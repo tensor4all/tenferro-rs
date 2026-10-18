@@ -49,6 +49,8 @@ mod gpu_ad_tests;
 mod gpu_f32_fusion;
 #[path = "integration/gpu_nn_composites.rs"]
 mod gpu_nn_composites;
+#[path = "integration/gpu_raw_constant_binding.rs"]
+mod gpu_raw_constant_binding;
 #[path = "integration/graph_compile.rs"]
 mod graph_compile;
 #[path = "integration/hvp.rs"]

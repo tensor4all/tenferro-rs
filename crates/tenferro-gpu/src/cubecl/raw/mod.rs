@@ -17,6 +17,11 @@
 //!   escape that must not retain it past the session scope.
 //! - `TensorRef` carries a validated device span and ownership identity; it
 //!   provides no `Deref` to the device buffer.
+//! - View storage (an eager constant, or any metadata-only view) is bound in
+//!   place by [`Session::tensor_read`], which resolves the base allocation,
+//!   folds in the view's logical offset, and validates the reachable span. It
+//!   accepts compact column-major views only: `TensorRef` has no per-axis
+//!   stride metadata, so a strided view is rejected rather than materialized.
 //! - A mutable device access can only be produced through [`Session::tensor_mut`]
 //!   which requires an exclusive `&mut` borrow of a compatibly-typed tensor, or
 //!   through a freshly allocated [`Session::alloc_output`] tensor.
@@ -27,11 +32,16 @@
 mod module;
 mod nvrtc;
 
+// Crate-internal view of the launch-time opt-in decision, unit-tested without
+// a device in `crate::cubecl::tests::raw_launch_tests`.
+#[cfg(test)]
+pub(crate) use module::needs_shared_memory_opt_in;
+
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use tenferro_tensor::{TensorRank, TypedTensor};
+use tenferro_tensor::{TensorRank, TensorRead, TypedTensor, TypedTensorView};
 
 use cudarc::cublas::sys as cublas_sys;
 
@@ -144,12 +154,29 @@ impl Module {
 pub struct Function {
     handle: cudarc::driver::sys::CUfunction,
     module: Rc<ModuleInner>,
+    /// Largest dynamic shared-memory budget this function was opted into with
+    /// (`CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES`). `0` means "the
+    /// driver's default", i.e. no attribute was set yet.
+    ///
+    /// The attribute only ever grows: a launch that requests no more than this
+    /// value reuses it instead of paying another driver call (#2085).
+    shared_mem_opt_in: std::cell::Cell<u32>,
 }
 
 impl Function {
     /// Return the raw function handle (for internal launch use).
     pub(crate) fn handle(&self) -> cudarc::driver::sys::CUfunction {
         self.handle
+    }
+
+    /// Largest dynamic shared-memory budget already opted into on this handle.
+    pub(crate) fn shared_mem_opt_in(&self) -> u32 {
+        self.shared_mem_opt_in.get()
+    }
+
+    /// Record a successful dynamic shared-memory opt-in on this handle.
+    pub(crate) fn set_shared_mem_opt_in(&self, bytes: u32) {
+        self.shared_mem_opt_in.set(bytes);
     }
 }
 
@@ -165,6 +192,11 @@ pub struct LaunchConfig {
     /// Block dimensions `[x, y, z]`.
     pub block: [u32; 3],
     /// Dynamic shared-memory bytes per block.
+    ///
+    /// Up to 48 KiB (49152 bytes) needs no opt-in. A larger request makes the
+    /// following [`Session::launch`] raise
+    /// `CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES` on the launched
+    /// [`Function`] once; see [`Session::launch`] for the device limit.
     pub shared_mem_bytes: u32,
 }
 
@@ -389,13 +421,7 @@ impl<'s> Session<'s> {
         super::dispatch::ensure_resident_on_runtime(&self.runtime, tensor, "raw.tensor")?;
         let prepared = super::dispatch::cubecl_buffer(tensor, "raw.tensor")?;
         let byte_len = prepared.byte_len;
-        let resource = self
-            .runtime
-            .client()
-            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.handle().clone())
-            .map_err(|err| crate::Error::backend_source("raw.tensor", err))?;
-        let base =
-            super::interop::cuda_device_ptr_from_addr(resource.resource().ptr, "raw.tensor")?;
+        let base = self.device_ptr(prepared.handle().clone(), "raw.tensor")?;
         Ok(TensorRef {
             base,
             byte_len,
@@ -426,14 +452,88 @@ impl<'s> Session<'s> {
         super::dispatch::ensure_resident_on_runtime(&self.runtime, tensor, "raw.tensor_mut")?;
         let prepared = super::dispatch::cubecl_buffer(tensor, "raw.tensor_mut")?;
         let byte_len = prepared.byte_len;
-        let resource = self
-            .runtime
-            .client()
-            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.handle().clone())
-            .map_err(|err| crate::Error::backend_source("raw.tensor_mut", err))?;
-        let base =
-            super::interop::cuda_device_ptr_from_addr(resource.resource().ptr, "raw.tensor_mut")?;
+        let base = self.device_ptr(prepared.handle().clone(), "raw.tensor_mut")?;
         Ok(TensorMut {
+            base,
+            byte_len,
+            _scope: PhantomData,
+            _dtype: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+
+    /// Build a checked read-only device reference for any device-resident read
+    /// target, including view storage such as an eager constant.
+    ///
+    /// [`Session::tensor`] takes an owned [`TypedTensor`], but a value
+    /// registered by `constant_from_host` is held as a view over its device
+    /// allocation: [`TensorRead::as_tensor`] is `None` for it, so there is no
+    /// owned tensor to pass. This method binds that storage in place. It
+    /// resolves the view's base CubeCL allocation, applies the view's logical
+    /// element offset, and validates the reachable byte span against that
+    /// allocation. No device copy or re-allocation is made, so a model weight
+    /// does not have to be duplicated into an owned tensor to reach a kernel.
+    ///
+    /// The binding is **compact column-major only**: a [`TensorRef`] carries
+    /// one base pointer and one byte length, and the raw seam does not carry
+    /// per-axis stride metadata, so a strided view cannot be described safely
+    /// by it. A noncompact or transposed view is rejected with
+    /// [`crate::Error::Validation`] instead of being materialized behind the
+    /// caller's back; canonicalize such a source through the backend first.
+    /// The returned span starts at the view's first element and covers exactly
+    /// its `n_elements` elements, never the whole backing allocation.
+    ///
+    /// Owned storage keeps the exact [`Session::tensor`] binding, so the
+    /// existing owned kernel path is unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::raw::{Session, TensorRef};
+    /// use tenferro_tensor::TensorValue;
+    ///
+    /// fn check<'s, 't>(
+    ///     raw: &'s Session<'s>,
+    ///     value: &'t TensorValue,
+    /// ) -> tenferro_tensor::Result<TensorRef<'s, f64>>
+    /// where
+    ///     't: 's,
+    /// {
+    ///     let read = value.tensor_read();
+    ///     raw.tensor_read::<f64>(&read)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor::ValidationError::DTypeMismatch`] when the read's
+    /// dtype is not `T`, or with `InvalidArgument` when the read is not a
+    /// compact column-major view whose span fits its allocation, and
+    /// [`crate::Error::RuntimeState`] when the read is not resident on this
+    /// session's runtime/device.
+    pub fn tensor_read<'a, 'b, T>(
+        &'a self,
+        read: &TensorRead<'b>,
+    ) -> crate::Result<TensorRef<'a, T>>
+    where
+        T: tenferro_tensor::TensorScalar + 'static,
+        'b: 'a,
+    {
+        const OP: &str = "raw.tensor_read";
+        if read.dtype() != T::dtype() {
+            return Err(crate::Error::dtype_mismatch(OP, T::dtype(), read.dtype()));
+        }
+        if let Some(tensor) = read.as_tensor() {
+            // Owned storage keeps the exact `Session::tensor` binding: the read
+            // already names an owned tensor with the requested dtype.
+            let typed = tensor
+                .as_typed::<T>()
+                .ok_or_else(|| crate::Error::dtype_mismatch(OP, T::dtype(), tensor.dtype()))?;
+            return self.tensor(typed);
+        }
+        let (base, byte_len) = self.compact_view_span_from_read(read, OP)?;
+        Ok(TensorRef {
             base,
             byte_len,
             _scope: PhantomData,
@@ -675,12 +775,29 @@ impl<'s> Session<'s> {
     ///   not drop the tensors or module until after a subsequent
     ///   [`Session::synchronize`].
     ///
+    /// Dynamic shared memory above 48 KiB needs a per-function opt-in that the
+    /// driver does not grant by default (since Volta). `launch` performs it
+    /// implicitly: before the first launch whose
+    /// [`LaunchConfig::shared_mem_bytes`] exceeds 48 KiB, it raises
+    /// `CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES` on `function` to that
+    /// byte count, and it calls the driver again only when a later launch asks
+    /// for more. A request at or below a value already set, or at or below the
+    /// 48 KiB default, is launched without a driver call.
+    ///
+    /// The device cap is
+    /// `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`, readable as
+    /// `CubeCL`'s `client().properties().hardware.max_shared_memory_size`
+    /// through
+    /// [`CudaExecSession::with_cubecl`](super::exec_session::CudaExecSession::with_cubecl).
+    /// A request above it is rejected by the driver and returned as
+    /// [`crate::Error::BackendSource`]; the value is never clamped.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] carrying
     /// `ValidationError::InvalidArgument` when the launch geometry or limits
     /// are invalid, or [`crate::Error::BackendSource`] when the driver rejects
-    /// the launch.
+    /// the dynamic shared-memory opt-in or the launch.
     pub unsafe fn launch(
         &self,
         function: &Function,
@@ -688,6 +805,7 @@ impl<'s> Session<'s> {
         args: &[KernelArg<'_>],
     ) -> crate::Result<()> {
         module::validate_launch_config(&config)?;
+        module::ensure_dynamic_shared_memory(function, config.shared_mem_bytes)?;
 
         // Build stable storage for every argument: scalar values live in heap
         // boxes (the param slot points directly at the value bytes), device
@@ -760,6 +878,109 @@ impl<'s> Session<'s> {
     }
 }
 
+impl Session<'_> {
+    /// Resolve a CubeCL allocation handle to its base CUDA device address.
+    ///
+    /// A retained handle keeps its storage offset and is never deallocated
+    /// while one of its slices is live (see the `CubeclBuffer::device_addr`
+    /// invariant), so the address is stable for the borrowing tensor or view.
+    /// Resolving through `get_resource` is also what aligns this access with
+    /// CubeCL's stream (issue #1868).
+    fn device_ptr(
+        &self,
+        handle: cubecl_runtime::server::Handle,
+        op: &'static str,
+    ) -> crate::Result<*mut std::ffi::c_void> {
+        let resource = self
+            .runtime
+            .client()
+            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
+            .map_err(|err| crate::Error::backend_source(op, err))?;
+        super::interop::cuda_device_ptr_from_addr(resource.resource().ptr, op)
+    }
+
+    /// Resolve a view read's compact device span through its concrete scalar.
+    ///
+    /// [`TensorRead`] is dtype-erased while the raw binding returns a typed
+    /// [`TensorRef`], so the view has to be recovered as a typed view before a
+    /// span can be described. Dispatching on the read's dtype keeps every
+    /// preset scalar on the same checked path instead of guessing a
+    /// representation.
+    fn compact_view_span_from_read(
+        &self,
+        read: &TensorRead<'_>,
+        op: &'static str,
+    ) -> crate::Result<(*mut std::ffi::c_void, usize)> {
+        tenferro_tensor::with_scalar_read!(
+            read.clone(),
+            all,
+            backend = tenferro_tensor::BackendId::Cuda,
+            op = op,
+            |view| -> crate::Result<(*mut std::ffi::c_void, usize)> {
+                self.compact_view_span(&view, op)
+            }
+        )
+    }
+
+    /// Resolve and validate the compact device span of a resident view.
+    ///
+    /// The provider preparation covers the whole backing allocation, so the
+    /// view's element offset is folded into the returned base pointer here and
+    /// the reachable span is checked against the allocation before any pointer
+    /// is handed out.
+    fn compact_view_span<T>(
+        &self,
+        view: &TypedTensorView<'_, T, impl TensorRank>,
+        op: &'static str,
+    ) -> crate::Result<(*mut std::ffi::c_void, usize)>
+    where
+        T: tenferro_tensor::TensorScalar + 'static,
+    {
+        super::dispatch::ensure_view_resident_on_runtime(&self.runtime, view, op)?;
+        if !view.is_col_major_contiguous()? {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "read",
+                format!(
+                    "raw binding requires a compact column-major view; got {} \
+                     (canonicalize a strided view through the backend first)",
+                    view.layout_summary()
+                ),
+            ));
+        }
+        let prepared = super::dispatch::prepared_view_access(view, op)?;
+        let allocation_byte_len = prepared.byte_len(op)?;
+        let element_size = std::mem::size_of::<T>();
+        let layout_error =
+            |message: &'static str| crate::Error::invalid_argument(op, "read", message);
+        let byte_offset = usize::try_from(view.offset())
+            .ok()
+            .and_then(|offset| offset.checked_mul(element_size))
+            .ok_or_else(|| layout_error("view byte offset is negative or overflows"))?;
+        let byte_len = view
+            .n_elements()
+            .checked_mul(element_size)
+            .ok_or_else(|| layout_error("view byte length overflows"))?;
+        let span_end = byte_offset
+            .checked_add(byte_len)
+            .ok_or_else(|| layout_error("view byte span overflows"))?;
+        if span_end > allocation_byte_len {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "read",
+                format!(
+                    "compact view span [offset {byte_offset}, end {span_end}) exceeds the \
+                     {allocation_byte_len}-byte backing allocation"
+                ),
+            ));
+        }
+        let base = self.device_ptr(prepared.into_handle(), op)?;
+        // The offset and length were just validated to end inside the resolved
+        // allocation, so the exposed address stays within the view's own span.
+        Ok((base.cast::<u8>().wrapping_add(byte_offset).cast(), byte_len))
+    }
+}
+
 /// Borrowed, opaque CUDA execution stream.
 ///
 /// Non-copy and non-constructible. The native handle is only exposed through an
@@ -790,7 +1011,11 @@ impl fmt::Debug for StreamRef<'_> {
     }
 }
 
-/// Checked read-only device span of a GPU-backed tensor.
+/// Checked read-only device span of a GPU-backed tensor or view.
+///
+/// The span is the one [`Session::tensor`] or [`Session::tensor_read`] validated
+/// for its source. For a view it starts at the view's first element and covers
+/// only the view's own elements, not the whole backing allocation.
 pub struct TensorRef<'s, T> {
     base: *mut std::ffi::c_void,
     byte_len: usize,

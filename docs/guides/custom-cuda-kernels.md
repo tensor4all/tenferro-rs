@@ -200,9 +200,60 @@ spans. `tensor_mut` requires an exclusive tensor borrow; a fresh
 compact column-major. Canonicalize a non-contiguous CUDA view through the
 backend before entering this compact-only raw path; do not download it.
 
+Storage that only exists as a view — most visibly an eager value registered by
+`constant_from_host`, whose `TensorRead::as_tensor()` is `None` — has no owned
+`TypedTensor` to pass to `tensor`. Bind it with
+`session.tensor_read::<f32>(&read)` instead: it resolves the view's base CubeCL
+allocation, applies the view's logical offset, and returns only the view's own
+span, without the `duplicate_value` device copy (#2084). That binding is also
+compact column-major only, because a `TensorRef` is one base pointer plus one
+byte length and carries no per-axis strides; a transposed or strided read is
+rejected with a typed validation error instead of being materialized. Owned
+reads passed to `tensor_read` keep using the `tensor` binding unchanged.
+
 `session.stream()` exposes the same captured stream for a foreign CUDA library.
 Its native handle and `TensorRef::raw_ptr` / `TensorMut::raw_ptr` are unsafe FFI
 escapes: use them only inside the callback and never retain or destroy them.
+
+## Large dynamic shared-memory tiles
+
+Since Volta the driver caps a launch that requests more than 48 KiB of dynamic
+shared memory unless the kernel opts in first. `raw::Session::launch` performs
+that opt-in implicitly: the first launch whose `LaunchConfig::shared_mem_bytes`
+exceeds 48 KiB raises
+`CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES` on the launched
+`raw::Function`, and a later launch calls the driver again only when it asks for
+more than the value already set. There is no separate opt-in flag and no
+`Function` setter to call.
+
+The device's opt-in ceiling is
+`CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`, which the CubeCL
+session reports as `hardware.max_shared_memory_size` (166912 bytes on an A100,
+101376 bytes on an RTX 3060):
+
+<!-- snippet-source: docs/tutorial-code/src/bin/custom_cuda_kernels.rs#custom_cuda_smem_limit -->
+```rust
+    use tenferro_gpu::cuda::CudaExecSession;
+
+    /// Dynamic shared memory a raw launch may opt into on this device, from
+    /// `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`.
+    fn max_shared_memory_bytes(
+        session: &mut CudaExecSession<'_>,
+    ) -> tenferro_tensor::Result<usize> {
+        session.with_cubecl("custom_cuda.smem_limit", |cubecl| {
+            Ok(cubecl.client().properties().hardware.max_shared_memory_size)
+        })
+    }
+```
+<!-- end-snippet-source -->
+
+A request above that ceiling is not clamped: the driver rejects the attribute
+and `launch` returns the typed `BackendSource` error
+(`CUDA_ERROR_INVALID_VALUE`) before any kernel is enqueued. The CUDA tests
+`raw_launch_uses_dynamic_shared_memory_above_48_kib` (a 64 KiB / 16384 f32 tile
+launched on an A100, values checked after download) and
+`raw_launch_rejects_dynamic_shared_memory_above_device_opt_in` (the typed
+rejection above the ceiling) cover both paths (#2085).
 
 ## Ordering, synchronization, and safety
 

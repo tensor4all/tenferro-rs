@@ -64,7 +64,84 @@ pub(crate) fn module_function(
     Ok(Function {
         handle,
         module: Rc::clone(inner),
+        shared_mem_opt_in: std::cell::Cell::new(0),
     })
+}
+
+/// Dynamic shared memory a launch may request without the per-function opt-in
+/// (48 KiB, the driver default since Volta).
+const DEFAULT_MAX_DYNAMIC_SHARED_BYTES: u32 = 48 * 1024;
+
+/// Whether a launch requesting `bytes` of dynamic shared memory must raise the
+/// per-function opt-in, given `current`, the value already recorded on the
+/// handle.
+///
+/// The attribute only grows, so a request at or below the recorded value needs
+/// no driver call; requests at or below the 48 KiB default never do.
+pub(crate) fn needs_shared_memory_opt_in(current: u32, bytes: u32) -> bool {
+    bytes > DEFAULT_MAX_DYNAMIC_SHARED_BYTES && current < bytes
+}
+
+/// Raise `CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES` to `bytes` when a
+/// launch asks for more dynamic shared memory than the 48 KiB default.
+///
+/// The attribute only grows, so the last value recorded on the function is
+/// reused: a repeated or smaller request above the default still needs no
+/// driver call (#2085). The requested value is not clamped; a value above the
+/// device's `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN` is rejected
+/// by the driver and returned as a typed backend error.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] when `bytes` does not fit the driver's
+/// `i32` attribute value, or [`crate::Error::BackendSource`] when the context
+/// cannot be activated or the driver rejects the attribute.
+pub(crate) fn ensure_dynamic_shared_memory(function: &Function, bytes: u32) -> crate::Result<()> {
+    if !needs_shared_memory_opt_in(function.shared_mem_opt_in(), bytes) {
+        return Ok(());
+    }
+    let value = i32::try_from(bytes).map_err(|_| {
+        crate::Error::invalid_argument(
+            "raw.launch",
+            "shared_mem_bytes",
+            format!("dynamic shared memory of {bytes} bytes does not fit the driver's i32 attribute value"),
+        )
+    })?;
+
+    // Activate the context that owns the module instead of relying on the raw
+    // scope that loaded the function still being current: a `Function` may be
+    // used outside its creating scope and thread later (#2085).
+    let context = function.module.context;
+    // SAFETY: `context` is the live tenferro primary context retained by the
+    // module, and `set_current` takes no ownership of it.
+    let previous = unsafe {
+        let previous = cudarc::driver::result::ctx::get_current().ok().flatten();
+        cudarc::driver::result::ctx::set_current(context)
+            .map_err(|err| crate::Error::backend_source("raw.launch", err))?;
+        previous
+    };
+
+    // SAFETY: the function handle belongs to the loaded module kept alive by
+    // `function`, and its owning context is current on this thread.
+    let set = unsafe {
+        cudarc::driver::result::function::set_function_attribute(
+            function.handle,
+            cudarc::driver::sys::CUfunction_attribute_enum::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+            value,
+        )
+    };
+
+    if let Some(previous) = previous {
+        if previous != context {
+            // SAFETY: `previous` was current when this function started; restore
+            // it so the caller's scope is unchanged.
+            let _ = unsafe { cudarc::driver::result::ctx::set_current(previous) };
+        }
+    }
+
+    set.map_err(|err| crate::Error::backend_source("raw.launch", err))?;
+    function.set_shared_mem_opt_in(bytes);
+    Ok(())
 }
 
 /// Validate launch geometry against the CUDA hardware limits.

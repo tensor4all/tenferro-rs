@@ -202,6 +202,150 @@ fn raw_load_cubin_rejects_garbage() {
     });
 }
 
+#[test]
+fn raw_dynamic_shared_memory_opt_in_runs_once_per_function() {
+    use crate::cubecl::raw::needs_shared_memory_opt_in;
+
+    const DEFAULT_BYTES: u32 = 48 * 1024;
+    const TILE_BYTES: u32 = 64 * 1024;
+
+    // At or below the driver default: no attribute, no driver call.
+    assert!(!needs_shared_memory_opt_in(0, 0));
+    assert!(!needs_shared_memory_opt_in(0, DEFAULT_BYTES));
+    // First request above the default raises the attribute once.
+    assert!(needs_shared_memory_opt_in(0, TILE_BYTES));
+    // Repeating the same request, or asking for less, reuses the attribute.
+    assert!(!needs_shared_memory_opt_in(TILE_BYTES, TILE_BYTES));
+    assert!(!needs_shared_memory_opt_in(TILE_BYTES, TILE_BYTES - 1024));
+    assert!(!needs_shared_memory_opt_in(TILE_BYTES, DEFAULT_BYTES));
+    // Only a larger request pays another driver call.
+    assert!(needs_shared_memory_opt_in(TILE_BYTES, TILE_BYTES + 1024));
+}
+
+/// A kernel that fills a dynamic shared-memory tile and writes samples out.
+///
+/// The tile is `floats` f32 values of dynamic shared memory, so the launcher's
+/// `shared_mem_bytes` decides the size the kernel can address.
+const SHARED_MEMORY_KERNEL_SRC: &str = r#"
+extern "C" __global__ void smem_kernel(float* out, int floats) {
+    extern __shared__ float tile[];
+    for (int i = threadIdx.x; i < floats; i += blockDim.x) tile[i] = (float)i;
+    __syncthreads();
+    if (threadIdx.x < 8) out[threadIdx.x] = tile[threadIdx.x * (floats / 8)];
+    if (threadIdx.x == 0) out[8] = tile[floats - 1];
+}
+"#;
+
+#[test]
+#[ignore = "requires CUDA"]
+fn raw_launch_uses_dynamic_shared_memory_above_48_kib() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+
+    // 64 KiB of dynamic shared memory in 16384 f32 slots: above the 48 KiB
+    // no-opt-in default, and below the A100/Turing opt-in per-block maximum.
+    const SHARED_BYTES: u32 = 64 * 1024;
+    const FLOATS: i32 = (SHARED_BYTES / 4) as i32;
+    assert_eq!(FLOATS, 16384);
+
+    with_cuda_exec(&mut backend, |session| {
+        let runtime = session.runtime().clone();
+        session
+            .with_raw("test.dynamic_shared_memory", |sess| {
+                let module =
+                    sess.compile_nvrtc(SHARED_MEMORY_KERNEL_SRC, &NvrtcOptions::default())?;
+                let function = module.function("smem_kernel")?;
+                let mut out = sess.alloc_output::<f32>(&[9])?;
+
+                // Launch twice with the same size: the attribute is set on the
+                // first launch and reused on the second.
+                for _ in 0..2 {
+                    let out_ref = sess.tensor_mut(&mut out)?;
+                    let config = LaunchConfig {
+                        grid: [1, 1, 1],
+                        block: [256, 1, 1],
+                        shared_mem_bytes: SHARED_BYTES,
+                    };
+                    // SAFETY: ABI is (out*, int); `out` has 9 f32 slots for the
+                    // 9 values the kernel writes; the tile indices stay inside
+                    // the `shared_mem_bytes` budget; blockDim is 256; module,
+                    // function, and tensor outlive the synchronization below.
+                    unsafe {
+                        sess.launch(
+                            &function,
+                            config,
+                            &[KernelArg::tensor_mut(&out_ref), KernelArg::i32(FLOATS)],
+                        )?;
+                    }
+                    sess.synchronize()?;
+                }
+
+                let (shape, flat): (Vec<usize>, Vec<f32>) = download_tensor_typed(&runtime, out)?;
+                assert_eq!(shape, vec![9]);
+                let floats = FLOATS as usize;
+                for (sample, &value) in flat.iter().take(8).enumerate() {
+                    let expected = (sample * (floats / 8)) as f32;
+                    assert_eq!(value, expected, "unexpected tile value at sample {sample}");
+                }
+                assert_eq!(flat[8], (floats - 1) as f32, "unexpected last tile value");
+                Ok(())
+            })
+            .expect("raw session should run");
+    });
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn raw_launch_rejects_dynamic_shared_memory_above_device_opt_in() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
+
+    with_cuda_exec(&mut backend, |session| {
+        // The opt-in device cap is exposed by the CubeCL session; a raw
+        // session deliberately adds no second accessor for it.
+        let limit = session
+            .with_cubecl("test.dynamic_shared_limit", |cubecl| {
+                Ok(cubecl.client().properties().hardware.max_shared_memory_size)
+            })
+            .expect("CubeCL session should expose the device properties");
+        assert!(
+            limit > 48 * 1024,
+            "device opt-in limit {limit} must exceed 48 KiB"
+        );
+        let over_limit = u32::try_from(limit).expect("limit fits u32") + 4096;
+
+        let result: crate::Result<()> = session.with_raw("test.dynamic_shared_too_large", |sess| {
+            let module = sess.compile_nvrtc(SHARED_MEMORY_KERNEL_SRC, &NvrtcOptions::default())?;
+            let function = module.function("smem_kernel")?;
+            let mut out = sess.alloc_output::<f32>(&[9])?;
+            let out_ref = sess.tensor_mut(&mut out)?;
+            let config = LaunchConfig {
+                grid: [1, 1, 1],
+                block: [256, 1, 1],
+                shared_mem_bytes: over_limit,
+            };
+            // SAFETY: ABI and bounds as above, but the driver must reject
+            // this launch before it runs: the opt-in exceeds the device cap.
+            unsafe {
+                sess.launch(
+                    &function,
+                    config,
+                    &[KernelArg::tensor_mut(&out_ref), KernelArg::i32(1)],
+                )
+            }
+        });
+
+        match result {
+            Err(crate::Error::BackendSource { op, .. }) => {
+                assert_eq!(op, "raw.launch", "the attribute setter must report the typed driver error");
+            }
+            other => panic!(
+                "requesting {over_limit} bytes of dynamic shared memory above the {limit}-byte device cap must fail with a typed driver error, got {other:?}"
+            ),
+        }
+    });
+}
+
 /// Download a typed f32 tensor via the public `download_tensor` seam.
 fn download_tensor_typed(
     runtime: &crate::cubecl::CudaRuntime,
