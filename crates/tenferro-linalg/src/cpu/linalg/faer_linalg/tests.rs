@@ -1,4 +1,5 @@
 use super::{checked_product, FaerEig};
+use crate::cpu::tests::with_cpu_linalg;
 use crate::{QrOptions, TensorLinalgExt};
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
@@ -231,5 +232,62 @@ fn normalize_eig_vectors_normalizes_extreme_magnitude_finite_columns() {
         (tiny64[1].im - 2.0 / root_five64).abs() < 1.0e-12,
         "{:?}",
         tiny64[1]
+    );
+}
+/// The compact state must own pooled storage, not two ordinary vectors.
+///
+/// A 64x24 `f64` factor is `packed` (1536 elements) plus `coeff` (24 elements). If either output
+/// left the pool as a plain `Vec`, dropping the state would free it instead of returning it, so the
+/// retained pool could never hold that payload and a second call would have to allocate it again.
+#[test]
+fn compact_factor_outputs_return_their_storage_to_the_pool() {
+    let packed_bytes = 64 * 24 * std::mem::size_of::<f64>();
+    let coeff_bytes = 24 * std::mem::size_of::<f64>();
+    let mut data = vec![0.0_f64; 64 * 24];
+    for col in 0..24 {
+        for row in 0..64 {
+            data[row + col * 64] = if row == col {
+                9.0
+            } else {
+                0.1 * (row as f64) - 0.05
+            };
+        }
+    }
+    let a = Tensor::from_vec_col_major(vec![64, 24], data).unwrap();
+    let mut backend = CpuBackend::new();
+    let empty = backend.buffer_pool_stats().unwrap();
+    assert_eq!(empty.capacity_bytes, 0, "a fresh backend retains nothing");
+
+    let state = with_cpu_linalg(&mut backend, |session| a.householder_qr(session)).unwrap();
+    let checked_out = backend.buffer_pool_stats().unwrap();
+    drop(state);
+    let returned = backend.buffer_pool_stats().unwrap();
+    eprintln!(
+        "checked out: {} buffers / {} B; returned: {} buffers / {} B",
+        checked_out.buffers, checked_out.capacity_bytes, returned.buffers, returned.capacity_bytes
+    );
+    assert!(
+        returned.capacity_bytes >= packed_bytes + coeff_bytes + checked_out.capacity_bytes,
+        "dropping the compact state must return the packed ({packed_bytes} B) and coefficient \
+         ({coeff_bytes} B) payloads to the pool: {} B retained before, {} B while checked out, \
+         {} B after the drop",
+        empty.capacity_bytes,
+        checked_out.capacity_bytes,
+        returned.capacity_bytes
+    );
+    assert!(
+        returned.buffers > checked_out.buffers,
+        "the two outputs must leave the pool while the state is alive"
+    );
+
+    // The warm pool serves the whole call: a second run must not grow the retained set, and the
+    // same storage must come back.
+    let state = with_cpu_linalg(&mut backend, |session| a.householder_qr(session)).unwrap();
+    drop(state);
+    let second = backend.buffer_pool_stats().unwrap();
+    assert_eq!(
+        (second.buffers, second.capacity_bytes),
+        (returned.buffers, returned.capacity_bytes),
+        "a warm pool must serve and recover the whole compact-QR payload"
     );
 }

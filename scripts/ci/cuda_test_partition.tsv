@@ -1089,6 +1089,7 @@ host	tenferro-linalg	cpu::backend::tests::typed_host_refuses_a_dtype_the_table_n
 host	tenferro-linalg	cpu::backend::tests::write_view_operand_unwinds_for_a_dtype_with_no_view
 host	tenferro-linalg	cpu::linalg::faer_linalg::tests::checked_matrix_element_count_reports_typed_overflow
 host	tenferro-linalg	cpu::linalg::faer_linalg::tests::compact_factor_and_append_reconstructs_f64
+host	tenferro-linalg	cpu::linalg::faer_linalg::tests::compact_factor_outputs_return_their_storage_to_the_pool
 host	tenferro-linalg	cpu::linalg::faer_linalg::tests::compact_from_factors_reconstructs_f64
 host	tenferro-linalg	cpu::linalg::faer_linalg::tests::normalize_eig_vectors_normalizes_extreme_magnitude_finite_columns
 host	tenferro-linalg	cpu::linalg::faer_linalg::tests::normalize_eig_vectors_puts_columns_in_the_unit_gauge
@@ -1186,6 +1187,7 @@ host	tenferro-linalg	cpu::tests::linalg::triangular_solve_read_accepts_owned_and
 host	tenferro-linalg	cpu::tests::managed_cholesky::domain_bound_backend_preserves_host_owned_and_read_cholesky
 host	tenferro-linalg	cpu::tests::managed_cholesky::fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output
 host	tenferro-linalg	cpu::tests::managed_cholesky::fake_managed_cholesky_rejects_foreign_device_local_and_busy_buffers
+host	tenferro-linalg	cpu::tests::managed_cholesky::managed_cholesky_stages_its_factor_in_pooled_storage
 host	tenferro-linalg	cpu::tests::managed_cholesky::managed_borrowed_cholesky_respects_offset_and_rejects_strides
 host	tenferro-linalg	cpu::tests::managed_cholesky::managed_snapshot_is_independent_and_rejects_foreign_storage
 host	tenferro-linalg	cpu::tests::managed_cholesky::managed_traced_cholesky_preserves_domain_and_values

@@ -72,7 +72,6 @@ macro_rules! impl_cpu_packed_lu {
                             {
                                 crate::cpu::tlinalg::solve_prepared_batch::<$scalar>(
                                     ctx,
-                                    buffers,
                                     tlinalg::Op::LuSolvePrepared,
                                     n,
                                     nrhs,

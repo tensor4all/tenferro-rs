@@ -7,7 +7,9 @@
 //! Every family is driven through the provider's borrowed-workspace pair: `*_workspace` reports the
 //! bytes one call needs at the route the same `Exec` resolves, and `*_into` carves all of its
 //! per-lane scratch from the [`PooledWorkspace`] region this module takes from the session pool.
-//! Nothing here allocates per call once the pool is warm.
+//! The provider scratch therefore allocates nothing per call once the pool is warm; the host still
+//! pays its own bookkeeping allocations (the pool's in-flight accounting node, the caller's result
+//! vectors), and a multi-lane run adds one rayon spawn job per extra lane.
 
 #![cfg(feature = "native")]
 
@@ -96,7 +98,6 @@ pub(crate) fn factor_batch<T: FaerScalar + PoolScalar>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn solve_prepared_batch<T: FaerScalar + PoolScalar>(
     ctx: &CpuExecutionContext<'_>,
-    buffers: &BufferPool,
     op: Op,
     n: usize,
     nrhs: usize,
@@ -123,8 +124,7 @@ pub(crate) fn solve_prepared_batch<T: FaerScalar + PoolScalar>(
     let pivots = RawStridedRef::new(pivots, &pivot_dims, &pivot_strides, 0)
         .map_err(|error| layout_error(op, error))?;
     // The prepared solve is the two triangular solves alone: it has no scratch to size, so the
-    // contract's natural workspace is the empty region.
-    let mut workspace = PooledWorkspace::<T>::new(buffers, 0)?;
+    // contract's natural workspace is an empty region.
     solve_prepared_into(
         op,
         packed_lu,
@@ -133,7 +133,7 @@ pub(crate) fn solve_prepared_batch<T: FaerScalar + PoolScalar>(
         output,
         transpose_a,
         conjugate_a,
-        workspace.bytes_mut(),
+        &mut [],
         exec_from(ctx)?,
     )
     .map_err(|error| map_error(op, error))

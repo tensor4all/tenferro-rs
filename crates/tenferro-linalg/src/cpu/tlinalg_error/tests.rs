@@ -94,8 +94,8 @@ fn every_variant_rebuilds_tenferros_kind_role_and_source() {
     ));
 
     // A workspace shorter than the host's own query is a broken host contract,
-    // not a caller error, so it reports as a runtime-state failure that still
-    // names the bytes the resolved route wanted.
+    // not a caller error, so it reports as a runtime-state failure that keeps the
+    // provider refusal downcastable, bytes and operation included.
     let error = map_error(
         Op::Qr,
         TlError::InsufficientWorkspace {
@@ -105,9 +105,14 @@ fn every_variant_rebuilds_tenferros_kind_role_and_source() {
         },
     );
     assert_eq!(error.kind(), ErrorKind::RuntimeState);
-    let rendered = error.to_string();
-    assert!(rendered.contains("128"), "{rendered}");
-    assert!(rendered.contains("64"), "{rendered}");
+    match error.source().and_then(|source| source.downcast_ref()) {
+        Some(TlError::InsufficientWorkspace { op, needed, have }) => {
+            assert_eq!(*op, Op::Qr);
+            assert_eq!(*needed, 128);
+            assert_eq!(*have, 64);
+        }
+        other => panic!("expected the provider refusal as the typed source, got {other:?}"),
+    }
 }
 
 #[cfg(feature = "blas")]

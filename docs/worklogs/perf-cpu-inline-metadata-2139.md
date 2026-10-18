@@ -59,6 +59,14 @@
   the existing pool: no second allocator, no per-call `Vec` scratch. Results are
   bitwise identical to the wrapper route, which the provider pins to 0.3.0 on
   its own battery and which was re-checked here family by family.
+- The host-side compositions (compact Householder QR factor/append/from-factors/
+  `R`/`Q` columns, and the managed-Cholesky staging copy) keep the recyclable
+  owner too: their packed/coefficient/R outputs and the Cholesky staging tensor
+  stay pooled tensors, so dropping a compact-QR state or finishing a managed
+  Cholesky returns that payload to the session pool. `tests` in
+  `faer_linalg/tests.rs` and the managed-Cholesky module assert the pool stats
+  before/after those drops, and that a warm pool serves the whole payload
+  again; the compact-QR ceiling drops to one host allocation per call.
 - The host residual on that route is 3 allocations per call at one thread:
   the `BufferPool` in-flight-accounting node the per-operation loan reset
   re-creates, the linalg module's result `Vec`, and the CPU backend's

@@ -569,16 +569,6 @@ fn pooled_workspace<T: PoolScalar>(
     PooledWorkspace::<T>::new(buffers, bytes?)
 }
 
-/// Finish a destination a completed provider call wrote in full and return its data vector.
-///
-/// The host compositions keep building plain vectors; the pooled lease is what the provider writes
-/// into, and a host tensor's storage always exports its vector.
-fn lease_into_vec<T: PoolScalar>(lease: PooledUninitOutput<T>) -> tenferro_tensor::Result<Vec<T>> {
-    finish_lease(lease)?
-        .into_host_vec()
-        .map_err(|failure| failure.into_parts().1)
-}
-
 /// Finish a destination a completed provider call wrote in full, carrying `placement`.
 fn tensor_from_lease<T: PoolScalar>(
     lease: PooledUninitOutput<T>,
@@ -649,12 +639,15 @@ pub(crate) fn cholesky_view<T: FaerLinalg>(
 }
 
 /// Lower Cholesky factor of one compact `n x n` matrix, for the managed (prepared) route.
+///
+/// The factor stays a pooled tensor, so the host's staging copy into the managed domain returns its
+/// storage to the session pool instead of allocating a fresh vector per call.
 pub(crate) fn cholesky_compact_data<T: FaerLinalg>(
     ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &[T],
     n: usize,
-) -> tenferro_tensor::Result<Vec<T>> {
+) -> tenferro_tensor::Result<TypedTensor<T>> {
     let expected_len = checked_product("cholesky", "matrix", &[n, n])?;
     if input.len() != expected_len {
         return Err(tenferro_tensor::Error::invalid_argument(
@@ -665,7 +658,7 @@ pub(crate) fn cholesky_compact_data<T: FaerLinalg>(
     }
     if n == 0 {
         validate_empty_route(ctx, Op::Cholesky, 1)?;
-        return Ok(buffers.acquire_with_capacity::<T>(expected_len));
+        return finish_lease(pooled_output::<T>(buffers, "cholesky", "matrix", &[0, 0])?);
     }
     let dims = [n, n];
     let strides = [1, n as isize];
@@ -686,7 +679,7 @@ pub(crate) fn cholesky_compact_data<T: FaerLinalg>(
         par,
     )
     .map_err(provider(Op::Cholesky))?;
-    lease_into_vec(l)
+    finish_lease(l)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1963,13 +1956,16 @@ pub(crate) fn eig_values(
 // ---------------------------------------------------------------------------------------------
 
 /// Factor one compact `rows x cols` matrix in place; returns its reflector coefficients.
+///
+/// The coefficients stay a pooled tensor, so their storage returns to the session pool when the
+/// caller drops them instead of being exported into an ordinary vector.
 fn compact_factor_data<T: FaerLinalg>(
     ctx: &CpuExecutionContext<'_>,
     buffers: &BufferPool,
     data: &mut [T],
     rows: usize,
     cols: usize,
-) -> tenferro_tensor::Result<Vec<T>> {
+) -> tenferro_tensor::Result<TypedTensor<T>> {
     let k = rows.min(cols);
     let mut coeff = pooled_output::<T>(buffers, "compact_factor", "coefficients", &[k])?;
     let par = exec_from(ctx)?;
@@ -1989,7 +1985,7 @@ fn compact_factor_data<T: FaerLinalg>(
         par,
     )
     .map_err(provider(Op::HouseholderQr))?;
-    lease_into_vec(coeff)
+    finish_lease(coeff)
 }
 
 /// Apply the first `k` reflectors of one compact state to `c` in place.
@@ -2076,22 +2072,27 @@ pub(crate) fn compact_factor_2d<T: FaerLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
-    let (rows, cols) = matrix_dims(input, "compact_factor_2d")?;
-    let input_data = input.host_data()?;
-    let mut packed = buffers.acquire_with_capacity::<T>(input_data.len());
-    packed.extend_from_slice(input_data);
-    let coeff = compact_factor_data(ctx, buffers, &mut packed, rows, cols)?;
+    const OP: &str = "compact_factor_2d";
+    let (rows, cols) = matrix_dims(input, OP)?;
+    let mut packed = pooled_copy::<T>(
+        buffers,
+        OP,
+        "packed state",
+        &[rows, cols],
+        input.host_data()?,
+    )?;
+    let mut coeff = compact_factor_data(ctx, buffers, packed.host_data_mut()?, rows, cols)?;
     let k = rows.min(cols);
-    if coeff.len() != k {
+    if coeff.shape().len() != 1 || coeff.shape()[0] != k {
         return Err(invalid_config(
-            "compact_factor_2d",
+            OP,
             "coefficients: provider returned an invalid coefficient count",
         ));
     }
-    Ok((
-        tensor_from_vec_with_template(vec![rows, cols], packed, input.placement())?,
-        tensor_from_vec_with_template(vec![k], coeff, input.placement())?,
-    ))
+    let placement = input.placement();
+    packed.set_placement(placement.clone());
+    coeff.set_placement(placement.clone());
+    Ok((packed, coeff))
 }
 
 pub(crate) fn append_2d<T: FaerLinalg>(
@@ -2110,77 +2111,113 @@ pub(crate) fn append_2d<T: FaerLinalg>(
             vec![input_rows, block_cols],
         ));
     }
+    const OP: &str = "append_2d";
     if block_cols == 0 {
-        return Ok((
-            tensor_from_vec_with_template(
-                packed.shape().to_vec(),
-                packed.host_data()?.to_vec(),
-                packed.placement(),
-            )?,
-            tensor_from_vec_with_template(
-                coeff.shape().to_vec(),
-                coeff.host_data()?.to_vec(),
-                coeff.placement(),
-            )?,
-        ));
+        let mut packed_copy = pooled_copy::<T>(
+            buffers,
+            OP,
+            "packed state",
+            packed.shape(),
+            packed.host_data()?,
+        )?;
+        let mut coeff_copy = pooled_copy::<T>(
+            buffers,
+            OP,
+            "coefficients",
+            coeff.shape(),
+            coeff.host_data()?,
+        )?;
+        packed_copy.set_placement(packed.placement().clone());
+        coeff_copy.set_placement(coeff.placement().clone());
+        return Ok((packed_copy, coeff_copy));
     }
     let new_cols = old_cols
         .checked_add(block_cols)
-        .ok_or_else(|| invalid_config("append_2d", "shape: column count overflows usize"))?;
+        .ok_or_else(|| invalid_config(OP, "shape: column count overflows usize"))?;
     let new_k = rows.min(new_cols);
-    let mut transformed = buffers.acquire_with_capacity::<T>(checked_product(
-        "append_2d",
+    let mut transformed = pooled_copy::<T>(
+        buffers,
+        OP,
         "transformed block",
         &[rows, block_cols],
-    )?);
-    transformed.extend_from_slice(input.host_data()?);
+        input.host_data()?,
+    )?;
     apply_reflectors_data(
         ctx,
         buffers,
         packed.host_data()?,
         old_cols,
         coeff.host_data()?,
-        &mut transformed,
+        transformed.host_data_mut()?,
         rows,
         block_cols,
         old_k,
         true,
     )?;
     let trailing_rows = rows - old_k;
-    let trailing_len =
-        checked_product("append_2d", "trailing block", &[trailing_rows, block_cols])?;
-    let mut trailing = buffers.acquire_with_capacity::<T>(trailing_len);
-    for col in 0..block_cols {
-        trailing.extend_from_slice(&transformed[col * rows + old_k..(col + 1) * rows]);
+    let mut trailing =
+        pooled_zeroed::<T>(buffers, OP, "trailing block", &[trailing_rows, block_cols])?;
+    {
+        let transformed_data = transformed.host_data()?;
+        let trailing_data = trailing.host_data_mut()?;
+        for col in 0..block_cols {
+            trailing_data[col * trailing_rows..(col + 1) * trailing_rows]
+                .copy_from_slice(&transformed_data[col * rows + old_k..(col + 1) * rows]);
+        }
     }
     let new_coeff = if trailing_rows == 0 {
-        Vec::new()
+        None
     } else {
-        compact_factor_data(ctx, buffers, &mut trailing, trailing_rows, block_cols)?
+        Some(compact_factor_data(
+            ctx,
+            buffers,
+            trailing.host_data_mut()?,
+            trailing_rows,
+            block_cols,
+        )?)
     };
-    let mut output = buffers.acquire_with_capacity::<T>(checked_product(
-        "append_2d",
-        "packed state",
-        &[rows, new_cols],
-    )?);
-    output.extend_from_slice(packed.host_data()?);
-    for col in 0..block_cols {
-        output.extend_from_slice(&transformed[col * rows..col * rows + old_k]);
-        output.extend_from_slice(&trailing[col * trailing_rows..(col + 1) * trailing_rows]);
+    let mut output = pooled_zeroed::<T>(buffers, OP, "packed state", &[rows, new_cols])?;
+    {
+        let packed_data = packed.host_data()?;
+        let transformed_data = transformed.host_data()?;
+        let trailing_data = trailing.host_data()?;
+        let output_data = output.host_data_mut()?;
+        for col in 0..old_cols {
+            output_data[col * rows..(col + 1) * rows]
+                .copy_from_slice(&packed_data[col * rows..(col + 1) * rows]);
+        }
+        for col in 0..block_cols {
+            let destination = (old_cols + col) * rows;
+            output_data[destination..destination + old_k]
+                .copy_from_slice(&transformed_data[col * rows..col * rows + old_k]);
+            output_data[destination + old_k..destination + rows]
+                .copy_from_slice(&trailing_data[col * trailing_rows..(col + 1) * trailing_rows]);
+        }
     }
-    let mut output_coeff = buffers.acquire_with_capacity::<T>(new_k);
-    output_coeff.extend_from_slice(coeff.host_data()?);
-    output_coeff.extend_from_slice(&new_coeff);
-    if output_coeff.len() != new_k {
-        return Err(invalid_config(
-            "append_2d",
-            "coefficients: provider returned an invalid coefficient count",
-        ));
+    let mut output_coeff = pooled_zeroed::<T>(buffers, OP, "coefficients", &[new_k])?;
+    {
+        let coeff_data = coeff.host_data()?;
+        let new_coeff_len = match &new_coeff {
+            Some(new_coeff) => new_coeff.host_data()?.len(),
+            None => 0,
+        };
+        if coeff_data.len() + new_coeff_len != new_k {
+            return Err(invalid_config(
+                OP,
+                "coefficients: provider returned an invalid coefficient count",
+            ));
+        }
+        let output_coeff_data = output_coeff.host_data_mut()?;
+        output_coeff_data[..coeff_data.len()].copy_from_slice(coeff_data);
+        if let Some(new_coeff) = &new_coeff {
+            let start = coeff_data.len();
+            output_coeff_data[start..].copy_from_slice(new_coeff.host_data()?);
+        }
     }
-    Ok((
-        tensor_from_vec_with_template(vec![rows, new_cols], output, packed.placement())?,
-        tensor_from_vec_with_template(vec![new_k], output_coeff, packed.placement())?,
-    ))
+    let placement = packed.placement();
+    output.set_placement(placement.clone());
+    output_coeff.set_placement(placement.clone());
+    Ok((output, output_coeff))
 }
 
 pub(crate) fn from_factors_2d<T: FaerLinalg>(
@@ -2216,70 +2253,89 @@ pub(crate) fn from_factors_2d<T: FaerLinalg>(
             }
         }
     }
-    let q_data = q.host_data()?;
-    let mut q_packed = buffers.acquire_with_capacity::<T>(q_data.len());
-    q_packed.extend_from_slice(q_data);
-    let q_coeff = compact_factor_data(ctx, buffers, &mut q_packed, rows, q_cols)?;
-    let folded_len = checked_product("from_factors_2d", "folded R", &[q_cols, cols])?;
-    let mut folded = buffers.acquire_with_capacity::<T>(folded_len);
-    folded.resize(folded_len, T::default());
-    let triangular_len =
-        checked_product("from_factors_2d", "triangular factor", &[q_cols, q_cols])?;
-    let mut t = buffers.acquire_with_capacity::<T>(triangular_len);
-    t.resize(triangular_len, T::default());
-    for col in 0..q_cols {
-        for row in 0..q_cols {
-            if row <= col {
-                t[row + col * q_cols] = q_packed[row + col * rows];
+    const OP: &str = "from_factors_2d";
+    let mut q_packed = pooled_copy::<T>(buffers, OP, "packed Q", &[rows, q_cols], q.host_data()?)?;
+    let q_coeff = compact_factor_data(ctx, buffers, q_packed.host_data_mut()?, rows, q_cols)?;
+    let mut folded = pooled_zeroed::<T>(buffers, OP, "folded R", &[q_cols, cols])?;
+    let mut t = pooled_zeroed::<T>(buffers, OP, "triangular factor", &[q_cols, q_cols])?;
+    {
+        let q_packed_data = q_packed.host_data()?;
+        let t_data = t.host_data_mut()?;
+        for col in 0..q_cols {
+            for row in 0..q_cols {
+                if row <= col {
+                    t_data[row + col * q_cols] = q_packed_data[row + col * rows];
+                }
             }
         }
     }
-    T::gemm_data(ctx, &t, q_cols, q_cols, r_data, cols, &mut folded)?;
-    let output_len = checked_product("from_factors_2d", "packed state", &[rows, cols])?;
-    let mut output = buffers.acquire_with_capacity::<T>(output_len);
-    output.resize(output_len, T::default());
-    for col in 0..cols {
-        for row in 0..rows {
-            output[row + col * rows] = if col < q_cols && row > col {
-                q_packed[row + col * rows]
-            } else if row < q_cols {
-                folded[row + col * q_cols]
-            } else {
-                T::default()
-            };
+    T::gemm_data(
+        ctx,
+        t.host_data()?,
+        q_cols,
+        q_cols,
+        r_data,
+        cols,
+        folded.host_data_mut()?,
+    )?;
+    let mut output = pooled_zeroed::<T>(buffers, OP, "packed state", &[rows, cols])?;
+    {
+        let q_packed_data = q_packed.host_data()?;
+        let folded_data = folded.host_data()?;
+        let output_data = output.host_data_mut()?;
+        for col in 0..cols {
+            for row in 0..rows {
+                output_data[row + col * rows] = if col < q_cols && row > col {
+                    q_packed_data[row + col * rows]
+                } else if row < q_cols {
+                    folded_data[row + col * q_cols]
+                } else {
+                    T::default()
+                };
+            }
         }
     }
-    let mut output_coeff = buffers.acquire_with_capacity::<T>(k);
-    output_coeff.resize(k, T::default());
-    output_coeff[..q_cols].copy_from_slice(&q_coeff);
-    Ok((
-        tensor_from_vec_with_template(vec![rows, cols], output, q.placement())?,
-        tensor_from_vec_with_template(vec![k], output_coeff, q.placement())?,
-    ))
+    let mut output_coeff = pooled_zeroed::<T>(buffers, OP, "coefficients", &[k])?;
+    {
+        let q_coeff_data = q_coeff.host_data()?;
+        let output_coeff_data = output_coeff.host_data_mut()?;
+        output_coeff_data[..q_coeff_data.len()].copy_from_slice(q_coeff_data);
+    }
+    let placement = q.placement();
+    output.set_placement(placement.clone());
+    output_coeff.set_placement(placement.clone());
+    Ok((output, output_coeff))
 }
 
 pub(crate) fn raw_r_2d<T: FaerLinalg>(
+    buffers: &BufferPool,
     packed: &TypedTensor<T>,
     coeff: &TypedTensor<T>,
     positive_diagonal: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    let (rows, cols, k) = validate_compact_state(packed, coeff, "raw_r_2d")?;
-    let mut r = vec![T::default(); checked_product("raw_r_2d", "R", &[k, cols])?];
-    let packed_data = packed.host_data()?;
-    for col in 0..cols {
-        for row in 0..k.min(col + 1) {
-            r[row + col * k] = packed_data[row + col * rows];
-        }
-    }
-    if positive_diagonal {
-        for diag in 0..k {
-            let phase = T::r_phase(r[diag + diag * k]);
-            for col in 0..cols {
-                r[diag + col * k] = r[diag + col * k] * phase;
+    const OP: &str = "raw_r_2d";
+    let (rows, cols, k) = validate_compact_state(packed, coeff, OP)?;
+    let mut r = pooled_zeroed::<T>(buffers, OP, "R", &[k, cols])?;
+    {
+        let packed_data = packed.host_data()?;
+        let r_data = r.host_data_mut()?;
+        for col in 0..cols {
+            for row in 0..k.min(col + 1) {
+                r_data[row + col * k] = packed_data[row + col * rows];
             }
         }
     }
-    tensor_from_vec_with_template(vec![k, cols], r, packed.placement())
+    if positive_diagonal {
+        let r_data = r.host_data_mut()?;
+        for diag in 0..k {
+            let phase = T::r_phase(r_data[diag + diag * k]);
+            for col in 0..cols {
+                r_data[diag + col * k] = r_data[diag + col * k] * phase;
+            }
+        }
+    }
+    r.set_placement(packed.placement().clone());
+    Ok(r)
 }
 
 pub(crate) fn q_columns_2d<T: FaerLinalg>(
@@ -2300,12 +2356,14 @@ pub(crate) fn q_columns_2d<T: FaerLinalg>(
             format!("range: range {start}..{end} is outside 0..{rows}"),
         ));
     }
+    const OP: &str = "q_columns_2d";
     let columns = end - start;
-    let q_len = checked_product("q_columns_2d", "Q", &[rows, columns])?;
-    let mut q = buffers.acquire_with_capacity::<T>(q_len);
-    q.resize(q_len, T::default());
-    for col in 0..columns {
-        q[start + col + col * rows] = T::one();
+    let mut q = pooled_zeroed::<T>(buffers, OP, "Q", &[rows, columns])?;
+    {
+        let q_data = q.host_data_mut()?;
+        for col in 0..columns {
+            q_data[start + col + col * rows] = T::one();
+        }
     }
     if columns != 0 {
         apply_reflectors_data(
@@ -2314,7 +2372,7 @@ pub(crate) fn q_columns_2d<T: FaerLinalg>(
             packed.host_data()?,
             packed.shape()[1],
             coeff.host_data()?,
-            &mut q,
+            q.host_data_mut()?,
             rows,
             columns,
             k,
@@ -2322,6 +2380,7 @@ pub(crate) fn q_columns_2d<T: FaerLinalg>(
         )?;
         if positive_diagonal {
             let packed_data = packed.host_data()?;
+            let q_data = q.host_data_mut()?;
             // The gauge is defined by R's diagonal, so it fixes only the first `k` columns; a
             // complement column has no diagonal to fix and is left as the reflector product
             // produced it.
@@ -2332,12 +2391,13 @@ pub(crate) fn q_columns_2d<T: FaerLinalg>(
                 }
                 let phase = T::q_phase(packed_data[diagonal + diagonal * rows]);
                 for row in 0..rows {
-                    q[row + col * rows] = q[row + col * rows] * phase;
+                    q_data[row + col * rows] = q_data[row + col * rows] * phase;
                 }
             }
         }
     }
-    tensor_from_vec_with_template(vec![rows, columns], q, packed.placement())
+    q.set_placement(packed.placement().clone());
+    Ok(q)
 }
 
 /// Predicate: can this view be fed to the provider as a strided descriptor?

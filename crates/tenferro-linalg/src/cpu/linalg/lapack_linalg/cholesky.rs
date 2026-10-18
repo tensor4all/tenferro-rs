@@ -13,7 +13,7 @@ pub(crate) fn cholesky_compact_data<T: LapackLinalg>(
     buffers: &mut BufferPool,
     input: &[T],
     n: usize,
-) -> tenferro_tensor::Result<Vec<T>> {
+) -> tenferro_tensor::Result<TypedTensor<T>> {
     let expected_len = n.checked_mul(n).ok_or_else(|| {
         tenferro_tensor::Error::invalid_argument(
             "cholesky",
@@ -30,7 +30,7 @@ pub(crate) fn cholesky_compact_data<T: LapackLinalg>(
     }
     let mut lower = buffers.acquire_with_capacity::<T>(expected_len);
     if n == 0 {
-        return Ok(lower);
+        return TypedTensor::from_vec_col_major([0, 0], lower);
     }
     let dims = [n, n];
     let strides = [1, n as isize];
@@ -38,7 +38,7 @@ pub(crate) fn cholesky_compact_data<T: LapackLinalg>(
         tenferro_tensor::Error::invalid_argument("cholesky", "layout", error.to_string())
     })?;
     T::cholesky(buffers, a, &mut lower).map_err(provider(Op::Cholesky))?;
-    Ok(lower)
+    TypedTensor::from_vec_col_major([n, n], lower)
 }
 
 pub(crate) fn cholesky<T: LapackLinalg>(

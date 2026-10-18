@@ -880,12 +880,14 @@ fn managed_cholesky(
 trait ManagedCholeskyScalar: Copy + Send + Sync + TensorScalar + 'static {
     const DTYPE: DType;
 
+    /// The factor as a pooled tensor: the staging copy into the managed domain borrows it, and its
+    /// storage returns to the session pool when the copy is done.
     fn factor(
         context: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         data: &[Self],
         n: usize,
-    ) -> tenferro_tensor::Result<Vec<Self>>;
+    ) -> tenferro_tensor::Result<TypedTensor<Self>>;
 
     fn take_output(output: Tensor) -> tenferro_tensor::Result<TypedTensor<Self>>;
     fn wrap(output: TypedTensor<Self>) -> Tensor;
@@ -901,7 +903,7 @@ macro_rules! impl_managed_cholesky_scalar {
                 buffers: &mut BufferPool,
                 data: &[Self],
                 n: usize,
-            ) -> tenferro_tensor::Result<Vec<Self>> {
+            ) -> tenferro_tensor::Result<TypedTensor<Self>> {
                 {
                     #[cfg(feature = "native")]
                     {
@@ -957,13 +959,19 @@ where
     T: ManagedCholeskyScalar,
 {
     let n = validate_managed_cholesky_input(input, domain.id())?;
+    // The factor keeps its pool recycler: the copy below is its only use, and the staging storage
+    // returns to the session pool immediately afterwards.
     let values = if n == 0 {
-        Vec::new()
+        None
     } else {
-        input.with_host_read(|read| T::factor(context, buffers, read, n))??
+        Some(input.with_host_read(|read| T::factor(context, buffers, read, n))??)
     };
     let mut typed = T::take_output(domain.allocate(T::DTYPE, &[n, n])?)?;
-    write_managed_cholesky_output(&mut typed, domain.id(), &values)?;
+    let staged: &[T] = match &values {
+        Some(values) => values.host_data()?,
+        None => &[],
+    };
+    write_managed_cholesky_output(&mut typed, domain.id(), staged)?;
     Ok(T::wrap(typed))
 }
 
@@ -2490,7 +2498,7 @@ fn householder_qr_append_entered(
 
 fn householder_qr_r_entered(
     _context: &CpuExecutionContext<'_>,
-    _buffers: &mut BufferPool,
+    buffers: &mut BufferPool,
     packed: &Tensor,
     coeff: &Tensor,
     options: crate::QrOptions,
@@ -2502,7 +2510,7 @@ fn householder_qr_r_entered(
         return same_variant_pair!(
             packed,
             coeff,
-            |p, c| linalg::faer::raw_r_2d(p, c, positive),
+            |p, c| linalg::faer::raw_r_2d(buffers, p, c, positive),
             Err(Error::dtype_mismatch(
                 "householder_qr_r",
                 packed.dtype(),
@@ -2512,6 +2520,9 @@ fn householder_qr_r_entered(
     }
     #[cfg(feature = "blas")]
     {
+        // The LAPACK reflector state has no pooled R destination; its extraction builds the
+        // response vector itself.
+        let _ = buffers;
         same_variant_pair!(
             packed,
             coeff,

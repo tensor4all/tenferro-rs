@@ -256,7 +256,7 @@ const REMAINING_FAMILY_CEILINGS: &[(&str, usize)] = &[
     ("faer/solve/48", 2),
     ("faer/qr/48", 3),
     ("faer/qr/tall", 3),
-    ("faer/householder_qr/tall", 3),
+    ("faer/householder_qr/tall", 1),
     ("faer/rank_revealing_qr/tall", 5),
     ("faer/eigh/48", 3),
     ("faer/eigvalsh/48", 1),

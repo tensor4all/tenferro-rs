@@ -365,6 +365,54 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
     });
 }
 
+/// The managed route stages its factor in a pooled tensor, so the staging copy returns to the
+/// session pool when the op ends instead of freeing a per-call vector.
+#[cfg(feature = "native")]
+#[test]
+fn managed_cholesky_stages_its_factor_in_pooled_storage() {
+    let domain = FakeDomain::new();
+    let mut backend = backend(&domain);
+    let n = 8;
+    let mut values = vec![0.0_f64; n * n];
+    for col in 0..n {
+        for row in 0..n {
+            values[row + col * n] = if row == col {
+                (n + 1) as f64
+            } else {
+                0.25 / (1.0 + row.abs_diff(col) as f64)
+            };
+        }
+    }
+    let staged_bytes = n * n * std::mem::size_of::<f64>();
+    let mut warm: Option<(usize, usize)> = None;
+    for round in 0..3 {
+        let input = domain.tensor(&[n, n], values.clone());
+        let output = with_cpu_linalg(&mut backend, |session| {
+            session.cholesky(&Tensor::from_typed::<f64>(input))
+        })
+        .unwrap();
+        drop(output);
+        let stats = backend.buffer_pool_stats().unwrap();
+        eprintln!(
+            "round {round}: {} buffers / {} B retained",
+            stats.buffers, stats.capacity_bytes
+        );
+        assert!(
+            stats.capacity_bytes >= staged_bytes,
+            "the {staged_bytes} B factor staging must return to the pool, {} B retained",
+            stats.capacity_bytes
+        );
+        match warm {
+            None => warm = Some((stats.buffers, stats.capacity_bytes)),
+            Some(first) => assert_eq!(
+                (stats.buffers, stats.capacity_bytes),
+                first,
+                "a warm pool must serve and recover the whole staging buffer"
+            ),
+        }
+    }
+}
+
 #[test]
 fn fake_managed_cholesky_rejects_foreign_device_local_and_busy_buffers() {
     let domain = FakeDomain::new();
