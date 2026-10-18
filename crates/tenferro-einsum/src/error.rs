@@ -15,7 +15,7 @@
 //! assert_eq!(err.kind(), ErrorKind::Validation(ValidationKind::InvalidArgument));
 //! ```
 
-use tenferro_tensor::{DType, ErrorKind, ShapeMismatch, ShapeVec, ValidationError, ValidationKind};
+use tenferro_tensor::{DType, ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
 
 use crate::EINSUM_EXTENSION_FAMILY_ID;
 
@@ -61,13 +61,13 @@ pub enum PlanningError {
 ///
 /// ```rust
 /// use tenferro_einsum::Error;
-/// use tenferro_tensor::{ErrorKind, ShapeMismatch, ShapeVec, ValidationKind};
+/// use tenferro_tensor::{ErrorKind, ShapeMismatch, ValidationKind};
 ///
 /// let err = Error::validation(
 ///     "einsum",
 ///     ShapeMismatch::ExpectedActual {
-///         expected: ShapeVec::from_vec(vec![2, 3]),
-///         actual: ShapeVec::from_vec(vec![2, 4]),
+///         expected: vec![2, 3].into_iter().collect(),
+///         actual: vec![2, 4].into_iter().collect(),
 ///     }
 ///     .into(),
 /// );
@@ -183,8 +183,8 @@ impl Error {
         Self::validation(
             op,
             ShapeMismatch::ExpectedActual {
-                expected: ShapeVec::from_vec(expected.into()),
-                actual: ShapeVec::from_vec(actual.into()),
+                expected: expected.into().into_iter().collect(),
+                actual: actual.into().into_iter().collect(),
             }
             .into(),
         )

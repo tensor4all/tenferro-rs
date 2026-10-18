@@ -48,7 +48,7 @@ pub trait IntoRankShape<R: TensorRank> {
 ///
 /// ```rust
 /// use tenferro_tensor_core::{Rank, TensorRank};
-/// let shape = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3].into())?;
+/// let shape = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3].into_iter().collect())?;
 /// assert_eq!(shape.as_ref(), &[2, 3]);
 /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
 /// ```
@@ -72,7 +72,7 @@ pub trait TensorRank: private::Sealed + Clone + Copy + Debug + Eq + Send + Sync 
     /// ```rust
     /// use tenferro_tensor_core::{DynRank, TensorRank};
     ///
-    /// let shape: <DynRank as TensorRank>::Shape = vec![2, 3].into();
+    /// let shape: <DynRank as TensorRank>::Shape = vec![2, 3].into_iter().collect();
     /// assert_eq!(shape.as_ref(), &[2, 3]);
     /// ```
     type Shape: Clone + Debug + PartialEq + Eq + AsRef<[usize]> + IntoRankShape<Self>;
@@ -84,7 +84,7 @@ pub trait TensorRank: private::Sealed + Clone + Copy + Debug + Eq + Send + Sync 
     /// ```rust
     /// use tenferro_tensor_core::{DynRank, TensorRank};
     ///
-    /// let strides: <DynRank as TensorRank>::Strides = vec![1, 2].into();
+    /// let strides: <DynRank as TensorRank>::Strides = vec![1, 2].into_iter().collect();
     /// assert_eq!(strides.as_ref(), &[1, 2]);
     /// ```
     type Strides: Clone + Debug + PartialEq + Eq + AsRef<[isize]>;
@@ -96,7 +96,7 @@ pub trait TensorRank: private::Sealed + Clone + Copy + Debug + Eq + Send + Sync 
     /// ```rust
     /// use tenferro_tensor_core::{Rank, TensorRank};
     ///
-    /// let shape = <Rank<1> as TensorRank>::shape_from_vec(vec![4].into())?;
+    /// let shape = <Rank<1> as TensorRank>::shape_from_vec(vec![4].into_iter().collect())?;
     /// assert_eq!(shape.as_ref(), &[4]);
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
@@ -114,7 +114,7 @@ pub trait TensorRank: private::Sealed + Clone + Copy + Debug + Eq + Send + Sync 
     /// ```rust
     /// use tenferro_tensor_core::{Rank, TensorRank};
     ///
-    /// let shape = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3].into())?;
+    /// let shape = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3].into_iter().collect())?;
     /// assert_eq!(<Rank<2> as TensorRank>::shape_into_vec(shape).as_slice(), &[2, 3]);
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
@@ -127,7 +127,7 @@ pub trait TensorRank: private::Sealed + Clone + Copy + Debug + Eq + Send + Sync 
     /// ```rust
     /// use tenferro_tensor_core::{Rank, TensorRank};
     ///
-    /// let strides = <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2].into())?;
+    /// let strides = <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2].into_iter().collect())?;
     /// assert_eq!(strides.as_ref(), &[1, 2]);
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
@@ -145,7 +145,7 @@ pub trait TensorRank: private::Sealed + Clone + Copy + Debug + Eq + Send + Sync 
     /// ```rust
     /// use tenferro_tensor_core::{Rank, TensorRank};
     ///
-    /// let strides = <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2].into())?;
+    /// let strides = <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2].into_iter().collect())?;
     /// assert_eq!(<Rank<2> as TensorRank>::strides_into_vec(strides).as_slice(), &[1, 2]);
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
@@ -199,7 +199,7 @@ impl<const N: usize> IntoRankShape<Rank<N>> for &[usize; N] {
 
 impl<const N: usize> IntoRankShape<Rank<N>> for Vec<usize> {
     fn into_rank_shape(self) -> Result<[usize; N]> {
-        Rank::<N>::shape_from_vec(self.into())
+        Rank::<N>::shape_from_vec(self.into_iter().collect())
     }
 }
 

@@ -8,7 +8,7 @@ use cubek_matmul::{
 };
 use cubek_std::InputBinding;
 use num_complex::Complex32;
-use smallvec::SmallVec;
+use tinyvec::TinyVec;
 
 use super::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, ensure_resident_on_runtime,
@@ -21,8 +21,8 @@ use crate::{
 
 const DOT_GENERAL_OP: &str = "webgpu_dot_general";
 
-type AxisVec = SmallVec<[usize; 8]>;
-type ShapeVec = SmallVec<[usize; 8]>;
+type AxisVec = TinyVec<[usize; 8]>;
+type ShapeVec = TinyVec<[usize; 8]>;
 
 #[derive(Clone, Debug)]
 struct DotGeneralPlan {
@@ -221,8 +221,8 @@ fn build_dot_general_plan(
             return Err(Error::validation(
                 DOT_GENERAL_OP,
                 ShapeMismatch::IncompatibleShapes {
-                    lhs: ShapeVec::from_vec(vec![lhs_dim]),
-                    rhs: ShapeVec::from_vec(vec![rhs_dim]),
+                    lhs: ShapeVec::from([lhs_dim].as_slice()),
+                    rhs: ShapeVec::from([rhs_dim].as_slice()),
                 }
                 .into(),
             ));

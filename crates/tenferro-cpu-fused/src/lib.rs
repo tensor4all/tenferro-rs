@@ -92,15 +92,14 @@ fn strided_fused_op(op: ElementwiseFusionOp) -> FusedOp {
         ElementwiseFusionOp::Pow => FusedOp::Pow,
         ElementwiseFusionOp::Expm1 => FusedOp::Expm1,
         ElementwiseFusionOp::Log1p => FusedOp::Log1p,
+        // `strided-fused 0.6.0` propagates NaN through the ordered selects; the
+        // unfused kernels use the same `strided_basic` functions.
+        ElementwiseFusionOp::Maximum => FusedOp::Maximum,
+        ElementwiseFusionOp::Minimum => FusedOp::Minimum,
+        ElementwiseFusionOp::Clamp => FusedOp::Clamp,
         // INVARIANT: `plan_uses_unfused_op` declines remainder/`erf` (which
-        // have no `strided_fused` instruction) and `plan_uses_ordered_op`
-        // declines the ordered ops for their NaN semantics before a strided
-        // plan is built.
-        ElementwiseFusionOp::Maximum
-        | ElementwiseFusionOp::Minimum
-        | ElementwiseFusionOp::Clamp
-        | ElementwiseFusionOp::Remainder
-        | ElementwiseFusionOp::Erf => {
+        // have no `strided_fused` instruction) before a strided plan is built.
+        ElementwiseFusionOp::Remainder | ElementwiseFusionOp::Erf => {
             unreachable!(
                 "ops without a selected strided_fused instruction are declined before CPU fusion"
             )
@@ -121,17 +120,6 @@ fn plan_uses_unfused_op(plan: &ElementwiseFusionPlan) -> bool {
     })
 }
 
-fn plan_uses_ordered_op(plan: &ElementwiseFusionPlan) -> bool {
-    plan.ops().iter().any(|inst| {
-        matches!(
-            inst.op(),
-            ElementwiseFusionOp::Maximum
-                | ElementwiseFusionOp::Minimum
-                | ElementwiseFusionOp::Clamp
-        )
-    })
-}
-
 fn should_defer_to_broadcast_multiply_special_case(plan: &ElementwiseFusionPlan) -> bool {
     !plan.input_views().iter().all(|view| view.is_identity())
         && plan.ops().len() == 1
@@ -140,18 +128,13 @@ fn should_defer_to_broadcast_multiply_special_case(plan: &ElementwiseFusionPlan)
 }
 
 fn strided_fused_plan(plan: &ElementwiseFusionPlan) -> FusedPlan {
-    FusedPlan {
-        input_count: plan.input_count(),
-        outputs: plan.outputs().to_vec(),
-        ops: plan
-            .ops()
+    FusedPlan::new(
+        plan.input_count(),
+        plan.outputs().iter().copied(),
+        plan.ops()
             .iter()
-            .map(|inst| FusedInst {
-                op: strided_fused_op(inst.op()),
-                inputs: inst.inputs().to_vec(),
-            })
-            .collect(),
-    }
+            .map(|inst| FusedInst::new(strided_fused_op(inst.op()), inst.inputs().iter().copied())),
+    )
 }
 
 /// The two dtypes the CPU fused replay covers.
@@ -173,16 +156,14 @@ impl FusedDType {
 
 /// The fused dtype a plan selects, or `None` when the region stays unfused.
 ///
-/// Only `F32`/`F64` are selected: `strided-fused 0.5.2`'s vectorized chunk
+/// Only `F32`/`F64` are selected: `strided-fused 0.6.0`'s vectorized chunk
 /// replay covers only those dtypes, and every other preset dtype would run the
-/// unmeasured per-element interpreter. An ordered op (`Maximum`/`Minimum`/
-/// `Clamp`) also declines for a real dtype: the upstream kernels use Rust
-/// `.max`/`.min`, which do not propagate NaN, while tenferro's ordinary kernels
-/// do (`R-numerics-01`).
+/// unmeasured per-element interpreter. Ordered ops (`Maximum`/`Minimum`/
+/// `Clamp`) are selected: `strided-fused 0.6.0` propagates NaN through them
+/// with the same `strided_basic` select the unfused kernels use, so the fused
+/// route matches the per-instruction route bit for bit (`R-numerics-01`,
+/// strided-rs#315).
 fn select_fused_dtype(plan: &ElementwiseFusionPlan) -> Option<FusedDType> {
-    if plan_uses_ordered_op(plan) {
-        return None;
-    }
     match plan.dtype() {
         DType::F32 => Some(FusedDType::F32),
         DType::F64 => Some(FusedDType::F64),
@@ -243,7 +224,7 @@ fn erased_fusion_input<'a>(
     let ElementwiseFusionInputView::BroadcastInDim { shape, dims } = view else {
         return Ok(ErasedFusionInput {
             data,
-            dims: ShapeVec::from_slice(base_shape),
+            dims: ShapeVec::from(base_shape),
             strides: base_strides,
         });
     };
@@ -260,7 +241,7 @@ fn erased_fusion_input<'a>(
         ));
     }
 
-    let mut strides = StrideVec::from_elem(0, shape.len());
+    let mut strides: StrideVec = std::iter::repeat_n(0isize, shape.len()).collect();
     let mut seen = vec![false; shape.len()];
     for (source_axis, &target_axis) in dims.iter().enumerate() {
         if target_axis >= shape.len() {
@@ -294,7 +275,7 @@ fn erased_fusion_input<'a>(
 
     Ok(ErasedFusionInput {
         data,
-        dims: ShapeVec::from_slice(shape),
+        dims: ShapeVec::from(shape.as_slice()),
         strides,
     })
 }

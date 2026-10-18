@@ -86,11 +86,15 @@ thread count, or placement; `threads(1)` on a tenferro backend does not imply a
 one-thread vendor call.
 
 The token is not uniform across the two linalg providers, by design: the
-faer-backed `tlinalg` owns batch lanes and takes `Parallel` (pool plus budget),
-while `tlinalg-blas` is deliberately token-free because LAPACK/BLAS own their
-own threading, its batch loop is serial, and a Rayon fan-out around a vendor
-call would fight the vendor's own pool. The host places the vendor call instead;
-its scratch still comes from tenferro's buffer pool through the workspace seam.
+faer-backed `tlinalg` owns batch lanes and takes a `tcontract_exec::Exec` (pool
+plus budget plus the resolved batch policy), while `tlinalg-blas` is
+deliberately token-free because LAPACK/BLAS own their own threading, its batch
+loop is serial, and a Rayon fan-out around a vendor call would fight the
+vendor's own pool. The host places the vendor call instead; its scratch still
+comes from tenferro's buffer pool through the workspace seam. Because the
+BLAS linalg lane has no `Exec` and no tenferro lanes, tenferro refuses a forced
+batch strategy there before any write with a typed unsupported error; see the
+[CPU-execution guide's Batched Operation Strategy](../guides/cpu-execution.md#batched-operation-strategy).
 
 ## Data Path
 
@@ -133,11 +137,13 @@ the case that fell back to `interpret_inner_loop_uninit` and lost about 16x on
 replays its instruction list once instead of once per output.
 
 The selection is scoped to what was measured. Only `F32`/`F64` regions are
-selected, because 0.5.2's vectorized chunk replay covers only those dtypes;
+selected, because 0.6.0's vectorized chunk replay covers only those dtypes;
 C32/C64, integers and bool stay unfused rather than run the unmeasured
-per-element interpreter. An ordered real op (`Maximum`/`Minimum`/`Clamp`) also
-declines, because the upstream kernels use Rust `.max`/`.min`, which drop NaN
-while tenferro's ordinary kernels propagate it.
+per-element interpreter. Ordered real ops (`Maximum`/`Minimum`/`Clamp`) are
+selected: `strided-fused 0.6.0` propagates NaN through the same
+`strided_basic` select the ordinary kernels use (strided-rs#315), so the fused
+route matches the per-instruction route bit for bit. `Remainder` and `Erf`
+remain declined, because they have no `strided_fused` instruction.
 
 The measurement (2026-10-17, `AMD EPYC 7713P`, 1T and 4T) is recorded in
 [`docs/worklogs/perf-cpu-fusion-declined-2140.md`](../worklogs/perf-cpu-fusion-declined-2140.md),

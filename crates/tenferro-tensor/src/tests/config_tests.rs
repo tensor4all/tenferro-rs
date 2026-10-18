@@ -20,11 +20,11 @@ fn dot_general_axes_inline_spill_and_value_identity() {
             &config.lhs_batch_dims,
             &config.rhs_batch_dims,
         ] {
-            assert_eq!(axes.spilled(), count > 4);
+            assert_eq!(axes.is_heap(), count > 4);
         }
         let mut reserved = config.clone();
         reserved.lhs_contracting_dims.reserve(16);
-        assert!(reserved.lhs_contracting_dims.spilled());
+        assert!(reserved.lhs_contracting_dims.is_heap());
         assert_eq!(config, reserved);
         let hash = |value: &DotGeneralConfig| {
             let mut hasher = DefaultHasher::new();
@@ -57,10 +57,10 @@ fn dot_general_inline_axes_preserve_all_validation_errors() {
     ];
     for [lc, rc, lb, rb] in invalid {
         let config = DotGeneralConfig {
-            lhs_contracting_dims: lc.into(),
-            rhs_contracting_dims: rc.into(),
-            lhs_batch_dims: lb.into(),
-            rhs_batch_dims: rb.into(),
+            lhs_contracting_dims: lc.iter().copied().collect(),
+            rhs_contracting_dims: rc.iter().copied().collect(),
+            lhs_batch_dims: lb.iter().copied().collect(),
+            rhs_batch_dims: rb.iter().copied().collect(),
         };
         assert!(config.validate_dims_with_ranks(2, 2).is_err(), "{config:?}");
     }
@@ -110,7 +110,7 @@ fn validate_dims_with_explicit_ranks_accepts_valid_config() {
 fn degenerate_no_contract_is_an_outer_product_even_for_equal_shapes() {
     use crate::{degenerate_dot_kind, DegenerateDotKind};
 
-    let no_dims = || smallvec::SmallVec::new();
+    let no_dims = || tinyvec::TinyVec::new();
     let empty = DotGeneralConfig {
         lhs_contracting_dims: no_dims(),
         rhs_contracting_dims: no_dims(),

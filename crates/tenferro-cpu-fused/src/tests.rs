@@ -52,18 +52,7 @@ fn elementwise_fusion_validation_covers_descriptor_errors_and_empty_outputs() {
         )],
     );
     assert!(plan_uses_unfused_op(&remainder_plan));
-    assert!(!plan_uses_ordered_op(&remainder_plan));
 
-    let maximum_plan = ElementwiseFusionPlan::new(
-        DType::F32,
-        2,
-        vec![2],
-        vec![ElementwiseFusionInst::new(
-            ElementwiseFusionOp::Maximum,
-            vec![0, 1],
-        )],
-    );
-    assert!(plan_uses_ordered_op(&maximum_plan));
     assert!(reject_complex_ordered_dtypes("maximum", &[DType::F32]).is_ok());
     assert!(matches!(
         reject_complex_ordered_dtypes("maximum", &[DType::C64]),
@@ -316,51 +305,120 @@ fn elementwise_fusion_declines_bool_and_complex_dtypes() {
     );
 }
 
-#[test]
-fn elementwise_fusion_declines_ordered_real_dtypes_for_nan_propagation() {
-    use tenferro_tensor::backend::ElementwiseFusionInst;
+/// Bit-for-bit reference for an ordered fused op, from the same `strided_basic`
+/// selects the unfused kernels use.
+fn ordered_reference<T: num_traits::Float>(
+    op: ElementwiseFusionOp,
+    input: T,
+    lower: T,
+    upper: T,
+) -> T {
+    use strided_basic::{nan_propagating_maximum, nan_propagating_minimum};
+    match op {
+        ElementwiseFusionOp::Maximum => nan_propagating_maximum(input, lower),
+        ElementwiseFusionOp::Minimum => nan_propagating_minimum(input, lower),
+        ElementwiseFusionOp::Clamp => {
+            nan_propagating_minimum(upper, nan_propagating_maximum(lower, input))
+        }
+        other => unreachable!("not an ordered op: {other:?}"),
+    }
+}
 
-    let mut buffers = BufferPool::default();
-    let n = ELEMENTWISE_FUSION_MIN_ELEMENTS;
-    for (dtype, tensor) in [
-        (
-            DType::F32,
-            Tensor::from_typed::<f32>(
-                TypedTensor::<f32>::from_vec_col_major(vec![n], vec![1.0_f32; n]).unwrap(),
-            ),
-        ),
-        (
-            DType::F64,
-            Tensor::from_typed::<f64>(
-                TypedTensor::<f64>::from_vec_col_major(vec![n], vec![1.0_f64; n]).unwrap(),
-            ),
-        ),
-    ] {
-        for op in [
-            ElementwiseFusionOp::Maximum,
-            ElementwiseFusionOp::Minimum,
-            ElementwiseFusionOp::Clamp,
-        ] {
-            let plan = ElementwiseFusionPlan::new(
-                dtype,
-                2,
-                vec![2],
-                vec![ElementwiseFusionInst::new(op, vec![0, 1])],
-            );
-            assert!(
-                elementwise_fusion_with_pool(
+/// Above-floor ordered ops fuse and match the unfused route bit for bit,
+/// including NaN in every operand position and signed-zero ties.
+macro_rules! ordered_fusion_bit_match {
+    ($name:ident, $ty:ty, $dtype:expr) => {
+        #[test]
+        fn $name() {
+            use tenferro_tensor::backend::ElementwiseFusionInst;
+
+            let n = ELEMENTWISE_FUSION_MIN_ELEMENTS;
+            let mut buffers = BufferPool::default();
+            let input_data: Vec<$ty> = (0..n)
+                .map(|i| match i % 6 {
+                    0 => <$ty>::NAN,
+                    1 => 0.0,
+                    2 => -0.0,
+                    3 => 1.0 + i as $ty,
+                    4 => -1.0 - i as $ty,
+                    _ => (i as $ty) * 0.5,
+                })
+                .collect();
+            let lower_data: Vec<$ty> = (0..n)
+                .map(|i| match i % 6 {
+                    0 => 1.0,
+                    1 => -0.0,
+                    2 => 0.0,
+                    3 => <$ty>::NAN,
+                    4 => -2.0,
+                    _ => 0.25,
+                })
+                .collect();
+            let upper_data: Vec<$ty> = (0..n)
+                .map(|i| match i % 6 {
+                    0 => 2.0,
+                    1 => 0.0,
+                    2 => -0.0,
+                    3 => 2.0,
+                    4 => <$ty>::NAN,
+                    _ => 3.0,
+                })
+                .collect();
+            let tensor_of = |data: &[$ty]| {
+                Tensor::from_typed::<$ty>(
+                    TypedTensor::<$ty>::from_vec_col_major(vec![n], data.to_vec()).unwrap(),
+                )
+            };
+            let input = tensor_of(&input_data);
+            let lower = tensor_of(&lower_data);
+            let upper = tensor_of(&upper_data);
+
+            for op in [
+                ElementwiseFusionOp::Maximum,
+                ElementwiseFusionOp::Minimum,
+                ElementwiseFusionOp::Clamp,
+            ] {
+                let (input_count, inputs) = match op {
+                    ElementwiseFusionOp::Clamp => (3, vec![&input, &lower, &upper]),
+                    _ => (2, vec![&input, &lower]),
+                };
+                let plan = ElementwiseFusionPlan::new(
+                    $dtype,
+                    input_count,
+                    vec![input_count],
+                    vec![ElementwiseFusionInst::new(op, (0..input_count).collect())],
+                );
+                let outputs = elementwise_fusion_with_pool(
                     &mut buffers,
                     &ExecContext::serial(),
-                    &[&tensor, &tensor],
+                    &inputs,
                     &plan,
                 )
                 .unwrap()
-                .is_none(),
-                "{dtype:?} {op:?} must stay unfused: upstream `.max`/`.min` drop NaN"
-            );
+                .unwrap_or_else(|| panic!("{op:?} must fuse above the floor"));
+                let actual = outputs[0].as_slice::<$ty>().unwrap();
+                for index in 0..n {
+                    let expected = ordered_reference(
+                        op,
+                        input_data[index],
+                        lower_data[index],
+                        upper_data[index],
+                    );
+                    assert_eq!(
+                        actual[index].to_bits(),
+                        expected.to_bits(),
+                        "{op:?} diverged at {index}: {:?} != {:?}",
+                        actual[index],
+                        expected
+                    );
+                }
+            }
         }
-    }
+    };
 }
+
+ordered_fusion_bit_match!(ordered_fusion_matches_unfused_f32, f32, DType::F32);
+ordered_fusion_bit_match!(ordered_fusion_matches_unfused_f64, f64, DType::F64);
 
 #[test]
 fn elementwise_fusion_returns_none_for_erased_unsupported_ops() {

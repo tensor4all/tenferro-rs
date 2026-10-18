@@ -24,7 +24,7 @@ fn builder_axis_vec_stays_inline_for_common_rank() {
     let mut axes = crate::builder::AxisVec::new();
     axes.extend(0..4);
 
-    assert!(!axes.spilled());
+    assert!(!axes.is_heap());
 }
 
 fn unwrap_local(result: Result<ValueRef<StdTensorOp>>) -> usize {

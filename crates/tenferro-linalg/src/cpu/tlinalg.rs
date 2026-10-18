@@ -1,27 +1,26 @@
 //! Adapter from tenferro's CPU session to the extracted `tlinalg` (faer) provider.
 //!
-//! Tenferro supplies one [`tlinalg::Parallel`] resource. The provider owns batch
+//! Tenferro supplies one [`tcontract_exec::Exec`] resource. The provider owns batch
 //! lane selection, scratch, and numerical execution; this adapter only translates
 //! the session's retained pool and budget and maps provider errors.
 
 #![cfg(feature = "native")]
 
 use strided_view::RawStridedRef;
+use tcontract_exec::Exec;
 use tenferro_cpu::CpuExecutionContext;
 use tlinalg::packed_lu::{factor, factor_solve, solve_prepared, validate_pivots};
-use tlinalg::{FaerScalar, Op, Parallel};
+use tlinalg::{FaerScalar, Op};
 
 use super::tlinalg_error::map_error;
 
-/// Build the one parallelism token accepted by `tlinalg`.
-pub(crate) fn parallel_from<'a>(ctx: &CpuExecutionContext<'a>) -> Parallel<'a> {
-    match ctx.rayon_pool() {
-        Some(pool) => Parallel::Pool {
-            pool,
-            budget: ctx.thread_budget(),
-        },
-        None => Parallel::Sequential,
-    }
+/// Build the one execution token accepted by `tlinalg`.
+///
+/// The token borrows the retained execution resources of the caller's
+/// owner-scoped context, so the provider reuses the domain's pool wrapper and
+/// workspace instead of a per-call `Pool::borrow`.
+pub(crate) fn exec_from<'a>(ctx: &CpuExecutionContext<'a>) -> tenferro_tensor::Result<Exec<'a>> {
+    ctx.contraction_exec()
 }
 
 /// Factor `batch` compact `m x n` matrices in place.
@@ -34,7 +33,7 @@ pub(crate) fn factor_batch<T: FaerScalar>(
     pivots: &mut [i32],
     parity: &mut [T],
 ) -> tenferro_tensor::Result<()> {
-    factor(op, m, n, lu, pivots, parity, parallel_from(ctx)).map_err(|error| map_error(op, error))
+    factor(op, m, n, lu, pivots, parity, exec_from(ctx)?).map_err(|error| map_error(op, error))
 }
 
 /// Solve `op(A) X = B` for compact systems from packed factors.
@@ -75,7 +74,7 @@ pub(crate) fn solve_prepared_batch<T: FaerScalar>(
         output,
         transpose_a,
         conjugate_a,
-        parallel_from(ctx),
+        exec_from(ctx)?,
     )
     .map_err(|error| map_error(op, error))
 }
@@ -92,8 +91,8 @@ pub(crate) fn factor_solve_batch<T: FaerScalar>(
     pivots: &mut [i32],
     output: &mut [T],
 ) -> tenferro_tensor::Result<()> {
-    let par = parallel_from(ctx);
-    factor_solve(op, n, nrhs, packed_lu, pivots, output, par).map_err(|error| map_error(op, error))
+    let exec = exec_from(ctx)?;
+    factor_solve(op, n, nrhs, packed_lu, pivots, output, exec).map_err(|error| map_error(op, error))
 }
 
 /// Column-major strides for a compact `[rows, cols, batch]` stack.

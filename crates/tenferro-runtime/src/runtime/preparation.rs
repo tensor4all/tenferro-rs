@@ -2182,8 +2182,8 @@ fn exec_instruction_retained_bytes(instruction: &ExecInstruction) -> Option<usiz
             .output_slots
             .len()
             .checked_mul(size_of::<usize>())?,
-        smallvec_outer_bytes::<Vec<DimExpr>>(
-            instruction.output_shapes.spilled(),
+        tinyvec_outer_bytes::<Vec<DimExpr>>(
+            instruction.output_shapes.is_heap(),
             instruction.output_shapes.len(),
         )?,
         checked_sum_options(
@@ -2192,8 +2192,8 @@ fn exec_instruction_retained_bytes(instruction: &ExecInstruction) -> Option<usiz
                 .iter()
                 .map(|shape| dim_expr_vec_bytes(shape)),
         )?,
-        smallvec_outer_bytes::<Vec<ShapeExtent<DimExpr>>>(
-            instruction.output_extents.spilled(),
+        tinyvec_outer_bytes::<Vec<ShapeExtent<DimExpr>>>(
+            instruction.output_extents.is_heap(),
             instruction.output_extents.len(),
         )?,
         checked_sum_options(
@@ -2291,7 +2291,7 @@ fn dot_general_config_retained_bytes(config: &DotGeneralConfig) -> Option<usize>
         &config.rhs_batch_dims,
     ]
     .into_iter()
-    .filter(|axes| axes.spilled())
+    .filter(|axes| axes.is_heap())
     .try_fold(0usize, |sum, axes| {
         sum.checked_add(vec_bytes::<usize>(axes.len())?)
     })
@@ -2420,7 +2420,7 @@ fn input_projection_retained_bytes(
             .len()
             .checked_mul(size_of::<(u32, usize)>())?,
         match projection.layout() {
-            Some(LayoutProjection::ExactStrides(strides)) if strides.spilled() => {
+            Some(LayoutProjection::ExactStrides(strides)) if strides.is_heap() => {
                 strides.len().checked_mul(size_of::<isize>())?
             }
             _ => 0,
@@ -2488,8 +2488,8 @@ fn alignment_retry_edges(required: Option<u8>, actual: Option<u8>) -> Option<usi
     }
 }
 
-fn smallvec_outer_bytes<T>(spilled: bool, len: usize) -> Option<usize> {
-    if spilled {
+fn tinyvec_outer_bytes<T>(heap_backed: bool, len: usize) -> Option<usize> {
+    if heap_backed {
         len.checked_mul(size_of::<T>())
     } else {
         Some(0)

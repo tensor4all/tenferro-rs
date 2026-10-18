@@ -408,8 +408,8 @@ fn core_then_extension_program() -> FrozenProgram {
 
 fn two_input_signature(dtype: DType) -> InputSignature {
     InputSignature::new(vec![
-        signature_entry(dtype, ShapeVec::from_vec(vec![1024])),
-        signature_entry(dtype, ShapeVec::from_vec(vec![1024])),
+        signature_entry(dtype, vec![1024].into_iter().collect::<ShapeVec>()),
+        signature_entry(dtype, vec![1024].into_iter().collect::<ShapeVec>()),
     ])
 }
 

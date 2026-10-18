@@ -28,7 +28,7 @@ fn dot_general_retained_bytes_count_only_spilled_capacity() {
             &config.rhs_batch_dims,
         ]
         .into_iter()
-        .filter(|axes| axes.spilled())
+        .filter(|axes| axes.is_heap())
         .map(|axes| axes.capacity() * size_of::<usize>())
         .sum();
         assert_eq!(

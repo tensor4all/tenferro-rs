@@ -31,8 +31,8 @@ fn broadcast_with_shape(
         input_slots: vec![input],
         output_slots: vec![output],
         dtype: DType::F64,
-        output_shapes: vec![dim_shape(shape)].into(),
-        output_extents: vec![exact_extents(shape)].into(),
+        output_shapes: vec![dim_shape(shape)].into_iter().collect(),
+        output_extents: vec![exact_extents(shape)].into_iter().collect(),
         last_use: vec![true],
     }
 }
@@ -44,8 +44,8 @@ fn multiply_with_shape(lhs: usize, rhs: usize, output: usize, shape: &[usize]) -
         input_slots: vec![lhs, rhs],
         output_slots: vec![output],
         dtype: DType::F64,
-        output_shapes: vec![dim_shape(shape)].into(),
-        output_extents: vec![exact_extents(shape)].into(),
+        output_shapes: vec![dim_shape(shape)].into_iter().collect(),
+        output_extents: vec![exact_extents(shape)].into_iter().collect(),
         last_use: vec![true, true],
     }
 }
@@ -57,8 +57,8 @@ fn add_with_shape(lhs: usize, rhs: usize, output: usize, shape: &[usize]) -> Exe
         input_slots: vec![lhs, rhs],
         output_slots: vec![output],
         dtype: DType::F64,
-        output_shapes: vec![dim_shape(shape)].into(),
-        output_extents: vec![exact_extents(shape)].into(),
+        output_shapes: vec![dim_shape(shape)].into_iter().collect(),
+        output_extents: vec![exact_extents(shape)].into_iter().collect(),
         last_use: vec![true, true],
     }
 }
@@ -73,12 +73,15 @@ fn broadcast(input: usize, output: usize, dims: Vec<usize>) -> ExecInstruction {
         input_slots: vec![input],
         output_slots: vec![output],
         dtype: DType::F64,
-        output_shapes: vec![vec![DimExpr::Const(2), DimExpr::Const(2)]].into(),
+        output_shapes: vec![vec![DimExpr::Const(2), DimExpr::Const(2)]]
+            .into_iter()
+            .collect(),
         output_extents: vec![vec![
             ShapeExtent::exact(DimExpr::Const(2)),
             ShapeExtent::exact(DimExpr::Const(2)),
         ]]
-        .into(),
+        .into_iter()
+        .collect(),
         last_use: vec![true],
     }
 }
@@ -90,12 +93,15 @@ fn multiply(lhs: usize, rhs: usize, output: usize) -> ExecInstruction {
         input_slots: vec![lhs, rhs],
         output_slots: vec![output],
         dtype: DType::F64,
-        output_shapes: vec![vec![DimExpr::Const(2), DimExpr::Const(2)]].into(),
+        output_shapes: vec![vec![DimExpr::Const(2), DimExpr::Const(2)]]
+            .into_iter()
+            .collect(),
         output_extents: vec![vec![
             ShapeExtent::exact(DimExpr::Const(2)),
             ShapeExtent::exact(DimExpr::Const(2)),
         ]]
-        .into(),
+        .into_iter()
+        .collect(),
         last_use: vec![true, true],
     }
 }
@@ -114,8 +120,8 @@ fn fused_segment_with_a_foreign_input_dtype_declines_and_runs_unfused() {
                 input_slots: vec![0],
                 output_slots: vec![2],
                 dtype: DType::F64,
-                output_shapes: vec![dim_shape(&[2, 2])].into(),
-                output_extents: vec![exact_extents(&[2, 2])].into(),
+                output_shapes: vec![dim_shape(&[2, 2])].into_iter().collect(),
+                output_extents: vec![exact_extents(&[2, 2])].into_iter().collect(),
                 last_use: vec![true],
             },
             ExecInstruction {
@@ -127,8 +133,8 @@ fn fused_segment_with_a_foreign_input_dtype_declines_and_runs_unfused() {
                 input_slots: vec![1],
                 output_slots: vec![3],
                 dtype: DType::F64,
-                output_shapes: vec![dim_shape(&[])].into(),
-                output_extents: vec![exact_extents(&[])].into(),
+                output_shapes: vec![dim_shape(&[])].into_iter().collect(),
+                output_extents: vec![exact_extents(&[])].into_iter().collect(),
                 last_use: vec![true],
             },
             multiply_with_shape(3, 2, 4, &[2, 2]),

@@ -23,10 +23,10 @@ fn config(
     rhs_batch: &[usize],
 ) -> DotGeneralConfig {
     DotGeneralConfig {
-        lhs_contracting_dims: lhs_contracting.into(),
-        rhs_contracting_dims: rhs_contracting.into(),
-        lhs_batch_dims: lhs_batch.into(),
-        rhs_batch_dims: rhs_batch.into(),
+        lhs_contracting_dims: lhs_contracting.iter().copied().collect(),
+        rhs_contracting_dims: rhs_contracting.iter().copied().collect(),
+        lhs_batch_dims: lhs_batch.iter().copied().collect(),
+        rhs_batch_dims: rhs_batch.iter().copied().collect(),
     }
 }
 

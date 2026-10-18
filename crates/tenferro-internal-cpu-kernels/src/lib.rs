@@ -185,7 +185,7 @@ where
     .map_err(|err| Error::backend_source(op, err))?;
     // SAFETY: the successful map replay writes every logical destination element.
     let out = unsafe { out.assume_init_as_recycled::<R>()? };
-    let shape = R::shape_from_vec(view.shape().to_vec().into())
+    let shape = R::shape_from_vec(view.shape().iter().copied().collect())
         .map_err(|err| Error::backend_source(op, err))?;
     let mut tensor = TypedTensor::from_vec_col_major(
         shape,

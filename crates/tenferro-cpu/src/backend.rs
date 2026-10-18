@@ -608,6 +608,8 @@ pub struct CpuBackend {
     resolved: ResolvedCpuExecution,
     pub(crate) engine: Arc<CpuEngine>,
     allocation_domain: Option<Arc<dyn SharedTensorAllocationDomain>>,
+    /// Default batch lane policy; followed by clones and placement handles.
+    batch_policy: crate::CpuBatchPolicy,
     /// Owner this handle's sessions are admitted under. `None` acquires a fresh
     /// owner; a child execution handle carries the issuing execution's owner so
     /// its sessions are admitted reentrant instead of parking on a conflict.
@@ -942,6 +944,7 @@ impl CpuBackend {
                 resolved,
                 engine,
                 allocation_domain: None,
+                batch_policy: crate::CpuBatchPolicy::default(),
             })
         }
     }
@@ -975,6 +978,7 @@ impl CpuBackend {
             resolved: ResolvedCpuExecution::Managed(engine.placement().clone()),
             engine,
             allocation_domain: None,
+            batch_policy: crate::CpuBatchPolicy::default(),
         }
     }
 
@@ -1037,6 +1041,7 @@ impl CpuBackend {
             resolved,
             engine: base_engine,
             allocation_domain: None,
+            batch_policy: crate::CpuBatchPolicy::default(),
         }
     }
 
@@ -1295,6 +1300,7 @@ impl CpuBackend {
             resolved,
             engine,
             allocation_domain: self.allocation_domain.clone(),
+            batch_policy: self.batch_policy,
         })
     }
 
@@ -1750,7 +1756,8 @@ impl CpuBackend {
     pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> crate::Result<R> {
         let admission = self.execution_admission()?;
         let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
         Ok(entry.enter(ParallelMode::Sequential, |_| op()))
     }
 
@@ -1906,6 +1913,44 @@ impl CpuBackend {
         self.allocation_domain.as_ref()
     }
 
+    /// Set this backend's default batch policy.
+    ///
+    /// The default applies to every batched operation run through this backend
+    /// value and its clones, unless an enclosing
+    /// [`crate::with_batch_policy`] scope overrides it. Wrapping a single call
+    /// in that scope expresses a per-operation choice. The default is
+    /// [`crate::CpuBatchStrategy::Auto`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::{CpuBackend, CpuBatchPolicy, CpuBatchStrategy};
+    ///
+    /// let backend = CpuBackend::with_threads(1)?
+    ///     .with_batch_policy(CpuBatchPolicy::new(CpuBatchStrategy::Sequential));
+    /// assert_eq!(backend.batch_policy().strategy, CpuBatchStrategy::Sequential);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn with_batch_policy(mut self, policy: crate::CpuBatchPolicy) -> Self {
+        self.batch_policy = policy;
+        self
+    }
+
+    /// Return this backend's default batch policy.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::{CpuBackend, CpuBatchPolicy};
+    ///
+    /// assert_eq!(CpuBackend::new().batch_policy(), CpuBatchPolicy::default());
+    /// ```
+    #[must_use]
+    pub fn batch_policy(&self) -> crate::CpuBatchPolicy {
+        self.batch_policy
+    }
+
     fn run_backend_session_cached<R>(
         &mut self,
         cache: Option<&mut gemm::GemmAnalysisCache>,
@@ -1940,7 +1985,8 @@ impl CpuBackend {
                         .map_err(affinity_error)?;
                 let permit = admission.permit();
                 let owner = permit.owner();
-                let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+                let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+                    .with_batch_policy(self.batch_policy);
                 // Provider-owned BLAS threading does not change session entry: the
                 // permit, including provider exclusion, spans this entire callback.
                 let run = |entered| {

@@ -178,7 +178,8 @@ impl CpuBackend {
         let permit = Arc::new(self.acquire_execution_permit(owner)?);
         let affinity = CallerAffinityGuard::enter(self.engine.domain().caller_cpus())
             .map_err(|error| crate::Error::backend_source(OP, error))?;
-        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit)
+            .with_batch_policy(self.batch_policy);
         let result = entry.enter(entry.preferred_engine_mode(), |_| {
             SCOPE.with(|slot| {
                 *slot.borrow_mut() = Some(Scope {

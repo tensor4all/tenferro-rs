@@ -269,8 +269,8 @@ pub fn matmul_config_for_shapes(
         return Err(Error::validation(
             op,
             ShapeMismatch::IncompatibleShapes {
-                lhs: lhs_shape.to_vec().into(),
-                rhs: rhs_shape.to_vec().into(),
+                lhs: lhs_shape.iter().copied().collect(),
+                rhs: rhs_shape.iter().copied().collect(),
             }
             .into(),
         ));

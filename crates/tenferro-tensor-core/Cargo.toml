@@ -23,5 +23,5 @@ name = "tenferro_tensor_core"
 
 [dependencies]
 num-complex.workspace = true
-smallvec.workspace = true
+tinyvec.workspace = true
 thiserror.workspace = true

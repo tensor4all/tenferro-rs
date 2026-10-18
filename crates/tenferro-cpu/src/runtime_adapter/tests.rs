@@ -331,19 +331,19 @@ fn two_input_signature() -> InputSignature {
     InputSignature::new(vec![
         InputSignatureEntry::new(
             DType::F64,
-            ShapeVec::from_vec(vec![2, 3]),
+            vec![2, 3].into_iter().collect::<ShapeVec>(),
             Placement::default(),
             layout_class(),
-            StrideVec::from_vec(vec![1, 2]),
+            vec![1, 2].into_iter().collect::<StrideVec>(),
             Some(4),
         )
         .expect("lhs signature"),
         InputSignatureEntry::new(
             DType::F64,
-            ShapeVec::from_vec(vec![5]),
+            vec![5].into_iter().collect::<ShapeVec>(),
             Placement::default(),
             layout_class(),
-            StrideVec::from_vec(vec![1]),
+            vec![1].into_iter().collect::<StrideVec>(),
             Some(4),
         )
         .expect("rhs signature"),
@@ -353,10 +353,10 @@ fn two_input_signature() -> InputSignature {
 fn high_rank_signature() -> InputSignature {
     InputSignature::new(vec![InputSignatureEntry::new(
         DType::F64,
-        ShapeVec::from_vec(vec![1; 9]),
+        vec![1; 9].into_iter().collect::<ShapeVec>(),
         Placement::default(),
         layout_class(),
-        StrideVec::from_vec(vec![1; 9]),
+        vec![1; 9].into_iter().collect::<StrideVec>(),
         None,
     )
     .expect("high-rank signature")])

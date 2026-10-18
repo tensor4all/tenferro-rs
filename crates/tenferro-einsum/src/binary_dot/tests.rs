@@ -19,10 +19,10 @@ fn compact_configs_inline_four_axes_and_spill_larger_lists() {
         assert_eq!(config.rhs_contracting_dims.len(), contracting);
         assert_eq!(config.lhs_batch_dims.len(), batch);
         assert_eq!(config.rhs_batch_dims.len(), batch);
-        assert_eq!(config.lhs_contracting_dims.spilled(), contracting > 4);
-        assert_eq!(config.rhs_contracting_dims.spilled(), contracting > 4);
-        assert_eq!(config.lhs_batch_dims.spilled(), batch > 4);
-        assert_eq!(config.rhs_batch_dims.spilled(), batch > 4);
+        assert_eq!(config.lhs_contracting_dims.is_heap(), contracting > 4);
+        assert_eq!(config.rhs_contracting_dims.is_heap(), contracting > 4);
+        assert_eq!(config.lhs_batch_dims.is_heap(), batch > 4);
+        assert_eq!(config.rhs_batch_dims.is_heap(), batch > 4);
         let labels = [lhs, rhs, output].map(|s| s.bytes().map(u32::from).collect::<Vec<_>>());
         let full =
             try_build_exact_output_binary_dot_plan(&labels[0], &labels[1], &labels[2]).unwrap();

@@ -214,8 +214,8 @@ impl Error {
         Self::validation(
             op,
             tenferro_tensor_core::ShapeMismatch::IncompatibleShapes {
-                lhs: tenferro_tensor_core::ShapeVec::from_vec(lhs.into()),
-                rhs: tenferro_tensor_core::ShapeVec::from_vec(rhs.into()),
+                lhs: lhs.into().into_iter().collect(),
+                rhs: rhs.into().into_iter().collect(),
             }
             .into(),
         )

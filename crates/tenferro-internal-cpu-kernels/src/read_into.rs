@@ -2,7 +2,6 @@
 
 //! CPU-owned one-shot elementwise read-into replay.
 
-use smallvec::SmallVec;
 use strided_kernel::{
     erased_map_into, erased_zip_into, ErasedMapOp, ErasedZipOp, ExecContext, KernelDType,
 };
@@ -11,6 +10,7 @@ use tenferro_tensor::{
     DType, Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensorView,
     TypedTensorViewMut,
 };
+use tinyvec::TinyVec;
 
 use crate::Error;
 use tenferro_cpu_basic::{erased_raw_strided_mut, erased_raw_strided_ptr};
@@ -157,8 +157,8 @@ fn execute_one_shot_map<T: 'static>(
     }
     .map_err(|error| Error::backend_source("elementwise_read_into", error))?;
 
-    let out_dims = SmallVec::<[usize; 8]>::from_slice(out.shape());
-    let out_strides = SmallVec::<[isize; 8]>::from_slice(out.strides());
+    let out_dims = TinyVec::<[usize; 8]>::from(out.shape());
+    let out_strides = TinyVec::<[isize; 8]>::from(out.strides());
     let out_offset = out.offset();
     let out_data = out.host_storage_mut()?;
     // INVARIANT: the copied output layout describes this uniquely borrowed
@@ -217,8 +217,8 @@ fn execute_one_shot_zip<T: 'static>(
     }
     .map_err(|error| Error::backend_source("elementwise_read_into", error))?;
 
-    let out_dims = SmallVec::<[usize; 8]>::from_slice(out.shape());
-    let out_strides = SmallVec::<[isize; 8]>::from_slice(out.strides());
+    let out_dims = TinyVec::<[usize; 8]>::from(out.shape());
+    let out_strides = TinyVec::<[isize; 8]>::from(out.strides());
     let out_offset = out.offset();
     let out_data = out.host_storage_mut()?;
     // INVARIANT: the copied output layout describes this uniquely borrowed

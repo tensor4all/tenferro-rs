@@ -341,8 +341,8 @@ fn provider_mapping_failures_return_the_checked_state_unchanged() {
     let checked = CheckedRead::<DynRank>::new::<bool>(
         owner.as_ref(),
         owner.as_ref().span(),
-        vec![4].into(),
-        vec![1].into(),
+        vec![4].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("checked wrong-length read");
@@ -362,8 +362,8 @@ fn provider_mapping_failures_return_the_checked_state_unchanged() {
     let checked = CheckedWrite::<DynRank>::new::<bool>(
         owner.as_mut(),
         span,
-        vec![4].into(),
-        vec![1].into(),
+        vec![4].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("checked wrong-length write");
@@ -379,8 +379,8 @@ fn provider_mapping_failures_return_the_checked_state_unchanged() {
     let checked = CheckedRead::<DynRank>::new::<bool>(
         owner.as_ref(),
         owner.as_ref().span(),
-        vec![4].into(),
-        vec![1].into(),
+        vec![4].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("checked unsupported read");
@@ -397,8 +397,8 @@ fn provider_mapping_failures_return_the_checked_state_unchanged() {
     let checked = CheckedWrite::<DynRank>::new::<bool>(
         owner.as_mut(),
         span,
-        vec![4].into(),
-        vec![1].into(),
+        vec![4].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("checked unsupported write");
@@ -418,8 +418,8 @@ fn provider_mapping_failures_return_the_checked_state_unchanged() {
     let checked = CheckedWrite::<DynRank>::new::<f64>(
         owner.as_mut(),
         span,
-        vec![1].into(),
-        vec![1].into(),
+        vec![1].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("checked misaligned write");
@@ -437,8 +437,8 @@ fn checked_layout_rejects_invalid_dtype_and_out_of_span_before_mapping() {
     let invalid = CheckedRead::<DynRank>::new::<bool>(
         owner.as_ref(),
         span,
-        vec![5].into(),
-        vec![1].into(),
+        vec![5].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     );
     assert!(matches!(invalid, Err(AccessError::InvalidLayout { .. })));
@@ -447,8 +447,8 @@ fn checked_layout_rejects_invalid_dtype_and_out_of_span_before_mapping() {
     let checked_bool = CheckedRead::<DynRank>::new::<bool>(
         owner.as_ref(),
         span,
-        vec![4].into(),
-        vec![1].into(),
+        vec![4].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("checked bool read");
@@ -464,8 +464,8 @@ fn checked_layout_rejects_invalid_dtype_and_out_of_span_before_mapping() {
     let length_mismatch = CheckedRead::<DynRank>::new::<f64>(
         aligned_owner.as_ref(),
         aligned_owner.as_ref().span(),
-        vec![1].into(),
-        vec![1].into(),
+        vec![1].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     );
     assert!(matches!(
@@ -477,8 +477,8 @@ fn checked_layout_rejects_invalid_dtype_and_out_of_span_before_mapping() {
     let foreign_span = CheckedRead::<DynRank>::new::<bool>(
         owner.as_ref(),
         foreign_owner.as_ref().span(),
-        vec![4].into(),
-        vec![1].into(),
+        vec![4].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     );
     assert!(matches!(
@@ -490,8 +490,8 @@ fn checked_layout_rejects_invalid_dtype_and_out_of_span_before_mapping() {
     let overlapping = CheckedWrite::<DynRank>::new::<bool>(
         owner.as_mut(),
         span,
-        vec![2, 2].into(),
-        vec![1, 1].into(),
+        vec![2, 2].into_iter().collect(),
+        vec![1, 1].into_iter().collect(),
         0,
     );
     assert!(matches!(
@@ -520,8 +520,8 @@ fn mapping_wrappers_and_checked_descriptor_views_are_private_and_borrowed() {
     let checked = CheckedRead::<DynRank>::new::<bool>(
         owner.as_ref(),
         span,
-        vec![2, 2].into(),
-        vec![1, 3].into(),
+        vec![2, 2].into_iter().collect(),
+        vec![1, 3].into_iter().collect(),
         0,
     )
     .expect("checked descriptor");
@@ -549,8 +549,8 @@ fn prepared_contiguous_read_and_write_use_typed_slices() {
     let checked = CheckedRead::<DynRank>::new::<bool>(
         owner.as_ref(),
         span,
-        vec![4].into(),
-        vec![1].into(),
+        vec![4].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("checked read");
@@ -575,8 +575,8 @@ fn prepared_contiguous_read_and_write_use_typed_slices() {
     let checked = CheckedWrite::<DynRank>::new::<bool>(
         owner.as_mut(),
         span,
-        vec![4].into(),
-        vec![1].into(),
+        vec![4].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("checked write");
@@ -602,8 +602,8 @@ fn prepared_strided_iterators_cover_reverse_and_empty_layouts() {
     let checked = CheckedRead::<DynRank>::new::<bool>(
         owner.as_ref(),
         span,
-        vec![2, 2].into(),
-        vec![1, -2].into(),
+        vec![2, 2].into_iter().collect(),
+        vec![1, -2].into_iter().collect(),
         2,
     )
     .expect("checked reverse read");
@@ -620,8 +620,8 @@ fn prepared_strided_iterators_cover_reverse_and_empty_layouts() {
     let empty = CheckedRead::<DynRank>::new::<bool>(
         empty_owner.as_ref(),
         empty_owner.as_ref().span(),
-        vec![0].into(),
-        vec![1].into(),
+        vec![0].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("empty checked read");
@@ -640,8 +640,8 @@ fn prepared_mutable_strided_iterator_requires_injective_layout() {
     let checked = CheckedWrite::<DynRank>::new::<bool>(
         owner.as_mut(),
         span,
-        vec![2, 2].into(),
-        vec![1, -2].into(),
+        vec![2, 2].into_iter().collect(),
+        vec![1, -2].into_iter().collect(),
         2,
     )
     .expect("checked mutable reverse layout");
@@ -664,8 +664,8 @@ fn device_preparation_keeps_host_access_unavailable() {
     let checked = CheckedRead::<DynRank>::new::<bool>(
         owner.as_ref(),
         span,
-        vec![2].into(),
-        vec![1].into(),
+        vec![2].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("device checked read");
@@ -678,8 +678,8 @@ fn device_preparation_keeps_host_access_unavailable() {
     let checked = CheckedWrite::<DynRank>::new::<bool>(
         owner.as_mut(),
         span,
-        vec![2].into(),
-        vec![1].into(),
+        vec![2].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("device checked write");
@@ -706,8 +706,8 @@ fn device_preparation_retains_provider_state_until_checked_access_drops() {
     let checked = CheckedRead::<DynRank>::new::<bool>(
         owner.as_ref(),
         owner.as_ref().span(),
-        vec![2].into(),
-        vec![1].into(),
+        vec![2].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("prepared checked read");
@@ -729,8 +729,8 @@ fn provider_resolution_counts_do_not_depend_on_element_count() {
     let small = CheckedRead::<DynRank>::new::<bool>(
         small.as_ref(),
         small.as_ref().span(),
-        vec![1].into(),
-        vec![1].into(),
+        vec![1].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("small checked read");
@@ -741,8 +741,8 @@ fn provider_resolution_counts_do_not_depend_on_element_count() {
     let large = CheckedRead::<DynRank>::new::<bool>(
         large.as_ref(),
         large.as_ref().span(),
-        vec![4096].into(),
-        vec![1].into(),
+        vec![4096].into_iter().collect(),
+        vec![1].into_iter().collect(),
         0,
     )
     .expect("large checked read");

@@ -176,15 +176,15 @@ impl NativeStridedCopyPlan {
         }
 
         let source = TensorLayout::<DynRank>::from_parts(
-            dims.to_vec().into(),
-            src_strides.to_vec().into(),
+            dims.iter().copied().collect(),
+            src_strides.iter().copied().collect(),
             src_offset,
             src_allocation_len,
         )
         .map_err(|source| crate::Error::validation(op, source))?;
         let destination = TensorLayout::<DynRank>::from_parts(
-            dims.to_vec().into(),
-            dst_strides.to_vec().into(),
+            dims.iter().copied().collect(),
+            dst_strides.iter().copied().collect(),
             dst_offset,
             dst_allocation_len,
         )
@@ -199,9 +199,11 @@ impl NativeStridedCopyPlan {
             })?;
 
         Ok(Self {
-            dims: fusion.dims,
-            src_strides: fusion.src_strides,
-            dst_strides: fusion.dst_strides,
+            // strided-perm 0.6 stores the fused axes inline; this plan keeps
+            // the previous heap vectors, one allocation per plan build.
+            dims: fusion.dims.to_vec(),
+            src_strides: fusion.src_strides.to_vec(),
+            dst_strides: fusion.dst_strides.to_vec(),
             src_offset,
             dst_offset,
             len,

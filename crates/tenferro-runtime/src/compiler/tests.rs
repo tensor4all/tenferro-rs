@@ -53,8 +53,8 @@ fn make_exec_instr(
         input_slots,
         output_slots: output_slots.clone(),
         dtype: DType::F64,
-        output_shapes: vec![Vec::new(); output_slots.len()].into(),
-        output_extents: vec![Vec::new(); output_slots.len()].into(),
+        output_shapes: vec![Vec::new(); output_slots.len()].into_iter().collect(),
+        output_extents: vec![Vec::new(); output_slots.len()].into_iter().collect(),
         last_use: Vec::new(),
     }
 }
@@ -75,9 +75,8 @@ fn make_exec_instr_with_meta(
         output_extents: output_shapes
             .iter()
             .map(|shape| exact_extents(shape))
-            .collect::<Vec<_>>()
-            .into(),
-        output_shapes: output_shapes.into(),
+            .collect(),
+        output_shapes: output_shapes.into_iter().collect(),
         last_use: Vec::new(),
     }
 }

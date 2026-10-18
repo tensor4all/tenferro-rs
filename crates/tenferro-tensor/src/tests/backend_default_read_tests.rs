@@ -462,8 +462,8 @@ impl TensorStructural for DefaultReadBackend {
             return Err(crate::Error::validation(
                 "copy_read_into",
                 crate::ShapeMismatch::IncompatibleShapes {
-                    lhs: src.shape().to_vec().into(),
-                    rhs: dst.shape().to_vec().into(),
+                    lhs: src.shape().iter().copied().collect(),
+                    rhs: dst.shape().iter().copied().collect(),
                 }
                 .into(),
             ));

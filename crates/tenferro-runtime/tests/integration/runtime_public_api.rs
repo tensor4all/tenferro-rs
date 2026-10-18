@@ -58,8 +58,10 @@ fn runtime_prepared_execution_hot_path_keeps_input_metadata_inline() {
         source.contains("type RuntimeInputReads<'a> = SmallVec"),
         "Runtime::run_prepared should keep short input reference lists inline"
     );
+    // `TensorRead` has no `Default`, so `tinyvec::Array` cannot hold the input
+    // read list; the shape list has no such constraint and moved to `TinyVec`.
     assert!(
-        source.contains("type RuntimeInputShapes<'a> = SmallVec"),
+        source.contains("type RuntimeInputShapes<'a> = TinyVec"),
         "Runtime::run_prepared should keep short input shape lists inline"
     );
     assert!(
@@ -822,30 +824,28 @@ fn prepared_elementwise_region_executes_as_one_fused_command() {
     );
 }
 
-/// An ordered op (`maximum`/`minimum`/`clamp`) stays unfused above the floor and
-/// keeps tenferro's NaN propagation.
+/// An ordered op (`maximum`/`minimum`/`clamp`) above the floor fuses and keeps
+/// tenferro's NaN propagation.
 ///
-/// `strided-fused 0.5.2` implements the ordered ops with Rust `.max`/`.min`,
-/// which drop NaN, while the per-instruction kernels propagate it. The region is
-/// therefore declined (`R-numerics-01`), and the fallback must return NaN for a
-/// NaN operand.
+/// `strided-fused 0.6.0` propagates NaN through its ordered kernels with the same
+/// `strided_basic` select the unfused kernels use (TF5, strided-rs#315), so the
+/// region executes through the fused route and must still return NaN for a NaN
+/// operand (`R-numerics-01`).
 #[test]
-fn prepared_ordered_region_declines_and_propagates_nan() {
+fn prepared_ordered_region_fuses_and_propagates_nan() {
     for dtype in [DType::F32, DType::F64] {
         let runtime = cpu_runtime();
         let n = 16 * 1024usize;
 
         let x = TracedTensor::input_concrete_shape(dtype, &[n]).unwrap();
         let y = TracedTensor::input_concrete_shape(dtype, &[n]).unwrap();
-        let one = match dtype {
-            DType::F32 => Tensor::from_vec_col_major(vec![n], vec![1.0_f32; n]).unwrap(),
-            DType::F64 => Tensor::from_vec_col_major(vec![n], vec![1.0_f64; n]).unwrap(),
-            _ => unreachable!(),
-        };
-        let one = TracedTensor::from_tensor_concrete_shape(one).unwrap();
-        let out = (&x.maximum(&y).unwrap() + &one).unwrap();
+        let z = TracedTensor::input_concrete_shape(dtype, &[n]).unwrap();
+        let out = (&x.maximum(&y).unwrap() + &z).unwrap();
         let program = GraphCompiler::new()
-            .compile_with_input_specs(&out, &[(&x, dtype, &[n]), (&y, dtype, &[n])])
+            .compile_with_input_specs(
+                &out,
+                &[(&x, dtype, &[n]), (&y, dtype, &[n]), (&z, dtype, &[n])],
+            )
             .unwrap();
 
         let nan_input = match dtype {
@@ -858,9 +858,14 @@ fn prepared_ordered_region_declines_and_propagates_nan() {
             DType::F64 => Tensor::from_vec_col_major(vec![n], vec![1.0_f64; n]).unwrap(),
             _ => unreachable!(),
         };
+        let one = match dtype {
+            DType::F32 => Tensor::from_vec_col_major(vec![n], vec![1.0_f32; n]).unwrap(),
+            DType::F64 => Tensor::from_vec_col_major(vec![n], vec![1.0_f64; n]).unwrap(),
+            _ => unreachable!(),
+        };
 
         let prepared = runtime
-            .prepare_compiled(&program, &[&nan_input, &finite_input])
+            .prepare_compiled(&program, &[&nan_input, &finite_input, &one])
             .unwrap();
         assert!(
             prepared.elementwise_region_summary().0 >= 1,
@@ -868,12 +873,12 @@ fn prepared_ordered_region_declines_and_propagates_nan() {
         );
 
         let mut out = runtime
-            .run_prepared(&prepared, &[&nan_input, &finite_input])
+            .run_prepared(&prepared, &[&nan_input, &finite_input, &one])
             .unwrap();
         assert_eq!(
             prepared.elementwise_region_execution_counts(),
-            (0, 1),
-            "{dtype:?}: the NaN-unsafe ordered region must be declined"
+            (1, 0),
+            "{dtype:?}: the NaN-propagating ordered region must run through the fused route"
         );
         let out = out.pop().unwrap();
         match dtype {
@@ -882,14 +887,14 @@ fn prepared_ordered_region_declines_and_propagates_nan() {
                     .unwrap()
                     .iter()
                     .all(|value| value.is_nan()),
-                "f32 NaN must propagate through the fallback"
+                "f32 NaN must propagate through the fused route"
             ),
             DType::F64 => assert!(
                 out.as_slice::<f64>()
                     .unwrap()
                     .iter()
                     .all(|value| value.is_nan()),
-                "f64 NaN must propagate through the fallback"
+                "f64 NaN must propagate through the fused route"
             ),
             _ => unreachable!(),
         }
@@ -898,7 +903,7 @@ fn prepared_ordered_region_declines_and_propagates_nan() {
 
 /// A region whose dtype is not F32/F64 stays unfused above the floor.
 ///
-/// `strided-fused 0.5.2`'s vectorized chunk replay covers only F32/F64; every
+/// `strided-fused 0.6.0`'s vectorized chunk replay covers only F32/F64; every
 /// other dtype would run the unmeasured per-element interpreter, so the region
 /// is declined and the per-instruction path is compared against a host
 /// reference.

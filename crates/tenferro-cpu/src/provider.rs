@@ -52,6 +52,7 @@ pub enum ParallelMode {
 pub struct CpuExecutionContext<'a> {
     domain: &'a CpuResourceDomain,
     parallel_mode: ParallelMode,
+    batch_policy: crate::CpuBatchPolicy,
 }
 
 impl fmt::Debug for CpuExecutionContext<'_> {
@@ -67,10 +68,15 @@ impl fmt::Debug for CpuExecutionContext<'_> {
 }
 
 impl<'a> CpuExecutionContext<'a> {
-    fn entered(domain: &'a CpuResourceDomain, parallel_mode: ParallelMode) -> Self {
+    fn entered(
+        domain: &'a CpuResourceDomain,
+        parallel_mode: ParallelMode,
+        batch_policy: crate::CpuBatchPolicy,
+    ) -> Self {
         Self {
             domain,
             parallel_mode,
+            batch_policy,
         }
     }
 
@@ -100,6 +106,38 @@ impl<'a> CpuExecutionContext<'a> {
         self.parallel_mode
     }
 
+    /// The effective batch policy for batched work in this context.
+    ///
+    /// It is the backend default unless an enclosing
+    /// [`crate::with_batch_policy`] scope overrode it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuBatchStrategy};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let strategy = backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| {
+    ///         cpu.with_linalg_pool(|context, _| Ok(context.batch_policy().strategy))
+    ///     })
+    ///     .expect("a CPU backend session")
+    /// })??;
+    /// assert_eq!(strategy, CpuBatchStrategy::Auto);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn batch_policy(&self) -> crate::CpuBatchPolicy {
+        self.batch_policy
+    }
+
+    /// This context with a scoped batch-policy override.
+    pub(crate) fn with_batch_policy(mut self, batch_policy: crate::CpuBatchPolicy) -> Self {
+        self.batch_policy = batch_policy;
+        self
+    }
+
     /// Return the faer policy selected by this operation context.
     ///
     /// This hidden public method is the owner-scoped extension contract used by
@@ -127,6 +165,31 @@ impl<'a> CpuExecutionContext<'a> {
         } else {
             None
         }
+    }
+
+    /// Borrow the retained lower-library execution resources for one call.
+    ///
+    /// This is the owner-scoped interop seam for the extracted numerical
+    /// providers (`tlinalg`, `cpueinsum`): they receive one `Exec` that reuses
+    /// the domain's persisted pool wrapper and workspace, instead of a
+    /// per-call `Pool::borrow`. The shared SPMD gate is preserved: a context
+    /// that does not own an inner region lends a serial-with-workspace token.
+    ///
+    /// # Errors
+    ///
+    /// Returns the CPU backend error when the retained execution resources
+    /// cannot produce a token, for example an invalid thread budget.
+    #[doc(hidden)]
+    pub fn contraction_exec(&self) -> crate::Result<cpueinsum::Exec<'a>> {
+        let budget = if self.uses_inner_parallelism() {
+            self.thread_budget().get()
+        } else {
+            1
+        };
+        Ok(self
+            .domain
+            .contraction_exec(budget)?
+            .with_batch_policy(self.batch_policy))
     }
 
     /// Effective native-kernel degree inside this admitted CPU context.
@@ -255,11 +318,27 @@ impl<'a> CpuExecutionContext<'a> {
 pub(crate) struct CpuOperationEntry<'a> {
     domain: &'a CpuResourceDomain,
     permit: &'a ResourcePermit,
+    batch_policy: crate::CpuBatchPolicy,
 }
 
 impl<'a> CpuOperationEntry<'a> {
     pub(crate) fn new(domain: &'a CpuResourceDomain, permit: &'a ResourcePermit) -> Self {
-        Self { domain, permit }
+        Self {
+            domain,
+            permit,
+            batch_policy: crate::CpuBatchPolicy::default(),
+        }
+    }
+
+    /// Return this entry with a different batch policy.
+    pub(crate) fn with_batch_policy(mut self, batch_policy: crate::CpuBatchPolicy) -> Self {
+        self.batch_policy = batch_policy;
+        self
+    }
+
+    /// The policy this entry carries into the contexts it produces.
+    pub(crate) fn batch_policy(self) -> crate::CpuBatchPolicy {
+        self.batch_policy
     }
 
     pub(crate) fn domain_id(self) -> CpuDomainId {
@@ -273,7 +352,8 @@ impl<'a> CpuOperationEntry<'a> {
         operation: impl FnOnce(&CpuExecutionContext<'_>) -> R,
     ) -> R {
         with_execution_owner(self.permit.owner(), || {
-            let context = CpuExecutionContext::entered(self.domain, parallel_mode);
+            let context =
+                CpuExecutionContext::entered(self.domain, parallel_mode, self.batch_policy);
             operation(&context)
         })
     }
@@ -293,8 +373,10 @@ impl<'a> CpuOperationEntry<'a> {
     /// view, so it needs the value with the entry's own lifetime.
     pub(crate) fn enter_owned<R>(self, operation: impl FnOnce(CpuExecutionContext<'a>) -> R) -> R {
         let mode = self.preferred_engine_mode();
+        let domain = self.domain;
+        let batch_policy = self.batch_policy;
         self.enter(mode, |_| {
-            operation(CpuExecutionContext::entered(self.domain, mode))
+            operation(CpuExecutionContext::entered(domain, mode, batch_policy))
         })
     }
 
@@ -304,9 +386,5 @@ impl<'a> CpuOperationEntry<'a> {
         } else {
             ParallelMode::Sequential
         }
-    }
-
-    pub(crate) fn thread_budget(self) -> NonZeroUsize {
-        self.domain.thread_budget()
     }
 }

@@ -6,6 +6,7 @@ use strided_kernel::{
     ErasedGatherPlan, ErasedPadPlan, ErasedRawStridedPtr, ErasedRawStridedRef, ErasedReversePlan,
     ErasedScatterPlan, ErasedSlicePlan, ExecContext, GatherSpec, KernelDType, ScatterSpec,
 };
+use tinyvec::TinyVec;
 
 use super::indexed_plan_cache::{IndexedPlanCache, IndexedPlanFamily, IndexedPlanKey};
 use super::typed_host_data;
@@ -15,10 +16,10 @@ use tenferro_tensor::TensorScalar;
 use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use tenferro_tensor::{Tensor, TypedTensor};
 
-type InlineStrides = SmallVec<[isize; 8]>;
+type InlineStrides = TinyVec<[isize; 8]>;
 
 fn inline_col_major_strides(op: &'static str, dims: &[usize]) -> crate::Result<InlineStrides> {
-    let mut strides = InlineStrides::from_elem(1, dims.len());
+    let mut strides: InlineStrides = std::iter::repeat_n(1isize, dims.len()).collect();
     for axis in 1..dims.len() {
         if strides[axis - 1] == 0 {
             strides[axis] = 0;
@@ -665,7 +666,7 @@ where
 fn collect_typed_inputs<'a, T>(
     first_dtype: crate::DType,
     inputs: &[&'a Tensor],
-) -> crate::Result<Vec<&'a TypedTensor<T>>>
+) -> crate::Result<SmallVec<[&'a TypedTensor<T>; 4]>>
 where
     Tensor: TensorAsTyped<T>,
 {
@@ -698,7 +699,7 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
         return Err(crate::Error::axis_out_of_bounds("concatenate", axis, rank));
     }
 
-    let mut out_shape = first_shape.to_vec();
+    let mut out_shape = tenferro_tensor::ShapeVec::from(first_shape);
     let mut axis_extent = 0usize;
     for input in inputs {
         let input_shape = input.shape();
@@ -730,13 +731,13 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
     out_shape[axis] = axis_extent;
 
     let dtype = kernel_dtype(T::dtype());
-    let input_dims: SmallVec<[&[usize]; 4]> = inputs.iter().map(|input| input.shape()).collect();
-    let input_strides: SmallVec<[InlineStrides; 4]> = input_dims
+    let input_dims: TinyVec<[&[usize]; 4]> = inputs.iter().map(|input| input.shape()).collect();
+    let input_strides: TinyVec<[InlineStrides; 4]> = input_dims
         .iter()
         .map(|dims| inline_col_major_strides("concatenate", dims))
         .collect::<crate::Result<_>>()?;
-    let input_stride_refs: SmallVec<[&[isize]; 4]> =
-        input_strides.iter().map(SmallVec::as_slice).collect();
+    let input_stride_refs: TinyVec<[&[isize]; 4]> =
+        input_strides.iter().map(TinyVec::as_slice).collect();
     let out_strides = inline_col_major_strides("concatenate", &out_shape)?;
     let plan = ErasedConcatenatePlan::compile(
         dtype,
@@ -749,6 +750,8 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
     .map_err(|err| crate::Error::backend_source("concatenate", err))?;
 
     let mut out = PooledUninitOutput::new(buffers, &out_shape)?;
+    // `ErasedRawStridedRef` has no `Default`, so `tinyvec::Array` cannot hold
+    // it; `SmallVec` keeps the four-operand descriptor list inline.
     let input_refs: SmallVec<[ErasedRawStridedRef<'_>; 4]> = inputs
         .iter()
         .zip(input_strides.iter())
@@ -769,6 +772,8 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
             .map_err(|err| crate::Error::backend_source("concatenate", err))
         })
         .collect::<crate::Result<_>>()?;
+    // `ErasedRawStridedPtr` has no `Default`; `SmallVec` keeps the short list
+    // inline as above.
     let input_ptrs: SmallVec<[ErasedRawStridedPtr<'_>; 4]> = input_refs
         .iter()
         .map(ErasedRawStridedPtr::from_ref)

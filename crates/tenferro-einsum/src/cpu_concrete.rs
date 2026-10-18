@@ -68,14 +68,19 @@ use cpueinsum::{EinsumPlan, EinsumSpec, Layout};
 /// Translate a lower einsum failure, keeping a typed route decline distinct.
 ///
 /// The lower library owns route selection, so a declined or unsupported step is
-/// `Unsupported` rather than a tenferro backend failure, and its diagnostic
-/// stays in the message.
+/// `Unsupported` and its typed error stays the source. A caller-owned arena
+/// shortage is a typed runtime-state failure.
 fn map_lower_einsum_error(op: &'static str, error: cpueinsum::Error) -> tenferro_tensor::Error {
+    if let cpueinsum::Error::Workspace { .. } = &error {
+        return tenferro_tensor::Error::runtime_state_source(op, error);
+    }
     if let cpueinsum::Error::Contract { source, .. } = &error {
         if source.is_unsupported() {
-            return tenferro_tensor::Error::unsupported(
+            return tenferro_tensor::Error::extension(
                 op,
-                format!("lower einsum declined this route: {source}"),
+                crate::EINSUM_EXTENSION_FAMILY_ID,
+                tenferro_tensor::ErrorKind::Unsupported,
+                error,
             );
         }
     }
@@ -495,4 +500,49 @@ mod tests {
             Complex64::new(0., 0.)
         );
     }
+
+    #[test]
+    fn lower_error_mapping_preserves_the_typed_source() {
+        use std::error::Error as _;
+        use tenferro_tensor::ErrorKind;
+
+        // A caller-owned arena shortage is a runtime-state failure, not a
+        // text-only backend error.
+        let error = map_lower_einsum_error(
+            "CPU einsum",
+            cpueinsum::Error::Workspace { needed: 8, have: 4 },
+        );
+        assert_eq!(error.kind(), ErrorKind::RuntimeState);
+        assert!(matches!(
+            error.source().and_then(|source| source.downcast_ref()),
+            Some(cpueinsum::Error::Workspace { .. })
+        ));
+
+        // A declined route stays `Unsupported` and keeps its typed source.
+        let declined = cpueinsum::Error::Contract {
+            step: 0,
+            source: cpueinsum::tcontract::Error::Unsupported(
+                cpueinsum::tcontract::api::Unsupported::Reason("test decline"),
+            ),
+        };
+        let error = map_lower_einsum_error("CPU einsum", declined);
+        assert_eq!(error.kind(), ErrorKind::Unsupported);
+        assert!(matches!(
+            error.source().and_then(|source| source.downcast_ref()),
+            Some(cpueinsum::Error::Contract { .. })
+        ));
+
+        // Any other lower failure keeps the raw typed source as a backend error.
+        let error = map_lower_einsum_error(
+            "CPU einsum",
+            cpueinsum::Error::Shape(cpueinsum::ShapeError::InputCount {
+                expected: 2,
+                got: 1,
+            }),
+        );
+        assert_eq!(error.kind(), ErrorKind::BackendFailure);
+    }
 }
+
+#[cfg(test)]
+mod forced_lane_tests;

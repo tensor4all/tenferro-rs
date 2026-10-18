@@ -236,7 +236,7 @@ fn dot_general_config_retained_bytes(config: &tenferro_tensor::DotGeneralConfig)
         &config.rhs_batch_dims,
     ]
     .into_iter()
-    .filter(|axes| axes.spilled())
+    .filter(|axes| axes.is_heap())
     .try_fold(0usize, |sum, axes| {
         sum.checked_add(vec_bytes::<usize>(axes.len())?)
     })

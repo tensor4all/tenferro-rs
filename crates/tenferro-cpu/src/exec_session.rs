@@ -311,7 +311,7 @@ fn flatten_compact_read(
     }
 }
 
-impl CpuExecSession<'_> {
+impl<'a> CpuExecSession<'a> {
     /// Return the resource-domain identity selected for this session.
     #[doc(hidden)]
     pub fn domain_id(&self) -> super::CpuDomainId {
@@ -322,6 +322,39 @@ impl CpuExecSession<'_> {
     #[doc(hidden)]
     pub fn shared_allocation_domain(&self) -> Option<Arc<dyn SharedTensorAllocationDomain>> {
         self.allocation_domain.cloned()
+    }
+
+    /// Replace this session's effective batch policy, returning the previous one.
+    pub(crate) fn replace_batch_policy(
+        &mut self,
+        policy: crate::CpuBatchPolicy,
+    ) -> crate::CpuBatchPolicy {
+        let previous = self.entry.batch_policy();
+        self.set_batch_policy(policy);
+        previous
+    }
+
+    fn set_batch_policy(&mut self, policy: crate::CpuBatchPolicy) {
+        self.entry = self.entry.with_batch_policy(policy);
+        self.entered = self
+            .entered
+            .map(|context| context.with_batch_policy(policy));
+    }
+
+    /// Build the retained contraction token carrying this session's resolved
+    /// batch policy.
+    ///
+    /// A live session is always entered, so the token comes from the entered
+    /// context; the fresh-entry fallback preserves the pre-policy behavior for
+    /// a session constructed without one.
+    fn resolved_contraction_exec(&mut self) -> crate::Result<cpueinsum::Exec<'a>> {
+        match self.entered {
+            Some(context) => context.contraction_exec(),
+            None => {
+                let context = self.entry.enter_owned(|context| context);
+                context.contraction_exec()
+            }
+        }
     }
 
     /// Borrow CPU-owned linalg resources on the caller thread.
@@ -374,7 +407,7 @@ impl CpuExecSession<'_> {
         })?;
         let _retention =
             context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
-        let exec = context.contraction_exec(self.entry.thread_budget().get())?;
+        let exec = self.resolved_contraction_exec()?;
         op(&exec, self.buffers, self.nary)
     }
 
@@ -750,7 +783,7 @@ impl CpuExecSession<'_> {
             })?;
             let _retention =
                 context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
-            let exec = context.contraction_exec(self.entry.thread_budget().get())?;
+            let exec = self.resolved_contraction_exec()?;
             let mut output = crate::contraction::dot_fresh(
                 &exec,
                 self.buffers,
@@ -907,7 +940,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
             })?;
             let _retention =
                 context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
-            let exec = context.contraction_exec(self.entry.thread_budget().get())?;
+            let exec = self.resolved_contraction_exec()?;
             return crate::contraction::dot_into(
                 &exec,
                 self.buffers,
@@ -945,7 +978,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
         })?;
         let _retention =
             context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
-        let exec = context.contraction_exec(self.entry.thread_budget().get())?;
+        let exec = self.resolved_contraction_exec()?;
         crate::contraction::grouped::execute(
             &exec,
             self.buffers,
@@ -1184,7 +1217,7 @@ impl BackendSession for CpuExecSession<'_> {
             let rank = lhs.shape().len();
             (lhs, rhs, rank)
         };
-        let axes = (0..rank).collect::<smallvec::SmallVec<[usize; 4]>>();
+        let axes = (0..rank).collect::<tinyvec::TinyVec<[usize; 4]>>();
         let config = DotGeneralConfig {
             lhs_contracting_dims: axes.clone(),
             rhs_contracting_dims: axes,

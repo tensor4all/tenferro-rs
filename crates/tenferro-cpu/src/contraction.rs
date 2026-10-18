@@ -1,6 +1,8 @@
 //! Tensor-boundary adapters; numerical plans and scheduling belong to cpueinsum.
 
 pub(crate) mod grouped;
+#[cfg(test)]
+mod tests;
 mod workspaces;
 pub use workspaces::ContractionWorkspaces;
 pub(crate) use workspaces::WorkspaceLease;
@@ -11,7 +13,6 @@ use cpueinsum::tcontract::{
     PlanConfig,
 };
 use cpueinsum::{ArenaProvider, Exec, Pool, SliceAccumulationSource};
-use smallvec::SmallVec;
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -20,11 +21,51 @@ use tenferro_tensor::{
     ContractionScalar, DotGeneralAccumulation, DotGeneralConfig, Tensor, TensorRead, TensorView,
     TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
+use tinyvec::TinyVec;
 
 #[cfg(feature = "native")]
 use cpueinsum::BinaryPlan;
 #[cfg(feature = "blas")]
 use cpueinsum_blas::BinaryPlan;
+
+/// The numerical route a binary contraction took, for allocation/route tests.
+///
+/// Only the vendor/native distinction is exposed: the native alternatives keep
+/// their own finer [`cpueinsum::ExecutionRoute`] variants, which are not a
+/// stable test contract.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContractionRoute {
+    #[cfg_attr(not(feature = "blas"), allow(dead_code))]
+    Vendor,
+    Native,
+}
+
+#[cfg(test)]
+thread_local! {
+    static LAST_CONTRACTION_ROUTE: std::cell::Cell<Option<ContractionRoute>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_last_contraction_route() -> Option<ContractionRoute> {
+    LAST_CONTRACTION_ROUTE.with(|last| last.replace(None))
+}
+
+#[cfg(all(test, feature = "blas"))]
+fn record_contraction_route(route: cpueinsum_blas::ExecutionRoute) {
+    use cpueinsum_blas::ExecutionRoute;
+    let route = match route {
+        ExecutionRoute::Vendor => ContractionRoute::Vendor,
+        ExecutionRoute::Native(_) => ContractionRoute::Native,
+    };
+    LAST_CONTRACTION_ROUTE.with(|last| last.set(Some(route)));
+}
+
+#[cfg(all(test, not(feature = "blas")))]
+fn record_contraction_route(_route: cpueinsum::ExecutionRoute) {
+    LAST_CONTRACTION_ROUTE.with(|last| last.set(Some(ContractionRoute::Native)));
+}
 
 #[cfg(feature = "native")]
 trait Scalar: PoolScalar + cpueinsum::Scalar {}
@@ -39,7 +80,7 @@ impl<T: PoolScalar + cpueinsum_blas::BlasScalar> Scalar for T {}
 ///
 /// A lower `Unsupported`/declined step is the lower library refusing a route it
 /// owns, not a tenferro backend failure, so it maps to `Unsupported` while the
-/// lower diagnostic stays in the message.
+/// lower typed error is preserved as the source (not formatted into a string).
 pub(crate) trait LowerContractionError {
     fn into_crate_error(self, op: &'static str) -> crate::Error;
 }
@@ -48,9 +89,11 @@ pub(crate) trait LowerContractionError {
 impl LowerContractionError for cpueinsum::tcontract::Error {
     fn into_crate_error(self, op: &'static str) -> crate::Error {
         if self.is_unsupported() {
-            return crate::Error::unsupported(
+            return tenferro_tensor::Error::extension(
                 op,
-                format!("lower contraction declined this route: {self}"),
+                "contraction",
+                tenferro_tensor::ErrorKind::Unsupported,
+                self,
             );
         }
         crate::Error::backend_source(op, self)
@@ -59,13 +102,22 @@ impl LowerContractionError for cpueinsum::tcontract::Error {
 
 impl LowerContractionError for cpueinsum::Error {
     fn into_crate_error(self, op: &'static str) -> crate::Error {
-        if let cpueinsum::Error::Contract { source, .. } = &self {
-            if source.is_unsupported() {
-                return crate::Error::unsupported(
-                    op,
-                    format!("lower contraction declined this route: {source}"),
-                );
-            }
+        // A caller-owned arena shortage is a runtime-state failure and keeps its
+        // typed `cpueinsum` source rather than becoming a text-only backend error.
+        if let cpueinsum::Error::Workspace { .. } = &self {
+            return crate::Error::runtime_state_source(op, self);
+        }
+        let declined = matches!(
+            &self,
+            cpueinsum::Error::Contract { source, .. } if source.is_unsupported()
+        );
+        if declined {
+            return tenferro_tensor::Error::extension(
+                op,
+                "contraction",
+                tenferro_tensor::ErrorKind::Unsupported,
+                self,
+            );
         }
         crate::Error::backend_source(op, self)
     }
@@ -74,18 +126,26 @@ impl LowerContractionError for cpueinsum::Error {
 #[cfg(feature = "blas")]
 impl LowerContractionError for cpueinsum_blas::BlasError {
     fn into_crate_error(self, op: &'static str) -> crate::Error {
-        let inner = match &self {
+        // A short work buffer is a runtime-state failure with a typed source.
+        if let cpueinsum_blas::BlasError::Work { .. } = &self {
+            return crate::Error::runtime_state_source(op, self);
+        }
+        let declined = match &self {
+            cpueinsum_blas::BlasError::StrategyUnavailable => true,
             cpueinsum_blas::BlasError::Prepare { source }
-            | cpueinsum_blas::BlasError::Native { source } => Some(source),
-            _ => None,
+            | cpueinsum_blas::BlasError::Native { source } => matches!(
+                source,
+                cpueinsum::Error::Contract { source, .. } if source.is_unsupported()
+            ),
+            _ => false,
         };
-        if let Some(cpueinsum::Error::Contract { source, .. }) = inner {
-            if source.is_unsupported() {
-                return crate::Error::unsupported(
-                    op,
-                    format!("lower contraction declined this route: {source}"),
-                );
-            }
+        if declined {
+            return tenferro_tensor::Error::extension(
+                op,
+                "contraction",
+                tenferro_tensor::ErrorKind::Unsupported,
+                self,
+            );
         }
         crate::Error::backend_source(op, self)
     }
@@ -154,8 +214,8 @@ impl Drop for WorkspaceRetention<'_> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Layout {
-    dims: SmallVec<[usize; 8]>,
-    strides: SmallVec<[isize; 8]>,
+    dims: TinyVec<[usize; 8]>,
+    strides: TinyVec<[isize; 8]>,
     offset: isize,
 }
 impl Layout {
@@ -228,12 +288,12 @@ impl BinaryCache {
                 .retained_bytes
                 .saturating_add(std::mem::size_of_val(entry.plan.as_ref()));
             for layout in [&entry.key.lhs, &entry.key.rhs, &entry.key.out] {
-                if layout.dims.spilled() {
+                if layout.dims.is_heap() {
                     stats.retained_bytes = stats
                         .retained_bytes
                         .saturating_add(layout.dims.capacity() * std::mem::size_of::<usize>());
                 }
-                if layout.strides.spilled() {
+                if layout.strides.is_heap() {
                     stats.retained_bytes = stats
                         .retained_bytes
                         .saturating_add(layout.strides.capacity() * std::mem::size_of::<isize>());
@@ -245,7 +305,7 @@ impl BinaryCache {
                 &entry.config.lhs_batch_dims,
                 &entry.config.rhs_batch_dims,
             ] {
-                if axes.spilled() {
+                if axes.is_heap() {
                     stats.retained_bytes = stats
                         .retained_bytes
                         .saturating_add(axes.capacity() * std::mem::size_of::<usize>());
@@ -398,18 +458,22 @@ fn initialized<T: Scalar>(
             let mut work = T::pool_acquire_zeroed(buffers, plan.work_len());
             #[cfg(feature = "native")]
             let _ = buffers;
-            let result = plan
-                .execute_slices_accum(
-                    exec,
-                    alpha,
-                    (a, lhs.offset()),
-                    (b, rhs.offset()),
-                    beta,
-                    SliceAccumulationSource::Output,
-                    (d, output_offset),
-                    #[cfg(feature = "blas")]
-                    &mut work,
-                )
+            let result = plan.execute_slices_accum(
+                exec,
+                alpha,
+                (a, lhs.offset()),
+                (b, rhs.offset()),
+                beta,
+                SliceAccumulationSource::Output,
+                (d, output_offset),
+                #[cfg(feature = "blas")]
+                &mut work,
+            );
+            #[cfg(test)]
+            if let Ok(route) = &result {
+                record_contraction_route(*route);
+            }
+            let result = result
                 .map(|_| ())
                 .map_err(|error| error.into_crate_error("dot_general"));
             #[cfg(feature = "blas")]
@@ -444,18 +508,22 @@ fn fresh<T: Scalar>(
             #[cfg(feature = "blas")]
             let mut work = T::pool_acquire_zeroed(buffers, plan.work_len());
             let mut output = PooledUninitOutput::<T>::new(buffers, shape)?;
-            let result = plan
-                .execute_uninit_slices(
-                    exec,
-                    alpha,
-                    (a, lhs.offset()),
-                    (b, rhs.offset()),
-                    beta,
-                    SliceAccumulationSource::Absent,
-                    (output.as_uninit_slice_mut(), 0),
-                    #[cfg(feature = "blas")]
-                    &mut work,
-                )
+            let result = plan.execute_uninit_slices(
+                exec,
+                alpha,
+                (a, lhs.offset()),
+                (b, rhs.offset()),
+                beta,
+                SliceAccumulationSource::Absent,
+                (output.as_uninit_slice_mut(), 0),
+                #[cfg(feature = "blas")]
+                &mut work,
+            );
+            #[cfg(test)]
+            if let Ok((_, route)) = &result {
+                record_contraction_route(*route);
+            }
+            let result = result
                 .map(|_| ())
                 .map_err(|error| error.into_crate_error("dot_general"));
             #[cfg(feature = "blas")]

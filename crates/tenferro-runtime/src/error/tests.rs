@@ -230,8 +230,8 @@ fn constructors_preserve_classification_and_typed_sources() {
         "reshape",
         ErrorPhase::GraphBuild,
         ShapeMismatch::ExpectedActual {
-            expected: ShapeVec::from_vec(vec![2, 3]),
-            actual: ShapeVec::from_vec(vec![6]),
+            expected: vec![2, 3].into_iter().collect::<ShapeVec>(),
+            actual: vec![6].into_iter().collect::<ShapeVec>(),
         }
         .into(),
     );

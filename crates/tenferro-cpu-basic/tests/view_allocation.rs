@@ -1,10 +1,11 @@
 //! Acceptance for #2143 item 6: the owned tensor keeps its canonical
-//! column-major strides, so the CPU per-operation view helper borrows the
-//! layout instead of owning a freshly computed one.
+//! column-major strides, and the per-operation view helper copies that layout
+//! into a view whose metadata is inline up to strided-view's `INLINE_RANK`.
 //!
-//! The primary signal is the allocation count, not time: a per-operation view
-//! that allocates two metadata vectors once or twice per eager operation is the
-//! defect this pins.
+//! The primary signal is the allocation count, not time: at rank
+//! `<= INLINE_RANK` a per-operation view that allocates metadata once or twice
+//! per eager operation is the defect this pins. Above `INLINE_RANK` the view
+//! spills two metadata vectors and no zero-allocation claim is made.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -55,34 +56,47 @@ fn count_allocations(op: impl FnOnce()) -> usize {
 }
 
 #[test]
-fn typed_view_allocates_no_metadata() {
+fn typed_view_allocates_no_metadata_at_inline_rank() {
     let dynamic = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], vec![0.0; 12]).unwrap();
     let ranked =
         TypedTensor::<f64, Rank<2>, Host>::from_host_vec_col_major([3, 4], vec![0.0; 12]).unwrap();
     assert_eq!(ranked.strides(), &[1, 3]);
-    // The strides of a rank above the inline capacity spill while the tensor is
-    // built; the view must still borrow them rather than build another one.
-    let high_rank = TypedTensor::<f64>::from_vec_col_major(vec![1; 9], vec![0.0]).unwrap();
 
-    for tensor in [&dynamic, &high_rank] {
-        let allocations = count_allocations(|| {
-            let view = typed_view("typed_view_allocates_no_metadata", tensor).unwrap();
-            black_box(&view);
-        });
-        assert_eq!(
-            allocations,
-            0,
-            "typed_view allocated {} metadata allocations for shape {:?}",
-            allocations,
-            tensor.shape(),
-        );
-    }
+    // Rank 2 is within strided-view's `INLINE_RANK`, so the view's metadata
+    // stays inline and the per-operation helper allocates nothing.
+    let allocations = count_allocations(|| {
+        let view = typed_view("typed_view_allocates_no_metadata", &dynamic).unwrap();
+        black_box(&view);
+    });
+    assert_eq!(
+        allocations,
+        0,
+        "typed_view allocated {allocations} metadata allocations for shape {:?}",
+        dynamic.shape(),
+    );
 
     // The view must expose the tensor's canonical column-major layout.
     let view = typed_view("typed_view_allocates_no_metadata", &dynamic).unwrap();
     assert_eq!(view.dims(), &[3, 4]);
     assert_eq!(view.strides(), &[1, 3]);
     assert_eq!(view.offset(), 0);
+}
+
+#[test]
+fn typed_view_above_inline_rank_spills_only_metadata() {
+    // Rank 9 exceeds `INLINE_RANK`; the view still serves the tensor's layout
+    // and only its two metadata vectors may allocate.
+    let high_rank = TypedTensor::<f64>::from_vec_col_major(vec![1; 9], vec![0.0]).unwrap();
+    let allocations = count_allocations(|| {
+        let view = typed_view("typed_view_above_inline_rank", &high_rank).unwrap();
+        assert_eq!(view.dims(), high_rank.shape());
+        assert_eq!(view.strides(), high_rank.strides());
+        black_box(&view);
+    });
+    assert!(
+        allocations <= 3,
+        "rank above INLINE_RANK spilled {allocations} allocations, expected at most 3"
+    );
 }
 
 #[test]

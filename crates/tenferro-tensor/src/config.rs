@@ -1,4 +1,4 @@
-use smallvec::SmallVec;
+use tinyvec::TinyVec;
 
 use crate::{Error, Result, ValidationError};
 
@@ -44,10 +44,10 @@ fn invalid_dot_general_config(message: impl Into<String>) -> Error {
 /// ```
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct DotGeneralConfig {
-    pub lhs_contracting_dims: SmallVec<[usize; 4]>,
-    pub rhs_contracting_dims: SmallVec<[usize; 4]>,
-    pub lhs_batch_dims: SmallVec<[usize; 4]>,
-    pub rhs_batch_dims: SmallVec<[usize; 4]>,
+    pub lhs_contracting_dims: TinyVec<[usize; 4]>,
+    pub rhs_contracting_dims: TinyVec<[usize; 4]>,
+    pub lhs_batch_dims: TinyVec<[usize; 4]>,
+    pub rhs_batch_dims: TinyVec<[usize; 4]>,
 }
 
 /// The degenerate algebra a `DotGeneral` actually is when it is not a

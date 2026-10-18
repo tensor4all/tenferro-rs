@@ -334,7 +334,8 @@ impl CpuPhase<'_> {
         // scratch and panic isolation a worker lane gets, without a second admission
         // and without relaxing same-thread child rejection.
         let mut resources = EngineResources::for_child_execution(self.buffer_limit());
-        let entry = CpuOperationEntry::new(self.backend.engine.domain(), self.permit);
+        let entry = CpuOperationEntry::new(self.backend.engine.domain(), self.permit)
+            .with_batch_policy(self.backend.batch_policy());
         let owner = self.owner;
         let backend = self.backend;
         let outcome = match entry.enter_owned(|context| {

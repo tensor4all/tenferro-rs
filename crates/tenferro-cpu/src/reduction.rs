@@ -10,7 +10,8 @@ use crate::buffer_pool::BufferPool;
 use crate::elementwise;
 use crate::materialize_tensor_read;
 use tenferro_tensor::{
-    DType, Tensor, TensorRank, TensorRead, TensorScalar, TensorView, TypedTensor, TypedTensorView,
+    DType, ShapeVec, Tensor, TensorRank, TensorRead, TensorScalar, TensorView, TypedTensor,
+    TypedTensorView,
 };
 
 fn unsupported_dtype_with_supported(
@@ -37,6 +38,22 @@ fn unsupported_sum_squares_dtype(op: &'static str, dtype: DType) -> crate::Error
 }
 
 fn validate_axes(op: &'static str, axes: &[usize], rank: usize) -> crate::Result<()> {
+    // Common ranks track seen axes in a bitmask; only very high ranks allocate.
+    // A one-axis reduction is an allocation-free metadata path at inline rank.
+    if rank <= u128::BITS as usize {
+        let mut seen = 0u128;
+        for &axis in axes {
+            if axis >= rank {
+                return Err(crate::Error::axis_out_of_bounds(op, axis, rank));
+            }
+            let bit = 1u128 << axis;
+            if seen & bit != 0 {
+                return Err(crate::Error::duplicate_axis(op, axis, "axes"));
+            }
+            seen |= bit;
+        }
+        return Ok(());
+    }
     let mut seen = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
@@ -156,7 +173,7 @@ fn typed_bytes<T>(data: &[T]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), size_of_val(data)) }
 }
 
-fn reduction_output_shape(input_shape: &[usize], axes: &[usize]) -> Vec<usize> {
+fn reduction_output_shape(input_shape: &[usize], axes: &[usize]) -> ShapeVec {
     input_shape
         .iter()
         .enumerate()

@@ -30,6 +30,11 @@ use strided_basic::{
     KernelDType, StridedView,
 };
 
+// Both sides own the same inline-capacity contract: tenferro's `ShapeVec`/
+// `StrideVec` and strided-view's metadata must spill at the same rank, or a
+// view would allocate where the metadata budget assumes it cannot.
+const _: () = assert!(tenferro_tensor::INLINE_RANK == strided_basic::INLINE_RANK);
+
 /// Error returned when a CPU-only operation receives backend storage.
 #[doc(hidden)]
 pub fn cpu_backend_buffer_error(op: &'static str) -> Error {
@@ -146,10 +151,10 @@ pub fn typed_view<'a, T: Copy + TensorScalar>(
 }
 
 #[doc(hidden)]
-pub fn typed_view_from_view<'v, 'a, T: Copy + 'static, R: TensorRank>(
+pub fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
     op: &'static str,
-    view: &'v TypedTensorView<'a, T, R>,
-) -> Result<StridedView<'v, T>> {
+    view: &TypedTensorView<'a, T, R>,
+) -> Result<StridedView<'a, T>> {
     if view.backend_buffer().is_some() {
         return Err(cpu_backend_buffer_error(op));
     }

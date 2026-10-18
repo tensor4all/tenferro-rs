@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::error::{Error, ErrorPhase, Result};
 use num_complex::{Complex32, Complex64};
-use smallvec::SmallVec;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::backend::ElementwiseFusionOp;
@@ -11,6 +10,7 @@ use tenferro_tensor::{
     BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
     SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor, ValidationError,
 };
+use tinyvec::TinyVec;
 
 use crate::extension_cache::ExtensionCacheStore;
 use crate::runtime::{ErasedExecutionContext, PreparedOperationPlan};
@@ -36,8 +36,8 @@ pub struct ExecInstruction {
     pub last_use: Vec<bool>,
 }
 
-pub type ExecOutputShapes = SmallVec<[Vec<DimExpr>; 1]>;
-pub type ExecOutputExtents = SmallVec<[Vec<ShapeExtent<DimExpr>>; 1]>;
+pub type ExecOutputShapes = TinyVec<[Vec<DimExpr>; 1]>;
+pub type ExecOutputExtents = TinyVec<[Vec<ShapeExtent<DimExpr>>; 1]>;
 
 #[derive(Clone, Debug)]
 pub struct ExecProgram {
@@ -618,7 +618,7 @@ pub(crate) fn eval_exec_ir_unsegmented_with_cache_and_workspace<
     extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<Tensor>> {
     validate_exec_input_count(program, inputs.len(), "initialize_exec_slots_in")?;
-    let input_shapes: SmallVec<[&[usize]; 8]> = inputs.iter().map(Tensor::shape).collect();
+    let input_shapes: TinyVec<[&[usize]; 8]> = inputs.iter().map(Tensor::shape).collect();
     validate_shape_guards(program, &input_shapes)?;
     drop(input_shapes);
     let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();

@@ -2881,8 +2881,8 @@ fn matmul_preserve_trailing_batch<B: BackendSession + ?Sized>(
     let config = DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: batch.clone().into(),
-        rhs_batch_dims: batch.into(),
+        lhs_batch_dims: batch.clone().iter().copied().collect(),
+        rhs_batch_dims: batch.iter().copied().collect(),
     };
     session.dot_general_read(
         TensorRead::from_tensor(lhs),
@@ -2903,8 +2903,8 @@ fn linalg_matmul_read<B: BackendSession + ?Sized>(
     let config = DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: lhs_batch_dims.into(),
-        rhs_batch_dims: rhs_batch_dims.into(),
+        lhs_batch_dims: lhs_batch_dims.iter().copied().collect(),
+        rhs_batch_dims: rhs_batch_dims.iter().copied().collect(),
     };
     session.dot_general_read(TensorRead::from_tensor(lhs), rhs, &config)
 }

@@ -179,8 +179,8 @@ impl Tensor {
                 return Err(crate::Error::validation(
                     "stack",
                     ShapeMismatch::IncompatibleShapes {
-                        lhs: first.shape().to_vec().into(),
-                        rhs: tensor.shape().to_vec().into(),
+                        lhs: first.shape().iter().copied().collect(),
+                        rhs: tensor.shape().iter().copied().collect(),
                     }
                     .into(),
                 ));

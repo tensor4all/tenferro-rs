@@ -1,5 +1,7 @@
-//! `typed_view` borrows the tensor's cached layout: a view of a host tensor
-//! costs no allocation at all, which is what the per-operation helpers rely on.
+//! `typed_view` builds a strided view of a host tensor. Since strided-view
+//! 0.6 the view owns its metadata inline up to `INLINE_RANK`, so the per-
+//! operation helper allocates nothing at rank `<= INLINE_RANK` and spills only
+//! the metadata at higher rank.
 //!
 //! The counting allocator is the pattern used by
 //! `crates/tenferro-tensor/tests/borrowed_view_allocation_tests.rs`.
@@ -65,9 +67,9 @@ fn typed_view_of_a_host_tensor_allocates_nothing() {
         let view = typed_view("allocation", &tensor).unwrap();
         assert_eq!(view.dims(), &[2, 3]);
         assert_eq!(view.strides(), &[1, 2]);
-        // The metadata is borrowed, not copied: the view points at the tensor's
-        // own cached layout.
-        assert_eq!(view.strides().as_ptr(), tensor.strides().as_ptr());
+        // strided-view 0.6 owns view metadata inline: the view copies the
+        // tensor's canonical layout rather than aliasing its cached vectors.
+        assert_eq!(view.strides(), tensor.strides());
         black_box(view);
     });
 
@@ -88,18 +90,24 @@ fn typed_view_of_a_dynamic_host_payload_allocates_nothing() {
 }
 
 #[test]
-fn typed_view_of_a_rank_above_the_inline_capacity_also_borrows() {
-    // Rank 10 exceeds `StrideVec`'s inline capacity, so the tensor's layout is
-    // heap-backed; the view must still borrow it.
+fn typed_view_of_a_rank_above_the_inline_capacity_exposes_the_layout() {
+    // Rank 10 exceeds strided-view's `INLINE_RANK`, so the view's metadata is
+    // heap-backed; the layout must still be the tensor's canonical one.
     let shape = vec![2usize; 10];
     let tensor = TypedTensor::<f64>::from_vec_col_major(shape, vec![3.0; 1024]).unwrap();
 
     let allocations = count_allocations(|| {
         let view = typed_view("allocation", &tensor).unwrap();
         assert_eq!(view.dims().len(), 10);
-        assert_eq!(view.strides().as_ptr(), tensor.strides().as_ptr());
+        assert_eq!(view.dims(), tensor.shape());
+        assert_eq!(view.strides(), tensor.strides());
         black_box(view);
     });
 
-    assert_eq!(allocations, 0);
+    // Above `INLINE_RANK` the spill box plus its two metadata vectors are the
+    // only allocations the view can make.
+    assert!(
+        allocations <= 3,
+        "rank above INLINE_RANK spilled {allocations} allocations, expected at most 3"
+    );
 }

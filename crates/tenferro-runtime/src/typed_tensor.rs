@@ -4,13 +4,13 @@
 //! in their extension crates.
 
 use num_complex::Complex64;
-use smallvec::SmallVec;
 use tenferro_ops::broadcast::{broadcast_shape, broadcast_shapes, BroadcastError};
 use tenferro_tensor::validate::matmul_config_for_shapes;
 use tenferro_tensor::{
     ActivationOp, BackendSession, CompareDir, DType, DotGeneralConfig, Error, Result, Tensor,
     TensorRead, TensorScalar, TensorValue, ValidationError,
 };
+use tinyvec::TinyVec;
 
 use crate::composite;
 use crate::composite::session::{run_session_composite, typed_borrowed};
@@ -561,7 +561,7 @@ pub(crate) fn broadcast_to_in_read<'a>(
 fn broadcast_aligned_dims(
     input: &[usize],
     output: &[usize],
-) -> std::result::Result<SmallVec<[usize; 8]>, BroadcastError> {
+) -> std::result::Result<TinyVec<[usize; 8]>, BroadcastError> {
     if input.len() > output.len() {
         return Err(BroadcastError::RankTooLarge {
             input: input.to_vec(),

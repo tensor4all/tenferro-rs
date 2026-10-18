@@ -56,13 +56,13 @@ pub enum BroadcastError {
 pub fn broadcast_error_to_validation(error: BroadcastError) -> ValidationError {
     match error {
         BroadcastError::IncompatibleBinary { lhs, rhs } => ShapeMismatch::IncompatibleShapes {
-            lhs: ShapeVec::from_vec(lhs),
-            rhs: ShapeVec::from_vec(rhs),
+            lhs: lhs.into_iter().collect(),
+            rhs: rhs.into_iter().collect(),
         }
         .into(),
         BroadcastError::IncompatibleInput { input, output } => ShapeMismatch::ExpectedActual {
-            expected: ShapeVec::from_vec(output),
-            actual: ShapeVec::from_vec(input),
+            expected: output.into_iter().collect(),
+            actual: input.into_iter().collect(),
         }
         .into(),
         BroadcastError::RankTooLarge { input, output } => ValidationError::RankMismatch {
@@ -181,7 +181,7 @@ pub fn broadcast_shapes<'a>(
     let Some(first) = iter.next() else {
         return Ok(ShapeVec::new());
     };
-    let mut out = ShapeVec::from_slice(first);
+    let mut out = ShapeVec::from(first);
     for shape in iter {
         out = broadcast_shape(&out, shape)?;
     }

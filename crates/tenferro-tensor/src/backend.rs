@@ -258,7 +258,7 @@ pub fn validate_dot_general_read_into(
             op,
             ShapeMismatch::ExpectedActual {
                 expected: expected.clone(),
-                actual: out.shape().to_vec().into(),
+                actual: out.shape().iter().copied().collect(),
             }
             .into(),
         ));

@@ -551,8 +551,8 @@ fn faer_routes_hand_whole_batches_to_tlinalg() {
         "Faer routes should hand the whole batch to tlinalg instead of looping per matrix"
     );
     assert!(
-        source.contains("parallel_from(ctx)"),
-        "Faer routes should hand one parallelism token to each batched tlinalg call"
+        source.contains("exec_from(ctx)"),
+        "Faer routes should hand one execution token to each batched tlinalg call"
     );
 }
 

@@ -282,8 +282,8 @@ impl InputSignatureEntry {
 
     pub(crate) fn logical_retained_bytes(&self) -> Option<usize> {
         checked_sum([
-            spilled_bytes::<usize>(self.shape.spilled(), self.shape.len())?,
-            spilled_bytes::<isize>(self.strides.spilled(), self.strides.len())?,
+            heap_backed_bytes::<usize>(self.shape.is_heap(), self.shape.len())?,
+            heap_backed_bytes::<isize>(self.strides.is_heap(), self.strides.len())?,
         ])
     }
 }
@@ -394,8 +394,8 @@ impl InputSignature {
     }
 }
 
-fn spilled_bytes<T>(spilled: bool, len: usize) -> Option<usize> {
-    if spilled {
+fn heap_backed_bytes<T>(heap_backed: bool, len: usize) -> Option<usize> {
+    if heap_backed {
         len.checked_mul(size_of::<T>())
     } else {
         Some(0)

@@ -5,6 +5,7 @@ use super::*;
 use tenferro_tensor::TensorRead;
 use tenferro_tensor::{BackendSessionHost, SessionEntryError};
 
+mod batch_policy;
 mod execution_scope;
 mod output_affinity;
 #[cfg(feature = "blas")]

@@ -28,7 +28,7 @@ default = []
 tenferro-tensor-core = { path = "../tenferro-tensor-core", version = "0.7.1" }
 num-traits.workspace = true
 num-complex.workspace = true
-smallvec.workspace = true
+tinyvec.workspace = true
 tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.7.1" }
 thiserror.workspace = true
 

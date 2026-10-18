@@ -7,8 +7,8 @@ fn inline_metadata_collection_keeps_small_shapes_and_strides_inline() {
 
     assert_eq!(shape.as_slice(), &[2, 3]);
     assert_eq!(strides.as_slice(), &[1, 2]);
-    assert!(!shape.spilled());
-    assert!(!strides.spilled());
+    assert!(!shape.is_heap());
+    assert!(!strides.is_heap());
 }
 
 #[test]

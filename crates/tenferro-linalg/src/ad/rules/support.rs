@@ -546,8 +546,8 @@ pub(super) fn matrix_multiply_config(rank: usize) -> DotGeneralConfig {
     DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: batch_dims.clone().into(),
-        rhs_batch_dims: batch_dims.into(),
+        lhs_batch_dims: batch_dims.clone().iter().copied().collect(),
+        rhs_batch_dims: batch_dims.iter().copied().collect(),
     }
 }
 
