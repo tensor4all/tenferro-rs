@@ -9,10 +9,11 @@
 
 /// Rebuild tenferro's error from one provider's error enum.
 ///
-/// The variants shared by both providers are mapped identically; `Internal` exists only in
-/// `tlinalg-blas` and is passed as an extra arm.
+/// The variants shared by both providers are mapped identically; every provider-specific variant
+/// (`Internal` exists only in `tlinalg-blas`, `InsufficientWorkspace` and `StrategyUnavailable` only
+/// in `tlinalg`) is passed as an extra arm.
 macro_rules! map_provider_error {
-    ($op:expr, $error:expr, $provider:ident $(, $extra_pat:pat => $extra_arm:expr)?) => {{
+    ($op:expr, $error:expr, $provider:ident $(, $extra_pat:pat => $extra_arm:expr)*) => {{
         use $provider::Error as ProviderError;
         let op_str = $op.as_str();
         match $error {
@@ -42,7 +43,7 @@ macro_rules! map_provider_error {
             ProviderError::Inconsistent { detail, .. } => {
                 tenferro_tensor::Error::Internal(format!("{op_str}: {detail}"))
             }
-            $($extra_pat => $extra_arm,)?
+            $($extra_pat => $extra_arm,)*
             // The provider enums are non-exhaustive so a new variant is not a breaking change for
             // the crate that reports it. The host cannot reproduce a payload it does not know, so
             // it fails loudly instead of guessing a kind and silently misclassifying the failure.
@@ -65,7 +66,14 @@ pub(crate) fn map_error(op: tlinalg::Op, error: tlinalg::Error) -> tenferro_tens
         crate::extension::LINALG_EXTENSION_FAMILY_ID,
         tenferro_tensor::ErrorKind::Unsupported,
         error,
-    ))
+    ),
+    // The host sizes every call with the matching `*_workspace` query at the
+    // same `Exec`, so a short region is a broken host contract rather than a
+    // caller error. Keep the provider error as the typed source: it names the
+    // bytes the resolved route wanted against the bytes it was given.
+    ProviderError::InsufficientWorkspace { .. } => {
+        tenferro_tensor::Error::runtime_state_source(op.as_str(), error)
+    })
 }
 
 /// Rebuild tenferro's error from a `tlinalg-blas` (LAPACK route) failure.

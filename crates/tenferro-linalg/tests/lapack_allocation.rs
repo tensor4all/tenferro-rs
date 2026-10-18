@@ -166,18 +166,18 @@ fn steady_state(
 /// *number* of allocations is structural.
 const ALLOCATION_CEILINGS: &[(&str, usize)] = &[
     ("svd/square", 10),
-    ("svdvals/square", 5),
-    ("qr/square", 8),
+    ("svdvals/square", 4),
+    ("qr/square", 7),
     ("svd/tall", 10),
-    ("svdvals/tall", 5),
-    ("qr/tall", 8),
-    ("svd/complex", 14),
-    ("svdvals/complex", 6),
-    ("qr/complex", 8),
-    ("eigh/square", 9),
-    ("lu/square", 12),
-    ("eigh/complex", 11),
-    ("lu/complex", 12),
+    ("svdvals/tall", 4),
+    ("qr/tall", 7),
+    ("svd/complex", 13),
+    ("svdvals/complex", 5),
+    ("qr/complex", 7),
+    ("eigh/square", 8),
+    ("lu/square", 11),
+    ("eigh/complex", 10),
+    ("lu/complex", 11),
 ];
 
 fn ceiling(name: &str) -> usize {

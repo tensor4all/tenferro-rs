@@ -220,48 +220,52 @@ fn with_session<T>(
 /// Steady-state allocation ceiling per route and case.
 ///
 /// These are the counts the current implementation achieves, not aspirations. They exist to stop a
-/// move from quietly reacquiring per-call scratch. `lu_factor` returns `(packed_lu, pivots,
-/// parity)`, so its wall is higher than a single-output primitive by construction.
+/// move from quietly reacquiring per-call scratch. The faer route now queries `*_workspace` and
+/// writes into pooled `*_into` destinations, so its ceiling is the host-side residual described in
+/// `small_linalg_allocation.rs`: the pool's per-operation in-flight accounting node, the provider
+/// module's result vector, and the backend's dtype-erased `Vec<Tensor>` mapping.
 const F64_LU_CEILINGS: &[(&str, usize)] = &[
-    ("faer/lu_factor/48", 11),
-    ("faer/lu_solve_prepared/48", 5),
-    ("faer/lu_factor_solve/48", 13),
+    ("faer/lu_factor/48", 3),
+    ("faer/lu_solve_prepared/48", 4),
+    ("faer/lu_factor_solve/48", 5),
     ("blas/lu_factor/48", 6),
     ("blas/lu_solve_prepared/48", 5),
     ("blas/lu_factor_solve/48", 8),
-    ("faer/lu_factor/complex32", 11),
+    ("faer/lu_factor/complex32", 3),
     ("blas/lu_factor/complex32", 6),
-    // The SVD family, faer route: the next slice's pre-move baseline.
-    ("faer/svd/48", 12),
-    ("faer/svdvals/48", 4),
-    ("faer/svd/tall", 12),
-    ("faer/svdvals/tall", 4),
-    ("faer/svd/complex32", 14),
-    ("faer/svdvals/complex32", 4),
+    // The SVD family, faer route.
+    ("faer/svd/48", 3),
+    ("faer/svdvals/48", 1),
+    ("faer/svd/tall", 3),
+    ("faer/svdvals/tall", 1),
+    ("faer/svd/complex32", 5),
+    ("faer/svdvals/complex32", 2),
 ];
 
 /// Baselines for the families that followed SVD and packed LU out of `tenferro-linalg`, measured
-/// through the public tensor routes on both CPU kinds. Recorded before the move and lowered where
-/// the batched providers allocate less; no case is above its pre-move count.
+/// through the public tensor routes on both CPU kinds, and lowered to the borrowed-workspace route
+/// (`tlinalg 0.3.1`): every faer family is now the host-side residual. The `blas` cases below are
+/// recorded from the `blas` lane; this target compiles only under `native` (the two CPU routes are
+/// mutually exclusive), so they are the historical record rather than a live check.
 const REMAINING_FAMILY_CEILINGS: &[(&str, usize)] = &[
-    ("faer/cholesky/48", 4),
-    ("faer/triangular_solve/48", 2),
-    ("faer/lu/48", 13),
-    ("faer/full_piv_lu/48", 17),
-    ("faer/full_piv_lu_solve/48", 10),
-    ("faer/solve/48", 8),
-    ("faer/qr/48", 11),
-    ("faer/qr/tall", 11),
-    ("faer/householder_qr/tall", 73),
-    ("faer/rank_revealing_qr/tall", 15),
-    ("faer/eigh/48", 9),
-    ("faer/eigvalsh/48", 4),
-    ("faer/eig/48", 10),
-    ("faer/eigvals/48", 6),
-    ("faer/solve/complex32", 8),
-    ("faer/qr/complex32", 11),
-    ("faer/eigh/complex32", 11),
-    ("faer/eig/complex32", 9),
+    ("faer/cholesky/48", 1),
+    ("faer/triangular_solve/48", 1),
+    ("faer/lu/48", 3),
+    ("faer/full_piv_lu/48", 3),
+    ("faer/full_piv_lu_solve/48", 2),
+    ("faer/solve/48", 2),
+    ("faer/qr/48", 3),
+    ("faer/qr/tall", 3),
+    ("faer/householder_qr/tall", 1),
+    ("faer/rank_revealing_qr/tall", 5),
+    ("faer/eigh/48", 3),
+    ("faer/eigvalsh/48", 1),
+    ("faer/eig/48", 4),
+    ("faer/eigvals/48", 3),
+    ("faer/solve/complex32", 2),
+    ("faer/qr/complex32", 3),
+    ("faer/eigh/complex32", 5),
+    ("faer/eig/complex32", 3),
     ("blas/cholesky/48", 3),
     ("blas/triangular_solve/48", 2),
     ("blas/lu/48", 12),

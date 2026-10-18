@@ -11,6 +11,72 @@ use strided_view::RawStridedRef;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar, PooledUninitOutput};
 use tenferro_tensor::{TypedTensor, TypedTensorView};
 
+/// A pooled destination a provider kernel fills completely.
+///
+/// The lease keeps the pool's recycler, so a finished output returns its storage to the session
+/// pool when the caller drops the tensor. That is what lets a provider route reach a zero
+/// allocation steady state instead of re-acquiring the same capacity every call.
+pub(crate) fn pooled_output<T: PoolScalar>(
+    buffers: &BufferPool,
+    op: &'static str,
+    role: &'static str,
+    shape: impl AsRef<[usize]>,
+) -> tenferro_tensor::Result<PooledUninitOutput<T>> {
+    let shape = shape.as_ref();
+    shape
+        .iter()
+        .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+        .ok_or_else(|| {
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "configuration",
+                format!("{role} element count overflows usize"),
+            )
+        })?;
+    PooledUninitOutput::<T>::new(buffers, shape)
+}
+
+/// Finish a destination a completed provider call wrote in full.
+pub(crate) fn finish_lease<T: PoolScalar>(
+    lease: PooledUninitOutput<T>,
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    // SAFETY: the provider's `*_into` returned `Ok`, which means it initialized every element of
+    // the destination it was handed; a short write is the provider's `Error::Inconsistent`.
+    unsafe { lease.assume_init_recycled() }
+}
+
+/// A pooled destination prefilled from `data` for an in-place provider call.
+pub(crate) fn pooled_copy<T: PoolScalar>(
+    buffers: &BufferPool,
+    op: &'static str,
+    role: &'static str,
+    shape: impl AsRef<[usize]>,
+    data: &[T],
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    let mut lease = pooled_output::<T>(buffers, op, role, shape)?;
+    let slots = lease.as_uninit_slice_mut();
+    // INVARIANT: `shape` is `data`'s compact shape and the check in `pooled_output` proved the
+    // product, so every destination slot is written here.
+    for (slot, &value) in slots.iter_mut().zip(data) {
+        slot.write(value);
+    }
+    finish_lease(lease)
+}
+
+/// A pooled destination initialized with the scalar's pool zero for an in-place provider call.
+pub(crate) fn pooled_zeroed<T: PoolScalar>(
+    buffers: &BufferPool,
+    op: &'static str,
+    role: &'static str,
+    shape: impl AsRef<[usize]>,
+) -> tenferro_tensor::Result<TypedTensor<T>> {
+    let mut lease = pooled_output::<T>(buffers, op, role, shape)?;
+    for slot in lease.as_uninit_slice_mut() {
+        slot.write(T::pool_zero());
+    }
+    finish_lease(lease)
+}
+
 /// Describe a host view to a linalg provider without copying it.
 ///
 /// Both providers read their operands as borrowed strided descriptors. The view's shape, strides

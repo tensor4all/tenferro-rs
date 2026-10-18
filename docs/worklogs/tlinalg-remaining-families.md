@@ -90,3 +90,8 @@
 | blas/qr/complex32 | 8 | 7 |
 | blas/eigh/complex32 | 8 | 8 |
 | blas/eig/complex32 | 11 | 8 |
+
+- Those ceilings are the pre/post-move record for this change. The faer lane's
+  numbers were lowered again when every family moved onto `tlinalg 0.3.1`'s
+  borrowed-workspace `*_workspace` / `*_into` entries (#2178 item 6); see
+  `perf-cpu-inline-metadata-2139.md` for the route-level residual.
