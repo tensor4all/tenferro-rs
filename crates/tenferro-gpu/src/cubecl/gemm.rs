@@ -7,6 +7,7 @@ use cubecl_environment::stream::StreamId;
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
+use super::batched_gemm::{BatchedGemmLaunch, BatchedGemmScalar};
 use super::dispatch::{
     alloc_output, cube_count_for_len, cube_dim_1d, cubecl_buffer, cubecl_view_buffer,
     cubecl_view_mut_buffer, dtype_mismatch, ensure_resident_on_runtime,
@@ -745,7 +746,7 @@ impl<T: 'static> WriteOperand<'_, '_, T> {
     }
 }
 
-fn cross_stream_handles<'a>(
+pub(super) fn cross_stream_handles<'a>(
     rt: &CudaRuntime,
     handles: impl IntoIterator<Item = &'a cubecl_runtime::server::Handle>,
 ) -> Vec<cubecl_runtime::server::Handle> {
@@ -1168,7 +1169,7 @@ fn dot_general_typed_with_conj<T>(
     rhs_conj: bool,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: CutensorScalar + Scalar,
+    T: CutensorScalar + BatchedGemmScalar,
 {
     backend.runtime().set_current_cuda_context(OP)?;
     validate_dot_general(lhs.shape(), rhs.shape(), config)?;
@@ -1191,6 +1192,17 @@ where
             },
         )?;
         return Ok(output);
+    }
+    // A standard batched matmul is one cuBLAS strided-batched GEMM instead of a
+    // cuTENSOR contraction; the general form keeps cuTENSOR. cuBLAS'
+    // strided-batched entry has no conjugation flag, so a conjugated complex
+    // operand stays on cuTENSOR; a real conjugation is the identity and is
+    // still served here.
+    if !(T::IS_COMPLEX && (lhs_conj || rhs_conj)) {
+        if let Some(args) = BatchedGemmLaunch::detect(lhs.shape(), rhs.shape(), config) {
+            super::batched_gemm::run_allocating(backend.runtime(), lhs, rhs, &output, &args)?;
+            return Ok(output);
+        }
     }
 
     let lhs_ptr = typed_device_ptr(backend.runtime(), lhs, OP)?;

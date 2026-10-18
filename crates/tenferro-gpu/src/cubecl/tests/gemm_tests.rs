@@ -6,6 +6,9 @@ use crate::cuda::CutensorWorkspaceStats;
 use crate::DotGeneralConfig;
 use crate::Tensor;
 
+use super::super::batched_gemm::{
+    batched_gemm_launches_for_test, reset_batched_gemm_launches_for_test,
+};
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f32,
     tensor_f64, upload, CpuBackend, CudaBackend,
@@ -519,4 +522,313 @@ fn cuda_cutensor_plan_is_shared_by_an_owned_and_an_equivalent_view_operand() {
         "the view must hit the owned plan"
     );
     assert_tensor_close(&download(&gpu, &viewed), &download(&gpu, &owned), 1e-9);
+}
+
+/// Deterministic values, so a mismatch is reproducible and the two operands see
+/// different patterns.
+fn ramp(shape: &[usize], scale: f64) -> Vec<f64> {
+    let len: usize = shape.iter().product();
+    (0..len)
+        .map(|i| (i * 7 % 23) as f64 * scale - 0.5)
+        .collect()
+}
+
+fn as_f32(values: &[f64]) -> Vec<f32> {
+    values.iter().map(|&value| value as f32).collect()
+}
+
+fn as_c32(values: &[f64]) -> Vec<Complex32> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, &value)| Complex32::new(value as f32, (i % 5) as f32 * 0.25 - 0.5))
+        .collect()
+}
+
+fn as_c64(values: &[f64]) -> Vec<Complex64> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, &value)| Complex64::new(value, (i % 5) as f64 * 0.25 - 0.5))
+        .collect()
+}
+
+/// Fill a compact column-major tensor of `shape` from a linear index.
+fn fill(shape: &[usize], value: impl Fn(usize) -> f64) -> Vec<f64> {
+    (0..shape.iter().product::<usize>()).map(value).collect()
+}
+
+/// `lhs[m, k, batch] * rhs[k, n, batch] -> out[m, n, batch]`: the standard
+/// batched matmul whose batch axes are the trailing ones on both sides.
+fn batched_matmul_config() -> DotGeneralConfig {
+    DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [2].as_slice().into(),
+        rhs_batch_dims: [2].as_slice().into(),
+    }
+}
+
+/// Run one case against the CPU reference and assert which path served it.
+///
+/// `expected_launches` is the number of cuBLAS strided-batched GEMMs the case
+/// must issue: `1` proves the fast path is taken, `0` proves the case fell back
+/// to cuTENSOR instead of matching only numerically.
+fn assert_case_launches(
+    lhs: Tensor,
+    rhs: Tensor,
+    config: DotGeneralConfig,
+    tol: f64,
+    expected_launches: usize,
+) {
+    reset_batched_gemm_launches_for_test();
+    run_dot_general_case(lhs, rhs, config, tol);
+    assert_eq!(
+        batched_gemm_launches_for_test(),
+        expected_launches,
+        "the case must be served by the expected contraction path"
+    );
+}
+
+/// Every supported dtype takes the cuBLAS strided-batched GEMM for a standard
+/// batched matmul.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_standard_batched_matmul_uses_one_strided_batched_gemm() {
+    let lhs_shape = vec![8, 5, 3];
+    let rhs_shape = vec![5, 7, 3];
+    let lhs = ramp(&lhs_shape, 0.1);
+    let rhs = ramp(&rhs_shape, -0.05);
+    // The f32/complex32 tolerances are tight enough that a compute type
+    // drifting to TF32 (~1e-3 here) would fail.
+    let cases = [
+        (
+            tensor_f32(lhs_shape.clone(), as_f32(&lhs)),
+            tensor_f32(rhs_shape.clone(), as_f32(&rhs)),
+            1e-5,
+        ),
+        (
+            tensor_f64(lhs_shape.clone(), lhs.clone()),
+            tensor_f64(rhs_shape.clone(), rhs.clone()),
+            1e-12,
+        ),
+        (
+            tensor_c32(lhs_shape.clone(), as_c32(&lhs)),
+            // Tight enough that a compute type drifting to TF32 would fail.
+            tensor_c32(rhs_shape.clone(), as_c32(&rhs)),
+            1e-5,
+        ),
+        (
+            tensor_c64(lhs_shape.clone(), as_c64(&lhs)),
+            tensor_c64(rhs_shape.clone(), as_c64(&rhs)),
+            1e-12,
+        ),
+    ];
+    for (lhs, rhs, tol) in cases {
+        assert_case_launches(lhs, rhs, batched_matmul_config(), tol, 1);
+    }
+}
+
+/// Both transpose combinations per operand are expressed with `opA`/`opB`, so
+/// none of them costs a transpose copy or leaves the fast path.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_standard_batched_matmul_covers_both_transpose_combinations() {
+    // (lhs shape, rhs shape, lhs contracting axis, rhs contracting axis):
+    // lhs `[m, k, b]`/`[k, m, b]` and rhs `[k, n, b]`/`[n, k, b]`.
+    let cases = [
+        (vec![5, 3, 4], vec![3, 7, 4], 1, 0),
+        (vec![3, 5, 4], vec![3, 7, 4], 0, 0),
+        (vec![5, 3, 4], vec![7, 3, 4], 1, 1),
+        (vec![3, 5, 4], vec![7, 3, 4], 0, 1),
+    ];
+    for (lhs_shape, rhs_shape, lhs_contracting, rhs_contracting) in cases {
+        let config = DotGeneralConfig {
+            lhs_contracting_dims: [lhs_contracting].as_slice().into(),
+            rhs_contracting_dims: [rhs_contracting].as_slice().into(),
+            lhs_batch_dims: [2].as_slice().into(),
+            rhs_batch_dims: [2].as_slice().into(),
+        };
+        assert_case_launches(
+            tensor_f64(lhs_shape.clone(), ramp(&lhs_shape, 0.1)),
+            tensor_f64(rhs_shape.clone(), ramp(&rhs_shape, -0.05)),
+            config,
+            1e-12,
+            1,
+        );
+    }
+}
+
+/// The benchmark shape (16 batches of 32x32) takes the fast path and agrees
+/// with both the CPU reference and the cuTENSOR contraction of the same
+/// algebra, reached through the batch-outer layout cuTENSOR still serves.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_standard_batched_matmul_batch_16_matches_the_cutensor_path() {
+    let (m, n, k, batch) = (32usize, 32usize, 32usize, 16usize);
+    // Both layouts are filled from the same logical `(row, inner, batch)`
+    // function, so the two paths contract identical matrices and only the
+    // physical axis order differs.
+    let lhs_value = |row: usize, inner: usize, b: usize| {
+        ((row * 7 + inner * 11 + b * 3) % 23) as f64 * 0.01 - 0.5
+    };
+    let rhs_value = |inner: usize, col: usize, b: usize| {
+        ((inner * 5 + col * 13 + b * 17) % 23) as f64 * -0.005 - 0.5
+    };
+    // Column-major `[m, k, batch]`: `i = row + inner * m + b * m * k`.
+    let lhs_standard = fill(&[m, k, batch], |i| {
+        lhs_value(i % m, (i / m) % k, i / (m * k))
+    });
+    let rhs_standard = fill(&[k, n, batch], |i| {
+        rhs_value(i % k, (i / k) % n, i / (k * n))
+    });
+    // Column-major `[batch, m, k]`: `i = b + row * batch + inner * batch * m`.
+    let lhs_outer = fill(&[batch, m, k], |i| {
+        lhs_value((i / batch) % m, i / (batch * m), i % batch)
+    });
+    let rhs_outer = fill(&[batch, k, n], |i| {
+        rhs_value((i / batch) % k, i / (batch * k), i % batch)
+    });
+
+    let lhs_host = tensor_f64(vec![m, k, batch], lhs_standard);
+    let rhs_host = tensor_f64(vec![k, n, batch], rhs_standard);
+    let config = batched_matmul_config();
+    // `lhs` keeps its contraction as the trailing axis; `rhs` is `[batch, k, n]`,
+    // so its contraction axis is 1.
+    let outer_config = DotGeneralConfig {
+        lhs_contracting_dims: [2].as_slice().into(),
+        rhs_contracting_dims: [1].as_slice().into(),
+        lhs_batch_dims: [0].as_slice().into(),
+        rhs_batch_dims: [0].as_slice().into(),
+    };
+    assert_eq!(lhs_outer.len(), m * k * batch);
+    assert_eq!(rhs_outer.len(), k * n * batch);
+
+    let mut cpu = cpu_backend();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs_host),
+                TensorRead::from_tensor(&rhs_host),
+                &config,
+            )
+        })
+        .unwrap()
+        .unwrap();
+
+    let mut gpu = gpu_backend();
+    let lhs = upload(&gpu, &lhs_host);
+    let rhs = upload(&gpu, &rhs_host);
+    let lhs_outer = upload(&gpu, &tensor_f64(vec![batch, m, k], lhs_outer));
+    let rhs_outer = upload(&gpu, &tensor_f64(vec![batch, k, n], rhs_outer));
+
+    reset_batched_gemm_launches_for_test();
+    let fast = gpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        batched_gemm_launches_for_test(),
+        1,
+        "the 16-batch 32x32 case must be one cuBLAS strided-batched GEMM"
+    );
+
+    let general = gpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs_outer),
+                TensorRead::from_tensor(&rhs_outer),
+                &outer_config,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        batched_gemm_launches_for_test(),
+        1,
+        "the batch-outer form must not take the cuBLAS batched path"
+    );
+
+    let fast = download(&gpu, &fast);
+    let general = download(&gpu, &general);
+    assert_eq!(fast.shape(), expected.shape());
+    assert_eq!(general.shape(), expected.shape());
+    assert_tensor_close(&fast, &expected, 1e-9);
+    assert_tensor_close(&general, &expected, 1e-9);
+}
+
+/// A single matrix keeps the cuTENSOR path and still matches.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_batched_matmul_with_one_batch_stays_on_the_cutensor_path() {
+    assert_case_launches(
+        tensor_f64(vec![8, 5, 1], ramp(&[8, 5, 1], 0.1)),
+        tensor_f64(vec![5, 7, 1], ramp(&[5, 7, 1], -0.05)),
+        batched_matmul_config(),
+        1e-12,
+        0,
+    );
+}
+
+/// A dot-general that is a real contraction but not a standard batched matmul
+/// keeps cuTENSOR and still matches.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_non_standard_dot_general_stays_on_the_cutensor_path() {
+    // Two free axes on each side plus a batch axis: not a matrix pair.
+    let lhs_shape = vec![5, 3, 4, 3];
+    let rhs_shape = vec![3, 7, 4, 3];
+    assert_case_launches(
+        tensor_f64(lhs_shape.clone(), ramp(&lhs_shape, 0.1)),
+        tensor_f64(rhs_shape.clone(), ramp(&rhs_shape, -0.05)),
+        DotGeneralConfig {
+            lhs_contracting_dims: [1].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [3].as_slice().into(),
+            rhs_batch_dims: [3].as_slice().into(),
+        },
+        1e-12,
+        0,
+    );
+}
+
+/// A conjugated complex operand keeps cuTENSOR: `gemmStridedBatchedEx` has no
+/// conjugation flag.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_conjugated_complex_batched_matmul_stays_on_the_cutensor_path() {
+    let lhs_shape = vec![6, 4, 3];
+    let rhs_shape = vec![4, 5, 3];
+    let lhs_host = tensor_c64(lhs_shape.clone(), as_c64(&ramp(&lhs_shape, 0.1)));
+    let rhs_host = tensor_c64(rhs_shape.clone(), as_c64(&ramp(&rhs_shape, -0.05)));
+    let config = batched_matmul_config();
+
+    let mut cpu = cpu_backend();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.dot_general_with_conj(&lhs_host, &rhs_host, &config, true, false)
+        })
+        .unwrap()
+        .unwrap();
+
+    let mut gpu = gpu_backend();
+    let lhs = upload(&gpu, &lhs_host);
+    let rhs = upload(&gpu, &rhs_host);
+    reset_batched_gemm_launches_for_test();
+    let actual = gpu
+        .with_backend_session(|__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, false))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        batched_gemm_launches_for_test(),
+        0,
+        "a conjugated complex batched matmul must keep the cuTENSOR path"
+    );
+    assert_tensor_close(&download(&gpu, &actual), &expected, 1e-12);
 }
