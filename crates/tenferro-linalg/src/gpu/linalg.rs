@@ -15,15 +15,12 @@ use super::ffi::cusolver::{
 use super::kernels as cubecl_linalg;
 use crate::backend::CompactQrResult;
 use crate::extension::{EighDriver, QrGauge, QrOptions, SvdDriver};
-// validate_nonsingular_gpu uses backend ops (extract_diagonal, magnitude,
-// reduce_min/reduce_max) then downloads scalar summaries — no bulk host
-// roundtrip.
 use tenferro_gpu::{
     cuda::cubecl::Session as CubeclSession, cuda::download_tensor, cuda::CudaExecSession,
 };
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
-    DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorElementwise, TensorRead,
+    DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorRead,
     TensorReduction, TensorScalar, TensorStructural, TypedTensor, ValidationError,
 };
 
@@ -421,8 +418,21 @@ pub(super) fn lu(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Ve
 }
 
 pub(super) fn lu_factor(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Vec<Tensor>> {
+    lu_factor_with_op(backend, input, "lu_factor")
+}
+
+/// LU factorization with the public operation name used in error reporting.
+///
+/// `solve` reuses this factorization and reports a singular matrix as
+/// `Singular { op: "solve" }`, while the standalone `lu_factor` op keeps its
+/// own name.
+fn lu_factor_with_op(
+    backend: &mut CudaExecSession<'_>,
+    input: &Tensor,
+    op: &'static str,
+) -> Result<Vec<Tensor>> {
     match input.dtype() {
-        DType::F32 => lu_factor_typed(backend, typed_host::<f32>("lu_factor", input)?).map(
+        DType::F32 => lu_factor_typed(backend, typed_host::<f32>(op, input)?, op).map(
             |(packed_lu, pivots, parity)| {
                 vec![
                     Tensor::from_typed::<f32>(packed_lu),
@@ -431,7 +441,7 @@ pub(super) fn lu_factor(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Re
                 ]
             },
         ),
-        DType::F64 => lu_factor_typed(backend, typed_host::<f64>("lu_factor", input)?).map(
+        DType::F64 => lu_factor_typed(backend, typed_host::<f64>(op, input)?, op).map(
             |(packed_lu, pivots, parity)| {
                 vec![
                     Tensor::from_typed::<f64>(packed_lu),
@@ -440,7 +450,7 @@ pub(super) fn lu_factor(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Re
                 ]
             },
         ),
-        DType::C32 => lu_factor_typed(backend, typed_host::<Complex32>("lu_factor", input)?).map(
+        DType::C32 => lu_factor_typed(backend, typed_host::<Complex32>(op, input)?, op).map(
             |(packed_lu, pivots, parity)| {
                 vec![
                     Tensor::from_typed::<Complex32>(packed_lu),
@@ -449,7 +459,7 @@ pub(super) fn lu_factor(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Re
                 ]
             },
         ),
-        DType::C64 => lu_factor_typed(backend, typed_host::<Complex64>("lu_factor", input)?).map(
+        DType::C64 => lu_factor_typed(backend, typed_host::<Complex64>(op, input)?, op).map(
             |(packed_lu, pivots, parity)| {
                 vec![
                     Tensor::from_typed::<Complex64>(packed_lu),
@@ -458,8 +468,8 @@ pub(super) fn lu_factor(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Re
                 ]
             },
         ),
-        DType::I32 | DType::I64 | DType::Bool => Err(unsupported_linalg_dtype("lu_factor", input)),
-        DType::External(_) => Err(unsupported_linalg_dtype("lu_factor", input)),
+        DType::I32 | DType::I64 | DType::Bool => Err(unsupported_linalg_dtype(op, input)),
+        DType::External(_) => Err(unsupported_linalg_dtype(op, input)),
     }
 }
 
@@ -1155,7 +1165,7 @@ pub(super) fn solve(backend: &mut CudaExecSession<'_>, a: &Tensor, b: &Tensor) -
         )
     };
 
-    let factors = lu_factor(backend, a)?;
+    let factors = lu_factor_with_op(backend, a, "solve")?;
     let [packed_lu, pivots, _parity] = factors.as_slice() else {
         return Err(Error::Internal(
             "solve: lu_factor returned an unexpected number of outputs".into(),
@@ -1221,7 +1231,6 @@ pub(super) fn lu_solve_prepared(
         )
     };
 
-    validate_nonsingular_gpu(backend, packed_lu)?;
     let result = match (packed_lu.dtype(), pivots.dtype(), rhs.dtype()) {
         (DType::F32, DType::I32, DType::F32) => {
             let (lu, pivots, rhs) = lu_solve_operands::<f32>(packed_lu, pivots, &rhs)?;
@@ -1601,7 +1610,7 @@ where
 {
     const OP: &str = "lu";
 
-    let (packed_lu, pivots, parity) = lu_factor_typed(backend, input)?;
+    let (packed_lu, pivots, parity) = lu_factor_typed(backend, input, OP)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let (p, l, u, _extracted_parity) =
         build_lu_outputs_device(backend, &packed_lu, &pivots, m, n, &input.shape()[2..])?;
@@ -1611,14 +1620,13 @@ where
 fn lu_factor_typed<T>(
     backend: &mut CudaExecSession<'_>,
     input: &TypedTensor<T>,
+    op: &'static str,
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
 where
     T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
 {
-    const OP: &str = "lu_factor";
-
-    ensure_cubecl_resident_typed(OP, input)?;
-    let (m, n) = matrix_dims(OP, input.shape())?;
+    ensure_cubecl_resident_typed(op, input)?;
+    let (m, n) = matrix_dims(op, input.shape())?;
     let k = m.min(n);
     if has_zero_dim(input.shape()) {
         return zero_sized_lu_factor_outputs(backend, input.shape());
@@ -1626,18 +1634,18 @@ where
 
     let mut pivot_shape = vec![k];
     pivot_shape.extend_from_slice(&input.shape()[2..]);
-    let batch_total = batch_count(OP, &input.shape()[2..])?;
-    let lda = as_i32(m, OP, "lda")?;
-    let m_i32 = as_i32(m, OP, "m")?;
-    let n_i32 = as_i32(n, OP, "n")?;
-    let matrix_stride = checked_mul_usize(OP, "lu matrix stride", m, n)?;
+    let batch_total = batch_count(op, &input.shape()[2..])?;
+    let lda = as_i32(m, op, "lda")?;
+    let m_i32 = as_i32(m, op, "m")?;
+    let n_i32 = as_i32(n, op, "n")?;
+    let matrix_stride = checked_mul_usize(op, "lu matrix stride", m, n)?;
 
-    let (work, pivots) = backend.with_raw(OP, |raw| {
+    let (work, pivots) = backend.with_raw(op, |raw| {
         let handles = raw.resource(CudaLinalgHandles::load)?;
         // SAFETY: the stream handle is valid only for this raw-session scope;
         // it is used immediately to bind the cuSOLVER handle and not retained.
         let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
-        handles.cusolver().set_stream(stream, OP)?;
+        handles.cusolver().set_stream(stream, op)?;
 
         // Clone `input` into a fresh work matrix on the session stream.
         let mut work = raw.alloc_output::<T>(input.shape())?;
@@ -1647,7 +1655,7 @@ where
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
             unsafe {
-                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?
             };
         }
 
@@ -1661,22 +1669,22 @@ where
                 // cuSOLVER only queries the leading dimension here.
                 unsafe { a_ref.raw_ptr() },
                 lda,
-                OP,
+                op,
             )?
         };
         let workspace_nbytes = {
             let lwork = usize::try_from(lwork).map_err(|_| {
                 Error::invalid_argument(
-                    OP,
+                    op,
                     "workspace_length",
                     format!("must be non-negative, got {lwork}"),
                 )
             })?;
             lwork.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
-                Error::invalid_argument(OP, "workspace_length", "byte size overflowed")
+                Error::invalid_argument(op, "workspace_length", "byte size overflowed")
             })?
         };
-        let workspace = raw.alloc_bytes(workspace_nbytes, OP)?;
+        let workspace = raw.alloc_bytes(workspace_nbytes, op)?;
         let mut workspace_ptr = std::ptr::null_mut::<c_void>();
         workspace.with_ptr(|ptr| workspace_ptr = ptr);
 
@@ -1694,8 +1702,8 @@ where
 
         for batch in 0..batch_total {
             let a_offset =
-                checked_batch_offset(OP, "lu matrix batch offset", batch, matrix_stride)?;
-            let pivot_offset = checked_batch_offset(OP, "lu pivot batch offset", batch, k)?;
+                checked_batch_offset(op, "lu matrix batch offset", batch, matrix_stride)?;
+            let pivot_offset = checked_batch_offset(op, "lu pivot batch offset", batch, k)?;
             // SAFETY: checked matrix, pivot, and info offsets stay inside their
             // live device allocations for this batch.
             let (batch_a, batch_pivots, batch_info) = unsafe {
@@ -1717,22 +1725,29 @@ where
                     workspace_ptr,
                     batch_pivots.cast::<i32>(),
                     batch_info.cast::<i32>(),
-                    OP,
+                    op,
                 )?;
             }
         }
 
         // Host barrier (only for reading the solver diagnostics).
-        let host_info = raw.download_tensor::<i32>(&info, OP)?;
+        let host_info = raw.download_tensor::<i32>(&info, op)?;
         for &info_value in host_info.host_data()? {
             if info_value < 0 {
                 return Err(Error::invalid_argument(
-                    OP,
+                    op,
                     "cusolver_argument",
                     format!(
                         "cusolverDn*getrf reported invalid parameter {}",
                         -info_value
                     ),
+                ));
+            }
+            if info_value > 0 {
+                // cuSOLVER reports the first zero pivot here: singular matrix.
+                return Err(crate::error::into_tensor_error(
+                    op,
+                    crate::Error::Singular { op },
                 ));
             }
         }
@@ -4198,163 +4213,4 @@ fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
     let mut rhs_shape = vec![b.shape()[0], 1];
     rhs_shape.extend_from_slice(&b.shape()[1..]);
     Some(rhs_shape)
-}
-
-/// Validate that U's diagonal has no singular/zero entries — GPU-accelerated.
-///
-/// Strategy: extract_diagonal → magnitude → reshape to 1D →
-/// reduce_min/reduce_max(axis=0) → download scalar summaries → tolerance check.
-///
-/// Only the final scalar summaries are transferred to host.
-fn validate_nonsingular_gpu(backend: &mut CudaExecSession<'_>, u: &Tensor) -> Result<()> {
-    let diag = backend.extract_diagonal(u, 0, 1)?;
-    let abs_diag = diagonal_magnitude(backend, &diag)?;
-
-    // Flatten to 1D then reduce_min on axis 0 to get a single scalar.
-    let total = checked_shape_product("validate_nonsingular_gpu", "diagonal", abs_diag.shape())?;
-    let flat = backend.reshape_read(TensorRead::from_tensor(&abs_diag), &[total])?;
-    let min_val = backend.reduce_min_read(TensorRead::from_tensor(&flat), &[0])?;
-    let max_val = backend.reduce_max_read(TensorRead::from_tensor(&flat), &[0])?;
-
-    // Host reads must observe the queued GPU reduction result.
-    backend.runtime().synchronize()?;
-    let host_min = download_tensor(backend.runtime(), &min_val)?;
-    let host_max = download_tensor(backend.runtime(), &max_val)?;
-    let (value, max_magnitude) = host_min_max_magnitudes(&host_min, &host_max)?;
-    let tolerance = singularity_tolerance(abs_diag.dtype(), max_magnitude)?;
-    let is_singular = !value.is_finite() || !max_magnitude.is_finite() || value <= tolerance;
-
-    if is_singular {
-        Err(crate::error::into_tensor_error(
-            "solve",
-            crate::Error::Singular { op: "solve" },
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-fn diagonal_magnitude(backend: &mut CudaExecSession<'_>, diag: &Tensor) -> Result<Tensor> {
-    match diag.dtype() {
-        DType::F32 | DType::F64 => backend.abs_read(TensorRead::from_tensor(diag)),
-        DType::C32 => complex32_magnitude(
-            backend,
-            typed_host::<Complex32>("validate_nonsingular_gpu", diag)?,
-        )
-        .map(Tensor::from_typed::<f32>),
-        DType::C64 => complex64_magnitude(
-            backend,
-            typed_host::<Complex64>("validate_nonsingular_gpu", diag)?,
-        )
-        .map(Tensor::from_typed::<f64>),
-        DType::I32 | DType::I64 | DType::Bool => {
-            Err(unsupported_linalg_dtype("validate_nonsingular_gpu", diag))
-        }
-        DType::External(_) => Err(unsupported_linalg_dtype("validate_nonsingular_gpu", diag)),
-    }
-}
-
-fn complex32_magnitude(
-    backend: &mut CudaExecSession<'_>,
-    input: &TypedTensor<Complex32>,
-) -> Result<TypedTensor<f32>> {
-    backend.with_cubecl("validate_nonsingular_gpu", |cubecl| {
-        let output = cubecl.alloc_output::<f32>(input.shape())?;
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let input_arg = unsafe { cubecl.array_arg(input, "validate_nonsingular_gpu") }?;
-        let output_arg = unsafe { cubecl.array_arg(&output, "validate_nonsingular_gpu") }?;
-        if output.n_elements() == 0 {
-            return Ok(output);
-        }
-        let launch_count = cubecl.cube_count_1d(output.n_elements())?;
-        // SAFETY: bindings describe live CUDA tensors, and `launch_count`
-        // covers exactly the complex32 magnitude output domain.
-        unsafe {
-            cubecl_linalg::complex32_magnitude::launch_unchecked(
-                cubecl.client(),
-                launch_count,
-                cubecl.cube_dim_1d(),
-                output_arg,
-                input_arg,
-            );
-        }
-        Ok(output)
-    })
-}
-
-fn complex64_magnitude(
-    backend: &mut CudaExecSession<'_>,
-    input: &TypedTensor<Complex64>,
-) -> Result<TypedTensor<f64>> {
-    backend.with_cubecl("validate_nonsingular_gpu", |cubecl| {
-        let output = cubecl.alloc_output::<f64>(input.shape())?;
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let input_arg = unsafe { cubecl.array_arg(input, "validate_nonsingular_gpu") }?;
-        let output_arg = unsafe { cubecl.array_arg(&output, "validate_nonsingular_gpu") }?;
-        if output.n_elements() == 0 {
-            return Ok(output);
-        }
-        let launch_count = cubecl.cube_count_1d(output.n_elements())?;
-        // SAFETY: bindings describe live CUDA tensors, and `launch_count`
-        // covers exactly the complex64 magnitude output domain.
-        unsafe {
-            cubecl_linalg::complex64_magnitude::launch_unchecked(
-                cubecl.client(),
-                launch_count,
-                cubecl.cube_dim_1d(),
-                output_arg,
-                input_arg,
-            );
-        }
-        Ok(output)
-    })
-}
-
-fn host_min_max_magnitudes(host_min: &Tensor, host_max: &Tensor) -> Result<(f64, f64)> {
-    match (host_min.dtype(), host_max.dtype()) {
-        (DType::F64, DType::F64) => {
-            let (min, max) = host_pair::<f64>(host_min, host_max)?;
-            Ok((min.host_data()?[0], max.host_data()?[0]))
-        }
-        (DType::F32, DType::F32) => {
-            let (min, max) = host_pair::<f32>(host_min, host_max)?;
-            Ok((
-                f64::from(min.host_data()?[0]),
-                f64::from(max.host_data()?[0]),
-            ))
-        }
-        _ => Err(Error::Internal(
-            "solve: unexpected dtype after magnitude reduction".into(),
-        )),
-    }
-}
-
-/// The typed pair behind a same-dtype pair of host tensors, or this module's refusal.
-fn host_pair<'a, T: TensorScalar>(
-    lhs: &'a Tensor,
-    rhs: &'a Tensor,
-) -> Result<(&'a TypedTensor<T>, &'a TypedTensor<T>)> {
-    let internal = || Error::Internal("solve: unexpected dtype after magnitude reduction".into());
-    let lhs_t = lhs.as_typed::<T>().ok_or_else(internal)?;
-    let rhs_t = rhs.as_typed::<T>().ok_or_else(internal)?;
-    Ok((lhs_t, rhs_t))
-}
-
-fn singularity_tolerance(dtype: DType, max_magnitude: f64) -> Result<f64> {
-    let eps = match dtype {
-        DType::F32 | DType::C32 => f32::EPSILON as f64,
-        DType::F64 | DType::C64 => f64::EPSILON,
-        DType::I32 | DType::I64 | DType::Bool => f64::EPSILON,
-        // The solve path validates the dtype before it reaches here, and a scalar tenferro does
-        // not declare has no tolerance this kernel could pick.
-        DType::External(_) => {
-            return Err(crate::error::unsupported_dtype(
-                "singularity_tolerance",
-                dtype,
-            ));
-        }
-    };
-    Ok(eps * max_magnitude.max(1.0))
 }
