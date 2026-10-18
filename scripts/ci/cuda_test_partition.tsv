@@ -1400,3 +1400,6 @@ host	tenferro-linalg::integration	traced_extension::traced_pinv_rejects_integer_
 host	tenferro-linalg::integration	traced_extension::traced_svd_eigh_qr_cholesky_reject_integer_and_bool_dtypes_at_construction
 host	tenferro-linalg::prelude	prelude_calls_concrete_linalg_operation
 two-gpu	tenferro-gpu	cubecl::runtime_adapter::tests::cuda_registration_preserves_two_caller_selected_engine_ids_and_devices
+host	tenferro-linalg	cpu::tests::batch_policy::forced_outer_reaches_the_faer_exec
+host	tenferro-linalg	cpu::tests::batch_policy::forced_whole_batch_vendor_on_native_empty_inputs_is_refused
+host	tenferro-linalg::small_linalg_allocation	small_batched_qr_svd_packed_lu_have_batch_independent_provider_scratch
