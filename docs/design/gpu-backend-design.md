@@ -704,6 +704,17 @@ the backend materializes the public `vt` output by copying V to V^H on the
 device. The singular-values-only path still passes scratch U/V buffers to
 `gesvdj` because cuSOLVER rejects null U/V pointers on that path.
 
+Ordinary CUDA QR (`qr`/`qr_with_options`) does not inspect the cuSOLVER
+`geqrf`/`orgqr` device `info` flags, so forward QR issues no host barrier.
+Synchronous provider return codes still propagate, and the doc-hidden compact
+Householder hooks keep their own `geqrf` status read. The flags are not useful for QR: the illegal-argument
+report is unreachable because shapes, dtypes, and dimensions are validated
+before the vendor call, and an exactly zero `R` diagonal (rank deficiency) is a
+valid factorization that cuSOLVER does not flag. A new CUDA decomposition should
+add a status download only where the flag carries a failure the caller cannot
+observe any other way, and never as an implicit host barrier on the forward
+path.
+
 `SvdDriver::Xgesvdp` is the opt-in polar-decomposition routine; `Auto` never
 selects it, and the explicit variant forces it at any size and dtype. It is the
 fastest of the three drivers for `min(m, n) >= 256` on an A100 (see the

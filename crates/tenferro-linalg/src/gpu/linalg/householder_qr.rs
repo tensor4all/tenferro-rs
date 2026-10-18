@@ -356,6 +356,8 @@ where
                 op,
             )?;
         }
+        // ponytail: the doc-hidden compact QR hooks keep the blocking geqrf
+        // status read; the public `qr` family skips it.
         let host_info = raw.download_tensor::<i32>(&info, op)?;
         check_solver_info(op, "cusolverDn*geqrf", host_info.host_data()?[0])?;
         Ok(coeff)
@@ -759,6 +761,8 @@ where
                 op,
             )?;
         }
+        // ponytail: the doc-hidden compact QR hooks keep the blocking geqrf
+        // status read; the public `qr` family skips it.
         let host_info = raw.download_tensor::<i32>(&info, op)?;
         check_solver_info(op, "cusolverDn*geqrf", host_info.host_data()?[0])?;
         Ok((packed, coeff))

@@ -614,21 +614,27 @@ fn gpu_solver_info_checks_are_batched_outside_kernel_loops() {
     }
 
     let qr = source_section(&source, "fn qr_typed", "fn eigh_typed");
+    // cuSOLVER requires a valid `devInfo` pointer, so the batched tensors stay,
+    // but forward QR never reads them: no host barrier on the default path.
     for needle in [
         "geqrf_info = raw.alloc_output::<i32>",
         "orgqr_info = raw.alloc_output::<i32>",
-        "raw.download_tensor::<i32>(&geqrf_info, OP)?",
-        "raw.download_tensor::<i32>(&orgqr_info, OP)?",
     ] {
         assert!(
             qr.contains(needle),
-            "QR should use batched info handling: missing {needle}"
+            "QR should keep one batched info tensor for cuSOLVER: missing {needle}"
         );
     }
-    assert!(
-        !qr.contains("copy_device_to_host"),
-        "QR should not synchronize inside the per-batch loop"
-    );
+    for banned in [
+        "download_tensor::<i32>",
+        "copy_device_to_host",
+        "host_data()",
+    ] {
+        assert!(
+            !qr.contains(banned),
+            "forward QR must not read the vendor status flags: found {banned}"
+        );
+    }
 }
 
 #[test]

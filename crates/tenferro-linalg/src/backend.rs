@@ -442,6 +442,12 @@ pub trait LinalgBackend: BackendSession {
     /// QR is thin: for an `m x n` input, `Q` has shape `m x min(m, n)` and
     /// `R` has shape `min(m, n) x n`.
     ///
+    /// This is [`LinalgBackend::qr_with_options`] with default options. The
+    /// CUDA provider does not inspect the cuSOLVER device status flags for
+    /// ordinary QR; synchronous provider errors still propagate. It does not
+    /// report rank deficiency: shapes and dtypes are validated up front, and a
+    /// rank-deficient input still yields its valid `(Q, R)` factors.
+    ///
     /// # Errors
     ///
     /// Returns `Error::Validation` for an unsupported rank, shape, or dtype,
@@ -451,7 +457,12 @@ pub trait LinalgBackend: BackendSession {
 
     /// Compute public QR outputs `(Q, R)` with explicit options.
     ///
-    /// `gauge` controls optional sign or phase post-processing.
+    /// `gauge` controls optional sign or phase post-processing. The CUDA
+    /// provider does not inspect the cuSOLVER device status flags for ordinary
+    /// QR; synchronous provider errors still propagate. It does not report
+    /// rank deficiency: shapes and dtypes are validated up front, and a
+    /// rank-deficient input still yields its valid factors. The caller's own
+    /// verification decides whether those factors are acceptable.
     ///
     /// # Examples
     ///

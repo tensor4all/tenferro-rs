@@ -197,6 +197,11 @@ pub trait EagerSessionLinalgExt {
 
     /// Compute QR with an explicit post-processing gauge.
     ///
+    /// The CUDA provider does not read the cuSOLVER `geqrf`/`orgqr` status
+    /// flags, so forward QR issues no host round trip and reports neither a
+    /// vendor parameter error nor a rank deficiency. A rank-deficient input
+    /// still yields valid factors.
+    ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};

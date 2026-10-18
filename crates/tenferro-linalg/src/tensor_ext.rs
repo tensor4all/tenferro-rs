@@ -270,6 +270,11 @@ pub trait TensorLinalgExt {
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<crate::HouseholderQr<Tensor>>;
 
+    /// The CUDA provider does not read the cuSOLVER `geqrf`/`orgqr` status
+    /// flags, so forward QR reports neither a vendor parameter error nor a
+    /// rank deficiency: shapes and dtypes are validated up front, and a
+    /// rank-deficient input still yields its valid factors.
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for matrix metadata or options, plus QR backend errors.
