@@ -89,7 +89,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("${GITHUB_REPOSITORY}/.github/workflows/runpod-gpu-test.yml@refs/heads/main", child)
         self.assertLess(child.index("Revalidate queued PR"), child.index("Create GitHub App token"))
         self.assertIn("    if: always()", child.split("  cleanup-runpod:", 1)[1])
-        self.assertIn('::error::Failed to delete RunPod pod', child)
+        self.assertIn('::error::Could not confirm deletion of RunPod pod', child)
         self.assertNotIn("actions/cache/save", child)
         gpu = child.split("  run-gpu-tests:", 1)[1].split("  cleanup-runpod:", 1)[0]
         self.assertNotIn("secrets.", gpu)
@@ -243,7 +243,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_runpod_schema_preflight_precedes_archive(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         self.assertIn("runpod-contract:", text)
-        self.assertIn("python3 scripts/ci/runpod_contract.py", text)
+        self.assertIn("python3 -m scripts.ci.runpod_contract", text)
         archive = text.index("  cuda-archive:")
         preflight = text.index("  runpod-contract:")
         self.assertLess(preflight, archive)
@@ -353,7 +353,7 @@ class WorkflowContractTests(unittest.TestCase):
         ):
             self.assertIn(condition, delete_on_failure)
         self.assertIn(
-            "if: inputs.keep_failed_pods != true || needs.start-runpod.result == 'success'",
+            "if: always() && (inputs.keep_failed_pods != true || needs.start-runpod.result == 'success')",
             whole,
         )
         # JIT configs are minted per candidate attempt inside the provision
@@ -470,7 +470,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_runpod_provision_is_bounded_and_price_ordered(self) -> None:
         config = json.loads(read("scripts/ci/runpod_config.json"))
         for key in (
-            "graphql_url",
+            "catalog_url",
             "min_vram_gb",
             "max_price_candidates",
             "max_provision_attempts",

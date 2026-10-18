@@ -23,6 +23,12 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      - name: Checkout trusted cleanup helper
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
       - name: Delete RunPod pod
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
@@ -30,103 +36,9 @@ jobs:
           POD_NAME: ${{ inputs.pod_name }}
         run: |
           set -euo pipefail
-
-          redact_secrets() {
-            jq '
-              def redact_item:
-                (if has("env") then
-                   .env.RUNNER_JIT_CONFIG = "***redacted***"
-                   | .env.PUBLIC_KEY = "***redacted***"
-                 else
-                   .
-                 end)
-                | (if has("dockerStartCmd") then
-                     (if (.dockerStartCmd | type) == "array" then
-                       .dockerStartCmd = ["***redacted-startup-script***"]
-                     else
-                       .dockerStartCmd = "***redacted-startup-script***"
-                     end)
-                   else
-                     .
-                   end);
-
-              if type == "array" then
-                map(redact_item)
-              elif has("pods") then
-                .pods |= map(redact_item)
-              elif has("data") then
-                .data |= map(redact_item)
-              elif has("items") then
-                .items |= map(redact_item)
-              else
-                redact_item
-              end
-            ' "$1"
-          }
-
-          if [ -z "${POD_ID}" ] || [ "${POD_ID}" = "null" ]; then
-            if [ -z "${POD_NAME}" ] || [ "${POD_NAME}" = "null" ]; then
-              echo "No POD_ID or POD_NAME; nothing to delete"
-              exit 0
-            fi
-
-          echo "Looking up RunPod pod by name: ${POD_NAME}"
-
-            response_file=/tmp/runpod-pods.json
-            status="$(
-              curl -sS \
-                --request GET \
-                --url "https://rest.runpod.io/v1/pods" \
-                --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
-              --output "$response_file" \
-              --write-out "%{http_code}"
-          )"
-
-            echo "RunPod list HTTP status: ${status}"
-          redact_secrets "$response_file" || cat "$response_file" || true
-
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            echo "Failed to list RunPod pods" >&2
-            exit 1
+          if [[ "${POD_ID}" == null ]]; then unset POD_ID; fi
+          if [[ -z "${POD_ID:-}" && ( -z "${POD_NAME}" || "${POD_NAME}" == null ) ]]; then
+            echo "No POD_ID or POD_NAME; nothing to delete"
+            exit 0
           fi
-
-            POD_ID="$(
-              jq -r --arg pod_name "$POD_NAME" '
-                if type == "array" then
-                  .[]
-                else
-                  (.pods // .data // .items // [])
-                  | .[]
-                end
-                | select(.name == $pod_name)
-                | .id
-              ' "$response_file" | head -1
-            )"
-
-            if [ -z "${POD_ID}" ] || [ "${POD_ID}" = "null" ]; then
-              echo "No pod found with name: ${POD_NAME}"
-              exit 0
-            fi
-          fi
-
-          echo "Deleting RunPod pod: ${POD_ID}"
-
-          response_file=/tmp/runpod-delete-response.json
-          status="$(
-            curl -sS \
-              --request DELETE \
-              --url "https://rest.runpod.io/v1/pods/${POD_ID}" \
-              --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
-              --output "$response_file" \
-              --write-out "%{http_code}"
-          )"
-
-          echo "RunPod delete HTTP status: ${status}"
-          redact_secrets "$response_file" || cat "$response_file" || true
-
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            echo "Failed to delete RunPod pod" >&2
-            exit 1
-          fi
-
-          echo "Deleted RunPod pod: ${POD_ID}"
+          python3 -m scripts.ci.runpod_http delete --config scripts/ci/runpod_config.json --pod-name "${POD_NAME}"

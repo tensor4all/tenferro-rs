@@ -11,35 +11,24 @@ to the static reviewed tier order so CI availability never depends on the
 pricing endpoint.
 """
 
+# Adapted from tensor4all/tenferro-benchmark PRs #214 and #215 (main 9012f4b).
 from __future__ import annotations
 
 import dataclasses
 import json
-import urllib.error
+import math
+import time
 import urllib.request
+import urllib.parse
+
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-GRAPHQL_URL = "https://api.runpod.io/graphql"
+from scripts.ci.runpod_http import Cooldown, request_once, retry_delay, retryable
 
-# The public pricing query needs no authentication; never send the RunPod
-# API key here.
-GPU_TYPES_QUERY = """
-query CandidatePricing {
-  gpuTypes {
-    id
-    memoryInGb
-    secureCloud
-    securePrice
-    lowestPrice(input: {gpuCount: 1, secureCloud: true}) {
-      stockStatus
-      uninterruptablePrice
-    }
-  }
-}
-""".strip()
+CATALOG_URL = "https://api.runpod.io/v2/catalog/gpus"
 
-Transport = Callable[[bytes], tuple[int, bytes]]
+Transport = Callable[[], tuple[int, bytes]]
 
 
 class PricingError(RuntimeError):
@@ -58,7 +47,7 @@ class GpuOffer:
 
 def _as_float(value: object) -> float | None:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
+        return float(value) if math.isfinite(value) else None
     return None
 
 
@@ -76,18 +65,13 @@ def parse_gpu_offers(
 
     try:
         payload = json.loads(body)
-    except json.JSONDecodeError as error:
+    except (ValueError, UnicodeError) as error:
         raise PricingError(f"pricing response is not JSON: {error}") from error
     if not isinstance(payload, Mapping):
         raise PricingError("pricing response root must be an object")
-    if payload.get("errors"):
-        raise PricingError(f"pricing query returned errors: {payload['errors']!r}")
-    data = payload.get("data")
-    if not isinstance(data, Mapping):
-        raise PricingError("pricing response is missing 'data'")
-    gpu_types = data.get("gpuTypes")
-    if not isinstance(gpu_types, Sequence):
-        raise PricingError("pricing response is missing 'gpuTypes'")
+    gpu_types = payload.get("gpus")
+    if not isinstance(gpu_types, list):
+        raise PricingError("catalog response is missing 'gpus'")
 
     eligible_order = {gpu_id: idx for idx, gpu_id in enumerate(eligible_gpu_type_ids)}
     offers: list[GpuOffer] = []
@@ -95,26 +79,24 @@ def parse_gpu_offers(
         if not isinstance(entry, Mapping):
             continue
         gpu_id = entry.get("id")
-        if gpu_id not in eligible_order:
+        if not isinstance(gpu_id, str) or gpu_id not in eligible_order:
             continue
-        if not entry.get("secureCloud"):
+        if not entry.get("secure"):
             print(f"Pricing: {gpu_id} has no Secure Cloud offer; skipping.")
             continue
-        lowest = entry.get("lowestPrice")
-        lowest = lowest if isinstance(lowest, Mapping) else {}
-        stock = lowest.get("stockStatus")
-        # RunPod reports availability as High/Medium/Low and uses the
-        # literal string "None" (or a JSON null) for no stock.
-        if stock not in ("High", "Medium", "Low"):
-            print(f"Pricing: {gpu_id} is out of stock; skipping.")
+        stock = entry.get("availability")
+        if stock not in ("HIGH", "MEDIUM", "LOW"):
+            print(
+                f"Pricing: {gpu_id} is out of stock or availability is unknown; skipping."
+            )
             continue
-        price = _as_float(lowest.get("uninterruptablePrice"))
-        if price is None:
-            price = _as_float(entry.get("securePrice"))
+        prices = entry.get("price")
+        prices = prices if isinstance(prices, Mapping) else {}
+        price = _as_float(prices.get("secure"))
         if price is None or price <= 0:
             print(f"Pricing: {gpu_id} has no usable price; skipping.")
             continue
-        memory = _as_float(entry.get("memoryInGb")) or 0.0
+        memory = _as_float(entry.get("memory")) or 0.0
         if memory < min_vram_gb:
             print(
                 f"Pricing: {gpu_id} has {memory:g} GB VRAM, below the "
@@ -142,37 +124,55 @@ def fetch_gpu_offers(
 ) -> list[GpuOffer]:
     """Query live pricing and return eligible offers, cheapest first."""
 
-    request_body = json.dumps({"query": GPU_TYPES_QUERY}).encode()
     try:
-        status, body = transport(request_body)
+        status, body = transport()
     except OSError as error:
         raise PricingError(f"pricing transport failure: {error}") from error
     if status != 200:
         raise PricingError(f"pricing query returned HTTP {status}")
-    return parse_gpu_offers(
-        body, eligible_gpu_type_ids, min_vram_gb=min_vram_gb
-    )
+    return parse_gpu_offers(body, eligible_gpu_type_ids, min_vram_gb=min_vram_gb)
 
 
-def http_transport(url: str = GRAPHQL_URL) -> Transport:
-    """Unauthenticated transport for the public pricing query."""
+def http_transport(
+    url: str = CATALOG_URL,
+    *,
+    api_key: str = "",
+    config: Mapping[str, Any] | None = None,
+    cooldown: Cooldown | None = None,
+    monotonic=time.monotonic,
+    transport=request_once,
+) -> Transport:
+    """One authenticated v2 catalog read; no pricing retry loop."""
+    config = config or {}
+    cooldown = cooldown if cooldown is not None else Cooldown()
+    params = {
+        "include": "AVAILABILITY",
+        "product": "POD",
+        "cloud": "SECURE",
+        "count": config.get("gpu_count", 1),
+    }
+    if config.get("allowed_cuda_versions"):
+        params["cudaVersions"] = ",".join(config["allowed_cuda_versions"])
+    catalog_url = url + "?" + urllib.parse.urlencode(params)
 
-    def send(payload: bytes) -> tuple[int, bytes]:
+    def send() -> tuple[int, bytes]:
+        if not api_key:
+            raise PricingError("API key required for the v2 catalog")
+        if monotonic() < cooldown.until:
+            return 429, b""
         request = urllib.request.Request(
-            url,
-            data=payload,
-            method="POST",
+            catalog_url,
+            method="GET",
             headers={
-                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
                 "Accept": "application/json",
-                "User-Agent": "tenferro-ci-runpod-pricing/1",
+                "User-Agent": "tenferro-ci-runpod-pricing/2",
             },
         )
-        try:
-            with urllib.request.urlopen(request, timeout=20.0) as response:
-                return response.status, response.read()
-        except urllib.error.HTTPError as error:
-            return error.code, error.read()
+        response = transport(request, timeout=20.0)
+        if retryable(response.status):
+            cooldown.until = monotonic() + retry_delay(response.headers, 1, base=10.0)
+        return response.status, response.body
 
     return send
 
@@ -182,6 +182,7 @@ def candidate_plan(
     tiers: Sequence[tuple[str, Sequence[str]]],
     *,
     transport: Transport | None = None,
+    api_key: str = "",
 ) -> list[tuple[str, list[str]]]:
     """Build the ordered create-attempt plan.
 
@@ -202,7 +203,12 @@ def candidate_plan(
         offers = fetch_gpu_offers(
             eligible,
             min_vram_gb=float(config.get("min_vram_gb", 0)),
-            transport=transport or http_transport(str(config.get("graphql_url", GRAPHQL_URL))),
+            transport=transport
+            or http_transport(
+                str(config.get("catalog_url", CATALOG_URL)),
+                api_key=api_key,
+                config=config,
+            ),
         )
     except PricingError as error:
         print(f"Live pricing unavailable; using static tier order: {error}")
@@ -225,5 +231,5 @@ def candidate_plan(
         print("No live-priced candidates; static reviewed tiers only.")
 
     for tier_name, gpu_type_ids in tiers:
-        plan.append((tier_name, list(gpu_type_ids)))
+        plan.extend((tier_name, [gpu_id]) for gpu_id in gpu_type_ids)
     return plan

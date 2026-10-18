@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """Validate repository RunPod configuration against the live OpenAPI schema."""
 
+# Adapted from tensor4all/tenferro-benchmark PRs #214 and #215 (main 9012f4b).
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import sys
-import urllib.error
+import time
 import urllib.request
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+from scripts.ci.runpod_http import request_with_retry
 
 
 DEFAULT_CONFIG = Path(__file__).with_name("runpod_config.json")
@@ -27,14 +31,8 @@ def configured_gpu_tiers(
     """Validate and return ordered, disjoint GPU tiers."""
 
     value = config.get("gpu_tiers")
-    if (
-        not isinstance(value, Sequence)
-        or isinstance(value, (str, bytes))
-        or not value
-    ):
-        raise ContractError(
-            "runpod_config.json gpu_tiers must be a nonempty array"
-        )
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or not value:
+        raise ContractError("runpod_config.json gpu_tiers must be a nonempty array")
     tiers: list[tuple[str, tuple[str, ...]]] = []
     seen: set[str] = set()
     for item in value:
@@ -44,23 +42,13 @@ def configured_gpu_tiers(
         ids = item.get("gpu_type_ids")
         if not isinstance(name, str) or not name:
             raise ContractError("each GPU tier requires a nonempty name")
-        if (
-            not isinstance(ids, Sequence)
-            or isinstance(ids, (str, bytes))
-            or not ids
-        ):
-            raise ContractError(
-                f"GPU tier {name} requires nonempty gpu_type_ids"
-            )
+        if not isinstance(ids, Sequence) or isinstance(ids, (str, bytes)) or not ids:
+            raise ContractError(f"GPU tier {name} requires nonempty gpu_type_ids")
         if any(not isinstance(gpu_id, str) or not gpu_id for gpu_id in ids):
-            raise ContractError(
-                f"GPU tier {name} IDs must be nonempty strings"
-            )
+            raise ContractError(f"GPU tier {name} IDs must be nonempty strings")
         duplicate = seen.intersection(ids)
         if duplicate:
-            raise ContractError(
-                f"duplicate GPU ID across tiers: {sorted(duplicate)}"
-            )
+            raise ContractError(f"duplicate GPU ID across tiers: {sorted(duplicate)}")
         seen.update(ids)
         tiers.append((name, tuple(ids)))
     return tiers
@@ -85,12 +73,10 @@ def configured_cuda_versions(config: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(value)
 
 
-def resolve_local_ref(
-    document: Mapping[str, object], ref: str
-) -> Mapping[str, object]:
+def resolve_local_ref(document: Mapping[str, object], ref: str) -> Mapping[str, object]:
     """Resolve one RFC 6901 local JSON pointer to an object."""
 
-    if not ref.startswith("#/"):
+    if not isinstance(ref, str) or not ref.startswith("#/"):
         raise ContractError(f"unsupported non-local OpenAPI reference: {ref}")
     value: object = document
     for segment in ref[2:].split("/"):
@@ -109,119 +95,83 @@ def _mapping(value: object, context: str) -> Mapping[str, object]:
     return value
 
 
-def _property(value: Mapping[str, object], name: str, context: str) -> object:
-    if name not in value:
-        raise ContractError(f"OpenAPI {context} is missing {name!r}")
-    return value[name]
-
-
-def _pod_create_properties(
-    document: Mapping[str, object],
-) -> Mapping[str, object]:
-    try:
-        paths = _mapping(_property(document, "paths", "document"), "paths")
-        pods = _mapping(_property(paths, "/pods", "paths"), "POST /pods")
-        post = _mapping(_property(pods, "post", "POST /pods"), "POST /pods")
-        request_body = _mapping(
-            _property(post, "requestBody", "POST /pods"),
-            "POST /pods requestBody",
-        )
-        content = _mapping(
-            _property(request_body, "content", "POST /pods requestBody"),
-            "POST /pods requestBody content",
-        )
-        json_content = _mapping(
-            _property(content, "application/json", "POST /pods content"),
-            "POST /pods application/json",
-        )
-        schema = _mapping(
-            _property(json_content, "schema", "POST /pods application/json"),
-            "POST /pods request schema",
-        )
-    except ContractError as error:
-        if "POST /pods" in str(error):
-            raise
-        raise ContractError(f"invalid POST /pods OpenAPI schema: {error}") from error
-
+def schema_properties(document, schema):
+    """Collect object properties through local refs and v2 allOf composition."""
+    schema = _mapping(schema, "object schema")
+    properties = {}
     if ref := schema.get("$ref"):
-        if not isinstance(ref, str):
-            raise ContractError("POST /pods schema $ref must be a string")
-        schema = resolve_local_ref(document, ref)
-
-    properties = _mapping(
-        _property(schema, "properties", "POST /pods schema"),
-        "POST /pods properties",
-    )
+        properties.update(schema_properties(document, resolve_local_ref(document, ref)))
+    for part in schema.get("allOf", []):
+        properties.update(schema_properties(document, part))
+    properties.update(schema.get("properties", {}))
     return properties
 
 
-def _extract_string_enum_property(
-    document: Mapping[str, object], property_name: str
-) -> frozenset[str]:
+def _pod_create_properties(document):
+    try:
+        schema = document["paths"]["/v2/pods"]["post"]["requestBody"]["content"][
+            "application/json"
+        ]["schema"]
+        return schema_properties(document, schema)
+    except (KeyError, TypeError) as error:
+        raise ContractError("invalid POST /v2/pods OpenAPI schema") from error
+
+
+def _gpu_properties(document):
     properties = _pod_create_properties(document)
-    property_schema = _mapping(
-        _property(properties, property_name, "POST /pods properties"),
-        f"POST /pods {property_name}",
-    )
-    items = _mapping(
-        _property(property_schema, "items", f"POST /pods {property_name}"),
-        f"POST /pods {property_name} items",
-    )
-    enum_values = _property(
-        items, "enum", f"POST /pods {property_name} items"
-    )
-    if (
-        not isinstance(enum_values, Sequence)
-        or isinstance(enum_values, (str, bytes))
-        or not enum_values
-        or any(not isinstance(value, str) for value in enum_values)
-    ):
-        raise ContractError(
-            f"POST /pods {property_name} enum must contain strings"
-        )
-    return frozenset(enum_values)
+    for field in ("image", "entrypoint", "cmd", "disk", "mounts", "gpu", "env"):
+        if field not in properties:
+            raise ContractError(f"POST /v2/pods schema is missing {field}")
+    return schema_properties(document, properties["gpu"])
 
 
-def extract_gpu_type_ids(document: Mapping[str, object]) -> frozenset[str]:
-    """Extract the accepted ``gpuTypeIds`` enum from ``POST /pods``."""
+def extract_gpu_type_ids(catalog):
+    """v2 GPU IDs are catalog data, not an enum in the create schema."""
+    gpus = catalog.get("gpus")
+    if not isinstance(gpus, list) or not gpus:
+        raise ContractError("v2 catalog must contain a nonempty gpus array")
+    ids = set()
+    for gpu in gpus:
+        if (
+            not isinstance(gpu, Mapping)
+            or not isinstance(gpu.get("id"), str)
+            or not gpu["id"]
+        ):
+            raise ContractError("v2 catalog GPU IDs must be nonempty strings")
+        ids.add(gpu["id"])
+    return frozenset(ids)
 
-    return _extract_string_enum_property(document, "gpuTypeIds")
 
-
-def extract_allowed_cuda_versions(
-    document: Mapping[str, object],
-) -> frozenset[str]:
-    """Extract accepted ``allowedCudaVersions`` values from ``POST /pods``."""
-
-    return _extract_string_enum_property(document, "allowedCudaVersions")
-
-
-def validate_gpu_type_ids(
-    document: Mapping[str, object], configured_ids: Sequence[str]
-) -> None:
-    """Require every configured GPU ID to occur in the current schema."""
-
-    accepted = extract_gpu_type_ids(document)
-    invalid = sorted(set(configured_ids) - accepted)
+def validate_gpu_type_ids(document, configured_ids, catalog):
+    properties = _gpu_properties(document)
+    if properties.get("id", {}).get("type") != "string":
+        raise ContractError("POST /v2/pods gpu.id must be a string")
+    invalid = sorted(set(configured_ids) - extract_gpu_type_ids(catalog))
     if invalid:
         raise ContractError(
-            "configured RunPod GPU IDs absent from POST /pods schema: "
-            + ", ".join(invalid)
+            "configured RunPod GPU IDs absent from v2 catalog: " + ", ".join(invalid)
         )
 
 
-def validate_cuda_versions(
-    document: Mapping[str, object], configured_versions: Sequence[str]
-) -> None:
-    """Require every configured CUDA version to occur in the current schema."""
-
-    accepted = extract_allowed_cuda_versions(document)
-    invalid = sorted(set(configured_versions) - accepted)
+def validate_cuda_versions(document, configured_versions):
+    try:
+        items = _gpu_properties(document)["allowedCudaVersions"]["items"]
+        pattern = items["pattern"]
+        if items["type"] != "string":
+            raise KeyError("type")
+    except (KeyError, TypeError) as error:
+        raise ContractError(
+            "POST /v2/pods gpu.allowedCudaVersions must declare a string pattern"
+        ) from error
+    invalid = [
+        version for version in configured_versions if not re.fullmatch(pattern, version)
+    ]
     if invalid:
         raise ContractError(
-            "configured RunPod CUDA versions absent from POST /pods schema: "
-            + ", ".join(invalid)
+            "CUDA versions do not match v2 format: " + ", ".join(invalid)
         )
+    # v2 permits any major.minor string. This validates syntax, not live stock;
+    # availability is checked by the catalog query and the CUDA startup proof.
 
 
 def _load_json(path: Path) -> Mapping[str, object]:
@@ -235,23 +185,24 @@ def _load_json(path: Path) -> Mapping[str, object]:
 
 
 def fetch_openapi(url: str, api_key: str) -> Mapping[str, object]:
-    """Fetch and decode the authenticated OpenAPI document without logging secrets."""
-
+    """Fetch OpenAPI or catalog JSON with bounded retries and no secret output."""
     request = urllib.request.Request(
         url,
         headers={
             "Authorization": f"Bearer {api_key}",
             "Accept": "application/json",
-            "User-Agent": "tenferro-ci-contract/1",
+            "User-Agent": "tenferro-ci-contract/2",
         },
     )
+    response = request_with_retry(request, deadline=time.monotonic() + 60)
+    if response.status != 200:
+        raise ContractError(f"RunPod contract request failed (HTTP {response.status})")
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            value: Any = json.load(response)
-    except (OSError, urllib.error.HTTPError, json.JSONDecodeError) as error:
-        raise ContractError(f"failed to fetch RunPod OpenAPI document: {error}") from error
+        value = json.loads(response.body)
+    except (ValueError, UnicodeError) as error:
+        raise ContractError("RunPod contract response is not JSON") from error
     if not isinstance(value, Mapping):
-        raise ContractError("RunPod OpenAPI document root must be an object")
+        raise ContractError("RunPod contract response root must be an object")
     return value
 
 
@@ -259,6 +210,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--schema-file", type=Path)
+    parser.add_argument("--catalog-file", type=Path)
     return parser.parse_args()
 
 
@@ -268,11 +220,14 @@ def main() -> int:
         config = _load_json(args.config)
         tiers = configured_gpu_tiers(config)
         cuda_versions = configured_cuda_versions(config)
-        configured_ids = [
-            gpu_id for _name, gpu_ids in tiers for gpu_id in gpu_ids
-        ]
+        configured_ids = [gpu_id for _name, gpu_ids in tiers for gpu_id in gpu_ids]
         if args.schema_file:
             schema = _load_json(args.schema_file)
+            if not args.catalog_file:
+                raise ContractError(
+                    "--schema-file requires --catalog-file for offline validation"
+                )
+            catalog = _load_json(args.catalog_file)
         else:
             api_key = os.environ.get("RUNPOD_API_KEY")
             if not api_key:
@@ -283,13 +238,15 @@ def main() -> int:
             if not isinstance(openapi_url, str) or not openapi_url:
                 raise ContractError("runpod_config.json openapi_url must be a string")
             schema = fetch_openapi(openapi_url, api_key)
-        validate_gpu_type_ids(schema, configured_ids)
+            catalog = fetch_openapi(str(config["catalog_url"]), api_key)
+        validate_gpu_type_ids(schema, configured_ids, catalog)
         validate_cuda_versions(schema, cuda_versions)
         print(
-            f"RunPod OpenAPI accepts all {len(configured_ids)} configured GPU "
-            f"IDs and CUDA versions {', '.join(cuda_versions)}."
+            f"RunPod v2 catalog recognizes all {len(configured_ids)} configured GPU "
+            f"IDs; CUDA version syntax is valid: {', '.join(cuda_versions)}. "
+            "Live capacity is checked separately."
         )
-    except ContractError as error:
+    except (ContractError, KeyError) as error:
         print(f"RunPod contract error: {error}", file=sys.stderr)
         return 1
     return 0

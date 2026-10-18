@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Create RunPod pods with bounded, status-aware retries and redacted output."""
 
+# Adapted from tensor4all/tenferro-benchmark PRs #214 and #215 (main 9012f4b).
 from __future__ import annotations
 
 import argparse
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.ci.runpod_contract import ContractError, configured_gpu_tiers
+from scripts.ci.runpod_http import Cooldown, retry_after
 
 
 class RetryClass(enum.Enum):
@@ -67,13 +69,14 @@ class AssignedGpuError(PermanentRunPodError):
         self.result = result
 
 
-Transport = Callable[
-    [bytes, float], tuple[int, Mapping[str, str], bytes]
-]
+Transport = Callable[[bytes, float], tuple[int, Mapping[str, str], bytes]]
 
 _CAPACITY_MESSAGES = (
     "does not have the resources to deploy your pod",
     "no available machine",
+    "no capacity",
+    "insufficient capacity",
+    "could not be placed",
 )
 
 
@@ -88,7 +91,7 @@ def classify_http_status(status: int) -> RetryClass:
 def is_capacity_failure(status: int, body: bytes) -> bool:
     """Return whether RunPod reported exhausted machine capacity."""
 
-    if not 500 <= status < 600:
+    if status != 400 and not 500 <= status < 600:
         return False
     message = body.decode("utf-8", errors="replace").lower()
     return any(marker in message for marker in _CAPACITY_MESSAGES)
@@ -119,22 +122,27 @@ def build_pod_payload(
     passed through it.
     """
 
+    if len(gpu_type_ids) != 1:
+        raise PermanentRunPodError("REST v2 requires exactly one GPU type per request")
     return {
-        "cloudType": config["cloud_type"],
-        "computeType": config["compute_type"],
-        "allowedCudaVersions": config["allowed_cuda_versions"],
+        "cloud": config["cloud_type"],
         "name": f"tenferro-rs-gpu-ci-{os.environ.get('GITHUB_RUN_ID', 'local')}",
-        "imageName": image_name,
-        "gpuTypeIds": list(gpu_type_ids),
-        "gpuTypePriority": config["gpu_type_priority"],
-        "gpuCount": config["gpu_count"],
-        "containerDiskInGb": config["container_disk_gb"],
-        "volumeInGb": config["volume_gb"],
-        "volumeMountPath": config["volume_mount_path"],
-        "interruptible": False,
+        "image": image_name,
+        "gpu": {
+            "id": gpu_type_ids[0],
+            "count": config["gpu_count"],
+            "allowedCudaVersions": config["allowed_cuda_versions"],
+        },
+        "disk": config["container_disk_gb"],
+        "mounts": {
+            "persistent": {
+                "size": config["volume_gb"],
+                "path": config["volume_mount_path"],
+            }
+        },
         "ports": [],
-        "dockerEntrypoint": ["bash", "-lc"],
-        "dockerStartCmd": [startup_script],
+        "entrypoint": ["bash", "-lc"],
+        "cmd": [startup_script],
         "env": {
             **(dict(extra_env) if extra_env else {}),
             "RUNNER_JIT_CONFIG": jit_config,
@@ -152,16 +160,14 @@ def _redact(value: object) -> object:
     for key, item in value.items():
         if key in {"RUNNER_JIT_CONFIG", "PUBLIC_KEY"}:
             redacted[key] = "***redacted***"
-        elif key == "dockerStartCmd":
+        elif key in {"cmd", "args"}:
             redacted[key] = ["***redacted-startup-script***"]
         else:
             redacted[key] = _redact(item)
     return redacted
 
 
-def redacted_error_message(
-    body: bytes, *, secrets: Sequence[str] = ()
-) -> str:
+def redacted_error_message(body: bytes, *, secrets: Sequence[str] = ()) -> str:
     """Render a bounded response diagnostic without request secrets."""
 
     try:
@@ -187,26 +193,14 @@ def parse_create_response(
             f"RunPod HTTP {status} returned invalid JSON"
         ) from error
     if not isinstance(value, Mapping):
-        raise PermanentRunPodError(
-            f"RunPod HTTP {status} response must be an object"
-        )
+        raise PermanentRunPodError(f"RunPod HTTP {status} response must be an object")
     pod_id = value.get("id")
     if not isinstance(pod_id, str) or not pod_id:
-        raise PermanentRunPodError(
-            f"RunPod HTTP {status} response is missing pod id"
-        )
+        raise PermanentRunPodError(f"RunPod HTTP {status} response is missing pod id")
     gpu_type_id = ""
-    machine = value.get("machine")
-    if isinstance(machine, Mapping):
-        direct = machine.get("gpuTypeId")
-        if isinstance(direct, str):
-            gpu_type_id = direct
-        else:
-            gpu_type = machine.get("gpuType")
-            if isinstance(gpu_type, Mapping) and isinstance(
-                gpu_type.get("id"), str
-            ):
-                gpu_type_id = gpu_type["id"]
+    gpu = value.get("gpu")
+    if isinstance(gpu, Mapping) and isinstance(gpu.get("id"), str):
+        gpu_type_id = gpu["id"]
     return CreateResult(
         pod_id=pod_id,
         gpu_type_id=gpu_type_id,
@@ -215,18 +209,7 @@ def parse_create_response(
     )
 
 
-def _retry_after(headers: Mapping[str, str]) -> float | None:
-    value = next(
-        (item for key, item in headers.items() if key.lower() == "retry-after"),
-        None,
-    )
-    if value is None:
-        return None
-    try:
-        delay = float(value)
-    except ValueError:
-        return None
-    return max(0.0, delay)
+_retry_after = retry_after
 
 
 def create_pod(
@@ -238,9 +221,11 @@ def create_pod(
     jitter: Callable[[], float] = random.random,
     monotonic: Callable[[], float] = time.monotonic,
     secrets: Sequence[str] = (),
+    cooldown: Cooldown | None = None,
 ) -> CreateResult:
     """Create a pod within both an attempt budget and a wall-clock deadline."""
 
+    cooldown = cooldown if cooldown is not None else Cooldown()
     attempts_per_tier = int(config.get("same_tier_retries", 1)) + 1
     base = float(config["retry_base_seconds"])
     cap = float(config["retry_max_seconds"])
@@ -249,18 +234,22 @@ def create_pod(
         for attempt in range(1, attempts_per_tier + 1):
             remaining = deadline - monotonic()
             if remaining <= 0:
-                raise RetryableRunPodError(
-                    "RunPod create deadline expired"
-                )
+                raise RetryableRunPodError("RunPod create deadline expired")
+            wait = max(0.0, cooldown.until - monotonic())
+            if wait >= remaining:
+                raise RetryableRunPodError("RunPod create cooldown exceeds deadline")
+            if wait:
+                sleep(wait)
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise RetryableRunPodError("RunPod create deadline expired")
             print(
                 f"RunPod create tier={request.tier_name} "
                 f"tier_attempt={attempt}/{attempts_per_tier}"
             )
             headers: Mapping[str, str] = {}
             try:
-                status, headers, body = transport(
-                    request.payload, remaining
-                )
+                status, headers, body = transport(request.payload, remaining)
             except OSError as error:
                 failure: RunPodError = RetryableRunPodError(
                     f"transport failure: {error}"
@@ -287,15 +276,18 @@ def create_pod(
                         )
                     return result
                 message = redacted_error_message(body, secrets=secrets)
-                if is_capacity_failure(status, body):
-                    failure = RetryableRunPodError(
-                        f"RunPod capacity unavailable: {message}"
+                if status == 403 or is_capacity_failure(status, body):
+                    reason = (
+                        "pool access unavailable"
+                        if status == 403
+                        else "capacity unavailable"
                     )
+                    failure = RetryableRunPodError(f"RunPod {reason}: {message}")
                     if monotonic() >= deadline:
                         raise failure
                     if tier_index + 1 < len(requests):
                         print(
-                            "RunPod capacity unavailable in tier "
+                            "RunPod candidate unavailable in tier "
                             f"{request.tier_name}; trying "
                             f"{requests[tier_index + 1].tier_name}; "
                             f"error={str(failure)!r}"
@@ -303,22 +295,17 @@ def create_pod(
                         break
                     raise failure
                 if classify_http_status(status) is RetryClass.PERMANENT:
-                    raise PermanentRunPodError(
-                        f"RunPod HTTP {status}: {message}"
-                    )
-                failure = RetryableRunPodError(
-                    f"RunPod HTTP {status}: {message}"
-                )
+                    raise PermanentRunPodError(f"RunPod HTTP {status}: {message}")
+                failure = RetryableRunPodError(f"RunPod HTTP {status}: {message}")
 
             now = monotonic()
-            if attempt == attempts_per_tier or now >= deadline:
-                raise failure
             delay = _retry_after(headers)
             if delay is None:
-                delay = backoff_seconds(
-                    attempt, base=base, cap=cap, jitter=jitter
-                )
-            bounded_delay = min(delay, max(0.0, deadline - now))
+                delay = backoff_seconds(attempt, base=base, cap=cap, jitter=jitter)
+            cooldown.until = max(cooldown.until, now + delay)
+            if attempt == attempts_per_tier or delay >= deadline - now:
+                raise failure
+            bounded_delay = delay
             print(
                 f"RunPod transient failure in tier {request.tier_name}; "
                 f"retrying after {bounded_delay:.1f}s: {str(failure)!r}"
@@ -341,9 +328,7 @@ def publish_github_result(
         ("gpu_tier", result.gpu_tier),
     ):
         if "\n" in value or "\r" in value:
-            raise PermanentRunPodError(
-                f"unsafe GitHub output value for {name}"
-            )
+            raise PermanentRunPodError(f"unsafe GitHub output value for {name}")
     if output_path is not None:
         with output_path.open("a", encoding="utf-8") as output:
             output.write(f"pod_id={result.pod_id}\n")
@@ -351,18 +336,14 @@ def publish_github_result(
             output.write(f"gpu_tier={result.gpu_tier}\n")
     if summary_path is not None:
         gpu_tier = html.escape(result.gpu_tier).replace("`", "&#96;")
-        gpu_type_id = html.escape(
-            result.gpu_type_id or "unknown"
-        ).replace("`", "&#96;")
+        gpu_type_id = html.escape(result.gpu_type_id or "unknown").replace("`", "&#96;")
         with summary_path.open("a", encoding="utf-8") as summary:
             summary.write("### RunPod GPU selection\n\n")
             summary.write(f"- Price tier: {gpu_tier}\n")
             summary.write(f"- Selected GPU: {gpu_type_id}\n")
 
 
-def publish_cleanup_pod_id(
-    result: CreateResult, output_path: Path | None
-) -> None:
+def publish_cleanup_pod_id(result: CreateResult, output_path: Path | None) -> None:
     """Publish only a validated pod ID so a rejected pod can be deleted."""
 
     if "\n" in result.pod_id or "\r" in result.pod_id:
@@ -373,9 +354,7 @@ def publish_cleanup_pod_id(
 
 
 def _http_transport(url: str, api_key: str) -> Transport:
-    def send(
-        payload: bytes, timeout: float
-    ) -> tuple[int, Mapping[str, str], bytes]:
+    def send(payload: bytes, timeout: float) -> tuple[int, Mapping[str, str], bytes]:
         request = urllib.request.Request(
             url,
             data=payload,
@@ -426,7 +405,12 @@ def main() -> int:
             )
         startup_script = args.startup_script.read_text(encoding="utf-8")
         requests: list[CreateRequest] = []
-        for tier_name, gpu_type_ids in configured_gpu_tiers(config):
+        candidates = [
+            (name, (gpu_id,))
+            for name, ids in configured_gpu_tiers(config)
+            for gpu_id in ids
+        ]
+        for tier_name, gpu_type_ids in candidates:
             payload = build_pod_payload(
                 config,
                 args.image_name,

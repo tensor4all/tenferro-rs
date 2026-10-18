@@ -21,21 +21,21 @@ def gpu_entry(
     gpu_id: str,
     *,
     price: float | None,
-    stock: str | None = "High",
+    stock: str | None = "HIGH",
     memory: float = 24,
     secure: bool = True,
 ) -> dict:
     return {
         "id": gpu_id,
-        "memoryInGb": memory,
-        "secureCloud": secure,
-        "securePrice": price,
-        "lowestPrice": {"stockStatus": stock, "uninterruptablePrice": price},
+        "memory": memory,
+        "secure": secure,
+        "price": {"secure": price},
+        "availability": stock,
     }
 
 
 def body(*entries: dict) -> bytes:
-    return json.dumps({"data": {"gpuTypes": list(entries)}}).encode()
+    return json.dumps({"gpus": list(entries)}).encode()
 
 
 class ParseGpuOffersTests(unittest.TestCase):
@@ -86,7 +86,7 @@ class ParseGpuOffersTests(unittest.TestCase):
         offers = parse_gpu_offers(
             body(
                 gpu_entry("NVIDIA A40", price=0.44, stock="None"),
-                gpu_entry("NVIDIA L40S", price=0.79, stock="Medium"),
+                gpu_entry("NVIDIA L40S", price=0.79, stock="MEDIUM"),
             ),
             ELIGIBLE,
             min_vram_gb=0,
@@ -108,14 +108,13 @@ class ParseGpuOffersTests(unittest.TestCase):
             fetch_gpu_offers(
                 ELIGIBLE,
                 min_vram_gb=0,
-                transport=lambda payload: (500, b"{}"),
+                transport=lambda: (500, b"{}"),
             )
 
-    def test_missing_uninterruptable_price_falls_back_to_secure_price(self) -> None:
-        entry = gpu_entry("NVIDIA A40", price=0.44)
-        entry["lowestPrice"]["uninterruptablePrice"] = None
-        offers = parse_gpu_offers(body(entry), ELIGIBLE, min_vram_gb=0)
-        self.assertEqual(offers, [GpuOffer("NVIDIA A40", 0.44, "High", 24)])
+    def test_missing_secure_price_is_not_replaced_by_community_price(self):
+        entry = gpu_entry("NVIDIA A40", price=None)
+        entry["price"]["community"] = 0.01
+        self.assertEqual(parse_gpu_offers(body(entry), ELIGIBLE, min_vram_gb=0), [])
 
 
 class CandidatePlanTests(unittest.TestCase):
@@ -128,7 +127,7 @@ class CandidatePlanTests(unittest.TestCase):
         plan = candidate_plan(
             {"min_vram_gb": 0, "max_price_candidates": 4},
             self.TIERS,
-            transport=lambda payload: (
+            transport=lambda: (
                 200,
                 body(
                     gpu_entry("NVIDIA A40", price=0.44),
@@ -141,7 +140,8 @@ class CandidatePlanTests(unittest.TestCase):
             [
                 ("price-0.44-NVIDIA A40", ["NVIDIA A40"]),
                 ("price-0.79-NVIDIA L40S", ["NVIDIA L40S"]),
-                ("cost-preferred", ["NVIDIA RTX A4000", "NVIDIA A40"]),
+                ("cost-preferred", ["NVIDIA RTX A4000"]),
+                ("cost-preferred", ["NVIDIA A40"]),
                 ("premium", ["NVIDIA L40S"]),
             ],
         )
@@ -150,7 +150,7 @@ class CandidatePlanTests(unittest.TestCase):
         plan = candidate_plan(
             {"min_vram_gb": 0, "max_price_candidates": 1},
             self.TIERS,
-            transport=lambda payload: (
+            transport=lambda: (
                 200,
                 body(
                     gpu_entry("NVIDIA A40", price=0.44),
@@ -159,10 +159,13 @@ class CandidatePlanTests(unittest.TestCase):
             ),
         )
         self.assertEqual(plan[0][0], "price-0.44-NVIDIA A40")
-        self.assertEqual([name for name, _ in plan[1:]], ["cost-preferred", "premium"])
+        self.assertEqual(
+            [name for name, _ in plan[1:]],
+            ["cost-preferred", "cost-preferred", "premium"],
+        )
 
     def test_pricing_failure_falls_back_to_static_tiers(self) -> None:
-        def failing_transport(payload: bytes) -> tuple[int, bytes]:
+        def failing_transport() -> tuple[int, bytes]:
             raise OSError("network down")
 
         plan = candidate_plan(
@@ -171,14 +174,14 @@ class CandidatePlanTests(unittest.TestCase):
             transport=failing_transport,
         )
         self.assertEqual(
-            [name for name, _ in plan], ["cost-preferred", "premium"]
+            [name for name, _ in plan], ["cost-preferred", "cost-preferred", "premium"]
         )
 
     def test_pricing_never_adds_unreviewed_gpu_types(self) -> None:
         plan = candidate_plan(
             {"min_vram_gb": 0},
             self.TIERS,
-            transport=lambda payload: (
+            transport=lambda: (
                 200,
                 body(gpu_entry("NVIDIA H100 PCIe", price=0.01)),
             ),

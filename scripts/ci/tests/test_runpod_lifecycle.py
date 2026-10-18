@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+from scripts.ci.runpod_http import Response
 from scripts.ci.runpod_lifecycle import HostedClient, WORKFLOW_PATH, owner, ownership_environment
 from scripts.ci.runpod_reap import main, reap, reason_to_reap
 
@@ -80,13 +81,23 @@ class HostedLifecycleTests(unittest.TestCase):
                     client.cancel("123", "2")
 
     def test_delete_retries_transient_errors_but_rejects_permanent_failure(self):
-        transport = Mock(side_effect=[OSError("network"), (429, b""), (404, b"")])
-        with patch("scripts.ci.runpod_lifecycle.time.sleep"):
-            HostedClient(REPO, "token", "pod-key", transport=transport).delete("pod")
-        self.assertEqual(transport.call_count, 3)
-        transport = Mock(return_value=(403, b""))
-        with self.assertRaisesRegex(RuntimeError, "rejected"):
-            HostedClient(REPO, "token", "pod-key", transport=transport).delete("pod")
+        from scripts.ci.tests.test_runpod_http import Clock
+        clock = Clock()
+        responses = iter([Response(0, {}, b""), Response(429, {"Retry-After": "12"}, b""), Response(404, {}, b"")])
+        times = []
+        def transport(request, *, timeout):
+            times.append(clock.now)
+            return next(responses)
+        # Use the real shared policy with an injected clock, without live HTTP.
+        from scripts.ci.runpod_http import delete_pod
+        with patch("scripts.ci.runpod_lifecycle.delete_pod", side_effect=lambda url, key, pod, **kw:
+                   delete_pod(url, key, pod, monotonic=clock.monotonic, sleep=clock.sleep, **kw)):
+            HostedClient(REPO, "token", "pod-key", pod_transport=transport).delete("pod")
+        self.assertEqual(len(times), 3)
+        self.assertGreaterEqual(times[2] - times[1], 12 - 1e-9)
+        transport = Mock(return_value=Response(403, {}, b""))
+        with self.assertRaisesRegex(RuntimeError, "Could not confirm"):
+            HostedClient(REPO, "token", "pod-key", pod_transport=transport).delete("pod")
         self.assertEqual(transport.call_count, 1)
 
 
@@ -160,7 +171,7 @@ class ReaperTests(unittest.TestCase):
 
     def test_cli_reads_provider_array_and_writes_only_decisions(self):
         client = Mock(repository=REPO)
-        client.transport.return_value = (200, json.dumps([{**POD, "env": {}}]).encode())
+        client.pods.return_value = [{**POD, "env": {}}]
         with tempfile.TemporaryDirectory() as folder, patch("sys.argv", ["reaper", "--output", folder + "/result.json"]), \
                 patch("scripts.ci.runpod_reap.HostedClient.from_environment", return_value=client):
             self.assertEqual(main(), 0)

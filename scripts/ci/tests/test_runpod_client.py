@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from scripts.ci.tests.test_runpod_http import Clock
 
 from scripts.ci.runpod_client import (
     AssignedGpuError,
@@ -24,9 +25,7 @@ from scripts.ci.runpod_client import (
 
 
 ROOT = Path(__file__).resolve().parents[3]
-CONFIG = json.loads(
-    (ROOT / "scripts" / "ci" / "runpod_config.json").read_text()
-)
+CONFIG = json.loads((ROOT / "scripts" / "ci" / "runpod_config.json").read_text())
 
 
 class RunPodClientTests(unittest.TestCase):
@@ -49,13 +48,9 @@ class RunPodClientTests(unittest.TestCase):
 
             self.assertEqual(
                 output.read_text(),
-                "pod_id=pod-1\n"
-                "gpu_type_id=NVIDIA L40S\n"
-                "gpu_tier=premium\n",
+                "pod_id=pod-1\n" "gpu_type_id=NVIDIA L40S\n" "gpu_tier=premium\n",
             )
-            self.assertIn(
-                "Selected GPU: NVIDIA L40S", summary.read_text()
-            )
+            self.assertIn("Selected GPU: NVIDIA L40S", summary.read_text())
             self.assertIn("Price tier: premium", summary.read_text())
 
     def test_publish_github_result_rejects_multiline_provider_values(
@@ -67,9 +62,7 @@ class RunPodClientTests(unittest.TestCase):
             gpu_tier="premium",
             body=b"{}",
         )
-        with self.assertRaisesRegex(
-            PermanentRunPodError, "unsafe GitHub output"
-        ):
+        with self.assertRaisesRegex(PermanentRunPodError, "unsafe GitHub output"):
             publish_github_result(
                 result,
                 output_path=Path("unused-output"),
@@ -92,8 +85,7 @@ class RunPodClientTests(unittest.TestCase):
                 transport=lambda _payload, _timeout: (
                     201,
                     {},
-                    b'{"id":"pod-1","machine":'
-                    b'{"gpuTypeId":"NVIDIA H100 80GB HBM3"}}',
+                    b'{"id":"pod-1","gpu":' b'{"id":"NVIDIA H100 80GB HBM3"}}',
                 ),
             )
         with tempfile.TemporaryDirectory() as directory:
@@ -102,9 +94,7 @@ class RunPodClientTests(unittest.TestCase):
             self.assertEqual(output.read_text(), "pod_id=pod-1\n")
 
     def test_create_requires_assigned_gpu_for_selected_tier(self) -> None:
-        with self.assertRaisesRegex(
-            PermanentRunPodError, "missing assigned GPU"
-        ):
+        with self.assertRaisesRegex(PermanentRunPodError, "missing assigned GPU"):
             create_pod(
                 CONFIG,
                 [
@@ -144,10 +134,8 @@ class RunPodClientTests(unittest.TestCase):
             b'your pod"}'
         )
         self.assertTrue(is_capacity_failure(500, body))
-        self.assertFalse(is_capacity_failure(400, body))
-        self.assertFalse(
-            is_capacity_failure(500, b'{"error":"internal failure"}')
-        )
+        self.assertTrue(is_capacity_failure(400, body))
+        self.assertFalse(is_capacity_failure(500, b'{"error":"internal failure"}'))
 
     def test_capacity_failure_moves_tier_without_sleep(self) -> None:
         requests = [
@@ -165,8 +153,7 @@ class RunPodClientTests(unittest.TestCase):
                 (
                     201,
                     {},
-                    b'{"id":"pod-1","machine":'
-                    b'{"gpuTypeId":"NVIDIA L40S"}}',
+                    b'{"id":"pod-1","gpu":' b'{"id":"NVIDIA L40S"}}',
                 ),
             ]
         )
@@ -182,9 +169,7 @@ class RunPodClientTests(unittest.TestCase):
             CONFIG,
             requests,
             transport=transport,
-            sleep=lambda _delay: self.fail(
-                "capacity failover must not sleep"
-            ),
+            sleep=lambda _delay: self.fail("capacity failover must not sleep"),
         )
 
         self.assertEqual(seen, [b"cheap", b"premium"])
@@ -194,14 +179,10 @@ class RunPodClientTests(unittest.TestCase):
     def test_retry_classification(self) -> None:
         for status in (408, 429, 500, 502, 503):
             with self.subTest(status=status):
-                self.assertIs(
-                    classify_http_status(status), RetryClass.RETRYABLE
-                )
+                self.assertIs(classify_http_status(status), RetryClass.RETRYABLE)
         for status in (400, 401, 403, 404, 422):
             with self.subTest(status=status):
-                self.assertIs(
-                    classify_http_status(status), RetryClass.PERMANENT
-                )
+                self.assertIs(classify_http_status(status), RetryClass.PERMANENT)
 
     def test_backoff_is_bounded_and_jittered(self) -> None:
         delays = [
@@ -211,7 +192,7 @@ class RunPodClientTests(unittest.TestCase):
         self.assertEqual(delays, [2.5, 5.0, 10.0, 20.0, 30.0, 30.0, 30.0])
 
     def test_payload_preserves_secure_trust_boundary(self) -> None:
-        gpu_type_ids = CONFIG["gpu_tiers"][0]["gpu_type_ids"]
+        gpu_type_ids = [CONFIG["gpu_tiers"][0]["gpu_type_ids"][0]]
         payload = build_pod_payload(
             CONFIG,
             "image",
@@ -219,15 +200,14 @@ class RunPodClientTests(unittest.TestCase):
             "jit",
             gpu_type_ids,
         )
-        self.assertEqual(payload["cloudType"], "SECURE")
-        self.assertIs(payload["interruptible"], False)
+        self.assertEqual(payload["cloud"], "SECURE")
         self.assertEqual(
-            payload["allowedCudaVersions"],
-            ["13.0", "12.9", "12.8", "12.7", "12.6"],
+            payload["gpu"]["allowedCudaVersions"],
+            CONFIG["allowed_cuda_versions"],
         )
-        self.assertEqual(payload["gpuTypeIds"], gpu_type_ids)
+        self.assertEqual(payload["gpu"]["id"], gpu_type_ids[0])
         self.assertEqual(payload["env"]["RUNNER_JIT_CONFIG"], "jit")
-        self.assertEqual(payload["dockerStartCmd"], ["startup"])
+        self.assertEqual(payload["cmd"], ["startup"])
 
     def test_success_without_pod_id_is_protocol_error(self) -> None:
         with self.assertRaisesRegex(PermanentRunPodError, "missing pod id"):
@@ -256,16 +236,18 @@ class RunPodClientTests(unittest.TestCase):
         responses = iter(
             [
                 (500, {}, b'{"error":"busy"}'),
-                (201, {}, b'{"id":"pod-1","machine":{"gpuTypeId":"NVIDIA A40"}}'),
+                (201, {}, b'{"id":"pod-1","gpu":{"id":"NVIDIA A40"}}'),
             ]
         )
-        sleeps: list[float] = []
+        clock = Clock()
+        sleeps = clock.sleeps
 
         result = create_pod(
             CONFIG,
             [CreateRequest("cost-preferred", b"{}")],
             transport=lambda _payload, _timeout: next(responses),
-            sleep=sleeps.append,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
             jitter=lambda: 0.5,
         )
 
@@ -280,13 +262,13 @@ class RunPodClientTests(unittest.TestCase):
                 (
                     201,
                     {},
-                    b'{"id":"pod-1","machine":'
-                    b'{"gpuTypeId":"NVIDIA L40S"}}',
+                    b'{"id":"pod-1","gpu":' b'{"id":"NVIDIA L40S"}}',
                 ),
             ]
         )
         seen: list[bytes] = []
-        sleeps: list[float] = []
+        clock = Clock()
+        sleeps = clock.sleeps
 
         def transport(
             payload: bytes, _timeout: float
@@ -298,7 +280,8 @@ class RunPodClientTests(unittest.TestCase):
             CONFIG | {"same_tier_retries": 1},
             [CreateRequest("premium", b"premium")],
             transport=transport,
-            sleep=sleeps.append,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
         )
 
         self.assertEqual(seen, [b"premium", b"premium"])
@@ -327,53 +310,47 @@ class RunPodClientTests(unittest.TestCase):
             )
         self.assertEqual(calls, 2)
 
-    def test_creation_deadline_caps_retry_sleep(self) -> None:
-        ticks = iter([0.0, 0.0, 59.0, 60.0])
-        sleeps: list[float] = []
+    def test_creation_deadline_does_not_shorten_retry_after(self):
+        clock = Clock()
+        calls = []
+
+        def transport(payload, timeout):
+            calls.append(timeout)
+            clock.now = 59
+            return 429, {"Retry-After": "30"}, b"{}"
+
         with self.assertRaises(RetryableRunPodError):
             create_pod(
-                CONFIG
-                | {
-                    "same_tier_retries": 1,
-                    "create_deadline_seconds": 60,
-                },
-                [CreateRequest("cost-preferred", b"cheap")],
-                transport=lambda _payload, _timeout: (
-                    503,
-                    {"Retry-After": "30"},
-                    b"{}",
-                ),
-                sleep=sleeps.append,
-                monotonic=lambda: next(ticks),
+                CONFIG,
+                [CreateRequest("tier", b"{}")],
+                transport=transport,
+                sleep=clock.sleep,
+                monotonic=clock.monotonic,
             )
-        self.assertEqual(sleeps, [1.0])
+        self.assertEqual(calls, [60])
+        self.assertEqual(clock.sleeps, [])
 
-    def test_creation_deadline_caps_each_transport_timeout(self) -> None:
-        ticks = iter([0.0, 0.0, 59.0, 59.0])
-        timeouts: list[float] = []
-        responses = iter(
-            [
-                (503, {}, b'{"error":"busy"}'),
-                (201, {}, b'{"id":"pod-1"}'),
-            ]
-        )
+    def test_creation_deadline_caps_each_transport_timeout(self):
+        clock = Clock()
+        timeouts = []
 
-        def transport(
-            _payload: bytes, timeout: float
-        ) -> tuple[int, dict[str, str], bytes]:
+        def transport(payload, timeout):
             timeouts.append(timeout)
-            return next(responses)
+            if len(timeouts) == 1:
+                clock.now = 59
+                return 503, {}, b"{}"
+            return 201, {}, b'{"id":"pod-1"}'
 
         result = create_pod(
             CONFIG,
-            [CreateRequest("cost-preferred", b"cheap")],
+            [CreateRequest("tier", b"{}")],
             transport=transport,
-            sleep=lambda _delay: None,
-            monotonic=lambda: next(ticks),
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            jitter=lambda: 0,
         )
-
         self.assertEqual(result.pod_id, "pod-1")
-        self.assertEqual(timeouts, [60.0, 1.0])
+        self.assertEqual(timeouts, [60, 1])
 
     def test_transport_failure_is_retryable_but_bounded(self) -> None:
         calls = 0
@@ -400,7 +377,7 @@ class RunPodClientTests(unittest.TestCase):
         body = json.dumps(
             {
                 "env": {"RUNNER_JIT_CONFIG": "jit-secret"},
-                "dockerStartCmd": ["startup-secret"],
+                "cmd": ["startup-secret"],
                 "message": "request echoed jit-secret",
             }
         ).encode()

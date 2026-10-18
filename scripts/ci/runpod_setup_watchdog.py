@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 
 from scripts.ci.runpod_cost import parse_runpod_timestamp
-from scripts.ci.runpod_lifecycle import HostedClient, request
+from scripts.ci.runpod_lifecycle import HostedClient
 from scripts.ci.runpod_workflow_cost import report
 
 
@@ -87,9 +87,8 @@ def main() -> int:
         parser.error("budget must be finite and positive")
     if not math.isfinite(args.lifetime_seconds) or args.lifetime_seconds < args.budget_seconds:
         parser.error("lifetime must be finite and at least the setup budget")
-    pod_url = f"https://rest.runpod.io/v1/pods/{os.environ['POD_ID']}"
     pod_token = os.environ["RUNPOD_API_KEY"]
-    client = HostedClient(os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"], pod_token, transport=request)
+    client = HostedClient(os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"], pod_token)
     run_id, run_attempt = os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"]
     pod = None
     def delete() -> None:
@@ -104,27 +103,17 @@ def main() -> int:
         except (ValueError, KeyError, TypeError, AttributeError) as error:
             print(f"::warning::Lifecycle cost unavailable after deletion: {error}", flush=True)
     try:
-        for attempt in range(3):
-            try:
-                status, data = request(pod_url, pod_token)
-            except OSError:
-                if attempt == 2:
-                    raise
-                time.sleep(5)
-                continue
-            if status not in {408, 429} and status < 500:
-                break
-            if attempt < 2:
-                time.sleep(5)
+        response = client.pod(os.environ["POD_ID"])
+        status, data = response.status, response.body
         if status == 404:
             print("Setup watchdog: pod already deleted.")
             return 0
         if status != 200:
             raise RuntimeError(f"Cannot read paid pod start time: HTTP {status}")
         pod = json.loads(data)
-        if not isinstance(pod, dict) or not isinstance(pod.get("lastStartedAt"), str):
-            raise ValueError("Pod record has no readable lastStartedAt")
-        started = parse_runpod_timestamp(pod["lastStartedAt"]).timestamp()
+        if not isinstance(pod, dict) or not isinstance(pod.get("startedAt"), str):
+            raise ValueError("Pod record has no readable startedAt")
+        started = parse_runpod_timestamp(pod["startedAt"]).timestamp()
     except (OSError, ValueError, KeyError, RuntimeError):
         # Without a start time this job cannot bound billing. Fail closed and
         # confirm deletion rather than silently falling back to 45 minutes.

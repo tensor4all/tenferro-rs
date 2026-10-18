@@ -9,8 +9,11 @@ import time
 import urllib.error
 import urllib.request
 
+from scripts.ci.runpod_http import (Cooldown, delete_pod, list_pods, pod_request,
+                                    request_once, request_with_retry)
+
 WORKFLOW_PATH = ".github/workflows/runpod-gpu-test.yml"
-PODS_URL = "https://rest.runpod.io/v1/pods"
+PODS_URL = "https://api.runpod.io/v2/pods"
 
 
 def request(url: str, token: str, method: str = "GET") -> tuple[int, bytes]:
@@ -53,11 +56,13 @@ def owner(pod: dict, repository: str) -> tuple[int, int] | None:
 class HostedClient:
     """Keep provider and GitHub credentials on trusted hosted runners only."""
 
-    def __init__(self, repository: str, github_token: str, pod_token: str = "", *, transport=request):
+    def __init__(self, repository: str, github_token: str, pod_token: str = "", *, transport=request, pod_transport=request_once):
         self.repository = repository
         self.github_token = github_token
         self.pod_token = pod_token
         self.transport = transport
+        self.pod_transport = pod_transport
+        self.cooldown = Cooldown()
 
     @classmethod
     def from_environment(cls):
@@ -115,22 +120,24 @@ class HostedClient:
                 return False
             page += 1
 
+    def pod(self, pod_id: str):
+        """A bounded provider read sharing the cleanup cooldown."""
+        return request_with_retry(pod_request(PODS_URL, self.pod_token, pod_id, "GET"),
+            deadline=time.monotonic() + 60, transport=self.pod_transport, cooldown=self.cooldown)
+
+    def pods(self) -> list[dict]:
+        """Keep ownership fields internally; never print full provider records."""
+        return list_pods(PODS_URL, self.pod_token, transport=self.pod_transport,
+                         cooldown=self.cooldown, include_private=True)
+
     def delete(self, pod_id: str) -> str:
-        """Bound retries and return the confirmed deletion time (404 is success)."""
-        for attempt in range(3):
-            try:
-                code, _ = self.transport(f"{PODS_URL}/{pod_id}", self.pod_token, "DELETE")
-                if 200 <= code < 300 or code == 404:
-                    stamp = dt.datetime.now(dt.timezone.utc).isoformat()
-                    print(f"Confirmed pod {pod_id} deletion at {stamp} (HTTP {code}).", flush=True)
-                    return stamp
-                if code < 500 and code not in {408, 429}:
-                    raise RuntimeError(f"Pod {pod_id} deletion rejected: HTTP {code}")
-            except OSError:
-                pass
-            if attempt < 2:
-                time.sleep(5)
-        raise RuntimeError(f"Could not confirm deletion of pod {pod_id}")
+        """Confirm deletion within 180 seconds; preserve the Pod ID on failure."""
+        if not delete_pod(PODS_URL, self.pod_token, pod_id,
+                          transport=self.pod_transport, cooldown=self.cooldown):
+            raise RuntimeError(f"Could not confirm deletion of pod {pod_id}; it may still be billing")
+        stamp = dt.datetime.now(dt.timezone.utc).isoformat()
+        print(f"Confirmed pod {pod_id} deletion at {stamp}.", flush=True)
+        return stamp
 
     def cancel(self, run_id: str, attempt: str) -> None:
         # A run may have been rerun while an old pod was being deleted. Never

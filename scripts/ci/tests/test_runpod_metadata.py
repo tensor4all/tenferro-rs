@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.ci.runpod_metadata import main, snapshot
+from scripts.ci.runpod_http import Response
 from scripts.ci.runpod_workflow_cost import report, select_pod_record
 
 POD = {'id': 'accepted', 'lastStartedAt': '2026-10-10T15:44:00Z',
@@ -55,17 +56,17 @@ class PodMetadataTests(unittest.TestCase):
                 (root / 'creation').write_text(json.dumps(full))
                 with patch('sys.argv', ['metadata', '--pod-id', 'accepted', '--creation-record', str(root/'creation')]), \
                      patch.dict(os.environ, RUNPOD_API_KEY='key', GITHUB_OUTPUT=str(root/'output')), \
-                     patch('scripts.ci.runpod_metadata.subprocess.run') as request:
+                     patch('scripts.ci.runpod_metadata.request_with_retry') as request:
                     if unavailable:
                         request.side_effect = TimeoutError('DNS timeout')
                     else:
-                        request.return_value = subprocess.CompletedProcess([], 0, json.dumps(full).encode())
+                        request.return_value = Response(200, {}, json.dumps(full).encode())
                     self.assertEqual(main(), 0)
                     value = (root/'output').read_text()
                     self.assertEqual(json.loads(value.removeprefix('pod_metadata=')), POD)
                     self.assertNotIn('secret', value)
-                    self.assertEqual(request.call_args.kwargs['timeout'], 6)
-                    self.assertIn('--max-time', request.call_args.args[0])
+                    self.assertEqual(request.call_args.kwargs['timeout'], 5)
+                    self.assertEqual(request.call_args.args[0].method, 'GET')
 
     def test_incomplete_successful_get_still_uses_usable_creation_record(self):
         invalid = ({'id': 'accepted'}, dict(POD, lastStartedAt=None),
@@ -78,8 +79,8 @@ class PodMetadataTests(unittest.TestCase):
                     (root/'creation').write_text(json.dumps(creation))
                     with patch('sys.argv', ['metadata', '--pod-id', 'accepted', '--creation-record', str(root/'creation')]), \
                          patch.dict(os.environ, RUNPOD_API_KEY='key', GITHUB_OUTPUT=str(root/'output')), \
-                         patch('scripts.ci.runpod_metadata.subprocess.run', return_value=
-                               subprocess.CompletedProcess([], 0, json.dumps(live).encode())):
+                         patch('scripts.ci.runpod_metadata.request_with_retry', return_value=
+                               Response(200, {}, json.dumps(live).encode())):
                         self.assertEqual(main(), 0)
                     if creation is POD:
                         saved = json.loads((root/'output').read_text().removeprefix('pod_metadata='))
@@ -92,6 +93,6 @@ class PodMetadataTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
              patch('sys.argv', ['metadata', '--pod-id', 'accepted', '--creation-record', directory+'/missing']), \
              patch.dict(os.environ, RUNPOD_API_KEY='key', GITHUB_OUTPUT=directory+'/output'), \
-             patch('scripts.ci.runpod_metadata.subprocess.run', side_effect=TimeoutError()):
+             patch('scripts.ci.runpod_metadata.request_with_retry', side_effect=TimeoutError()):
             self.assertEqual(main(), 0)
             self.assertFalse(Path(directory, 'output').exists())
