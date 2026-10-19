@@ -11,7 +11,7 @@ use tenferro_runtime::{
     DType, Runtime, Tensor, TensorSessionOpsExt, TracedTensor, TypedTensor,
     TypedTensorSessionOpsExt,
 };
-use tenferro_tensor::{Engine, BackendSessionHost};
+use tenferro_tensor::{BackendSessionHost, Engine};
 
 fn ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
@@ -154,11 +154,7 @@ fn traced_act(act: Act, x: &TracedTensor) -> tenferro_ad::Result<TracedTensor> {
     }
 }
 
-fn session_act(
-    act: Act,
-    x: &Tensor,
-    session: &mut dyn Engine,
-) -> tenferro_tensor::Result<Tensor> {
+fn session_act(act: Act, x: &Tensor, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
     match act {
         Act::Sigmoid => x.sigmoid(session),
         Act::Silu => x.silu(session),

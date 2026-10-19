@@ -29,7 +29,7 @@ use tenferro_runtime::{
 };
 use tenferro_tensor::TypedTensorView;
 use tenferro_tensor::{AllocationGroup, DescriptorSlot, GroupError, Tensor};
-use tenferro_tensor::{Engine, BackendSessionHost, DType, DotGeneralConfig};
+use tenferro_tensor::{BackendSessionHost, DType, DotGeneralConfig, Engine};
 use tenferro_tensor::{ErrorKind, ValidationKind};
 use tenferro_tensor::{TensorRead, TensorStructural, TensorView, TensorWrite};
 

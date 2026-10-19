@@ -146,7 +146,7 @@ impl<'a> EagerSession<'a> {
             return Ok(None);
         }
         let read = input.tensor_read();
-        let Some(output) = self.backend.fused_activation_read(op, read)? else {
+        let Some(output) = self.engine.fused_activation_read(op, read)? else {
             return Ok(None);
         };
         Ok(Some(EagerTensor::new_untracked_result(

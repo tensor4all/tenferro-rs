@@ -21,7 +21,7 @@ use tenferro_runtime::{
 #[cfg(feature = "cuda")]
 use tenferro_tensor::MemoryKind;
 use tenferro_tensor::{
-    Engine, BackendSessionHost, DType, Tensor, TensorRead, TensorStructural, TensorValue,
+    BackendSessionHost, DType, Engine, Tensor, TensorRead, TensorStructural, TensorValue,
 };
 
 #[derive(Clone, Debug)]
