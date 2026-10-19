@@ -551,7 +551,7 @@ fn test_dot_general_read_blas_negative_stride_view_falls_back() {
     };
     let mut backend = crate::CpuEngine::serial();
 
-    let out = tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |session| {
+    let out = crate::test_support::on_engine(&mut backend, |session| {
         session.dot_general_read(
             TensorRead::from_view(TensorView::F64(lhs_view)),
             TensorRead::from_tensor(&rhs),
