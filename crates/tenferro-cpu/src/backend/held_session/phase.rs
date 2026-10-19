@@ -1,15 +1,17 @@
 //! Phase lease: lend the session's CPU pool to a downstream phase scheduler.
 //!
 //! See `docs/design/held-cpu-session-1945-phase-lease.md`. A phase drives one lane
-//! per worker of the context's own pool through `ThreadPool::broadcast`, keeps one
-//! owner-inheriting child session open per lane for the whole lane, joins every
-//! lane, and supports cooperative cancellation. It never creates a pool, never
-//! admits a second root execution, and never leaves a peer stranded.
+//! per worker of the context's own pool through `ThreadPool::broadcast`, or through a
+//! scope when a caller-thread coordinator runs concurrently with the lanes. It keeps
+//! one owner-inheriting child session open per lane for the whole lane, joins every
+//! lane, and supports cooperative cancellation. It never creates a pool, never admits
+//! a second root execution, and never leaves a peer stranded.
 
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use tenferro_tensor::{BackendSession, BackendSessionHost, SessionEntryError};
 
@@ -49,7 +51,8 @@ pub enum CpuPhaseError {
     },
 }
 
-/// Why [`CpuPhase::run`] did not complete successfully.
+/// Why [`CpuPhase::run`] or [`CpuPhase::run_with_coordinator`] did not complete
+/// successfully.
 ///
 /// # Examples
 ///
@@ -64,6 +67,9 @@ pub enum CpuPhaseError {
 ///     });
 /// assert!(error.to_string().contains("CpuBackend"));
 /// assert!(std::error::Error::source(&error).is_some());
+///
+/// let error: PhaseRunError<&'static str> = PhaseRunError::Coordinator("coordinator failed");
+/// assert!(error.to_string().contains("coordinator failed"));
 /// ```
 #[derive(Debug, thiserror::Error)]
 pub enum PhaseRunError<E> {
@@ -72,10 +78,134 @@ pub enum PhaseRunError<E> {
     #[error("CPU phase lane failed: {0}")]
     Lane(#[source] E),
     /// A lane could not enter its child session or could not clean up. This
-    /// replaces a lane error, exactly as a restoration failure replaces a callback
-    /// value on the scoped entry.
+    /// replaces a lane error and a coordinator error, exactly as a restoration
+    /// failure replaces a callback value on the scoped entry.
     #[error("CPU phase session failed: {0}")]
     Session(#[source] SessionEntryError),
+    /// The coordinator callback returned an error. Every lane was joined first.
+    /// A lane error or a session failure replaces it.
+    #[error("CPU phase coordinator failed: {0}")]
+    Coordinator(#[source] E),
+    /// [`CpuPhase::run_with_coordinator`] was called for a one-lane phase.
+    ///
+    /// A one-lane phase runs its lane inline on the calling thread, so it cannot
+    /// run that lane concurrently with a caller-thread coordinator. Neither
+    /// callback ran; callers use [`CpuPhase::run`] or their sequential path.
+    #[error(
+        "{backend}: run_with_coordinator requires at least two lanes; use run or the caller's \
+         sequential path"
+    )]
+    SingleLane {
+        /// Backend that rejected the coordinator run.
+        backend: &'static str,
+    },
+}
+
+/// The coordinator's view of a running phase.
+///
+/// A coordinator is not a lane: it gets no session, cannot issue numerical work,
+/// and cannot open a root session or another phase. It runs on the phase's
+/// calling thread while every lane runs on a worker of the context's pool, and
+/// communicates with the lanes only through caller-owned synchronization such as
+/// the downstream scheduler's queue.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuBackend;
+///
+/// let backend = CpuBackend::with_threads(2)?;
+/// let mut session = backend.open_session()?;
+/// session.phase(|phase| -> Result<(), Box<dyn std::error::Error>> {
+///     phase.run_with_coordinator(
+///         |control| {
+///             assert!(!control.cancelled());
+///             control.cancel();
+///             Ok::<(), tenferro_tensor::Error>(())
+///         },
+///         |_index, lane| {
+///             let _ = lane.cancelled();
+///             Ok::<(), tenferro_tensor::Error>(())
+///         },
+///     )?;
+///     Ok(())
+/// })?;
+/// session.close()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct PhaseControl<'a> {
+    cancel: &'a AtomicBool,
+}
+
+impl fmt::Debug for PhaseControl<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PhaseControl")
+            .field("cancelled", &self.cancelled())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PhaseControl<'_> {
+    /// Whether a lane failed or unwound, or [`PhaseControl::cancel`] was called.
+    ///
+    /// The coordinator uses this to stop feeding a queue once a lane has stopped
+    /// making progress. Cancellation is cooperative: a lane that cannot observe it
+    /// keeps the phase's join waiting.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let backend = CpuBackend::with_threads(2)?;
+    /// let mut session = backend.open_session()?;
+    /// session.phase(|phase| -> Result<(), Box<dyn std::error::Error>> {
+    ///     phase.run_with_coordinator(
+    ///         |control| Ok::<bool, tenferro_tensor::Error>(control.cancelled()),
+    ///         |_index, _lane| Ok::<(), tenferro_tensor::Error>(()),
+    ///     )?;
+    ///     Ok(())
+    /// })?;
+    /// session.close()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
+    /// Ask the lanes to stop pulling work.
+    ///
+    /// This sets the same cooperative stop signal that a lane failure sets. The
+    /// coordinator still returns its own value; the phase joins every lane before
+    /// returning it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let backend = CpuBackend::with_threads(2)?;
+    /// let mut session = backend.open_session()?;
+    /// session.phase(|phase| -> Result<(), Box<dyn std::error::Error>> {
+    ///     phase.run_with_coordinator(
+    ///         |control| {
+    ///             control.cancel();
+    ///             Ok::<(), tenferro_tensor::Error>(())
+    ///         },
+    ///         |_index, lane| {
+    ///             let _ = lane.cancelled();
+    ///             Ok::<(), tenferro_tensor::Error>(())
+    ///         },
+    ///     )?;
+    ///     Ok(())
+    /// })?;
+    /// session.close()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 /// One lane of a running phase.
@@ -321,6 +451,163 @@ impl CpuPhase<'_> {
         reduce_outcomes(outcomes)
     }
 
+    /// Run `coordinator` on the calling thread while `lane` runs on every lane.
+    ///
+    /// The coordinator is not a lane: it receives only [`PhaseControl`], so it gets
+    /// no session and cannot issue numerical work. It runs concurrently with one
+    /// lane per worker of the context's own pool, and communicates with the lanes
+    /// only through caller-owned synchronization. The method returns after both the
+    /// coordinator and every lane have finished.
+    ///
+    /// A one-lane phase runs its lane inline on the calling thread, so it cannot
+    /// run that lane concurrently with a caller-thread coordinator. It is rejected
+    /// with [`PhaseRunError::SingleLane`] without running either callback; callers
+    /// fall back to [`CpuPhase::run`] or their own sequential path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::{mpsc, Mutex};
+    /// use std::time::Duration;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let backend = CpuBackend::with_threads(2)?;
+    /// let x = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
+    /// let mut session = backend.open_session()?;
+    /// let (work_tx, work_rx) = mpsc::channel::<Option<usize>>();
+    /// let work_rx = Mutex::new(work_rx);
+    /// let (ack_tx, ack_rx) = mpsc::channel::<usize>();
+    /// let x_lane = &x;
+    /// let acknowledged = session
+    ///     .phase(|phase| -> Result<usize, Box<dyn std::error::Error>> {
+    ///         let lanes = phase.lanes();
+    ///         let lane_work = &work_rx;
+    ///         let acked = phase.run_with_coordinator(
+    ///             |control| {
+    ///                 assert!(!control.cancelled());
+    ///                 for item in 0..lanes {
+    ///                     work_tx.send(Some(item)).expect("send a work item");
+    ///                 }
+    ///                 let received = (0..lanes)
+    ///                     .map(|_| {
+    ///                         ack_rx
+    ///                             .recv_timeout(Duration::from_secs(30))
+    ///                             .expect("a lane acknowledges its item")
+    ///                     })
+    ///                     .collect::<Vec<_>>();
+    ///                 for _ in 0..lanes {
+    ///                     work_tx.send(None).expect("send a stop item");
+    ///                 }
+    ///                 Ok::<usize, tenferro_tensor::Error>(received.len())
+    ///             },
+    ///             move |_index, lane| -> Result<(), tenferro_tensor::Error> {
+    ///                 loop {
+    ///                     let item = lane_work
+    ///                         .lock()
+    ///                         .expect("work queue")
+    ///                         .recv_timeout(Duration::from_secs(30))
+    ///                         .expect("a lane receives work or a stop");
+    ///                     let Some(item) = item else { return Ok(()) };
+    ///                     let value = lane.session().add_read(
+    ///                         TensorRead::from_tensor(x_lane),
+    ///                         TensorRead::from_tensor(x_lane),
+    ///                     )?;
+    ///                     assert_eq!(value.as_slice::<f64>()?, &[4.0]);
+    ///                     ack_tx.send(item).expect("send a lane acknowledgement");
+    ///                 }
+    ///             },
+    ///         )?;
+    ///         Ok(acked)
+    ///     })??;
+    /// assert_eq!(acknowledged, 2);
+    /// session.close()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PhaseRunError::SingleLane`] for a one-lane phase without running
+    /// either callback, and [`PhaseRunError::Session`] when a lane could not enter
+    /// its child session or could not be cleaned up. Otherwise returns
+    /// [`PhaseRunError::Lane`] with a lane callback's error, or
+    /// [`PhaseRunError::Coordinator`] with the coordinator's error; a session
+    /// failure replaces a lane error, and a lane error replaces a coordinator
+    /// error. Every branch is reported only after the coordinator and every lane
+    /// have finished.
+    ///
+    /// # Panics
+    ///
+    /// A panic inside the coordinator or a lane callback is resumed on the calling
+    /// thread after every lane has been joined.
+    pub fn run_with_coordinator<C, E: Send>(
+        &mut self,
+        coordinator: impl FnOnce(&PhaseControl<'_>) -> Result<C, E>,
+        lane: impl Fn(usize, &mut PhaseLane<'_>) -> Result<(), E> + Sync,
+    ) -> Result<C, PhaseRunError<E>> {
+        if self.lanes <= 1 {
+            return Err(PhaseRunError::SingleLane {
+                backend: CPU_BACKEND,
+            });
+        }
+        let pool = match self.pool {
+            Some(pool) => pool,
+            None => {
+                return Err(PhaseRunError::SingleLane {
+                    backend: CPU_BACKEND,
+                });
+            }
+        };
+        // A worker of this pool can never drive the blocking scope below.
+        if pool.current_thread_index().is_some() {
+            return Err(PhaseRunError::Session(SessionEntryError::Reentered {
+                backend: CPU_BACKEND,
+            }));
+        }
+        let cancel = AtomicBool::new(false);
+        let child = &self.child;
+        let cancel_ref = &cancel;
+        let lane_ref = &lane;
+        let control = PhaseControl { cancel: cancel_ref };
+        // `spawn_broadcast` returns no values, so each worker publishes its lane
+        // outcome into its own index. The index is unique per worker, so the lock is
+        // only the shared-access wrapper Rayon's `Sync` bound requires.
+        let outcomes = Mutex::new(
+            (0..pool.current_num_threads())
+                .map(|_| None)
+                .collect::<Vec<Option<PhaseRunError<E>>>>(),
+        );
+        let outcomes_ref = &outcomes;
+        let coordinator_result = pool.in_place_scope(|scope| {
+            scope.spawn_broadcast(|_, context| {
+                let index = context.index();
+                let outcome = run_worker_lane(child, cancel_ref, index, lane_ref);
+                let mut slots = outcomes_ref.lock().unwrap_or_else(PoisonError::into_inner);
+                if let Some(slot) = slots.get_mut(index) {
+                    *slot = outcome;
+                }
+            });
+            // The guard and the explicit store cancel the lanes before the scope
+            // joins, on both the error and the unwind path.
+            let _unwind = CancelOnUnwind { cancel: cancel_ref };
+            let result = coordinator(&control);
+            if result.is_err() {
+                cancel_ref.store(true, Ordering::Relaxed);
+            }
+            result
+        });
+        let outcomes = outcomes
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner);
+        match reduce_outcomes(outcomes) {
+            Err(error) => Err(error),
+            Ok(()) => match coordinator_result {
+                Ok(value) => Ok(value),
+                Err(error) => Err(PhaseRunError::Coordinator(error)),
+            },
+        }
+    }
+
     fn run_single_lane<E: Send>(
         &mut self,
         lane: &(impl Fn(usize, &mut PhaseLane<'_>) -> Result<(), E> + Sync),
@@ -446,6 +733,10 @@ fn reduce_outcomes<E>(
             Some(PhaseRunError::Lane(error)) => {
                 lane_error.get_or_insert(error);
             }
+            // INVARIANT: lane outcomes are produced by `run_worker_lane` and
+            // `run_single_lane`, which never produce a coordinator error.
+            Some(PhaseRunError::Coordinator(_)) => {}
+            Some(PhaseRunError::SingleLane { .. }) => {}
             None => {}
         }
     }

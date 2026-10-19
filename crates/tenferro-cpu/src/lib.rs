@@ -248,7 +248,8 @@ pub use affinity::{
 };
 pub use backend::execution_scope::{current_cpu_execution, CpuThreadExecution};
 pub use backend::held_session::{
-    CpuHeldSession, CpuHeldSessionError, CpuPhase, CpuPhaseError, PhaseLane, PhaseRunError,
+    CpuHeldSession, CpuHeldSessionError, CpuPhase, CpuPhaseError, PhaseControl, PhaseLane,
+    PhaseRunError,
 };
 pub use backend::{CpuBackend, CpuBackendError, CpuRuntimeIdentity};
 pub use batch_policy::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy, CpuBatchThresholds};
