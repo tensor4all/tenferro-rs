@@ -404,6 +404,9 @@ pub struct Session<'s> {
     pins: std::cell::RefCell<
         Vec<cubecl_runtime::storage::ManagedResource<cubecl_cuda::ffi_interop::GpuResource>>,
     >,
+    /// Set after a CubeCL kernel was queued through [`Session::cubecl`]; the
+    /// next raw CUDA entry dispatches it first so raw work cannot overtake it.
+    cubecl_pending: std::cell::Cell<bool>,
     _not_send_sync: PhantomData<Rc<()>>,
     _scope: PhantomData<&'s ()>,
 }
@@ -434,6 +437,7 @@ impl<'s> Session<'s> {
             cache,
             stream,
             pins: std::cell::RefCell::new(Vec::new()),
+            cubecl_pending: std::cell::Cell::new(false),
             _not_send_sync: PhantomData,
             _scope: PhantomData,
         }
@@ -518,7 +522,52 @@ impl<'s> Session<'s> {
     /// itself is not reported here; it surfaces on the buffer the work left
     /// unwritten.
     pub fn flush_cubecl(&self) -> crate::Result<()> {
+        self.cubecl_pending.set(false);
         self.runtime.flush_cubecl("raw::Session::flush_cubecl")
+    }
+
+    /// Dispatch CubeCL work queued through [`Self::cubecl`] before raw CUDA
+    /// work, so a raw consumer always observes earlier CubeCL producers.
+    fn fence_cubecl(&self, op: &'static str) -> crate::Result<()> {
+        if self.cubecl_pending.replace(false) {
+            self.runtime.flush_cubecl(op)?;
+        }
+        Ok(())
+    }
+
+    /// Run caller-written CubeCL kernels on this scope's stream.
+    ///
+    /// The next raw CUDA entry of this scope (a launch, a copy, a cuBLAS
+    /// enqueue, a device address) first hands the queued CubeCL work to the
+    /// GPU, so CUDA work issued after this call is ordered after these
+    /// kernels. A caller that issues its own CUDA calls on [`Self::stream`]
+    /// after this call must call [`Self::flush_cubecl`] first.
+    ///
+    /// # Errors
+    ///
+    /// Returns the callback's error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::raw::Session;
+    ///
+    /// fn check(raw: &Session<'_>) -> tenferro_tensor::Result<()> {
+    ///     raw.cubecl(|_cubecl| Ok(()))
+    /// }
+    /// let _ = check;
+    /// ```
+    #[cfg(feature = "cubecl-interop")]
+    pub fn cubecl<R>(
+        &self,
+        f: impl for<'c> FnOnce(&super::session_cubecl::Session<'c>) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        // SAFETY: the raw scope keeps the runtime's primary context current and
+        // this thread on the engine's stream for the whole call.
+        let session = unsafe { super::session_cubecl::Session::new(self.runtime.clone()) };
+        let result = f(&session);
+        self.cubecl_pending.set(true);
+        result
     }
 
     /// Borrow the captured execution stream.
@@ -577,6 +626,7 @@ impl<'s> Session<'s> {
         pointer_mode: cublas_sys::cublasPointerMode_t,
         execute: impl FnOnce(cublas_sys::cublasHandle_t) -> crate::Result<R>,
     ) -> crate::Result<R> {
+        self.fence_cubecl(op)?;
         self.runtime
             .with_cublas_handle(op, pointer_mode, Vec::new(), execute)
     }
@@ -989,6 +1039,7 @@ impl<'s> Session<'s> {
         if nbytes == 0 {
             return Ok(());
         }
+        self.fence_cubecl(op)?;
         let stream = self.stream as *mut cudarc::runtime::sys::CUstream_st;
         cudarc::runtime::result::memcpy_dtod_async(dst, src, nbytes, stream)
             .map_err(|err| crate::Error::backend_source(op, err))
@@ -1145,6 +1196,7 @@ impl<'s> Session<'s> {
         config: LaunchConfig,
         args: &[KernelArg<'_>],
     ) -> crate::Result<()> {
+        self.fence_cubecl("raw.launch")?;
         // A `Function` is `Send + Sync` and may have been compiled by another
         // runtime. The driver allows the handle from any thread, but only under
         // the primary context that loaded it; a session on a different device
@@ -1251,6 +1303,7 @@ impl Session<'_> {
             .client()
             .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
             .map_err(|err| crate::Error::backend_source(op, err))?;
+        self.fence_cubecl(op)?;
         let addr = resource.resource().ptr;
         self.pins.borrow_mut().push(resource);
         super::interop::cuda_device_ptr_from_addr(addr, op)

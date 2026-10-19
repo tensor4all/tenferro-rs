@@ -378,8 +378,7 @@ impl CubeclBuffer {
         op: &'static str,
     ) -> crate::Result<u64> {
         let mut pin = self.pin.lock().unwrap_or_else(|error| error.into_inner());
-        let same_stream =
-            cubecl_environment::stream::StreamId::current() == self.handle.stream;
+        let same_stream = cubecl_environment::stream::StreamId::current() == self.handle.stream;
         if let Some(existing) = pin.as_ref() {
             if existing.ordered && same_stream && !require_round_trip {
                 return Ok(existing.resource.resource().ptr);

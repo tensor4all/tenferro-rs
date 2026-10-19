@@ -36,7 +36,8 @@ pub struct DeviceByteBuffer {
     ptr: *mut c_void,
     // Keeps the allocation bound, so `ptr` stays valid while the guard lives
     // (#2207). A forgotten guard keeps the allocation bound for good.
-    _binding: Option<cubecl_runtime::storage::ManagedResource<cubecl_cuda::ffi_interop::GpuResource>>,
+    _binding:
+        Option<cubecl_runtime::storage::ManagedResource<cubecl_cuda::ffi_interop::GpuResource>>,
 }
 
 impl fmt::Debug for DeviceByteBuffer {
@@ -354,7 +355,8 @@ pub(crate) fn offset_device_ptr<T: 'static>(
     })?;
     // The root buffer's pin keeps the base address valid while the buffer
     // lives (#2207).
-    let base = buffer.pinned_device_addr(rt.client(), prepared.into_handle(), require_round_trip, op)?;
+    let base =
+        buffer.pinned_device_addr(rt.client(), prepared.into_handle(), require_round_trip, op)?;
     let offset_bytes = offset
         .checked_mul(std::mem::size_of::<T>())
         .ok_or_else(|| {

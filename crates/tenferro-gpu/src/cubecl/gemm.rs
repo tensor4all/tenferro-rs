@@ -362,7 +362,8 @@ struct Workspace {
     ptr: *mut c_void,
     // Keeps the allocation bound, so `ptr` stays valid while the workspace is
     // cached (#2207); dropped with the workspace, after its handle is retired.
-    _binding: Option<cubecl_runtime::storage::ManagedResource<cubecl_cuda::ffi_interop::GpuResource>>,
+    _binding:
+        Option<cubecl_runtime::storage::ManagedResource<cubecl_cuda::ffi_interop::GpuResource>>,
     size: u64,
     runtime: Option<CudaRuntime>,
     stream: u64,
