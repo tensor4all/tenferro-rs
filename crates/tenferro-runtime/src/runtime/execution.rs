@@ -59,9 +59,27 @@ pub struct PreparedCompiledGraph {
     epoch: super::RuntimeEpoch,
     program: CompiledGraph,
     prepared: Arc<super::preparation::PreparedProgram>,
+    /// Whether this handle's preparation ran the metadata check on the graph's
+    /// *retained* inputs, i.e. on the values an empty-input run would reuse.
+    ///
+    /// Preparation that replaced every input validated the replacements only,
+    /// so its prepared handle must re-check the defaults at execution time.
+    defaults_validated: bool,
 }
 
 impl PreparedCompiledGraph {
+    /// How executions must treat this handle's retained inputs.
+    ///
+    /// Skipping the check is sound only when preparation itself ran it on those
+    /// values; preparation with a complete replacement input list did not.
+    fn bound_input_check(&self) -> BoundInputCheck {
+        if self.defaults_validated {
+            BoundInputCheck::AlreadyValidatedAtPrepare
+        } else {
+            BoundInputCheck::Validate
+        }
+    }
+
     /// Number of planned elementwise regions and the instructions they cover,
     /// for execution-path parity tests.
     #[doc(hidden)]
@@ -1691,7 +1709,7 @@ pub(super) fn run_compiled(
     program: &CompiledGraph,
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
-    let inputs = resolve_input_refs(program, inputs)?;
+    let inputs = resolve_input_refs(program, inputs, BoundInputCheck::Validate)?;
     let signature = input_signature_reads(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
     validate_prepared_epoch(runtime, prepared.root().epoch(), "Runtime::run_compiled")?;
@@ -1878,7 +1896,8 @@ pub(super) fn prepare_compiled(
     program: &CompiledGraph,
     inputs: &[&Tensor],
 ) -> Result<PreparedCompiledGraph> {
-    let inputs = resolve_input_refs(program, inputs)?;
+    let defaults_validated = retained_inputs_validated(program, inputs);
+    let inputs = resolve_input_refs(program, inputs, BoundInputCheck::Validate)?;
     let signature = input_signature_reads(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
     validate_prepared_epoch(
@@ -1891,7 +1910,19 @@ pub(super) fn prepare_compiled(
         epoch: prepared.root().epoch(),
         program: program.clone(),
         prepared,
+        defaults_validated,
     })
+}
+
+/// Whether resolving `inputs` makes [`resolve_input_refs`] check the graph's
+/// retained inputs.
+///
+/// Empty inputs resolve to the retained values, and a partial list still
+/// resolves every bound input, so both validate them. A list that covers every
+/// input replaces all of them, which leaves the retained values unchecked.
+fn retained_inputs_validated(program: &CompiledGraph, inputs: &[&Tensor]) -> bool {
+    let expected = program.program().inputs().len();
+    inputs.len() != expected || expected == 0
 }
 
 pub(super) fn submit(
@@ -1936,7 +1967,7 @@ pub(super) fn run_prepared(
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
     validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared")?;
-    let inputs = resolve_input_refs(&prepared.program, inputs)?;
+    let inputs = resolve_input_refs(&prepared.program, inputs, prepared.bound_input_check())?;
     let root = prepared.prepared.root();
     // The steady-state route holds one session around the whole graph, so repeated
     // `run_prepared` calls pay one session entry instead of one per instruction.
@@ -1991,7 +2022,7 @@ pub(super) fn run_prepared_in(
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
     validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared_in")?;
-    let inputs = resolve_input_refs(&prepared.program, inputs)?;
+    let inputs = resolve_input_refs(&prepared.program, inputs, prepared.bound_input_check())?;
     let schedule = prepared.prepared.root().schedule();
     let executor = single_engine_executor(schedule, "Runtime::run_prepared_in")?;
     let mut state = executor.try_lease_session_state("Runtime::run_prepared_in")?;
@@ -2132,6 +2163,10 @@ fn prepare_compiled_reads(
         epoch: prepared.root().epoch(),
         program: program.clone(),
         prepared,
+        // This route validates the caller's complete read list, which need not
+        // be the graph's retained values, so a later default-input run must
+        // still check them.
+        defaults_validated: false,
     })
 }
 
@@ -2155,7 +2190,7 @@ pub(super) fn run_compiled_values(
     program: &CompiledGraph,
     inputs: &[&Tensor],
 ) -> Result<Vec<TensorValue>> {
-    let inputs = resolve_input_refs(program, inputs)?;
+    let inputs = resolve_input_refs(program, inputs, BoundInputCheck::Validate)?;
     let signature = input_signature_reads(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
     validate_prepared_epoch(
@@ -2781,6 +2816,32 @@ impl ScheduledEventDomains {
         schedule.preflight().map_err(|source| {
             Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
         })?;
+        // A coalescing-eligible schedule names exactly one event domain: every
+        // location, completion, and dependency carries the root's, and no
+        // transfer node exists. Seed that single run directly instead of
+        // scanning every location into a driver table only to find one entry.
+        if single_domain_coalescing_eligible(schedule) {
+            let domain = schedule.root_location().event_domain_id();
+            let witness = schedule.root_location().witness();
+            let mut run = RuntimeOwnedEventDomainRun::new(
+                domain,
+                witness.event_domain_driver().begin_run(domain)?,
+            );
+            let actual = run.domain(EventDomainOperation::BeginRun)?;
+            if actual != domain {
+                return Err(event_domain_error(EventDomainError::RunDomainMismatch {
+                    operation: EventDomainOperation::BeginRun,
+                    node_index: None,
+                    expected: domain,
+                    actual,
+                }));
+            }
+            run.enable_single_domain_coalescing();
+            return Ok(Self {
+                runs: vec![run],
+                completions: HashMap::new(),
+            });
+        }
         fn add_domain(
             drivers: &mut Vec<(super::EventDomainId, Arc<dyn super::EventDomainDriver>)>,
             seen_domains: &mut HashSet<super::EventDomainId>,
@@ -2842,12 +2903,6 @@ impl ScheduledEventDomains {
                 }));
             }
             runs.push(run);
-        }
-        // The coalescing decision is made once, here, before any node launch:
-        // the provider run accepts the mode only when every scheduled location
-        // and node shares one event domain and the schedule has no transfer.
-        if single_domain_coalescing_eligible(schedule) && runs.len() == 1 {
-            runs[0].enable_single_domain_coalescing();
         }
         Ok(Self {
             runs,
@@ -3709,9 +3764,23 @@ fn input_signature_reads(inputs: &[TensorRead<'_>]) -> Result<InputSignature> {
     InputSignature::from_reads(inputs).map_err(|source| prepare_error(Arc::new(source)))
 }
 
+/// Whether [`resolve_input_refs`] must re-validate the graph's retained inputs.
+///
+/// A retained input's value is the program's own tensor and cannot change
+/// between calls, so a check that already ran on it need not run again. That is
+/// a fact about the resolution, not about preparedness:
+/// [`PreparedCompiledGraph::defaults_validated`] records whether preparation
+/// itself checked these values, and only then may an execution skip the check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BoundInputCheck {
+    Validate,
+    AlreadyValidatedAtPrepare,
+}
+
 fn resolve_input_refs<'a>(
     program: &'a CompiledGraph,
     inputs: &'a [&'a Tensor],
+    bound_inputs: BoundInputCheck,
 ) -> Result<RuntimeInputReads<'a>> {
     let expected = program.program().inputs().len();
     if inputs.len() > expected {
@@ -3720,9 +3789,15 @@ fn resolve_input_refs<'a>(
             actual: inputs.len(),
         });
     }
-    let resolved = if inputs.is_empty() {
-        semantic_default_inputs(program)?
-    } else if inputs.len() == expected {
+    if inputs.is_empty() {
+        let resolved = semantic_default_inputs(program)?;
+        if matches!(bound_inputs, BoundInputCheck::AlreadyValidatedAtPrepare) {
+            return Ok(resolved);
+        }
+        validate_ordered_input_metadata_reads(program, &resolved)?;
+        return Ok(resolved);
+    }
+    let resolved = if inputs.len() == expected {
         inputs
             .iter()
             .map(|tensor| TensorRead::from_tensor(tensor))

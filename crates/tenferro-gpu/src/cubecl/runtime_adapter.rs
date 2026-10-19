@@ -2,6 +2,7 @@ use std::fmt;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
+use num_complex::{Complex32, Complex64};
 use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef, SemanticOperationView};
 use tenferro_runtime::{
     assemble_executable_engine_registration, CacheOwnerError, CoreCapabilityBundle,
@@ -17,7 +18,9 @@ use tenferro_runtime::{
     RuntimeCacheOwner, RuntimeConfigError, RuntimeInputContract, SpecializationError,
     SpecializationProjection, SpecializationRequirements, StorageClass, UnsupportedReason,
 };
-use tenferro_tensor::{DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorRead, TensorView};
+use tenferro_tensor::{
+    DType, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor, TensorRead, TensorView,
+};
 
 use super::event_domain::CudaEventDomainDriver;
 use super::CudaBackend;
@@ -180,11 +183,36 @@ fn cuda_input_tensor(
         && cuda_input_has_owned_buffer(input, device_ordinal, expected_domain)
 }
 
+/// Whether this read target reaches a CubeCL allocation of `device_ordinal`
+/// in `expected_domain`.
+///
+/// An owned read already carries its backend storage, so this inspects that
+/// storage directly. Only a borrowed view needs the [`TensorView`] projection
+/// the storage access is defined on; building one for an owned tensor recomputes
+/// a layout (and allocates its strides) on every call for a predicate that never
+/// reads a stride (#2087 per-call host path).
 fn cuda_input_has_owned_buffer(
     input: &TensorRead<'_>,
     device_ordinal: usize,
     expected_domain: tenferro_tensor::AllocationDomainId,
 ) -> bool {
+    if let TensorRead::Tensor(tensor) = input {
+        return match tensor.dtype() {
+            DType::F32 => owned_tensor_has_owner::<f32>(tensor, device_ordinal, expected_domain),
+            DType::F64 => owned_tensor_has_owner::<f64>(tensor, device_ordinal, expected_domain),
+            DType::I32 => owned_tensor_has_owner::<i32>(tensor, device_ordinal, expected_domain),
+            DType::I64 => owned_tensor_has_owner::<i64>(tensor, device_ordinal, expected_domain),
+            DType::Bool => owned_tensor_has_owner::<bool>(tensor, device_ordinal, expected_domain),
+            DType::C32 => {
+                owned_tensor_has_owner::<Complex32>(tensor, device_ordinal, expected_domain)
+            }
+            DType::C64 => {
+                owned_tensor_has_owner::<Complex64>(tensor, device_ordinal, expected_domain)
+            }
+            // A caller-owned payload has no backend storage to own.
+            DType::External(_) => false,
+        };
+    }
     match input.clone().tensor_view() {
         TensorView::F32(view) => {
             cubecl_view_has_owner::<f32>(&view, device_ordinal, expected_domain)
@@ -201,33 +229,38 @@ fn cuda_input_has_owned_buffer(
         TensorView::Bool(view) => {
             cubecl_view_has_owner::<bool>(&view, device_ordinal, expected_domain)
         }
-        TensorView::C32(view) => view.backend_buffer().is_some_and(|buffer| {
-            buffer
-                .as_any()
-                .downcast_ref::<crate::CubeclBuffer>()
-                .is_some_and(|buffer| {
-                    buffer.device_ordinal() == device_ordinal
-                        && buffer.allocation_domain() == expected_domain
-                })
-        }),
-        TensorView::C64(view) => view.backend_buffer().is_some_and(|buffer| {
-            buffer
-                .as_any()
-                .downcast_ref::<crate::CubeclBuffer>()
-                .is_some_and(|buffer| {
-                    buffer.device_ordinal() == device_ordinal
-                        && buffer.allocation_domain() == expected_domain
-                })
-        }),
+        TensorView::C32(view) => cubecl_storage_has_owner::<Complex32>(
+            view.backend_buffer(),
+            device_ordinal,
+            expected_domain,
+        ),
+        TensorView::C64(view) => cubecl_storage_has_owner::<Complex64>(
+            view.backend_buffer(),
+            device_ordinal,
+            expected_domain,
+        ),
     }
 }
 
-fn cubecl_view_has_owner<T: 'static>(
-    view: &tenferro_tensor::TypedTensorView<'_, T>,
+fn owned_tensor_has_owner<T: tenferro_tensor::TensorScalar + 'static>(
+    tensor: &Tensor,
     device_ordinal: usize,
     expected_domain: tenferro_tensor::AllocationDomainId,
 ) -> bool {
-    view.backend_buffer().is_some_and(|buffer| {
+    match tensor.as_typed::<T>() {
+        Some(tensor) => {
+            cubecl_storage_has_owner::<T>(tensor.backend_buffer(), device_ordinal, expected_domain)
+        }
+        None => false,
+    }
+}
+
+fn cubecl_storage_has_owner<T: 'static>(
+    storage: Option<&dyn tenferro_tensor::BackendStorage<T>>,
+    device_ordinal: usize,
+    expected_domain: tenferro_tensor::AllocationDomainId,
+) -> bool {
+    storage.is_some_and(|buffer: &dyn tenferro_tensor::BackendStorage<T>| {
         buffer
             .as_any()
             .downcast_ref::<crate::CubeclBuffer>()
@@ -236,6 +269,14 @@ fn cubecl_view_has_owner<T: 'static>(
                     && buffer.allocation_domain() == expected_domain
             })
     })
+}
+
+fn cubecl_view_has_owner<T: 'static>(
+    view: &tenferro_tensor::TypedTensorView<'_, T>,
+    device_ordinal: usize,
+    expected_domain: tenferro_tensor::AllocationDomainId,
+) -> bool {
+    cubecl_storage_has_owner::<T>(view.backend_buffer(), device_ordinal, expected_domain)
 }
 
 #[cfg(test)]

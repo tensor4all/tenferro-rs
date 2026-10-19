@@ -51,6 +51,67 @@ fn runtime_prepared_compiled_graph_runs_repeated_inputs() {
 }
 
 #[test]
+fn prepared_execution_checks_retained_defaults_preparation_did_not_validate() {
+    use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
+
+    // Both inputs declare `[n]` with `n` = input 1's axis 0, so the pair must
+    // agree: the retained defaults below are 2 and 3, which do not.
+    let shared_extent = || DimExpr::InputDim {
+        input_idx: 1,
+        axis: 0,
+    };
+    let mut builder = SemanticProgramBuilder::new();
+    let first = builder
+        .input(ProgramInputSpec::new(DType::F64, [shared_extent()]))
+        .unwrap();
+    let second = builder
+        .input(ProgramInputSpec::new(DType::F64, [shared_extent()]))
+        .unwrap();
+    // Binding checks constant extents only, so an inconsistent default pair is
+    // accepted here; the mismatch surfaces when a run resolves the defaults.
+    builder
+        .bind_input(
+            first,
+            Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+        )
+        .unwrap();
+    builder
+        .bind_input(
+            second,
+            Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]).unwrap(),
+        )
+        .unwrap();
+    let frozen = builder.finish(&[first, second]).unwrap();
+    let program = GraphCompiler::new()
+        .compile_frozen_program(&frozen)
+        .unwrap();
+
+    let runtime = cpu_runtime();
+    // Preparation replaces every input, so it validates the replacements and
+    // never the retained defaults.
+    let replacement_first = Tensor::from_vec_col_major(vec![3], vec![7.0_f64; 3]).unwrap();
+    let replacement_second = Tensor::from_vec_col_major(vec![3], vec![8.0_f64; 3]).unwrap();
+    let prepared = runtime
+        .prepare_compiled(&program, &[&replacement_first, &replacement_second])
+        .unwrap();
+
+    let outputs = runtime
+        .run_prepared(&prepared, &[&replacement_first, &replacement_second])
+        .expect("the validated replacements satisfy the declared shape relation");
+    assert_eq!(outputs.len(), 2);
+
+    // Resolving the retained defaults must still apply the metadata check that
+    // preparation never ran on them.
+    let error = runtime
+        .run_prepared(&prepared, &[])
+        .expect_err("the retained defaults violate the declared shape relation");
+    assert!(
+        matches!(error, Error::PlaceholderShapeMismatch { .. }),
+        "got {error:?}"
+    );
+}
+
+#[test]
 fn runtime_prepared_execution_hot_path_keeps_input_metadata_inline() {
     let source = include_str!("../../src/runtime/execution.rs");
 
