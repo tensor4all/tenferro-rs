@@ -1902,6 +1902,41 @@ fn test_cubecl_solve_f64_matches_cpu() {
 
 #[test]
 #[ignore = "requires CUDA"]
+fn test_cubecl_solve_singular_matrix_is_left_to_the_caller() {
+    let a = tensor_f64(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
+    let b = tensor_f64(vec![2, 1], vec![1.0, 2.0]);
+    let mut gpu = gpu_backend();
+    let gpu_a = upload(&gpu, &a);
+    let gpu_b = upload(&gpu, &b);
+
+    // The forward solve has no per-call singularity check. The returned values
+    // for an exactly singular system are provider-defined; only the shape is
+    // part of the contract.
+    let gpu_out = with_cuda_linalg_session(&mut gpu, |session| session.solve(&gpu_a, &gpu_b))
+        .expect("CUDA forward solve must not perform a per-call singularity check");
+    assert_eq!(gpu_out.shape(), &[2, 1]);
+    assert_eq!(download(&gpu, &gpu_out).shape(), &[2, 1]);
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn test_cubecl_lu_factor_still_rejects_a_singular_matrix() {
+    let a = tensor_f64(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
+    let mut gpu = gpu_backend();
+    let gpu_a = upload(&gpu, &a);
+
+    let err = with_cuda_linalg_session(&mut gpu, |session| session.lu_factor(&gpu_a))
+        .expect_err("the public LU factorization keeps its getrf status check");
+    assert_eq!(err.kind(), tenferro_tensor::ErrorKind::NumericalFailure);
+    assert!(matches!(
+        std::error::Error::source(&err)
+            .and_then(|source| source.downcast_ref::<tenferro_linalg::Error>()),
+        Some(tenferro_linalg::Error::Singular { op: "lu_factor" })
+    ));
+}
+
+#[test]
+#[ignore = "requires CUDA"]
 fn test_cubecl_solve_vector_rhs_uses_borrowed_session_reshape() {
     let a = tensor_f64(vec![2, 2], vec![3.0, 1.0, 1.0, 2.0]);
     let b = tensor_f64(vec![2], vec![5.0, 1.0]);

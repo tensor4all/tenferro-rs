@@ -1074,6 +1074,12 @@ pub trait LinalgBackend: BackendSession {
 
     /// Solve a dense linear system.
     ///
+    /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
+    /// the forward solve path, so it performs no per-call non-singularity check
+    /// and issues no host round trip. An exactly singular input is left to the
+    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
+    /// still report their own exactly singular factor as `Error::Singular`.
+    ///
     /// # Errors
     ///
     /// Returns `Error::Validation` for incompatible matrix/rhs shapes, rank,
@@ -1110,6 +1116,12 @@ pub trait LinalgBackend: BackendSession {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     ///
+    /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
+    /// the forward solve path, so it performs no per-call non-singularity check
+    /// and issues no host round trip. An exactly singular input is left to the
+    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
+    /// still report their own exactly singular factor as `Error::Singular`.
+    ///
     /// # Errors
     ///
     /// The default implementation returns `Error::Unsupported` because the
@@ -1134,6 +1146,12 @@ pub trait LinalgBackend: BackendSession {
     /// `out`. Backends with a native destination path may override this method,
     /// but must validate the destination before the first write and preserve
     /// the same shape, dtype, placement, aliasing, and error contracts.
+    ///
+    /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
+    /// the forward solve path, so it performs no per-call non-singularity check
+    /// and issues no host round trip. An exactly singular input is left to the
+    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
+    /// still report their own exactly singular factor as `Error::Singular`.
     ///
     /// # Errors
     ///

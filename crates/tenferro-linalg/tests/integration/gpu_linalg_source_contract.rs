@@ -288,7 +288,12 @@ fn gpu_linalg_batched_pointer_offsets_use_checked_arithmetic_contract() {
 #[test]
 fn gpu_zero_sized_lu_factor_parity_is_filled_on_device() {
     let source = linalg_source();
-    let zero_lu = source_section(&source, "fn zero_sized_lu_factor_outputs", "fn raw_stream");
+    let zero_lu = source_section(&source, "fn zero_sized_lu_factor_pair", "fn raw_stream");
+    let factor = source_section(
+        &source,
+        "fn lu_factor_typed",
+        "fn lu_factor_for_solve_typed",
+    );
     let kernels = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
 
     for needle in [
@@ -298,12 +303,12 @@ fn gpu_zero_sized_lu_factor_parity_is_filled_on_device() {
     ] {
         assert!(
             !zero_lu.contains(needle),
-            "zero-sized GPU LU factor parity should not build host tensors: found {needle}"
+            "zero-sized GPU LU factor outputs should not build host tensors: found {needle}"
         );
     }
 
     assert!(
-        zero_lu.contains("fill_one_device_tensor"),
+        factor.contains("fill_one_device_tensor(backend, &input.shape()[2..], \"lu_factor\")?"),
         "zero-sized GPU LU factor parity should be initialized by a device fill helper"
     );
     assert!(
@@ -337,7 +342,7 @@ fn gpu_solve_uses_packed_lu_without_public_lu_materialization() {
         violations.join("\n")
     );
     assert!(
-        solve_source.contains("lu_factor("),
+        solve_source.contains("lu_factor_for_solve("),
         "GPU solve should factor into packed LU with pivots"
     );
     assert!(
@@ -918,9 +923,9 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
             "raw.alloc_output",
         ),
         (
-            "fn lu_typed",
-            "fn svd_typed",
-            "ensure_cubecl_resident_typed(OP, input)?;",
+            "fn lu_factor_core",
+            "fn lu_solve_prepared_typed",
+            "ensure_cubecl_resident_typed(op, input)?;",
             "if has_zero_dim",
         ),
         // SVD's zero-dim contract is split across two functions: `svd_typed`
@@ -946,7 +951,7 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
         ),
         (
             "fn eigh_typed",
-            "fn validate_nonsingular_gpu",
+            "fn eigh_values_typed",
             "ensure_cubecl_resident_typed(OP, input)?;",
             "if has_zero_dim",
         ),
@@ -998,71 +1003,48 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
 }
 
 #[test]
-fn gpu_validate_nonsingular_synchronizes_before_host_download() {
+fn gpu_solve_skips_the_singularity_scan_and_solver_status_readback() {
     let source = linalg_source();
-    let validate = source_section(
-        &source,
+
+    for removed in [
         "fn validate_nonsingular_gpu",
         "fn diagonal_magnitude",
-    );
-    assert!(validate.contains("backend.reduce_min_read(TensorRead::from_tensor(&flat), &[0])?"));
-
-    assert_before(
-        validate,
-        "backend.runtime().synchronize()?;",
-        "download_tensor(backend.runtime(), &min_val)?;",
-    );
-}
-
-#[test]
-fn gpu_validate_nonsingular_uses_complex_magnitude_and_tolerance() {
-    let source = linalg_source();
-    let validate = source_section(
-        &source,
-        "fn validate_nonsingular_gpu",
+        "fn host_min_max_magnitudes",
+        "fn host_pair",
         "fn singularity_tolerance",
-    );
-    let kernels = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
-
-    assert!(
-        validate.contains("diagonal_magnitude(backend, &diag)?"),
-        "GPU singularity validation should compute diagonal magnitudes through a dedicated helper"
-    );
-    assert!(
-        !validate.contains("backend.cast(&diag, DType::F64)"),
-        "GPU singularity validation must not cast complex diagonals to real and discard imaginary parts"
-    );
-    assert!(
-        validate.contains(
-            "let max_val = backend.reduce_max_read(TensorRead::from_tensor(&flat), &[0])?;"
-        ),
-        "GPU singularity validation should compute max diagonal magnitude for a scaled tolerance"
-    );
-    assert!(
-        source
-            .contains("fn singularity_tolerance(dtype: DType, max_magnitude: f64) -> Result<f64>"),
-        "GPU singularity validation should use a dtype-aware tolerance helper"
-    );
-    assert!(
-        source.contains("DType::External(_) =>"),
-        "GPU singularity validation should reject a scalar tenferro does not declare instead of \
-         picking a tolerance for it"
-    );
-    assert!(
-        validate.contains("value <= tolerance"),
-        "GPU singularity validation should reject near-zero pivots with an epsilon-scaled tolerance"
-    );
-
-    for needle in [
-        "pub fn complex32_magnitude",
-        "pub fn complex64_magnitude",
-        ".abs()",
     ] {
         assert!(
-            kernels.contains(needle),
-            "GPU linalg kernels should compute complex magnitude on device: missing {needle}"
+            !source.contains(removed),
+            "the CUDA solve path must not keep a per-call singularity scan: found {removed}"
         );
     }
+
+    let solve = source_section(&source, "pub(super) fn solve", "fn cholesky_typed");
+    assert!(
+        solve.contains("lu_factor_for_solve(backend, a)?"),
+        "GPU solve should use the no-check factor path"
+    );
+    assert!(
+        !solve.contains("build_lu_parity_device"),
+        "GPU solve should not materialize the LU permutation parity"
+    );
+
+    let factor = source_section(&source, "fn lu_factor_for_solve_typed", "fn lu_factor_core");
+    assert!(
+        factor.contains("lu_factor_core(backend, input, op, false)"),
+        "GPU solve should call the factorization with the status check disabled"
+    );
+
+    let core = source_section(&source, "fn lu_factor_core", "fn lu_solve_prepared_typed");
+    assert!(
+        core.contains("if check_status {"),
+        "only the public LU factorization should gate the solver-status download"
+    );
+    let status = source_section(core, "if check_status {", "Ok((work, pivots))");
+    assert!(
+        status.contains("raw.download_tensor::<i32>(&info, op)?"),
+        "the gated public LU path should still read the solver status"
+    );
 }
 
 #[test]
@@ -1071,7 +1053,7 @@ fn gpu_lu_shape_extent_k_is_runtime_not_compile_time_specialized() {
     let lu_kernels = source_section(
         &source,
         "#[cube(launch_unchecked)]\npub fn lu_extract_outputs",
-        "fn zero_sized_lu_factor_outputs",
+        "fn zero_sized_lu_factor_pair",
     );
 
     assert!(

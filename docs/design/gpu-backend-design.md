@@ -715,6 +715,15 @@ add a status download only where the flag carries a failure the caller cannot
 observe any other way, and never as an implicit host barrier on the forward
 path.
 
+CUDA `solve` and `lu_factor_solve` do not inspect the cuSOLVER `getrf` device
+`info` flags and do not scan the packed LU diagonal, so the forward solve issues
+no host barrier and performs no per-call non-singularity check. Shapes, dtypes,
+dimensions, and leading dimensions are validated before the vendor call, and an
+exactly singular factor is left to the caller's verification, as in
+`torch.linalg.solve`. The public `lu_factor`/`lu` operations keep their `getrf`
+status read and `Singular` error, and the forward solve also skips the
+permutation-parity kernel that only the public LU outputs consume.
+
 `SvdDriver::Xgesvdp` is the opt-in polar-decomposition routine; `Auto` never
 selects it, and the explicit variant forces it at any size and dtype. It is the
 fastest of the three drivers for `min(m, n) >= 256` on an A100 (see the

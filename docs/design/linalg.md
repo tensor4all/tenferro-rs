@@ -164,6 +164,30 @@ their own `geqrf` status read.
 Other decompositions keep their status checks because their flags report
 non-convergence that invalidates the result.
 
+## Solve Solver Status And Singularity Reporting
+
+The CUDA forward solve path does not inspect the cuSOLVER `getrf` device status
+flag and does not scan the packed LU diagonal for a small pivot. Reading the
+flag is a blocking device-to-host copy that waits for the factorization kernels,
+and the diagonal scan needed a full stream synchronize plus two scalar
+downloads on every solve. `torch.linalg.solve` performs neither check.
+
+- CUDA `solve` and `lu_factor_solve` therefore perform no per-call
+  non-singularity check and issue no host round trip. The public CUDA
+  `lu_factor` and `lu` operations keep the `getrf` status read and report an
+  exactly singular factor as `Error::Singular { op }`.
+- Shapes, dtypes, dimensions, and leading dimensions are validated before the
+  vendor call, so the vendor's illegal-argument report remains unreachable on
+  the no-check path.
+- A singular or near-singular system is left to the caller's verification on
+  the CUDA forward solve. The CPU providers keep their exact-zero singularity
+  reporting from the provider factorization; they do not reject near-singular
+  systems either.
+
+The public solve surface has no strictness knob. A debug-only check, if one is
+ever useful, belongs in tests or a diagnostic build rather than in the per-call
+public path.
+
 ## Solve Lowering
 
 Traced `solve` and tracked eager `solve` emit one `LuFactorSolve` extension op

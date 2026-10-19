@@ -20,8 +20,8 @@ use tenferro_gpu::{
 };
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
-    DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorRead,
-    TensorReduction, TensorScalar, TensorStructural, TypedTensor, ValidationError,
+    DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorRead, TensorReduction,
+    TensorScalar, TensorStructural, TypedTensor, ValidationError,
 };
 
 type Result<T> = tenferro_tensor::Result<T>;
@@ -421,11 +421,11 @@ pub(super) fn lu_factor(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Re
     lu_factor_with_op(backend, input, "lu_factor")
 }
 
-/// LU factorization with the public operation name used in error reporting.
+/// LU factorization returning the public `(packed_lu, pivots, parity)` outputs.
 ///
-/// `solve` reuses this factorization and reports a singular matrix as
-/// `Singular { op: "solve" }`, while the standalone `lu_factor` op keeps its
-/// own name.
+/// The standalone `lu_factor`/`lu` operations keep the cuSOLVER status check
+/// and the permutation parity. The forward solve uses `lu_factor_for_solve`
+/// instead and skips both.
 fn lu_factor_with_op(
     backend: &mut CudaExecSession<'_>,
     input: &Tensor,
@@ -470,6 +470,62 @@ fn lu_factor_with_op(
         ),
         DType::I32 | DType::I64 | DType::Bool => Err(unsupported_linalg_dtype(op, input)),
         DType::External(_) => Err(unsupported_linalg_dtype(op, input)),
+    }
+}
+
+/// Factor `input` for the forward solve path.
+///
+/// The forward solve does not inspect cuSOLVER's `getrf` status and does not
+/// materialize the permutation parity that the public `lu_factor` returns. A
+/// singular input therefore reaches the triangular solve instead of failing at
+/// factorization; the caller's residual check decides whether the result is
+/// acceptable. The public `lu_factor`/`lu` operations keep the status check and
+/// parity output.
+fn lu_factor_for_solve(
+    backend: &mut CudaExecSession<'_>,
+    input: &Tensor,
+) -> Result<(Tensor, Tensor)> {
+    match input.dtype() {
+        DType::F32 => {
+            lu_factor_for_solve_typed(backend, typed_host::<f32>("solve", input)?, "solve").map(
+                |(packed_lu, pivots)| {
+                    (
+                        Tensor::from_typed::<f32>(packed_lu),
+                        Tensor::from_typed::<i32>(pivots),
+                    )
+                },
+            )
+        }
+        DType::F64 => {
+            lu_factor_for_solve_typed(backend, typed_host::<f64>("solve", input)?, "solve").map(
+                |(packed_lu, pivots)| {
+                    (
+                        Tensor::from_typed::<f64>(packed_lu),
+                        Tensor::from_typed::<i32>(pivots),
+                    )
+                },
+            )
+        }
+        DType::C32 => {
+            lu_factor_for_solve_typed(backend, typed_host::<Complex32>("solve", input)?, "solve")
+                .map(|(packed_lu, pivots)| {
+                    (
+                        Tensor::from_typed::<Complex32>(packed_lu),
+                        Tensor::from_typed::<i32>(pivots),
+                    )
+                })
+        }
+        DType::C64 => {
+            lu_factor_for_solve_typed(backend, typed_host::<Complex64>("solve", input)?, "solve")
+                .map(|(packed_lu, pivots)| {
+                    (
+                        Tensor::from_typed::<Complex64>(packed_lu),
+                        Tensor::from_typed::<i32>(pivots),
+                    )
+                })
+        }
+        DType::I32 | DType::I64 | DType::Bool => Err(unsupported_linalg_dtype("solve", input)),
+        DType::External(_) => Err(unsupported_linalg_dtype("solve", input)),
     }
 }
 
@@ -1165,13 +1221,8 @@ pub(super) fn solve(backend: &mut CudaExecSession<'_>, a: &Tensor, b: &Tensor) -
         )
     };
 
-    let factors = lu_factor_with_op(backend, a, "solve")?;
-    let [packed_lu, pivots, _parity] = factors.as_slice() else {
-        return Err(Error::Internal(
-            "solve: lu_factor returned an unexpected number of outputs".into(),
-        ));
-    };
-    let x = lu_solve_prepared(backend, a, packed_lu, pivots, &rhs, false, false)?;
+    let (packed_lu, pivots) = lu_factor_for_solve(backend, a)?;
+    let x = lu_solve_prepared(backend, a, &packed_lu, &pivots, &rhs, false, false)?;
     if let Some(shape) = restore_shape {
         backend.reshape_read(TensorRead::from_tensor(&x), &shape)
     } else {
@@ -1625,11 +1676,46 @@ fn lu_factor_typed<T>(
 where
     T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
 {
+    let (packed_lu, pivots) = lu_factor_core(backend, input, op, true)?;
+    let (m, n) = matrix_dims(op, input.shape())?;
+    let parity = if has_zero_dim(input.shape()) {
+        fill_one_device_tensor(backend, &input.shape()[2..], "lu_factor")?
+    } else {
+        build_lu_parity_device(backend, &pivots, m.min(n), &input.shape()[2..])?
+    };
+    Ok((packed_lu, pivots, parity))
+}
+
+fn lu_factor_for_solve_typed<T>(
+    backend: &mut CudaExecSession<'_>,
+    input: &TypedTensor<T>,
+    op: &'static str,
+) -> Result<(TypedTensor<T>, TypedTensor<i32>)>
+where
+    T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
+{
+    lu_factor_core(backend, input, op, false)
+}
+
+/// The shared `getrf` factorization.
+///
+/// `check_status` downloads cuSOLVER's per-batch `info` and reports a zero
+/// pivot as `Singular`; the forward solve passes `false` and issues no host
+/// round trip.
+fn lu_factor_core<T>(
+    backend: &mut CudaExecSession<'_>,
+    input: &TypedTensor<T>,
+    op: &'static str,
+    check_status: bool,
+) -> Result<(TypedTensor<T>, TypedTensor<i32>)>
+where
+    T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
+{
     ensure_cubecl_resident_typed(op, input)?;
     let (m, n) = matrix_dims(op, input.shape())?;
     let k = m.min(n);
     if has_zero_dim(input.shape()) {
-        return zero_sized_lu_factor_outputs(backend, input.shape());
+        return zero_sized_lu_factor_pair(backend, input.shape());
     }
 
     let mut pivot_shape = vec![k];
@@ -1640,7 +1726,7 @@ where
     let n_i32 = as_i32(n, op, "n")?;
     let matrix_stride = checked_mul_usize(op, "lu matrix stride", m, n)?;
 
-    let (work, pivots) = backend.with_raw(op, |raw| {
+    backend.with_raw(op, |raw| {
         let handles = raw.resource(CudaLinalgHandles::load)?;
         // SAFETY: the stream handle is valid only for this raw-session scope;
         // it is used immediately to bind the cuSOLVER handle and not retained.
@@ -1730,32 +1816,31 @@ where
             }
         }
 
-        // Host barrier (only for reading the solver diagnostics).
-        let host_info = raw.download_tensor::<i32>(&info, op)?;
-        for &info_value in host_info.host_data()? {
-            if info_value < 0 {
-                return Err(Error::invalid_argument(
-                    op,
-                    "cusolver_argument",
-                    format!(
-                        "cusolverDn*getrf reported invalid parameter {}",
-                        -info_value
-                    ),
-                ));
-            }
-            if info_value > 0 {
-                // cuSOLVER reports the first zero pivot here: singular matrix.
-                return Err(crate::error::into_tensor_error(
-                    op,
-                    crate::Error::Singular { op },
-                ));
+        if check_status {
+            // Host barrier (only when the caller needs the solver diagnostics).
+            let host_info = raw.download_tensor::<i32>(&info, op)?;
+            for &info_value in host_info.host_data()? {
+                if info_value < 0 {
+                    return Err(Error::invalid_argument(
+                        op,
+                        "cusolver_argument",
+                        format!(
+                            "cusolverDn*getrf reported invalid parameter {}",
+                            -info_value
+                        ),
+                    ));
+                }
+                if info_value > 0 {
+                    // cuSOLVER reports the first zero pivot here: singular matrix.
+                    return Err(crate::error::into_tensor_error(
+                        op,
+                        crate::Error::Singular { op },
+                    ));
+                }
             }
         }
         Ok((work, pivots))
-    })?;
-
-    let parity = build_lu_parity_device(backend, &pivots, k, &input.shape()[2..])?;
-    Ok((work, pivots, parity))
+    })
 }
 
 fn lu_solve_prepared_typed<T>(
@@ -3971,26 +4056,23 @@ where
     })
 }
 
-fn zero_sized_lu_factor_outputs<T>(
+fn zero_sized_lu_factor_pair<T>(
     backend: &mut CudaExecSession<'_>,
     shape: &[usize],
-) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
+) -> Result<(TypedTensor<T>, TypedTensor<i32>)>
 where
     T: LinalgScalar + TensorScalar + Scalar,
 {
     let m = shape[0];
     let n = shape[1];
     let k = m.min(n);
-    let batch_shape = &shape[2..];
     let mut pivot_shape = vec![k];
-    pivot_shape.extend_from_slice(batch_shape);
-    let parity_shape = batch_shape.to_vec();
-    let parity = fill_one_device_tensor(backend, &parity_shape, "lu_factor")?;
+    pivot_shape.extend_from_slice(&shape[2..]);
     let lu = backend.with_cubecl("lu_factor", |cubecl| cubecl.alloc_output::<T>(shape))?;
     let pivots = backend.with_cubecl("lu_factor", |cubecl| {
         cubecl.alloc_output::<i32>(&pivot_shape)
     })?;
-    Ok((lu, pivots, parity))
+    Ok((lu, pivots))
 }
 
 fn matrix_slice_config(shape: &[usize], row_limit: usize, col_limit: usize) -> SliceConfig {
