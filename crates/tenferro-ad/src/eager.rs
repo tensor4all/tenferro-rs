@@ -2696,7 +2696,7 @@ impl EagerRuntime {
     /// ```
     /// use tenferro_ad::{AdContext, EagerRuntime};
     ///
-    /// let ad = AdContext::new();
+    /// let ad = AdContext::builder().build().unwrap();
     /// let ctx = EagerRuntime::with_ad_context(&ad)?;
     /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -2911,7 +2911,6 @@ impl EagerRuntime {
     ///
     /// let ctx = EagerRuntime::new()?;
     /// ctx.clear_caches()?;
-    /// assert_eq!(ctx.cache_stats()?.extensions.entries, 0);
     /// assert_eq!(ctx.cache_stats()?.ad_transforms.entries, 0);
     /// assert_eq!(ctx.cache_stats()?.prepared_derivatives.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -2958,7 +2957,6 @@ impl EagerRuntime {
     ///
     /// let ctx = EagerRuntime::new()?;
     /// let stats = ctx.cache_stats()?;
-    /// assert_eq!(stats.extensions.entries, 0);
     /// assert_eq!(stats.ad_transforms.entries, 0);
     /// assert_eq!(stats.prepared_derivatives.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
