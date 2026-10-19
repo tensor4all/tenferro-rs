@@ -41,6 +41,24 @@ impl CpuPhase<'_> {
         &mut self,
         lane: impl Fn(usize, &mut PhaseLane<'_>) -> Result<(), E> + Sync,
     ) -> Result<(), PhaseRunError<E>>;
+
+    /// Run `coordinator` on the calling thread while every lane runs.
+    pub fn run_with_coordinator<C, E: Send>(
+        &mut self,
+        coordinator: impl FnOnce(&PhaseControl<'_>) -> Result<C, E>,
+        lane: impl Fn(usize, &mut PhaseLane<'_>) -> Result<(), E> + Sync,
+    ) -> Result<C, PhaseRunError<E>>;
+}
+
+pub struct PhaseControl<'a> {
+    cancel: &'a AtomicBool,
+}
+
+impl PhaseControl<'_> {
+    /// Set by a lane failure or unwind, or by `cancel`.
+    pub fn cancelled(&self) -> bool;
+    /// Ask the lanes to stop pulling work.
+    pub fn cancel(&self);
 }
 
 pub struct PhaseLane<'lane> {
@@ -68,6 +86,22 @@ Two shape decisions that the pre-implementation review forced, and that are deli
   every operation in the callback.
 - **The index is a callback argument, not also an accessor**, so there is one spelling.
 
+`run_with_coordinator` adds a caller-thread coordinator for a downstream scheduler whose
+control loop must keep progressing while the lanes compute (the MPI `MPI_THREAD_FUNNELED`
+case of tensor4all/hataori-rs#24). The coordinator is not another lane: it gets only
+`PhaseControl`, so it has no session, cannot issue numerical work, and cannot open a root
+session or another phase. It runs on the phase's opening thread, outside the context pool,
+while one lane per worker runs through `in_place_scope`/`spawn_broadcast`; the scope joins
+every lane before the method returns. Lanes and coordinator communicate only through
+caller-owned synchronization, usually the downstream queue. The coordinator result is
+returned only when no lane failed.
+
+A one-lane phase runs its lane inline on the calling thread, so it cannot also run a
+caller-thread coordinator. `run_with_coordinator` rejects it with
+`PhaseRunError::SingleLane` **without invoking either callback**; the caller explicitly
+falls back to `run` or its sequential path. There is no hidden worker, no second pool, and
+no TLS selector.
+
 ## 3. Contract
 
 | Invariant | How |
@@ -79,6 +113,11 @@ Two shape decisions that the pre-implementation review forced, and that are deli
 | Bounded **tenferro-controlled** execution | Lanes are bounded by the context's thread budget; the parked driver is not a numerical lane. Vendor BLAS/LAPACK threads are the provider's and are outside this bound. |
 | One-thread context | The same API runs one lane inline on the caller under the already-held root permit; it does not call entry admission again and creates no pool. It does not fall back to an inline eager backend. |
 | Join before return | `run` returns only after every lane has finished, on the success, error and panic paths. |
+| Coordinator is not a lane | The coordinator receives only `PhaseControl`; it has no session, no numerical work, and no root/phase entry. |
+| Concurrent coordinator | `run_with_coordinator` runs the coordinator on the opening thread and one lane per worker through `in_place_scope`/`spawn_broadcast`; the scope joins every lane before returning. |
+| One-lane coordinator | `run_with_coordinator` returns `PhaseRunError::SingleLane` without running either callback; the caller falls back to `run` or its sequential path. |
+| Symmetric cancellation | A coordinator error or unwind sets the stop signal before the join; a lane error or unwind sets it as before, and the coordinator observes it through `PhaseControl::cancelled`. |
+| Coordinator result | The coordinator's value is returned only if no lane failed; a lane or session error replaces it. |
 | Cooperative cancellation | The first lane error or unwind sets the stop signal; other lanes observe it and stop pulling work. |
 | Recovery | After `run` returns a lane error, the root session is still open: the next `with_session` and a fresh `phase` both work. |
 | Repeatable runs | Each `run` starts with a fresh cancellation flag, so a later `run` on the same phase does real work. |
@@ -93,11 +132,13 @@ CpuHeldSession<'_>                  owns admission, the resource checkout, the o
         ├── pool:       Option<&'h rayon::ThreadPool>  // the context's own pool, borrowed; None for budget 1
         ├── budget:     NonZeroUsize                   // lanes
         ├── child:      CpuBackend                     // owner-inheriting prototype, cloned per lane
-        └── cancel:     AtomicBool                     // per-run stop signal, borrowed by the lanes
+        ├── cancel:     AtomicBool                     // per-run stop signal, borrowed by the lanes
+        └── control:    PhaseControl<'_>               // coordinator-side view; no session
 
 `CpuPhase` is `!Send + !Sync`, like the held session: its inline lane runs under the
 caller-affinity guard and owner marker the root session installed on its opening thread,
-so moving a phase would run that lane outside the selected CPU set.
+so moving a phase would run that lane outside the selected CPU set. That also keeps a
+caller-thread coordinator on the thread that owns the `!Send` held session.
 ```
 
 Admission and lock order, extending the U1 order by one step:
@@ -105,9 +146,9 @@ Admission and lock order, extending the U1 order by one step:
 ```text
 1. thread-local reentry check        already held: EXECUTION_OWNER is this session's owner
 2. target-pool membership check      typed error before any blocking wait
-3. broadcast to the context pool     blocks the driver; the driver holds no lock
+3. scope + spawn_broadcast           coordinator runs on the opening thread, lanes on the pool
 4. per worker: child session entry   joins the owner's active request (non-waiting), private resources
-5. join                              every lane finished, then the phase returns
+5. join                              coordinator and every lane finished, then the phase returns
 ```
 
 - The root's checkout is owned, not locked, so management entry points keep reporting it as
@@ -133,9 +174,13 @@ Admission and lock order, extending the U1 order by one step:
 pub enum PhaseRunError<E> {
     /// A lane's callback returned an error. Returned after every lane finished.
     Lane(E),
-    /// A lane could not enter or could not clean up. Replaces a lane error, as U1's
-    /// restoration failures replace a callback value.
+    /// A lane could not enter or could not clean up. Replaces a lane error and a
+    /// coordinator error, as U1's restoration failures replace a callback value.
     Session(SessionEntryError),
+    /// The coordinator returned an error. Every lane was joined first.
+    Coordinator(E),
+    /// `run_with_coordinator` on a one-lane phase; neither callback ran.
+    SingleLane { backend: &'static str },
 }
 ```
 
@@ -153,8 +198,15 @@ pub enum PhaseRunError<E> {
   worker order, so "first in time" is not available; the contract is "one lane error after
   joining".
 - **Precedence.** A session (entry/cleanup) failure is returned as `Session`, replacing a lane
-  error, mirroring U1's rule that a restoration failure replaces the callback's value. Otherwise
-  the lane error is returned.
+  error, mirroring U1's rule that a restoration failure replaces the callback's value.
+  Otherwise a lane error is returned over a coordinator error; the coordinator's error is
+  returned only when every lane succeeded. The coordinator's value is returned only on a
+  clean run.
+- **Symmetric coordinator cancellation.** `run_with_coordinator` arms the same stop signal
+  when the coordinator returns `Err` or unwinds, before the scope joins the lanes, so active
+  lanes stop pulling work. A lane error or unwind sets the flag as before, which the
+  coordinator observes through `PhaseControl::cancelled`. A coordinator that calls
+  `PhaseControl::cancel` requests the same cooperative stop without failing the run.
 - **Panics** are not converted into errors: Rayon re-raises one after all workers joined, and
   the phase lease unwinds afterwards. The root session remains usable when it lives outside the
   caught unwind, which the tests assert.
@@ -198,6 +250,14 @@ Delivered in `crates/tenferro-cpu/src/backend/held_session/phase/tests.rs`:
 | More lanes than work items: every lane runs, unclaimed lanes find an empty queue, and a lane 64x larger than its peers still completes | `phase_with_empty_and_skewed_lanes_completes` |
 | Concurrent lane execution within the thread budget, observed inside the lanes around their numerical work, with every lane on a worker of the context pool | `phase_bounds_concurrent_lane_execution_by_the_thread_budget` |
 | A lane runs contraction, transpose, reshape and reduction routes and agrees with the single-threaded values | `phase_lane_runs_concrete_route_families` |
+| The coordinator feeds a queue and waits for lane acknowledgements while the lanes compute, on the opening thread, with exactly one distinct worker index per lane | `coordinator_runs_concurrently_with_the_lanes` |
+| Coordinator error cancels active lanes, returns `Coordinator`, and leaves the session usable | `coordinator_error_cancels_the_lanes_and_is_returned` |
+| Coordinator panic cancels and joins the lanes, then is resumed; the session survives the caught unwind | `coordinator_panic_cancels_and_joins_the_lanes` |
+| Lane error is observed by the coordinator and reported after the join | `lane_error_is_observed_by_the_coordinator` |
+| Lane panic is observed by the coordinator and resumed after the join | `lane_panic_is_observed_by_the_coordinator` |
+| A lane error together with a coordinator error reports `Lane` | `lane_error_takes_precedence_over_a_coordinator_error` |
+| A one-lane backend rejects the coordinator run with `SingleLane` and runs neither callback | `one_lane_backend_rejects_the_coordinator_run` |
+| A caller inside the target pool is rejected before either coordinator callback runs | `run_with_coordinator_rejects_a_caller_inside_its_own_pool` |
 
 Two items in the previous revision of this list are closed by the tests above: lane counts
 larger than the task count with empty and skewed queues, and representative concrete routes

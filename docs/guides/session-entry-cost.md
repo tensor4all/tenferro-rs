@@ -157,8 +157,11 @@ affinity. `CpuHeldSession::phase` lends the session's own pool to a phase
 driver: each lane runs on a worker of the context's pool with its own child
 session over the same routes, lanes are joined before the call returns on the
 success, error and panic paths, and the phase is opened from a thread that is
-not a worker of that pool. A runnable driver is
-`crates/tenferro-cpu/examples/held_session_driver.rs`.
+not a worker of that pool. `CpuPhase::run_with_coordinator` keeps the opening
+thread free for a caller-owned coordinator (a downstream queue or MPI loop)
+that runs concurrently with the lanes; it rejects a one-lane phase with
+`PhaseRunError::SingleLane` so the caller can fall back explicitly. A runnable
+driver is `crates/tenferro-cpu/examples/held_session_driver.rs`.
 
 Measured with the same protocol as the tables above, on AMD EPYC 7713P,
 Linux 6.8.0, rustc 1.97.1, faer 0.24.4, **one worker**

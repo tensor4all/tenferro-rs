@@ -625,3 +625,497 @@ fn phase_lane_runs_concrete_route_families() {
     }
     session.close().expect("affinity restores");
 }
+
+fn wait_for_lane_cancel(lane: &PhaseLane<'_>, context: &str) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !lane.cancelled() {
+        assert!(
+            Instant::now() < deadline,
+            "{context}: the lane never observed cancellation"
+        );
+        thread::yield_now();
+    }
+}
+
+fn wait_for_control_cancel(control: &PhaseControl<'_>, context: &str) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !control.cancelled() {
+        assert!(
+            Instant::now() < deadline,
+            "{context}: the coordinator never observed cancellation"
+        );
+        thread::yield_now();
+    }
+}
+
+/// The coordinator feeds a queue and waits for lane acknowledgements while the
+/// lanes compute. A sequential implementation (coordinator before or after the
+/// lanes) would block on the protocol and fail the deadline.
+#[test]
+fn coordinator_runs_concurrently_with_the_lanes() {
+    let backend = backend(2);
+    let x = vector(2.0);
+    let (work_tx, work_rx) = mpsc::channel::<Option<usize>>();
+    let work_rx = Mutex::new(work_rx);
+    let (ack_tx, ack_rx) = mpsc::channel::<usize>();
+    let x_lane = &x;
+    let opening_thread = thread::current().id();
+    let lane_indices = Mutex::new(Vec::new());
+    let expected_lanes = 2usize;
+    let mut session = backend.open_session().expect("held session");
+
+    let acknowledged = session
+        .phase(
+            |phase| -> Result<usize, PhaseRunError<tenferro_tensor::Error>> {
+                let lanes = phase.lanes();
+                assert_eq!(lanes, expected_lanes);
+                let lane_work = &work_rx;
+                let lane_indices = &lane_indices;
+                phase.run_with_coordinator(
+                    |control| {
+                        assert_eq!(
+                            thread::current().id(),
+                            opening_thread,
+                            "the coordinator runs on the phase's opening thread"
+                        );
+                        assert!(!control.cancelled(), "a clean phase starts uncancelled");
+                        for item in 0..lanes {
+                            work_tx.send(Some(item)).expect("send a work item");
+                        }
+                        let received = (0..lanes)
+                            .map(|_| {
+                                ack_rx
+                                    .recv_timeout(Duration::from_secs(30))
+                                    .expect("a lane acknowledges its item")
+                            })
+                            .collect::<Vec<_>>();
+                        for _ in 0..lanes {
+                            work_tx.send(None).expect("send a stop item");
+                        }
+                        Ok::<usize, tenferro_tensor::Error>(received.len())
+                    },
+                    move |index, lane| -> Result<(), tenferro_tensor::Error> {
+                        lane_indices.lock().expect("lane index lock").push(index);
+                        loop {
+                            let item = lane_work
+                                .lock()
+                                .expect("work queue")
+                                .recv_timeout(Duration::from_secs(30))
+                                .expect("a lane receives work or a stop");
+                            let Some(item) = item else {
+                                return Ok(());
+                            };
+                            let value = lane.session().add_read(
+                                TensorRead::from_tensor(x_lane),
+                                TensorRead::from_tensor(x_lane),
+                            )?;
+                            assert_eq!(value.as_slice::<f64>()?, &[4.0]);
+                            ack_tx.send(item).expect("send a lane acknowledgement");
+                        }
+                    },
+                )
+            },
+        )
+        .expect("phase starts")
+        .expect("phase runs");
+
+    assert_eq!(
+        acknowledged, expected_lanes,
+        "every lane acknowledged a work item"
+    );
+    let mut lane_indices = lane_indices.into_inner().expect("lane indices");
+    lane_indices.sort_unstable();
+    assert_eq!(
+        lane_indices,
+        (0..expected_lanes).collect::<Vec<_>>(),
+        "each worker index ran exactly one lane"
+    );
+    session.close().expect("affinity restores");
+}
+
+/// A coordinator error cancels the active lanes before the join and is returned
+/// as `Coordinator`; the session remains usable.
+#[test]
+fn coordinator_error_cancels_the_lanes_and_is_returned() {
+    let backend = backend(2);
+    let x = vector(3.0);
+    let (started_tx, started_rx) = mpsc::channel::<()>();
+    let lane_count = 2usize;
+    let observed = Arc::new(AtomicBool::new(false));
+    let lane_observed = Arc::clone(&observed);
+    let mut session = backend.open_session().expect("held session");
+
+    let outcome: Result<usize, PhaseRunError<&'static str>> = session
+        .phase(|phase| -> Result<usize, PhaseRunError<&'static str>> {
+            let started_tx = started_tx;
+            let lane_observed = Arc::clone(&lane_observed);
+            phase.run_with_coordinator(
+                |_control| {
+                    for _ in 0..lane_count {
+                        started_rx
+                            .recv_timeout(Duration::from_secs(30))
+                            .expect("a lane acknowledges its start");
+                    }
+                    Err::<usize, &'static str>("coordinator failed")
+                },
+                move |_index, lane| -> Result<(), &'static str> {
+                    started_tx.send(()).expect("send a start acknowledgement");
+                    wait_for_lane_cancel(lane, "coordinator error");
+                    lane_observed.store(true, Ordering::Relaxed);
+                    Ok(())
+                },
+            )
+        })
+        .expect("phase starts");
+
+    assert!(matches!(
+        outcome,
+        Err(PhaseRunError::Coordinator("coordinator failed"))
+    ));
+    assert!(
+        observed.load(Ordering::Relaxed),
+        "the lanes observed the coordinator error's cancellation"
+    );
+    let value = session
+        .with_session(|view| {
+            view.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+        })
+        .expect("root operation after a coordinator error");
+    assert_eq!(value.as_slice::<f64>().expect("f64 payload"), &[6.0]);
+    session.close().expect("affinity restores");
+}
+
+/// A coordinator panic cancels the lanes, joins every lane, and is then resumed
+/// on the calling thread; the session survives the caught unwind.
+#[test]
+fn coordinator_panic_cancels_and_joins_the_lanes() {
+    let backend = backend(2);
+    let x = vector(4.0);
+    let (started_tx, started_rx) = mpsc::channel::<()>();
+    let lane_count = 2usize;
+    let observed = Arc::new(AtomicUsize::new(0));
+    let lane_observed = Arc::clone(&observed);
+    let mut session = backend.open_session().expect("held session");
+
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.phase(
+            |phase| -> Result<(), PhaseRunError<tenferro_tensor::Error>> {
+                let started_tx = started_tx;
+                let lane_observed = Arc::clone(&lane_observed);
+                phase.run_with_coordinator(
+                    |_control| -> Result<(), tenferro_tensor::Error> {
+                        for _ in 0..lane_count {
+                            started_rx
+                                .recv_timeout(Duration::from_secs(30))
+                                .expect("a lane acknowledges its start");
+                        }
+                        panic!("coordinator panicked");
+                    },
+                    move |_index, lane| -> Result<(), tenferro_tensor::Error> {
+                        started_tx.send(()).expect("send a start acknowledgement");
+                        wait_for_lane_cancel(lane, "coordinator panic");
+                        lane_observed.fetch_add(1, Ordering::Relaxed);
+                        Ok(())
+                    },
+                )
+            },
+        );
+    }));
+    assert!(
+        panic.is_err(),
+        "the coordinator panic surfaces on the driver"
+    );
+    assert_eq!(
+        observed.load(Ordering::Relaxed),
+        lane_count,
+        "every lane observed the coordinator panic's cancellation"
+    );
+
+    let value = session
+        .with_session(|view| {
+            view.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+        })
+        .expect("root operation after a caught coordinator panic");
+    assert_eq!(value.as_slice::<f64>().expect("f64 payload"), &[8.0]);
+    session.close().expect("affinity restores");
+}
+
+/// A lane error is observed by the coordinator through `PhaseControl`, and the
+/// lane error is reported after the join.
+#[test]
+fn lane_error_is_observed_by_the_coordinator() {
+    let backend = backend(2);
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let go_rx = Arc::new(Mutex::new(go_rx));
+    let observed = Arc::new(AtomicBool::new(false));
+    let coordinator_observed = Arc::clone(&observed);
+    let mut session = backend.open_session().expect("held session");
+
+    let outcome: Result<bool, PhaseRunError<&'static str>> = session
+        .phase(|phase| -> Result<bool, PhaseRunError<&'static str>> {
+            let go_rx = Arc::clone(&go_rx);
+            let coordinator_observed = Arc::clone(&coordinator_observed);
+            let go_tx = go_tx;
+            phase.run_with_coordinator(
+                move |control| {
+                    go_tx.send(()).expect("release lane zero");
+                    wait_for_control_cancel(control, "lane error");
+                    coordinator_observed.store(true, Ordering::Relaxed);
+                    Ok::<bool, &'static str>(true)
+                },
+                move |index, lane| -> Result<(), &'static str> {
+                    if index == 0 {
+                        go_rx
+                            .lock()
+                            .expect("lane zero gate")
+                            .recv_timeout(Duration::from_secs(30))
+                            .expect("lane zero is released");
+                        return Err("lane zero failed");
+                    }
+                    wait_for_lane_cancel(lane, "lane error");
+                    Ok(())
+                },
+            )
+        })
+        .expect("phase starts");
+
+    assert!(matches!(
+        outcome,
+        Err(PhaseRunError::Lane("lane zero failed"))
+    ));
+    assert!(
+        observed.load(Ordering::Relaxed),
+        "the coordinator observed the lane failure"
+    );
+    session.close().expect("affinity restores");
+}
+
+/// A lane panic cancels the coordinator, every lane is joined, and the panic is
+/// resumed after the join.
+#[test]
+fn lane_panic_is_observed_by_the_coordinator() {
+    let backend = backend(2);
+    let x = vector(5.0);
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let go_rx = Arc::new(Mutex::new(go_rx));
+    let observed = Arc::new(AtomicBool::new(false));
+    let coordinator_observed = Arc::clone(&observed);
+    let mut session = backend.open_session().expect("held session");
+
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.phase(
+            |phase| -> Result<(), PhaseRunError<tenferro_tensor::Error>> {
+                let go_rx = Arc::clone(&go_rx);
+                let coordinator_observed = Arc::clone(&coordinator_observed);
+                let go_tx = go_tx;
+                phase.run_with_coordinator(
+                    move |control| {
+                        go_tx.send(()).expect("release lane zero");
+                        wait_for_control_cancel(control, "lane panic");
+                        coordinator_observed.store(true, Ordering::Relaxed);
+                        Ok::<(), tenferro_tensor::Error>(())
+                    },
+                    move |index, lane| -> Result<(), tenferro_tensor::Error> {
+                        if index == 0 {
+                            go_rx
+                                .lock()
+                                .expect("lane zero gate")
+                                .recv_timeout(Duration::from_secs(30))
+                                .expect("lane zero is released");
+                            panic!("lane zero panicked");
+                        }
+                        wait_for_lane_cancel(lane, "lane panic");
+                        Ok(())
+                    },
+                )
+            },
+        );
+    }));
+    assert!(panic.is_err(), "the lane panic surfaces on the driver");
+    assert!(
+        observed.load(Ordering::Relaxed),
+        "the coordinator observed the lane panic's cancellation"
+    );
+
+    let value = session
+        .with_session(|view| {
+            view.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+        })
+        .expect("root operation after a caught lane panic");
+    assert_eq!(value.as_slice::<f64>().expect("f64 payload"), &[10.0]);
+    session.close().expect("affinity restores");
+}
+
+/// Mixed failures keep the documented precedence: a lane error is reported over
+/// a coordinator error.
+#[test]
+fn lane_error_takes_precedence_over_a_coordinator_error() {
+    let backend = backend(2);
+    let (started_tx, started_rx) = mpsc::channel::<()>();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let go_rx = Arc::new(Mutex::new(go_rx));
+    let lane_count = 2usize;
+    let mut session = backend.open_session().expect("held session");
+
+    let outcome: Result<usize, PhaseRunError<&'static str>> = session
+        .phase(|phase| -> Result<usize, PhaseRunError<&'static str>> {
+            let started_tx = started_tx;
+            let go_rx = Arc::clone(&go_rx);
+            let go_tx = go_tx;
+            phase.run_with_coordinator(
+                move |_control| {
+                    for _ in 0..lane_count {
+                        started_rx
+                            .recv_timeout(Duration::from_secs(30))
+                            .expect("a lane acknowledges its start");
+                    }
+                    go_tx.send(()).expect("release lane zero");
+                    Err::<usize, &'static str>("coordinator failed")
+                },
+                move |index, _lane| -> Result<(), &'static str> {
+                    started_tx.send(()).expect("send a start acknowledgement");
+                    if index == 0 {
+                        go_rx
+                            .lock()
+                            .expect("lane zero gate")
+                            .recv_timeout(Duration::from_secs(30))
+                            .expect("lane zero is released");
+                        return Err("lane zero failed");
+                    }
+                    Ok(())
+                },
+            )
+        })
+        .expect("phase starts");
+
+    assert!(matches!(
+        outcome,
+        Err(PhaseRunError::Lane("lane zero failed"))
+    ));
+    session.close().expect("affinity restores");
+}
+
+/// A one-lane phase rejects a coordinator run without invoking either callback.
+#[test]
+fn one_lane_backend_rejects_the_coordinator_run() {
+    let backend = backend(1);
+    let x = vector(6.0);
+    let coordinator_runs = AtomicUsize::new(0);
+    let lane_runs = AtomicUsize::new(0);
+    let mut session = backend.open_session().expect("held session");
+
+    session
+        .phase(|phase| -> Result<(), PhaseRunError<&'static str>> {
+            assert_eq!(phase.lanes(), 1);
+            let outcome = phase.run_with_coordinator(
+                |_control| {
+                    coordinator_runs.fetch_add(1, Ordering::Relaxed);
+                    Ok::<(), &'static str>(())
+                },
+                |_index, _lane| {
+                    lane_runs.fetch_add(1, Ordering::Relaxed);
+                    Ok::<(), &'static str>(())
+                },
+            );
+            assert!(matches!(
+                outcome,
+                Err(PhaseRunError::SingleLane {
+                    backend: "CpuBackend"
+                })
+            ));
+            Ok(())
+        })
+        .expect("phase starts")
+        .expect("the typed single-lane rejection is an inner result");
+
+    assert_eq!(coordinator_runs.load(Ordering::Relaxed), 0);
+    assert_eq!(lane_runs.load(Ordering::Relaxed), 0);
+    let value = session
+        .with_session(|view| {
+            view.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+        })
+        .expect("root operation after a rejected coordinator run");
+    assert_eq!(value.as_slice::<f64>().expect("f64 payload"), &[12.0]);
+    session.close().expect("affinity restores");
+}
+
+/// A caller on a worker of the target pool is rejected before either callback
+/// runs. The public `phase` entry already rejects that caller, so the phase is
+/// assembled inside the worker to reach `run_with_coordinator`'s own check.
+#[test]
+fn run_with_coordinator_rejects_a_caller_inside_its_own_pool() {
+    let context = Arc::new(CpuContext::with_threads(2).expect("two-worker context"));
+    let backend = CpuBackend::from_context(Arc::clone(&context));
+    let owner = crate::arbiter::fresh_execution_owner().expect("fresh owner on the test thread");
+    let permit = backend
+        .acquire_execution_permit(owner)
+        .expect("root permit on the test thread");
+    let backend = Arc::new(backend);
+    let backend_ref = &backend;
+    let permit_ref = &permit;
+    let outcome = context.install(move || {
+        let backend = backend_ref.as_ref();
+        let mut phase = CpuPhase {
+            backend,
+            permit: permit_ref,
+            owner,
+            child: backend.with_inherited_owner(owner),
+            pool: backend.engine.domain().rayon_pool(),
+            lanes: backend.engine.domain().thread_budget().get(),
+            _opening_thread: std::marker::PhantomData,
+        };
+        phase.run_with_coordinator(
+            |_control| Ok::<(), &'static str>(()),
+            |_index, _lane| Ok::<(), &'static str>(()),
+        )
+    });
+    drop(permit);
+    assert!(matches!(
+        outcome,
+        Err(PhaseRunError::Session(SessionEntryError::Reentered { .. }))
+    ));
+}
+
+/// A coordinator that cancels on its own stops every lane, and the phase handles
+/// format without exposing their internals.
+#[test]
+fn coordinator_cancel_stops_the_lanes_and_handles_format() {
+    let backend = backend(2);
+    let lanes_started = Barrier::new(3);
+    let stopped = AtomicUsize::new(0);
+    let mut session = backend.open_session().expect("held session");
+
+    let value = session
+        .phase(
+            |phase| -> Result<u32, PhaseRunError<tenferro_tensor::Error>> {
+                assert!(format!("{phase:?}").starts_with("CpuPhase"));
+                phase.run_with_coordinator(
+                    |control| {
+                        assert!(format!("{control:?}").contains("cancelled: false"));
+                        lanes_started.wait();
+                        control.cancel();
+                        assert!(control.cancelled());
+                        assert!(format!("{control:?}").contains("cancelled: true"));
+                        Ok::<u32, tenferro_tensor::Error>(7)
+                    },
+                    |_index, lane| -> Result<(), tenferro_tensor::Error> {
+                        assert!(format!("{lane:?}").starts_with("PhaseLane"));
+                        lanes_started.wait();
+                        wait_for_lane_cancel(lane, "coordinator cancel");
+                        stopped.fetch_add(1, Ordering::Relaxed);
+                        Ok(())
+                    },
+                )
+            },
+        )
+        .expect("phase entry")
+        .expect("coordinator run");
+
+    assert_eq!(value, 7, "an explicit cancel is not a failure");
+    assert_eq!(
+        stopped.load(Ordering::Relaxed),
+        2,
+        "every lane observed the cancel"
+    );
+    session.close().expect("close");
+}

@@ -74,7 +74,8 @@ operation-local exception. tenferro never installs the caller's continuation.
 
 One caller-owned exception exists, and it is explicit rather than implicit: a
 [held session's phase lease](./held-cpu-session-1945-phase-lease.md) runs the
-caller's own lane callbacks on the workers of the context's pool. A lane is the
+caller's own lane callbacks on the workers of the context's pool, optionally
+with a caller-thread coordinator running concurrently with them. A lane is the
 coordinator of the numerical calls it makes and reaches tenferro through an
 owner-inheriting child session, so ordinary session entry stays admission-only
 and lower-library lane ownership is unchanged. A phase never creates a pool, and

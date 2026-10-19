@@ -14,7 +14,7 @@ use tenferro_tensor::{BackendSession, SessionEntryError};
 
 mod phase;
 
-pub use phase::{CpuPhase, CpuPhaseError, PhaseLane, PhaseRunError};
+pub use phase::{CpuPhase, CpuPhaseError, PhaseControl, PhaseLane, PhaseRunError};
 
 use super::execution_scope::{current_cpu_execution, CpuThreadExecution};
 use super::{CpuBackend, CPU_BACKEND};
