@@ -399,6 +399,11 @@ pub struct Session<'s> {
     runtime: CudaRuntime,
     cache: &'s CudaExtensionCache,
     stream: u64,
+    /// Bindings of every allocation whose address this scope handed out; they
+    /// keep those addresses valid until the scope ends (#2207).
+    pins: std::cell::RefCell<
+        Vec<cubecl_runtime::storage::ManagedResource<cubecl_cuda::ffi_interop::GpuResource>>,
+    >,
     _not_send_sync: PhantomData<Rc<()>>,
     _scope: PhantomData<&'s ()>,
 }
@@ -428,6 +433,7 @@ impl<'s> Session<'s> {
             runtime,
             cache,
             stream,
+            pins: std::cell::RefCell::new(Vec::new()),
             _not_send_sync: PhantomData,
             _scope: PhantomData,
         }
@@ -1230,11 +1236,11 @@ impl<'s> Session<'s> {
 impl Session<'_> {
     /// Resolve a CubeCL allocation handle to its base CUDA device address.
     ///
-    /// A retained handle keeps its storage offset and is never deallocated
-    /// while one of its slices is live (see the `CubeclBuffer::device_addr`
-    /// invariant), so the address is stable for the borrowing tensor or view.
-    /// Resolving through `get_resource` is also what aligns this access with
-    /// CubeCL's stream (issue #1868).
+    /// The allocation's binding is kept until this scope ends, so the address
+    /// stays valid for every use inside the scope: CubeCL may otherwise move a
+    /// live allocation to compact its pools (#2207). Resolving through
+    /// `get_resource` is also what aligns this access with CubeCL's stream
+    /// (issue #1868).
     fn device_ptr(
         &self,
         handle: cubecl_runtime::server::Handle,
@@ -1245,7 +1251,9 @@ impl Session<'_> {
             .client()
             .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
             .map_err(|err| crate::Error::backend_source(op, err))?;
-        super::interop::cuda_device_ptr_from_addr(resource.resource().ptr, op)
+        let addr = resource.resource().ptr;
+        self.pins.borrow_mut().push(resource);
+        super::interop::cuda_device_ptr_from_addr(addr, op)
     }
 
     /// Resolve a view read's compact device span through its concrete scalar.

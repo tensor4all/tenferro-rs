@@ -829,7 +829,7 @@ where
     T: TensorScalar + 'static + Scalar,
     R: TensorRank,
 {
-    super::gemm::memoized_device_addr(
+    super::gemm::pinned_buffer_addr(
         rt,
         cubecl_view_buffer(view, op)?,
         prepared_view_access(view, op)?,
@@ -848,13 +848,14 @@ where
     T: TensorScalar + 'static + Scalar,
     R: TensorRank,
 {
-    let resource = rt
-        .client()
-        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(
-            prepared_view_mut_access(view, op)?.into_handle(),
-        )
-        .map_err(|err| Error::backend_source(op, err))?;
-    Ok(resource.resource().ptr)
+    let prepared = prepared_view_mut_access(view, op)?;
+    // The root buffer's pin keeps the address valid while the buffer lives (#2207).
+    super::dispatch::cubecl_view_mut_buffer(view, op)?.pinned_device_addr(
+        rt.client(),
+        prepared.into_handle(),
+        true,
+        op,
+    )
 }
 
 fn typed_device_ptr<T, R>(
@@ -867,11 +868,14 @@ where
     R: TensorRank,
 {
     let prepared = prepared_tensor_access(tensor, op)?;
-    let resource = rt
-        .client()
-        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())
-        .map_err(|err| Error::backend_source(op, err))?;
-    cuda_device_ptr_from_addr(resource.resource().ptr, op)
+    // Always a round trip, as before; the pin keeps the address valid (#2207).
+    let addr = super::dispatch::cubecl_buffer(tensor, op)?.pinned_device_addr(
+        rt.client(),
+        prepared.into_handle(),
+        true,
+        op,
+    )?;
+    cuda_device_ptr_from_addr(addr, op)
 }
 
 fn resolve_prepared_device_region<T: TensorScalar + 'static + Scalar>(

@@ -148,25 +148,32 @@ pub(crate) struct CubeclBuffer {
     // The owning runtime's output pool, so a dropped buffer returns its handle to
     // the object that owns the device (#2156).
     output_pool: OutputPoolHandle,
-    // Memoized device address resolved by the first raw-FFI access.
-    // Zero means "not memoized": no CUDA allocation lives at the null address.
+    // The pinned device address of this allocation for raw vendor calls.
     //
-    // INVARIANT: in pinned CubeCL rev a2adda17, a retained handle's memory
-    // slice keeps its storage offset (pool coalescing merges only free
-    // slices) and its backing storage is never deallocated while any of its
-    // slices is live, so the resolved address is stable for this buffer's
-    // lifetime. Raw-FFI callers must still route cross-stream accesses
-    // through `get_resource` for CubeCL's stream alignment.
+    // INVARIANT (#2207): an address is only ever read while the
+    // `ManagedResource` binding it came from is held. CubeCL relocates live
+    // allocations to compact its pools unless they are bound, so the pin keeps
+    // the binding for as long as the address is memoized; the address is
+    // therefore valid for every vendor call made while this buffer is alive.
+    // Relocation itself is queued behind work already on the streams, so a
+    // vendor call enqueued while the binding was held is never overtaken.
     //
-    // INVARIANT (issue #1868): the memoized address is cleared whenever a
-    // CubeCL kernel is queued to write this buffer. Resolving the address
-    // through `get_resource` is a blocking server round trip, which is also
-    // what pushes queued kernels onto the CUstream; a raw vendor call reached
-    // through a memoized address skips that round trip and could otherwise be
-    // issued ahead of a kernel that precedes it in program order. Clearing on
-    // write keeps the fast path for read-only reuse and forces exactly one
-    // round trip after each write.
-    device_addr: std::sync::atomic::AtomicU64,
+    // INVARIANT (issue #1868): `ordered` is cleared whenever a CubeCL kernel is
+    // queued to write this buffer. Resolving through `get_resource` is a
+    // blocking server round trip that also pushes queued kernels onto the
+    // CUstream; a vendor call reached through an unordered pin re-resolves,
+    // so it cannot be issued ahead of a kernel that precedes it in program
+    // order. The binding is kept across the invalidation, so the re-resolved
+    // address is the same allocation.
+    pin: std::sync::Mutex<Option<BufferPin>>,
+}
+
+/// A held binding of a buffer's allocation and whether its address is ordered
+/// after every CubeCL write queued so far.
+#[cfg(feature = "cuda")]
+struct BufferPin {
+    resource: cubecl_runtime::storage::ManagedResource<cubecl_cuda::ffi_interop::GpuResource>,
+    ordered: bool,
 }
 
 #[cfg(feature = "cuda")]
@@ -347,7 +354,7 @@ impl CubeclBuffer {
             allocation_id: AllocationId::from_backend_id(
                 NEXT_CUDA_ALLOCATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ),
-            device_addr: std::sync::atomic::AtomicU64::new(0),
+            pin: std::sync::Mutex::new(None),
         }
     }
 
@@ -355,31 +362,50 @@ impl CubeclBuffer {
         &self.handle
     }
 
-    /// Return the memoized device address, if one is currently valid.
-    pub(crate) fn cached_device_addr(&self) -> Option<u64> {
-        match self.device_addr.load(std::sync::atomic::Ordering::Acquire) {
-            0 => None,
-            addr => Some(addr),
-        }
-    }
-
-    /// Memoize the device address resolved through `get_resource` for this
-    /// buffer's handle.
-    pub(crate) fn memoize_device_addr(&self, addr: u64) {
-        self.device_addr
-            .store(addr, std::sync::atomic::Ordering::Release);
-    }
-
-    /// Drop the memoized address because a CubeCL kernel was queued to write
-    /// this buffer.
+    /// The device address of this buffer's allocation, pinned for the
+    /// buffer's lifetime (see the `pin` invariants).
     ///
-    /// The next raw-FFI access then resolves through `get_resource`, whose
-    /// blocking server round trip also pushes the queued kernel onto the
-    /// CUstream, so the vendor call cannot overtake it. See the
-    /// `device_addr` invariant and issue #1868.
+    /// Reuses the pin when it is ordered after every queued CubeCL write, the
+    /// caller does not demand a fresh round trip (`require_round_trip`, used
+    /// before a vendor *write*, #1949) and the current stream created the
+    /// allocation; otherwise resolves through the blocking `get_resource`
+    /// round trip and keeps the new binding.
+    pub(crate) fn pinned_device_addr(
+        &self,
+        client: &::cubecl::client::Client,
+        handle: cubecl_runtime::server::Handle,
+        require_round_trip: bool,
+        op: &'static str,
+    ) -> crate::Result<u64> {
+        let mut pin = self.pin.lock().unwrap_or_else(|error| error.into_inner());
+        let same_stream =
+            cubecl_environment::stream::StreamId::current() == self.handle.stream;
+        if let Some(existing) = pin.as_ref() {
+            if existing.ordered && same_stream && !require_round_trip {
+                return Ok(existing.resource.resource().ptr);
+            }
+        }
+        let resource = client
+            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
+            .map_err(|err| crate::Error::backend_source(op, err))?;
+        let addr = resource.resource().ptr;
+        // Replacing the pin drops the previous binding only after the new one
+        // is held, so the allocation stays bound throughout.
+        *pin = Some(BufferPin {
+            resource,
+            ordered: true,
+        });
+        Ok(addr)
+    }
+
+    /// Mark the pinned address unordered because a CubeCL kernel was queued to
+    /// write this buffer; the next raw access re-resolves (issue #1868). The
+    /// binding itself is kept.
     pub(crate) fn invalidate_device_addr(&self) {
-        self.device_addr
-            .store(0, std::sync::atomic::Ordering::Release);
+        let mut pin = self.pin.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(existing) = pin.as_mut() {
+            existing.ordered = false;
+        }
     }
 
     pub(crate) fn element_len<T: 'static>(&self) -> usize {

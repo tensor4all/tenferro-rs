@@ -268,7 +268,8 @@ impl<T: TensorScalar + 'static + Scalar> ReadRef<'_, '_, T> {
             Self::Owned(tensor) => typed_device_ptr(rt, tensor, op),
             Self::View(view) => {
                 let prepared = prepared_view_access(view, op)?;
-                offset_device_ptr::<T>(rt, prepared, view.offset(), op)
+                let buffer = cubecl_view_buffer(view, op)?;
+                offset_device_ptr::<T>(rt, buffer, prepared, view.offset(), false, op)
             }
         }
     }
@@ -313,7 +314,9 @@ impl<T: TensorScalar + 'static + Scalar> WriteRef<'_, '_, T> {
             Self::View(view) => {
                 let offset = view.offset();
                 let prepared = prepared_view_mut_access(view, op)?;
-                offset_device_ptr::<T>(rt, prepared, offset, op)
+                let buffer = cubecl_view_mut_buffer(view, op)?;
+                // A vendor write takes the round trip, as an owned destination does (#1949).
+                offset_device_ptr::<T>(rt, buffer, prepared, offset, true, op)
             }
         }
     }

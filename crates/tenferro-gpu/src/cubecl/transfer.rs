@@ -1517,9 +1517,10 @@ const PUBLICATION_OP: &str = "publish_source";
 pub struct SourcePublication {
     runtime: CudaRuntime,
     value: Option<Tensor>,
-    /// Device address of the published value's storage. The owned value keeps the allocation alive, so
-    /// resolution's retention guard is not needed after the address is recorded.
+    /// Device address of the published value's storage, valid while `_binding` is held: the owned
+    /// value keeps the allocation alive, and the binding keeps it in place (#2207).
     address: u64,
+    _binding: cubecl_runtime::storage::ManagedResource<cubecl_cuda::ffi_interop::GpuResource>,
     bytes: usize,
     stream: StreamId,
     frontier: Option<CUevent>,
@@ -1854,11 +1855,12 @@ impl SourcePublication {
                 ),
             ));
         }
-        let destination_pointer = match runtime
+        // `destination_binding` keeps the destination in place until the copy is enqueued (#2207).
+        let destination_binding = match runtime
             .client()
             .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
         {
-            Ok(resource) => resource.resource().ptr,
+            Ok(resource) => resource,
             Err(error) => {
                 return Err(copy_refused(
                     self,
@@ -1866,6 +1868,7 @@ impl SourcePublication {
                 ))
             }
         };
+        let destination_pointer = destination_binding.resource().ptr;
         let source_address = self.address;
         let frontier = self.frontier;
         let event = match cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING) {
@@ -2034,9 +2037,6 @@ pub(crate) fn publish_in_stream(
         ));
     }
     let address = resource.resource().ptr;
-    // The value keeps the allocation alive, so resolution's guard is released here and only the
-    // address is retained.
-    drop(resource);
 
     // Past this point an enqueue may happen: a failure retains the package for soundness.
     let prepared = (|| -> crate::Result<CUevent> {
@@ -2071,6 +2071,7 @@ pub(crate) fn publish_in_stream(
         runtime: runtime.clone(),
         value: Some(value),
         address,
+        _binding: resource,
         bytes,
         stream,
         frontier: Some(event),

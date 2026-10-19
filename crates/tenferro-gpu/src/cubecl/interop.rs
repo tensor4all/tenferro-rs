@@ -34,6 +34,9 @@ use cubecl::frontend::Scalar;
 pub struct DeviceByteBuffer {
     handle: Option<cubecl_runtime::server::Handle>,
     ptr: *mut c_void,
+    // Keeps the allocation bound, so `ptr` stays valid while the guard lives
+    // (#2207). A forgotten guard keeps the allocation bound for good.
+    _binding: Option<cubecl_runtime::storage::ManagedResource<cubecl_cuda::ffi_interop::GpuResource>>,
 }
 
 impl fmt::Debug for DeviceByteBuffer {
@@ -51,6 +54,7 @@ impl DeviceByteBuffer {
         Self {
             handle: None,
             ptr: std::ptr::null_mut(),
+            _binding: None,
         }
     }
 
@@ -322,6 +326,7 @@ fn device_bytes_from_handle(
     Ok(DeviceByteBuffer {
         handle: Some(handle),
         ptr: cuda_device_ptr_from_addr(resource.resource().ptr, op)?,
+        _binding: Some(resource),
     })
 }
 
@@ -338,29 +343,26 @@ fn device_bytes_from_handle(
 /// resource cannot be resolved.
 pub(crate) fn offset_device_ptr<T: 'static>(
     rt: &CudaRuntime,
+    buffer: &crate::CubeclBuffer,
     prepared: dispatch::CubeclPreparedAccess,
     offset: isize,
+    require_round_trip: bool,
     op: &'static str,
 ) -> crate::Result<*mut std::ffi::c_void> {
     let offset = usize::try_from(offset).map_err(|_| {
         crate::Error::invalid_argument(op, "layout", "view offset must be nonnegative")
     })?;
-    let resource = rt
-        .client()
-        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())
-        .map_err(|err| crate::Error::backend_source(op, err))?;
+    // The root buffer's pin keeps the base address valid while the buffer
+    // lives (#2207).
+    let base = buffer.pinned_device_addr(rt.client(), prepared.into_handle(), require_round_trip, op)?;
     let offset_bytes = offset
         .checked_mul(std::mem::size_of::<T>())
         .ok_or_else(|| {
             crate::Error::invalid_argument(op, "layout", "view byte offset overflows")
         })?;
-    let addr = resource
-        .resource()
-        .ptr
-        .checked_add(offset_bytes as u64)
-        .ok_or_else(|| {
-            crate::Error::invalid_argument(op, "layout", "view device address overflows")
-        })?;
+    let addr = base.checked_add(offset_bytes as u64).ok_or_else(|| {
+        crate::Error::invalid_argument(op, "layout", "view device address overflows")
+    })?;
     cuda_device_ptr_from_addr(addr, op)
 }
 
@@ -862,7 +864,9 @@ fn fill_zero_span<T: 'static>(
     // Resolve the destination and submit pending CubeCL work in one hand-off:
     // the memset below must not overtake queued launches that may still use
     // memory this allocation reuses.
-    let base = rt.resolve_and_flush(prepared.into_handle(), FILL_ZERO_OP)?;
+    // `resolved` keeps the destination bound until the memset is enqueued (#2207).
+    let resolved = rt.resolve_and_flush(prepared.into_handle(), FILL_ZERO_OP)?;
+    let base = resolved.resource().ptr;
     let addr = base.checked_add(offset_bytes as u64).ok_or_else(|| {
         crate::Error::invalid_argument(FILL_ZERO_OP, "layout", "view device address overflows")
     })?;

@@ -238,7 +238,7 @@ fn owned_raw_vendor_writes_use_the_round_trip_path() {
     );
     for memoized in [
         "cached_device_addr",
-        "memoized_device_addr",
+        "pinned_buffer_addr",
         "typed_device_ptr",
     ] {
         assert!(
