@@ -2013,22 +2013,195 @@ pub(super) fn run_prepared(
 /// different backend state, and a prepared operation that does not support a
 /// borrowed session, all before the first launch.
 ///
-/// The GPU event run still retires (drains) before this returns, success or
-/// failure; retirement is not deferred to the caller's session lifecycle.
+/// This is the deferred run followed by one immediate finish, so both routes
+/// share one execution path. The GPU event run retires before this returns,
+/// success or failure.
 pub(super) fn run_prepared_in(
     runtime: &Runtime,
     session: &mut dyn BackendSession,
     prepared: &PreparedCompiledGraph,
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
-    validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared_in")?;
-    let inputs = resolve_input_refs(&prepared.program, inputs, prepared.bound_input_check())?;
+    let mut deferred =
+        begin_prepared_deferred(runtime, session, prepared, "Runtime::run_prepared_in")?;
+    deferred.run_prepared_deferred(prepared, inputs)?;
+    let mut runs = deferred.finish_prepared()?;
+    if runs.len() != 1 {
+        return Err(Error::runtime_state(
+            "Runtime::run_prepared_in",
+            ErrorPhase::Execution,
+            format!(
+                "the synchronous prepared route enqueued one run but finish returned {}",
+                runs.len()
+            ),
+        ));
+    }
+    runs.pop().ok_or_else(|| {
+        Error::runtime_state(
+            "Runtime::run_prepared_in",
+            ErrorPhase::Execution,
+            "the synchronous prepared route produced no output package",
+        )
+    })
+}
+
+/// Deferred prepared execution on one caller-held backend session.
+///
+/// A deferred run enqueues a prepared graph and materializes its outputs
+/// without retiring the event domains. The outputs are not valid for host or
+/// device reads until [`Self::finish_prepared`] retires all work enqueued since
+/// the last finish; the guard owns those outputs internally, so caller code
+/// cannot release their device storage before retirement.
+///
+/// The guard borrows the session and the prepared graph for its lifetime, so
+/// unrelated work cannot use that session between deferred runs. It leases the
+/// executor state once, without waiting, for the same reason. [`Drop`] retires
+/// pending work best-effort when the caller forgets to finish, but that path
+/// cannot report a device-side error; call [`Self::finish_prepared`] to observe
+/// it.
+pub struct PreparedDeferred<'a> {
+    runtime: &'a Runtime,
+    prepared: &'a PreparedCompiledGraph,
+    session: &'a mut dyn BackendSession,
+    state: Box<dyn BorrowedExecutorSessionState + 'a>,
+    event_domains: Option<ScheduledEventDomains>,
+    pending_outputs: Vec<Vec<Tensor>>,
+}
+
+impl fmt::Debug for PreparedDeferred<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedDeferred")
+            .field("pending_runs", &self.pending_outputs.len())
+            .field("has_pending_retirement", &self.event_domains.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> PreparedDeferred<'a> {
+    /// Enqueue one prepared run without its retirement barrier.
+    ///
+    /// Returns this run's index in the vector later returned by
+    /// [`Self::finish_prepared`]. `inputs` must outlive this guard; the borrow
+    /// checker enforces that because the run keeps device work reading them
+    /// until finish.
+    ///
+    /// Host-side failures return here after retiring any work already
+    /// enqueued. Device-side failures discovered by retirement return from
+    /// [`Self::finish_prepared`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same prepared-handle, input-metadata, engine, session, and
+    /// instruction-support failures as [`Runtime::run_prepared_in`]. Returns
+    /// [`crate::Error::Unsupported`] when `prepared` is not the exact graph
+    /// this guard was opened for.
+    pub fn run_prepared_deferred(
+        &mut self,
+        prepared: &PreparedCompiledGraph,
+        inputs: &'a [&'a Tensor],
+    ) -> Result<usize> {
+        let caller = "Runtime::run_prepared_deferred";
+        if !Arc::ptr_eq(&self.prepared.prepared, &prepared.prepared) {
+            return Err(Error::unsupported(
+                caller,
+                ErrorPhase::Execution,
+                "the deferred guard was opened for another prepared graph; open one guard per \
+                 prepared graph",
+            ));
+        }
+        validate_prepared_runtime(self.runtime, prepared, caller)?;
+        let inputs = resolve_input_refs(&prepared.program, inputs, prepared.bound_input_check())?;
+        let root = prepared.prepared.root();
+        let result = {
+            let mut runner = ScheduledRunner::Borrowed {
+                session: &mut *self.session,
+                extension_caches: self.state.extension_caches_mut(),
+            };
+            execute_scheduled_reads_with_domains(
+                root.staging(),
+                root.schedule(),
+                root.regions(),
+                root.region_counters(),
+                prepared.prepared.operations(),
+                &inputs,
+                &mut runner,
+                &mut self.event_domains,
+            )
+        };
+        match result {
+            Ok(outputs) => {
+                let index = self.pending_outputs.len();
+                self.pending_outputs.push(outputs);
+                Ok(index)
+            }
+            Err(error) => match self.retire_pending_event_domains() {
+                Ok(()) => Err(error),
+                Err(cleanup) => {
+                    // A failed retirement makes every retained output
+                    // unproven, not only the failed run's.
+                    self.pending_outputs.clear();
+                    Err(scheduled_execution_cleanup_error(error, cleanup))
+                }
+            },
+        }
+    }
+
+    /// Retire every deferred run since the last finish and return their outputs.
+    ///
+    /// Outputs are returned in enqueue order, one package per deferred run.
+    /// A successful return is the first point at which those tensors may be
+    /// read. A device-side retirement failure is returned here and the
+    /// unproven outputs are dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first provider retirement error, including errors reported
+    /// by the CubeCL dispatch or the CUDA stream barrier. The guard remains
+    /// usable for a later batch after the failed retirement.
+    pub fn finish_prepared(&mut self) -> Result<Vec<Vec<Tensor>>> {
+        match self.retire_pending_event_domains() {
+            Ok(()) => Ok(std::mem::take(&mut self.pending_outputs)),
+            Err(error) => {
+                self.pending_outputs.clear();
+                Err(error)
+            }
+        }
+    }
+
+    fn retire_pending_event_domains(&mut self) -> Result<()> {
+        match self.event_domains.take() {
+            Some(mut event_domains) => event_domains.drain(),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for PreparedDeferred<'_> {
+    fn drop(&mut self) {
+        if self.event_domains.is_some()
+            && let Err(error) = self.retire_pending_event_domains()
+        {
+            eprintln!(
+                "tenferro-runtime: failed to retire deferred prepared run during Drop: {error}"
+            );
+        }
+    }
+}
+
+pub(super) fn begin_prepared_deferred<'a>(
+    runtime: &'a Runtime,
+    session: &'a mut dyn BackendSession,
+    prepared: &'a PreparedCompiledGraph,
+    caller: &'static str,
+) -> Result<PreparedDeferred<'a>> {
+    validate_prepared_runtime(runtime, prepared, caller)?;
     let schedule = prepared.prepared.root().schedule();
-    let executor = single_engine_executor(schedule, "Runtime::run_prepared_in")?;
-    let mut state = executor.try_lease_session_state("Runtime::run_prepared_in")?;
+    let executor = single_engine_executor_ref(schedule, caller)?;
+    let mut state = executor.try_lease_session_state(caller)?;
     if !state.owns_session(session) {
         return Err(Error::unsupported(
-            "Runtime::run_prepared_in",
+            caller,
             ErrorPhase::Execution,
             "the borrowed session belongs to a different backend state than the prepared graph's \
              engine; pass a session of the prepared engine, or use Runtime::run_prepared outside a \
@@ -2039,21 +2212,16 @@ pub(super) fn run_prepared_in(
         prepared.prepared.root().staging(),
         prepared.prepared.operations(),
         state.extension_caches_mut(),
-        "Runtime::run_prepared_in",
+        caller,
     )?;
-    let mut runner = ScheduledRunner::Borrowed {
+    Ok(PreparedDeferred {
+        runtime,
+        prepared,
         session,
-        extension_caches: state.extension_caches_mut(),
-    };
-    execute_scheduled_reads(
-        prepared.prepared.root().staging(),
-        schedule,
-        prepared.prepared.root().regions(),
-        prepared.prepared.root().region_counters(),
-        prepared.prepared.operations(),
-        &inputs,
-        &mut runner,
-    )
+        state,
+        event_domains: None,
+        pending_outputs: Vec::new(),
+    })
 }
 
 /// The executor shared by every scheduled location, or `None` when the graph
@@ -2093,23 +2261,40 @@ fn schedule_has_transfer(schedule: &ScheduledGraph) -> bool {
         .any(|node| matches!(node, ScheduledNode::Transfer(_)))
 }
 
-/// The one executor shared by every scheduled location of `schedule`.
+/// Borrow the single executor witness of `schedule` for a caller-held session.
 ///
-/// Returns a typed error when the graph spans more than one engine, which the
-/// caller-borrowed route does not support: the caller holds one session and a
-/// transfer between engines would require a second execution authority.
-fn single_engine_executor(
-    schedule: &ScheduledGraph,
+/// A deferred guard keeps this borrow for its whole lifetime, so the executor
+/// state lease can be tied to the prepared graph the caller already holds.
+fn single_engine_executor_ref<'a>(
+    schedule: &'a ScheduledGraph,
     caller: &'static str,
-) -> Result<Arc<dyn ErasedTensorBackendExecutor>> {
-    common_scheduled_executor(schedule).ok_or_else(|| {
-        Error::unsupported(
+) -> Result<&'a Arc<dyn ErasedTensorBackendExecutor>> {
+    let first = schedule.root_location().witness().executor();
+    let same_engine = |witness: &super::snapshot::ExecutableEngineSnapshot| {
+        Arc::ptr_eq(first, witness.executor())
+    };
+    let single_engine = schedule
+        .input_locations()
+        .iter()
+        .all(|location| same_engine(location.witness()))
+        && schedule
+            .operation_locations()
+            .iter()
+            .all(|location| same_engine(location.witness()))
+        && schedule
+            .nodes()
+            .iter()
+            .all(|node| same_engine(node.event_domain_witness()));
+    if single_engine {
+        Ok(first)
+    } else {
+        Err(Error::unsupported(
             caller,
             ErrorPhase::Execution,
             "the prepared graph spans multiple engines; Runtime::run_prepared_in runs one engine on \
              a caller-borrowed session, so use Runtime::run_prepared outside a session",
-        )
-    })
+        ))
+    }
 }
 
 /// Reject any prepared instruction that cannot execute on a borrowed session.
@@ -2422,13 +2607,48 @@ fn execute_scheduled_reads(
     inputs: &[TensorRead<'_>],
     runner: &mut ScheduledRunner<'_>,
 ) -> Result<Vec<Tensor>> {
+    let mut event_domains = None;
+    let result = execute_scheduled_reads_with_domains(
+        program,
+        schedule,
+        regions,
+        region_counters,
+        operations,
+        inputs,
+        runner,
+        &mut event_domains,
+    );
+    match event_domains {
+        Some(event_domains) => drain_after_collection(result, event_domains),
+        None => result,
+    }
+}
+
+/// Execute a scheduled tensor run without retiring its event domains.
+///
+/// The caller owns `event_domains`: a deferred guard keeps and reuses one set
+/// across runs so a single finish retires them all, while the synchronous
+/// route creates one set and drains it immediately. A validation failure before
+/// any domain is created leaves `event_domains` as `None`, so the caller does
+/// not take a retirement barrier for a run that never launched.
+#[allow(clippy::too_many_arguments)]
+fn execute_scheduled_reads_with_domains(
+    program: &ExecProgram,
+    schedule: &ScheduledGraph,
+    regions: &[super::region::ElementwiseRegion],
+    region_counters: &super::region::RegionExecutionCounters,
+    operations: &[PreparedOperationPlan],
+    inputs: &[TensorRead<'_>],
+    runner: &mut ScheduledRunner<'_>,
+    event_domains: &mut Option<ScheduledEventDomains>,
+) -> Result<Vec<Tensor>> {
     validate_exec_input_count(program, inputs.len())?;
     crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
+    if event_domains.is_none() {
+        *event_domains = Some(ScheduledEventDomains::new(schedule)?);
+    }
     let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
-    let ScheduledExecution {
-        mut outputs,
-        event_domains,
-    } = execute_scheduled_slots(
+    let mut outputs = execute_scheduled_slots_into(
         program,
         schedule,
         regions,
@@ -2437,11 +2657,11 @@ fn execute_scheduled_reads(
         inputs,
         RuntimeOutputMode::Tensor,
         runner,
+        event_domains,
     )?;
-    let collection = collect_tensor_outputs_with(program, &mut outputs, |location, slot| {
+    collect_tensor_outputs_with(program, &mut outputs, |location, slot| {
         runner.materialize_slot(location.witness().executor(), slot)
-    });
-    drain_after_collection(collection, event_domains)
+    })
 }
 
 fn execute_scheduled_value_reads(
@@ -2484,6 +2704,55 @@ fn execute_scheduled_slots<'input>(
     output_mode: RuntimeOutputMode,
     runner: &mut ScheduledRunner<'_>,
 ) -> Result<ScheduledExecution<'input>> {
+    let mut event_domains = Some(ScheduledEventDomains::new(schedule)?);
+    match execute_scheduled_slots_into(
+        program,
+        schedule,
+        regions,
+        region_counters,
+        operations,
+        inputs,
+        output_mode,
+        runner,
+        &mut event_domains,
+    ) {
+        Ok(outputs) => match event_domains.take() {
+            Some(event_domains) => Ok(ScheduledExecution {
+                outputs,
+                event_domains,
+            }),
+            None => Err(Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                "scheduled execution consumed its event domains before collecting outputs",
+            )),
+        },
+        Err(error) => match event_domains.take() {
+            Some(event_domains) => drain_scheduled_error(error, event_domains),
+            None => Err(error),
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_scheduled_slots_into<'input>(
+    program: &ExecProgram,
+    schedule: &ScheduledGraph,
+    regions: &[super::region::ElementwiseRegion],
+    region_counters: &super::region::RegionExecutionCounters,
+    operations: &[PreparedOperationPlan],
+    inputs: Vec<ExecSlot<'input>>,
+    output_mode: RuntimeOutputMode,
+    runner: &mut ScheduledRunner<'_>,
+    event_domains: &mut Option<ScheduledEventDomains>,
+) -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
+    let domains = event_domains.as_mut().ok_or_else(|| {
+        Error::runtime_state(
+            "Runtime::run_compiled",
+            ErrorPhase::Execution,
+            "scheduled execution has no event-domain run to submit into",
+        )
+    })?;
     let terminal_slots = if matches!(output_mode, RuntimeOutputMode::Value) {
         crate::exec::terminal_output_slots(program)
     } else {
@@ -2494,9 +2763,9 @@ fn execute_scheduled_slots<'input>(
         .map(|_| Vec::new())
         .collect::<Vec<Vec<LocatedExecSlot<'input>>>>();
     // INVARIANT: the immutable schedule was validated during preparation;
-    // runs are declared after the value stores so unwinding drops
-    // and drains native domain work before any tensor storage is released.
-    // Driver preflight completes before input ingress or any operation launch.
+    // driver preflight completes before input ingress or any operation launch.
+    // A provider panic is caught after this body and drops the event-domain
+    // run before this frame's staged tensor storage drops.
     // Planned elementwise regions: the start node executes the whole region as
     // one fused command and the covered nodes are skipped. Regions apply to
     // tensor output mode; value mode keeps the per-instruction path.
@@ -2512,37 +2781,39 @@ fn execute_scheduled_slots<'input>(
         }
     }
 
-    let mut event_domains = ScheduledEventDomains::new(schedule)?;
-    let result = (|| {
-        crate::exec::initialize_exec_slots_in(program, inputs, &mut staged)?;
-        if schedule.input_locations().len() != program.input_slots.len() {
-            return Err(Error::runtime_state(
-                "Runtime::run_compiled",
-                ErrorPhase::Execution,
-                format!(
-                    "prepared schedule has {} input locations for {} inputs",
-                    schedule.input_locations().len(),
-                    program.input_slots.len()
-                ),
-            ));
-        }
-        for (&slot, location) in program.input_slots.iter().zip(schedule.input_locations()) {
-            let value = staged
-                .get_mut(slot)
-                .and_then(Option::take)
-                .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
-            validate_runtime_input_ingress(location, &value.as_read(), slot)?;
-            located[slot].push(LocatedExecSlot {
-                location: location.clone(),
-                value,
-            });
-        }
-        for (node_index, node) in schedule.nodes().iter().enumerate() {
-            match node {
-                ScheduledNode::Operation(operation_node) => {
-                    if let Some(&region_index) = region_starts.get(&node_index) {
-                        let region = &regions[region_index];
-                        let first_instruction = program
+    let result = std::panic::catch_unwind(AssertUnwindSafe(
+        || -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
+            (|| {
+                crate::exec::initialize_exec_slots_in(program, inputs, &mut staged)?;
+                if schedule.input_locations().len() != program.input_slots.len() {
+                    return Err(Error::runtime_state(
+                        "Runtime::run_compiled",
+                        ErrorPhase::Execution,
+                        format!(
+                            "prepared schedule has {} input locations for {} inputs",
+                            schedule.input_locations().len(),
+                            program.input_slots.len()
+                        ),
+                    ));
+                }
+                for (&slot, location) in program.input_slots.iter().zip(schedule.input_locations())
+                {
+                    let value = staged
+                        .get_mut(slot)
+                        .and_then(Option::take)
+                        .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+                    validate_runtime_input_ingress(location, &value.as_read(), slot)?;
+                    located[slot].push(LocatedExecSlot {
+                        location: location.clone(),
+                        value,
+                    });
+                }
+                for (node_index, node) in schedule.nodes().iter().enumerate() {
+                    match node {
+                        ScheduledNode::Operation(operation_node) => {
+                            if let Some(&region_index) = region_starts.get(&node_index) {
+                                let region = &regions[region_index];
+                                let first_instruction = program
                             .instructions
                             .get(region.instruction_range.start)
                             .ok_or_else(|| {
@@ -2556,60 +2827,162 @@ fn execute_scheduled_slots<'input>(
                                     ),
                                 )
                             })?;
-                        let operation = instruction_execution(schedule, first_instruction)?;
-                        if operation.location() != operation_node.location() {
-                            return Err(Error::runtime_state(
+                                let operation = instruction_execution(schedule, first_instruction)?;
+                                if operation.location() != operation_node.location() {
+                                    return Err(Error::runtime_state(
                                 "Runtime::run_prepared",
                                 ErrorPhase::Execution,
                                 "elementwise region location does not match its first prepared                                  operation"
                                     .to_string(),
                             ));
-                        }
-                        let location = operation.location().clone();
-                        let mut launch = || {
-                            for &slot in &region.input_slots {
-                                stage_slot_input(slot, &location, &mut located, &mut staged)?;
-                            }
-                            let applied = runner.execute_elementwise_fusion_slots(
-                                operation.executor(),
-                                &region.input_slots,
-                                region.instructions.len(),
-                                &region.plan,
-                                &mut staged,
-                                &region.output_slots,
-                            )?;
-                            if applied {
-                                region_counters.record_fused();
-                                validate_region_outputs(region, &location, &staged)?;
-                                return retain_region_results(
-                                    region,
-                                    &location,
-                                    &mut located,
-                                    &mut staged,
-                                );
-                            }
-                            // The backend rejected the fusion: execute the
-                            // region's instructions one by one.
-                            region_counters.record_fallback();
-                            for (offset, instruction) in region.instructions.iter().enumerate() {
-                                let instruction_index = region.instruction_range.start + offset;
-                                let member = instruction_execution(schedule, instruction)?;
-                                if member.location() != operation_node.location() {
-                                    return Err(Error::runtime_state(
+                                }
+                                let location = operation.location().clone();
+                                let mut launch = || {
+                                    for &slot in &region.input_slots {
+                                        stage_slot_input(
+                                            slot,
+                                            &location,
+                                            &mut located,
+                                            &mut staged,
+                                        )?;
+                                    }
+                                    let applied = runner.execute_elementwise_fusion_slots(
+                                        operation.executor(),
+                                        &region.input_slots,
+                                        region.instructions.len(),
+                                        &region.plan,
+                                        &mut staged,
+                                        &region.output_slots,
+                                    )?;
+                                    if applied {
+                                        region_counters.record_fused();
+                                        validate_region_outputs(region, &location, &staged)?;
+                                        return retain_region_results(
+                                            region,
+                                            &location,
+                                            &mut located,
+                                            &mut staged,
+                                        );
+                                    }
+                                    // The backend rejected the fusion: execute the
+                                    // region's instructions one by one.
+                                    region_counters.record_fallback();
+                                    for (offset, instruction) in
+                                        region.instructions.iter().enumerate()
+                                    {
+                                        let instruction_index =
+                                            region.instruction_range.start + offset;
+                                        let member = instruction_execution(schedule, instruction)?;
+                                        if member.location() != operation_node.location() {
+                                            return Err(Error::runtime_state(
                                         "Runtime::run_prepared",
                                         ErrorPhase::Execution,
                                         "elementwise region member location does not match the                                          region location"
                                             .to_string(),
                                     ));
+                                        }
+                                        stage_instruction_inputs(
+                                            instruction,
+                                            member.location(),
+                                            &mut located,
+                                            &mut staged,
+                                        )?;
+                                        runner.execute_slot_instruction(
+                                            member.executor(),
+                                            instruction_index,
+                                            instruction,
+                                            operations,
+                                            &mut staged,
+                                            output_mode,
+                                            &terminal_slots,
+                                        )?;
+                                        validate_instruction_outputs(
+                                            instruction_index,
+                                            instruction,
+                                            member.location(),
+                                            &staged,
+                                        )?;
+                                        retain_instruction_results(
+                                            instruction,
+                                            member.location(),
+                                            &mut located,
+                                            &mut staged,
+                                        )?;
+                                    }
+                                    Ok(())
+                                };
+                                domains.enqueue(node_index, node, &mut launch)?;
+                                region_counters.record_submission();
+                                // Every covered node's completion resolves to the region's
+                                // completion token, which was recorded after the region's
+                                // last command.
+                                let completion =
+                                    EventDependency::from_completion(node.completion());
+                                if let Some(token) = domains.completions.get(&completion).cloned() {
+                                    for &covered in &region.node_indices {
+                                        if covered == node_index {
+                                            continue;
+                                        }
+                                        let covered_node = schedule.nodes().get(covered).ok_or_else(|| {
+                                    Error::runtime_state(
+                                        "Runtime::run_prepared",
+                                        ErrorPhase::Execution,
+                                        format!(
+                                            "elementwise region references schedule node {covered},                                              but the schedule has {} nodes",
+                                            schedule.nodes().len()
+                                        ),
+                                    )
+                                })?;
+                                        domains.completions.insert(
+                                            EventDependency::from_completion(
+                                                covered_node.completion(),
+                                            ),
+                                            Arc::clone(&token),
+                                        );
+                                    }
+                                }
+                                continue;
+                            }
+                            if region_covered.contains(&node_index) {
+                                // Executed as part of its region.
+                                continue;
+                            }
+                            let mut launch = || {
+                                let instruction_index = operation_node.instruction_index();
+                                let instruction = program
+                                    .instructions
+                                    .get(instruction_index)
+                                    .ok_or_else(|| {
+                                        Error::runtime_state(
+                                            "Runtime::run_compiled",
+                                            ErrorPhase::Execution,
+                                            format!(
+                                                "scheduled operation references instruction \
+                                         {instruction_index}, but the execution program has {} \
+                                         instructions",
+                                                program.instructions.len()
+                                            ),
+                                        )
+                                    })?;
+                                let operation = instruction_execution(schedule, instruction)?;
+                                if operation.location() != operation_node.location() {
+                                    return Err(Error::runtime_state(
+                                        "Runtime::run_compiled",
+                                        ErrorPhase::Execution,
+                                        format!(
+                                    "scheduled instruction {instruction_index} location does not \
+                                     match its prepared executor"
+                                ),
+                                    ));
                                 }
                                 stage_instruction_inputs(
                                     instruction,
-                                    member.location(),
+                                    operation.location(),
                                     &mut located,
                                     &mut staged,
                                 )?;
                                 runner.execute_slot_instruction(
-                                    member.executor(),
+                                    operation.executor(),
                                     instruction_index,
                                     instruction,
                                     operations,
@@ -2620,147 +2993,54 @@ fn execute_scheduled_slots<'input>(
                                 validate_instruction_outputs(
                                     instruction_index,
                                     instruction,
-                                    member.location(),
+                                    operation.location(),
                                     &staged,
                                 )?;
                                 retain_instruction_results(
                                     instruction,
-                                    member.location(),
+                                    operation.location(),
                                     &mut located,
                                     &mut staged,
-                                )?;
-                            }
-                            Ok(())
-                        };
-                        event_domains.enqueue(node_index, node, &mut launch)?;
-                        region_counters.record_submission();
-                        // Every covered node's completion resolves to the region's
-                        // completion token, which was recorded after the region's
-                        // last command.
-                        let completion = EventDependency::from_completion(node.completion());
-                        if let Some(token) = event_domains.completions.get(&completion).cloned() {
-                            for &covered in &region.node_indices {
-                                if covered == node_index {
-                                    continue;
-                                }
-                                let covered_node = schedule.nodes().get(covered).ok_or_else(|| {
-                                    Error::runtime_state(
-                                        "Runtime::run_prepared",
-                                        ErrorPhase::Execution,
-                                        format!(
-                                            "elementwise region references schedule node {covered},                                              but the schedule has {} nodes",
-                                            schedule.nodes().len()
-                                        ),
-                                    )
-                                })?;
-                                event_domains.completions.insert(
-                                    EventDependency::from_completion(covered_node.completion()),
-                                    Arc::clone(&token),
-                                );
-                            }
-                        }
-                        continue;
-                    }
-                    if region_covered.contains(&node_index) {
-                        // Executed as part of its region.
-                        continue;
-                    }
-                    let mut launch = || {
-                        let instruction_index = operation_node.instruction_index();
-                        let instruction =
-                            program.instructions.get(instruction_index).ok_or_else(|| {
-                                Error::runtime_state(
-                                    "Runtime::run_compiled",
-                                    ErrorPhase::Execution,
-                                    format!(
-                                        "scheduled operation references instruction \
-                                         {instruction_index}, but the execution program has {} \
-                                         instructions",
-                                        program.instructions.len()
-                                    ),
                                 )
-                            })?;
-                        let operation = instruction_execution(schedule, instruction)?;
-                        if operation.location() != operation_node.location() {
-                            return Err(Error::runtime_state(
+                            };
+                            domains.enqueue(node_index, node, &mut launch)?;
+                            region_counters.record_submission();
+                        }
+                        ScheduledNode::Transfer(transfer) => {
+                            let mut launch = || execute_scheduled_transfer(transfer, &mut located);
+                            domains.enqueue(node_index, node, &mut launch)?;
+                            region_counters.record_submission();
+                        }
+                        ScheduledNode::Collective(_) => {
+                            return Err(Error::runtime_state_source(
                                 "Runtime::run_compiled",
                                 ErrorPhase::Execution,
-                                format!(
-                                    "scheduled instruction {instruction_index} location does not \
-                                     match its prepared executor"
-                                ),
+                                UnsupportedScheduledNodeError {
+                                    node_index,
+                                    node_kind: ScheduledNodeKind::Collective,
+                                },
                             ));
                         }
-                        stage_instruction_inputs(
-                            instruction,
-                            operation.location(),
-                            &mut located,
-                            &mut staged,
-                        )?;
-                        runner.execute_slot_instruction(
-                            operation.executor(),
-                            instruction_index,
-                            instruction,
-                            operations,
-                            &mut staged,
-                            output_mode,
-                            &terminal_slots,
-                        )?;
-                        validate_instruction_outputs(
-                            instruction_index,
-                            instruction,
-                            operation.location(),
-                            &staged,
-                        )?;
-                        retain_instruction_results(
-                            instruction,
-                            operation.location(),
-                            &mut located,
-                            &mut staged,
-                        )
-                    };
-                    event_domains.enqueue(node_index, node, &mut launch)?;
-                    region_counters.record_submission();
+                        ScheduledNode::Barrier(_) => {
+                            let mut launch = || Ok(());
+                            domains.enqueue(node_index, node, &mut launch)?;
+                            region_counters.record_submission();
+                        }
+                    }
                 }
-                ScheduledNode::Transfer(transfer) => {
-                    let mut launch = || execute_scheduled_transfer(transfer, &mut located);
-                    event_domains.enqueue(node_index, node, &mut launch)?;
-                    region_counters.record_submission();
-                }
-                ScheduledNode::Collective(_) => {
-                    return Err(Error::runtime_state_source(
-                        "Runtime::run_compiled",
-                        ErrorPhase::Execution,
-                        UnsupportedScheduledNodeError {
-                            node_index,
-                            node_kind: ScheduledNodeKind::Collective,
-                        },
-                    ));
-                }
-                ScheduledNode::Barrier(_) => {
-                    let mut launch = || Ok(());
-                    event_domains.enqueue(node_index, node, &mut launch)?;
-                    region_counters.record_submission();
-                }
-            }
-        }
-        Ok(())
-    })();
-    match result {
-        Ok(()) => match collect_located_outputs(program, &mut located) {
-            Ok(outputs) => Ok(ScheduledExecution {
-                outputs,
-                event_domains,
-            }),
-            Err(error) => {
-                staged.clear();
-                drain_scheduled_error(error, event_domains)
-            }
+                Ok(())
+            })()?;
+            collect_located_outputs(program, &mut located)
         },
-        Err(error) => {
-            staged.clear();
-            located.clear();
-            drain_scheduled_error(error, event_domains)
+    ));
+    match result {
+        Ok(outputs) => outputs,
+        Err(payload) => {
+            // A provider launch may unwind through the scheduler. Drop the
+            // event-domain run before this frame's staged tensor storage drops,
+            // preserving the same cleanup order as the synchronous wrapper.
+            event_domains.take();
+            std::panic::resume_unwind(payload)
         }
     }
 }

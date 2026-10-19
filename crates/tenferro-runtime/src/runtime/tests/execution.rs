@@ -1004,7 +1004,10 @@ fn host_cpu_ingress(storage: &StorageClass) -> InputIngressContract {
     )
 }
 
-fn counting_engine_registration(host: &CountingSessionHost) -> EngineRegistration {
+fn counting_engine_registration_with_driver(
+    host: &CountingSessionHost,
+    driver: Arc<dyn EventDomainDriver>,
+) -> EngineRegistration {
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).expect("cpu storage class");
     EngineRegistration::executable(
         ProviderExecutableBinding::new(
@@ -1016,7 +1019,7 @@ fn counting_engine_registration(host: &CountingSessionHost) -> EngineRegistratio
                 test_provider_device_identity("session-counting"),
                 metadata_only_capabilities(),
                 host.clone(),
-                Arc::new(ImmediateEventDomainDriver::new()),
+                driver,
                 host_cpu_ingress(&storage),
                 None,
             ),
@@ -1025,12 +1028,107 @@ fn counting_engine_registration(host: &CountingSessionHost) -> EngineRegistratio
     )
 }
 
+fn counting_engine_registration(host: &CountingSessionHost) -> EngineRegistration {
+    counting_engine_registration_with_driver(host, Arc::new(ImmediateEventDomainDriver::new()))
+}
+
 fn runtime_with_counting_host(host: &CountingSessionHost) -> Runtime {
     let mut builder = Runtime::builder();
     builder
         .register_engine(counting_engine_registration(host))
         .expect("register counting engine");
     builder.build().expect("counting runtime")
+}
+
+#[derive(Debug)]
+struct FailingDrainDriver {
+    inner: ImmediateEventDomainDriver,
+}
+
+impl FailingDrainDriver {
+    fn new() -> Self {
+        Self {
+            inner: ImmediateEventDomainDriver::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FailingDrainRun {
+    inner: Box<dyn EventDomainRun>,
+}
+
+impl EventDomainRun for FailingDrainRun {
+    fn domain(&self) -> EventDomainId {
+        self.inner.domain()
+    }
+
+    fn enqueue(
+        &mut self,
+        dependencies: &[Arc<dyn EventToken>],
+        launch: &mut dyn FnMut() -> crate::Result<()>,
+    ) -> crate::Result<Arc<dyn EventToken>> {
+        self.inner.enqueue(dependencies, launch)
+    }
+
+    fn drain(&mut self) -> crate::Result<()> {
+        Err(Error::runtime_state(
+            "test event domain",
+            ErrorPhase::Execution,
+            "injected device-side retirement failure",
+        ))
+    }
+}
+
+impl EventDomainDriver for FailingDrainDriver {
+    fn begin_run(&self, domain: EventDomainId) -> crate::Result<Box<dyn EventDomainRun>> {
+        Ok(Box::new(FailingDrainRun {
+            inner: self.inner.begin_run(domain)?,
+        }))
+    }
+}
+
+#[test]
+fn prepared_deferred_finish_returns_the_device_side_retirement_error() {
+    let mut host = CountingSessionHost::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(counting_engine_registration_with_driver(
+            &host,
+            Arc::new(FailingDrainDriver::new()),
+        ))
+        .expect("register failing driver engine");
+    let runtime = builder.build().expect("runtime");
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("input");
+    let y = (&x + &x).expect("add");
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .expect("compile");
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("input tensor");
+    let prepared = runtime
+        .prepare_compiled(&program, &[&input])
+        .expect("prepare");
+    let inputs: [&Tensor; 1] = [&input];
+
+    host.with_backend_session(|session| {
+        let mut deferred = runtime
+            .begin_prepared_deferred(session, &prepared)
+            .expect("deferred guard");
+        deferred
+            .run_prepared_deferred(&prepared, &inputs)
+            .expect("the deferred run itself only enqueues");
+        let error = deferred
+            .finish_prepared()
+            .expect_err("retirement must report the injected device-side failure");
+        assert!(
+            error
+                .to_string()
+                .contains("injected device-side retirement failure"),
+            "unexpected finish error: {error}"
+        );
+    })
+    .expect("backend session entry");
 }
 
 /// Several scheduled operations of an eligible graph share one session entry.

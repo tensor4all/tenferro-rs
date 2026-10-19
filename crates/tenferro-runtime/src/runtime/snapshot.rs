@@ -1163,6 +1163,69 @@ impl Runtime {
         super::execution::run_prepared_in(self, session, prepared, inputs)
     }
 
+    /// Open a deferred prepared-execution guard on a caller-held session.
+    ///
+    /// The guard borrows `session` and `prepared` for its lifetime, leases the
+    /// prepared engine's executor state once without waiting, and enforces the
+    /// same single-engine and session-compatibility preflight as
+    /// [`Self::run_prepared_in`]. Calls to
+    /// [`super::execution::PreparedDeferred::run_prepared_deferred`] enqueue
+    /// runs without the event-domain retirement barrier; one
+    /// [`super::execution::PreparedDeferred::finish_prepared`] retires all work
+    /// enqueued since the previous finish. The deferred outputs are valid only
+    /// after that finish.
+    ///
+    /// Use this for a batch of prepared runs whose device completion is only
+    /// needed once, such as a benchmark sampling loop or batched inference.
+    /// Keep using [`Self::run_prepared_in`] when each call must return
+    /// retired outputs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{runtime_engine_registration, CpuBackend};
+    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut backend = CpuBackend::new();
+    /// let mut builder = Runtime::builder();
+    /// builder.register_engine(runtime_engine_registration(&backend)?)?;
+    /// let runtime = builder.build()?;
+    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let graph = GraphCompiler::new().compile(&x)?;
+    /// let prepared = runtime.prepare_compiled(&graph, &[])?;
+    /// let inputs: [&tenferro_tensor::Tensor; 0] = [];
+    /// let batches = backend.with_backend_session(|session| {
+    ///     let mut deferred = runtime.begin_prepared_deferred(session, &prepared)?;
+    ///     deferred.run_prepared_deferred(&prepared, &inputs)?;
+    ///     deferred.run_prepared_deferred(&prepared, &inputs)?;
+    ///     deferred.finish_prepared()
+    /// })??;
+    /// assert_eq!(batches.len(), 2);
+    /// assert_eq!(batches[1][0].as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the same prepared-handle, engine, session, and
+    /// instruction-support failures as [`Self::run_prepared_in`], before any
+    /// work is enqueued.
+    pub fn begin_prepared_deferred<'a>(
+        &'a self,
+        session: &'a mut dyn BackendSession,
+        prepared: &'a super::execution::PreparedCompiledGraph,
+    ) -> crate::Result<super::execution::PreparedDeferred<'a>> {
+        super::execution::begin_prepared_deferred(
+            self,
+            session,
+            prepared,
+            "Runtime::begin_prepared_deferred",
+        )
+    }
+
     /// Submit a compiled graph for asynchronous runtime-owned execution.
     ///
     /// Dropping the returned handle detaches the observer without blocking.

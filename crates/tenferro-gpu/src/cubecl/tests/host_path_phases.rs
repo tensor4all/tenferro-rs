@@ -41,6 +41,9 @@ use super::super::{batched_gemm, dispatch, CudaBackend, CudaDeviceId};
 use super::{cpu_backend, tensor_f64};
 
 const CALLS: usize = 400;
+/// Calls in one deferred batch. One finish retires the whole batch, so the
+/// per-call figure amortizes one barrier over this many prepared calls.
+const DEFERRED_CALLS: usize = 64;
 const WARMUPS: usize = 3;
 const BATCH: usize = 16;
 const EXTENT: usize = 32;
@@ -286,6 +289,34 @@ fn host_path_phases() {
         std::hint::black_box(out);
     });
 
+    // Deferred arm: one held-session callback and one finish per 64 prepared
+    // calls, reported per call so it is comparable with the synchronous arm
+    // above. The harness owns the outputs inside the guard until finish, so
+    // this arm does not download or inspect them inside the timed region.
+    let (line_deferred, t_deferred) = {
+        let samples = measure(|| {
+            let outputs = session
+                .with_session(|view| {
+                    let inputs: [&Tensor; 0] = [];
+                    let mut deferred = runtime.begin_prepared_deferred(view, &prepared)?;
+                    for _ in 0..DEFERRED_CALLS {
+                        deferred.run_prepared_deferred(&prepared, &inputs)?;
+                    }
+                    deferred.finish_prepared()
+                })
+                .expect("held callback")
+                .expect("deferred prepared runs");
+            std::hint::black_box(outputs);
+        });
+        summarize(
+            "prepared deferred x64 + finish (per call)",
+            samples
+                .into_iter()
+                .map(|sample| sample / DEFERRED_CALLS as u32)
+                .collect(),
+        )
+    };
+
     // Timed arms.
     let (line_full, t_full) = summarize(
         "prepared run_prepared_in (harness)",
@@ -399,6 +430,7 @@ fn host_path_phases() {
     println!("\n=== whole-arm timings, 16 x 32x32 f64 batched matmul, {CALLS} calls ===");
     for line in [
         line_full,
+        line_deferred,
         line_entry,
         line_sync,
         line_owned,
@@ -418,6 +450,10 @@ fn host_path_phases() {
     // retirement), so none of these is a phase attribution.
     println!("\nwhole-arm deltas (not phase attribution):");
     println!("  held-session entry arm: {t_entry:.3} us");
+    println!(
+        "  deferred per call - synchronous prepared call: {:.3} us",
+        t_deferred - t_full
+    );
     println!(
         "  prepared call - (cuBLAS enqueue arm + synchronize): {:.3} us",
         t_full - t_enqueue_sync

@@ -79,6 +79,41 @@ that does not support a borrowed session, each with a typed error that names `Ru
 as the alternative. The scoped form `with_backend_session(|view| runtime.run_prepared_in(view, ...))`
 works on CPU and CUDA; the eager/AD adapter is still not part of this route.
 
+### Deferred completion for a batch of prepared runs
+
+When a loop runs the same prepared graph several times and only needs completion
+before reading the batch's results, defer retirement instead of paying one stream
+barrier per call:
+
+```rust
+let mut session = backend.open_session()?;
+let batches = session.with_session(|view| {
+    let mut deferred = runtime.begin_prepared_deferred(view, &prepared)?;
+    let inputs: [&Tensor; 1] = [&input];
+    for _ in 0..64 {
+        deferred.run_prepared_deferred(&prepared, &inputs)?;
+    }
+    deferred.finish_prepared()
+})??;
+// Every tensor in `batches` is now valid; `batches[i]` is run i's output package.
+```
+
+`run_prepared_deferred` enqueues a run and returns its index without the
+retirement barrier. `finish_prepared` retires all runs since the previous finish
+(one dispatch fence plus one stream barrier for a coalesced single-domain graph)
+and returns their outputs in enqueue order. The outputs are **not** valid before
+`finish_prepared`; the guard owns them internally, and the inputs it borrows must
+outlive the guard, so neither can be released while device work is pending. The
+guard also borrows the session and holds the executor-state lease, so unrelated
+work cannot use that session between deferred runs. A device-side retirement
+failure is returned by `finish_prepared`; dropping an unfinished guard retires
+best-effort and cannot report an error. Host-side validation failures still come
+from the deferred call itself.
+
+Use `run_prepared_in` when each individual call must return retired outputs, or
+when a graph spans more than one engine; the deferred guard supports the same
+single-engine graphs as the caller-borrowed synchronous route.
+
 ## Rules the session keeps
 
 - **One owner, one thread.** The session is `!Send + !Sync` and captures the logical CubeCL stream of
