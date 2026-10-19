@@ -191,6 +191,9 @@ gpu	tenferro-gpu	cubecl::tests::runtime_tests::cuda_event_domain_keeps_per_node_
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_coalesced_error_retires_before_returning
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_identity_run_retires_collection_before_returning
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_in_held_single_domain_run_coalesces_scheduler_events
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_deferred_batch_retires_once_and_matches_synchronous_runs
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_deferred_guard_drop_retires_pending_work
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_deferred_interleaves_cubecl_and_vendor_nodes
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_run_dispatches_cubecl_launches_before_recording_retirement
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_single_domain_run_coalesces_scheduler_events
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_backend_add_matches_cpu_reference
