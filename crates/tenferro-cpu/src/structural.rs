@@ -506,12 +506,12 @@ pub(crate) fn broadcast_in_dim_read_with_pool(
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_tensor::{DType, Tensor, TensorStructural};
 ///
-/// let mut backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-/// let y = backend.convert(&x, DType::F64).unwrap();
+/// let y = engine.convert(&x, DType::F64).unwrap();
 /// assert_eq!(y.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 /// ```
 ///

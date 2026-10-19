@@ -71,7 +71,7 @@ fn operation_from_own_pool_worker_is_rejected() {
 fn panicking_operation_breaks_the_engine() {
     let mut engine = CpuEngine::serial();
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = engine.with_linalg_pool(|_, buffers| {
+        let _ = engine.with_linalg_pool::<()>(|_, buffers| {
             let _scratch = <f64 as crate::buffer_pool::PoolScalar>::pool_acquire_zeroed(buffers, 8);
             panic!("exercise the broken flag");
         });

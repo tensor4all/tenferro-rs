@@ -1,5 +1,4 @@
 use super::*;
-use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::TensorRead;
 
 #[test]
@@ -299,9 +298,8 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
         limits: vec![4, 3],
         strides: vec![2, 2],
     };
-    let mut backend = CpuBackend::new();
-    let sliced = backend
-        .with_backend_session(|__s| __s.slice(&input, &config))
+    let mut backend = crate::CpuEngine::serial();
+    let sliced = crate::test_support::on_engine(&mut backend, |__s| __s.slice(&input, &config))
         .unwrap()
         .unwrap();
     assert_eq!(sliced.shape(), &[2, 2]);
@@ -319,8 +317,7 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
     let c = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 1], vec![5.0, 6.0]).unwrap(),
     );
-    let concatenated = backend
-        .with_backend_session(|__s| __s.concatenate(&[&a, &b, &c], 1))
+    let concatenated = crate::test_support::on_engine(&mut backend, |__s| __s.concatenate(&[&a, &b, &c], 1))
         .unwrap()
         .unwrap();
     assert_eq!(concatenated.shape(), &[2, 3]);
@@ -328,8 +325,7 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
     assert_eq!(get_f64(&concatenated, &[1, 1]), 4.0);
     assert_eq!(get_f64(&concatenated, &[0, 2]), 5.0);
 
-    let reversed = backend
-        .with_backend_session(|__s| __s.reverse(&input, &[0, 1]))
+    let reversed = crate::test_support::on_engine(&mut backend, |__s| __s.reverse(&input, &[0, 1]))
         .unwrap()
         .unwrap();
     assert_eq!(reversed.shape(), &[4, 3]);
@@ -372,7 +368,7 @@ fn test_structural_convert_rejects_lossy_dtype_projection() {
 
 #[test]
 fn test_backend_cast_supports_real_complex_and_precision_changes() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let f32_input = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![2], vec![1.25_f32, -2.5_f32]).unwrap(),
     );
@@ -426,8 +422,7 @@ fn test_backend_cast_supports_real_complex_and_precision_changes() {
     ];
 
     for (input, to) in cases {
-        let output = backend
-            .with_backend_session(|__s| __s.cast(input, to))
+        let output = crate::test_support::on_engine(&mut backend, |__s| __s.cast(input, to))
             .unwrap()
             .unwrap();
         assert_eq!(output.shape(), &[2]);
@@ -516,7 +511,7 @@ fn test_backend_cast_supports_real_complex_and_precision_changes() {
 
 #[test]
 fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
     let f64_bad = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(
@@ -530,8 +525,7 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
         )
         .unwrap(),
     );
-    let err = backend
-        .with_backend_session(|__s| __s.cast(&f64_bad, DType::I32))
+    let err = crate::test_support::on_engine(&mut backend, |__s| __s.cast(&f64_bad, DType::I32))
         .unwrap()
         .unwrap_err();
     assert!(matches!(
@@ -548,8 +542,7 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
     let f32_bad = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![1], vec![i64::MAX as f32]).unwrap(),
     );
-    let err = backend
-        .with_backend_session(|__s| __s.cast(&f32_bad, DType::I64))
+    let err = crate::test_support::on_engine(&mut backend, |__s| __s.cast(&f32_bad, DType::I64))
         .unwrap()
         .unwrap_err();
     assert!(matches!(
@@ -563,8 +556,7 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
     let c64_bad = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(vec![1], vec![Complex64::new(f64::INFINITY, 0.0)]).unwrap(),
     );
-    let err = backend
-        .with_backend_session(|__s| __s.cast(&c64_bad, DType::I64))
+    let err = crate::test_support::on_engine(&mut backend, |__s| __s.cast(&c64_bad, DType::I64))
         .unwrap()
         .unwrap_err();
     assert!(matches!(
@@ -578,18 +570,16 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
 
 #[test]
 fn test_cpu_supports_i32_and_bool_structural_paths() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
     let i32_tensor = Tensor::from_vec_col_major(vec![2], vec![-1_i32, 0]).unwrap();
-    let i32_as_bool = backend
-        .with_backend_session(|__s| __s.cast(&i32_tensor, DType::Bool))
+    let i32_as_bool = crate::test_support::on_engine(&mut backend, |__s| __s.cast(&i32_tensor, DType::Bool))
         .unwrap()
         .unwrap();
     assert_eq!(i32_as_bool.as_slice::<bool>().unwrap(), &[true, false]);
 
     let bool_tensor = Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap();
-    let bool_as_i64 = backend
-        .with_backend_session(|__s| __s.convert(&bool_tensor, DType::I64))
+    let bool_as_i64 = crate::test_support::on_engine(&mut backend, |__s| __s.convert(&bool_tensor, DType::I64))
         .unwrap()
         .unwrap();
     assert_eq!(bool_as_i64.as_slice::<i64>().unwrap(), &[1, 0]);
@@ -648,30 +638,30 @@ fn test_cpu_supports_i32_and_bool_structural_paths() {
 
 #[test]
 fn test_backend_default_and_buffer_pool_len() {
-    let backend = CpuBackend::default();
+    let backend = crate::CpuEngine::serial();
     assert!(backend.num_threads() >= 1);
-    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
+    assert_eq!(backend.buffer_pool_len(), 0);
 }
 
 #[test]
 fn test_backend_buffer_pool_controls_report_and_update_limits() {
-    let ctx = Arc::new(CpuContext::with_threads(1).unwrap());
-    let mut backend = CpuBackend::from_context_with_buffer_pool_limit(ctx, 64);
+    let mut backend = CpuEngine::serial();
+    backend.set_buffer_pool_limit_bytes(64);
 
     assert_eq!(backend.num_threads(), 1);
     assert_eq!(backend.buffer_pool_limit_bytes(), 64);
-    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
-    let stats = backend.buffer_pool_stats().unwrap();
+    assert_eq!(backend.buffer_pool_len(), 0);
+    let stats = backend.buffer_pool_stats();
     assert_eq!(stats.buffers, 0);
     assert_eq!(stats.capacity_bytes, 0);
-    let cache_stats = backend.buffer_pool_cache_stats().unwrap();
+    let cache_stats = backend.buffer_pool_cache_stats();
     assert_eq!(cache_stats.entries, 0);
     assert_eq!(cache_stats.retained_bytes, 0);
 
-    backend.set_buffer_pool_limit_bytes(0).unwrap();
+    backend.set_buffer_pool_limit_bytes(0);
     assert_eq!(backend.buffer_pool_limit_bytes(), 0);
-    backend.reset_buffer_pool().unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
+    backend.reset_buffer_pool();
+    assert_eq!(backend.buffer_pool_len(), 0);
 }
 
 #[test]
@@ -689,10 +679,9 @@ fn test_backend_mul_neg_conj_dispatch() {
         )
         .unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
-    let prod = backend
-        .with_backend_session(|__s| {
+    let prod = crate::test_support::on_engine(&mut backend, |__s| {
             __s.mul_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
         })
         .unwrap()
@@ -700,15 +689,13 @@ fn test_backend_mul_neg_conj_dispatch() {
     assert_eq!(get_f64(&prod, &[0]), 3.0);
     assert_eq!(get_f64(&prod, &[1]), -8.0);
 
-    let negated = backend
-        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&a)))
+    let negated = crate::test_support::on_engine(&mut backend, |__s| __s.neg_read(TensorRead::from_tensor(&a)))
         .unwrap()
         .unwrap();
     assert_eq!(get_f64(&negated, &[0]), -1.0);
     assert_eq!(get_f64(&negated, &[1]), 2.0);
 
-    let conjugated = backend
-        .with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(&c)))
+    let conjugated = crate::test_support::on_engine(&mut backend, |__s| __s.conj_read(TensorRead::from_tensor(&c)))
         .unwrap()
         .unwrap();
     assert_c64_close(get_c64(&conjugated, &[0]), Complex64::new(1.0, -2.0));
@@ -717,15 +704,14 @@ fn test_backend_mul_neg_conj_dispatch() {
 
 #[test]
 fn test_backend_structural_ops_dispatch() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let a = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
     );
 
     let scalar =
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![5.0]).unwrap());
-    let broadcast = backend
-        .with_backend_session(|__s| {
+    let broadcast = crate::test_support::on_engine(&mut backend, |__s| {
             __s.broadcast_in_dim_read(TensorRead::from_tensor(&scalar), &[2, 2], &[])
         })
         .unwrap()
@@ -734,8 +720,7 @@ fn test_backend_structural_ops_dispatch() {
     assert_eq!(get_f64(&broadcast, &[0, 0]), 5.0);
     assert_eq!(get_f64(&broadcast, &[1, 1]), 5.0);
 
-    let diag = backend
-        .with_backend_session(|__s| __s.extract_diagonal(&a, 0, 1))
+    let diag = crate::test_support::on_engine(&mut backend, |__s| __s.extract_diagonal(&a, 0, 1))
         .unwrap()
         .unwrap();
     assert_eq!(diag.shape(), &[2]);
@@ -745,30 +730,26 @@ fn test_backend_structural_ops_dispatch() {
     let d = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![10.0, 20.0]).unwrap(),
     );
-    let embedded = backend
-        .with_backend_session(|__s| __s.embed_diagonal(&d, 0, 1))
+    let embedded = crate::test_support::on_engine(&mut backend, |__s| __s.embed_diagonal(&d, 0, 1))
         .unwrap()
         .unwrap();
     assert_eq!(embedded.shape(), &[2, 2]);
     assert_eq!(get_f64(&embedded, &[0, 0]), 10.0);
     assert_eq!(get_f64(&embedded, &[1, 1]), 20.0);
 
-    let tril_result = backend
-        .with_backend_session(|__s| __s.tril(&a, 0))
+    let tril_result = crate::test_support::on_engine(&mut backend, |__s| __s.tril(&a, 0))
         .unwrap()
         .unwrap();
     assert_eq!(tril_result.shape(), &[2, 2]);
     assert_eq!(get_f64(&tril_result, &[0, 1]), 0.0);
 
-    let triu_result = backend
-        .with_backend_session(|__s| __s.triu(&a, 0))
+    let triu_result = crate::test_support::on_engine(&mut backend, |__s| __s.triu(&a, 0))
         .unwrap()
         .unwrap();
     assert_eq!(triu_result.shape(), &[2, 2]);
     assert_eq!(get_f64(&triu_result, &[1, 0]), 0.0);
 
-    let summed = backend
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&a), &[0]))
+    let summed = crate::test_support::on_engine(&mut backend, |__s| __s.reduce_sum_read(TensorRead::from_tensor(&a), &[0]))
         .unwrap()
         .unwrap();
     assert_eq!(summed.shape(), &[2]);
@@ -778,7 +759,7 @@ fn test_backend_structural_ops_dispatch() {
 
 #[test]
 fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let config = DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),
@@ -792,8 +773,7 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
     let b_f32 = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0f32, 4.0]).unwrap(),
     );
-    let out_f32 = backend
-        .with_backend_session(|__s| {
+    let out_f32 = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&a_f32),
                 TensorRead::from_tensor(&b_f32),
@@ -818,8 +798,7 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
         )
         .unwrap(),
     );
-    let out_c32 = backend
-        .with_backend_session(|__s| {
+    let out_c32 = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&a_c32),
                 TensorRead::from_tensor(&b_c32),
@@ -836,8 +815,7 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
     let f32_t = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap(),
     );
-    let err = backend
-        .with_backend_session(|__s| {
+    let err = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&f64_t),
                 TensorRead::from_tensor(&f32_t),
@@ -857,14 +835,13 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
 
 #[test]
 fn test_backend_gather_scatter_dynamic_slice_dispatch() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
     let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
     );
     let start_indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]).unwrap();
-    let gathered = backend
-        .with_backend_session(|__s| __s.gather(&operand, &start_indices, &simple_gather_config()))
+    let gathered = crate::test_support::on_engine(&mut backend, |__s| __s.gather(&operand, &start_indices, &simple_gather_config()))
         .unwrap()
         .unwrap();
     assert_eq!(gathered.shape(), &[3]);
@@ -877,8 +854,7 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
     let updates = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![3], vec![5.0, 6.0, 7.0]).unwrap(),
     );
-    let scattered = backend
-        .with_backend_session(|__s| {
+    let scattered = crate::test_support::on_engine(&mut backend, |__s| {
             __s.scatter(
                 &operand,
                 &scatter_indices,
@@ -903,8 +879,7 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
         .unwrap(),
     );
     let starts = Tensor::from_vec_col_major(vec![2], vec![2_i64, 3]).unwrap();
-    let ds = backend
-        .with_backend_session(|__s| __s.dynamic_slice(&input, &starts, &[2, 2]))
+    let ds = crate::test_support::on_engine(&mut backend, |__s| __s.dynamic_slice(&input, &starts, &[2, 2]))
         .unwrap()
         .unwrap();
     assert_eq!(ds.shape(), &[2, 2]);
@@ -914,25 +889,23 @@ fn test_backend_gather_scatter_dynamic_slice_dispatch() {
 
 #[test]
 fn indexed_plan_cache_reuses_public_gather_plan_and_obeys_controls() {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
     let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
     );
     let indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]).unwrap();
     let config = simple_gather_config();
 
-    backend
-        .with_backend_session(|__s| __s.gather(&operand, &indices, &config))
+    crate::test_support::on_engine(&mut backend, |__s| __s.gather(&operand, &indices, &config))
         .unwrap()
         .unwrap();
-    let after_compile = backend.indexed_plan_cache_stats().unwrap();
+    let after_compile = backend.plan_cache().indexed_stats();
     assert_eq!(after_compile.entries, 1);
     assert_eq!(after_compile.hits, 0);
     assert_eq!(after_compile.misses, 1);
     assert!(after_compile.retained_bytes > 0);
 
-    backend
-        .with_backend_session(|__s| __s.gather(&operand, &indices, &config))
+    crate::test_support::on_engine(&mut backend, |__s| __s.gather(&operand, &indices, &config))
         .unwrap()
         .unwrap();
     let scatter_operand = Tensor::from_typed::<f64>(TypedTensor::zeros(vec![5]).unwrap());
@@ -950,46 +923,41 @@ fn indexed_plan_cache_reuses_public_gather_plan_and_obeys_controls() {
         TypedTensor::from_vec_col_major(vec![2], vec![7.0, 8.0]).unwrap(),
     );
     for _ in 0..2 {
-        backend
-            .with_backend_session(|__s| {
+        crate::test_support::on_engine(&mut backend, |__s| {
                 __s.scatter(&scatter_operand, &indices, &updates, &scatter_config)
             })
             .unwrap()
             .unwrap();
-        backend
-            .with_backend_session(|__s| __s.dynamic_slice(&operand, &starts, &[2]))
+        crate::test_support::on_engine(&mut backend, |__s| __s.dynamic_slice(&operand, &starts, &[2]))
             .unwrap()
             .unwrap();
-        backend
-            .with_backend_session(|__s| __s.dynamic_update_slice(&operand, &update, &starts))
+        crate::test_support::on_engine(&mut backend, |__s| __s.dynamic_update_slice(&operand, &update, &starts))
             .unwrap()
             .unwrap();
     }
 
-    let after_replay = backend.indexed_plan_cache_stats().unwrap();
+    let after_replay = backend.plan_cache().indexed_stats();
     assert_eq!(after_replay.entries, 4);
     assert_eq!(after_replay.hits, 4);
     assert_eq!(after_replay.misses, 4);
 
     backend
-        .set_indexed_plan_cache_limits(crate::IndexedPlanCacheLimits::new(0, 0))
-        .unwrap();
-    assert_eq!(backend.indexed_plan_cache_stats().unwrap().entries, 0);
-    backend.clear_indexed_plan_cache().unwrap();
-    assert_eq!(backend.indexed_plan_cache_stats().unwrap().clears, 1);
+        .plan_cache().set_indexed_limits(crate::IndexedPlanCacheLimits::new(0, 0));
+    assert_eq!(backend.plan_cache().indexed_stats().entries, 0);
+    backend.plan_cache().clear_indexed();
+    assert_eq!(backend.plan_cache().indexed_stats().clears, 1);
 }
 
 #[test]
 fn indexed_plan_cache_reuses_gather_plan_through_exec_session() {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
     let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![5], vec![10.0, 20.0, 30.0, 40.0, 50.0]).unwrap(),
     );
     let indices = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 4]).unwrap();
     let config = simple_gather_config();
 
-    backend
-        .with_backend_session(|session| {
+    crate::test_support::on_engine(&mut backend, |session| {
             session.gather(&operand, &indices, &config)?;
             session.gather(&operand, &indices, &config)?;
             Ok::<(), crate::Error>(())
@@ -997,17 +965,17 @@ fn indexed_plan_cache_reuses_gather_plan_through_exec_session() {
         .unwrap()
         .unwrap();
 
-    let stats = backend.indexed_plan_cache_stats().unwrap();
+    let stats = backend.plan_cache().indexed_stats();
     assert_eq!(stats.entries, 1);
     assert_eq!(stats.misses, 1);
     assert_eq!(stats.hits, 1);
 }
 
 #[test]
-fn indexed_plan_cache_limit_snapshots_remain_coherent_across_clones() {
-    let backend = CpuBackend::with_threads(1).unwrap();
-    let mut writer = backend.clone();
-    let reader = backend.clone();
+fn indexed_plan_cache_limit_snapshots_remain_coherent_across_shared_handles() {
+    let backend = crate::test_support::cpu_engine(1).unwrap();
+    let writer = backend.plan_cache().clone();
+    let reader = backend.plan_cache().clone();
     let start = std::sync::Arc::new(std::sync::Barrier::new(2));
     let writer_start = std::sync::Arc::clone(&start);
 
@@ -1019,13 +987,13 @@ fn indexed_plan_cache_limit_snapshots_remain_coherent_across_clones() {
             } else {
                 crate::IndexedPlanCacheLimits::new(22, 2_222)
             };
-            writer.set_indexed_plan_cache_limits(limits).unwrap();
+            writer.set_indexed_limits(limits);
         }
     });
 
     start.wait();
     for _ in 0..2_000 {
-        let limits = reader.indexed_plan_cache_limits().unwrap();
+        let limits = reader.indexed_limits();
         assert!(
             limits == crate::IndexedPlanCacheLimits::new(11, 1_111)
                 || limits == crate::IndexedPlanCacheLimits::new(22, 2_222)

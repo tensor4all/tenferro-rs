@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn integer_dot_is_rejected_without_mutating_output() {
-    use tenferro_tensor::BackendSessionHost;
+    
     let lhs = Tensor::from_vec_col_major(vec![2], vec![2_i64, 3]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2], vec![5_i64, 7]).unwrap();
     let config = DotGeneralConfig {
@@ -11,9 +11,8 @@ fn integer_dot_is_rejected_without_mutating_output() {
         lhs_batch_dims: [0].as_slice().into(),
         rhs_batch_dims: [0].as_slice().into(),
     };
-    let mut backend = crate::CpuBackend::with_threads(1).unwrap();
-    assert!(backend
-        .with_backend_session(|session| session.dot_general_read(
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
+    assert!(crate::test_support::on_engine(&mut backend, |session| session.dot_general_read(
             TensorRead::from_tensor(&lhs),
             TensorRead::from_tensor(&rhs),
             &config
@@ -21,8 +20,7 @@ fn integer_dot_is_rejected_without_mutating_output() {
         .unwrap()
         .is_err());
     let mut target = Tensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
-    assert!(backend
-        .with_backend_session(|session| session.dot_general_read_into(
+    assert!(crate::test_support::on_engine(&mut backend, |session| session.dot_general_read_into(
             TensorRead::from_tensor(&lhs),
             TensorRead::from_tensor(&rhs),
             &config,
@@ -35,13 +33,12 @@ fn integer_dot_is_rejected_without_mutating_output() {
 
 #[test]
 fn backend_controls_clear_and_bound_owned_nary_workspace() {
-    use tenferro_tensor::BackendSessionHost;
-    let mut backend = crate::CpuBackend::with_threads(1).unwrap();
-    let baseline = backend.runtime_cache_stats().unwrap();
-    let populate = |backend: &mut crate::CpuBackend| {
-        backend
-            .with_backend_session(|session| {
-                crate::with_cpu_exec_session(session, |cpu| {
+    
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
+    let baseline = backend.runtime_cache_stats();
+    let populate = |backend: &mut crate::CpuEngine| {
+        crate::test_support::on_engine(backend, |session| {
+                crate::with_cpu_engine(session, |cpu| {
                     cpu.with_contraction_exec(|_, buffers, workspace| {
                         workspace.with_scratch::<f64, _>(
                             16,
@@ -56,25 +53,25 @@ fn backend_controls_clear_and_bound_owned_nary_workspace() {
             .unwrap();
     };
     populate(&mut backend);
-    let filled = backend.runtime_cache_stats().unwrap();
+    let filled = backend.runtime_cache_stats();
     assert_eq!(filled.entries, baseline.entries + 1);
     assert_eq!(filled.retained_bytes, baseline.retained_bytes + 128);
-    backend.reset_buffer_pool().unwrap();
+    backend.reset_buffer_pool();
     assert_eq!(
-        backend.runtime_cache_stats().unwrap().retained_bytes,
+        backend.runtime_cache_stats().retained_bytes,
         baseline.retained_bytes
     );
     populate(&mut backend);
-    backend.set_buffer_pool_limit_bytes(0).unwrap();
+    backend.set_buffer_pool_limit_bytes(0);
     assert_eq!(
-        backend.runtime_cache_stats().unwrap().retained_bytes,
+        backend.runtime_cache_stats().retained_bytes,
         baseline.retained_bytes
     );
-    backend.set_buffer_pool_limit_bytes(1024).unwrap();
+    backend.set_buffer_pool_limit_bytes(1024);
     populate(&mut backend);
-    backend.clear_runtime_caches().unwrap();
+    backend.clear_runtime_caches();
     assert_eq!(
-        backend.runtime_cache_stats().unwrap().retained_bytes,
+        backend.runtime_cache_stats().retained_bytes,
         baseline.retained_bytes
     );
 }
@@ -82,14 +79,13 @@ fn backend_controls_clear_and_bound_owned_nary_workspace() {
 #[test]
 fn linalg_resource_callback_and_result_stay_on_the_caller_without_send() {
     use std::rc::Rc;
-    use tenferro_tensor::BackendSessionHost;
+    
 
     let caller = std::thread::current().id();
     let value = Rc::new(37);
-    let mut backend = crate::CpuBackend::with_threads(2).unwrap();
-    let result = backend
-        .with_backend_session(|session| {
-            crate::with_cpu_exec_session(session, |cpu| {
+    let mut backend = crate::test_support::cpu_engine(2).unwrap();
+    let result = crate::test_support::on_engine(&mut backend, |session| {
+            crate::with_cpu_engine(session, |cpu| {
                 cpu.with_linalg_pool(|_, _| {
                     assert_eq!(std::thread::current().id(), caller);
                     Ok(Rc::clone(&value))
@@ -105,7 +101,7 @@ fn linalg_resource_callback_and_result_stay_on_the_caller_without_send() {
 #[cfg(not(feature = "provider-inject"))]
 #[test]
 fn native_operation_enters_the_selected_rayon_executor() {
-    let mut backend = crate::CpuBackend::with_threads(2).unwrap();
+    let mut backend = crate::test_support::cpu_engine(2).unwrap();
 
     assert!(rayon::current_thread_index().is_none());
     let (worker, pool_size, participants) = crate::tests::with_cpu_session(&mut backend, |cpu| {

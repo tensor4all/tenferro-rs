@@ -4,41 +4,37 @@ use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{MemoryKind, Placement};
 
 use super::*;
-use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::TensorRead;
 
 static MATERIALIZATION_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-fn run_blas1(threads: usize, mut f: impl FnMut(&mut CpuBackend)) {
-    let mut backend = CpuBackend::with_threads(threads).unwrap();
+fn run_blas1(threads: usize, mut f: impl FnMut(&mut CpuEngine)) {
+    let mut backend = crate::test_support::cpu_engine(threads).unwrap();
     f(&mut backend);
 }
 
-fn vdot(backend: &mut CpuBackend, lhs: &Tensor, rhs: &Tensor) -> Tensor {
-    backend
-        .with_backend_session(|session| {
+fn vdot(backend: &mut CpuEngine, lhs: &Tensor, rhs: &Tensor) -> Tensor {
+    crate::test_support::on_engine(backend, |session| {
             session.vdot_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
         })
         .unwrap()
         .unwrap()
 }
 
-fn norm_squared(backend: &mut CpuBackend, input: &Tensor) -> Tensor {
-    backend
-        .with_backend_session(|session| session.norm_squared_read(TensorRead::from_tensor(input)))
+fn norm_squared(backend: &mut CpuEngine, input: &Tensor) -> Tensor {
+    crate::test_support::on_engine(backend, |session| session.norm_squared_read(TensorRead::from_tensor(input)))
         .unwrap()
         .unwrap()
 }
 
 fn axpby(
-    backend: &mut CpuBackend,
+    backend: &mut CpuEngine,
     alpha: ContractionScalar,
     x: &Tensor,
     beta: ContractionScalar,
     y: &mut Tensor,
 ) {
-    backend
-        .with_backend_session(|session| {
+    crate::test_support::on_engine(backend, |session| {
             session.axpby_read_into_accum(
                 alpha,
                 TensorRead::from_tensor(x),
@@ -170,7 +166,7 @@ fn blas1_compact_f32_f64_c32_c64_matches_scalar_references() {
 
 #[test]
 fn blas1_compact_view_destinations_cover_all_supported_dtypes() {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
 
     macro_rules! check {
         ($ty:ty, $tensor_variant:ident, $view_variant:ident, $scalar_variant:ident, $one:expr, $two:expr) => {{
@@ -179,8 +175,7 @@ fn blas1_compact_view_destinations_cover_all_supported_dtypes() {
             );
             let mut storage = vec![$two, $one];
             let view = TypedTensorViewMut::from_slice([2], [1], 0, &mut storage).unwrap();
-            backend
-                .with_backend_session(|session| {
+            crate::test_support::on_engine(&mut backend, |session| {
                     session.axpby_read_into_accum(
                         ContractionScalar::$scalar_variant($one),
                         TensorRead::from_tensor(&x),
@@ -216,8 +211,7 @@ fn blas1_compact_view_destinations_cover_all_supported_dtypes() {
     let empty_x = Tensor::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap();
     let mut empty_storage = Vec::<f64>::new();
     let empty_view = TypedTensorViewMut::from_slice([0], [1], 0, &mut empty_storage).unwrap();
-    backend
-        .with_backend_session(|session| {
+    crate::test_support::on_engine(&mut backend, |session| {
             session.axpby_read_into_accum(
                 ContractionScalar::F64(1.0),
                 TensorRead::from_tensor(&empty_x),
@@ -231,7 +225,7 @@ fn blas1_compact_view_destinations_cover_all_supported_dtypes() {
 
 #[test]
 fn blas1_rankn_and_empty_inputs_reduce_all_axes() {
-    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let mut backend = crate::test_support::cpu_engine(2).unwrap();
     let x = Tensor::from_vec_col_major(vec![2, 2, 2], (1..=8).map(f64::from).collect()).unwrap();
     let y = Tensor::from_vec_col_major(vec![2, 2, 2], vec![2.0_f64; 8]).unwrap();
     assert_eq!(
@@ -278,10 +272,9 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
             .unwrap();
     let lhs_view = lhs.as_view().transpose_view([1, 0]).unwrap();
     let rhs_view = rhs.as_view().transpose_view([1, 0]).unwrap();
-    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let mut backend = crate::test_support::cpu_engine(2).unwrap();
 
-    let dot = backend
-        .with_backend_session(|session| {
+    let dot = crate::test_support::on_engine(&mut backend, |session| {
             session.vdot_read(
                 TensorRead::from_view(TensorView::F64(lhs_view.clone())),
                 TensorRead::from_view(TensorView::F64(rhs_view)),
@@ -290,8 +283,7 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
         .unwrap()
         .unwrap();
     assert_eq!(dot.as_slice::<f64>().unwrap(), &[182.0]);
-    let norm = backend
-        .with_backend_session(|session| {
+    let norm = crate::test_support::on_engine(&mut backend, |session| {
             session.norm_squared_read(TensorRead::from_view(TensorView::F64(lhs_view.clone())))
         })
         .unwrap()
@@ -300,8 +292,7 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
 
     let mut out = Tensor::from_vec_col_major(vec![3, 2], vec![10.0_f64; 6]).unwrap();
     crate::blas1::reset_materializations_for_test();
-    backend
-        .with_backend_session(|session| {
+    crate::test_support::on_engine(&mut backend, |session| {
             session.axpby_read_into_accum(
                 ContractionScalar::F64(2.0),
                 TensorRead::from_view(TensorView::F64(lhs_view.clone())),
@@ -325,8 +316,7 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
     let strided_destination =
         TypedTensorViewMut::from_slice(vec![3, 2], vec![1, 4], 0, &mut strided_storage).unwrap();
     crate::blas1::reset_materializations_for_test();
-    backend
-        .with_backend_session(|session| {
+    crate::test_support::on_engine(&mut backend, |session| {
             session.axpby_read_into_accum(
                 ContractionScalar::F64(2.0),
                 TensorRead::from_view(TensorView::F64(lhs_view)),
@@ -348,7 +338,7 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
 /// allocation is compared byte-for-byte afterwards.
 #[test]
 fn blas1_strided_destination_region_preserves_surrounding_bytes() {
-    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let mut backend = crate::test_support::cpu_engine(2).unwrap();
     // Column-major `[4, 3]` strides; region rows 0..2, columns 1..3.
     let region = [5_usize, 6, 9, 10];
     let alpha = 2.0_f64;
@@ -370,8 +360,7 @@ fn blas1_strided_destination_region_preserves_surrounding_bytes() {
     let destination =
         TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 4], 5, &mut storage).unwrap();
     crate::blas1::reset_materializations_for_test();
-    backend
-        .with_backend_session(|session| {
+    crate::test_support::on_engine(&mut backend, |session| {
             session.axpby_read_into_accum(
                 ContractionScalar::F64(alpha),
                 TensorRead::from_tensor(&x),
@@ -397,8 +386,7 @@ fn blas1_strided_destination_region_preserves_surrounding_bytes() {
     let destination =
         TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 4], 5, &mut storage).unwrap();
     crate::blas1::reset_materializations_for_test();
-    backend
-        .with_backend_session(|session| {
+    crate::test_support::on_engine(&mut backend, |session| {
             session.axpby_read_into_accum(
                 ContractionScalar::F64(alpha),
                 TensorRead::from_view(TensorView::F64(source_view)),
@@ -414,15 +402,14 @@ fn blas1_strided_destination_region_preserves_surrounding_bytes() {
 }
 
 fn assert_axpby_rejects_without_mutating(
-    backend: &mut CpuBackend,
+    backend: &mut CpuEngine,
     alpha: ContractionScalar,
     x: &Tensor,
     beta: ContractionScalar,
     y: &mut Tensor,
 ) {
     let before = y.as_slice::<f64>().unwrap().to_vec();
-    assert!(backend
-        .with_backend_session(|session| {
+    assert!(crate::test_support::on_engine(backend, |session| {
             session.axpby_read_into_accum(
                 alpha,
                 TensorRead::from_tensor(x),
@@ -437,7 +424,7 @@ fn assert_axpby_rejects_without_mutating(
 
 #[test]
 fn blas1_invalid_axpby_requests_leave_y_byte_identical() {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
     let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let mut y = Tensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]).unwrap();
 
@@ -521,8 +508,7 @@ fn blas1_invalid_axpby_requests_leave_y_byte_identical() {
     let wrong_shape_x = Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
     let wrong_shape_y =
         TypedTensorViewMut::from_slice(vec![2], vec![2], 0, &mut noncompact_storage).unwrap();
-    assert!(backend
-        .with_backend_session(|session| {
+    assert!(crate::test_support::on_engine(&mut backend, |session| {
             session.axpby_read_into_accum(
                 ContractionScalar::F64(1.0),
                 TensorRead::from_tensor(&wrong_shape_x),
@@ -537,8 +523,7 @@ fn blas1_invalid_axpby_requests_leave_y_byte_identical() {
     let wrong_dtype_x = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let wrong_dtype_y =
         TypedTensorViewMut::from_slice(vec![2], vec![2], 0, &mut noncompact_storage).unwrap();
-    assert!(backend
-        .with_backend_session(|session| {
+    assert!(crate::test_support::on_engine(&mut backend, |session| {
             session.axpby_read_into_accum(
                 ContractionScalar::F32(1.0),
                 TensorRead::from_tensor(&wrong_dtype_x),
@@ -553,13 +538,12 @@ fn blas1_invalid_axpby_requests_leave_y_byte_identical() {
 
 #[test]
 fn blas1_vdot_and_norm_reject_invalid_metadata_and_placement() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let wrong_shape = Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
     let wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     for rhs in [&wrong_shape, &wrong_dtype] {
-        assert!(backend
-            .with_backend_session(|session| session
+        assert!(crate::test_support::on_engine(&mut backend, |session| session
                 .vdot_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(rhs),))
             .unwrap()
             .is_err());
@@ -573,28 +557,25 @@ fn blas1_vdot_and_norm_reject_invalid_metadata_and_placement() {
             cpu_affinity: None,
         });
     }
-    assert!(backend
-        .with_backend_session(|session| session.vdot_read(
+    assert!(crate::test_support::on_engine(&mut backend, |session| session.vdot_read(
             TensorRead::from_tensor(&device),
             TensorRead::from_tensor(&device),
         ))
         .unwrap()
         .is_err());
-    assert!(backend
-        .with_backend_session(|session| session.norm_squared_read(TensorRead::from_tensor(&device)))
+    assert!(crate::test_support::on_engine(&mut backend, |session| session.norm_squared_read(TensorRead::from_tensor(&device)))
         .unwrap()
         .is_err());
 }
 
 #[test]
 fn blas1_norm_rejects_integer_and_bool_without_allocating_a_result() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     for input in [
         Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap(),
         Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap(),
     ] {
-        let result = backend
-            .with_backend_session(|session| {
+        let result = crate::test_support::on_engine(&mut backend, |session| {
                 session.norm_squared_read(TensorRead::from_tensor(&input))
             })
             .unwrap();
@@ -604,7 +585,7 @@ fn blas1_norm_rejects_integer_and_bool_without_allocating_a_result() {
 
 #[test]
 fn blas1_cg_microfixture_uses_session_primitives_without_element_loops() {
-    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let mut backend = crate::test_support::cpu_engine(2).unwrap();
     let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 2.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 2.0]).unwrap();
     let mut x = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
@@ -614,8 +595,7 @@ fn blas1_cg_microfixture_uses_session_primitives_without_element_loops() {
     let mut rs = norm_squared(&mut backend, &r);
 
     for _ in 0..2 {
-        backend
-            .with_backend_session(|__s| {
+        crate::test_support::on_engine(&mut backend, |__s| {
                 __s.copy_read_into(
                     TensorRead::from_tensor(&p),
                     TensorWrite::from_tensor(&mut ap),
@@ -623,8 +603,7 @@ fn blas1_cg_microfixture_uses_session_primitives_without_element_loops() {
             })
             .unwrap()
             .unwrap();
-        let computed_ap = backend
-            .with_backend_session(|__s| {
+        let computed_ap = crate::test_support::on_engine(&mut backend, |__s| {
                 __s.dot_general_read(
                     TensorRead::from_tensor(&a),
                     TensorRead::from_tensor(&ap),
@@ -638,8 +617,7 @@ fn blas1_cg_microfixture_uses_session_primitives_without_element_loops() {
             })
             .unwrap()
             .unwrap();
-        backend
-            .with_backend_session(|__s| {
+        crate::test_support::on_engine(&mut backend, |__s| {
                 __s.copy_read_into(
                     TensorRead::from_tensor(&computed_ap),
                     TensorWrite::from_tensor(&mut ap),

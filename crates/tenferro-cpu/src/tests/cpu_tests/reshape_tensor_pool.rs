@@ -12,7 +12,7 @@ use super::*;
 
 /// Reshape through the entered-context seam the linalg caller uses.
 fn reshape_via_context(
-    backend: &mut CpuBackend,
+    backend: &mut CpuEngine,
     input: &Tensor,
     shape: &[usize],
 ) -> tenferro_tensor::Result<Tensor> {
@@ -26,7 +26,7 @@ fn assert_exact<T>(threads: usize, from_shape: &[usize], to_shape: &[usize], val
 where
     T: tenferro_tensor::TensorScalar + PartialEq + core::fmt::Debug,
 {
-    let mut backend = CpuBackend::with_threads(threads).unwrap();
+    let mut backend = crate::test_support::cpu_engine(threads).unwrap();
     let input = Tensor::from_typed::<T>(
         TypedTensor::from_vec_col_major(from_shape.to_vec(), values.clone()).unwrap(),
     );
@@ -89,16 +89,16 @@ fn reshape_tensor_recycles_a_pool_buffer_only_on_the_parallel_branch() {
     let input =
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![N, N], values).unwrap());
     for (threads, expect_checkout) in [(1usize, false), (4usize, true)] {
-        let mut backend = CpuBackend::with_threads(threads).unwrap();
+        let mut backend = crate::test_support::cpu_engine(threads).unwrap();
         assert_eq!(
-            backend.buffer_pool_len().unwrap(),
+            backend.buffer_pool_len(),
             0,
             "threads={threads}: a fresh engine pool starts empty"
         );
         let out = reshape_via_context(&mut backend, &input, &[512, 128]).unwrap();
         assert_eq!(out.as_slice::<f64>().unwrap().len(), N * N);
         drop(out);
-        let retained = backend.buffer_pool_len().unwrap();
+        let retained = backend.buffer_pool_len();
         assert_eq!(
             retained == 1,
             expect_checkout,
@@ -121,13 +121,12 @@ fn reshape_read_reads_a_non_contiguous_view_in_logical_order() {
     let storage: Vec<f64> = (0..N * N).map(|i| i as f64).collect();
     let expected: Vec<f64> = (0..N * N).map(|k| ((k / N) + N * (k % N)) as f64).collect();
     for threads in [1, 4] {
-        let mut backend = CpuBackend::with_threads(threads).unwrap();
+        let mut backend = crate::test_support::cpu_engine(threads).unwrap();
         let view = TypedTensorView::from_col_major(&[N, N], &storage)
             .unwrap()
             .transpose_view([1, 0])
             .unwrap();
-        let out = backend
-            .with_backend_session(|session| {
+        let out = crate::test_support::on_engine(&mut backend, |session| {
                 session.reshape_read(TensorRead::from_view(TensorView::F64(view)), &[N * N])
             })
             .unwrap()

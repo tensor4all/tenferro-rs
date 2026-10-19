@@ -3,11 +3,10 @@ use tenferro_tensor::{
     BackendId, CapabilityAxis, CapabilityQuery, DType, SupportLevel, TensorBackendCapability,
 };
 
-use crate::CpuBackend;
 
 #[test]
 fn cpu_capability_table_reports_core_elementwise_reduction_and_dot_support() {
-    let backend = CpuBackend::new();
+    let backend = crate::CpuEngine::serial();
 
     assert_eq!(backend.backend_id(), BackendId::Cpu);
 

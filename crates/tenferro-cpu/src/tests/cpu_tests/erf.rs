@@ -1,7 +1,7 @@
 //! Accuracy of the CPU `erf` kernel against a high-precision reference.
 
 use super::*;
-use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
+use tenferro_tensor::{TensorRead, TensorView};
 
 /// `(x, erf(x) in f64, erf(x as f32))` from mpmath at 200 bits, rounded to f64.
 ///
@@ -187,12 +187,11 @@ fn erf_special_values_follow_ieee_limits() {
 
 #[test]
 fn erf_session_path_reads_strided_views_and_rejects_non_real_dtypes() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let base =
         TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.5, 1.0, 2.0, 3.0]).unwrap();
     let transposed = base.as_view().transpose_view([1, 0]).unwrap();
-    let out = backend
-        .with_backend_session(|session| {
+    let out = crate::test_support::on_engine(&mut backend, |session| {
             session.erf_read(TensorRead::from_view(TensorView::F64(transposed)))
         })
         .unwrap()
@@ -207,8 +206,7 @@ fn erf_session_path_reads_strided_views_and_rejects_non_real_dtypes() {
         Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex32::new(0.5, 0.0)]).unwrap(),
         Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap(),
     ] {
-        let err = backend
-            .with_backend_session(|session| session.erf_read(TensorRead::from_tensor(&input)))
+        let err = crate::test_support::on_engine(&mut backend, |session| session.erf_read(TensorRead::from_tensor(&input)))
             .unwrap()
             .unwrap_err();
         assert!(

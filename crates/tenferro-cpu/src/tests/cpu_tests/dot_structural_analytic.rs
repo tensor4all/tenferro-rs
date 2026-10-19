@@ -1,5 +1,6 @@
+#[allow(unused_imports)]
+use crate::test_support::RunErased;
 use super::*;
-use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::TensorRead;
 
 #[test]
@@ -16,9 +17,8 @@ fn test_dot_general_matmul() {
         )
         .unwrap(),
     );
-    let mut backend = CpuBackend::new();
-    let c = backend
-        .with_backend_session(|__s| {
+    let mut backend = crate::CpuEngine::serial();
+    let c = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
@@ -67,10 +67,9 @@ fn test_dot_general_with_conj_matches_materialized_complex_matmul() {
         lhs_batch_dims: [].as_slice().into(),
         rhs_batch_dims: [].as_slice().into(),
     };
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
-    let out = backend
-        .with_backend_session(|__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, true))
+    let out = crate::test_support::on_engine(&mut backend, |__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, true))
         .unwrap()
         .unwrap();
 
@@ -100,10 +99,9 @@ fn test_dot_general_read_accepts_tensor_and_view_inputs() {
         lhs_batch_dims: [].as_slice().into(),
         rhs_batch_dims: [].as_slice().into(),
     };
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
-    let direct = backend
-        .with_backend_session(|__s| {
+    let direct = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_view(rhs_view.clone()),
@@ -115,8 +113,7 @@ fn test_dot_general_read_accepts_tensor_and_view_inputs() {
     assert_eq!(direct.shape(), &[2, 2]);
     assert_eq!(direct.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
 
-    let session = backend
-        .with_backend_session(|exec| {
+    let session = crate::test_support::on_engine(&mut backend, |exec| {
             exec.dot_general_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_view(rhs_view),
@@ -145,10 +142,9 @@ fn test_dot_general_read_accepts_transposed_host_view_input() {
         lhs_batch_dims: [].as_slice().into(),
         rhs_batch_dims: [].as_slice().into(),
     };
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
-    let out = backend
-        .with_backend_session(|__s| {
+    let out = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read(
                 TensorRead::from_view(TensorView::F64(lhs_view)),
                 TensorRead::from_tensor(&rhs),
@@ -174,11 +170,10 @@ fn test_dot_general_read_into_writes_compact_and_strided_outputs() {
         lhs_batch_dims: [].as_slice().into(),
         rhs_batch_dims: [].as_slice().into(),
     };
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
     let mut compact = Tensor::from_vec_col_major(vec![2, 2], vec![-1.0_f64; 4]).unwrap();
-    backend
-        .with_backend_session(|__s| {
+    crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read_into(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_view(TensorView::f64(&rhs_shape, &rhs_data).unwrap()),
@@ -198,8 +193,7 @@ fn test_dot_general_read_into_writes_compact_and_strided_outputs() {
         let out_view = TensorViewMut::F64(
             TypedTensorViewMut::from_slice([2, 2], [1, 3], 1, &mut strided_data).unwrap(),
         );
-        backend
-            .with_backend_session(|exec| {
+        crate::test_support::on_engine(&mut backend, |exec| {
                 exec.dot_general_read_into(
                     TensorRead::from_tensor(&lhs),
                     TensorRead::from_view(TensorView::f64(&rhs_shape, &rhs_data).unwrap()),
@@ -228,11 +222,10 @@ fn test_dot_general_read_into_rejects_output_shape_and_dtype_mismatch() {
         lhs_batch_dims: [].as_slice().into(),
         rhs_batch_dims: [].as_slice().into(),
     };
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
     let mut wrong_shape = Tensor::from_vec_col_major(vec![4], vec![0.0_f64; 4]).unwrap();
-    let shape_err = backend
-        .with_backend_session(|__s| {
+    let shape_err = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read_into(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -251,8 +244,7 @@ fn test_dot_general_read_into_rejects_output_shape_and_dtype_mismatch() {
     ));
 
     let mut wrong_dtype = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f32; 4]).unwrap();
-    let dtype_err = backend
-        .with_backend_session(|__s| {
+    let dtype_err = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read_into(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -291,10 +283,9 @@ fn test_dot_general_read_into_accum_updates_existing_output() {
         alpha: ContractionScalar::F64(2.0),
         beta: ContractionScalar::F64(-0.5),
     };
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
-    backend
-        .with_backend_session(|__s| {
+    crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read_into_accum(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -322,8 +313,7 @@ fn test_dot_general_read_into_accum_updates_existing_output() {
         let out_view = TensorViewMut::F64(
             TypedTensorViewMut::from_slice([2, 2], [1, 3], 1, &mut strided_data).unwrap(),
         );
-        backend
-            .with_backend_session(|exec| {
+        crate::test_support::on_engine(&mut backend, |exec| {
                 exec.dot_general_read_into_accum_cached(
                     Some(7),
                     TensorRead::from_tensor(&lhs),
@@ -397,10 +387,9 @@ fn test_dot_general_read_into_accum_applies_complex_conj_and_scalars() {
         alpha: ContractionScalar::C64(alpha),
         beta: ContractionScalar::C64(beta),
     };
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
-    backend
-        .with_backend_session(|__s| {
+    crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read_into_accum(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -440,10 +429,9 @@ fn test_dot_general_read_into_accum_rejects_scalar_dtype_mismatch() {
         alpha: ContractionScalar::F32(1.0),
         beta: ContractionScalar::F64(0.0),
     };
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
-    let err = backend
-        .with_backend_session(|__s| {
+    let err = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read_into_accum(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -476,8 +464,8 @@ fn test_dot_general_read_into_accum_covers_supported_scalar_dtypes() {
     let lhs_f32 = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]).unwrap();
     let rhs_f32 = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f32, 6.0]).unwrap();
     let mut out_f32 = Tensor::from_vec_col_major(vec![2, 1], vec![7.0_f32, 8.0]).unwrap();
-    CpuBackend::new()
-        .with_backend_session(|__s| {
+    crate::CpuEngine::serial()
+        .run_erased(|__s| {
             __s.dot_general_read_into_accum(
                 TensorRead::from_tensor(&lhs_f32),
                 TensorRead::from_tensor(&rhs_f32),
@@ -516,8 +504,8 @@ fn test_dot_general_read_into_accum_covers_supported_scalar_dtypes() {
     );
     let alpha = Complex32::new(1.5, -0.25);
     let beta = Complex32::new(0.25, 0.5);
-    CpuBackend::new()
-        .with_backend_session(|__s| {
+    crate::CpuEngine::serial()
+        .run_erased(|__s| {
             __s.dot_general_read_into_accum(
                 TensorRead::from_tensor(&lhs_c32),
                 TensorRead::from_tensor(&rhs_c32),
@@ -561,7 +549,7 @@ fn test_dot_general_read_blas_negative_stride_view_falls_back() {
         lhs_batch_dims: [].as_slice().into(),
         rhs_batch_dims: [].as_slice().into(),
     };
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
     let out = tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |session| {
         session.dot_general_read(
@@ -585,9 +573,8 @@ fn test_dot_general_inner_product_returns_rank0_scalar() {
     let b = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0]).unwrap(),
     );
-    let mut backend = CpuBackend::new();
-    let c = backend
-        .with_backend_session(|__s| {
+    let mut backend = crate::CpuEngine::serial();
+    let c = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
@@ -611,9 +598,8 @@ fn test_dot_general_zero_sized_matmul_returns_empty_matrix() {
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![0, 0], Vec::new()).unwrap());
     let b =
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![0, 0], Vec::new()).unwrap());
-    let mut backend = CpuBackend::new();
-    let c = backend
-        .with_backend_session(|__s| {
+    let mut backend = crate::CpuEngine::serial();
+    let c = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
@@ -643,9 +629,8 @@ fn test_dot_general_zero_contracting_dim_returns_zero_filled_output() {
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![2, 0], Vec::new()).unwrap());
     let b =
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![0, 3], Vec::new()).unwrap());
-    let mut backend = CpuBackend::new();
-    let c = backend
-        .with_backend_session(|__s| {
+    let mut backend = crate::CpuEngine::serial();
+    let c = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
@@ -691,9 +676,8 @@ fn test_dot_general_falls_back_for_unfusable_lhs_batch_layout() {
         )
         .unwrap(),
     );
-    let mut backend = CpuBackend::new();
-    let c = backend
-        .with_backend_session(|__s| {
+    let mut backend = crate::CpuEngine::serial();
+    let c = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&a),
                 TensorRead::from_tensor(&b),
@@ -741,10 +725,9 @@ fn test_dot_general_falls_back_for_mixed_batch_orders() {
         lhs_batch_dims: [2, 3].as_slice().into(),
         rhs_batch_dims: [2, 3].as_slice().into(),
     };
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
-    let output = backend
-        .with_backend_session(|__s| {
+    let output = crate::test_support::on_engine(&mut backend, |__s| {
             __s.dot_general_read(
                 TensorRead::from_view(TensorView::F64(lhs_view)),
                 TensorRead::from_view(TensorView::F64(rhs_view)),
@@ -973,13 +956,12 @@ fn test_neg_and_conj() {
 
 #[test]
 fn test_cpu_backend_analytic_ops_real() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
     let exp_input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![0.0, 1.0]).unwrap(),
     );
-    let exp_out = backend
-        .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&exp_input)))
+    let exp_out = crate::test_support::on_engine(&mut backend, |__s| __s.exp_read(TensorRead::from_tensor(&exp_input)))
         .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&exp_out, &[0]), 1.0);
@@ -988,8 +970,7 @@ fn test_cpu_backend_analytic_ops_real() {
     let log_input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![1.0, 4.0]).unwrap(),
     );
-    let log_out = backend
-        .with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(&log_input)))
+    let log_out = crate::test_support::on_engine(&mut backend, |__s| __s.log_read(TensorRead::from_tensor(&log_input)))
         .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&log_out, &[0]), 0.0);
@@ -998,12 +979,10 @@ fn test_cpu_backend_analytic_ops_real() {
     let trig_input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![0.0, std::f64::consts::FRAC_PI_2]).unwrap(),
     );
-    let sin_out = backend
-        .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(&trig_input)))
+    let sin_out = crate::test_support::on_engine(&mut backend, |__s| __s.sin_read(TensorRead::from_tensor(&trig_input)))
         .unwrap()
         .unwrap();
-    let cos_out = backend
-        .with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(&trig_input)))
+    let cos_out = crate::test_support::on_engine(&mut backend, |__s| __s.cos_read(TensorRead::from_tensor(&trig_input)))
         .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&sin_out, &[0]), 0.0);
@@ -1014,8 +993,7 @@ fn test_cpu_backend_analytic_ops_real() {
     let tanh_input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![0.0, 1.0]).unwrap(),
     );
-    let tanh_out = backend
-        .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&tanh_input)))
+    let tanh_out = crate::test_support::on_engine(&mut backend, |__s| __s.tanh_read(TensorRead::from_tensor(&tanh_input)))
         .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&tanh_out, &[0]), 0.0);
@@ -1024,12 +1002,10 @@ fn test_cpu_backend_analytic_ops_real() {
     let sqrt_input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![1.0, 4.0]).unwrap(),
     );
-    let sqrt_out = backend
-        .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&sqrt_input)))
+    let sqrt_out = crate::test_support::on_engine(&mut backend, |__s| __s.sqrt_read(TensorRead::from_tensor(&sqrt_input)))
         .unwrap()
         .unwrap();
-    let rsqrt_out = backend
-        .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&sqrt_input)))
+    let rsqrt_out = crate::test_support::on_engine(&mut backend, |__s| __s.rsqrt_read(TensorRead::from_tensor(&sqrt_input)))
         .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&sqrt_out, &[0]), 1.0);
@@ -1037,14 +1013,12 @@ fn test_cpu_backend_analytic_ops_real() {
     assert_f64_close(get_f64(&rsqrt_out, &[0]), 1.0);
     assert_f64_close(get_f64(&rsqrt_out, &[1]), 0.5);
 
-    let expm1_out = backend
-        .with_backend_session(|__s| {
+    let expm1_out = crate::test_support::on_engine(&mut backend, |__s| {
             __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&exp_input))
         })
         .unwrap()
         .unwrap();
-    let log1p_out = backend
-        .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(&log_input)))
+    let log1p_out = crate::test_support::on_engine(&mut backend, |__s| __s.log1p_read(TensorRead::from_tensor(&log_input)))
         .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&expm1_out, &[0]), 0.0);
@@ -1058,8 +1032,7 @@ fn test_cpu_backend_analytic_ops_real() {
     let pow_exp = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![3.0, 0.5]).unwrap(),
     );
-    let pow_out = backend
-        .with_backend_session(|__s| {
+    let pow_out = crate::test_support::on_engine(&mut backend, |__s| {
             __s.pow_read(
                 TensorRead::from_tensor(&pow_base),
                 TensorRead::from_tensor(&pow_exp),
@@ -1073,7 +1046,7 @@ fn test_cpu_backend_analytic_ops_real() {
 
 #[test]
 fn test_cpu_backend_analytic_ops_complex() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
     let exp_input = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(
@@ -1082,8 +1055,7 @@ fn test_cpu_backend_analytic_ops_complex() {
         )
         .unwrap(),
     );
-    let exp_out = backend
-        .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&exp_input)))
+    let exp_out = crate::test_support::on_engine(&mut backend, |__s| __s.exp_read(TensorRead::from_tensor(&exp_input)))
         .unwrap()
         .unwrap();
     assert_c64_close(get_c64(&exp_out, &[0]), Complex64::new(1.0, 0.0));
@@ -1096,8 +1068,7 @@ fn test_cpu_backend_analytic_ops_complex() {
         )
         .unwrap(),
     );
-    let log_out = backend
-        .with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(&log_input)))
+    let log_out = crate::test_support::on_engine(&mut backend, |__s| __s.log_read(TensorRead::from_tensor(&log_input)))
         .unwrap()
         .unwrap();
     assert_c64_close(get_c64(&log_out, &[0]), Complex64::new(1.0, 0.0).ln());
@@ -1110,16 +1081,13 @@ fn test_cpu_backend_analytic_ops_complex() {
         )
         .unwrap(),
     );
-    let sin_out = backend
-        .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(&trig_input)))
+    let sin_out = crate::test_support::on_engine(&mut backend, |__s| __s.sin_read(TensorRead::from_tensor(&trig_input)))
         .unwrap()
         .unwrap();
-    let cos_out = backend
-        .with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(&trig_input)))
+    let cos_out = crate::test_support::on_engine(&mut backend, |__s| __s.cos_read(TensorRead::from_tensor(&trig_input)))
         .unwrap()
         .unwrap();
-    let tanh_out = backend
-        .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&trig_input)))
+    let tanh_out = crate::test_support::on_engine(&mut backend, |__s| __s.tanh_read(TensorRead::from_tensor(&trig_input)))
         .unwrap()
         .unwrap();
     assert_c64_close(get_c64(&sin_out, &[0]), Complex64::new(0.0, 0.0).sin());
@@ -1136,12 +1104,10 @@ fn test_cpu_backend_analytic_ops_complex() {
         )
         .unwrap(),
     );
-    let sqrt_out = backend
-        .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&sqrt_input)))
+    let sqrt_out = crate::test_support::on_engine(&mut backend, |__s| __s.sqrt_read(TensorRead::from_tensor(&sqrt_input)))
         .unwrap()
         .unwrap();
-    let rsqrt_out = backend
-        .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&sqrt_input)))
+    let rsqrt_out = crate::test_support::on_engine(&mut backend, |__s| __s.rsqrt_read(TensorRead::from_tensor(&sqrt_input)))
         .unwrap()
         .unwrap();
     assert_c64_close(get_c64(&sqrt_out, &[0]), Complex64::new(1.0, 0.0).sqrt());
@@ -1157,14 +1123,12 @@ fn test_cpu_backend_analytic_ops_complex() {
         1.0e-12,
     );
 
-    let expm1_out = backend
-        .with_backend_session(|__s| {
+    let expm1_out = crate::test_support::on_engine(&mut backend, |__s| {
             __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&exp_input))
         })
         .unwrap()
         .unwrap();
-    let log1p_out = backend
-        .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(&log_input)))
+    let log1p_out = crate::test_support::on_engine(&mut backend, |__s| __s.log1p_read(TensorRead::from_tensor(&log_input)))
         .unwrap()
         .unwrap();
     assert_c64_close(
@@ -1198,8 +1162,7 @@ fn test_cpu_backend_analytic_ops_complex() {
         )
         .unwrap(),
     );
-    let pow_out = backend
-        .with_backend_session(|__s| {
+    let pow_out = crate::test_support::on_engine(&mut backend, |__s| {
             __s.pow_read(
                 TensorRead::from_tensor(&pow_base),
                 TensorRead::from_tensor(&pow_exp),
@@ -1277,9 +1240,8 @@ fn test_cpu_backend_dispatches_tensor_backend_ops() {
     let b = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
     );
-    let mut backend = CpuBackend::new();
-    let out = backend
-        .with_backend_session(|__s| {
+    let mut backend = crate::CpuEngine::serial();
+    let out = crate::test_support::on_engine(&mut backend, |__s| {
             __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
         })
         .unwrap()
@@ -1311,10 +1273,9 @@ fn test_tier2_elementwise_ops_real() {
     let upper = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![3], vec![1.0, 0.25, 4.0]).unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
-    let div = backend
-        .with_backend_session(|__s| {
+    let div = crate::test_support::on_engine(&mut backend, |__s| {
             __s.div_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         })
         .unwrap()
@@ -1323,24 +1284,21 @@ fn test_tier2_elementwise_ops_real() {
     assert_eq!(get_f64(&div, &[1]), -0.4);
     assert_eq!(get_f64(&div, &[2]), 3.0);
 
-    let abs = backend
-        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&lhs)))
+    let abs = crate::test_support::on_engine(&mut backend, |__s| __s.abs_read(TensorRead::from_tensor(&lhs)))
         .unwrap()
         .unwrap();
     assert_eq!(get_f64(&abs, &[0]), 8.0);
     assert_eq!(get_f64(&abs, &[1]), 2.0);
     assert_eq!(get_f64(&abs, &[2]), 9.0);
 
-    let sign = backend
-        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&lhs)))
+    let sign = crate::test_support::on_engine(&mut backend, |__s| __s.sign_read(TensorRead::from_tensor(&lhs)))
         .unwrap()
         .unwrap();
     assert_eq!(get_f64(&sign, &[0]), 1.0);
     assert_eq!(get_f64(&sign, &[1]), -1.0);
     assert_eq!(get_f64(&sign, &[2]), 1.0);
 
-    let maximum = backend
-        .with_backend_session(|__s| {
+    let maximum = crate::test_support::on_engine(&mut backend, |__s| {
             __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         })
         .unwrap()
@@ -1349,8 +1307,7 @@ fn test_tier2_elementwise_ops_real() {
     assert_eq!(get_f64(&maximum, &[1]), 5.0);
     assert_eq!(get_f64(&maximum, &[2]), 9.0);
 
-    let minimum = backend
-        .with_backend_session(|__s| {
+    let minimum = crate::test_support::on_engine(&mut backend, |__s| {
             __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         })
         .unwrap()
@@ -1359,8 +1316,7 @@ fn test_tier2_elementwise_ops_real() {
     assert_eq!(get_f64(&minimum, &[1]), -2.0);
     assert_eq!(get_f64(&minimum, &[2]), 3.0);
 
-    let eq = backend
-        .with_backend_session(|__s| {
+    let eq = crate::test_support::on_engine(&mut backend, |__s| {
             __s.compare_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -1373,8 +1329,7 @@ fn test_tier2_elementwise_ops_real() {
     assert!(!get_bool(&eq, &[1]));
     assert!(!get_bool(&eq, &[2]));
 
-    let lt = backend
-        .with_backend_session(|__s| {
+    let lt = crate::test_support::on_engine(&mut backend, |__s| {
             __s.compare_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -1387,8 +1342,7 @@ fn test_tier2_elementwise_ops_real() {
     assert!(get_bool(&lt, &[1]));
     assert!(!get_bool(&lt, &[2]));
 
-    let le = backend
-        .with_backend_session(|__s| {
+    let le = crate::test_support::on_engine(&mut backend, |__s| {
             __s.compare_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -1401,8 +1355,7 @@ fn test_tier2_elementwise_ops_real() {
     assert!(get_bool(&le, &[1]));
     assert!(!get_bool(&le, &[2]));
 
-    let gt = backend
-        .with_backend_session(|__s| {
+    let gt = crate::test_support::on_engine(&mut backend, |__s| {
             __s.compare_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -1415,8 +1368,7 @@ fn test_tier2_elementwise_ops_real() {
     assert!(!get_bool(&gt, &[1]));
     assert!(get_bool(&gt, &[2]));
 
-    let ge = backend
-        .with_backend_session(|__s| {
+    let ge = crate::test_support::on_engine(&mut backend, |__s| {
             __s.compare_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -1429,8 +1381,7 @@ fn test_tier2_elementwise_ops_real() {
     assert!(!get_bool(&ge, &[1]));
     assert!(get_bool(&ge, &[2]));
 
-    let select = backend
-        .with_backend_session(|__s| {
+    let select = crate::test_support::on_engine(&mut backend, |__s| {
             __s.select_read(
                 TensorRead::from_tensor(&pred),
                 TensorRead::from_tensor(&on_true),
@@ -1443,8 +1394,7 @@ fn test_tier2_elementwise_ops_real() {
     assert_eq!(get_f64(&select, &[1]), 20.0);
     assert_eq!(get_f64(&select, &[2]), 30.0);
 
-    let clamp = backend
-        .with_backend_session(|__s| {
+    let clamp = crate::test_support::on_engine(&mut backend, |__s| {
             __s.clamp_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&lower),
@@ -1481,32 +1431,30 @@ fn test_tier2_elementwise_ops_complex() {
         )
         .unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
-    let abs = backend
-        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&input)))
+    let abs = crate::test_support::on_engine(&mut backend, |__s| __s.abs_read(TensorRead::from_tensor(&input)))
         .unwrap()
         .unwrap();
     assert_eq!(abs.dtype(), DType::F64);
     assert_eq!(get_f64(&abs, &[0]), 5.0);
     assert_eq!(get_f64(&abs, &[1]), 0.0);
 
-    let sign = backend
-        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&input)))
+    let sign = crate::test_support::on_engine(&mut backend, |__s| __s.sign_read(TensorRead::from_tensor(&input)))
         .unwrap()
         .unwrap();
     assert_c64_close(get_c64(&sign, &[0]), Complex64::new(0.6, 0.8));
     assert_c64_close(get_c64(&sign, &[1]), Complex64::new(0.0, 0.0));
 
     assert!(matches!(
-        backend.with_backend_session(|__s| __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))).unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))).unwrap(),
         Err(crate::Error::Unsupported {
             op: "maximum",
             message,
         }) if message.contains("total order")
     ));
     assert!(matches!(
-        backend.with_backend_session(|__s| __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))).unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))).unwrap(),
         Err(crate::Error::Unsupported {
             op: "minimum",
             message,
@@ -1543,12 +1491,11 @@ fn canonical_fallback_honors_operand_offsets_and_output_strides() {
         rhs_batch_dims: [].as_slice().into(),
     };
 
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
     {
         let out =
             TypedTensorViewMut::from_slice([2, 2, 2], [1, 2, 6], 0, &mut out_storage).unwrap();
-        backend
-            .with_backend_session(|session| {
+        crate::test_support::on_engine(&mut backend, |session| {
                 session.dot_general_read_into(
                     TensorRead::from_tensor(&lhs),
                     TensorRead::from_view(TensorView::F64(rhs)),
@@ -1601,7 +1548,7 @@ fn auto_batched_gemm_on_lanes_matches_reference_with_padded_batches() {
     // A nonzero view offset shifts every lane's chunk split.
     for offset in [0_usize, 3] {
         let mut out_storage = vec![-7.0_f64; offset + pitch * batch];
-        let mut backend = CpuBackend::with_threads(4).unwrap();
+        let mut backend = crate::test_support::cpu_engine(4).unwrap();
         {
             let out = TypedTensorViewMut::from_slice(
                 [m, m, batch],
@@ -1610,8 +1557,7 @@ fn auto_batched_gemm_on_lanes_matches_reference_with_padded_batches() {
                 &mut out_storage,
             )
             .unwrap();
-            backend
-                .with_backend_session(|session| {
+            crate::test_support::on_engine(&mut backend, |session| {
                     session.dot_general_read_into(
                         TensorRead::from_tensor(&lhs),
                         TensorRead::from_tensor(&rhs),
@@ -1671,9 +1617,8 @@ fn auto_grouped_gemm_on_lanes_matches_reference_for_ordered_and_reversed_jobs() 
         let mut output =
             Tensor::from_vec_col_major(vec![pitch * jobs_len], vec![-7.0_f64; pitch * jobs_len])
                 .unwrap();
-        let mut backend = CpuBackend::with_threads(4).unwrap();
-        backend
-            .with_backend_session(|session| {
+        let mut backend = crate::test_support::cpu_engine(4).unwrap();
+        crate::test_support::on_engine(&mut backend, |session| {
                 session.grouped_gemm_cached(
                     None,
                     TensorRead::from_tensor(&lhs),
@@ -1732,9 +1677,8 @@ fn auto_allocated_batched_gemm_on_lanes_matches_reference() {
         rhs_batch_dims: [2].as_slice().into(),
     };
 
-    let mut backend = CpuBackend::with_threads(4).unwrap();
-    let output = backend
-        .with_backend_session(|session| {
+    let mut backend = crate::test_support::cpu_engine(4).unwrap();
+    let output = crate::test_support::on_engine(&mut backend, |session| {
             session.dot_general_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),

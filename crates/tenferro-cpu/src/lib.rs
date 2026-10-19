@@ -118,6 +118,8 @@ mod reduction;
 mod runtime_adapter;
 mod simd_math;
 mod structural;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use num_complex::{Complex32, Complex64};
 #[cfg(test)]

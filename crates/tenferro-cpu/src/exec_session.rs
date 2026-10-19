@@ -256,7 +256,7 @@ impl TensorDeviceTransfer for CpuEngine {
     fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
         if tensor.backend_family().is_some() {
             return Err(crate::Error::runtime_state(
-                "CpuBackend::download_to_host",
+                "CpuEngine::download_to_host",
                 "CPU backend received a backend buffer; download the tensor to host with its owning backend before CPU execution",
             ));
         }
@@ -266,7 +266,7 @@ impl TensorDeviceTransfer for CpuEngine {
     fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
         if tensor.backend_family().is_some() {
             return Err(crate::Error::runtime_state(
-                "CpuBackend::upload_host_tensor",
+                "CpuEngine::upload_host_tensor",
                 "CPU backend upload_host_tensor expects a host tensor; download backend buffers to host before CPU execution",
             ));
         }
@@ -371,7 +371,7 @@ impl TensorStructural for CpuEngine {
             self.check_entry("CpuEngine::to_contiguous_read")?;
             return materialize_tensor_read_in_domain(
                 &mut self.buffers,
-                "CpuBackend::to_contiguous_read",
+                "CpuEngine::to_contiguous_read",
                 input,
                 domain.as_deref(),
             );
@@ -379,7 +379,7 @@ impl TensorStructural for CpuEngine {
         self.run_native(|buffers| {
             materialize_tensor_read_in_domain(
                 buffers,
-                "CpuBackend::to_contiguous_read",
+                "CpuEngine::to_contiguous_read",
                 input,
                 domain.as_deref(),
             )
@@ -387,7 +387,7 @@ impl TensorStructural for CpuEngine {
     }
 
     fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
-        self.run_native(|_| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
+        self.run_native(|_| copy_tensor_read_into("CpuEngine::copy_read_into", src, dst))
     }
 
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {

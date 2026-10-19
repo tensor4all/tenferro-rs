@@ -1,24 +1,21 @@
 use std::mem::{size_of, size_of_val};
-use std::sync::Arc;
 
 use tenferro_runtime::program::CoreSemanticOp;
 use tenferro_runtime::{
-    CompareDir, DType, DotGeneralConfig, DotGeneralPreparation, ElementwiseRuntime,
-    IndexingRuntime, InputSignature, InputSignatureEntry, InputSpecializationProjection,
-    InputSpecializationRequirements, LayoutClass, LayoutRuntime, LayoutSpecialization,
-    PlacementSpecialization, ReductionRuntime, RuntimeCacheOwner, SpecializationError,
+    CompareDir, DType, DotGeneralConfig, InputSignature, InputSignatureEntry, InputSpecializationProjection,
+    InputSpecializationRequirements, LayoutClass, LayoutSpecialization,
+    PlacementSpecialization, SpecializationError,
     SpecializationRequirements,
 };
 use tenferro_tensor::{
-    BackendSessionHost, GatherConfig, PadConfig, Placement, ScatterConfig, ShapeVec, SliceConfig,
-    StrideVec, Tensor,
+    GatherConfig, PadConfig, Placement, ScatterConfig, ShapeVec, SliceConfig,
+    StrideVec,
 };
 
 use super::{
     checked_specialization_heap_retained_bytes, concrete_axes_for_rank, cpu_operation_kind,
     minimum_specialization_requirements, CpuPreparedKind,
 };
-use crate::CpuBackend;
 
 #[test]
 fn managed_ingress_requires_a_registered_matching_allocation_domain() {
@@ -57,20 +54,8 @@ fn managed_ingress_requires_a_registered_matching_allocation_domain() {
 }
 
 #[test]
-fn cpu_backend_coerces_to_all_runtime_traits() {
-    let backend = Arc::new(CpuBackend::new());
-
-    let _: Arc<dyn ElementwiseRuntime> = backend.clone();
-    let _: Arc<dyn ReductionRuntime> = backend.clone();
-    let _: Arc<dyn IndexingRuntime> = backend.clone();
-    let _: Arc<dyn DotGeneralPreparation> = backend.clone();
-    let _: Arc<dyn LayoutRuntime> = backend.clone();
-    let _: Arc<dyn RuntimeCacheOwner> = backend;
-}
-
-#[test]
 fn public_cpu_runtime_registration_exposes_complete_preparation_capabilities() {
-    let backend = CpuBackend::new();
+    let backend = crate::CpuEngine::serial();
 
     let registration = crate::runtime_engine_registration(&backend).expect("CPU registration");
 
@@ -90,7 +75,7 @@ fn public_cpu_runtime_registration_exposes_complete_preparation_capabilities() {
     );
     assert_eq!(
         registration.provider_device_identity().target_identity(),
-        format!("domain:{}", backend.domain_id_for_test().as_u64())
+        "host"
     );
 }
 
@@ -101,7 +86,7 @@ fn public_cpu_runtime_registration_exposes_complete_preparation_capabilities() {
 fn public_cpu_runtime_registration_uses_the_compiled_provider_under_caller_engine_ids() {
     use tenferro_runtime::{EngineId, Runtime};
 
-    let backend = CpuBackend::with_threads(1).expect("CPU backend");
+    let backend = crate::test_support::cpu_engine(1).expect("CPU backend");
     let primary = crate::runtime_engine_registration_with_id(
         &backend,
         EngineId::new("tenferro-cpu.primary.identity.v1").expect("primary engine ID"),
@@ -218,85 +203,6 @@ fn cpu_specialization_projection_retained_bytes_count_spilled_exact_strides() {
         checked_specialization_heap_retained_bytes(&projection),
         Some(expected)
     );
-}
-
-#[test]
-fn cpu_runtime_adapter_source_stays_metadata_only() {
-    let source = include_str!("../runtime_adapter.rs");
-
-    assert!(!source.contains("use tenferro_tensor"));
-    assert!(!source.contains("Tensor::"));
-    assert!(!source.contains("lock_engine_resources"));
-    assert!(!source.contains(".install("));
-    assert!(!source.contains("with_backend_session"));
-    assert!(!source.contains("execute_"));
-}
-
-#[test]
-fn cpu_runtime_adapter_has_only_the_six_runtime_trait_impls_on_cpu_backend() {
-    let source = include_str!("../runtime_adapter.rs");
-
-    for implementation in [
-        "impl ElementwiseRuntime for CpuBackend",
-        "impl ReductionRuntime for CpuBackend",
-        "impl IndexingRuntime for CpuBackend",
-        "impl DotGeneralPreparation for CpuBackend",
-        "impl LayoutRuntime for CpuBackend",
-        "impl RuntimeCacheOwner for CpuBackend",
-    ] {
-        assert_eq!(
-            source.matches(implementation).count(),
-            1,
-            "{implementation}"
-        );
-    }
-    assert!(!source.contains("pub struct"));
-    assert!(!source.contains("pub enum"));
-}
-
-#[test]
-fn cpu_backend_cache_owner_hooks_report_and_clear_current_engine_caches() {
-    let mut backend = CpuBackend::with_threads(1).expect("backend");
-
-    let stats = RuntimeCacheOwner::cache_stats(&backend).expect("cache stats");
-    assert_eq!(stats.entries, 0);
-    assert_eq!(stats.retained_bytes, 0);
-    assert_eq!(stats.hits, 0);
-    assert_eq!(stats.misses, 0);
-    assert_eq!(stats.evictions, 0);
-    assert_eq!(stats.clears, 0);
-
-    let operand = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).expect("operand");
-    let indices = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 2]).expect("indices");
-    let config = GatherConfig {
-        offset_dims: vec![],
-        collapsed_slice_dims: vec![0],
-        start_index_map: vec![0],
-        index_vector_dim: 1,
-        slice_sizes: vec![1],
-    };
-    backend
-        .with_backend_session(|__s| __s.gather(&operand, &indices, &config))
-        .unwrap()
-        .expect("compile gather plan");
-    backend
-        .with_backend_session(|__s| __s.gather(&operand, &indices, &config))
-        .unwrap()
-        .expect("reuse gather plan");
-    let populated = RuntimeCacheOwner::cache_stats(&backend).expect("populated cache stats");
-    // The reported entries are the compiled gather plan plus whatever the buffer pool holds: a
-    // finished output carries a recycler, so the gather's result comes back to the pool.
-    let pooled = backend.buffer_pool_stats().expect("pool stats").buffers;
-    assert_eq!(populated.entries, 1 + pooled);
-    assert!(populated.retained_bytes > 0);
-    assert_eq!(populated.hits, 1);
-    assert_eq!(populated.misses, 1);
-
-    RuntimeCacheOwner::clear_caches(&backend).expect("clear caches");
-    let cleared = RuntimeCacheOwner::cache_stats(&backend).expect("cleared cache stats");
-    assert_eq!(cleared.entries, 0);
-    assert_eq!(cleared.retained_bytes, 0);
-    assert_eq!(cleared.clears, 1);
 }
 
 #[test]
