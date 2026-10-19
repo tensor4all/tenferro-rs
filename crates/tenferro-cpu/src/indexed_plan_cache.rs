@@ -184,17 +184,16 @@ struct IndexedPlanCacheEntry {
     retained_bytes: usize,
 }
 
-/// Engine-owned cache for compile-once indexed traversal plans.
+/// Cache for compile-once indexed traversal plans, held inside a
+/// [`crate::CpuPlanCache`].
 ///
-/// Each [`crate::engine::EngineResources`] value owns one cache for the
-/// lifetime of its CPU execution engine. The bounded default retains at most
+/// The bounded default retains at most
 /// 256 plans and 8 MiB of logical plan/key payload. Entries are keyed by the
 /// complete family, dtype, index dtype, layout, and operation configuration,
 /// and least-recently-used entries are evicted when either bound is exceeded.
 ///
-/// [`crate::CpuBackend`] exposes cache-specific limits, clear, and aggregate
-/// stats methods. Its [`tenferro_runtime::runtime::RuntimeCacheOwner`]
-/// implementation also includes this cache in runtime aggregate stats/clear.
+/// [`crate::CpuPlanCache`] exposes cache-specific limits, clear, and aggregate
+/// stats methods.
 #[derive(Debug)]
 pub(crate) struct IndexedPlanCache {
     entries: LruCache<IndexedPlanKey, IndexedPlanCacheEntry>,
@@ -223,6 +222,10 @@ impl IndexedPlanCache {
             evictions: 0,
             clears: 0,
         }
+    }
+
+    pub(crate) fn limits(&self) -> IndexedPlanCacheLimits {
+        self.limits
     }
 
     pub(crate) fn set_limits(&mut self, limits: IndexedPlanCacheLimits) {

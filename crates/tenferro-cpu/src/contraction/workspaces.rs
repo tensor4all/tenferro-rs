@@ -49,13 +49,24 @@ impl std::fmt::Debug for ContractionWorkspaces {
 }
 
 impl ContractionWorkspaces {
-    pub(crate) fn lock(&self) -> crate::Result<WorkspaceLease<'_>> {
+    fn entries(&self) -> std::sync::MutexGuard<'_, HashMap<TypeId, Entry>> {
+        // INVARIANT: an unwound scratch borrow already cleared the map
+        // (`RetentionCleanup`), so a poisoned lock guards consistent state.
         self.entries
-            .try_lock()
-            .map(WorkspaceLease)
-            .map_err(|error| {
-                crate::Error::backend_source("CPU N-ary workspace", WorkspaceError::from(error))
-            })
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    /// `(entries, retained bytes)` of the scratch store.
+    pub(crate) fn total_stats(&self) -> (usize, usize) {
+        WorkspaceLease(self.entries()).stats()
+    }
+    /// Drop all scratch.
+    pub(crate) fn clear_all(&self) {
+        WorkspaceLease(self.entries()).clear();
+    }
+    /// Drop all scratch when it retains more than `max_bytes`.
+    pub(crate) fn trim_to(&self, max_bytes: usize) {
+        WorkspaceLease(self.entries()).trim(max_bytes);
     }
     /// Borrow initialized scratch for a lower N-ary operation.
     ///

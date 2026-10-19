@@ -88,25 +88,13 @@ name = "pairwise_contraction"
 harness = false
 
 [[bench]]
-name = "cpu_install_overhead"
-harness = false
-
-[[bench]]
 name = "view_materialization"
-harness = false
-
-[[bench]]
-name = "held_session_dispatch"
 harness = false
 
 [[bench]]
 name = "openblas_direct_overhead"
 harness = false
 required-features = ["blas"]
-
-[[bench]]
-name = "grouped_gemm"
-harness = false
 
 [[bench]]
 name = "route_matrix"
@@ -123,11 +111,6 @@ path = "tests/blas1_thread_counts.rs"
 [[test]]
 name = "blas1_pool_aliasing"
 path = "tests/blas1_pool_aliasing.rs"
-
-[[test]]
-name = "child_execution"
-path = "tests/child_execution.rs"
-required-features = ["native"]
 
 [[test]]
 name = "faer_reexport_identity"

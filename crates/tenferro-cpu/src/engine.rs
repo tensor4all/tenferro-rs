@@ -1,223 +1,644 @@
+//! The CPU execution engine: a caller-held value that owns one Rayon pool (or
+//! none) and the workspace every operation on it writes.
+//!
+//! tenferro never builds threads. The caller builds the pool, usually from
+//! [`thread_pool_builder`], and hands it to [`CpuEngine::new`]; a
+//! [`CpuEngine::serial`] engine has no pool at all. Every operation takes the
+//! engine through `&mut`, so one computation uses it at a time without run-time
+//! locks. An operation starts on the calling thread and enters the pool only
+//! after a provider has chosen more than one worker for it.
+
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use crate::buffer_pool::BufferPool;
-use crate::gemm::GemmAnalysisCache;
-use crate::indexed_plan_cache::IndexedPlanCache;
-use crate::placement::ResolvedCpuPlacement;
-use crate::resource_domain::CpuResourceDomain;
-use crate::{CpuContext, CpuContextError, CpuDomainId, CpuSet};
+use tenferro_tensor::{AllocationDomainId, SharedTensorAllocationDomain};
 
-#[derive(Debug)]
-pub(crate) struct EngineResources {
+use crate::buffer_pool::{BufferPool, BufferPoolStats};
+use crate::contraction::ExecutionResources;
+use crate::provider::CpuExecutionContext;
+use crate::{CacheStats, CpuPlanCache};
+
+/// Stack size the [`thread_pool_builder`] preset reserves for every worker.
+///
+/// Rust's `std::thread` default is 2 MiB, but provider code can recurse with
+/// large private frames: a `NUM_THREADS=64` OpenBLAS build keeps a
+/// `job_t job[64]` (about 541 KiB per level, measured) on the stack of every
+/// recursive `dgetrf_parallel` frame, so 2 MiB allowed only three levels and
+/// aborted with a stack overflow at n>=256. Sixteen MiB leaves room for about
+/// thirty such frames, which is the order of the 8 MiB main-thread default that
+/// provider calls receive outside a pool.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(tenferro_cpu::DEFAULT_WORKER_STACK_BYTES, 16 << 20);
+/// ```
+pub const DEFAULT_WORKER_STACK_BYTES: usize = 16 << 20;
+
+/// Smallest worker stack a caller should configure for a pool that runs
+/// provider code.
+///
+/// # Examples
+///
+/// ```
+/// assert!(tenferro_cpu::MIN_WORKER_STACK_BYTES < tenferro_cpu::DEFAULT_WORKER_STACK_BYTES);
+/// ```
+pub const MIN_WORKER_STACK_BYTES: usize = 64 << 10;
+
+/// A `rayon::ThreadPoolBuilder` preset with the worker stack size the CPU
+/// providers need ([`DEFAULT_WORKER_STACK_BYTES`]).
+///
+/// This is a convenience, not a construction mode: the caller sets the thread
+/// count, pins workers if it wants to, builds the pool and hands it to
+/// [`CpuEngine::new`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::{thread_pool_builder, CpuEngine};
+///
+/// let pool = thread_pool_builder().num_threads(2).build()?;
+/// let engine = CpuEngine::new(pool);
+/// assert_eq!(engine.num_threads(), 2);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn thread_pool_builder() -> rayon::ThreadPoolBuilder {
+    rayon::ThreadPoolBuilder::new().stack_size(DEFAULT_WORKER_STACK_BYTES)
+}
+
+/// Typed refusals reported by a [`CpuEngine`] before an operation runs.
+///
+/// They reach callers as the source of a [`crate::Error::RuntimeState`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuEngineError;
+///
+/// assert!(CpuEngineError::CallerInOwnPool.to_string().contains("worker"));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum CpuEngineError {
+    /// The operation was called from a worker of the engine's own pool.
+    ///
+    /// Some provider strategies cannot start on the pool's own worker (a
+    /// team that needs every worker at once is refused), and the others would
+    /// run with less parallelism than the engine promises. tenferro rejects
+    /// the call instead of letting the outcome depend on the provider.
+    #[error(
+        "a CPU engine operation was called from a worker of the engine's own pool; \
+         call it from a thread outside that pool"
+    )]
+    CallerInOwnPool,
+    /// An earlier operation panicked while it was using the engine.
+    ///
+    /// The engine's workspace may be half updated, so later operations are
+    /// refused; replace the engine with a new one.
+    #[error("the CPU engine is broken by an earlier panic; build a new engine")]
+    Broken,
+}
+
+/// A caller-held CPU execution engine.
+///
+/// The engine owns one Rayon pool (or none for [`CpuEngine::serial`]) and the
+/// workspace operations write: the buffer pool that recycles outputs, the
+/// contraction scratch, and a handle to a [`CpuPlanCache`]. It implements
+/// [`tenferro_tensor::Engine`], so every operation takes it as `&mut`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuEngine;
+/// use tenferro_tensor::{Tensor, TensorElementwise, TensorRead};
+///
+/// let mut engine = CpuEngine::serial();
+/// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
+/// let c = engine.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))?;
+/// assert_eq!(c.as_slice::<f64>()?, &[4.0, 6.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub struct CpuEngine {
+    pub(crate) resources: ExecutionResources,
     pub(crate) buffers: BufferPool,
-    pub(crate) gemm_analysis_cache: GemmAnalysisCache,
-    pub(crate) indexed_plan_cache: IndexedPlanCache,
-    /// N-ary contraction scratch. A session that runs on the engine's shared
-    /// resources keeps `None` and uses the context-wide store, exactly as
-    /// before. A reentrant child execution gets its own store here, because the
-    /// shared one is a single `try_lock`ed lease that assumes one active
-    /// execution per owner: two concurrent children would otherwise race on it.
-    pub(crate) nary: Option<crate::ContractionWorkspaces>,
-    pub(crate) runtime_clears: u64,
+    pub(crate) plans: CpuPlanCache,
+    pub(crate) batch_policy: crate::CpuBatchPolicy,
+    pub(crate) allocation_domain: Option<Arc<dyn SharedTensorAllocationDomain>>,
+    runtime_clears: u64,
+    pub(crate) broken: bool,
 }
 
-impl EngineResources {
-    pub(crate) fn new(buffer_limit: usize) -> Self {
-        Self {
-            buffers: BufferPool::with_max_retained_capacity_bytes(buffer_limit),
-            gemm_analysis_cache: GemmAnalysisCache::default(),
-            indexed_plan_cache: IndexedPlanCache::default(),
-            nary: None,
-            runtime_clears: 0,
-        }
-    }
-
-    /// Resources for a reentrant child execution: same shape as [`Self::new`],
-    /// but with a private N-ary scratch store.
-    pub(crate) fn for_child_execution(buffer_limit: usize) -> Self {
-        Self {
-            nary: Some(crate::ContractionWorkspaces::default()),
-            ..Self::new(buffer_limit)
-        }
-    }
-}
-
-/// One tenferro-owned CPU execution engine.
-///
-/// tenferro uses only pools it builds, so the engine always owns its context;
-/// there is no borrowed or externally managed executor.
-#[derive(Debug)]
-pub(crate) struct CpuEngine {
-    domain: CpuResourceDomain,
-    pub(crate) context: Arc<CpuContext>,
-    /// Reusable numerical resources, or the fact that a held session has them
-    /// checked out; see [`EngineResourceCheckout`].
-    pub(crate) resources: Mutex<ResourceSlot>,
-}
-
-/// One engine's reusable numerical resources, or the fact that a held session
-/// has checked them out.
-#[derive(Debug)]
-pub(crate) enum ResourceSlot {
-    /// The engine owns the resources and a session may check them out.
-    ///
-    /// Boxed so the slot stays small: the resources are moved as a whole, never
-    /// per field, and the engine allocates this once.
-    Ready(Box<EngineResources>),
-    /// A held session owns the resources until it closes.
-    CheckedOut,
-}
-
-impl ResourceSlot {
-    /// Borrow the checked-out resources, or `None` while a held session owns them.
-    pub(crate) fn ready_mut(&mut self) -> Option<&mut EngineResources> {
-        match self {
-            Self::Ready(resources) => Some(resources),
-            Self::CheckedOut => None,
-        }
-    }
-}
-
-/// Owned checkout of one engine's reusable numerical resources.
-///
-/// A held CPU session owns this value instead of holding the engine's mutex for
-/// its whole lifetime, so no shared plan-cache or buffer-pool lock spans an
-/// operation, a kernel or a join (#1945 A2). Dropping the checkout returns the
-/// resources; the return is unconditional and recovers a poisoned mutex exactly
-/// as the scoped execution path does.
-pub(crate) struct EngineResourceCheckout {
-    engine: Arc<CpuEngine>,
-    /// The engine's boxed resources, moved between the slot and this checkout so
-    /// no session entry allocates.
-    resources: Option<Box<EngineResources>>,
-}
-
-impl EngineResourceCheckout {
-    /// Take the engine's resources, or `None` when another holder has them.
-    ///
-    /// The engine builds its resources eagerly, so a vacant slot always means
-    /// "checked out", never "not created yet".
-    pub(crate) fn take(engine: &Arc<CpuEngine>) -> Option<Self> {
-        let mut slot = engine
-            .resources
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let resources = match std::mem::replace(&mut *slot, ResourceSlot::CheckedOut) {
-            ResourceSlot::Ready(resources) => resources,
-            vacant @ ResourceSlot::CheckedOut => {
-                *slot = vacant;
-                return None;
-            }
-        };
-        drop(slot);
-        Some(Self {
-            engine: Arc::clone(engine),
-            resources: Some(resources),
-        })
-    }
-
-    /// Borrow the checked-out resources for one operation view.
-    ///
-    /// The checkout is released only by [`Self::return_resources`], which runs
-    /// from the held session's `close` or `Drop`; no other `&mut` method of the
-    /// session can observe it absent.
-    pub(crate) fn resources_mut(&mut self) -> &mut EngineResources {
-        match self.resources.as_deref_mut() {
-            Some(resources) => resources,
-            None => unreachable!("engine resources are released only by the held session"),
-        }
-    }
-
-    fn return_resources(&mut self) {
-        let Some(resources) = self.resources.take() else {
-            return;
-        };
-        let mut slot = self
-            .engine
-            .resources
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // INVARIANT: the arbiter grants one root execution per engine, and a
-        // reentrant child owns private resources, so the slot cannot be refilled
-        // while this checkout is live. Replacing instead of asserting keeps a
-        // violated invariant from leaking resources without introducing a panic.
-        debug_assert!(
-            matches!(&*slot, ResourceSlot::CheckedOut),
-            "engine resources returned twice"
-        );
-        *slot = ResourceSlot::Ready(resources);
-    }
-}
-
-impl Drop for EngineResourceCheckout {
-    fn drop(&mut self) {
-        self.return_resources();
+impl std::fmt::Debug for CpuEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CpuEngine")
+            .field("num_threads", &self.num_threads())
+            .field("batch_policy", &self.batch_policy)
+            .field("allocation_domain", &self.allocation_domain())
+            .field("broken", &self.broken)
+            .finish_non_exhaustive()
     }
 }
 
 impl CpuEngine {
-    pub(crate) fn new(
-        id: CpuDomainId,
-        placement: ResolvedCpuPlacement,
-        thread_budget: usize,
-        buffer_limit: usize,
-    ) -> Result<Self, CpuContextError> {
-        let worker_count = thread_budget.min(placement.cpus().len());
-        let thread_budget =
-            NonZeroUsize::new(worker_count).ok_or(CpuContextError::InvalidThreadCount)?;
-        let context = CpuContext::with_pinned_cpus(placement.cpus().clone(), worker_count)?;
-        let caller_cpus = caller_affinity_for(&placement);
-        Ok(Self::from_context(
-            id,
-            placement,
-            Arc::new(context),
-            thread_budget,
-            buffer_limit,
-            caller_cpus,
-        ))
-    }
-
-    pub(crate) fn from_context(
-        id: CpuDomainId,
-        placement: ResolvedCpuPlacement,
-        context: Arc<CpuContext>,
-        thread_budget: NonZeroUsize,
-        buffer_limit: usize,
-        caller_cpus: Option<CpuSet>,
-    ) -> Self {
+    fn with_resources(resources: ExecutionResources) -> Self {
         Self {
-            domain: CpuResourceDomain::new(
-                id,
-                placement,
-                Arc::clone(&context),
-                thread_budget,
-                caller_cpus,
-            ),
-            context,
-            resources: Mutex::new(ResourceSlot::Ready(Box::new(EngineResources::new(
-                buffer_limit,
-            )))),
+            resources,
+            buffers: BufferPool::new(),
+            plans: CpuPlanCache::new(),
+            batch_policy: crate::CpuBatchPolicy::default(),
+            allocation_domain: None,
+            runtime_clears: 0,
+            broken: false,
         }
     }
 
-    pub(crate) fn domain(&self) -> &CpuResourceDomain {
-        &self.domain
+    /// An engine that computes on `pool`, which it takes over.
+    ///
+    /// Every operation may use all workers of the pool; a caller that wants
+    /// fewer threads builds a smaller pool. Build the pool with
+    /// [`thread_pool_builder`] to get the worker stack the providers need.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let pool = tenferro_cpu::thread_pool_builder().num_threads(4).build()?;
+    /// let engine = tenferro_cpu::CpuEngine::new(pool);
+    /// assert_eq!(engine.num_threads(), 4);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn new(pool: rayon::ThreadPool) -> Self {
+        Self::with_resources(ExecutionResources::new(Some(pool)))
     }
 
-    pub(crate) fn placement(&self) -> &ResolvedCpuPlacement {
-        self.domain.placement()
+    /// An engine with no pool: every operation runs on the calling thread.
+    ///
+    /// A serial engine never touches Rayon's global pool, so it is safe to use
+    /// from inside any other pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let engine = tenferro_cpu::CpuEngine::serial();
+    /// assert!(engine.pool().is_none());
+    /// assert_eq!(engine.num_threads(), 1);
+    /// ```
+    pub fn serial() -> Self {
+        Self::with_resources(ExecutionResources::new(None))
+    }
+
+    /// Use `plans` as this engine's plan cache, shared with every other engine
+    /// that holds a clone of it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuEngine, CpuPlanCache};
+    ///
+    /// let plans = CpuPlanCache::new();
+    /// let engine = CpuEngine::serial().with_plan_cache(plans.clone());
+    /// assert!(engine.plan_cache().shares_with(&plans));
+    /// ```
+    #[must_use]
+    pub fn with_plan_cache(mut self, plans: CpuPlanCache) -> Self {
+        self.plans = plans;
+        self
+    }
+
+    /// The plan cache this engine reads plans from.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let engine = tenferro_cpu::CpuEngine::serial();
+    /// assert_eq!(engine.plan_cache().stats().entries, 0);
+    /// ```
+    pub fn plan_cache(&self) -> &CpuPlanCache {
+        &self.plans
+    }
+
+    /// Bind outputs and managed inputs to a shared allocation domain.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let engine = tenferro_cpu::CpuEngine::serial();
+    /// assert!(engine.allocation_domain().is_none());
+    /// ```
+    #[must_use]
+    pub fn with_allocation_domain(mut self, domain: Arc<dyn SharedTensorAllocationDomain>) -> Self {
+        self.allocation_domain = Some(domain);
+        self
+    }
+
+    /// The shared allocation domain this engine is bound to, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(tenferro_cpu::CpuEngine::serial().allocation_domain(), None);
+    /// ```
+    pub fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        self.allocation_domain.as_ref().map(|domain| domain.id())
+    }
+
+    /// The shared allocator this engine is bound to, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert!(tenferro_cpu::CpuEngine::serial().shared_allocation_domain().is_none());
+    /// ```
+    pub fn shared_allocation_domain(&self) -> Option<&Arc<dyn SharedTensorAllocationDomain>> {
+        self.allocation_domain.as_ref()
+    }
+
+    /// This engine with a different default batch policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuBatchPolicy, CpuBatchStrategy, CpuEngine};
+    ///
+    /// let engine = CpuEngine::serial()
+    ///     .with_batch_policy(CpuBatchPolicy::new(CpuBatchStrategy::Sequential));
+    /// assert_eq!(engine.batch_policy().strategy, CpuBatchStrategy::Sequential);
+    /// ```
+    #[must_use]
+    pub fn with_batch_policy(mut self, policy: crate::CpuBatchPolicy) -> Self {
+        self.batch_policy = policy;
+        self
+    }
+
+    /// Replace the default batch policy, returning the previous one.
+    ///
+    /// For a one-operation override use [`crate::with_batch_policy`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuBatchPolicy, CpuBatchStrategy, CpuEngine};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let previous = engine.set_batch_policy(CpuBatchPolicy::new(CpuBatchStrategy::Outer));
+    /// assert_eq!(previous.strategy, CpuBatchStrategy::Auto);
+    /// ```
+    pub fn set_batch_policy(&mut self, policy: crate::CpuBatchPolicy) -> crate::CpuBatchPolicy {
+        std::mem::replace(&mut self.batch_policy, policy)
+    }
+
+    /// The default batch policy of this engine.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuBatchStrategy, CpuEngine};
+    /// assert_eq!(CpuEngine::serial().batch_policy().strategy, CpuBatchStrategy::Auto);
+    /// ```
+    #[must_use]
+    pub fn batch_policy(&self) -> crate::CpuBatchPolicy {
+        self.batch_policy
+    }
+
+    /// The pool this engine computes on, or `None` for a serial engine.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let pool = tenferro_cpu::thread_pool_builder().num_threads(2).build()?;
+    /// let engine = tenferro_cpu::CpuEngine::new(pool);
+    /// assert_eq!(engine.pool().map(|pool| pool.current_num_threads()), Some(2));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn pool(&self) -> Option<&rayon::ThreadPool> {
+        self.resources.rayon_pool()
+    }
+
+    /// The number of workers operations may use: the pool size, or one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(tenferro_cpu::CpuEngine::serial().num_threads(), 1);
+    /// ```
+    pub fn num_threads(&self) -> usize {
+        self.thread_budget().get()
+    }
+
+    pub(crate) fn thread_budget(&self) -> NonZeroUsize {
+        self.resources.thread_budget()
+    }
+
+    /// Whether an earlier operation broke this engine (see
+    /// [`CpuEngineError::Broken`]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert!(!tenferro_cpu::CpuEngine::serial().is_broken());
+    /// ```
+    pub fn is_broken(&self) -> bool {
+        self.broken
+    }
+
+    /// The provider execution token for this engine: its pool, its budget and
+    /// its batch policy.
+    ///
+    /// A downstream kernel that calls a provider (cpueinsum, tcontract,
+    /// tlinalg) directly passes this token, so it uses the same threads, budget
+    /// and batch policy as tenferro. Getting the token applies the same checks
+    /// as an operation; what the kernel then does with the (copyable) token is
+    /// that kernel's responsibility.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] with a [`CpuEngineError`] source
+    /// when called from a worker of the engine's own pool or when the engine is
+    /// broken.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// let exec = engine.exec()?;
+    /// assert_eq!(exec.budget(), 1);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn exec(&mut self) -> crate::Result<cpueinsum::Exec<'_>> {
+        self.check_entry("CpuEngine::exec")?;
+        CpuExecutionContext::new(&self.resources, self.batch_policy).contraction_exec()
+    }
+
+    /// Borrow the provider token, the buffer pool and the N-ary contraction
+    /// scratch for one downstream call.
+    ///
+    /// # Errors
+    ///
+    /// Returns the entry refusals of [`CpuEngine::exec`], or `op`'s own error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// let len = engine.with_contraction_exec(|_, buffers, workspaces| {
+    ///     workspaces.with_scratch::<f64, _>(4, buffers.max_retained_capacity_bytes(), |scratch| {
+    ///         Ok(scratch.len())
+    ///     })
+    /// })?;
+    /// assert_eq!(len, 4);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[doc(hidden)]
+    pub fn with_contraction_exec<R>(
+        &mut self,
+        op: impl FnOnce(
+            &cpueinsum::Exec<'_>,
+            &mut BufferPool,
+            &crate::ContractionWorkspaces,
+        ) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        self.check_entry("CpuEngine::with_contraction_exec")?;
+        let context = CpuExecutionContext::new(&self.resources, self.batch_policy);
+        let _retention = self
+            .resources
+            .retention_guard(self.buffers.max_retained_capacity_bytes());
+        let exec = context.contraction_exec()?;
+        let nary = &self.resources.nary;
+        guard_unwind(&mut self.buffers, &mut self.broken, |buffers| {
+            op(&exec, buffers, nary)
+        })
+    }
+
+    /// Borrow the execution context and buffer pool for a linalg provider call.
+    ///
+    /// The provider chooses its own execution through the context; this
+    /// callback itself runs on the calling thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns the entry refusals of [`CpuEngine::exec`], or `op`'s own error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuBatchStrategy, CpuEngine};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let strategy = engine.with_linalg_pool(|context, _| Ok(context.batch_policy().strategy))?;
+    /// assert_eq!(strategy, CpuBatchStrategy::Auto);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[doc(hidden)]
+    pub fn with_linalg_pool<R>(
+        &mut self,
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        self.check_entry("CpuEngine::with_linalg_pool")?;
+        let context = CpuExecutionContext::new(&self.resources, self.batch_policy);
+        guard_unwind(&mut self.buffers, &mut self.broken, |buffers| {
+            op(&context, buffers)
+        })
+    }
+
+    /// Refuse an operation that cannot run on this engine now.
+    pub(crate) fn check_entry(&self, op: &'static str) -> crate::Result<()> {
+        if self.broken {
+            return Err(crate::Error::runtime_state_source(
+                op,
+                CpuEngineError::Broken,
+            ));
+        }
+        if self
+            .resources
+            .rayon_pool()
+            .is_some_and(|pool| pool.current_thread_index().is_some())
+        {
+            return Err(crate::Error::runtime_state_source(
+                op,
+                CpuEngineError::CallerInOwnPool,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Number of retained buffers in the engine's buffer pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(tenferro_cpu::CpuEngine::serial().buffer_pool_len(), 0);
+    /// ```
+    pub fn buffer_pool_len(&self) -> usize {
+        self.buffers.len()
+    }
+
+    /// Retained-buffer statistics of the engine's buffer pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(tenferro_cpu::CpuEngine::serial().buffer_pool_stats().buffers, 0);
+    /// ```
+    pub fn buffer_pool_stats(&self) -> BufferPoolStats {
+        self.buffers.stats()
+    }
+
+    /// The buffer pool as cache statistics (entries and retained bytes).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(tenferro_cpu::CpuEngine::serial().buffer_pool_cache_stats().entries, 0);
+    /// ```
+    pub fn buffer_pool_cache_stats(&self) -> CacheStats {
+        let stats = self.buffers.stats();
+        CacheStats {
+            entries: stats.buffers,
+            retained_bytes: stats.capacity_bytes,
+            ..CacheStats::default()
+        }
+    }
+
+    /// The retention limit of recycled buffers, in retained capacity bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// engine.set_buffer_pool_limit_bytes(0);
+    /// assert_eq!(engine.buffer_pool_limit_bytes(), 0);
+    /// ```
+    pub fn buffer_pool_limit_bytes(&self) -> usize {
+        self.buffers.max_retained_capacity_bytes()
+    }
+
+    /// Bound the bytes of recycled buffers and contraction scratch retained
+    /// between operations; zero disables retention.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// engine.set_buffer_pool_limit_bytes(1 << 20);
+    /// assert_eq!(engine.buffer_pool_limit_bytes(), 1 << 20);
+    /// ```
+    pub fn set_buffer_pool_limit_bytes(&mut self, max_retained_capacity_bytes: usize) {
+        self.buffers
+            .set_max_retained_capacity_bytes(max_retained_capacity_bytes);
+        self.resources.nary.trim_to(max_retained_capacity_bytes);
+        if self.resources.retained_bytes() > max_retained_capacity_bytes {
+            self.resources.trim();
+        }
+    }
+
+    /// Drop every retained buffer and contraction scratch.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// engine.reset_buffer_pool();
+    /// assert_eq!(engine.buffer_pool_len(), 0);
+    /// ```
+    pub fn reset_buffer_pool(&mut self) {
+        self.buffers.clear();
+        self.resources.nary.clear_all();
+        self.resources.trim();
+    }
+
+    /// Aggregate statistics of everything this engine retains between
+    /// operations: buffers, contraction scratch and its plan cache.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(tenferro_cpu::CpuEngine::serial().runtime_cache_stats().entries, 0);
+    /// ```
+    #[doc(hidden)]
+    pub fn runtime_cache_stats(&self) -> CacheStats {
+        let (workspace_entries, nary_bytes) = self.resources.nary.total_stats();
+        let workspace_bytes = nary_bytes.saturating_add(self.resources.retained_bytes());
+        let buffers = self.buffers.cache_stats();
+        let plans = self.plans.stats();
+        CacheStats {
+            entries: buffers
+                .entries
+                .saturating_add(plans.entries)
+                .saturating_add(workspace_entries),
+            retained_bytes: buffers
+                .retained_bytes
+                .saturating_add(plans.retained_bytes)
+                .saturating_add(workspace_bytes),
+            hits: plans.hits,
+            misses: plans.misses,
+            evictions: plans.evictions,
+            clears: self.runtime_clears,
+        }
+    }
+
+    /// Drop everything this engine retains between operations, including its
+    /// plan cache (and therefore the plans of every engine sharing it).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// engine.clear_runtime_caches();
+    /// assert_eq!(engine.runtime_cache_stats().clears, 1);
+    /// ```
+    #[doc(hidden)]
+    pub fn clear_runtime_caches(&mut self) {
+        self.reset_buffer_pool();
+        self.plans.clear();
+        self.runtime_clears = self.runtime_clears.saturating_add(1);
+    }
+}
+
+/// Run one operation's use of the buffer pool, recovering the pool's
+/// accounting and marking the engine broken if it unwinds.
+///
+/// Buffers checked out during the operation are counted as in flight. A normal
+/// exit forgets that accounting (the buffers left as outputs); an unwind
+/// replenishes the pool with replacements for the buffers it lost and marks the
+/// engine broken, since other workspace may be half updated.
+pub(crate) fn guard_unwind<R>(
+    buffers: &mut BufferPool,
+    broken: &mut bool,
+    op: impl FnOnce(&mut BufferPool) -> R,
+) -> R {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(&mut *buffers))) {
+        Ok(value) => {
+            buffers.clear_in_flight_retained();
+            value
+        }
+        Err(payload) => {
+            buffers.replenish_in_flight_retained();
+            *broken = true;
+            std::panic::resume_unwind(payload)
+        }
+    }
+}
+
+impl CpuEngine {
+    /// Split borrows for the operation helpers: the execution context (which
+    /// borrows only the pool resources), the buffer pool, the plan cache and
+    /// the broken flag.
+    pub(crate) fn parts(
+        &mut self,
+    ) -> (
+        CpuExecutionContext<'_>,
+        &mut BufferPool,
+        &CpuPlanCache,
+        &mut bool,
+    ) {
+        (
+            CpuExecutionContext::new(&self.resources, self.batch_policy),
+            &mut self.buffers,
+            &self.plans,
+            &mut self.broken,
+        )
     }
 }
 
 #[cfg(test)]
 mod tests;
-
-/// Caller-affinity target of a resolved placement: `None` for the wildcard
-/// all-allowed set, the node's CPUs for an explicit node placement.
-pub(crate) fn caller_affinity_for(placement: &ResolvedCpuPlacement) -> Option<CpuSet> {
-    match placement {
-        ResolvedCpuPlacement::NumaNode { cpus, .. } => Some(cpus.clone()),
-        ResolvedCpuPlacement::AllAllowed { .. } => None,
-    }
-}

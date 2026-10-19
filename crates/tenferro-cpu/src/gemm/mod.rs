@@ -21,7 +21,6 @@ pub struct GemmAnalysisCache {
     max_slots: usize,
     clears: u64,
     pub(crate) binary: crate::contraction::BinaryCache,
-    pub(crate) grouped: crate::contraction::grouped::GroupCache,
 }
 
 impl fmt::Debug for GemmAnalysisCache {
@@ -29,7 +28,6 @@ impl fmt::Debug for GemmAnalysisCache {
         f.debug_struct("GemmAnalysisCache")
             .field("max_slots", &self.max_slots)
             .field("binary", &self.binary)
-            .field("grouped", &self.grouped)
             .finish_non_exhaustive()
     }
 }
@@ -40,7 +38,6 @@ impl GemmAnalysisCache {
             max_slots,
             clears: 0,
             binary: crate::contraction::BinaryCache::default(),
-            grouped: crate::contraction::grouped::GroupCache::default(),
         }
     }
 
@@ -54,7 +51,6 @@ impl GemmAnalysisCache {
     #[doc(hidden)]
     pub fn set_capacity(&mut self, max_slots: usize) {
         self.binary.set_capacity(max_slots);
-        self.grouped.set_capacity(max_slots);
         self.max_slots = max_slots;
     }
 }
@@ -68,20 +64,14 @@ impl Default for GemmAnalysisCache {
 impl tenferro_tensor::RuntimeCacheControl for GemmAnalysisCache {
     fn clear(&mut self) {
         self.binary.clear();
-        self.grouped.clear();
         self.clears = self.clears.saturating_add(1);
     }
 
     fn stats(&self) -> CacheStats {
         let binary = self.binary.stats();
-        let grouped = self.grouped.stats();
         CacheStats {
-            entries: binary.entries.saturating_add(grouped.entries),
-            retained_bytes: binary.retained_bytes.saturating_add(grouped.retained_bytes),
-            hits: binary.hits.saturating_add(grouped.hits),
-            misses: binary.misses.saturating_add(grouped.misses),
-            evictions: binary.evictions.saturating_add(grouped.evictions),
             clears: self.clears,
+            ..binary
         }
     }
 }
