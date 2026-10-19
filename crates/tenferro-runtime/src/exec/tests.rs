@@ -8,7 +8,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{ShapeExtent, SymDim};
 use tenferro_tensor::{
-    BackendSession, BackendSessionHost, CompareDir, DType, DotGeneralConfig, GatherConfig,
+    Engine, BackendSessionHost, CompareDir, DType, DotGeneralConfig, GatherConfig,
     PadConfig, ScatterConfig, SliceConfig, Tensor,
 };
 
@@ -112,7 +112,7 @@ fn host_dispatch_table_covers_host_exec_ops() {
 
     for (op, expected) in cases {
         assert_eq!(HostDispatchKey::for_op(&op), Some(expected), "{op:?}");
-        let entry = host_dispatch_entry::<dyn BackendSession>(&op).unwrap_or_else(|| {
+        let entry = host_dispatch_entry::<dyn Engine>(&op).unwrap_or_else(|| {
             panic!("missing host dispatch table entry for {expected:?}: {op:?}")
         });
         assert_eq!(entry.key, expected);
@@ -124,7 +124,7 @@ fn host_dispatch_table_excludes_backend_and_ffi_exec_ops() {
     for op in non_host_dispatch_cases() {
         assert_eq!(HostDispatchKey::for_op(&op), None, "{op:?}");
         assert!(
-            host_dispatch_entry::<dyn BackendSession>(&op).is_none(),
+            host_dispatch_entry::<dyn Engine>(&op).is_none(),
             "{op:?}"
         );
     }

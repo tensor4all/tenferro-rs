@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use tenferro_tensor::BackendSession;
+use tenferro_tensor::Engine;
 
 use crate::extension_cache::ExtensionCacheStore;
 
@@ -61,12 +61,12 @@ use crate::extension_cache::ExtensionCacheStore;
 ///     })
 /// }
 /// ```
-pub struct ExtensionExecutionContext<'a, B: BackendSession + ?Sized> {
+pub struct ExtensionExecutionContext<'a, B: Engine + ?Sized> {
     backend: &'a mut B,
     caches: &'a mut ExtensionCacheStore,
 }
 
-impl<B: BackendSession + ?Sized> fmt::Debug for ExtensionExecutionContext<'_, B> {
+impl<B: Engine + ?Sized> fmt::Debug for ExtensionExecutionContext<'_, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExtensionExecutionContext")
             .field("backend_type", &std::any::type_name::<B>())
@@ -75,7 +75,7 @@ impl<B: BackendSession + ?Sized> fmt::Debug for ExtensionExecutionContext<'_, B>
     }
 }
 
-impl<'a, B: BackendSession + ?Sized> ExtensionExecutionContext<'a, B> {
+impl<'a, B: Engine + ?Sized> ExtensionExecutionContext<'a, B> {
     /// Build a context from externally-owned backend and cache state.
     pub fn new(backend: &'a mut B, caches: &'a mut ExtensionCacheStore) -> Self {
         Self { backend, caches }
@@ -111,7 +111,7 @@ impl<'a, B: BackendSession + ?Sized> ExtensionExecutionContext<'a, B> {
 mod tests {
     use super::*;
     use tenferro_cpu::CpuBackend;
-    use tenferro_tensor::{BackendSession, BackendSessionHost, Tensor, TensorRead};
+    use tenferro_tensor::{Engine, BackendSessionHost, Tensor, TensorRead};
 
     use crate::ExtensionCacheSelector;
 
@@ -123,7 +123,7 @@ mod tests {
         backend
             .with_backend_session(|session| {
                 let mut context = ExtensionExecutionContext::new(session, &mut caches);
-                let _: &dyn BackendSession = context.backend();
+                let _: &dyn Engine = context.backend();
                 let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
                 let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
                 let output = context

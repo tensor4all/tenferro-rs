@@ -21,7 +21,7 @@ use tenferro_runtime::{
 #[cfg(feature = "cuda")]
 use tenferro_tensor::MemoryKind;
 use tenferro_tensor::{
-    BackendSession, BackendSessionHost, DType, Tensor, TensorRead, TensorStructural, TensorValue,
+    Engine, BackendSessionHost, DType, Tensor, TensorRead, TensorStructural, TensorValue,
 };
 
 #[derive(Clone, Debug)]
@@ -205,7 +205,7 @@ impl PreparedOperationExecutor for BridgePrepared {
 
     fn execute_in_session(
         &self,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
         _caches: &mut tenferro_runtime::ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {

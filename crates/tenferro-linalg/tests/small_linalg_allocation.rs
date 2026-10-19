@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{BackendSession, BackendSessionHost, Tensor, TypedTensor};
+use tenferro_tensor::{Engine, BackendSessionHost, Tensor, TypedTensor};
 
 struct CountingAllocator;
 
@@ -80,7 +80,7 @@ fn batched_matrix(n: usize, batch: usize) -> Tensor {
 }
 
 fn with_cpu<T>(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     operation: impl FnOnce(&mut tenferro_cpu::CpuExecSession<'_>) -> T,
 ) -> T {
     with_cpu_exec_session(session, operation).expect("host exposes a CPU exec session")
@@ -89,7 +89,7 @@ fn with_cpu<T>(
 /// Steady-state count for one operation, pooling warmed by four rounds.
 fn steady_state(
     backend: &mut CpuBackend,
-    operation: impl Fn(&mut dyn BackendSession) + Send + Sync,
+    operation: impl Fn(&mut dyn Engine) + Send + Sync,
 ) -> usize {
     let mut best = usize::MAX;
     for _ in 0..8 {
@@ -107,7 +107,7 @@ fn check_family(
     single_ceiling: usize,
     batch_ceiling: usize,
     allowed_batch_growth: usize,
-    operation: impl Fn(&mut dyn BackendSession, &Tensor) + Send + Sync,
+    operation: impl Fn(&mut dyn Engine, &Tensor) + Send + Sync,
 ) {
     let single = batched_matrix(4, 1);
     let batch = batched_matrix(4, 64);

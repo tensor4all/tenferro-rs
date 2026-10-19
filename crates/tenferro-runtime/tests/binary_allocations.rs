@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::TensorSessionOpsExt;
 use tenferro_tensor::TensorRead;
-use tenferro_tensor::{BackendSession, BackendSessionHost, CompareDir, DotGeneralConfig, Tensor};
+use tenferro_tensor::{Engine, BackendSessionHost, CompareDir, DotGeneralConfig, Tensor};
 
 const LEN: usize = 4096;
 const INPUT_BYTES: usize = LEN * size_of::<f64>();
@@ -87,7 +87,7 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     assert_eq!(backend.num_threads(), 1);
     backend
-        .with_backend_session(|session: &mut dyn BackendSession| {
+        .with_backend_session(|session: &mut dyn Engine| {
             macro_rules! check {
                 ($name:ident, $read:ident) => {{
                     drop(
@@ -247,7 +247,7 @@ fn canonical_fallback_contraction_does_not_copy_operands() {
     };
     let mut backend = CpuBackend::with_threads(1).unwrap();
     backend
-        .with_backend_session(|session: &mut dyn BackendSession| {
+        .with_backend_session(|session: &mut dyn Engine| {
             let plain = TensorRead::from_tensor(&a);
             let typed_b = b.as_typed::<f64>().expect("an f64 tensor");
             let view = typed_b.as_view();

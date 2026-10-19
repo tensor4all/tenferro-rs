@@ -1,7 +1,7 @@
 use std::fmt;
 use std::ops::Range;
 
-use tenferro_tensor::{BackendSession, Tensor};
+use tenferro_tensor::{Engine, Tensor};
 
 use crate::backend::CompactQrResult;
 use crate::QrOptions;
@@ -63,7 +63,7 @@ impl HouseholderQr<Tensor> {
     pub fn from_factors(
         q: &Tensor,
         r: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Self> {
         crate::tensor_ext::with_linalg_backend(session, "householder_qr_from_factors", |backend| {
             backend
@@ -83,7 +83,7 @@ impl HouseholderQr<Tensor> {
     pub fn append_columns(
         &self,
         block: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Self> {
         crate::tensor_ext::with_linalg_backend(session, "householder_qr_append", |backend| {
             backend
@@ -102,7 +102,7 @@ impl HouseholderQr<Tensor> {
     pub fn r(
         &self,
         options: QrOptions,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         crate::tensor_ext::with_linalg_backend(session, "householder_qr_r", |backend| {
             backend.householder_qr_r(&self.packed, &self.coeff, options)
@@ -128,7 +128,7 @@ impl HouseholderQr<Tensor> {
         &self,
         columns: Range<usize>,
         options: QrOptions,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         crate::tensor_ext::with_linalg_backend(session, "householder_qr_q_columns", |backend| {
             backend.householder_qr_q_columns(&self.packed, &self.coeff, columns, options)

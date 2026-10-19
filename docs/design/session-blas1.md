@@ -10,7 +10,7 @@ Backend-session callers implement allocation-conscious Krylov iterations over `T
 
 ## Session contract
 
-Add object-safe default methods directly to `BackendSession`:
+Add object-safe default methods directly to `Engine`:
 
 ```rust
 fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> Result<Tensor>;

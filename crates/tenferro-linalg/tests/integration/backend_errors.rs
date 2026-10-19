@@ -5,7 +5,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{LinalgBackend, QrOptions, TensorLinalgExt};
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
+    BackendCachedDot, BackendRuntimeCache, Engine, BackendSessionHost,
     BackendStorageHandle, CompareDir, DType, DotGeneralConfig, ElementwiseReadOp, Error, ErrorKind,
     GatherConfig, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer,
     Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
@@ -569,11 +569,11 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     }
     impl BackendCachedDot for DefaultOnlyLinalgBackend {}
 
-    impl BackendSession for DefaultOnlyLinalgBackend {}
+    impl Engine for DefaultOnlyLinalgBackend {}
     impl BackendSessionHost for DefaultOnlyLinalgBackend {
         fn with_backend_session<R>(
             &mut self,
-            f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R,
+            f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
         ) -> Result<R, tenferro_tensor::SessionEntryError> {
             tenferro_tensor::with_session_entry_guard("test backend", || f(self))
         }

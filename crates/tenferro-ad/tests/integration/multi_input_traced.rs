@@ -86,7 +86,7 @@ impl_extension_op!(ForceOp, FORCE_FAMILY, 5, 4);
 
 fn execute_action(
     _op: &ActionOp,
-    _session: &mut dyn tenferro_tensor::BackendSession,
+    _session: &mut dyn tenferro_tensor::Engine,
     _caches: &mut tenferro_runtime::ExtensionCacheStore,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -102,7 +102,7 @@ fn execute_action(
 
 fn execute_force(
     _op: &ForceOp,
-    _session: &mut dyn tenferro_tensor::BackendSession,
+    _session: &mut dyn tenferro_tensor::Engine,
     _caches: &mut tenferro_runtime::ExtensionCacheStore,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_tensor::Result<Vec<Tensor>> {

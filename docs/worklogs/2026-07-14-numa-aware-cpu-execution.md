@@ -26,7 +26,7 @@ one worker and the process-default worker budget. It compares concurrent disjoin
 sessions, an all-allowed session, and (when compiled and linked)
 provider-default exclusive execution. On single-node hosts it still measures
 the portable cases and skips only the disjoint-node comparison. The CPU crate benchmark uses the same
-multi-op `BackendSession` boundary as compiled graph execution without adding a
+multi-op `Engine` boundary as compiled graph execution without adding a
 reverse dev-dependency from `tenferro-cpu` to `tenferro-runtime`.
 
 Local benchmark verification on 2026-07-14:

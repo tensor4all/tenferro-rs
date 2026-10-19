@@ -8,7 +8,7 @@ use std::thread;
 
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendRuntimeCache, BackendSession, BackendSessionHost,
+    AllocationDomainId, AllocationId, BackendRuntimeCache, Engine, BackendSessionHost,
     BackendStorage, DType, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
     SessionEntryError, StorageBuffer, Tensor, TensorBackend, TensorDeviceTransfer, TensorRead,
     TensorValue, TensorView, TypedTensor,
@@ -839,7 +839,7 @@ impl TensorDeviceTransfer for CountingSessionHost {
 impl BackendSessionHost for CountingSessionHost {
     fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, SessionEntryError> {
         self.uncached_entries.fetch_add(1, Ordering::SeqCst);
         self.inner.with_backend_session(f)
@@ -848,7 +848,7 @@ impl BackendSessionHost for CountingSessionHost {
     fn with_backend_session_cached<R>(
         &mut self,
         cache: &mut Self::RuntimeCache,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, SessionEntryError> {
         let entry = self.cached_entries.fetch_add(1, Ordering::SeqCst);
         let panic_inside = self.panic_on_cached_entry.load(Ordering::SeqCst) == entry;
@@ -861,7 +861,7 @@ impl BackendSessionHost for CountingSessionHost {
             })
     }
 
-    fn owns_session(&self, session: &mut dyn BackendSession) -> bool {
+    fn owns_session(&self, session: &mut dyn Engine) -> bool {
         self.inner.owns_session(session)
     }
 }

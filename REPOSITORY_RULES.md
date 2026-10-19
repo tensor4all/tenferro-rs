@@ -207,7 +207,7 @@ entry and construction (`open_session`, `adopt_held_permit`, `CpuHeldSession`),
   after the callback, it reports `SessionEntryError::Executor` after the callback
   has run and that error replaces the callback's value.
 - Backend-leaf native services are reached only through the leaf's visitor on
-  `BackendSession::native_session()`; `NativeSessionRef` has one `unsafe`
+  `Engine::native_engine()`; `NativeSessionRef` has one `unsafe`
   constructor, used only by the leaf that owns the marker.
 - A renamed import is not an exemption: the audit resolves `use ... as alias`
   and fails on an aliased entry, and its own negative tests run on every check.
@@ -898,7 +898,7 @@ Tests follow implementation ownership.
 - **Non-AD concrete ops**: `Tensor` and dynamic-rank `TypedTensor<T>` use
   crate-root session extension traits (`TensorSessionOpsExt`,
   `TypedTensorSessionOpsExt`, and `TypedTensorMaskSessionOpsExt`) whose
-  methods run inside a caller-provided `BackendSession` (entered via
+  methods run inside a caller-provided `Engine` (entered via
   `BackendSessionHost::with_backend_session`, which returns
   `Result<R, SessionEntryError>`, so a fallible operation is written `??`).
   The facade targets the `Dynamic` representation; a `Host` owner reaches it

@@ -139,7 +139,7 @@ fn c64_matrix(n: usize) -> Tensor {
 /// quiet sample is the one the kernels actually cost.
 fn steady_state(
     host: &mut CpuBackend,
-    operation: impl Fn(&mut dyn tenferro_tensor::BackendSession) + Send + Sync,
+    operation: impl Fn(&mut dyn tenferro_tensor::Engine) + Send + Sync,
 ) -> AllocationReport {
     for _ in 0..4 {
         host.with_backend_session(|session| operation(session))
@@ -223,21 +223,21 @@ fn lapack_kernels_take_their_scratch_from_the_session_buffer_pool() {
         check!(
             format!("svd/{shape}"),
             input,
-            |input: &Tensor, session: &mut dyn tenferro_tensor::BackendSession| {
+            |input: &Tensor, session: &mut dyn tenferro_tensor::Engine| {
                 input.svd(session).unwrap();
             }
         );
         check!(
             format!("svdvals/{shape}"),
             input,
-            |input: &Tensor, session: &mut dyn tenferro_tensor::BackendSession| {
+            |input: &Tensor, session: &mut dyn tenferro_tensor::Engine| {
                 input.svdvals(session).unwrap();
             }
         );
         check!(
             format!("qr/{shape}"),
             input,
-            |input: &Tensor, session: &mut dyn tenferro_tensor::BackendSession| {
+            |input: &Tensor, session: &mut dyn tenferro_tensor::Engine| {
                 input.qr(session).unwrap();
             }
         );
@@ -247,14 +247,14 @@ fn lapack_kernels_take_their_scratch_from_the_session_buffer_pool() {
         check!(
             format!("eigh/{shape}"),
             input,
-            |input: &Tensor, session: &mut dyn tenferro_tensor::BackendSession| {
+            |input: &Tensor, session: &mut dyn tenferro_tensor::Engine| {
                 input.eigh(session).unwrap();
             }
         );
         check!(
             format!("lu/{shape}"),
             input,
-            |input: &Tensor, session: &mut dyn tenferro_tensor::BackendSession| {
+            |input: &Tensor, session: &mut dyn tenferro_tensor::Engine| {
                 input.lu(session).unwrap();
             }
         );

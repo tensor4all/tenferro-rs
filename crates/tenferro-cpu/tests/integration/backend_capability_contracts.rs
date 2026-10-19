@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendRuntimeCache, BackendSession, BackendSessionHost, TensorAnalytic, TensorBackend,
+    BackendRuntimeCache, Engine, BackendSessionHost, TensorAnalytic, TensorBackend,
     TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
@@ -282,7 +282,7 @@ where
         + TensorDot
         + TensorFusion
         + TensorBuffer
-        + BackendSession
+        + Engine
         + ?Sized,
 {
 }
@@ -580,7 +580,7 @@ fn tensor_public_surface_has_no_context_free_materialization_api() {
     // also required to contain no backend/device vocabulary: the identifiers a
     // context-free materialization could hide behind, including under a new name.
     const SESSION_IDENTIFIERS: [&str; 7] = [
-        "BackendSession",
+        "Engine",
         "BackendSessionHost",
         "TensorStructural",
         "BackendAllocation",
@@ -734,7 +734,7 @@ fn cpu_provider_dispatch_has_no_runtime_registry_lookup_or_legacy_staging() {
         assert_direct_dispatch(module, source);
     }
 
-    // exec_session.rs also owns the concrete BackendSession type identity;
+    // exec_session.rs also owns the concrete Engine type identity;
     // scan only its contraction entry points so that this unrelated TypeId is
     // not mistaken for a dispatch registry.
     let exec_session = include_str!("../../src/exec_session.rs");

@@ -392,7 +392,7 @@ fn axpby_strided_source_kernel_compiles_once_per_rank() {
 fn assert_cpu_parity(
     gpu: &mut CudaBackend,
     inputs: &[&Tensor],
-    op: impl Fn(&mut dyn tenferro_tensor::backend::BackendSession, &[&Tensor]) -> Tensor + Sync,
+    op: impl Fn(&mut dyn tenferro_tensor::backend::Engine, &[&Tensor]) -> Tensor + Sync,
 ) {
     let expected = cpu_backend()
         .with_backend_session(|session| op(session, inputs))

@@ -4,7 +4,7 @@ use super::*;
 use crate::{CpuBatchPolicy, CpuBatchStrategy};
 
 /// Read the effective policy of a live CPU session through its linalg context.
-fn observed(session: &mut dyn tenferro_tensor::BackendSession) -> CpuBatchStrategy {
+fn observed(session: &mut dyn tenferro_tensor::Engine) -> CpuBatchStrategy {
     crate::with_cpu_exec_session(session, |cpu| {
         cpu.with_linalg_pool(|context, _| Ok(context.batch_policy().strategy))
     })
@@ -228,7 +228,7 @@ struct NonCpuSession;
 mod non_cpu_session {
     use super::NonCpuSession;
     use tenferro_tensor::{
-        BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir,
+        BackendCachedDot, BackendRuntimeCache, Engine, BackendSessionHost, CompareDir,
         DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig, ScatterConfig,
         SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
         TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction,
@@ -338,12 +338,12 @@ mod non_cpu_session {
     }
 
     impl BackendCachedDot for NonCpuSession {}
-    impl BackendSession for NonCpuSession {}
+    impl Engine for NonCpuSession {}
 
     impl BackendSessionHost for NonCpuSession {
         fn with_backend_session<R>(
             &mut self,
-            f: impl FnOnce(&mut dyn BackendSession) -> R,
+            f: impl FnOnce(&mut dyn Engine) -> R,
         ) -> std::result::Result<R, tenferro_tensor::SessionEntryError> {
             tenferro_tensor::with_session_entry_guard("non-CPU test session", || f(self))
         }

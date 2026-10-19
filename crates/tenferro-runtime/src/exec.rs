@@ -7,7 +7,7 @@ use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::backend::ElementwiseFusionOp;
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
-    BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
+    Engine, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
     SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor, ValidationError,
 };
 use tinyvec::TinyVec;
@@ -117,7 +117,7 @@ impl<'a> ExecSlot<'a> {
         }
     }
 
-    pub(crate) fn into_tensor(self, exec: &mut dyn BackendSession) -> Result<Tensor> {
+    pub(crate) fn into_tensor(self, exec: &mut dyn Engine) -> Result<Tensor> {
         match self {
             Self::Owned(tensor) => Ok(tensor),
             Self::Value(value) => {
@@ -137,7 +137,7 @@ impl<'a> ExecSlot<'a> {
         }
     }
 
-    pub(crate) fn into_value(self, exec: &mut dyn BackendSession) -> Result<TensorValue> {
+    pub(crate) fn into_value(self, exec: &mut dyn Engine) -> Result<TensorValue> {
         match self {
             Self::Owned(tensor) => Ok(TensorValue::from_tensor(tensor)),
             Self::Value(value) => Ok(value),
@@ -348,7 +348,7 @@ where
 }
 
 pub(crate) fn ensure_owned<'input>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'input>>],
     input_slots: &[usize],
     idx: usize,
@@ -397,7 +397,7 @@ pub(crate) fn initialize_exec_slots_in<'input>(
 pub(crate) fn collect_outputs_from<'input>(
     program: &ExecProgram,
     slots: &mut [Option<ExecSlot<'input>>],
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
 ) -> Result<Vec<Tensor>> {
     program
         .output_slots
@@ -412,7 +412,7 @@ pub(crate) fn collect_outputs_from<'input>(
 pub(crate) fn collect_output_values_from<'input>(
     program: &ExecProgram,
     slots: &mut [Option<ExecSlot<'input>>],
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
 ) -> Result<Vec<TensorValue>> {
     program
         .output_slots
@@ -464,7 +464,7 @@ pub(crate) fn instruction_may_be_terminal_value(
 }
 
 pub(crate) fn try_execute_terminal_value_instruction<'input>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
     terminal_slots: &[bool],
@@ -521,7 +521,7 @@ pub(crate) fn try_execute_terminal_value_instruction<'input>(
 }
 
 fn tensor_value_for_lazy_view<'input>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'input>>],
     slot: usize,
     consume: bool,
@@ -866,7 +866,7 @@ pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: Tensor
 }
 
 pub(crate) fn execute_backend_op<'input>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
@@ -874,7 +874,7 @@ pub(crate) fn execute_backend_op<'input>(
 }
 
 pub(crate) fn execute_host_instruction_exec<'input>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
 ) -> Result<()> {
@@ -914,7 +914,7 @@ pub(crate) fn execute_owner_extension_fallback<'input, B: TensorBackend + 'stati
 }
 
 pub(crate) fn execute_ffi_instruction_exec<'input>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
     cache_slot: Option<usize>,
@@ -996,7 +996,7 @@ pub(crate) fn execute_ffi_instruction_exec<'input>(
 }
 
 fn execute_prepared_extension_instruction_in_session<'input>(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     slots: &[Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
     ext: &dyn ExtensionOp,
@@ -1258,7 +1258,7 @@ fn exact_bytes<const N: usize>(dtype: DType, bytes: &[u8]) -> Result<[u8; N]> {
 pub(crate) fn reclaim_last_use_inputs_exec<'input>(
     slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
 ) {
     for (i, &is_last) in inst.last_use.iter().enumerate() {
         if is_last && let Some(slot) = slots[inst.input_slots[i]].take() {
@@ -1267,7 +1267,7 @@ pub(crate) fn reclaim_last_use_inputs_exec<'input>(
     }
 }
 
-fn reclaim_exec_slot_with_session(slot: ExecSlot<'_>, exec: &mut dyn BackendSession) {
+fn reclaim_exec_slot_with_session(slot: ExecSlot<'_>, exec: &mut dyn Engine) {
     match slot {
         ExecSlot::Owned(tensor) => exec.reclaim_buffer(tensor),
         ExecSlot::Value(value) => {

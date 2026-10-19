@@ -13,7 +13,7 @@ the strides or materializes once (`borrowed-extension-reads.md`).
 
 - **Changed**: the eager gather took *every* view operand through
   `to_contiguous_read` before the kernel, so a pooled or borrowed embedding table
-  was copied once per call. `BackendSession::gather_read` now takes both operands
+  was copied once per call. `Engine::gather_read` now takes both operands
   as reads: the default materializes and delegates (so every backend keeps
   working), and the CUDA session binds the operand where it is when the device can
   read it through its own strides, falling back to the owned path otherwise. The

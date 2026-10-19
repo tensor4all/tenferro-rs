@@ -50,7 +50,7 @@ use tenferro_tensor::{
     GroupError, IntoShapeVec, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorRead,
     TensorScalar, TensorValue, TensorView,
 };
-use tenferro_tensor::{BackendSession, BackendSessionHost};
+use tenferro_tensor::{Engine, BackendSessionHost};
 
 #[cfg(feature = "cuda")]
 use crate::eager_backend::cuda_runtime_engine_id;
@@ -975,7 +975,7 @@ impl AdValueRecord {
 /// immutable runtime registration metadata when [`EagerRuntime::on_cpu`] is
 /// called. It holds no resource permit while idle and enters one backend
 /// session only while [`Self::with_eager_session`] runs. The session exposes
-/// core [`BackendSession`] operations on concrete [`Tensor`] values. This
+/// core [`Engine`] operations on concrete [`Tensor`] values. This
 /// bridge deliberately does not expose the eager runtime's linalg, FFT, einsum,
 /// or extension-runtime registries.
 ///
@@ -1077,7 +1077,7 @@ impl CpuPlacementBoundEager {
     /// execution scope. The closure may borrow stack data and need not be
     /// `'static`.
     ///
-    /// This phase-2 bridge accepts only core [`BackendSession`] operations. It
+    /// This phase-2 bridge accepts only core [`Engine`] operations. It
     /// does not lock or dispatch the eager runtime's linalg, FFT, einsum, or
     /// extension registries.
     ///
@@ -1113,7 +1113,7 @@ impl CpuPlacementBoundEager {
     /// refreshed. Use only the borrowed `session` for work inside the scope.
     pub fn with_eager_session<T, E: From<Error>>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> std::result::Result<T, E>,
+        f: impl FnOnce(&mut dyn Engine) -> std::result::Result<T, E>,
     ) -> std::result::Result<T, E> {
         self.refresh_runtime_selection().map_err(E::from)?;
         match self.backend.with_backend_session(f) {
@@ -1196,7 +1196,7 @@ pub struct EagerRuntime {
 /// ```
 pub struct EagerSession<'a> {
     runtime: &'a Arc<EagerRuntime>,
-    backend: &'a mut dyn BackendSession,
+    backend: &'a mut dyn Engine,
 }
 
 impl fmt::Debug for EagerSession<'_> {
@@ -2815,7 +2815,7 @@ impl EagerSession<'_> {
     /// assert_eq!(copy.as_slice::<f64>()?, &[1.0, -2.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn backend_session(&mut self) -> &mut dyn BackendSession {
+    pub fn backend_session(&mut self) -> &mut dyn Engine {
         &mut *self.backend
     }
 
@@ -3748,7 +3748,7 @@ impl EagerRuntime {
     /// callback result.
     pub fn with_execution_session<R>(
         &self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R> {
         // Lock order: the eager backend owner lock is taken before admission,
         // and admission never waits on this lock while holding a permit.
@@ -3902,7 +3902,7 @@ impl EagerRuntime {
     pub fn with_extension_execution_context<R: Send>(
         &self,
         f: impl FnOnce(
-                &mut tenferro_runtime::ExtensionExecutionContext<'_, dyn BackendSession + '_>,
+                &mut tenferro_runtime::ExtensionExecutionContext<'_, dyn Engine + '_>,
             ) -> R
             + Send,
     ) -> Result<R> {
@@ -4494,7 +4494,7 @@ impl EagerRuntime {
     fn store_grads(
         &self,
         cotangents: &HashMap<ValueKey<StdTensorOp>, Tensor>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<()> {
         let mut updates = Vec::new();
 
@@ -5120,7 +5120,7 @@ fn validate_same_runtime(
 }
 
 fn copy_value_in_session(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     value: &RetainedValue,
 ) -> Result<Tensor> {
     let read = value.tensor_read().map_err(|error| {
@@ -5296,7 +5296,7 @@ impl EagerTensor {
         ctx: Arc<EagerRuntime>,
         tensor: Tensor,
         requires_grad: bool,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<Self> {
         Self::new_leaf_with_session(ctx, tensor, requires_grad, Some(session))
     }
@@ -5305,7 +5305,7 @@ impl EagerTensor {
         ctx: Arc<EagerRuntime>,
         tensor: Tensor,
         requires_grad: bool,
-        session: Option<&mut dyn BackendSession>,
+        session: Option<&mut dyn Engine>,
     ) -> Result<Self> {
         let key = eager_val_key();
         // A host-placement tensor needs no backend session: the CPU backend only
@@ -5639,7 +5639,7 @@ impl EagerTensor {
 
     pub(crate) fn duplicate_value_in_session(
         &self,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<Tensor> {
         if let Some(tensor) = self.duplicate_host_value() {
             return Ok(tensor);
@@ -6264,7 +6264,7 @@ pub(crate) fn record_eager_outputs_in_session(
     op: &StdTensorOp,
     outputs: &[&Tensor],
     inputs: &[&EagerTensor],
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
 ) -> Result<RecordedEagerOutputs> {
     let metadata = outputs
         .iter()
@@ -6277,7 +6277,7 @@ pub(crate) fn record_eager_value_outputs_in_session(
     op: &StdTensorOp,
     outputs: &[&TensorValue],
     inputs: &[&EagerTensor],
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
 ) -> Result<RecordedEagerOutputs> {
     let metadata = outputs
         .iter()
@@ -6290,7 +6290,7 @@ fn record_eager_outputs_inner(
     op: &StdTensorOp,
     output_metadata: Vec<TensorMeta>,
     inputs: &[&EagerTensor],
-    session: Option<&mut dyn BackendSession>,
+    session: Option<&mut dyn Engine>,
 ) -> Result<RecordedEagerOutputs> {
     let semantic_traces = record_semantic_eager_outputs(op, &output_metadata, inputs, session)?;
     record_eager_outputs_from_metadata(output_metadata, semantic_traces, inputs)
@@ -6300,7 +6300,7 @@ fn record_semantic_eager_outputs(
     op: &StdTensorOp,
     output_metadata: &[TensorMeta],
     inputs: &[&EagerTensor],
-    mut session: Option<&mut dyn BackendSession>,
+    mut session: Option<&mut dyn Engine>,
 ) -> Result<Vec<Option<TracedTensor>>> {
     // Materialize a constant semantic leaf for any untracked input that lost
     // its implicit semantic trace on the active-edge fast path. This keeps
@@ -6549,7 +6549,7 @@ pub(crate) fn zero_like_tensor<B: TensorBackend>(
         .map_err(Error::from)
 }
 
-pub(crate) fn one_like_tensor(input: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
+pub(crate) fn one_like_tensor(input: &Tensor, session: &mut dyn Engine) -> Result<Tensor> {
     let host = ones_tensor(input.dtype(), input.shape().to_vec())?;
     session
         .upload_host_tensor(TensorRead::from_tensor(&host))

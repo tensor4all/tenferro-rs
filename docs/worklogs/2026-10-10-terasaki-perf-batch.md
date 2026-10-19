@@ -40,7 +40,7 @@ materialization in the complex Frobenius norm.
   an externally defined dtype instead of borrowing `Tensor::tensor_view`, which
   has no external variant and would otherwise panic.
 - **Complex full Frobenius norm uses the fused full-reduction primitive.**
-  `norm_from_read` now takes `BackendSession::norm_squared_read` (one `|x|^2`
+  `norm_from_read` now takes `Engine::norm_squared_read` (one `|x|^2`
   pass) plus `sqrt_read` whenever `ord` is `None` and the axes cover every
   dimension. The previous route for a complex all-axis norm materialized a
   permuted copy (`move_axes_to_front`) and a full `abs` temporary before

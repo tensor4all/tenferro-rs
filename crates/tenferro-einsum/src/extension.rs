@@ -28,7 +28,7 @@ use tenferro_runtime::extension::{ExtensionCacheKey, ExtensionExecutionContext};
 use tenferro_runtime::program::{
     CoreSemanticOp, ProgramValue, ProgramValueMetadata, SemanticProgramBuilder,
 };
-use tenferro_tensor::{BackendSession, DType, Error as TensorError, Tensor, TensorRead};
+use tenferro_tensor::{Engine, DType, Error as TensorError, Tensor, TensorRead};
 
 use crate::builder::build_einsum_graph;
 use crate::cache::{
@@ -1017,7 +1017,7 @@ define_extension_runtime! {
 pub(crate) fn execute_einsum_extension_session_reads(
     op: &EinsumExtensionOp,
     inputs: &[TensorRead<'_>],
-    ctx: &mut ExtensionExecutionContext<'_, dyn BackendSession + '_>,
+    ctx: &mut ExtensionExecutionContext<'_, dyn Engine + '_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     if inputs.is_empty() {
         return Err(tenferro_tensor::Error::invalid_argument(
@@ -1042,7 +1042,7 @@ pub(crate) fn execute_einsum_extension_session_reads(
 /// it here is explicitly out of scope for issue #1665.
 fn execute_einsum_extension_reads_in_session(
     op: &EinsumExtensionOp,
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     caches: &mut tenferro_runtime::ExtensionCacheStore,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -1114,7 +1114,7 @@ struct CachedRuntimeTree {
     tree: Arc<ContractionTree>,
 }
 
-fn cached_runtime_tree<B: BackendSession + ?Sized>(
+fn cached_runtime_tree<B: Engine + ?Sized>(
     ctx: &mut ExtensionExecutionContext<'_, B>,
     subscripts: &EinsumSubscripts,
     plan_spec: &EinsumPlanSpec,

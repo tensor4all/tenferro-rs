@@ -20,7 +20,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::backend::{
     ElementwiseFusionInputView, ElementwiseFusionInst, ElementwiseFusionPlan,
 };
-use tenferro_tensor::{BackendSession, Tensor, TensorBackend, TensorRead, TensorValue};
+use tenferro_tensor::{Engine, Tensor, TensorBackend, TensorRead, TensorValue};
 
 /// A compiled execution segment.
 ///
@@ -632,7 +632,7 @@ fn eval_exec_segmented_session_regions_slot_values_with_workspace<
 }
 
 fn execute_segment_in_session(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'_>>],
     segment: &Segment,
     inst_idx: usize,
@@ -666,7 +666,7 @@ fn execute_segment_in_session(
 }
 
 fn execute_value_segment_in_session(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'_>>],
     segment: &Segment,
     inst_idx: usize,
@@ -840,7 +840,7 @@ fn eval_exec_segmented_single_session_slot_values_with_workspace<'input, B: Tens
 }
 
 fn execute_fused_segment(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'_>>],
     instructions: &[ExecInstruction],
     input_slots: &[usize],
@@ -890,7 +890,7 @@ fn execute_fused_segment(
 }
 
 fn execute_fused_value_segment(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'_>>],
     instructions: &[ExecInstruction],
     input_slots: &[usize],
@@ -980,7 +980,7 @@ fn has_multi_instruction_fused_segment(program: &ExecProgram) -> bool {
 }
 
 fn try_execute_broadcast_multiply_segment(
-    exec: &mut dyn tenferro_tensor::BackendSession,
+    exec: &mut dyn tenferro_tensor::Engine,
     slots: &[Option<ExecSlot<'_>>],
     instructions: &[ExecInstruction],
     output_slots: &[usize],
@@ -1109,7 +1109,7 @@ where
 }
 
 fn try_execute_single_broadcast_multiply_segment(
-    exec: &mut dyn tenferro_tensor::BackendSession,
+    exec: &mut dyn tenferro_tensor::Engine,
     slots: &[Option<ExecSlot<'_>>],
     instructions: &[ExecInstruction],
     output_slots: &[usize],
@@ -1174,7 +1174,7 @@ fn try_execute_single_broadcast_multiply_segment(
 }
 
 fn try_execute_terminal_broadcast_multiply_value_segment(
-    exec: &mut dyn tenferro_tensor::BackendSession,
+    exec: &mut dyn tenferro_tensor::Engine,
     slots: &[Option<ExecSlot<'_>>],
     instructions: &[ExecInstruction],
     output_slots: &[usize],
@@ -1229,7 +1229,7 @@ fn try_execute_terminal_broadcast_multiply_value_segment(
 }
 
 fn try_execute_terminal_single_broadcast_multiply_value_segment(
-    exec: &mut dyn tenferro_tensor::BackendSession,
+    exec: &mut dyn tenferro_tensor::Engine,
     slots: &[Option<ExecSlot<'_>>],
     instructions: &[ExecInstruction],
     output_slots: &[usize],
@@ -1440,7 +1440,7 @@ fn reclaim_segment_inputs_exec(
     slots: &mut [Option<ExecSlot<'_>>],
     input_slots: &[usize],
     last_use: &[bool],
-    exec: &mut dyn tenferro_tensor::BackendSession,
+    exec: &mut dyn tenferro_tensor::Engine,
 ) {
     for (&slot, &is_last_use) in input_slots.iter().zip(last_use.iter()) {
         if is_last_use && let Some(ExecSlot::Owned(tensor)) = slots[slot].take() {

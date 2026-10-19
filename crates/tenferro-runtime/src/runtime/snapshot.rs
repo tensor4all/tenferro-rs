@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
-use tenferro_tensor::{BackendSession, Tensor, TensorValue};
+use tenferro_tensor::{Engine, Tensor, TensorValue};
 
 use crate::graph::CompiledGraph;
 use crate::program::FrozenProgram;
@@ -1156,7 +1156,7 @@ impl Runtime {
     /// [`crate::Error::Extension`].
     pub fn run_prepared_in(
         &self,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
         prepared: &super::execution::PreparedCompiledGraph,
         inputs: &[&Tensor],
     ) -> crate::Result<Vec<Tensor>> {
@@ -1216,7 +1216,7 @@ impl Runtime {
     /// on either failure.
     pub fn begin_prepared_deferred<'a>(
         &'a self,
-        session: &'a mut dyn BackendSession,
+        session: &'a mut dyn Engine,
         prepared: &'a super::execution::PreparedCompiledGraph,
     ) -> crate::Result<super::execution::PreparedDeferred<'a>> {
         super::execution::begin_prepared_deferred(

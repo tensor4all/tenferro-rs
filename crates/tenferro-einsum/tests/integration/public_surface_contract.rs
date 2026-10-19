@@ -44,7 +44,7 @@ fn typed_einsum_view_inputs_use_read_suffix_and_typed_outputs_accept_views() {
 
     assert!(source.contains("pub trait TypedTensorReadEinsumExt"));
     assert!(source.contains("fn einsum_read("));
-    assert!(source.contains("session: &mut dyn BackendSession,"));
+    assert!(source.contains("session: &mut dyn Engine,"));
     assert!(source.contains("pub trait TypedTensorReadEinsumIntoExt"));
     assert!(source.contains("fn einsum_read_into<'out, O>"));
     assert!(source.contains("O: Into<TypedTensorWrite<'out, T>>"));

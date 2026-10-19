@@ -8,7 +8,7 @@ add, and multiplication operations; the source-contract test checks those
 phrases and rejects duplicate adjacent proofs. TBLIS thread-control FFI now
 states the process-global ABI/serialized guard/Drop-restoration contract.
 
-The erased session bridge now uses explicit `BackendSession` implementations
+The erased session bridge now uses explicit `Engine` implementations
 for each concrete backend/session and private `'static` marker structs whose
 `TypeId`s identify the concrete target; it no longer uses a shared
 `BackendSessionIdentity` or `type_name`. CPU tests cover foreign-marker

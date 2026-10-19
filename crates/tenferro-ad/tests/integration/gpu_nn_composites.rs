@@ -463,7 +463,7 @@ fn test_gpu_composites_concrete_session_matches_cpu() {
                 &Tensor,
                 &Tensor,
                 &Tensor,
-                &mut dyn tenferro_tensor::BackendSession,
+                &mut dyn tenferro_tensor::Engine,
             ) -> tenferro_tensor::Result<Tensor>
             + Send
             + Sync

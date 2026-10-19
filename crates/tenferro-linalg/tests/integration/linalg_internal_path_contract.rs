@@ -238,7 +238,7 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
     // Owned SVD values: values-only hook, not compute-and-discard via svd.
     let owned_svdvals = source_section(
         &source,
-        "fn svdvals(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+        "fn svdvals(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
         "fn svd_with_options(",
     );
     assert!(
@@ -252,7 +252,7 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
 
     let read_svdvals = source_section(
         &source,
-        "fn svdvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+        "fn svdvals_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
         "fn svd_with_options_read(",
     );
     assert!(
@@ -263,8 +263,8 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
     // Owned eigvalsh: values-only hook, not compute-and-discard via eigh.
     let owned_eigvalsh = source_section(
         &source,
-        "fn eigvalsh(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
-        "fn eigvals(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+        "fn eigvalsh(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
+        "fn eigvals(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
     );
     assert!(
         owned_eigvalsh.contains("backend.eigh_values(self)"),
@@ -278,7 +278,7 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
     // Owned eigvals already uses the general values-only hook (kept).
     let owned_eigvals = source_section(
         &source,
-        "fn eigvals(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+        "fn eigvals(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
         "fn pinv(",
     );
     assert!(
@@ -293,8 +293,8 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
     // Read surfaces route directly through the borrowed values-only hook.
     let read_eigvalsh = source_section(
         &source,
-        "fn eigvalsh_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
-        "fn eigvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+        "fn eigvalsh_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
+        "fn eigvals_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
     );
     assert!(
         read_eigvalsh.contains("eigh_values_read(self)"),
@@ -307,7 +307,7 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
 
     let read_eigvals = source_section(
         &source,
-        "fn eigvals_read(self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor> {",
+        "fn eigvals_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
         "fn pinv_read",
     );
     assert!(

@@ -3,7 +3,7 @@
 use num_complex::Complex64;
 
 use crate::{
-    BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
+    Engine, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
     SliceConfig, Tensor,
 };
 
@@ -64,7 +64,7 @@ pub trait TensorSessionOpsExt {
     fn add(
         &self,
         rhs: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise multiplication with NumPy-style broadcasting inside a session.
     ///
@@ -93,7 +93,7 @@ pub trait TensorSessionOpsExt {
     fn mul(
         &self,
         rhs: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise exponential inside a session.
     ///
@@ -118,7 +118,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn exp(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn exp(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Sum over the selected axes inside a session. `None` reduces every
     /// axis and `Some(&[])` keeps the input shape, as in the eager and traced
     /// reduction family.
@@ -147,7 +147,7 @@ pub trait TensorSessionOpsExt {
     fn reduce_sum(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Convert to a different dtype using the checked conversion lattice inside a session.
     ///
@@ -176,7 +176,7 @@ pub trait TensorSessionOpsExt {
     fn convert(
         &self,
         to: DType,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Cast to a different dtype using explicit lossy projection inside a session.
     ///
@@ -201,7 +201,7 @@ pub trait TensorSessionOpsExt {
     /// with `DTypeMismatch` or `InvalidArgument` for invalid tensor metadata,
     /// or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn cast(&self, to: DType, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn cast(&self, to: DType, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise subtraction with NumPy-style broadcasting inside a session.
     ///
     /// Like [`Self::add`], the broadcast and the subtraction run in the one
@@ -230,7 +230,7 @@ pub trait TensorSessionOpsExt {
     fn sub(
         &self,
         rhs: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise division with NumPy-style broadcasting inside a session.
     ///
@@ -259,7 +259,7 @@ pub trait TensorSessionOpsExt {
     fn div(
         &self,
         rhs: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise remainder with NumPy-style broadcasting inside a session.
     ///
@@ -287,7 +287,7 @@ pub trait TensorSessionOpsExt {
     fn rem(
         &self,
         rhs: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise power with NumPy-style broadcasting inside a session.
     ///
@@ -316,7 +316,7 @@ pub trait TensorSessionOpsExt {
     fn pow(
         &self,
         rhs: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise maximum with NumPy-style broadcasting inside a session.
     ///
@@ -343,7 +343,7 @@ pub trait TensorSessionOpsExt {
     fn maximum(
         &self,
         rhs: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise minimum with NumPy-style broadcasting inside a session.
     ///
@@ -370,7 +370,7 @@ pub trait TensorSessionOpsExt {
     fn minimum(
         &self,
         rhs: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise negation inside a session.
     ///
@@ -393,7 +393,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] when the dtype is not
     /// supported by the operation, or [`tenferro_tensor::Error::BackendSource`]
     /// for a typed backend failure.
-    fn neg(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn neg(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise absolute value inside a session.
     ///
     /// # Examples
@@ -415,7 +415,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn abs(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn abs(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise sign inside a session.
     ///
     /// # Examples
@@ -437,7 +437,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn sign(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn sign(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise complex conjugate inside a session.
     ///
     /// For real dtypes the conjugate is the identity.
@@ -461,7 +461,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn conj(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn conj(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise natural logarithm inside a session.
     ///
     /// # Examples
@@ -485,7 +485,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn log(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn log(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise `exp(x) - 1` inside a session.
     ///
     /// # Examples
@@ -509,7 +509,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn expm1(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn expm1(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise `log(1 + x)` inside a session.
     ///
     /// # Examples
@@ -533,7 +533,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn log1p(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn log1p(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise error function `erf(x)` inside a session, for real `F32`/`F64`.
     ///
     /// # Examples
@@ -557,7 +557,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
     /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
     /// for a typed backend failure.
-    fn erf(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn erf(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise sine inside a session.
     ///
     /// # Examples
@@ -581,7 +581,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn sin(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn sin(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise cosine inside a session.
     ///
     /// # Examples
@@ -605,7 +605,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn cos(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn cos(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise hyperbolic tangent inside a session.
     ///
     /// # Examples
@@ -629,7 +629,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn tanh(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn tanh(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise square root inside a session.
     ///
     /// # Examples
@@ -651,7 +651,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn sqrt(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn sqrt(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise reciprocal square root inside a session.
     ///
     /// # Examples
@@ -675,7 +675,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn rsqrt(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn rsqrt(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise comparison with NumPy-style broadcasting inside a session.
     ///
     /// The result is a bool tensor.
@@ -704,7 +704,7 @@ pub trait TensorSessionOpsExt {
         &self,
         rhs: &Tensor,
         dir: CompareDir,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Select values from `on_true` or `on_false` using this tensor as condition inside a session.
     ///
@@ -733,7 +733,7 @@ pub trait TensorSessionOpsExt {
         &self,
         on_true: &Tensor,
         on_false: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Clamp values elementwise between lower and upper bounds inside a session.
     ///
@@ -762,7 +762,7 @@ pub trait TensorSessionOpsExt {
         &self,
         lower: &Tensor,
         upper: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Rank-2 matrix multiplication inside a session.
     ///
@@ -789,7 +789,7 @@ pub trait TensorSessionOpsExt {
     fn matmul(
         &self,
         rhs: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Reshape without changing element order inside a session.
     ///
@@ -816,7 +816,7 @@ pub trait TensorSessionOpsExt {
     fn reshape(
         &self,
         shape: &[usize],
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Permute axes inside a session.
     ///
@@ -843,7 +843,7 @@ pub trait TensorSessionOpsExt {
     fn transpose(
         &self,
         perm: &[usize],
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Gather slices of this tensor at `indices` inside a session (StableHLO `gather`).
     ///
@@ -877,7 +877,7 @@ pub trait TensorSessionOpsExt {
         &self,
         indices: &Tensor,
         config: GatherConfig,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Scatter `updates` into a copy of this tensor at `indices` inside a session (StableHLO `scatter`).
     ///
@@ -912,7 +912,7 @@ pub trait TensorSessionOpsExt {
         indices: &Tensor,
         updates: &Tensor,
         config: ScatterConfig,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Slice this tensor with explicit start, limit and stride per axis inside a session.
     ///
@@ -938,7 +938,7 @@ pub trait TensorSessionOpsExt {
     fn slice(
         &self,
         config: SliceConfig,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Slice this tensor at runtime `starts` (an integer tensor) with static `sizes` inside a session.
     ///
@@ -965,7 +965,7 @@ pub trait TensorSessionOpsExt {
         &self,
         starts: &Tensor,
         sizes: &[usize],
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Pad this tensor with zeros (edge and interior padding per axis) inside a session.
     ///
@@ -995,7 +995,7 @@ pub trait TensorSessionOpsExt {
     fn pad(
         &self,
         config: PadConfig,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Concatenate tensors along `axis` inside a session.
     ///
@@ -1024,7 +1024,7 @@ pub trait TensorSessionOpsExt {
     fn concatenate(
         inputs: &[&Tensor],
         axis: usize,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>
     where
         Self: Sized;
@@ -1051,7 +1051,7 @@ pub trait TensorSessionOpsExt {
     fn reverse(
         &self,
         axes: &[usize],
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Take the maximum over the selected axes inside a session. `None` reduces every axis and `Some(&[])` keeps the input shape.
     ///
@@ -1077,7 +1077,7 @@ pub trait TensorSessionOpsExt {
     fn reduce_max(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Take the minimum over the selected axes inside a session. `None` reduces every axis and `Some(&[])` keeps the input shape.
     ///
@@ -1103,7 +1103,7 @@ pub trait TensorSessionOpsExt {
     fn reduce_min(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Multiply over the selected axes inside a session. `None` reduces every axis and `Some(&[])` keeps the input shape.
     ///
@@ -1129,7 +1129,7 @@ pub trait TensorSessionOpsExt {
     fn reduce_prod(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Sum elementwise squares over the selected axes inside a session (`f32`/`f64`). `None` reduces every axis and `Some(&[])` keeps the input shape.
     ///
@@ -1155,7 +1155,7 @@ pub trait TensorSessionOpsExt {
     fn reduce_sum_squares(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Broadcast this tensor into `shape`, mapping input axis `i` to output axis `dims[i]`, inside a session.
     ///
@@ -1181,7 +1181,7 @@ pub trait TensorSessionOpsExt {
         &self,
         shape: &[usize],
         dims: &[usize],
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Keep the lower triangle (on and below diagonal `k`) of the trailing matrix axes inside a session.
     ///
@@ -1203,7 +1203,7 @@ pub trait TensorSessionOpsExt {
     ///
     /// Returns [`tenferro_tensor::Error::Validation`] for an input of rank below 2, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn tril(&self, k: i64, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn tril(&self, k: i64, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Keep the upper triangle (on and above diagonal `k`) of the trailing matrix axes inside a session.
     ///
     /// # Examples
@@ -1224,7 +1224,7 @@ pub trait TensorSessionOpsExt {
     ///
     /// Returns [`tenferro_tensor::Error::Validation`] for an input of rank below 2, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn triu(&self, k: i64, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn triu(&self, k: i64, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Extract the diagonal along `axis_a` and `axis_b` inside a session.
     ///
     /// # Examples
@@ -1249,7 +1249,7 @@ pub trait TensorSessionOpsExt {
         &self,
         axis_a: usize,
         axis_b: usize,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Embed this tensor along the diagonal of `axis_a` and `axis_b` inside a session.
     ///
@@ -1275,7 +1275,7 @@ pub trait TensorSessionOpsExt {
         &self,
         axis_a: usize,
         axis_b: usize,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Contract this tensor with `rhs` inside a session (StableHLO `dot_general`).
     ///
@@ -1310,7 +1310,7 @@ pub trait TensorSessionOpsExt {
         &self,
         rhs: &Tensor,
         config: DotGeneralConfig,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Contract with optional conjugation of either operand inside a session.
     ///
@@ -1346,7 +1346,7 @@ pub trait TensorSessionOpsExt {
         config: DotGeneralConfig,
         lhs_conj: bool,
         rhs_conj: bool,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Multiply by a real scalar inside a session, with the eager `scale_real` dtype rules.
     ///
@@ -1374,7 +1374,7 @@ pub trait TensorSessionOpsExt {
     fn scale_real(
         &self,
         factor: f64,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Multiply a complex tensor by a complex scalar inside a session.
     ///
@@ -1401,7 +1401,7 @@ pub trait TensorSessionOpsExt {
     fn scale_complex(
         &self,
         factor: Complex64,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Logistic sigmoid `1 / (1 + exp(-x))` inside a session, overflow-free.
     ///
@@ -1430,7 +1430,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
     /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
     /// for a typed backend failure.
-    fn sigmoid(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn sigmoid(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// SiLU (swish) `x * sigmoid(x)` inside a session.
     ///
     /// Real `F32`/`F64` only.
@@ -1456,7 +1456,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
     /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
     /// for a typed backend failure.
-    fn silu(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn silu(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Softplus `log(1 + exp(x))` inside a session, in the stable form `max(x, 0) + log1p(exp(-|x|))`.
     ///
     /// Real `F32`/`F64` only; never overflows.
@@ -1483,7 +1483,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
     /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
     /// for a typed backend failure.
-    fn softplus(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn softplus(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Exact GELU `x/2 * (1 + erf(x / sqrt(2)))` inside a session.
     ///
     /// Real `F32`/`F64` only (PyTorch `approximate="none"`).
@@ -1509,7 +1509,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
     /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
     /// for a typed backend failure.
-    fn gelu(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn gelu(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// GELU tanh approximation inside a session (PyTorch `approximate="tanh"`).
     ///
     /// `x/2 * (1 + tanh(sqrt(2/pi) * (x + 0.044715 x^3)))`; real `F32`/`F64` only.
@@ -1535,7 +1535,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
     /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
     /// for a typed backend failure.
-    fn gelu_tanh(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    fn gelu_tanh(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Arithmetic mean over `axes` inside a session (`None` reduces every axis).
     ///
     /// Float and complex dtypes. The sum is divided by the element count; a mean
@@ -1564,7 +1564,7 @@ pub trait TensorSessionOpsExt {
     fn reduce_mean(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Max-subtracted softmax along `axis` inside a session.
     ///
@@ -1594,7 +1594,7 @@ pub trait TensorSessionOpsExt {
     fn softmax(
         &self,
         axis: usize,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Max-subtracted log-softmax along `axis` inside a session.
     ///
@@ -1624,7 +1624,7 @@ pub trait TensorSessionOpsExt {
     fn log_softmax(
         &self,
         axis: usize,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Softmax along `axis` over the entries where the `Bool` `mask` is true.
     ///
@@ -1658,7 +1658,7 @@ pub trait TensorSessionOpsExt {
         &self,
         mask: &Tensor,
         axis: usize,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Log-softmax along `axis` over the entries where the `Bool` `mask` is true.
     ///
@@ -1692,7 +1692,7 @@ pub trait TensorSessionOpsExt {
         &self,
         mask: &Tensor,
         axis: usize,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Layer normalization along `axis` with optional affine `weight` / `bias`, inside a session.
     ///
@@ -1728,7 +1728,7 @@ pub trait TensorSessionOpsExt {
         weight: Option<&Tensor>,
         bias: Option<&Tensor>,
         eps: f64,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// RMS normalization along `axis` with optional affine `weight` / `bias`, inside a session.
     ///
@@ -1766,7 +1766,7 @@ pub trait TensorSessionOpsExt {
         weight: Option<&Tensor>,
         bias: Option<&Tensor>,
         eps: f64,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
     /// NumPy-style `take_along_axis` over `gather`, inside a session.
     ///
@@ -1803,6 +1803,6 @@ pub trait TensorSessionOpsExt {
         &self,
         indices: &Tensor,
         axis: usize,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
 }

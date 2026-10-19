@@ -16,7 +16,7 @@ use tenferro_tensor::backend::{
     TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
 };
 use tenferro_tensor::{
-    BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
+    BackendRuntimeCache, Engine, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
     ElementwiseReadOp, Error, GatherConfig, PadConfig, ScatterConfig, ShapeMismatch, SliceConfig,
     TensorBackend, TensorRead, TensorWrite, ValidationError,
 };
@@ -1185,7 +1185,7 @@ macro_rules! test_backend_impls {
 
         impl BackendCachedDot for $ty {}
 
-        impl BackendSession for $ty {
+        impl Engine for $ty {
 
         }
 
@@ -1449,7 +1449,7 @@ panic_reduction!(SessionCountingBackend);
 impl BackendSessionHost for SessionCountingBackend {
     fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         self.entries.set(self.entries.get() + 1);
         self.inner.with_backend_session(f)
@@ -1563,7 +1563,7 @@ impl TensorDeviceTransfer for WrongDTypeSessionBackend {
 
 impl BackendCachedDot for WrongDTypeSessionBackend {}
 
-impl BackendSession for WrongDTypeSessionBackend {}
+impl Engine for WrongDTypeSessionBackend {}
 
 impl TensorBackend for WrongDTypeSessionBackend {}
 
@@ -1758,7 +1758,7 @@ impl TensorReduction for WrongDTypeSessionBackend {
 impl BackendSessionHost for WrongDTypeSessionBackend {
     fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R,
+        f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         tenferro_tensor::with_session_entry_guard("test backend", || f(self))
     }

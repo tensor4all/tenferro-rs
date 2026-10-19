@@ -181,7 +181,7 @@ the native copy, and a compact 2D/3D transpose into a row-major compact
 destination uses the tiled transpose kernel there. The source and destination
 must be distinct allocations.
 
-`BackendSession::axpby_read_into_accum` keeps the documented compact
+`Engine::axpby_read_into_accum` keeps the documented compact
 destination contract, and consumes an arbitrary-stride or offset `x` through
 one native strided-source pass rather than canonicalizing it; a compact `x`
 still runs the single cuBLAS `geam` call.

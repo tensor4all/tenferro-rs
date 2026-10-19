@@ -147,7 +147,7 @@ use tenferro_runtime::extension::{
 use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
 use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
 use tenferro_tensor::{
-    BackendSession, CacheStats, DType, ErrorKind, Tensor, TensorBackend, TensorRead,
+    Engine, CacheStats, DType, ErrorKind, Tensor, TensorBackend, TensorRead,
     ValidationError,
 };
 
@@ -242,7 +242,7 @@ impl FftExecutor {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
@@ -271,7 +271,7 @@ impl FftExecutor {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
@@ -300,7 +300,7 @@ impl FftExecutor {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
@@ -329,7 +329,7 @@ impl FftExecutor {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
@@ -351,7 +351,7 @@ impl FftExecutor {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         let spec = concrete_fft_spec(
             op_name,
@@ -496,7 +496,7 @@ pub trait TensorFftExt {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Execute a one-dimensional inverse FFT along `axis`.
@@ -513,7 +513,7 @@ pub trait TensorFftExt {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Execute a one-dimensional real FFT along `axis`.
@@ -530,7 +530,7 @@ pub trait TensorFftExt {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Execute a one-dimensional inverse real FFT along `axis`.
@@ -547,7 +547,7 @@ pub trait TensorFftExt {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
 }
 
@@ -557,7 +557,7 @@ impl TensorFftExt for Tensor {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         let spec = concrete_fft_spec(
             "TensorFftExt::fft",
@@ -578,7 +578,7 @@ impl TensorFftExt for Tensor {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         let spec = concrete_fft_spec(
             "TensorFftExt::ifft",
@@ -599,7 +599,7 @@ impl TensorFftExt for Tensor {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         let spec = concrete_fft_spec(
             "TensorFftExt::rfft",
@@ -620,7 +620,7 @@ impl TensorFftExt for Tensor {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         let spec = concrete_fft_spec(
             "TensorFftExt::irfft",
@@ -679,7 +679,7 @@ pub trait TensorReadFftExt {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Execute a one-dimensional inverse FFT along `axis`.
@@ -696,7 +696,7 @@ pub trait TensorReadFftExt {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Execute a one-dimensional real FFT along `axis`.
@@ -713,7 +713,7 @@ pub trait TensorReadFftExt {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Execute a one-dimensional inverse real FFT along `axis`.
@@ -730,7 +730,7 @@ pub trait TensorReadFftExt {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
 }
 
@@ -740,7 +740,7 @@ impl TensorReadFftExt for TensorRead<'_> {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         with_fft_exec_session(session, "TensorReadFftExt::fft_read", |backend| {
             execute_concrete_fft_read_op(
@@ -760,7 +760,7 @@ impl TensorReadFftExt for TensorRead<'_> {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         with_fft_exec_session(session, "TensorReadFftExt::ifft_read", |backend| {
             execute_concrete_fft_read_op(
@@ -780,7 +780,7 @@ impl TensorReadFftExt for TensorRead<'_> {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         with_fft_exec_session(session, "TensorReadFftExt::rfft_read", |backend| {
             execute_concrete_fft_read_op(
@@ -800,7 +800,7 @@ impl TensorReadFftExt for TensorRead<'_> {
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         with_fft_exec_session(session, "TensorReadFftExt::irfft_read", |backend| {
             execute_concrete_fft_read_op(
@@ -1003,7 +1003,7 @@ impl ExtensionOp for FftOp {
 /// [`FftBackend`] implementations remain supported through the SPI trait, but
 /// the concrete op path is built-in-session only.
 fn with_fft_exec_session<X>(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     op: &'static str,
     f: impl FnOnce(&mut dyn FftBackend) -> tenferro_tensor::Result<X>,
 ) -> tenferro_tensor::Result<X> {
@@ -1481,7 +1481,7 @@ pub fn semantic_ad_rules(
 pub(crate) fn execute_fft_extension_reads_session(
     op: &FftOp,
     inputs: &[TensorRead<'_>],
-    ctx: &mut ExtensionExecutionContext<'_, dyn BackendSession + '_>,
+    ctx: &mut ExtensionExecutionContext<'_, dyn Engine + '_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     let (session, caches) = ctx.parts_mut();
     execute_fft_extension_reads_on_session(op, inputs, session, caches)
@@ -1522,7 +1522,7 @@ fn execute_fft_extension_reads_for_capability<B: FftBackend + ?Sized>(
 fn execute_fft_extension_reads_on_session(
     op: &FftOp,
     inputs: &[TensorRead<'_>],
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     caches: &mut ExtensionCacheStore,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     if let Some(result) = with_cpu_exec_session(session, |session| {
@@ -1562,7 +1562,7 @@ define_extension_runtime! {
 /// by the owner and eager paths; do not reimplement it here.
 fn execute_fft_extension_reads_in_session(
     op: &FftOp,
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     caches: &mut ExtensionCacheStore,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_tensor::Result<Vec<Tensor>> {

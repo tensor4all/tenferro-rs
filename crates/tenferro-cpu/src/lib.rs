@@ -299,12 +299,12 @@ pub fn with_cpu_exec_session<B, R>(
     f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R,
 ) -> Option<R>
 where
-    B: tenferro_tensor::BackendSession + ?Sized,
+    B: tenferro_tensor::Engine + ?Sized,
 {
     let data = session
-        .native_session()?
+        .native_engine()?
         .into_marked_ptr::<exec_session::CpuExecSessionMarker>()?;
-    // SAFETY: only `CpuExecSession::native_session` creates a token with the
+    // SAFETY: only `CpuExecSession::native_engine` creates a token with the
     // crate-private `CpuExecSessionMarker`, and it points that token at a live
     // `CpuExecSession`. The token borrowed `*session` exclusively, and this
     // function keeps holding `session: &mut B` for the whole visit. The
@@ -388,7 +388,7 @@ pub trait FaerParallelismExt {
     ///
     /// ```rust
     /// # #[cfg(feature = "native")]
-    /// # fn example(session: &mut dyn tenferro_tensor::BackendSession) -> tenferro_tensor::Result<()> {
+    /// # fn example(session: &mut dyn tenferro_tensor::Engine) -> tenferro_tensor::Result<()> {
     /// use tenferro_cpu::FaerParallelismExt;
     /// session.with_faer_parallelism(|parallel| {
     ///     let _ = parallel;
@@ -406,7 +406,7 @@ pub trait FaerParallelismExt {
 #[cfg(feature = "native")]
 impl<S> FaerParallelismExt for S
 where
-    S: tenferro_tensor::BackendSession + ?Sized,
+    S: tenferro_tensor::Engine + ?Sized,
 {
     fn with_faer_parallelism(
         &mut self,

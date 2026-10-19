@@ -20,17 +20,17 @@ impl CpuBackend {
     pub fn open_session(&self) -> Result<CpuHeldSession<'_>, SessionEntryError>;
 }
 impl CpuHeldSession<'_> {          // !Send + !Sync
-    pub fn with_session<R>(&mut self, f: impl FnOnce(&mut dyn BackendSession) -> R) -> R;
+    pub fn with_session<R>(&mut self, f: impl FnOnce(&mut dyn Engine) -> R) -> R;
     pub fn close(self) -> Result<(), CpuHeldSessionError>;
 }
 ```
 
 This is deliberately the *whole* API. #1945 states that concrete `Tensor`/`TensorRead`
-plus `BackendSession` already support einsum and linalg and that "these are the non-AD
+plus `Engine` already support einsum and linalg and that "these are the non-AD
 substrate, not a new tensor implementation", so the held session hands out the same
-`BackendSession` the scoped entry does instead of growing a parallel operation surface:
+`Engine` the scoped entry does instead of growing a parallel operation surface:
 
-- primitives, indexing, structural, reductions: the `BackendSession` methods;
+- primitives, indexing, structural, reductions: the `Engine` methods;
 - einsum, linalg and extension operations: the borrowed-session extension traits
   (`TensorSessionOpsExt`, `TypedTensorSessionOpsExt`) called with that session;
 - borrowed reads and caller-provided output buffers: `TensorRead` / `TensorWrite`

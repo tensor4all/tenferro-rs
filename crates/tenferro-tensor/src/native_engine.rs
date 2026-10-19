@@ -2,7 +2,7 @@
 //!
 //! A backend leaf crate (CPU, CUDA, WebGPU) exposes its concrete execution
 //! session to higher-level operation crates through a [`NativeSessionRef`]
-//! returned by [`BackendSession::native_session`](crate::BackendSession::native_session).
+//! returned by [`Engine::native_engine`](crate::Engine::native_engine).
 //! The token is opaque: its fields are private and its only constructor is
 //! `unsafe`, so safe code can neither fabricate one nor retarget it at another
 //! value. A backend leaf recovers its own session with a safe visitor that
@@ -16,20 +16,20 @@
 //! A session without native services returns no token, which is the default:
 //!
 //! ```rust
-//! use tenferro_tensor::{BackendSession, NativeSessionRef};
+//! use tenferro_tensor::{Engine, NativeSessionRef};
 //!
-//! fn has_native_services(session: &mut dyn BackendSession) -> bool {
-//!     session.native_session().is_some()
+//! fn has_native_services(session: &mut dyn Engine) -> bool {
+//!     session.native_engine().is_some()
 //! }
 //! ```
 //!
 //! The token borrows its session exclusively and cannot outlive that borrow:
 //!
 //! ```compile_fail
-//! use tenferro_tensor::{BackendSession, NativeSessionRef};
+//! use tenferro_tensor::{Engine, NativeSessionRef};
 //!
-//! fn escape(session: &mut dyn BackendSession) -> NativeSessionRef<'static> {
-//!     session.native_session().unwrap()
+//! fn escape(session: &mut dyn Engine) -> NativeSessionRef<'static> {
+//!     session.native_engine().unwrap()
 //! }
 //! ```
 //!
@@ -76,7 +76,7 @@ use std::ptr::NonNull;
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{BackendSession, NativeSessionRef};
+/// use tenferro_tensor::{Engine, NativeSessionRef};
 ///
 /// struct Marker;
 ///
@@ -84,8 +84,8 @@ use std::ptr::NonNull;
 ///     token.has_marker::<Marker>()
 /// }
 ///
-/// fn inspect(session: &mut dyn BackendSession) -> bool {
-///     session.native_session().is_some_and(|token| is_marked(&token))
+/// fn inspect(session: &mut dyn Engine) -> bool {
+///     session.native_engine().is_some_and(|token| is_marked(&token))
 /// }
 /// ```
 pub struct NativeSessionRef<'s> {

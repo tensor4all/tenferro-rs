@@ -2287,12 +2287,12 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
 
     impl BackendCachedDot for DefaultOnlyBackend {}
 
-    impl BackendSession for DefaultOnlyBackend {}
+    impl Engine for DefaultOnlyBackend {}
 
     impl BackendSessionHost for DefaultOnlyBackend {
         fn with_backend_session<R>(
             &mut self,
-            f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R,
+            f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
         ) -> Result<R, tenferro_tensor::SessionEntryError> {
             tenferro_tensor::with_session_entry_guard("test backend", || f(self))
         }

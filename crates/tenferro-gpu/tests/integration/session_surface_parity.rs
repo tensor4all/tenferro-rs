@@ -13,7 +13,7 @@
 //! this one compares the three session types against one bound.
 
 use tenferro_tensor::backend::{
-    BackendSession, SessionCachedDot, TensorAnalytic, TensorDot, TensorElementwise, TensorIndexing,
+    Engine, SessionCachedDot, TensorAnalytic, TensorDot, TensorElementwise, TensorIndexing,
     TensorReduction, TensorStructural,
 };
 
@@ -23,7 +23,7 @@ use tenferro_tensor::backend::{
 /// same bound rather than a backend-specific extra.
 fn assert_common_session_surface<S>()
 where
-    S: BackendSession
+    S: Engine
         + SessionCachedDot
         + TensorElementwise
         + TensorAnalytic

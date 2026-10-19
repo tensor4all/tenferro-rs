@@ -11,7 +11,7 @@ use tenferro_runtime::{
     ProviderDeviceIdentity, ProviderId, ReductionRuntime, ResidentOutputContract,
     RuntimeCacheOwner, RuntimeInputContract, StorageClass,
 };
-use tenferro_tensor::{BackendSession, ErrorKind};
+use tenferro_tensor::{Engine, ErrorKind};
 
 use super::super::{CpuPlacementBoundEager, EagerRuntime, CPU_RUNTIME_SELECTION_REFRESHES};
 
@@ -151,9 +151,9 @@ fn placement_bound_view_reuses_cached_snapshot_until_runtime_epoch_changes() {
     assert_bound_matches_current_runtime(&cpu);
     let original_epoch = cpu.epoch;
 
-    cpu.with_eager_session(|_: &mut dyn BackendSession| Ok::<(), crate::Error>(()))
+    cpu.with_eager_session(|_: &mut dyn Engine| Ok::<(), crate::Error>(()))
         .unwrap();
-    cpu.with_eager_session(|_: &mut dyn BackendSession| Ok::<(), crate::Error>(()))
+    cpu.with_eager_session(|_: &mut dyn Engine| Ok::<(), crate::Error>(()))
         .unwrap();
     assert_eq!(refreshes(), 0);
     assert_eq!(cpu.epoch, original_epoch);
@@ -173,7 +173,7 @@ fn placement_bound_view_reuses_cached_snapshot_until_runtime_epoch_changes() {
     let reconfigured_epoch = runtime.runtime.epoch().unwrap();
     assert_ne!(reconfigured_epoch, original_epoch);
 
-    cpu.with_eager_session(|_: &mut dyn BackendSession| Ok::<(), crate::Error>(()))
+    cpu.with_eager_session(|_: &mut dyn Engine| Ok::<(), crate::Error>(()))
         .unwrap();
     assert_eq!(refreshes(), 1);
     assert_bound_matches_current_runtime(&cpu);
@@ -218,7 +218,7 @@ fn extension_only_epoch_change_keeps_cpu_registration_fast_path() {
     let after_extension_epoch = runtime.runtime.snapshot().unwrap().epoch();
     assert_ne!(after_extension_epoch, before_epoch);
 
-    cpu.with_eager_session(|_: &mut dyn BackendSession| Ok::<(), crate::Error>(()))
+    cpu.with_eager_session(|_: &mut dyn Engine| Ok::<(), crate::Error>(()))
         .unwrap();
 
     assert_eq!(refreshes(), 1);
@@ -331,7 +331,7 @@ fn runtime_snapshot_refresh_reports_typed_configuration_failures() {
         break_runtime(&runtime, &mut cpu);
 
         let error = cpu
-            .with_eager_session(|_: &mut dyn BackendSession| Ok::<(), crate::Error>(()))
+            .with_eager_session(|_: &mut dyn Engine| Ok::<(), crate::Error>(()))
             .unwrap_err();
 
         assert_eq!(error.kind(), expected_kind, "{label}: {error}");

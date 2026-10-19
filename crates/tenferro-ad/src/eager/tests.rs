@@ -29,7 +29,7 @@ use tenferro_runtime::{
 };
 use tenferro_tensor::TypedTensorView;
 use tenferro_tensor::{AllocationGroup, DescriptorSlot, GroupError, Tensor};
-use tenferro_tensor::{BackendSession, BackendSessionHost, DType, DotGeneralConfig};
+use tenferro_tensor::{Engine, BackendSessionHost, DType, DotGeneralConfig};
 use tenferro_tensor::{ErrorKind, ValidationKind};
 use tenferro_tensor::{TensorRead, TensorStructural, TensorView, TensorWrite};
 
@@ -146,7 +146,7 @@ fn eager_backend_session_identity_belongs_to_the_concrete_backend() {
     let mut recording = EagerBackend::recording_cpu(materializations);
     assert!(recording
         .with_backend_session(|session| {
-            session.native_session().is_none()
+            session.native_engine().is_none()
                 && tenferro_cpu::with_cpu_exec_session(session, |_| ()).is_none()
         })
         .unwrap());
@@ -564,7 +564,7 @@ impl PreparedOperationExecutor for ReadPathFallbackPrepared {
 
     fn execute_in_session(
         &self,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
         _caches: &mut tenferro_runtime::ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {

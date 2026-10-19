@@ -1,5 +1,5 @@
 use tenferro_tensor::backend::{
-    BackendSession, BackendSessionHost, ElementwiseReadOp, SessionCachedDot, TensorAnalytic,
+    Engine, BackendSessionHost, ElementwiseReadOp, SessionCachedDot, TensorAnalytic,
     TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
@@ -70,12 +70,12 @@ pub fn with_webgpu_exec_session<B, R>(
     f: impl for<'a> FnOnce(&'a mut WebGpuExecSession<'a>) -> R,
 ) -> Option<R>
 where
-    B: BackendSession + ?Sized,
+    B: Engine + ?Sized,
 {
     let data = session
-        .native_session()?
+        .native_engine()?
         .into_marked_ptr::<WebGpuExecSessionMarker>()?;
-    // SAFETY: only `WebGpuExecSession::native_session` creates a token with the
+    // SAFETY: only `WebGpuExecSession::native_engine` creates a token with the
     // crate-private `WebGpuExecSessionMarker`, and it points that token at a live
     // `WebGpuExecSession`. The token borrowed `*session` exclusively, and this function
     // keeps holding `session: &mut B` for the whole scoped visit.
@@ -596,8 +596,8 @@ delegate!(TensorDeviceTransfer {
 // runtime cache of its own, so the session implements them directly.
 impl SessionCachedDot for WebGpuExecSession<'_> {}
 
-impl BackendSession for WebGpuExecSession<'_> {
-    fn native_session(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
+impl Engine for WebGpuExecSession<'_> {
+    fn native_engine(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
         // SAFETY: `WebGpuExecSessionMarker` is private to this crate, and this is the only
         // place a token carrying it is created; it always points to a
         // `WebGpuExecSession`, exclusively borrowed for the token lifetime.
@@ -608,7 +608,7 @@ impl BackendSession for WebGpuExecSession<'_> {
 impl BackendSessionHost for WebGpuBackend {
     fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         let mut session = WebGpuExecSession { backend: self };
         // The portable in-session guard rejects nested entry before `f` runs;
@@ -616,7 +616,7 @@ impl BackendSessionHost for WebGpuBackend {
         with_session_entry_guard("WebGpuBackend", || f(&mut session))
     }
 
-    fn owns_session(&self, session: &mut dyn BackendSession) -> bool {
+    fn owns_session(&self, session: &mut dyn Engine) -> bool {
         with_webgpu_exec_session(session, |session| {
             session.runtime_identity() == self.runtime_identity()
         })

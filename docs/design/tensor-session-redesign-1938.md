@@ -314,7 +314,7 @@ Keep explicit session propagation. The proposed boundary shape is:
 ```text
 with_backend_session<R: Send>(
     &mut self,
-    f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
+    f: impl FnOnce(&mut dyn Engine) -> R + Send,
 ) -> Result<R, SessionEntryError>
 ```
 
@@ -392,7 +392,7 @@ poison. Arbiter poisoning is not recovered; its lists cannot be trusted.
 
 ### D7. Compact erased operation boundary and bounded native access
 
-**One numerical implementation:** keep object-safe `BackendSession` operations,
+**One numerical implementation:** keep object-safe `Engine` operations,
 but change their input/output descriptors together with storage. Thin typed
 facades are permitted and necessary for output typing; a second generic kernel
 SPI is not required. This is a design choice, not proof that generics always
@@ -441,11 +441,11 @@ are distinct: pass the selected provider and effective execution context into
 standard algorithms explicitly (D8). Thread policy cannot be reset by extracting
 a delegate's capability.
 
-**Implemented mapping (#1938 session phase).** `BackendSession::session_type_id`
+**Implemented mapping (#1938 session phase).** `Engine::session_type_id`
 and the `unsafe fn session_data_mut` raw-pointer pair are gone. Safe code could
 implement both, so a custom session could claim a leaf's marker and hand the
 leaf visitor a forged pointer. They are replaced by
-`BackendSession::native_session(&mut self) -> Option<NativeSessionRef<'_>>`,
+`Engine::native_engine(&mut self) -> Option<NativeSessionRef<'_>>`,
 defaulting to `None`. `NativeSessionRef` (in `tenferro-tensor`) has private
 fields (marker `TypeId`, pointer, `&'s mut` borrow marker, `*mut ()`
 thread-affinity marker), no `Clone`/`Send`/`Sync`, and one `unsafe` constructor

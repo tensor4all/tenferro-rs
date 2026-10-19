@@ -88,7 +88,7 @@ fn map_lower_einsum_error(op: &'static str, error: cpueinsum::Error) -> tenferro
 }
 use tenferro_cpu::with_cpu_exec_session;
 use tenferro_tensor::{
-    BackendSession, DType, Tensor, TensorRead, TensorScalar, TensorView, TensorViewMut,
+    Engine, DType, Tensor, TensorRead, TensorScalar, TensorView, TensorViewMut,
     TensorWrite, TypedTensorView,
 };
 
@@ -102,7 +102,7 @@ trait Scalar: TensorScalar + cpueinsum_blas::BlasScalar {}
 impl<T: TensorScalar + cpueinsum_blas::BlasScalar> Scalar for T {}
 
 pub(crate) fn execute(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
 ) -> Option<tenferro_tensor::Result<Tensor>> {
@@ -111,7 +111,7 @@ pub(crate) fn execute(
 
 #[cfg(any(feature = "native", feature = "blas"))]
 pub(crate) fn execute_cached(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
     cache: Option<&Cache>,
@@ -155,7 +155,7 @@ pub(crate) fn execute_cached(
 }
 #[cfg(not(any(feature = "native", feature = "blas")))]
 pub(crate) fn execute_cached(
-    _session: &mut dyn BackendSession,
+    _session: &mut dyn Engine,
     _inputs: &[TensorRead<'_>],
     _tree: &ContractionTree,
     _cache: Option<&Cache>,
@@ -311,7 +311,7 @@ fn run_into<T: Scalar>(
     )
 }
 
-pub(crate) fn supports(session: &mut dyn BackendSession, inputs: &[TensorRead<'_>]) -> bool {
+pub(crate) fn supports(session: &mut dyn Engine, inputs: &[TensorRead<'_>]) -> bool {
     inputs.len() >= 3
         && inputs.first().is_some_and(|input| {
             matches!(
@@ -324,7 +324,7 @@ pub(crate) fn supports(session: &mut dyn BackendSession, inputs: &[TensorRead<'_
 
 #[cfg(any(feature = "native", feature = "blas"))]
 pub(crate) fn execute_into(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
     cache: Option<&Cache>,
@@ -381,7 +381,7 @@ pub(crate) fn execute_into(
 }
 #[cfg(not(any(feature = "native", feature = "blas")))]
 pub(crate) fn execute_into(
-    _session: &mut dyn BackendSession,
+    _session: &mut dyn Engine,
     _inputs: &[TensorRead<'_>],
     _tree: &ContractionTree,
     _cache: Option<&Cache>,

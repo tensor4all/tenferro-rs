@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use num_complex::Complex64;
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
 use tenferro_linalg::{LinalgBackend, RankRevealingQrOptions, TensorLinalgExt};
-use tenferro_tensor::{BackendSession, BackendSessionHost, Tensor, TypedTensor};
+use tenferro_tensor::{Engine, BackendSessionHost, Tensor, TypedTensor};
 
 /// Counts allocations and live bytes while armed.
 struct CountingAllocator;
@@ -186,7 +186,7 @@ fn c64_matrix(n: usize) -> Tensor {
 /// Run `operation` until the report stops shrinking, so pooled scratch is already warm.
 fn steady_state(
     host: &mut CpuBackend,
-    operation: impl Fn(&mut dyn BackendSession) + Send + Sync,
+    operation: impl Fn(&mut dyn Engine) + Send + Sync,
 ) -> AllocationReport {
     let mut best: Option<AllocationReport> = None;
     for _ in 0..4 {
@@ -201,17 +201,17 @@ fn steady_state(
 }
 
 /// Thin SVD through the public tensor route, so the measured call is the one users make.
-fn svd_ext(input: &Tensor, session: &mut dyn BackendSession) {
+fn svd_ext(input: &Tensor, session: &mut dyn Engine) {
     input.svd(session).unwrap();
 }
 
 /// Singular values only through the public tensor route.
-fn svdvals_ext(input: &Tensor, session: &mut dyn BackendSession) {
+fn svdvals_ext(input: &Tensor, session: &mut dyn Engine) {
     input.svdvals(session).unwrap();
 }
 
 fn with_session<T>(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     operation: impl FnOnce(&mut tenferro_cpu::CpuExecSession<'_>) -> T,
 ) -> T {
     with_cpu_exec_session(session, operation).expect("host exposes a CPU exec session")
@@ -299,7 +299,7 @@ fn check(
     host: &mut CpuBackend,
     failures: &mut Vec<String>,
     name: &str,
-    operation: impl Fn(&mut dyn BackendSession) + Send + Sync,
+    operation: impl Fn(&mut dyn Engine) + Send + Sync,
 ) {
     let report = steady_state(host, operation);
     eprintln!(

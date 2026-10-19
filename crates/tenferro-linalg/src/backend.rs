@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use tenferro_tensor::{BackendSession, Tensor, TensorRead, TensorWrite};
+use tenferro_tensor::{Engine, Tensor, TensorRead, TensorWrite};
 
 /// Compact provider-neutral Householder QR payload used by backend hooks.
 #[doc(hidden)]
@@ -36,7 +36,7 @@ use crate::RankRevealingQrOptions;
 /// })?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub trait LinalgBackend: BackendSession {
+pub trait LinalgBackend: Engine {
     /// Compute a Cholesky factorization.
     ///
     /// # Errors

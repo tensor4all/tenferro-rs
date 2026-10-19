@@ -12,7 +12,7 @@ should be removed when the new owner is in place.
 - Move linalg ownership fully into `tenferro-linalg`.
 - Replace scattered primitive-op metadata with a single core-op catalog.
 - Collapse runtime and GPU dispatch duplication into descriptor-driven tables.
-- Use `BackendSession` as the backend operation execution surface.
+- Use `Engine` as the backend operation execution surface.
 - Make `try_*`, traced extension `Result`, crate-local `Result` aliases, and
   backend error construction consistent.
 - Keep file and test cleanup driven by ownership boundaries, not line count
@@ -136,12 +136,12 @@ map those policies to backend launches.
 
 ## Backend Session Model
 
-Use `BackendSession` as the lightweight session surface.
+Use `Engine` as the lightweight session surface.
 
 `TensorBackend` becomes the backend owner and session factory. It owns device
 state, resource pools, caches, contexts, and backend identity.
 
-`BackendSession<'a>` is a lightweight borrowing wrapper that implements the
+`Engine<'a>` is a lightweight borrowing wrapper that implements the
 operation category traits. Direct/eager calls may create short-lived sessions;
 graph execution should create and reuse a session while evaluating a program.
 

@@ -11,7 +11,7 @@ use tenferro_runtime::{
     DType, Runtime, Tensor, TensorSessionOpsExt, TracedTensor, TypedTensor,
     TypedTensorSessionOpsExt,
 };
-use tenferro_tensor::{BackendSession, BackendSessionHost};
+use tenferro_tensor::{Engine, BackendSessionHost};
 
 fn ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
@@ -61,7 +61,7 @@ fn traced_value(tensor: &TracedTensor) -> Tensor {
     tensor.run_with(runtime()).unwrap()
 }
 
-fn with_session<R>(f: impl FnOnce(&mut dyn BackendSession) -> R + Send) -> R
+fn with_session<R>(f: impl FnOnce(&mut dyn Engine) -> R + Send) -> R
 where
     R: Send,
 {
@@ -157,7 +157,7 @@ fn traced_act(act: Act, x: &TracedTensor) -> tenferro_ad::Result<TracedTensor> {
 fn session_act(
     act: Act,
     x: &Tensor,
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
 ) -> tenferro_tensor::Result<Tensor> {
     match act {
         Act::Sigmoid => x.sigmoid(session),
@@ -663,7 +663,7 @@ fn session_softmax(
     x: &Tensor,
     mask: &Tensor,
     axis: usize,
-    s: &mut dyn BackendSession,
+    s: &mut dyn Engine,
 ) -> tenferro_tensor::Result<Tensor> {
     match (case.log, case.masked) {
         (false, false) => x.softmax(axis, s),

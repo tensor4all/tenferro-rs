@@ -16,7 +16,7 @@ use tenferro_runtime::{
     RuntimeFailureReasonRef, Tensor, TracedTensor,
 };
 use tenferro_tensor::{
-    BackendSession, BackendSessionHost, BackendStorageHandle, Placement, StorageBuffer, TensorRead,
+    Engine, BackendSessionHost, BackendStorageHandle, Placement, StorageBuffer, TensorRead,
     TensorView, TypedTensor, TypedTensorView,
 };
 
@@ -114,7 +114,7 @@ identity_op!(BorrowedOp, BORROWED_FAMILY, 4);
 // reaches the family's engine and returns its typed WrongOperationFamily error.
 identity_op!(WrongFamilyOp, IDENTITY_FAMILY, 1);
 
-fn execute_identity<B: BackendSession + ?Sized>(
+fn execute_identity<B: Engine + ?Sized>(
     _op: &IdentityOp,
     inputs: &[TensorRead<'_>],
     context: &mut ExtensionExecutionContext<'_, B>,
@@ -124,7 +124,7 @@ fn execute_identity<B: BackendSession + ?Sized>(
         .to_contiguous_read(inputs[0].clone())?])
 }
 
-fn execute_second<B: BackendSession + ?Sized>(
+fn execute_second<B: Engine + ?Sized>(
     _op: &SecondOp,
     inputs: &[TensorRead<'_>],
     context: &mut ExtensionExecutionContext<'_, B>,
@@ -144,7 +144,7 @@ fn sum_four(slices: [&[f64]; 4], shape: &[usize]) -> tenferro_tensor::Result<Ten
     Tensor::from_vec_col_major(shape.to_vec(), data)
 }
 
-fn execute_borrowed<B: BackendSession + ?Sized>(
+fn execute_borrowed<B: Engine + ?Sized>(
     _op: &BorrowedOp,
     inputs: &[TensorRead<'_>],
     _context: &mut ExtensionExecutionContext<'_, B>,
@@ -162,7 +162,7 @@ fn execute_borrowed<B: BackendSession + ?Sized>(
     Ok(vec![sum_four(slices, inputs[0].shape())?])
 }
 
-fn execute_host_only<B: BackendSession + ?Sized>(
+fn execute_host_only<B: Engine + ?Sized>(
     _op: &IdentityOp,
     inputs: &[TensorRead<'_>],
     _context: &mut ExtensionExecutionContext<'_, B>,

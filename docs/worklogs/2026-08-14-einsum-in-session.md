@@ -11,7 +11,7 @@ execute_read_into_accum). The one-shot methods now delegate to the
 entry per call to one entry total. Key structural finding: the one-shot
 einsum already entered a session internally (`with_backend_session(|exec|
 eager_einsum_exec(...))`) and the eager cores already took
-`&mut dyn BackendSession` — `execute_in_session` is a thin validate +
+`&mut dyn Engine` — `execute_in_session` is a thin validate +
 core-call on the caller's borrowed session, no new entry.
 
 ## Gate record (frontier review, per AGENTS.md)

@@ -30,7 +30,7 @@ adapter.
 ## Design decisions
 
 - **Option (b) capability decision**: concrete ops take `&mut dyn
-  BackendSession` with internal built-in dispatch (reusing the existing
+  Engine` with internal built-in dispatch (reusing the existing
   linalg/fft extension-session downcast patterns). Documented breaking
   restriction: the concrete op traits no longer accept third-party
   LinalgBackend/FftBackend impls; the SPI traits stay for backend

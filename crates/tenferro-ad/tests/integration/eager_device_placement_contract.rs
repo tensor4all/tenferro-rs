@@ -126,7 +126,7 @@ fn eager_ad_seed_and_missing_tangent_zeroes_are_uploaded() {
 
     let eager_one_like = source_section(
         &eager,
-        "pub(crate) fn one_like_tensor(input: &Tensor, session: &mut dyn BackendSession)",
+        "pub(crate) fn one_like_tensor(input: &Tensor, session: &mut dyn Engine)",
         "#[cfg(test)]",
     );
     assert!(eager_one_like.contains("ones_tensor(input.dtype(), input.shape().to_vec())"));

@@ -11,7 +11,7 @@ mod metal {
 
     /// Visit the concrete WebGPU session for SPI-level behavior only: stream
     /// synchronization and backend-interop limits. Concrete FFT trait calls
-    /// take `&mut dyn BackendSession` and use `with_backend_session` directly.
+    /// take `&mut dyn Engine` and use `with_backend_session` directly.
     fn with_webgpu_fft<R>(
         backend: &mut WebGpuBackend,
         f: impl for<'a> FnOnce(&'a mut WebGpuExecSession<'a>) -> R + Send,

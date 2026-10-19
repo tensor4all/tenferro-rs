@@ -7,7 +7,7 @@
 //! changing the result.
 //!
 //! This module is private: it backs the optional
-//! [`tenferro_tensor::BackendSession::fused_activation_read`] fast path only.
+//! [`tenferro_tensor::Engine::fused_activation_read`] fast path only.
 
 use tenferro_tensor::{ActivationOp, Tensor, TensorRead, TensorView, TypedTensorView};
 

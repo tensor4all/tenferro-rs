@@ -10,7 +10,7 @@
 //! See `docs/design/held-cpu-session-1945-u1.md` for the ownership, drop, lock
 //! and error contracts this implements.
 
-use tenferro_tensor::{BackendSession, SessionEntryError};
+use tenferro_tensor::{Engine, SessionEntryError};
 
 mod phase;
 
@@ -234,7 +234,7 @@ impl CpuHeldSession<'_> {
     /// Run one concrete operation in this held session.
     ///
     /// The callback receives the session's concrete execution surface — the same
-    /// `BackendSession` the scoped entry hands out — so every operation that takes
+    /// `Engine` the scoped entry hands out — so every operation that takes
     /// a session (primitives, indexing, structural, reductions, einsum, linalg,
     /// borrowed reads and caller-provided output buffers) runs in this held
     /// session without opening another one. Build one short-lived view per
@@ -268,7 +268,7 @@ impl CpuHeldSession<'_> {
     /// session.close()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn with_session<R>(&mut self, f: impl FnOnce(&mut dyn BackendSession) -> R) -> R {
+    pub fn with_session<R>(&mut self, f: impl FnOnce(&mut dyn Engine) -> R) -> R {
         self.with_session_cached(None, f)
     }
 
@@ -280,7 +280,7 @@ impl CpuHeldSession<'_> {
     pub(crate) fn with_session_cached<R>(
         &mut self,
         cache: Option<&mut GemmAnalysisCache>,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> R {
         let HeldSessionState {
             backend,

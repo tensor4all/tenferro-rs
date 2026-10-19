@@ -6,7 +6,7 @@ use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt, TypedTensor, TypedTensorSessionOpsExt};
 use tenferro_tensor::{
-    BackendSession, BackendSessionHost, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
+    Engine, BackendSessionHost, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
     SliceConfig, TensorRead,
 };
 
@@ -23,7 +23,7 @@ fn same(receiver: &Tensor, session: &Tensor) {
     );
 }
 
-fn in_session<R: Send>(f: impl FnOnce(&mut dyn BackendSession) -> R + Send) -> R {
+fn in_session<R: Send>(f: impl FnOnce(&mut dyn Engine) -> R + Send) -> R {
     CpuBackend::new().with_backend_session(f).unwrap()
 }
 

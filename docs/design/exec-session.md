@@ -2,7 +2,7 @@
 
 ## Overview
 
-`BackendSession` is the execution-time primitive surface. Ops run within a
+`Engine` is the execution-time primitive surface. Ops run within a
 backend-owned execution scope when the backend has one, such as a GPU runtime
 or the CPU backend's reusable buffer scope. Individual ops must not re-enter
 the same backend scope.
@@ -18,7 +18,7 @@ implementing the session capability on their prepared executor. The scheduler
 forms a compatible region only when every extension instruction in that region
 advertises the capability; unsupported extensions remain a boundary and are
 never silently retried through the ordinary per-operation path. A session-aware
-executor receives `&mut dyn BackendSession` and must not reacquire a backend
+executor receives `&mut dyn Engine` and must not reacquire a backend
 session or let session-local state escape. Capability selection is backend-type
 specific, so a CPU implementation cannot accidentally claim a CUDA or wgpu
 session until that backend supplies its own mapping.
@@ -42,7 +42,7 @@ Without sessions, each backend method independently prepares its execution
 state and scratch-buffer access. For N-ary einsum with hundreds of small GEMM
 steps, repeating that setup per instruction can dominate.
 
-Sessions amortize that setup by creating one `BackendSession` for a fused
+Sessions amortize that setup by creating one `Engine` for a fused
 backend segment instead of one per instruction.
 
 ## Backend Mapping
@@ -62,7 +62,7 @@ kernels use `Par::Seq` for one thread and explicit `Par::rayon(n)` otherwise,
 so policy construction cannot inherit an unrelated ambient Rayon degree before
 joining the `CpuContext` pool.
 
-`CpuExecSession` implements `BackendSession` by calling kernel functions
+`CpuExecSession` implements `Engine` by calling kernel functions
 directly after the session has entered `CpuContext`. Individual ops should not
 re-enter the pool.
 
@@ -121,7 +121,7 @@ A backend without resource admission wraps its closure in the portable
 `with_session_entry_guard` and passes itself as the session (the pattern the
 test backends use). A custom session that composes a standard one forwards the
 operations it does not override; it exposes the standard session's native
-services only by forwarding `native_session()`.
+services only by forwarding `native_engine()`.
 
 ## Trait Relationship
 
@@ -130,15 +130,15 @@ BackendSessionHost      — owner: admission, long-lived resources
   with_backend_session() -> Result<R, SessionEntryError>
   with_backend_session_cached()  (runtime-cache-aware, hidden)
 
-BackendSession          — the only operation surface
+Engine          — the only operation surface
   add_read(), dot_general_read(), reduce_sum_read(), ...
   *_into / *_read_into   — overwrite a caller-provided output
-  native_session() -> Option<NativeSessionRef<'_>>   (default None)
+  native_engine() -> Option<NativeSessionRef<'_>>   (default None)
 ```
 
 Owners no longer carry one-shot operation methods (#1929); every operation,
 including standalone tensor operations, linalg multi-step logic, extension
-runtimes and eager execution, runs on a borrowed `BackendSession`.
+runtimes and eager execution, runs on a borrowed `Engine`.
 
 ## Native services
 

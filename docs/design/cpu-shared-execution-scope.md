@@ -11,7 +11,7 @@ same immutable backend witness sequentially inside the callback. The operation
 and AD APIs are unchanged. External/fallible executor domains are not supported
 by this initial scope API; their operation-level admission remains unchanged.
 
-A scope is not a borrowed `BackendSession`: it holds no mutable buffer/cache
+A scope is not a borrowed `Engine`: it holds no mutable buffer/cache
 borrow while calling user code. Each operation/session still borrows the owning
 engine's resources exclusively and releases that borrow before the next call.
 Output allocation semantics, provider dispatch, AD recording, runtime epoch

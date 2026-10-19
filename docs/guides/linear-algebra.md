@@ -53,7 +53,7 @@ Box<dyn std::error::Error>>` for a standalone binary.
 
 | Layer | Linear algebra style |
 | --- | --- |
-| Concrete `Tensor` / `TensorRead` / `TypedTensor<T>` | crate-root linalg extension traits; methods take `&mut dyn BackendSession` obtained via `BackendSessionHost::with_backend_session` |
+| Concrete `Tensor` / `TensorRead` / `TypedTensor<T>` | crate-root linalg extension traits; methods take `&mut dyn Engine` obtained via `BackendSessionHost::with_backend_session` |
 | `EagerTensor` | `EagerSessionLinalgExt` methods on a borrowed `EagerSession` behind `autodiff`, except tensor-owned `EagerTensorLinalgExt::solve`; tracked variables support `backward()` and functional transforms where AD rules support the operation |
 | `TracedTensor` | `TracedTensorLinalgExt` methods for graph execution and `grad`/`vjp`/`jvp` workflows |
 
@@ -83,7 +83,7 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 Concrete, read, typed, eager-session, and traced tensor APIs are crate-root
 extension traits. Eager decompositions take `&mut EagerSession` from
 `EagerRuntime::with_eager_session`; do not call the tensor-owned `solve` entry
-inside an active borrowed session. Concrete methods take `&mut dyn BackendSession` obtained through
+inside an active borrowed session. Concrete methods take `&mut dyn Engine` obtained through
 `BackendSessionHost::with_backend_session`. `TensorReadLinalgExt::svdvals_read`
 and `eigvalsh_read` accept borrowed inputs; eligible faer host views avoid a
 full input copy, while providers that need owned compact storage materialize at

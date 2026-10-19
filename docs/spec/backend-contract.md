@@ -193,7 +193,7 @@ Execution is divided into three instruction categories.
 
 ### Backend-session instructions
 
-These run through `BackendSession` inside `TensorBackend::with_backend_session()`.
+These run through `Engine` inside `TensorBackend::with_backend_session()`.
 They are the operations eligible for grouped segmented execution and, when
 supported by the backend, elementwise fusion planning.
 
@@ -279,7 +279,7 @@ Extension instructions must run through a registered `ExtensionModule`; missing
 module registration is an error, not a fallback to a host/reference path.
 
 The engine uses `last_use` metadata to reclaim buffers via
-`BackendSession::reclaim_buffer()` or `TensorBackend::reclaim_buffer()`.
+`Engine::reclaim_buffer()` or `TensorBackend::reclaim_buffer()`.
 
 ---
 
@@ -302,7 +302,7 @@ It includes:
 - `upload_host_tensor`
 - `reclaim_buffer`
 
-`BackendSession` is the session-local companion trait used by grouped backend
+`Engine` is the session-local companion trait used by grouped backend
 execution. Backends may override `with_backend_session()` to install one shared
 execution scope, for example a CPU thread-pool context.
 
@@ -312,7 +312,7 @@ reentry, a busy caller-managed domain, a mismatched execution scope, poisoned
 admission state, executor-entry failure) is reported before the callback runs.
 The callback's own result is returned unchanged inside `Ok`. A backend leaf that
 exposes native services returns an opaque `NativeSessionRef` from
-`BackendSession::native_session()`, recovered only by that leaf's visitor; the
+`Engine::native_engine()`, recovered only by that leaf's visitor; the
 default is `None`.
 
 Custom operation families do not add a second backend trait. They lower to

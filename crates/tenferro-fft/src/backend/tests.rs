@@ -106,7 +106,7 @@ macro_rules! unreachable_methods {
 mod default_session_impls {
     use super::DefaultFftSession;
     use tenferro_tensor::{
-        BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir,
+        BackendCachedDot, BackendRuntimeCache, Engine, BackendSessionHost, CompareDir,
         DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig, ScatterConfig,
         SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
         TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction,
@@ -205,12 +205,12 @@ mod default_session_impls {
     }
 
     impl BackendCachedDot for DefaultFftSession {}
-    impl BackendSession for DefaultFftSession {}
+    impl Engine for DefaultFftSession {}
 
     impl BackendSessionHost for DefaultFftSession {
         fn with_backend_session<R>(
             &mut self,
-            f: impl FnOnce(&mut dyn BackendSession) -> R,
+            f: impl FnOnce(&mut dyn Engine) -> R,
         ) -> std::result::Result<R, tenferro_tensor::SessionEntryError> {
             tenferro_tensor::with_session_entry_guard("default FFT test session", || f(self))
         }

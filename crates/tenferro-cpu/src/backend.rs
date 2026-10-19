@@ -23,7 +23,7 @@ use crate::{
 };
 use crate::{CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorWrite, TypedTensor};
 use tenferro_tensor::{
-    AllocationDomainId, BackendRuntimeCache, BackendSession, BackendSessionHost, ElementwiseReadOp,
+    AllocationDomainId, BackendRuntimeCache, Engine, BackendSessionHost, ElementwiseReadOp,
     TensorBackend, TensorDeviceTransfer,
 };
 use tenferro_tensor::{SessionEntryError, SharedTensorAllocationDomain};
@@ -503,7 +503,7 @@ fn with_operation_session<'a, R>(
     resources: &'a mut EngineResources,
     cache: Option<&'a mut gemm::GemmAnalysisCache>,
     owner: ResourceOwner,
-    f: impl FnOnce(&mut dyn BackendSession) -> R,
+    f: impl FnOnce(&mut dyn Engine) -> R,
 ) -> R {
     let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
     let cache = cache.unwrap_or(&mut resources.gemm_analysis_cache);
@@ -1954,7 +1954,7 @@ impl CpuBackend {
     fn run_backend_session_cached<R>(
         &mut self,
         cache: Option<&mut gemm::GemmAnalysisCache>,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, SessionEntryError> {
         match self.execution_admission()? {
             // A standalone root session owns its reservation, the engine
@@ -2006,7 +2006,7 @@ impl CpuBackend {
 impl BackendSessionHost for CpuBackend {
     fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, SessionEntryError> {
         self.run_backend_session_cached(None, f)
     }
@@ -2014,7 +2014,7 @@ impl BackendSessionHost for CpuBackend {
     fn with_backend_session_cached<R>(
         &mut self,
         cache: &mut Self::RuntimeCache,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, SessionEntryError> {
         if !cpu_session_profile_enabled() {
             return self.run_backend_session_cached(Some(cache), f);
@@ -2029,7 +2029,7 @@ impl BackendSessionHost for CpuBackend {
         result
     }
 
-    fn owns_session(&self, session: &mut dyn BackendSession) -> bool {
+    fn owns_session(&self, session: &mut dyn Engine) -> bool {
         crate::with_cpu_exec_session(session, |cpu| {
             cpu.child_backend.runtime_identity() == self.runtime_identity()
         })

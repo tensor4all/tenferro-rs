@@ -1,15 +1,15 @@
-//! A generic helper over `&mut dyn BackendSession`.
+//! A generic helper over `&mut dyn Engine`.
 //!
 //! This is the shape scheduler and extension code use: the helper receives a
 //! session and must not create one. It survives the unification, and after the
 //! one-shot deletion it is the only way to write such a helper.
 
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSession, BackendSessionHost, Tensor, TensorRead};
+use tenferro_tensor::{Engine, BackendSessionHost, Tensor, TensorRead};
 
 /// Two chained additions inside the caller's session.
 fn add_twice(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     a: &Tensor,
     b: &Tensor,
 ) -> tenferro_tensor::Result<Tensor> {

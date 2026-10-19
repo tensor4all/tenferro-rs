@@ -19,7 +19,7 @@ use tenferro_cpu::{scalar_binary_into, AddOp, CpuBackend};
 use tenferro_runtime::{TensorSessionOpsExt, TypedTensor, TypedTensorSessionOpsExt};
 use tenferro_tensor::backend::dot_general_output_shape;
 use tenferro_tensor::{
-    BackendSession, BackendSessionHost, ContractionScalar, DotGeneralAccumulation,
+    Engine, BackendSessionHost, ContractionScalar, DotGeneralAccumulation,
     DotGeneralConfig, DynRank, Host, Tensor, TensorRead, TensorView, TensorWrite,
 };
 use tinyvec::tiny_vec;
@@ -141,14 +141,14 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
             let permuted_view = matrix.as_view().transpose_view([1, 0]).unwrap();
             let permuted_read = TensorRead::from_view(TensorView::F64(permuted_view));
             let matrix_read = TensorRead::from_view(TensorView::F64(matrix.as_view()));
-            budget!("add permuted view", 0, |s: &mut dyn BackendSession| s
+            budget!("add permuted view", 0, |s: &mut dyn Engine| s
                 .add_read(permuted_read.clone(), matrix_read.clone()));
             // An analytic op over a stride-0 broadcast view stays zero: the
             // view carries its layout inline and the kernel reads through it.
             let broadcast_read = TensorRead::from_view(TensorView::F64(row.as_view()))
                 .broadcast_in_dim_view(&[4, 4], &[1])
                 .unwrap();
-            budget!("exp broadcast view", 0, |s: &mut dyn BackendSession| s
+            budget!("exp broadcast view", 0, |s: &mut dyn Engine| s
                 .exp_read(broadcast_read.clone()));
             // Concatenate and a beta != 1 contraction on the erased session
             // surface, at inline rank.
@@ -160,7 +160,7 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
             );
             // Concatenate keeps its typed input list and output shape inline and
             // builds a bounded `ErasedConcatenatePlan` through the plan cache.
-            budget!("concatenate", 0, |s: &mut dyn BackendSession| {
+            budget!("concatenate", 0, |s: &mut dyn Engine| {
                 Tensor::concatenate(&[&concat_a, &concat_b], 0, s)
             });
             let dot_lhs = Tensor::from_typed::<f64>(
@@ -183,7 +183,7 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
                 ContractionScalar::F64(0.5),
             )
             .unwrap();
-            budget!("dot accum beta!=1", 0, |s: &mut dyn BackendSession| {
+            budget!("dot accum beta!=1", 0, |s: &mut dyn Engine| {
                 s.dot_general_read_into_accum(
                     TensorRead::from_tensor(&dot_lhs),
                     TensorRead::from_tensor(&dot_rhs),
@@ -269,7 +269,7 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
     two_thread_backend
         .with_backend_session(|session| {
             let mut budget =
-                |call: &dyn Fn(&mut dyn tenferro_tensor::BackendSession) -> TypedTensor<f64>| {
+                |call: &dyn Fn(&mut dyn tenferro_tensor::Engine) -> TypedTensor<f64>| {
                     for _ in 0..16 {
                         drop(call(session));
                     }

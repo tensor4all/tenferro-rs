@@ -1,6 +1,6 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
+    BackendCachedDot, BackendRuntimeCache, Engine, BackendSessionHost, CompareDir, DType,
     DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
     Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
     TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
@@ -492,12 +492,12 @@ impl TensorDot for WrongDTypeBackend {
 
 impl BackendCachedDot for WrongDTypeBackend {}
 
-impl BackendSession for WrongDTypeBackend {}
+impl Engine for WrongDTypeBackend {}
 
 impl BackendSessionHost for WrongDTypeBackend {
     fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R,
+        f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         tenferro_tensor::with_session_entry_guard("test backend", || f(self))
     }

@@ -1,10 +1,10 @@
 use tenferro_gpu::cuda::{download_tensor, upload_tensor, CudaBackend};
 use tenferro_runtime::Tensor;
-use tenferro_tensor::{BackendSession, BackendSessionHost, TensorRead};
+use tenferro_tensor::{Engine, BackendSessionHost, TensorRead};
 
 pub fn with_cuda_fft_session<R>(
     backend: &mut CudaBackend,
-    f: impl for<'a> FnOnce(&'a mut (dyn BackendSession + 'a)) -> R + Send,
+    f: impl for<'a> FnOnce(&'a mut (dyn Engine + 'a)) -> R + Send,
 ) -> R
 where
     R: Send,

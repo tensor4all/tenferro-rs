@@ -7,7 +7,7 @@ use tenferro_cpu::with_cpu_exec_session;
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::ExtensionOp;
-use tenferro_tensor::{BackendSession, DType, Error, ErrorKind, Tensor, TensorBackend, TensorRead};
+use tenferro_tensor::{Engine, DType, Error, ErrorKind, Tensor, TensorBackend, TensorRead};
 
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::with_cuda_exec_session;
@@ -907,7 +907,7 @@ impl ExtensionOp for LinalgExtensionOp {
     }
 }
 
-fn execute_linalg_extension_reads_on_session<B: BackendSession + ?Sized>(
+fn execute_linalg_extension_reads_on_session<B: Engine + ?Sized>(
     op: &LinalgExtensionOp,
     inputs: &[TensorRead<'_>],
     session: &mut B,
@@ -1095,7 +1095,7 @@ fn linalg_session_supported<B: tenferro_tensor::TensorBackend + 'static>(
 
 fn execute_linalg_extension_in_session(
     op: &LinalgExtensionOp,
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     _extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_tensor::Result<Vec<Tensor>> {

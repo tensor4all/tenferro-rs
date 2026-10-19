@@ -5,7 +5,7 @@ use tenferro_fft::{FftBackend, FftExecutor, FftNorm, TensorFftExt};
 use tenferro_gpu::cuda::CudaExecSession;
 use tenferro_runtime::Runtime;
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
+    BackendCachedDot, BackendRuntimeCache, Engine, BackendSessionHost,
     BackendStorageHandle, CompareDir, DType, DeviceId, DeviceKind, DotGeneralConfig,
     ElementwiseReadOp, ErrorKind, GatherConfig, GpuBackendKind, MemoryKind, PadConfig, Placement,
     ScatterConfig, SliceConfig, StorageBuffer, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
@@ -369,13 +369,13 @@ macro_rules! impl_minimal_tensor_backend {
             }
         }
         impl BackendCachedDot for $ty {}
-        impl BackendSession for $ty {
+        impl Engine for $ty {
 
         }
         impl BackendSessionHost for $ty {
             fn with_backend_session<R>(
                 &mut self,
-                f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R,
+                f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
             ) -> Result<R, tenferro_tensor::SessionEntryError> {
                 tenferro_tensor::with_session_entry_guard("test backend", || f(self))
             }

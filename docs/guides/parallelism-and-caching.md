@@ -53,7 +53,7 @@ counts still apply to tenferro-owned CPU kernels and fallback paths.
 ## CPU Operation Parallelism
 
 `CpuContext` owns the Rayon pool used by tenferro-owned CPU tensor kernels.
-Standalone backend calls and compiled `BackendSession` operations cross the
+Standalone backend calls and compiled `Engine` operations cross the
 selected domain executor exactly once before dispatch. Provider-facing
 execution contexts are already entered and cannot install or submit nested
 executor work.

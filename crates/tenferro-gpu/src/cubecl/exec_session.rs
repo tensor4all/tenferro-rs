@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Mutex;
 use tenferro_tensor::backend::{
-    BackendSession, BackendSessionHost, ElementwiseFusionPlan, ElementwiseReadOp, SessionCachedDot,
+    Engine, BackendSessionHost, ElementwiseFusionPlan, ElementwiseReadOp, SessionCachedDot,
     TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
     TensorIndexing, TensorReduction, TensorStructural,
 };
@@ -519,7 +519,7 @@ where
 ///
 /// // Call-check only: the visitor borrows CUDA execution authority for the
 /// // duration of the callback.
-/// fn check(session: &mut dyn tenferro_tensor::backend::BackendSession) {
+/// fn check(session: &mut dyn tenferro_tensor::backend::Engine) {
 ///     let _ = with_cuda_exec_session(session, |_session| 0usize);
 /// }
 /// let _ = check;
@@ -529,12 +529,12 @@ pub fn with_cuda_exec_session<B, R>(
     f: impl for<'a> FnOnce(&'a mut CudaExecSession<'a>) -> R,
 ) -> Option<R>
 where
-    B: BackendSession + ?Sized,
+    B: Engine + ?Sized,
 {
     let data = session
-        .native_session()?
+        .native_engine()?
         .into_marked_ptr::<CudaExecSessionMarker>()?;
-    // SAFETY: only `CudaExecSession::native_session` creates a token with the
+    // SAFETY: only `CudaExecSession::native_engine` creates a token with the
     // crate-private `CudaExecSessionMarker`, and it points that token at a live
     // `CudaExecSession`. The token borrowed `*session` exclusively, and this function
     // keeps holding `session: &mut B` for the whole scoped visit.
@@ -747,7 +747,7 @@ impl SessionCachedDot for CudaExecSession<'_> {
     }
 }
 
-impl BackendSession for CudaExecSession<'_> {
+impl Engine for CudaExecSession<'_> {
     fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         ops::vdot_read(self.backend, lhs, rhs)
     }
@@ -783,7 +783,7 @@ impl BackendSession for CudaExecSession<'_> {
         self.gather(&operand, &start_indices, config)
     }
 
-    fn native_session(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
+    fn native_engine(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
         // SAFETY: `CudaExecSessionMarker` is private to this crate, and this is the only
         // place a token carrying it is created; it always points to a
         // `CudaExecSession`, exclusively borrowed for the token lifetime.
@@ -794,7 +794,7 @@ impl BackendSession for CudaExecSession<'_> {
 impl BackendSessionHost for CudaBackend {
     fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         // A held session owns this state's execution binding: a new root would silently share
         // the domain with it. Report the conflict before any device call.
@@ -808,7 +808,7 @@ impl BackendSessionHost for CudaBackend {
         with_session_entry_guard("CudaBackend", || f(&mut session))
     }
 
-    fn owns_session(&self, session: &mut dyn BackendSession) -> bool {
+    fn owns_session(&self, session: &mut dyn Engine) -> bool {
         with_cuda_exec_session(session, |session| {
             session.runtime_identity() == self.runtime_identity()
         })
@@ -986,7 +986,7 @@ pub struct CudaSessionStats {
 ///
 /// ```no_run
 /// use tenferro_gpu::cuda::CudaBackend;
-/// use tenferro_tensor::{BackendSession, Tensor, TensorElementwise, TensorRead};
+/// use tenferro_tensor::{Engine, Tensor, TensorElementwise, TensorRead};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0))?;
@@ -1050,7 +1050,7 @@ impl CudaHeldSession<'_> {
     ///
     /// ```no_run
     /// use tenferro_gpu::cuda::CudaBackend;
-    /// use tenferro_tensor::{BackendSession, Tensor, TensorElementwise, TensorRead};
+    /// use tenferro_tensor::{Engine, Tensor, TensorElementwise, TensorRead};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let mut backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0))?;
@@ -1095,7 +1095,7 @@ impl CudaHeldSession<'_> {
 
     /// Run one operation on the held binding, through the existing CUDA session authority.
     ///
-    /// The callback receives the same `&mut dyn BackendSession` view the scoped entry hands out,
+    /// The callback receives the same `&mut dyn Engine` view the scoped entry hands out,
     /// so every concrete route and `with_cuda_exec_session` visitation work unchanged.
     ///
     /// # Errors
@@ -1107,7 +1107,7 @@ impl CudaHeldSession<'_> {
     ///
     /// ```no_run
     /// use tenferro_gpu::cuda::CudaBackend;
-    /// use tenferro_tensor::{BackendSession, Tensor, TensorElementwise, TensorRead};
+    /// use tenferro_tensor::{Engine, Tensor, TensorElementwise, TensorRead};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0))?;
@@ -1123,7 +1123,7 @@ impl CudaHeldSession<'_> {
     /// ```
     pub fn with_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         let stream = self.stream;
         let backend: &mut CudaBackend = self.backend;

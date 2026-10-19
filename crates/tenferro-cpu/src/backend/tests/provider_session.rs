@@ -15,7 +15,7 @@ fn blas_sessions_keep_the_callback_caller_inline_and_reuse_one_context() {
             rhs_batch_dims: [].as_slice().into(),
         };
         for cached in [false, true] {
-            let run = |session: &mut dyn BackendSession| {
+            let run = |session: &mut dyn Engine| {
                 // Session entry is admission-only: the callback and the
                 // coordinator stay on the calling OS thread.
                 let session_thread = std::thread::current().id();

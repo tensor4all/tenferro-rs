@@ -64,12 +64,12 @@ impl PhaseControl<'_> {
 pub struct PhaseLane<'lane> {
     /// The worker-local execution surface. One child session stays open for the
     /// whole lane, so its scratch and plan caches are reused across work items.
-    session: &'lane mut dyn BackendSession,
+    session: &'lane mut dyn Engine,
     cancel: &'lane AtomicBool,
 }
 
 impl PhaseLane<'_> {
-    pub fn session(&mut self) -> &mut dyn BackendSession;
+    pub fn session(&mut self) -> &mut dyn Engine;
     /// Cooperative stop signal. Set as soon as any lane fails, errors, or unwinds.
     pub fn cancelled(&self) -> bool;
 }
@@ -77,7 +77,7 @@ impl PhaseLane<'_> {
 
 Two shape decisions that the pre-implementation review forced, and that are deliberate:
 
-- **The lane hands out `&mut dyn BackendSession`, not a held child session.** A worker-local
+- **The lane hands out `&mut dyn Engine`, not a held child session.** A worker-local
   `CpuHeldSession<'static>` is not expressible today: the held session borrows its backend
   (`held_session.rs`), `open_session` is rejected on every owner-inheriting child handle, and
   the held constructor checks out the *root* resources. The expressible route is the #2044

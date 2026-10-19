@@ -127,7 +127,7 @@ fn shared_scope_is_admission_only_and_reuses_resources_across_operations() {
                         backend
                             .with_backend_session(|__s| __s.reclaim_buffer(y))
                             .unwrap();
-                        let run = |session: &mut dyn BackendSession| {
+                        let run = |session: &mut dyn Engine| {
                             let y = session
                                 .mul_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
                                 .unwrap();

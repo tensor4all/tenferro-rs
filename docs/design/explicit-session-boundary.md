@@ -74,7 +74,7 @@ focused validation and remaining CPU/GPU capabilities.
 
 ## Problem
 
-`BackendSession` is documented as the execution-time primitive surface and the
+`Engine` is documented as the execution-time primitive surface and the
 `_in`/`_read` session methods exist, but the source still contains several
 *distinct* ways for ordinary operations to reach backend execution without the
 caller ever naming an execution boundary:
@@ -86,12 +86,12 @@ caller ever naming an execution boundary:
 2. **A second CPU entry mechanism that is not a session at all.**
    `CpuBackend`'s `install_with_pool_context*` family installs a permit,
    `CpuOperationEntry`, and a buffer-pool loan, but hands the closure a
-   `CpuExecutionContext` + `BufferPool` instead of a `BackendSession`.
+   `CpuExecutionContext` + `BufferPool` instead of a `Engine`.
 3. **Extension owner routes** registered as `execute = ..._owner` that call
    `with_backend_session` on a `&mut B: TensorBackend`, even though a
    borrowed-session sibling already exists.
 4. **Generic helpers** that reach a session-opening method on a `&mut B`
-   type parameter rather than through a passed `&mut dyn BackendSession`.
+   type parameter rather than through a passed `&mut dyn Engine`.
 
 The consequences are the ones the umbrella describes: an unbounded number of
 fixed per-call entries that cannot be amortized by a caller, and no mechanical
@@ -106,7 +106,7 @@ deliberate convenience, while #1926 requires it to be removed.
   are named, few, documented, and enumerable.
 - **Hidden entry** — any other function that creates backend execution state.
 - **Session surface** — operations that receive a borrowed
-  `&mut dyn BackendSession` (or a concrete session reference) and never create
+  `&mut dyn Engine` (or a concrete session reference) and never create
   one.
 
 ## Target contract
@@ -142,7 +142,7 @@ nested per-op entry. The same holds for the eager boundaries
 (`with_eager_session`, `with_execution_session`,
 `with_extension_execution_context`). The compiled path also has a
 caller-session spelling, `Runtime::run_prepared_in(session, prepared, inputs)`: it runs a
-prepared single-engine graph on a `&mut dyn BackendSession` the caller already
+prepared single-engine graph on a `&mut dyn Engine` the caller already
 entered, without opening a scoped session on that path, so it borrows an
 existing execution boundary rather than creating one.
 
@@ -174,8 +174,8 @@ one), or `decide` (needs an explicit recorded decision).
 | `EagerRuntime::with_execution_session` | `tenferro-ad/src/eager.rs:1863` | forwards to `with_backend_session` | all |
 | `EagerRuntime::with_extension_execution_context` | `tenferro-ad/src/eager.rs:1934` | session + extension cache, one lifetime | all |
 | `Runtime::run_compiled` / `run_compiled_values` | `tenferro-runtime/src/runtime/snapshot.rs:1004`, `:1145` | scheduler-owned regions (`exec.rs`, `segment.rs`) | all |
-| `Runtime::run_prepared_in` | `tenferro-runtime/src/runtime/snapshot.rs` (`run_prepared_in`) | caller-borrowed `&mut dyn BackendSession`; no scoped entry on the path; deferred batch with an immediate finish | all (single-engine graphs) |
-| `Runtime::begin_prepared_deferred` | `tenferro-runtime/src/runtime/snapshot.rs` (`begin_prepared_deferred`) | caller-borrowed `&mut dyn BackendSession` retained by the returned guard; deferred event-domain retirement until `finish_prepared` | all (single-engine graphs) |
+| `Runtime::run_prepared_in` | `tenferro-runtime/src/runtime/snapshot.rs` (`run_prepared_in`) | caller-borrowed `&mut dyn Engine`; no scoped entry on the path; deferred batch with an immediate finish | all (single-engine graphs) |
+| `Runtime::begin_prepared_deferred` | `tenferro-runtime/src/runtime/snapshot.rs` (`begin_prepared_deferred`) | caller-borrowed `&mut dyn Engine` retained by the returned guard; deferred event-domain retirement until `finish_prepared` | all (single-engine graphs) |
 
 `with_backend_session_cached` is the runtime-cache-aware entry used by the
 scheduler and eager paths; `with_backend_session` is the canonical user entry.
@@ -202,8 +202,8 @@ execution entries — `install_with_pool_context_unmarked`
 
 | Family | Trait impls and sites | Entry | Status | Replacement route |
 |---|---|---|---|---|
-| BLAS-1 | `impl BackendSession for CpuBackend` `:2919` — `vdot_read` `:2921`, `norm_squared_read` `:2925`, `axpby_read_into_accum` `:2935` | `run_backend_session_cached` | boundary | these **are** session methods; the `CpuBackend`-as-session impl stays |
-| Dense contraction | `impl TensorDot for CpuBackend` `:3451` — `dot_general` `:3458`, `dot_general_read` `:3467`, `dot_general_read_into` `:3479`, `dot_general_read_into_accum` `:3492`, `dot_general_with_conj` `:3505` | `run_backend_session_cached` | decide | `BackendSession::dot_general*_read*` on a caller session |
+| BLAS-1 | `impl Engine for CpuBackend` `:2919` — `vdot_read` `:2921`, `norm_squared_read` `:2925`, `axpby_read_into_accum` `:2935` | `run_backend_session_cached` | boundary | these **are** session methods; the `CpuBackend`-as-session impl stays |
+| Dense contraction | `impl TensorDot for CpuBackend` `:3451` — `dot_general` `:3458`, `dot_general_read` `:3467`, `dot_general_read_into` `:3479`, `dot_general_read_into_accum` `:3492`, `dot_general_with_conj` `:3505` | `run_backend_session_cached` | decide | `Engine::dot_general*_read*` on a caller session |
 | Dense contraction (cached) | `impl BackendCachedDot for CpuBackend` `:3511` — `dot_general_cached` `:3520`, `dot_general_with_conj_cached` `:3535`, `dot_general_read_into_accum_cached` `:3550`, `grouped_gemm_cached` `:3571` | `run_backend_session_cached(Some(cache))` | decide | `with_backend_session_cached` + session `_cached` methods |
 | Elementwise | `impl TensorElementwise for CpuBackend` `:2953` (~30 methods) | `install_with_pool_context{,_unmarked}` | decide | session-provided pool/context |
 | Reductions | `impl TensorReduction for CpuBackend` `:3382` (5 methods) | `install_with_pool_context` | decide | session-provided pool/context |
@@ -219,7 +219,7 @@ listed as `decide` are public backend SPI. Removing them from the public
 surface requires either (a) making the session method the only spelling and
 migrating every caller, or (b) keeping one named one-shot boundary per family.
 This document records the target as **(a)**: the session surface
-(`BackendSession`) becomes the only operation primitive, and
+(`Engine`) becomes the only operation primitive, and
 `with_backend_session[_cached]` the only entry. Option (b) is retained only for
 `with_linalg_pool`, which exists specifically so an operation-family crate can
 own its backend implementation while sharing the CPU pool. That is a named,
@@ -227,7 +227,7 @@ documented boundary, not a crate-wide exemption.
 
 Consequence for the audit gate: `install_with_*` becomes private to the
 `CpuBackend` boundary implementations themselves, and `run_backend_session_cached`
-is called only from `BackendSessionHost`/`BackendSession`.
+is called only from `BackendSessionHost`/`Engine`.
 
 ### C. Eager per-op entries (`tenferro-ad`)
 
@@ -260,7 +260,7 @@ issue — it is not silently exempted.
 
 **Eager migration contract (delivered; historical implementation notes follow).** An eager
 operation must receive a runtime-bound, borrowed session created by the owning
-`EagerRuntime` at an explicit caller boundary. A plain `&mut dyn BackendSession`
+`EagerRuntime` at an explicit caller boundary. A plain `&mut dyn Engine`
 is insufficient: two eager runtimes may select the same backend type but own
 different provider/device state, while the eager value and trace are tied to one
 runtime. The boundary therefore carries both the originating runtime identity
@@ -334,10 +334,10 @@ with the region construction owned by the runtime rather than by the extension.
 ### E. GPU backend entries
 
 `CudaBackend` and `WebGpuBackend` implement the `Tensor*` operation traits by
-calling the *same* functions as their `BackendSession` impls. There is no
+calling the *same* functions as their `Engine` impls. There is no
 distinct one-shot session struct: the backend is effectively its own session.
 
-| Backend | `Tensor*` impls | `BackendSession` impl | Status |
+| Backend | `Tensor*` impls | `Engine` impl | Status |
 |---|---|---|---|
 | CUDA/CubeCL | `TensorElementwise` `cubecl/mod.rs:4719`, `TensorAnalytic` `:5601`, `TensorStructural` `:5879`, `TensorReduction` `:6669`, `TensorDot` `:6902`, `TensorIndexing` `:6959`, `TensorFusion` `:7895` | `:8109` | remove the owner impls |
 | WebGPU | `TensorElementwise` `webgpu/mod.rs:758`, `TensorAnalytic` `:836`, `TensorStructural` `:878`, `TensorReduction` `:952`, `TensorDot` `:970`, `TensorIndexing` `:992`, `TensorFusion` `:1047` | `:1077` | remove the owner impls |
@@ -607,7 +607,7 @@ Landed so far:
 * **WebGPU** (`ad6b41720`): the operation bodies moved from
   `impl Tensor* for WebGpuBackend` into `impl Tensor* for WebGpuExecSession<'_>`
   (the `delegate!` invocations for the operation families became real impls),
-  the owner's `BackendSession`/`BackendCachedDot` impls and the session marker
+  the owner's `Engine`/`BackendCachedDot` impls and the session marker
   deleted, and `SessionCachedDot` implemented directly on the session (WebGPU has
   no runtime cache, so the trait defaults are what the owner's blanket impl
   provided). Verified with and without the `webgpu` feature.
@@ -626,7 +626,7 @@ Landed so far:
    `dot_general_with_conj`, ...) to the session form, and add
    `impl SessionCachedDot for CudaExecSession<'_> {}` in place of
    `delegate_cached!`;
-4. delete `impl BackendSession for CudaBackend`/`BackendCachedDot for CudaBackend`
+4. delete `impl Engine for CudaBackend`/`BackendCachedDot for CudaBackend`
    and the marker, then retarget the CUDA source-text contracts
    (`cuda_launch_contract`, `public_surface_contract`, `session_contract`,
    `backend_read_contract`) that name `cubecl/mod.rs` sections.
@@ -651,7 +651,7 @@ Attempted twice and reverted. What the attempts measured, in addition to the
 **The module-function shape landed, and it is what the attempt history argued.
 The CUDA operation bodies now live in `crates/tenferro-gpu/src/cubecl/ops.rs` as
 57 free functions over `&mut CudaBackend`, the seven owner impls and the owner
-`BackendSession`/`BackendCachedDot` impls are deleted, and `exec_session.rs`
+`Engine`/`BackendCachedDot` impls are deleted, and `exec_session.rs`
 keeps one delegation macro per direction:
 
 1. each owner method became `pub(super) fn <op>(backend: &mut CudaBackend,
@@ -688,7 +688,7 @@ The CUDA tests and example migrated through the same wrapper as CPU and WebGPU.
 Two shapes needed hand work: `upload(&gpu, ..)` inside a session closure borrows
 `gpu` immutably while the session needs it mutably (E0502), so the upload is
 hoisted into a `let` before the enclosing statement, and two object-safety tests
-that wrote `let exec: &mut dyn BackendSession = &mut gpu;` now obtain the erased
+that wrote `let exec: &mut dyn Engine = &mut gpu;` now obtain the erased
 session from `with_backend_session`, which still proves the same interface.
 
 The source-text contracts were retargeted to the module that now holds the
@@ -745,10 +745,10 @@ means a file, a command output, or a test that runs in CI, not an intention.
 | Requirement | Evidence |
 | --- | --- |
 | B1 fail: owner `add`/`add_read` on three backends | `tenferro-cpu/src/lib.rs` crate docs pin the deleted owner spellings for `add`, `mul`, `exp`, `reduce_sum`, `transpose`, `dot_general`; `cubecl/exec_session.rs` and `webgpu/mod.rs` pin that the CUDA/WebGPU owners do not implement an operation trait (a call cannot resolve for the same reason) |
-| B1 fail: `dyn BackendSession` old `add` | `tenferro-tensor/src/backend.rs::BackendSession` `compile_fail` example |
+| B1 fail: `dyn Engine` old `add` | `tenferro-tensor/src/backend.rs::Engine` `compile_fail` example |
 | B1 fail: `BackendCachedDot` | `tenferro-cpu/src/lib.rs` owner-bound `compile_fail` example |
 | B1 fail: `default_backend_session` | `tenferro-tensor/src/backend.rs::BackendSessionHost` `compile_fail` example |
-| B1 pass: `Tensor::add(.., session)`, cached operations, typed-view operations, scheduler/extension `dyn BackendSession`, scope nesting | five trybuild fixtures in `tenferro-runtime/tests/ui/session_surface/pass/`, driven by `session_surface_contract.rs`, which runs under the CI nextest profile (verified with `cargo nextest run -p tenferro-runtime --test session_surface_contract`) |
+| B1 pass: `Tensor::add(.., session)`, cached operations, typed-view operations, scheduler/extension `dyn Engine`, scope nesting | five trybuild fixtures in `tenferro-runtime/tests/ui/session_surface/pass/`, driven by `session_surface_contract.rs`, which runs under the CI nextest profile (verified with `cargo nextest run -p tenferro-runtime --test session_surface_contract`) |
 | B2 delegation inverted, one-shot spelling deleted | 31 per-operation deletion commits; `_read`/`_into` are required items |
 | B2 acceptance ranges unchanged | `backend_default_read_tests.rs`: `default_read_methods_delegate_owned_tensors_and_reject_views`, `structural_runtime_materialization_rejects_views_by_default` |
 | B3 supertraits trimmed | `pub trait TensorBackend: BackendRuntimeCache + TensorDeviceTransfer + BackendSessionHost` |
@@ -757,7 +757,7 @@ means a file, a command output, or a test that runs in CI, not an intention.
 | B3 CPU linalg policy preserved | `preferred_linalg_mode` consumed at `tenferro-cpu/src/backend.rs:2752`, defined in `provider.rs` |
 | B3 GPU `delegate!` shim decided and documented | CUDA operations moved to `ops.rs` and deleted from the shim; `delegate!` remains only for `TensorBuffer`/`TensorDeviceTransfer` |
 | B3 generic-bound and call-site migration (~215 sites, doctests, examples) | `cargo check --workspace --all-targets` is clean, which is the machine-checkable form of the migration |
-| B4 extension owner path is session-primary | `define_extension_runtime!`'s owner entry forms the session and hands extensions `&mut dyn BackendSession`; owner routes are limited to the runtime-formed fallback (`execute_owner_extension_fallback`); the linalg helper is session-typed |
+| B4 extension owner path is session-primary | `define_extension_runtime!`'s owner entry forms the session and hands extensions `&mut dyn Engine`; owner routes are limited to the runtime-formed fallback (`execute_owner_extension_fallback`); the linalg helper is session-typed |
 | B5 deterministic audit gate | `scripts/audit-session-entry.py` + `scripts/session-entry-allowlist.json`, run by `scripts/check-pr-fast.sh`; tracked mechanisms and the 16-entry inventory are in the table above |
 | B5 alias negative test, deny on a hidden entry, pass on the boundary | the `--check` self-test plus the recorded demonstration below (exit 1 with the hidden entry, exit 0 without) |
 | B5 single rules owner and doc consistency | `REPOSITORY_RULES.md` "Backend Session Entry" section, routed by `scripts/repository-rules-review.py`; `docs/design/explicit-session-boundary.md` and `docs/design/index.md` updated together |
@@ -1305,7 +1305,7 @@ for aesthetic consistency" as a non-goal. That was correct for its own scope
 for **operation-level session-opening APIs**: #1926 removes them, because a
 thin wrapper that opens a session per call is still an implicit entry. What
 #1673 established and remains unchanged: the shape of the session surface
-(`_in`/`_read` methods, `&mut dyn BackendSession`, preserved `Send` bounds), the
+(`_in`/`_read` methods, `&mut dyn Engine`, preserved `Send` bounds), the
 nested-entry prohibition, and cache parity.
 
 `exec-session.md` remains the owner for "what a session is". Its
@@ -1617,7 +1617,7 @@ that still delegate to the removed method and must absorb its body.
 2. Factory *invocation* lines (`dot_general(...) -> Ret;` entries) that must be
    deleted individually.
 3. Receivers that are not simple identifiers: `&mut B` generic session
-   parameters, multi-line `receiver\n .method(` forms, `&mut dyn BackendSession`.
+   parameters, multi-line `receiver\n .method(` forms, `&mut dyn Engine`.
 4. Argument lists with nested calls, macros and struct literals
    (`black_box(..)`, `DotGeneralConfig { .. }`), which need real paren matching —
    the indent/brace heuristics failed here repeatedly.
@@ -1679,7 +1679,7 @@ single pre-existing environmental `tenferro-ad` trybuild span mismatch
 (`eager_backend_capability_contract`); the workspace doctests pass; and no
 `*_read` method recurses into itself.
 
-The remaining Phase-B work is unchanged: B3 (drop `BackendSession`,
+The remaining Phase-B work is unchanged: B3 (drop `Engine`,
 `TensorBackendOps` and `BackendCachedDot` from the `TensorBackend` supertraits
 and keep only the session implementations), B4 (extension owner routes), B5
 (audit gate, `REPOSITORY_RULES.md` owner, batched repository gate), then the
@@ -1687,7 +1687,7 @@ Phase-C paired benchmark against the recorded baseline.
 
 ### B3 reconnaissance: what removing the owner supertraits surfaces
 
-Dropping `BackendSession`, `TensorBackendOps` and `BackendCachedDot` from
+Dropping `Engine`, `TensorBackendOps` and `BackendCachedDot` from
 `TensorBackend` was measured once, then reverted, so the next session starts from
 a known work list instead of rediscovering it.
 
@@ -1733,7 +1733,7 @@ because it ran into the extension route. The finding is an ordering constraint
 that the slice list does not show.
 
 What converts cleanly: `exec/dispatch.rs`'s host table and the
-`execute_*_host` functions become `&mut dyn BackendSession` (the session path
+`execute_*_host` functions become `&mut dyn Engine` (the session path
 already calls them), the four owner-based evaluators in `segment.rs`/`exec.rs`
 open one session and use `execute_segment_in_session` /
 `execute_value_segment_in_session` / `execute_ffi_instruction_exec`, and the
@@ -1744,7 +1744,7 @@ What does not convert yet is the *extension* operation route. Two facts pin it:
 
 1. `execute_prepared_extension_instruction` builds `ErasedExecutionContext`, which
    requires a `Sized + 'static` type, so it needs the owner (`B: TensorBackend +
-   'static`), not `&mut dyn BackendSession`. The session equivalent
+   'static`), not `&mut dyn Engine`. The session equivalent
    (`execute_prepared_extension_instruction_in_session`) exists and is used by
    `execute_ffi_instruction_exec`, but the owner route is still reachable.
 2. `segment_is_session_compatible` excludes FFI ops that are not session
@@ -1766,8 +1766,8 @@ look at the extension routes narrows the reason. `execute_linalg_extension_reads
 `ErasedExecutionContext<'_, B>` with `B: TensorBackend + 'static`, which the
 extension runtime uses to identify the concrete backend for capability
 dispatch. The session-based equivalent already exists
-(`BackendSession::session_type_id`, since #1938 D7 replaced by the opaque
-`BackendSession::native_session` token; `with_cpu_exec_session`,
+(`Engine::session_type_id`, since #1938 D7 replaced by the opaque
+`Engine::native_engine` token; `with_cpu_exec_session`,
 `with_cuda_exec_session`), and `execute_prepared_extension_instruction_in_session`
 uses it, but the owner path is still reachable.
 
@@ -1776,7 +1776,7 @@ It is reachable rather than dead because session support is per operation:
 `false` on CUDA for `FullPivLu`, `FullPivLuSolve` and general `eig`
 (`extension.rs:1060`, issue #1665). For those operations the scheduler keeps the
 owner path, and that path's `ErasedExecutionContext` cannot be built from
-`&mut dyn BackendSession`.
+`&mut dyn Engine`.
 
 So B4's deliverable is precise: move extension capability dispatch from the
 owner's type identity to the session's, and give the remaining per-op
@@ -1803,7 +1803,7 @@ The workable order is:
 family that registers the session route (`execute_in_session` +
 `session_supported`) now gets an owner entry that calls
 `with_backend_session` itself and hands the extension nothing but
-`&mut dyn BackendSession`; supplying both routes, or neither, is a compile
+`&mut dyn Engine`; supplying both routes, or neither, is a compile
 error. The einsum, linalg and fft owner routes (`execute_*_reads_owner`,
 `execute_einsum_extension_reads`) are deleted, the linalg session-context
 variant that only the owner route used is deleted, and the three tests that
@@ -1844,7 +1844,7 @@ operation implementations any more; deleting them is the last step, and the
 measured shape of that step is recorded here because it is a call-site migration,
 not a deletion.
 
-Deleting the eight CPU owner impls (`BackendSession`, `TensorElementwise`,
+Deleting the eight CPU owner impls (`Engine`, `TensorElementwise`,
 `TensorAnalytic`, `TensorStructural`, `TensorReduction`, `TensorDot`,
 `BackendCachedDot`, `TensorIndexing`) leaves 261 errors in the CPU crate alone,
 across about a dozen test/bench files. They split into four shapes, and only the
@@ -1884,7 +1884,7 @@ trybuild `.stderr` files, because `compile_fail` only requires compilation to
 fail and therefore does not depend on the compiler's span rendering or on any
 local build wrapper rewriting paths:
 
-* `tenferro_tensor::BackendSession` documents that `exec.add(a, b)` inside
+* `tenferro_tensor::Engine` documents that `exec.add(a, b)` inside
   `with_backend_session` no longer compiles;
 * `tenferro_cpu`'s crate docs pin the deleted owner spellings for one operation
   per family (`add`, `mul`, `exp`, `reduce_sum`, `transpose`, `dot_general`).

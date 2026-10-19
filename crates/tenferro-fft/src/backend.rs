@@ -1,7 +1,7 @@
 use std::fmt;
 
 use tenferro_runtime::ExtensionCacheStore;
-use tenferro_tensor::{BackendSession, Tensor, TensorRead};
+use tenferro_tensor::{Engine, Tensor, TensorRead};
 
 use crate::{FftPlanCache, FftPlanSpec};
 
@@ -88,7 +88,7 @@ impl<'a> FftExecutionCache<'a> {
 /// This is a backend SPI: third-party backend implementers implement this
 /// trait on their execution sessions to provide FFT capability. The concrete
 /// [`TensorFftExt`](crate::TensorFftExt)/[`TensorReadFftExt`](crate::TensorReadFftExt) methods and [`FftExecutor`](crate::FftExecutor) take an
-/// erased `&mut dyn BackendSession` and dispatch **internally** to the
+/// erased `&mut dyn Engine` and dispatch **internally** to the
 /// built-in CPU/CUDA/WebGPU execution sessions; a session without this
 /// capability returns a typed `Error::Unsupported` instead of being accepted
 /// as an arbitrary third-party backend (issue #1680 Phase 3).
@@ -115,7 +115,7 @@ impl<'a> FftExecutionCache<'a> {
 ///     let _: &mut dyn FftBackend = backend;
 /// }
 /// ```
-pub trait FftBackend: BackendSession {
+pub trait FftBackend: Engine {
     /// Validate a borrowed runtime input before the extension read path
     /// materializes it into a compact tensor.
     ///

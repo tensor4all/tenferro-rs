@@ -26,11 +26,11 @@ deliverable; it does not claim reduced dispatch or synchronization overhead.
 
 The CUDA execution authority is a **borrowed session object, not the owner**:
 
-- `impl BackendSession for CudaExecSession<'_>` (`crates/tenferro-gpu/src/cubecl/exec_session.rs`)
+- `impl Engine for CudaExecSession<'_>` (`crates/tenferro-gpu/src/cubecl/exec_session.rs`)
   is the erased operation surface every concrete route goes through.
 - `CudaExecSession<'a>` borrows `&'a mut CudaBackend` and carries the crate-private
   `CudaExecSessionMarker`; `CudaBackend` implements `TensorBackend` (`cubecl/mod.rs`), not
-  `BackendSession`.
+  `Engine`.
 - `impl BackendSessionHost for CudaBackend` constructs that session for one callback;
   `with_cuda_exec_session(&mut B, f) -> Option<R>` **visits** an existing marked session and has no
   entry-error channel. Extension crates and runtime extension dispatch reach CUDA only that way.
@@ -96,7 +96,7 @@ impl CudaHeldSession<'_> {
     /// scoped CUDA callback.
     pub fn with_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, SessionEntryError>;
 
     /// Explicit submission boundary: dispatch pending device work (see §5 for the waits it
@@ -122,7 +122,7 @@ impl Drop for CudaHeldSession<'_> { /* release the reservation; never panics; ne
   (`with_backend_session`) is rejected typed while a held session is live on that state. Concurrent
   **scoped** callbacks on different clones keep working exactly as today — the scoped path is not
   enlisted into the reservation.
-- **The operation view is the existing authority.** `with_session` hands out `&mut dyn BackendSession`
+- **The operation view is the existing authority.** `with_session` hands out `&mut dyn Engine`
   whose concrete value is a `CudaExecSession` carrying the native marker, so
   `with_cuda_exec_session` visitation keeps working inside a held session. No parallel operation
   surface and no second numerical path.
@@ -222,7 +222,7 @@ synchronization. Each is reported as an existing boundary, not as something this
 | `failed_synchronizes` | `synchronize` attempts that returned an error |
 
 Readbacks are not separately attributed: they happen inside a `with_session` callback through the
-`BackendSession` surface, so the session cannot distinguish them from other operations there.
+`Engine` surface, so the session cannot distinguish them from other operations there.
 
 Substrate-internal submissions and waits are **not** attributed to the session: the host-dispatch
 channel batches work from several callers, the automatic staging flush happens inside CubeCL, and

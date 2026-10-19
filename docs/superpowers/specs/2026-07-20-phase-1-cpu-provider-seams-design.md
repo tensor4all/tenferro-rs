@@ -256,7 +256,7 @@ the wrong provider.
 
 ## Existing-Path Migration
 
-Both direct `CpuBackend` calls and graph `BackendSession` calls construct the
+Both direct `CpuBackend` calls and graph `Engine` calls construct the
 same `CpuExecSession` and delegate contraction to its borrowed
 `DotGeneralRuntime`. The session receives the selected bundle once at session
 construction. No operation creates a backend, session, pool, permit, or

@@ -16,7 +16,7 @@
   and a second result path to verify. `TensorDot::dot_general_read` already
   uses this fallback, so the CUDA entry points now follow the same rule.
 - Forward the same entry points from `CudaExecSession`. The traced runtime
-  reaches them through the erased `BackendSession` surface, so overriding them
+  reaches them through the erased `Engine` surface, so overriding them
   on `CudaBackend` alone would not fix the reported failure.
 - Materialization is bounded to the call: `CudaReadInput` owns the materialized
   tensor for exactly as long as the kernel needs it.

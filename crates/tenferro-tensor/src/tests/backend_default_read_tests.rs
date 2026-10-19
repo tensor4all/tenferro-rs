@@ -3,7 +3,7 @@ use crate::{
         validate_axpby_read_into_accum, validate_dot_general_read_into, validate_grouped_gemm,
         GroupedGemmConfig, GroupedGemmJob,
     },
-    AllocationDomainId, AllocationId, BackendCachedDot, BackendRuntimeCache, BackendSession,
+    AllocationDomainId, AllocationId, BackendCachedDot, BackendRuntimeCache, Engine,
     BackendSessionHost, BackendStorage, CompareDir, ContractionScalar, DType,
     DotGeneralAccumulation, DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig,
     Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor, TensorAnalytic, TensorBackend,
@@ -739,12 +739,12 @@ impl BackendRuntimeCache for DefaultReadBackend {
 
 impl BackendCachedDot for DefaultReadBackend {}
 
-impl BackendSession for DefaultReadBackend {}
+impl Engine for DefaultReadBackend {}
 
 impl BackendSessionHost for DefaultReadBackend {
     fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn crate::BackendSession) -> R,
+        f: impl FnOnce(&mut dyn crate::Engine) -> R,
     ) -> Result<R, crate::SessionEntryError> {
         crate::with_session_entry_guard("test backend", || f(self))
     }
@@ -1961,7 +1961,7 @@ fn structural_runtime_materialization_is_object_safe_and_clones_owned_input_by_d
         structural_runtime_enabled: false,
         ..Default::default()
     };
-    let session: &mut dyn BackendSession = &mut backend;
+    let session: &mut dyn Engine = &mut backend;
 
     let output = session
         .to_contiguous_read(TensorRead::from_tensor(&input))
@@ -1979,7 +1979,7 @@ fn structural_runtime_materialization_rejects_views_by_default() {
         structural_runtime_enabled: false,
         ..Default::default()
     };
-    let session: &mut dyn BackendSession = &mut backend;
+    let session: &mut dyn Engine = &mut backend;
 
     let err = session
         .to_contiguous_read(TensorRead::from_view(view))
@@ -2017,7 +2017,7 @@ fn structural_runtime_materialization_rejects_foreign_backend_storage_by_default
         structural_runtime_enabled: false,
         ..Default::default()
     };
-    let session: &mut dyn BackendSession = &mut backend;
+    let session: &mut dyn Engine = &mut backend;
 
     let err = session
         .to_contiguous_read(TensorRead::from_tensor(&input))
@@ -2040,7 +2040,7 @@ fn structural_runtime_copy_is_explicitly_unsupported_by_default() {
         structural_runtime_enabled: false,
         ..Default::default()
     };
-    let session: &mut dyn BackendSession = &mut backend;
+    let session: &mut dyn Engine = &mut backend;
 
     let err = session
         .copy_read_into(

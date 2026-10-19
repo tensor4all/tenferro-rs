@@ -69,7 +69,7 @@ share topology, engines, arbitration, and engine-owned caches.
 ## Scoped direct faer calls
 
 Downstream code that needs a faer routine not exposed by tenferro can use
-`tenferro_cpu::FaerParallelismExt` on the active `BackendSession`:
+`tenferro_cpu::FaerParallelismExt` on the active `Engine`:
 
 ```text
 backend.with_backend_session(|session| {
@@ -178,7 +178,7 @@ bypasses domain admission.
 
 Supported Host instructions, native instructions, and session-capable GEMM FFI
 instructions share one backend session. Extension runtimes that cannot execute
-through `BackendSession` remain explicit session boundaries.
+through `Engine` remain explicit session boundaries.
 
 ## Diagnostics
 

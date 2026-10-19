@@ -37,7 +37,7 @@ supported yet. The runnable driver is
 ```
 <!-- end-snippet-source -->
 
-`with_session` hands out the same `&mut dyn BackendSession` view the scoped entry hands out, so every
+`with_session` hands out the same `&mut dyn Engine` view the scoped entry hands out, so every
 concrete route and the extension path (`with_cuda_exec_session`) work unchanged; the difference is
 only when the backend is entered. `submit` dispatches pending work at a boundary the caller chooses,
 `synchronize` adds an explicit host barrier, and `close` performs a final submission and returns the

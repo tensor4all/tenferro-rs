@@ -16,9 +16,9 @@ fn webgpu_session_type_is_distinct_from_owner() {
 #[test]
 fn webgpu_session_exposes_backend_session_operations() {
     use tenferro_gpu::webgpu::WebGpuExecSession;
-    use tenferro_tensor::{BackendSession, Tensor, TensorElementwise, TensorRead};
+    use tenferro_tensor::{Engine, Tensor, TensorElementwise, TensorRead};
 
-    fn assert_backend_session<S: BackendSession + ?Sized>() {}
+    fn assert_backend_session<S: Engine + ?Sized>() {}
 
     assert_backend_session::<WebGpuExecSession<'static>>();
     let _add: fn(
@@ -43,9 +43,9 @@ fn cuda_session_type_is_distinct_from_owner() {
 #[test]
 fn cuda_session_exposes_backend_session_operations() {
     use tenferro_gpu::cuda::CudaExecSession;
-    use tenferro_tensor::{BackendSession, Tensor, TensorElementwise, TensorRead};
+    use tenferro_tensor::{Engine, Tensor, TensorElementwise, TensorRead};
 
-    fn assert_backend_session<S: BackendSession + ?Sized>() {}
+    fn assert_backend_session<S: Engine + ?Sized>() {}
 
     assert_backend_session::<CudaExecSession<'static>>();
     let _add: fn(

@@ -2,7 +2,7 @@ use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::{CpuBackend, Tensor, TensorRead, TensorValue, TensorWrite};
 use num_complex::{Complex32, Complex64};
 use std::sync::Arc;
-use tenferro_tensor::backend::{BackendSession, ElementwiseFusionPlan, GroupedGemmConfig};
+use tenferro_tensor::backend::{Engine, ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::{
     ActivationOp, CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp,
     GatherConfig, PadConfig, ScatterConfig, SharedTensorAllocationDomain, SliceConfig, TensorView,
@@ -1194,13 +1194,13 @@ impl TensorFusion for CpuExecSession<'_> {
     }
 }
 
-impl BackendSession for CpuExecSession<'_> {
+impl Engine for CpuExecSession<'_> {
     fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         tenferro_tensor::backend::validate_vdot_read(&lhs, &rhs)?;
-        crate::blas1::validate_cpu_read("BackendSession::vdot_read", &lhs)?;
-        crate::blas1::validate_cpu_read("BackendSession::vdot_read", &rhs)?;
+        crate::blas1::validate_cpu_read("Engine::vdot_read", &lhs)?;
+        crate::blas1::validate_cpu_read("Engine::vdot_read", &rhs)?;
         let element_count = tenferro_tensor::validate::checked_shape_product(
-            "BackendSession::vdot_read",
+            "Engine::vdot_read",
             "shape",
             lhs.shape(),
         )?;
@@ -1229,7 +1229,7 @@ impl BackendSession for CpuExecSession<'_> {
 
     fn norm_squared_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         tenferro_tensor::backend::validate_norm_squared_read(&input)?;
-        crate::blas1::validate_cpu_read("BackendSession::norm_squared_read", &input)?;
+        crate::blas1::validate_cpu_read("Engine::norm_squared_read", &input)?;
         self.run_native_fresh(|buffers| reduction::norm_squared_read(buffers, input))
     }
 
@@ -1257,7 +1257,7 @@ impl BackendSession for CpuExecSession<'_> {
         })
     }
 
-    fn native_session(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
+    fn native_engine(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
         // SAFETY: `CpuExecSessionMarker` is private to this crate, and this is
         // the only place a token carrying it is created; it always points to a
         // `CpuExecSession`, exclusively borrowed for the token lifetime.

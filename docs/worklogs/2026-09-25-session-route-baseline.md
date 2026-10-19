@@ -99,7 +99,7 @@ cases and free on contraction-dominated cases. The `oneshot/single` and
 ### 4. GPU: the routes are equivalent, and launch is separated from completion
 
 `CudaBackend` implements the operation traits by calling the same functions as
-its `BackendSession` impl, so the two routes differ only by the session wrapper.
+its `Engine` impl, so the two routes differ only by the session wrapper.
 That is what the data shows. f64:
 
 | size | `oneshot/round_trip` | `session/round_trip` | `oneshot/enqueue_batch16` | `session/enqueue_batch16` |

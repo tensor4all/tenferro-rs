@@ -29,7 +29,7 @@ einsum through one composite `StdTensorOp` graph node.
   operation-family crates that need to execute and record a standard-op graph
   as one eager result.
 - Executed tracked eager einsum forward by walking the lowered standard graph in
-  one `BackendSession`, instead of replaying the old per-op eager API.
+  one `Engine`, instead of replaying the old per-op eager API.
 - Retained conservative O(N) residual data by saving the graph input values and
   every concrete value produced by the forward graph execution.
 - Left untracked eager einsum's existing cached expanded-program path intact

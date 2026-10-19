@@ -134,15 +134,15 @@ pub fn derive_extension_family_id(input: TokenStream) -> TokenStream {
 ///
 /// * `execute_reads` runs the operation inside the runtime-formed context and
 ///   has this signature:
-///   `fn<B: BackendSession + ?Sized>(&OpType, &[TensorRead<'_>], &mut ExtensionExecutionContext<'_, B>)`.
+///   `fn<B: Engine + ?Sized>(&OpType, &[TensorRead<'_>], &mut ExtensionExecutionContext<'_, B>)`.
 ///   The generated owner entry opens the backend session and the context
-///   borrows it (`B` is `dyn BackendSession`), so the callback never runs on
+///   borrows it (`B` is `dyn Engine`), so the callback never runs on
 ///   the owner. Prefer the session route below for new extensions.
 /// * the session route (`execute_in_session` + `session_supported`) is the
 ///   preferred one: `session_supported` has signature
 ///   `fn<B: BackendBound + 'static>(&OpType) -> bool` and `execute_in_session`
 ///   has signature
-///   `fn(&OpType, &mut dyn BackendSession, &mut ExtensionCacheStore, &[TensorRead<'_>])`.
+///   `fn(&OpType, &mut dyn Engine, &mut ExtensionCacheStore, &[TensorRead<'_>])`.
 ///   With it, the generated owner entry forms the session itself and hands the
 ///   extension only a session, so no operation ever runs on the owner.
 ///
@@ -276,7 +276,7 @@ fn expand_extension_runtime(args: RuntimeArgs) -> syn::Result<proc_macro2::Token
 
             fn execute_in_session(
                 &self,
-                session: &mut dyn tenferro_tensor::BackendSession,
+                session: &mut dyn tenferro_tensor::Engine,
                 extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
                 inputs: &[tenferro_tensor::TensorRead<'_>],
             ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {

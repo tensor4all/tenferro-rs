@@ -3,7 +3,7 @@
 //! completion.
 //!
 //! Issue #1926 / umbrella #1929. `CudaBackend` used to implement the `Tensor*`
-//! operation traits by calling the same functions as its `BackendSession` impl
+//! operation traits by calling the same functions as its `Engine` impl
 //! — the backend was effectively its own session — so a one-shot call did not
 //! open a session, it ran *unbatched*. That owner spelling is deleted, so the
 //! only route measured here is `with_backend_session` plus `dot_general_read` on

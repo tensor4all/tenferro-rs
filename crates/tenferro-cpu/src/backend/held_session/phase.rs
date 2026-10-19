@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use tenferro_tensor::{BackendSession, BackendSessionHost, SessionEntryError};
+use tenferro_tensor::{Engine, BackendSessionHost, SessionEntryError};
 
 use super::HeldSessionState;
 use crate::arbiter::{ResourceOwner, ResourcePermit};
@@ -238,7 +238,7 @@ impl PhaseControl<'_> {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct PhaseLane<'lane> {
-    session: &'lane mut dyn BackendSession,
+    session: &'lane mut dyn Engine,
     cancel: &'lane AtomicBool,
 }
 
@@ -277,7 +277,7 @@ impl PhaseLane<'_> {
     /// session.close()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn session(&mut self) -> &mut dyn BackendSession {
+    pub fn session(&mut self) -> &mut dyn Engine {
         self.session
     }
 

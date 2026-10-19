@@ -3301,9 +3301,9 @@ pub trait TensorDot: TensorElementwise {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::BackendSession;
+/// use tenferro_tensor::Engine;
 ///
-/// fn accepts_session_dot<S: BackendSession + ?Sized>(_session: &mut S) {}
+/// fn accepts_session_dot<S: Engine + ?Sized>(_session: &mut S) {}
 /// ```
 pub trait SessionCachedDot: TensorDot {
     #[doc(hidden)]
@@ -3561,8 +3561,8 @@ pub trait TensorIndexing {
 /// must not perform hidden host/device transfers or silently materialize an
 /// unsupported source layout.
 ///
-/// This trait is intentionally separate from [`BackendSession`] so generic
-/// typed methods do not change the object-safety contract of `dyn BackendSession`.
+/// This trait is intentionally separate from [`Engine`] so generic
+/// typed methods do not change the object-safety contract of `dyn Engine`.
 ///
 /// # Examples
 ///
@@ -3934,14 +3934,14 @@ pub trait BackendSessionHost: BackendRuntimeCache {
     /// re-derive it; it says nothing about whether `f` ran.
     fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, SessionEntryError>;
 
     #[doc(hidden)]
     fn with_backend_session_cached<R>(
         &mut self,
         _cache: &mut Self::RuntimeCache,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, SessionEntryError> {
         self.with_backend_session(f)
     }
@@ -3957,13 +3957,13 @@ pub trait BackendSessionHost: BackendRuntimeCache {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{BackendSession, BackendSessionHost};
+    /// use tenferro_tensor::{Engine, BackendSessionHost};
     ///
-    /// fn owns<H: BackendSessionHost>(host: &H, session: &mut dyn BackendSession) -> bool {
+    /// fn owns<H: BackendSessionHost>(host: &H, session: &mut dyn Engine) -> bool {
     ///     host.owns_session(session)
     /// }
     /// ```
-    fn owns_session(&self, _session: &mut dyn BackendSession) -> bool {
+    fn owns_session(&self, _session: &mut dyn Engine) -> bool {
         false
     }
 }
@@ -3995,10 +3995,10 @@ impl<T> TensorBackendOps for T where
 {
 }
 
-/// Validate the shared input contract for [`BackendSession::vdot_read`].
+/// Validate the shared input contract for [`Engine::vdot_read`].
 #[doc(hidden)]
 pub fn validate_vdot_read(lhs: &TensorRead<'_>, rhs: &TensorRead<'_>) -> crate::Result<()> {
-    let op = "BackendSession::vdot_read";
+    let op = "Engine::vdot_read";
     validate_supported_blas1_dtype(op, lhs.dtype())?;
     if rhs.dtype() != lhs.dtype() {
         return Err(Error::dtype_mismatch(op, lhs.dtype(), rhs.dtype()));
@@ -4014,15 +4014,15 @@ pub fn validate_vdot_read(lhs: &TensorRead<'_>, rhs: &TensorRead<'_>) -> crate::
     validate_compatible_placement(op, lhs, rhs)
 }
 
-/// Validate the shared input contract for [`BackendSession::norm_squared_read`].
+/// Validate the shared input contract for [`Engine::norm_squared_read`].
 #[doc(hidden)]
 pub fn validate_norm_squared_read(input: &TensorRead<'_>) -> crate::Result<()> {
-    validate_supported_blas1_dtype("BackendSession::norm_squared_read", input.dtype())?;
-    validate_shape_product("BackendSession::norm_squared_read", input.shape()).map(|_| ())
+    validate_supported_blas1_dtype("Engine::norm_squared_read", input.dtype())?;
+    validate_shape_product("Engine::norm_squared_read", input.shape()).map(|_| ())
 }
 
 /// Validate the shared input and destination contract for
-/// [`BackendSession::axpby_read_into_accum`].
+/// [`Engine::axpby_read_into_accum`].
 #[doc(hidden)]
 pub fn validate_axpby_read_into_accum(
     alpha: ContractionScalar,
@@ -4030,7 +4030,7 @@ pub fn validate_axpby_read_into_accum(
     beta: ContractionScalar,
     y: &TensorWrite<'_>,
 ) -> crate::Result<()> {
-    let op = "BackendSession::axpby_read_into_accum";
+    let op = "Engine::axpby_read_into_accum";
     validate_supported_blas1_dtype(op, x.dtype())?;
     if y.dtype() != x.dtype() {
         return Err(Error::dtype_mismatch(op, x.dtype(), y.dtype()));
@@ -4141,7 +4141,7 @@ fn validate_compatible_placement(
 ///     });
 /// }
 /// ```
-pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
+pub trait Engine: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
     /// Gather with both operands taken as reads.
     ///
     /// The default materializes both reads and delegates to
@@ -4178,9 +4178,9 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{BackendSession, TensorRead};
+    /// use tenferro_tensor::{Engine, TensorRead};
     ///
-    /// fn vdot(session: &mut dyn BackendSession, x: TensorRead<'_>, y: TensorRead<'_>)
+    /// fn vdot(session: &mut dyn Engine, x: TensorRead<'_>, y: TensorRead<'_>)
     ///     -> tenferro_tensor::Result<tenferro_tensor::Tensor>
     /// {
     ///     session.vdot_read(x, y)
@@ -4196,7 +4196,7 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     /// storage; or [`Error::BackendSource`] when provider execution fails.
     fn vdot_read(&mut self, _lhs: TensorRead<'_>, _rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         Err(Error::unsupported(
-            "BackendSession::vdot_read",
+            "Engine::vdot_read",
             "backend session does not implement vdot_read",
         ))
     }
@@ -4210,9 +4210,9 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{BackendSession, TensorRead};
+    /// use tenferro_tensor::{Engine, TensorRead};
     ///
-    /// fn norm_squared(session: &mut dyn BackendSession, x: TensorRead<'_>)
+    /// fn norm_squared(session: &mut dyn Engine, x: TensorRead<'_>)
     ///     -> tenferro_tensor::Result<tenferro_tensor::Tensor>
     /// {
     ///     session.norm_squared_read(x)
@@ -4227,7 +4227,7 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     /// reduction execution fails.
     fn norm_squared_read(&mut self, _input: TensorRead<'_>) -> crate::Result<Tensor> {
         Err(Error::unsupported(
-            "BackendSession::norm_squared_read",
+            "Engine::norm_squared_read",
             "backend session does not implement norm_squared_read",
         ))
     }
@@ -4244,9 +4244,9 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{ActivationOp, BackendSession, TensorRead};
+    /// use tenferro_tensor::{ActivationOp, Engine, TensorRead};
     ///
-    /// fn fused(session: &mut dyn BackendSession, x: TensorRead<'_>)
+    /// fn fused(session: &mut dyn Engine, x: TensorRead<'_>)
     ///     -> tenferro_tensor::Result<Option<tenferro_tensor::Tensor>>
     /// {
     ///     session.fused_activation_read(ActivationOp::Sigmoid, x)
@@ -4279,9 +4279,9 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{BackendSession, ContractionScalar, TensorRead, TensorWrite};
+    /// use tenferro_tensor::{Engine, ContractionScalar, TensorRead, TensorWrite};
     ///
-    /// fn axpby(session: &mut dyn BackendSession, x: TensorRead<'_>, y: TensorWrite<'_>)
+    /// fn axpby(session: &mut dyn Engine, x: TensorRead<'_>, y: TensorWrite<'_>)
     ///     -> tenferro_tensor::Result<()>
     /// {
     ///     session.axpby_read_into_accum(
@@ -4306,7 +4306,7 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
         _y: TensorWrite<'_>,
     ) -> crate::Result<()> {
         Err(Error::unsupported(
-            "BackendSession::axpby_read_into_accum",
+            "Engine::axpby_read_into_accum",
             "backend session does not implement axpby_read_into_accum",
         ))
     }
@@ -4325,13 +4325,13 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::BackendSession;
+    /// use tenferro_tensor::Engine;
     ///
-    /// fn native_services_available(session: &mut dyn BackendSession) -> bool {
-    ///     session.native_session().is_some()
+    /// fn native_services_available(session: &mut dyn Engine) -> bool {
+    ///     session.native_engine().is_some()
     /// }
     /// ```
-    fn native_session(&mut self) -> Option<crate::NativeSessionRef<'_>> {
+    fn native_engine(&mut self) -> Option<crate::NativeSessionRef<'_>> {
         None
     }
 }

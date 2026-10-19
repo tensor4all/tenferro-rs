@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::program::SemanticOperationView;
 use crate::ExtensionCacheStore;
-use tenferro_tensor::{BackendSession, Tensor, TensorRead};
+use tenferro_tensor::{Engine, Tensor, TensorRead};
 
 use super::{
     ExecutionContextIdentity, ExecutionContextMismatch, HardwareClassId, InputSignature,
@@ -323,7 +323,7 @@ pub trait PreparedOperationExecutor: fmt::Debug + Send + Sync + 'static {
     /// typed execution error from the operation itself.
     fn execute_in_session(
         &self,
-        _session: &mut dyn BackendSession,
+        _session: &mut dyn Engine,
         _extension_caches: &mut ExtensionCacheStore,
         _inputs: &[TensorRead<'_>],
     ) -> crate::Result<Vec<Tensor>> {

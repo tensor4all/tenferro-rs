@@ -14,7 +14,7 @@ use std::thread::{self, ThreadId};
 use smallvec::SmallVec;
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::{
-    AllocationGroup, BackendSession, DType, DescriptorSlot, GroupError, MemoryKind, Tensor,
+    AllocationGroup, Engine, DType, DescriptorSlot, GroupError, MemoryKind, Tensor,
     TensorBackend, TensorRead, TensorValue, TensorView,
 };
 use tinyvec::TinyVec;
@@ -1192,7 +1192,7 @@ impl<B: TensorBackend + 'static> fmt::Debug for TensorBackendExecutor<B> {
 /// type-erased [`ErasedTensorBackendExecutor`].
 pub(super) trait BorrowedExecutorSessionState {
     /// Whether the executor's backend state owns `session`.
-    fn owns_session(&self, session: &mut dyn BackendSession) -> bool;
+    fn owns_session(&self, session: &mut dyn Engine) -> bool;
     /// The extension cache store the scheduled extension instructions use.
     fn extension_caches_mut(&mut self) -> &mut ExtensionCacheStore;
 }
@@ -1200,7 +1200,7 @@ pub(super) trait BorrowedExecutorSessionState {
 impl<B: TensorBackend + 'static> BorrowedExecutorSessionState
     for TensorBackendExecutorLease<'_, B>
 {
-    fn owns_session(&self, session: &mut dyn BackendSession) -> bool {
+    fn owns_session(&self, session: &mut dyn Engine) -> bool {
         self.state
             .as_ref()
             .expect("executor state lease always owns state before drop")
@@ -1550,7 +1550,7 @@ where
 /// path handles that fallback before entering this function.
 #[allow(clippy::too_many_arguments)]
 fn execute_slot_instruction_in_session<'input>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     extension_caches: &mut ExtensionCacheStore,
     operations: &[PreparedOperationPlan],
     instruction_index: usize,
@@ -1623,7 +1623,7 @@ fn execute_slot_instruction_in_session<'input>(
 
 /// Run one planned elementwise region on `exec` without entering a session.
 fn execute_elementwise_fusion_slots_in_session<'input>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     input_slots: &[usize],
     instruction_count: usize,
     plan: &tenferro_tensor::backend::ElementwiseFusionPlan,
@@ -2018,7 +2018,7 @@ pub(super) fn run_prepared(
 /// success or failure.
 pub(super) fn run_prepared_in(
     runtime: &Runtime,
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     prepared: &PreparedCompiledGraph,
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
@@ -2056,7 +2056,7 @@ pub(super) fn run_prepared_in(
 pub struct PreparedDeferred<'a> {
     runtime: &'a Runtime,
     prepared: &'a PreparedCompiledGraph,
-    session: &'a mut dyn BackendSession,
+    session: &'a mut dyn Engine,
     state: Box<dyn BorrowedExecutorSessionState + 'a>,
     event_domains: Option<ScheduledEventDomains>,
     pending_outputs: Vec<Vec<Tensor>>,
@@ -2196,7 +2196,7 @@ impl Drop for PreparedDeferred<'_> {
 
 pub(super) fn begin_prepared_deferred<'a>(
     runtime: &'a Runtime,
-    session: &'a mut dyn BackendSession,
+    session: &'a mut dyn Engine,
     prepared: &'a PreparedCompiledGraph,
     caller: &'static str,
 ) -> Result<PreparedDeferred<'a>> {
@@ -2464,7 +2464,7 @@ enum ScheduledRunner<'a> {
     /// only the source of `session` differs, so the runner keeps just the
     /// extension-cache borrow it actually needs while executing.
     Borrowed {
-        session: &'a mut dyn BackendSession,
+        session: &'a mut dyn Engine,
         extension_caches: &'a mut ExtensionCacheStore,
     },
 }
@@ -4261,7 +4261,7 @@ mod tests {
     use tenferro_ops::ext_op::ExtensionOp;
     use tenferro_ops::SymDim;
     use tenferro_tensor::{
-        BackendSession, BackendSessionHost, DType, Tensor, TensorBackend, TensorRead, TypedTensor,
+        Engine, BackendSessionHost, DType, Tensor, TensorBackend, TensorRead, TypedTensor,
     };
 
     use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
@@ -4459,7 +4459,7 @@ mod tests {
 
         fn execute_in_session(
             &self,
-            session: &mut dyn BackendSession,
+            session: &mut dyn Engine,
             _extension_caches: &mut ExtensionCacheStore,
             inputs: &[TensorRead<'_>],
         ) -> Result<Vec<Tensor>> {

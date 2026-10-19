@@ -133,16 +133,16 @@ pub use cpueinsum::WorkModel as CpuBatchThresholds;
 ///
 /// Returns [`tenferro_tensor::Error::Unsupported`] without running `f` when
 /// `session` is neither a CPU execution session nor a session that forwards one
-/// through [`tenferro_tensor::BackendSession::native_session`] (a CUDA or other
+/// through [`tenferro_tensor::Engine::native_engine`] (a CUDA or other
 /// custom session). `f`'s own result is returned unchanged inside `Ok`.
 ///
 /// # Panics
 ///
 /// A panic in `f` propagates after the previous policy is restored.
 pub fn with_batch_policy<R>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    session: &mut dyn tenferro_tensor::Engine,
     policy: CpuBatchPolicy,
-    f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R,
+    f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
 ) -> tenferro_tensor::Result<R> {
     let Some(previous) =
         crate::with_cpu_exec_session(session, |cpu| cpu.replace_batch_policy(policy))

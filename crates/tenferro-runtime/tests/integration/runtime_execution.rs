@@ -1123,7 +1123,7 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
 
     fn execute_in_session(
         &self,
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
         _extension_caches: &mut ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {

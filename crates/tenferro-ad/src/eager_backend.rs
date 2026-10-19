@@ -19,7 +19,7 @@ use tenferro_tensor::{
     TensorWrite,
 };
 use tenferro_tensor::{
-    BackendRuntimeCache, BackendSession, BackendSessionHost, DType, MemoryKind,
+    BackendRuntimeCache, Engine, BackendSessionHost, DType, MemoryKind,
     Result as TensorResult, Tensor, TensorRead,
 };
 
@@ -309,7 +309,7 @@ macro_rules! delegate_owned_read_methods {
 }
 
 #[cfg(test)]
-impl BackendSession for RecordingBackend {}
+impl Engine for RecordingBackend {}
 
 #[cfg(test)]
 impl BackendRuntimeCache for RecordingBackend {
@@ -513,7 +513,7 @@ impl BackendCachedDot for RecordingBackend {}
 impl BackendSessionHost for RecordingBackend {
     fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         self.sessions.fetch_add(1, Ordering::Relaxed);
         Ok(f(self))
@@ -529,7 +529,7 @@ impl BackendRuntimeCache for EagerBackend {
 impl BackendSessionHost for EagerBackend {
     fn with_backend_session<R>(
         &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R,
+        f: impl FnOnce(&mut dyn Engine) -> R,
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         // Hand the caller the *concrete* backend's session. The composite enum
         // is not a session: its read halves deliberately reproduce the
