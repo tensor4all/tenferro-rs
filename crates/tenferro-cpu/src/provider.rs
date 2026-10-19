@@ -202,24 +202,43 @@ impl<'a> CpuExecutionContext<'a> {
     /// and only when the engine has more than one worker; a single-worker or
     /// serial engine runs the operation on the calling thread under a
     /// sequential policy.
-    // TODO(#2206 U1b): hand the pool to strided (its caller-pool API) so that
-    // strided enters it only after deciding a width above one, instead of
-    // installing before every operation on a multi-worker engine.
     pub(crate) fn with_native_parallelism<R: Send>(
         &self,
         operation: impl FnOnce() -> R + Send,
     ) -> R {
-        let policy = if self.uses_inner_parallelism() {
-            strided_kernel::ExecutionPolicy::Rayon {
-                max_threads: self.thread_budget(),
+        match (self.uses_inner_parallelism(), self.rayon_pool()) {
+            // strided decides each operation's width against the engine's pool and
+            // enters it only when the operation fans out, so small operations
+            // stay on the calling thread (#2206).
+            (true, Some(pool)) => {
+                strided_basic::with_execution_pool(pool, self.thread_budget(), || {
+                    strided_kernel::with_execution_policy(
+                        strided_kernel::ExecutionPolicy::Rayon {
+                            max_threads: self.thread_budget(),
+                        },
+                        operation,
+                    )
+                })
             }
-        } else {
-            strided_kernel::ExecutionPolicy::Sequential
-        };
-        let run = || strided_kernel::with_execution_policy(policy, operation);
-        match self.rayon_pool() {
-            Some(pool) => pool.install(run),
-            None => run(),
+            _ => strided_kernel::with_execution_policy(
+                strided_kernel::ExecutionPolicy::Sequential,
+                operation,
+            ),
+        }
+    }
+
+    /// Run a faer computation with this context's parallelism.
+    ///
+    /// faer's `Par::rayon` schedules on the pool of the calling thread, so a
+    /// parallel faer call must run inside the engine's pool; a serial context
+    /// runs on the caller with `Par::Seq`.
+    pub(crate) fn with_faer_pool<R: Send>(&self, operation: impl FnOnce(faer::Par) -> R + Send) -> R {
+        let par = self.faer_parallelism();
+        match (par, self.rayon_pool()) {
+            (faer::Par::Rayon(_), Some(pool)) if pool.current_thread_index().is_none() => {
+                pool.install(|| operation(par))
+            }
+            _ => operation(par),
         }
     }
 

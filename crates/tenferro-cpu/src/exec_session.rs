@@ -206,7 +206,9 @@ impl CpuEngine {
         &mut self,
         callback: impl FnOnce(faer::Par) -> crate::Result<()> + Send,
     ) -> crate::Result<()> {
-        self.run_native_with_context(|context, _| callback(context.faer_parallelism()))
+        self.check_entry("CpuEngine")?;
+        let (context, buffers, _, broken) = self.parts();
+        guard_unwind(buffers, broken, |_| context.with_faer_pool(callback))
     }
 
     fn run_native_with_context<R: Send>(

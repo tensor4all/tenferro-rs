@@ -51,7 +51,8 @@ fn native_kernel_modules_cannot_select_ambient_or_ad_hoc_execution_policies() {
         provider
             .matches("strided_kernel::with_execution_policy(")
             .count(),
-        1
+        2,
+        "one parallel (engine pool) and one sequential entry"
     );
     assert!(!provider.contains("ExecContext::ambient("));
     for (name, source) in native_modules {

@@ -101,24 +101,24 @@ fn linalg_resource_callback_and_result_stay_on_the_caller_without_send() {
 
 #[cfg(not(feature = "provider-inject"))]
 #[test]
-fn native_operation_enters_the_selected_rayon_executor() {
+fn native_operation_starts_on_the_caller_and_fans_out_on_the_engine_pool() {
     let mut backend = crate::test_support::cpu_engine(2).unwrap();
 
     assert!(rayon::current_thread_index().is_none());
-    let (worker, pool_size, participants) = crate::tests::with_cpu_session(&mut backend, |cpu| {
+    let (worker, participants) = crate::tests::with_cpu_session(&mut backend, |cpu| {
         cpu.with_linalg_pool(|context, _| {
             context.with_native_parallelism(|| {
                 Ok((
                     rayon::current_thread_index(),
-                    rayon::current_num_threads(),
                     crate::tests::native_participants::run_unscoped_native_map(true),
                 ))
             })
         })
     })
     .unwrap();
-    assert!(matches!(worker, Some(0 | 1)));
-    assert_eq!(pool_size, 2);
+    // The operation itself stays on the calling thread (#2206); strided enters
+    // the engine's two-worker pool only for the part that fans out.
+    assert_eq!(worker, None);
     assert_eq!(participants.max_active(), 2);
     assert_eq!(participants.thread_count(), 2);
     assert!(rayon::current_thread_index().is_none());
