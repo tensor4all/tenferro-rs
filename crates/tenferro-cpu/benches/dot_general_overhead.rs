@@ -1,7 +1,29 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendRuntimeCache, BackendSessionHost, DotGeneralConfig, Tensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{DotGeneralConfig, Tensor};
+
+/// Run `f` on `engine` (keeps the measured call shape of the former session entry).
+fn run<R>(
+    engine: &mut CpuEngine,
+    f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
+) -> tenferro_tensor::Result<R> {
+    Ok(f(engine))
+}
+
+/// An engine with `threads` workers (serial for one).
+fn engine(threads: usize) -> CpuEngine {
+    if threads <= 1 {
+        CpuEngine::serial()
+    } else {
+        CpuEngine::new(
+            tenferro_cpu::thread_pool_builder()
+                .num_threads(threads)
+                .build()
+                .expect("benchmark pool"),
+        )
+    }
+}
 
 const L: usize = 32;
 const PHYS_DIM: usize = 2;
@@ -82,100 +104,95 @@ fn scalar_one() -> Tensor {
 }
 
 fn inner_fresh_backend_cache(
-    backend: &mut CpuBackend,
+    backend: &mut CpuEngine,
     bra: &[Tensor],
     ket: &[Tensor],
     configs: &LocalPathConfigs,
 ) -> Tensor {
     let mut env = scalar_one();
     for (bra_core, ket_core) in bra.iter().zip(ket) {
-        let tmp = backend
-            .with_backend_session(|__s| {
-                __s.dot_general_with_conj(&env, bra_core, &configs.env_bra, false, true)
-            })
-            .unwrap()
-            .expect("environment and conjugated bra contraction should succeed");
-        env = backend
-            .with_backend_session(|__s| {
-                __s.dot_general_with_conj(&tmp, ket_core, &configs.tmp_ket, false, false)
-            })
-            .unwrap()
-            .expect("normal ket contraction should succeed");
+        let tmp = run(backend, |__s| {
+            __s.dot_general_with_conj(&env, bra_core, &configs.env_bra, false, true)
+        })
+        .unwrap()
+        .expect("environment and conjugated bra contraction should succeed");
+        env = run(backend, |__s| {
+            __s.dot_general_with_conj(&tmp, ket_core, &configs.tmp_ket, false, false)
+        })
+        .unwrap()
+        .expect("normal ket contraction should succeed");
     }
     env
 }
 
 fn inner_persistent_backend_cache(
-    backend: &mut CpuBackend,
-    cache: &mut <CpuBackend as BackendRuntimeCache>::RuntimeCache,
+    backend: &mut CpuEngine,
+    _cache: &mut tenferro_cpu::CpuPlanCache,
     bra: &[Tensor],
     ket: &[Tensor],
     configs: &LocalPathConfigs,
 ) -> Tensor {
     let mut env = scalar_one();
     for (site, (bra_core, ket_core)) in bra.iter().zip(ket).enumerate() {
-        let tmp = backend
-            .with_backend_session_cached(cache, |__s| {
-                __s.dot_general_with_conj_cached(
-                    Some(2 * site),
-                    &env,
-                    bra_core,
-                    &configs.env_bra,
-                    false,
-                    true,
-                )
-            })
-            .unwrap()
-            .expect("environment and conjugated bra contraction should succeed");
-        env = backend
-            .with_backend_session_cached(cache, |__s| {
-                __s.dot_general_with_conj_cached(
-                    Some(2 * site + 1),
-                    &tmp,
-                    ket_core,
-                    &configs.tmp_ket,
-                    false,
-                    false,
-                )
-            })
-            .unwrap()
-            .expect("normal ket contraction should succeed");
+        let tmp = run(backend, |__s| {
+            __s.dot_general_with_conj_cached(
+                Some(2 * site),
+                &env,
+                bra_core,
+                &configs.env_bra,
+                false,
+                true,
+            )
+        })
+        .unwrap()
+        .expect("environment and conjugated bra contraction should succeed");
+        env = run(backend, |__s| {
+            __s.dot_general_with_conj_cached(
+                Some(2 * site + 1),
+                &tmp,
+                ket_core,
+                &configs.tmp_ket,
+                false,
+                false,
+            )
+        })
+        .unwrap()
+        .expect("normal ket contraction should succeed");
     }
     env
 }
 
 fn inner_single_exec_session(
-    backend: &mut CpuBackend,
-    cache: &mut <CpuBackend as BackendRuntimeCache>::RuntimeCache,
+    backend: &mut CpuEngine,
+    _cache: &mut tenferro_cpu::CpuPlanCache,
     bra: &[Tensor],
     ket: &[Tensor],
     configs: &LocalPathConfigs,
 ) -> Tensor {
     let mut env = scalar_one();
-    backend
-        .with_backend_session_cached(cache, |exec| {
-            for (site, (bra_core, ket_core)) in bra.iter().zip(ket).enumerate() {
-                let tmp = exec.dot_general_with_conj_cached(
-                    Some(2 * site),
-                    &env,
-                    bra_core,
-                    &configs.env_bra,
-                    false,
-                    true,
-                )?;
-                env = exec.dot_general_with_conj_cached(
-                    Some(2 * site + 1),
-                    &tmp,
-                    ket_core,
-                    &configs.tmp_ket,
-                    false,
-                    false,
-                )?;
-            }
-            Ok::<(), tenferro_tensor::Error>(())
-        })
-        .unwrap()
-        .expect("single exec session inner product should succeed");
+    run(backend, |exec| {
+        for (site, (bra_core, ket_core)) in bra.iter().zip(ket).enumerate() {
+            let tmp = exec.dot_general_with_conj_cached(
+                Some(2 * site),
+                &env,
+                bra_core,
+                &configs.env_bra,
+                false,
+                true,
+            )?;
+            env = exec.dot_general_with_conj_cached(
+                Some(2 * site + 1),
+                &tmp,
+                ket_core,
+                &configs.tmp_ket,
+                false,
+                false,
+            )?;
+        }
+        Ok::<(), tenferro_tensor::Error>(())
+    })
+    .unwrap()
+    .expect("single exec session inner product should succeed");
     env
 }
 
@@ -188,7 +205,7 @@ fn bench_dot_general_overhead(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("fresh_backend_cache", &params), |b| {
             b.iter(|| {
-                let mut backend = CpuBackend::with_threads(1).unwrap();
+                let mut backend = engine(1);
                 let output = inner_fresh_backend_cache(
                     black_box(&mut backend),
                     black_box(&fixture.bra_tensors),
@@ -201,12 +218,7 @@ fn bench_dot_general_overhead(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("persistent_backend_cache", &params), |b| {
             b.iter_batched(
-                || {
-                    (
-                        CpuBackend::with_threads(1).unwrap(),
-                        <CpuBackend as BackendRuntimeCache>::RuntimeCache::default(),
-                    )
-                },
+                || (engine(1), tenferro_cpu::CpuPlanCache::default()),
                 |(mut backend, mut cache)| {
                     let output = inner_persistent_backend_cache(
                         black_box(&mut backend),
@@ -223,12 +235,7 @@ fn bench_dot_general_overhead(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("single_exec_session", &params), |b| {
             b.iter_batched(
-                || {
-                    (
-                        CpuBackend::with_threads(1).unwrap(),
-                        <CpuBackend as BackendRuntimeCache>::RuntimeCache::default(),
-                    )
-                },
+                || (engine(1), tenferro_cpu::CpuPlanCache::default()),
                 |(mut backend, mut cache)| {
                     let output = inner_single_exec_session(
                         black_box(&mut backend),

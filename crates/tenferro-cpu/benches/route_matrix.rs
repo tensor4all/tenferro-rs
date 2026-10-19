@@ -1,40 +1,23 @@
-//! CPU execution-route matrix: the coexisting entry mechanisms measured on the
-//! same logical operation.
+//! CPU per-operation cost matrix: the same logical operations called directly
+//! on a `CpuEngine` (#2206).
 //!
-//! Issue #1926 / umbrella #1929. The CPU backend used to expose three distinct
-//! ways to reach the same kernel:
+//! Operations take the engine as `&mut`; there is no session entry to amortize.
+//! The `single` arms measure one operation per iteration and the `marginal16`
+//! arm a chain of sixteen, which together show the fixed per-operation cost.
 //!
-//! * `oneshot` — an operation method on `CpuBackend` itself
-//!   (`TensorElementwise::add(&mut backend, ..)`), which entered through
-//!   `install_with_pool_context` (permit + `CpuOperationEntry`, no session).
-//! * `session` — the same kernel through `BackendSessionHost::with_backend_session`
-//!   and an `_read` method on the borrowed session, which enters through
-//!   `run_backend_session_cached` (permit + `CpuOperationEntry` + session
-//!   construction + pool loan).
-//! * `scope` — an operation method on a backend clone inside
-//!   `CpuBackend::with_execution_scope`, which reuses the scope's permit.
-//!
-//! The route/API unification deleted the `oneshot` spelling, so this harness
-//! registers only `session` and `scope`. The before-only `oneshot` rows stay in
-//! `docs/testing/session-route-baseline.json` and the comparator reports them as
-//! deleted, so a session route is never compared against owner-route numbers.
-//! The price of the unification is read off `session/single` against the recorded
-//! `oneshot/single` values, and the marginal arms expose the per-operation cost
-//! once an entry is already open, which is what a caller amortizes; those must
-//! not regress.
-//!
-//! All arms run on an explicit one-worker backend (`CpuBackend::with_threads(1)`),
-//! per the repository rule for dispatch/overhead measurement. Every arm
-//! validates its result outside the timed region.
+//! All arms run on a serial engine (`CpuEngine::serial()`), per the repository
+//! rule for dispatch/overhead measurement. Every arm validates its result
+//! outside the timed region.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
-    BackendSessionHost, DType, DotGeneralConfig, Tensor, TensorIndexing, TensorRead,
+    DType, DotGeneralConfig, Tensor, TensorDot, TensorElementwise, TensorIndexing, TensorRead,
+    TensorReduction, TensorStructural,
 };
 
-/// Operations per entry for the `marginal` arms.
+/// Operations per iteration for the `marginal` arms.
 const CHAIN_LEN: usize = 16;
 
 /// Elementwise sizes: two overhead-scale and two throughput-scale.
@@ -43,10 +26,6 @@ const ELEMENTWISE_LENS: &[usize] = &[1, 64, 4096, 65536];
 const DOT_SIZES: &[usize] = &[2, 64, 256];
 /// Reduction and indexing sizes.
 const STRUCTURAL_LENS: &[usize] = &[64, 65536];
-
-fn backend() -> CpuBackend {
-    CpuBackend::with_threads(1).expect("one-worker faer backend should construct")
-}
 
 fn full_tensor(shape: Vec<usize>) -> Tensor {
     let len: usize = shape.iter().product();
@@ -71,215 +50,38 @@ fn slice_config(len: usize) -> SliceConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Per-operation entry cost (one operation, one entry).
-// ---------------------------------------------------------------------------
-
-fn add_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
-    owner
-        .with_backend_session(|session| {
-            session.add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
-        })
-        .unwrap()
-        .expect("session add should succeed")
+fn add(engine: &mut CpuEngine, a: &Tensor, b: &Tensor) -> Tensor {
+    engine
+        .add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
+        .expect("add")
 }
 
-// `scope` arms are written as `with_execution_scope` + `with_backend_session`
-// so that they survive the route/API unification of issue #1926: both spellings
-// remain public boundaries, while the one-shot operation methods do not. The
-// scope holds the resource permit and each execution entry reuses it.
-
-fn add_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
-    owner
-        .with_execution_scope(|| {
-            ops.with_backend_session(|session| {
-                session.add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
-            })
-            .unwrap()
-        })
-        .expect("scope admission should succeed")
-        .expect("scope add should succeed")
+fn add_chain(engine: &mut CpuEngine, a: &Tensor, b: &Tensor) -> Tensor {
+    let mut last = add(engine, a, b);
+    for _ in 1..CHAIN_LEN {
+        last = add(engine, a, b);
+    }
+    last
 }
-
-fn dot_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
-    owner
-        .with_backend_session(|session| {
-            session.dot_general_read(
-                TensorRead::from_tensor(a),
-                TensorRead::from_tensor(b),
-                &dot_config(),
-            )
-        })
-        .unwrap()
-        .expect("session dot should succeed")
-}
-
-fn dot_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
-    owner
-        .with_execution_scope(|| {
-            ops.with_backend_session(|session| {
-                session.dot_general_read(
-                    TensorRead::from_tensor(a),
-                    TensorRead::from_tensor(b),
-                    &dot_config(),
-                )
-            })
-            .unwrap()
-        })
-        .expect("scope admission should succeed")
-        .expect("scope dot should succeed")
-}
-
-fn reduce_session(owner: &mut CpuBackend, a: &Tensor) -> Tensor {
-    owner
-        .with_backend_session(|session| session.reduce_sum_read(TensorRead::from_tensor(a), &[0]))
-        .unwrap()
-        .expect("session reduce_sum should succeed")
-}
-
-fn reduce_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor) -> Tensor {
-    owner
-        .with_execution_scope(|| {
-            ops.with_backend_session(|session| {
-                session.reduce_sum_read(TensorRead::from_tensor(a), &[0])
-            })
-            .unwrap()
-        })
-        .expect("scope admission should succeed")
-        .expect("scope reduce_sum should succeed")
-}
-
-fn slice_session(owner: &mut CpuBackend, a: &Tensor, config: &SliceConfig) -> Tensor {
-    owner
-        .with_backend_session(|session| {
-            // `TensorIndexing` has no `slice_read`; the session path for an
-            // indexed operation is the capability dispatch on the session.
-            TensorIndexing::slice(session, a, config)
-        })
-        .unwrap()
-        .expect("session slice should succeed")
-}
-
-fn slice_scope(
-    owner: &CpuBackend,
-    ops: &mut CpuBackend,
-    a: &Tensor,
-    config: &SliceConfig,
-) -> Tensor {
-    owner
-        .with_execution_scope(|| {
-            ops.with_backend_session(|session| TensorIndexing::slice(session, a, config))
-                .unwrap()
-        })
-        .expect("scope admission should succeed")
-        .expect("scope slice should succeed")
-}
-
-// ---------------------------------------------------------------------------
-// Marginal per-operation cost (CHAIN_LEN operations inside one entry).
-// ---------------------------------------------------------------------------
-
-fn add_marginal_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
-    owner
-        .with_backend_session(|session| {
-            let mut x = session
-                .add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
-                .expect("session add should succeed");
-            for _ in 1..CHAIN_LEN {
-                x = session
-                    .add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(b))
-                    .expect("session add should succeed");
-            }
-            x
-        })
-        .unwrap()
-}
-
-fn add_marginal_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
-    // One execution scope holding the permit, and CHAIN_LEN separate session
-    // entries inside it. This isolates permit reuse from session construction:
-    // compare with `session/marginal16` (one session for the whole chain) and
-    // with the before-only `oneshot/marginal16` (a fresh entry per operation).
-    owner
-        .with_execution_scope(|| {
-            let mut x = ops
-                .with_backend_session(|session| {
-                    session.add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
-                })
-                .unwrap()
-                .expect("scope add should succeed");
-            for _ in 1..CHAIN_LEN {
-                x = ops
-                    .with_backend_session(|session| {
-                        session.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(b))
-                    })
-                    .unwrap()
-                    .expect("scope add should succeed");
-            }
-            x
-        })
-        .expect("scope admission should succeed")
-}
-
-// ---------------------------------------------------------------------------
-// Groups.
-// ---------------------------------------------------------------------------
 
 fn bench_elementwise(c: &mut Criterion) {
     let mut group = c.benchmark_group("route_matrix/elementwise_add_f64");
-
     for &len in ELEMENTWISE_LENS {
         let a = full_tensor(vec![len]);
         let b = full_tensor(vec![len]);
-        let mut owner = backend();
-        let mut ops = owner.clone();
+        let mut engine = CpuEngine::serial();
+        let value = add(&mut engine, &a, &b);
+        assert_eq!(value.shape(), &[len]);
+        assert_eq!(value.as_slice::<f64>().unwrap()[0], 2.0);
 
-        // Validation outside the timed region: both operands are all-ones, so
-        // the sum is 2 everywhere.
-        let expected = 2.0_f64;
-        for (name, value) in [
-            ("session", add_session(&mut owner, &a, &b)),
-            ("scope", add_scope(&owner, &mut ops, &a, &b)),
-        ] {
-            assert_eq!(value.shape(), &[len], "{name} shape");
-            assert_eq!(
-                value.as_slice::<f64>().unwrap()[0],
-                expected,
-                "{name} value"
-            );
-        }
-
-        group.bench_with_input(BenchmarkId::new("session/single", len), &len, |bench, _| {
-            bench.iter(|| black_box(add_session(&mut owner, black_box(&a), black_box(&b))));
-        });
-        group.bench_with_input(BenchmarkId::new("scope/single", len), &len, |bench, _| {
-            bench.iter(|| black_box(add_scope(&owner, &mut ops, black_box(&a), black_box(&b))));
+        group.bench_with_input(BenchmarkId::new("engine/single", len), &len, |bench, _| {
+            bench.iter(|| black_box(add(&mut engine, black_box(&a), black_box(&b))));
         });
         group.bench_with_input(
-            BenchmarkId::new("session/marginal16", len),
+            BenchmarkId::new("engine/marginal16", len),
             &len,
             |bench, _| {
-                bench.iter(|| {
-                    black_box(add_marginal_session(
-                        &mut owner,
-                        black_box(&a),
-                        black_box(&b),
-                    ))
-                });
-            },
-        );
-        group.bench_with_input(
-            BenchmarkId::new("scope/marginal16", len),
-            &len,
-            |bench, _| {
-                bench.iter(|| {
-                    black_box(add_marginal_scope(
-                        &owner,
-                        &mut ops,
-                        black_box(&a),
-                        black_box(&b),
-                    ))
-                });
+                bench.iter(|| black_box(add_chain(&mut engine, black_box(&a), black_box(&b))));
             },
         );
     }
@@ -288,66 +90,54 @@ fn bench_elementwise(c: &mut Criterion) {
 
 fn bench_dot(c: &mut Criterion) {
     let mut group = c.benchmark_group("route_matrix/dot_general_f64");
-
+    let config = dot_config();
     for &size in DOT_SIZES {
         let a = full_tensor(vec![size, size]);
         let b = full_tensor(vec![size, size]);
-        let mut owner = backend();
-        let mut ops = owner.clone();
-
-        let expected = size as f64;
-        for (name, value) in [
-            ("session", dot_session(&mut owner, &a, &b)),
-            ("scope", dot_scope(&owner, &mut ops, &a, &b)),
-        ] {
-            assert_eq!(value.shape(), &[size, size], "{name} shape");
-            assert_eq!(
-                value.as_slice::<f64>().unwrap()[0],
-                expected,
-                "{name} value"
-            );
-        }
+        let mut engine = CpuEngine::serial();
+        let dot = |engine: &mut CpuEngine, a: &Tensor, b: &Tensor| {
+            engine
+                .dot_general_read(
+                    TensorRead::from_tensor(a),
+                    TensorRead::from_tensor(b),
+                    &config,
+                )
+                .expect("dot_general")
+        };
+        let value = dot(&mut engine, &a, &b);
+        assert_eq!(value.shape(), &[size, size]);
+        assert_eq!(value.as_slice::<f64>().unwrap()[0], size as f64);
 
         group.bench_with_input(
-            BenchmarkId::new("session/single", size),
+            BenchmarkId::new("engine/single", size),
             &size,
             |bench, _| {
-                bench.iter(|| black_box(dot_session(&mut owner, black_box(&a), black_box(&b))));
+                bench.iter(|| black_box(dot(&mut engine, black_box(&a), black_box(&b))));
             },
         );
-        group.bench_with_input(BenchmarkId::new("scope/single", size), &size, |bench, _| {
-            bench.iter(|| black_box(dot_scope(&owner, &mut ops, black_box(&a), black_box(&b))));
-        });
     }
     group.finish();
 }
 
 fn bench_reduce(c: &mut Criterion) {
     let mut group = c.benchmark_group("route_matrix/reduce_sum_f64");
-
     for &len in STRUCTURAL_LENS {
         let a = full_tensor(vec![len]);
-        let mut owner = backend();
-        let mut ops = owner.clone();
+        let mut engine = CpuEngine::serial();
+        let value = engine
+            .reduce_sum_read(TensorRead::from_tensor(&a), &[0])
+            .expect("reduce_sum");
+        assert!(value.shape().is_empty());
+        assert_eq!(value.as_slice::<f64>().unwrap()[0], len as f64);
 
-        let expected = len as f64;
-        for (name, value) in [
-            ("session", reduce_session(&mut owner, &a)),
-            ("scope", reduce_scope(&owner, &mut ops, &a)),
-        ] {
-            assert!(value.shape().is_empty(), "{name} shape");
-            assert_eq!(
-                value.as_slice::<f64>().unwrap()[0],
-                expected,
-                "{name} value"
-            );
-        }
-
-        group.bench_with_input(BenchmarkId::new("session/single", len), &len, |bench, _| {
-            bench.iter(|| black_box(reduce_session(&mut owner, black_box(&a))));
-        });
-        group.bench_with_input(BenchmarkId::new("scope/single", len), &len, |bench, _| {
-            bench.iter(|| black_box(reduce_scope(&owner, &mut ops, black_box(&a))));
+        group.bench_with_input(BenchmarkId::new("engine/single", len), &len, |bench, _| {
+            bench.iter(|| {
+                black_box(
+                    engine
+                        .reduce_sum_read(TensorRead::from_tensor(black_box(&a)), &[0])
+                        .expect("reduce_sum"),
+                )
+            });
         });
     }
     group.finish();
@@ -355,62 +145,38 @@ fn bench_reduce(c: &mut Criterion) {
 
 fn bench_indexing(c: &mut Criterion) {
     let mut group = c.benchmark_group("route_matrix/slice_f64");
-
     for &len in STRUCTURAL_LENS {
         let a = full_tensor(vec![len]);
         let config = slice_config(len);
-        let mut owner = backend();
-        let mut ops = owner.clone();
+        let mut engine = CpuEngine::serial();
+        let value = TensorIndexing::slice(&mut engine, &a, &config).expect("slice");
+        assert_eq!(value.shape(), &[len]);
+        assert_eq!(value.as_slice::<f64>().unwrap()[0], 1.0);
 
-        for (name, value) in [
-            ("session", slice_session(&mut owner, &a, &config)),
-            ("scope", slice_scope(&owner, &mut ops, &a, &config)),
-        ] {
-            assert_eq!(value.shape(), &[len], "{name} shape");
-            assert_eq!(value.as_slice::<f64>().unwrap()[0], 1.0, "{name} value");
-        }
-
-        group.bench_with_input(BenchmarkId::new("session/single", len), &len, |bench, _| {
-            bench.iter(|| black_box(slice_session(&mut owner, black_box(&a), black_box(&config))));
-        });
-        group.bench_with_input(BenchmarkId::new("scope/single", len), &len, |bench, _| {
+        group.bench_with_input(BenchmarkId::new("engine/single", len), &len, |bench, _| {
             bench.iter(|| {
-                black_box(slice_scope(
-                    &owner,
-                    &mut ops,
-                    black_box(&a),
-                    black_box(&config),
-                ))
+                black_box(
+                    TensorIndexing::slice(&mut engine, black_box(&a), black_box(&config))
+                        .expect("slice"),
+                )
             });
         });
     }
     group.finish();
 }
 
-/// Cast through the same three routes: a dtype-conversion kernel whose
-/// session path is a provided method on the session surface rather than a
-/// dedicated `_read` override.
+/// Cast: a dtype-conversion kernel provided on the engine surface rather than
+/// a dedicated `_read` method.
 fn bench_cast(c: &mut Criterion) {
     let mut group = c.benchmark_group("route_matrix/cast_f64_f32");
     let len = 4096;
     let a = full_tensor(vec![len]);
-    let mut owner = backend();
+    let mut engine = CpuEngine::serial();
+    let out = engine.cast(&a, DType::F32).expect("cast");
+    assert_eq!(out.as_slice::<f32>().unwrap()[0], 1.0);
 
-    let session_out = owner
-        .with_backend_session(|session| session.cast(&a, DType::F32))
-        .unwrap()
-        .expect("session cast");
-    assert_eq!(session_out.as_slice::<f32>().unwrap()[0], 1.0);
-
-    group.bench_function("session/single", |bench| {
-        bench.iter(|| {
-            black_box(
-                owner
-                    .with_backend_session(|session| session.cast(black_box(&a), DType::F32))
-                    .unwrap()
-                    .expect("session cast"),
-            )
-        });
+    group.bench_function("engine/single", |bench| {
+        bench.iter(|| black_box(engine.cast(black_box(&a), DType::F32).expect("cast")));
     });
     group.finish();
 }

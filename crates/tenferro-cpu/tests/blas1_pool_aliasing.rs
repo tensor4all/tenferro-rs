@@ -12,9 +12,31 @@
 
 use num_complex::Complex64;
 
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::backend::BackendSessionHost;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorRead};
+
+/// An engine with `threads` workers (serial for one).
+#[allow(dead_code)]
+fn engine(threads: usize) -> tenferro_cpu::CpuEngine {
+    if threads <= 1 {
+        tenferro_cpu::CpuEngine::serial()
+    } else {
+        tenferro_cpu::CpuEngine::new(
+            tenferro_cpu::thread_pool_builder()
+                .num_threads(threads)
+                .build()
+                .expect("test pool"),
+        )
+    }
+}
+
+/// Run `f` on `engine` viewed as `&mut dyn Engine`.
+#[allow(dead_code)]
+fn run<R>(
+    engine: &mut tenferro_cpu::CpuEngine,
+    f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
+) -> tenferro_tensor::Result<R> {
+    Ok(f(engine))
+}
 
 fn matrix(rows: usize, columns: usize, seed: f64) -> Tensor {
     let data: Vec<Complex64> = (0..rows * columns)
@@ -25,7 +47,7 @@ fn matrix(rows: usize, columns: usize, seed: f64) -> Tensor {
 
 #[test]
 fn blas1_scalars_do_not_overwrite_live_session_results() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let lhs = matrix(8, 6, 0.25);
     let rhs = matrix(6, 4, -1.5);
@@ -40,16 +62,15 @@ fn blas1_scalars_do_not_overwrite_live_session_results() {
     // Krylov basis.
     let mut live: Vec<Tensor> = Vec::new();
     for _ in 0..4 {
-        let product = backend
-            .with_backend_session(|session| {
-                session.dot_general_read(
-                    TensorRead::from_tensor(&lhs),
-                    TensorRead::from_tensor(&rhs),
-                    &config,
-                )
-            })
-            .unwrap()
-            .unwrap();
+        let product = run(&mut backend, |session| {
+            session.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap()
+        .unwrap();
         live.push(product);
     }
 
@@ -62,21 +83,19 @@ fn blas1_scalars_do_not_overwrite_live_session_results() {
     // results stay alive.
     let operand = matrix(16, 1, 0.75);
     for _ in 0..8 {
-        let _dot = backend
-            .with_backend_session(|session| {
-                session.vdot_read(
-                    TensorRead::from_tensor(&operand),
-                    TensorRead::from_tensor(&operand),
-                )
-            })
-            .unwrap()
-            .unwrap();
-        let _norm = backend
-            .with_backend_session(|session| {
-                session.norm_squared_read(TensorRead::from_tensor(&operand))
-            })
-            .unwrap()
-            .unwrap();
+        let _dot = run(&mut backend, |session| {
+            session.vdot_read(
+                TensorRead::from_tensor(&operand),
+                TensorRead::from_tensor(&operand),
+            )
+        })
+        .unwrap()
+        .unwrap();
+        let _norm = run(&mut backend, |session| {
+            session.norm_squared_read(TensorRead::from_tensor(&operand))
+        })
+        .unwrap()
+        .unwrap();
     }
 
     for (index, (tensor, expected)) in live.iter().zip(&expected).enumerate() {

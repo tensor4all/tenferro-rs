@@ -5,7 +5,7 @@ use crate::{CpuBatchPolicy, CpuBatchStrategy};
 
 /// Read the effective policy of a live CPU session through its linalg context.
 fn observed(session: &mut dyn tenferro_tensor::Engine) -> CpuBatchStrategy {
-    crate::with_cpu_exec_session(session, |cpu| {
+    crate::with_cpu_engine(session, |cpu| {
         cpu.with_linalg_pool(|context, _| Ok(context.batch_policy().strategy))
     })
     .expect("a CPU backend session")
@@ -14,7 +14,7 @@ fn observed(session: &mut dyn tenferro_tensor::Engine) -> CpuBatchStrategy {
 
 #[test]
 fn scoped_overrides_nest_over_the_backend_default_and_restore() {
-    let mut backend = CpuBackend::with_threads(1)
+    let mut backend = crate::test_support::cpu_engine(1)
         .unwrap()
         .with_batch_policy(CpuBatchPolicy::new(CpuBatchStrategy::Sequential));
 
@@ -51,7 +51,7 @@ fn scoped_overrides_nest_over_the_backend_default_and_restore() {
 
 #[test]
 fn scoped_override_is_restored_after_an_error() {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
 
     with_cpu_session(&mut backend, |session| {
         let returned = crate::with_batch_policy(
@@ -67,7 +67,7 @@ fn scoped_override_is_restored_after_an_error() {
 
 #[test]
 fn scoped_override_is_restored_after_unwind() {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
 
     with_cpu_session(&mut backend, |session| {
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -92,21 +92,6 @@ fn a_non_cpu_session_is_rejected() {
     )
     .expect_err("a non-CPU session must be rejected");
     assert_eq!(error.kind(), tenferro_tensor::ErrorKind::Unsupported);
-}
-
-#[test]
-fn backend_default_policy_follows_clones() {
-    let backend = CpuBackend::with_threads(1)
-        .unwrap()
-        .with_batch_policy(CpuBatchPolicy::new(CpuBatchStrategy::WholeBatchVendor));
-    let clone = backend.clone();
-    assert_eq!(
-        clone.batch_policy().strategy,
-        CpuBatchStrategy::WholeBatchVendor
-    );
-    let mut clone = clone;
-    let strategy = with_cpu_session(&mut clone, |session| observed(session));
-    assert_eq!(strategy, CpuBatchStrategy::WholeBatchVendor);
 }
 
 fn batched_matmul_config() -> tenferro_tensor::DotGeneralConfig {
@@ -142,7 +127,7 @@ fn dot_with_strategy(threads: usize, strategy: CpuBatchStrategy) -> Tensor {
 
     let (lhs, rhs) = contraction_inputs();
     let config = batched_matmul_config();
-    let mut backend = CpuBackend::with_threads(threads).unwrap();
+    let mut backend = crate::test_support::cpu_engine(threads).unwrap();
     with_cpu_session(&mut backend, |session| {
         crate::with_batch_policy(session, CpuBatchPolicy::new(strategy), |session| {
             session
@@ -190,7 +175,7 @@ fn forced_whole_batch_vendor_on_blas_contraction_is_refused_before_writes() {
     let (lhs, rhs) = contraction_inputs();
     let config = batched_matmul_config();
     let mut out = Tensor::from_vec_col_major(vec![8, 8, 16], vec![-71.0_f64; 8 * 8 * 16]).unwrap();
-    let mut backend = CpuBackend::with_threads(4).unwrap();
+    let mut backend = crate::test_support::cpu_engine(4).unwrap();
     let result = with_cpu_session(&mut backend, |session| {
         crate::with_batch_policy(
             session,
@@ -228,9 +213,8 @@ struct NonCpuSession;
 mod non_cpu_session {
     use super::NonCpuSession;
     use tenferro_tensor::{
-        BackendCachedDot, BackendRuntimeCache, Engine, BackendSessionHost, CompareDir,
-        DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig, ScatterConfig,
-        SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
+        CompareDir, DType, DotGeneralConfig, ElementwiseReadOp, Engine, GatherConfig, PadConfig,
+        ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
         TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction,
         TensorStructural, TensorWrite,
     };
@@ -246,10 +230,6 @@ mod non_cpu_session {
                 }
             )+
         };
-    }
-
-    impl BackendRuntimeCache for NonCpuSession {
-        type RuntimeCache = ();
     }
 
     impl TensorElementwise for NonCpuSession {
@@ -337,17 +317,12 @@ mod non_cpu_session {
         }
     }
 
-    impl BackendCachedDot for NonCpuSession {}
+    impl tenferro_tensor::SessionCachedDot for NonCpuSession {}
     impl Engine for NonCpuSession {}
 
-    impl BackendSessionHost for NonCpuSession {
-        fn with_backend_session<R>(
-            &mut self,
-            f: impl FnOnce(&mut dyn Engine) -> R,
-        ) -> std::result::Result<R, tenferro_tensor::SessionEntryError> {
-            tenferro_tensor::with_session_entry_guard("non-CPU test session", || f(self))
+    impl crate::test_support::TestEngine for NonCpuSession {
+        fn as_engine(&mut self) -> &mut dyn Engine {
+            self
         }
     }
-
-    impl TensorBackend for NonCpuSession {}
 }

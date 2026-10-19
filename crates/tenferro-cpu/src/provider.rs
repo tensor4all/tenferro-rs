@@ -12,10 +12,8 @@ use std::num::NonZeroUsize;
 
 use tenferro_tensor::{Tensor, TensorRead};
 
-use crate::arbiter::{with_execution_owner, ResourcePermit};
 use crate::buffer_pool::BufferPool;
-use crate::resource_domain::CpuResourceDomain;
-use crate::{CpuDomainId, CpuSet};
+use crate::contraction::ExecutionResources;
 
 /// Parallel scheduling mode selected for one CPU operation.
 ///
@@ -34,11 +32,11 @@ pub enum ParallelMode {
     Inner,
 }
 
-/// Borrowed execution policy for an already-admitted CPU operation.
+/// Borrowed execution policy of one CPU engine for one operation.
 ///
-/// The context exposes immutable domain facts while keeping the resource lease
-/// private. Callees may read the selected pool and budget; they cannot install
-/// the caller's continuation into a pool or submit through tenferro.
+/// The context exposes the engine's pool, budget and batch policy to the lower
+/// numerical libraries. Callees may read the pool and budget; they cannot
+/// install the caller's continuation into the pool or submit through tenferro.
 ///
 /// # Examples
 ///
@@ -50,8 +48,7 @@ pub enum ParallelMode {
 /// ```
 #[derive(Clone, Copy)]
 pub struct CpuExecutionContext<'a> {
-    domain: &'a CpuResourceDomain,
-    parallel_mode: ParallelMode,
+    resources: &'a ExecutionResources,
     batch_policy: crate::CpuBatchPolicy,
 }
 
@@ -59,8 +56,6 @@ impl fmt::Debug for CpuExecutionContext<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CpuExecutionContext")
-            .field("domain_id", &self.domain_id())
-            .field("cpus", &self.cpus())
             .field("thread_budget", &self.thread_budget())
             .field("parallel_mode", &self.parallel_mode())
             .finish_non_exhaustive()
@@ -68,81 +63,62 @@ impl fmt::Debug for CpuExecutionContext<'_> {
 }
 
 impl<'a> CpuExecutionContext<'a> {
-    fn entered(
-        domain: &'a CpuResourceDomain,
-        parallel_mode: ParallelMode,
+    pub(crate) fn new(
+        resources: &'a ExecutionResources,
         batch_policy: crate::CpuBatchPolicy,
     ) -> Self {
         Self {
-            domain,
-            parallel_mode,
+            resources,
             batch_policy,
         }
     }
 
     pub(crate) fn uses_inner_parallelism(self) -> bool {
-        self.parallel_mode == ParallelMode::Inner
-            && self.thread_budget().get() > 1
-            && self.domain.rayon_pool().is_some()
+        self.thread_budget().get() > 1 && self.resources.rayon_pool().is_some()
     }
 
-    /// Return the stable identity of the selected CPU resource domain.
-    pub fn domain_id(&self) -> CpuDomainId {
-        self.domain.id()
-    }
-
-    /// Return the selected domain's declared logical CPU set.
-    pub fn cpus(&self) -> &CpuSet {
-        self.domain.cpus()
-    }
-
-    /// Return the non-zero maximum participating-thread budget.
+    /// Return the non-zero maximum participating-thread budget: the engine's
+    /// pool size, or one without a pool.
     pub fn thread_budget(&self) -> NonZeroUsize {
-        self.domain.thread_budget()
+        self.resources.thread_budget()
     }
 
-    /// Return the scheduling mode selected for this entered operation.
+    /// Return the scheduling mode of this context: [`ParallelMode::Inner`] on
+    /// a pool with more than one worker, [`ParallelMode::Sequential`] otherwise.
     pub fn parallel_mode(&self) -> ParallelMode {
-        self.parallel_mode
+        if self.uses_inner_parallelism() {
+            ParallelMode::Inner
+        } else {
+            ParallelMode::Sequential
+        }
     }
 
     /// The effective batch policy for batched work in this context.
     ///
-    /// It is the backend default unless an enclosing
+    /// It is the engine default unless an enclosing
     /// [`crate::with_batch_policy`] scope overrode it.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuBatchStrategy};
-    /// use tenferro_tensor::BackendSessionHost;
+    /// use tenferro_cpu::{CpuBatchStrategy, CpuEngine};
     ///
-    /// let mut backend = CpuBackend::with_threads(1)?;
-    /// let strategy = backend.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |cpu| {
-    ///         cpu.with_linalg_pool(|context, _| Ok(context.batch_policy().strategy))
-    ///     })
-    ///     .expect("a CPU backend session")
-    /// })??;
+    /// let mut engine = CpuEngine::serial();
+    /// let strategy = engine.with_linalg_pool(|context, _| Ok(context.batch_policy().strategy))?;
     /// assert_eq!(strategy, CpuBatchStrategy::Auto);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn batch_policy(&self) -> crate::CpuBatchPolicy {
         self.batch_policy
     }
 
-    /// This context with a scoped batch-policy override.
-    pub(crate) fn with_batch_policy(mut self, batch_policy: crate::CpuBatchPolicy) -> Self {
-        self.batch_policy = batch_policy;
-        self
-    }
-
     /// Return the faer policy selected by this operation context.
     ///
-    /// This hidden public method is the owner-scoped extension contract used by
-    /// operation-family crates such as `tenferro-linalg`, so sibling crates do
-    /// not derive a second CPU threading policy.
+    /// This hidden public method is the engine-scoped extension contract used
+    /// by operation-family crates such as `tenferro-linalg`, so sibling crates
+    /// do not derive a second CPU threading policy. A `Par::rayon` value must
+    /// be used inside [`CpuExecutionContext::rayon_pool`]'s `install`.
     #[cfg(feature = "native")]
     #[doc(hidden)]
     pub fn faer_parallelism(self) -> faer::Par {
@@ -161,7 +137,7 @@ impl<'a> CpuExecutionContext<'a> {
     /// the pool, and runs in place on a worker of that pool.
     pub fn rayon_pool(&self) -> Option<&'a rayon::ThreadPool> {
         if self.uses_inner_parallelism() {
-            self.domain.rayon_pool()
+            self.resources.rayon_pool()
         } else {
             None
         }
@@ -169,9 +145,9 @@ impl<'a> CpuExecutionContext<'a> {
 
     /// Borrow the retained lower-library execution resources for one call.
     ///
-    /// This is the owner-scoped interop seam for the extracted numerical
+    /// This is the engine-scoped interop seam for the extracted numerical
     /// providers (`tlinalg`, `cpueinsum`): they receive one `Exec` that reuses
-    /// the domain's persisted pool wrapper and workspace, instead of a
+    /// the engine's persisted pool wrapper and workspace, instead of a
     /// per-call `Pool::borrow`. The shared SPMD gate is preserved: a context
     /// that does not own an inner region lends a serial-with-workspace token.
     ///
@@ -187,8 +163,8 @@ impl<'a> CpuExecutionContext<'a> {
             1
         };
         Ok(self
-            .domain
-            .contraction_exec(budget)?
+            .resources
+            .exec(budget)?
             .with_batch_policy(self.batch_policy))
     }
 
@@ -222,9 +198,13 @@ impl<'a> CpuExecutionContext<'a> {
 
     /// Run a lower-library numerical operation with this context's parallelism.
     ///
-    /// The selected pool is installed for the duration of the operation only:
-    /// tenferro confines one lower-library numerical call, and never the
-    /// caller's continuation.
+    /// The engine's pool is installed for the duration of the operation only,
+    /// and only when the engine has more than one worker; a single-worker or
+    /// serial engine runs the operation on the calling thread under a
+    /// sequential policy.
+    // TODO(#2206 U1b): hand the pool to strided (its caller-pool API) so that
+    // strided enters it only after deciding a width above one, instead of
+    // installing before every operation on a multi-worker engine.
     pub(crate) fn with_native_parallelism<R: Send>(
         &self,
         operation: impl FnOnce() -> R + Send,
@@ -248,8 +228,7 @@ impl<'a> CpuExecutionContext<'a> {
     ///
     /// Owned tensor inputs are borrowed directly. View inputs are materialized
     /// from `buffers`, passed to `operation`, and returned to the same pool on
-    /// both success and ordinary error. The receiver is an unforgeable proof
-    /// that the caller is already inside the selected CPU execution domain.
+    /// both success and ordinary error.
     ///
     /// # Errors
     ///
@@ -307,84 +286,5 @@ impl<'a> CpuExecutionContext<'a> {
             });
         }
         crate::structural::reshape(input, shape)
-    }
-}
-
-/// Crate-private unentered capability for one CPU operation.
-///
-/// This is the only type that owns the resource permit. A
-/// [`CpuExecutionContext`] is constructed only from an admitted entry.
-#[derive(Clone, Copy)]
-pub(crate) struct CpuOperationEntry<'a> {
-    domain: &'a CpuResourceDomain,
-    permit: &'a ResourcePermit,
-    batch_policy: crate::CpuBatchPolicy,
-}
-
-impl<'a> CpuOperationEntry<'a> {
-    pub(crate) fn new(domain: &'a CpuResourceDomain, permit: &'a ResourcePermit) -> Self {
-        Self {
-            domain,
-            permit,
-            batch_policy: crate::CpuBatchPolicy::default(),
-        }
-    }
-
-    /// Return this entry with a different batch policy.
-    pub(crate) fn with_batch_policy(mut self, batch_policy: crate::CpuBatchPolicy) -> Self {
-        self.batch_policy = batch_policy;
-        self
-    }
-
-    /// The policy this entry carries into the contexts it produces.
-    pub(crate) fn batch_policy(self) -> crate::CpuBatchPolicy {
-        self.batch_policy
-    }
-
-    pub(crate) fn domain_id(self) -> CpuDomainId {
-        self.domain.id()
-    }
-
-    /// Borrow the admitted resources without dispatching the caller's work.
-    pub(crate) fn enter<R>(
-        self,
-        parallel_mode: ParallelMode,
-        operation: impl FnOnce(&CpuExecutionContext<'_>) -> R,
-    ) -> R {
-        with_execution_owner(self.permit.owner(), || {
-            let context =
-                CpuExecutionContext::entered(self.domain, parallel_mode, self.batch_policy);
-            operation(&context)
-        })
-    }
-
-    /// Enter this domain for a whole backend session.
-    pub(crate) fn enter_managed_session<R>(
-        self,
-        operation: impl FnOnce(CpuExecutionContext<'a>) -> R,
-    ) -> Result<R, tenferro_tensor::SessionEntryError> {
-        Ok(self.enter_owned(operation))
-    }
-
-    /// Enter this domain and hand the caller owned context facts.
-    ///
-    /// [`Self::enter`] lends a context tied to a callback local. A held session
-    /// builds its operation view outside a callback and keeps the context in that
-    /// view, so it needs the value with the entry's own lifetime.
-    pub(crate) fn enter_owned<R>(self, operation: impl FnOnce(CpuExecutionContext<'a>) -> R) -> R {
-        let mode = self.preferred_engine_mode();
-        let domain = self.domain;
-        let batch_policy = self.batch_policy;
-        self.enter(mode, |_| {
-            operation(CpuExecutionContext::entered(domain, mode, batch_policy))
-        })
-    }
-
-    pub(crate) fn preferred_engine_mode(self) -> ParallelMode {
-        if self.domain.thread_budget().get() > 1 && self.domain.rayon_pool().is_some() {
-            ParallelMode::Inner
-        } else {
-            ParallelMode::Sequential
-        }
     }
 }

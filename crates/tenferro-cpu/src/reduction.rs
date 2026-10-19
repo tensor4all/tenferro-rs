@@ -341,9 +341,9 @@ pub(crate) fn reduce_sum_squares(
 fn norm_squared_operand<T: tenferro_tensor::TensorScalar>(
     tensor: &Tensor,
 ) -> crate::Result<&TypedTensor<T>> {
-    tensor.as_typed::<T>().ok_or_else(|| {
-        unsupported_sum_squares_dtype("Engine::norm_squared_read", tensor.dtype())
-    })
+    tensor
+        .as_typed::<T>()
+        .ok_or_else(|| unsupported_sum_squares_dtype("Engine::norm_squared_read", tensor.dtype()))
 }
 
 pub(crate) fn norm_squared_read(

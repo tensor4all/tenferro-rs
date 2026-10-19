@@ -13,3 +13,27 @@ mod inject_tests;
 mod runtime_error_tests;
 #[path = "integration/static_replay.rs"]
 mod static_replay;
+
+/// An engine with `threads` workers (serial for one).
+#[allow(dead_code)]
+pub(crate) fn engine(threads: usize) -> tenferro_cpu::CpuEngine {
+    if threads <= 1 {
+        tenferro_cpu::CpuEngine::serial()
+    } else {
+        tenferro_cpu::CpuEngine::new(
+            tenferro_cpu::thread_pool_builder()
+                .num_threads(threads)
+                .build()
+                .expect("test pool"),
+        )
+    }
+}
+
+/// Run `f` on `engine` viewed as `&mut dyn Engine`.
+#[allow(dead_code)]
+pub(crate) fn run<R>(
+    engine: &mut tenferro_cpu::CpuEngine,
+    f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
+) -> tenferro_tensor::Result<R> {
+    Ok(f(engine))
+}

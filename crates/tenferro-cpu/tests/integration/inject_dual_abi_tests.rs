@@ -7,8 +7,7 @@ use tenferro_cpu::inject::{
     register_blas_gemm_provider_ptrs, register_lapack_provider_ptrs, BlasGemmProviderPtrSet,
     LapackProviderPtrSet, ProviderAbi, ProviderRegistrationError,
 };
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead, TypedTensor};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorRead, TypedTensor};
 
 // --- GEMM ILP64 counters and fake ----------------------------------------
 
@@ -210,21 +209,20 @@ fn ilp64_gemm_provider_reaches_lp64_consumer() {
         TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
-    let c = backend
-        .with_backend_session(|session| {
-            session.dot_general_read(
-                TensorRead::from_tensor(&a),
-                TensorRead::from_tensor(&b),
-                &DotGeneralConfig {
-                    lhs_contracting_dims: [1].as_slice().into(),
-                    rhs_contracting_dims: [0].as_slice().into(),
-                    lhs_batch_dims: [].as_slice().into(),
-                    rhs_batch_dims: [].as_slice().into(),
-                },
-            )
-        })
-        .expect("session entry");
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    let c = crate::run(&mut backend, |session| {
+        session.dot_general_read(
+            TensorRead::from_tensor(&a),
+            TensorRead::from_tensor(&b),
+            &DotGeneralConfig {
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
+            },
+        )
+    })
+    .expect("session entry");
 
     assert_eq!(DGEMM_ILP64_CALLS.load(Ordering::SeqCst), 1);
     match c {

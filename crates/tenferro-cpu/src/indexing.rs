@@ -8,10 +8,11 @@ use strided_kernel::{
 };
 use tinyvec::TinyVec;
 
-use super::indexed_plan_cache::{IndexedPlanCache, IndexedPlanFamily, IndexedPlanKey};
+use super::indexed_plan_cache::{IndexedPlanFamily, IndexedPlanKey};
 use super::typed_host_data;
 use super::PooledUninitOutput;
 use crate::buffer_pool::{BufferPool, PoolScalar};
+use crate::CpuPlanCache;
 use tenferro_tensor::TensorScalar;
 use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use tenferro_tensor::{Tensor, TypedTensor};
@@ -47,7 +48,7 @@ fn inline_col_major_strides(op: &'static str, dims: &[usize]) -> crate::Result<I
 }
 
 // Indexing families delegate bulk traversal to strided-kernel erased plans.
-// Backend entrypoints inject the CpuContext-derived execution policy.
+// Engine entrypoints inject the engine-derived execution policy.
 
 trait TensorAsTyped<T> {
     fn as_typed(&self) -> Option<&TypedTensor<T>>;
@@ -288,10 +289,10 @@ pub(crate) fn gather(
     config: &GatherConfig,
 ) -> crate::Result<Tensor> {
     with_test_pool(|buffers| {
-        let mut cache = IndexedPlanCache::default();
+        let cache = CpuPlanCache::default();
         gather_with_pool(
             buffers,
-            &mut cache,
+            &cache,
             &ExecContext::serial(),
             operand,
             start_indices,
@@ -302,7 +303,7 @@ pub(crate) fn gather(
 
 pub(crate) fn gather_with_pool(
     buffers: &mut BufferPool,
-    cache: &mut IndexedPlanCache,
+    cache: &CpuPlanCache,
     exec_context: &ExecContext,
     operand: &Tensor,
     start_indices: &Tensor,
@@ -327,10 +328,10 @@ pub(crate) fn scatter(
     config: &ScatterConfig,
 ) -> crate::Result<Tensor> {
     with_test_pool(|buffers| {
-        let mut cache = IndexedPlanCache::default();
+        let cache = CpuPlanCache::default();
         scatter_with_pool(
             buffers,
-            &mut cache,
+            &cache,
             &ExecContext::serial(),
             operand,
             scatter_indices,
@@ -342,7 +343,7 @@ pub(crate) fn scatter(
 
 pub(crate) fn scatter_with_pool(
     buffers: &mut BufferPool,
-    cache: &mut IndexedPlanCache,
+    cache: &CpuPlanCache,
     exec_context: &ExecContext,
     operand: &Tensor,
     scatter_indices: &Tensor,
@@ -383,10 +384,10 @@ pub(crate) fn dynamic_slice(
     slice_sizes: &[usize],
 ) -> crate::Result<Tensor> {
     with_test_pool(|buffers| {
-        let mut cache = IndexedPlanCache::default();
+        let cache = CpuPlanCache::default();
         dynamic_slice_with_pool(
             buffers,
-            &mut cache,
+            &cache,
             &ExecContext::serial(),
             input,
             starts,
@@ -397,7 +398,7 @@ pub(crate) fn dynamic_slice(
 
 pub(crate) fn dynamic_slice_with_pool(
     buffers: &mut BufferPool,
-    cache: &mut IndexedPlanCache,
+    cache: &CpuPlanCache,
     exec_context: &ExecContext,
     input: &Tensor,
     starts: &Tensor,
@@ -440,10 +441,10 @@ pub(crate) fn dynamic_update_slice(
     starts: &Tensor,
 ) -> crate::Result<Tensor> {
     with_test_pool(|buffers| {
-        let mut cache = IndexedPlanCache::default();
+        let cache = CpuPlanCache::default();
         dynamic_update_slice_with_pool(
             buffers,
-            &mut cache,
+            &cache,
             &ExecContext::serial(),
             operand,
             update,
@@ -454,7 +455,7 @@ pub(crate) fn dynamic_update_slice(
 
 pub(crate) fn dynamic_update_slice_with_pool(
     buffers: &mut BufferPool,
-    cache: &mut IndexedPlanCache,
+    cache: &CpuPlanCache,
     exec_context: &ExecContext,
     operand: &Tensor,
     update: &Tensor,
@@ -1063,7 +1064,7 @@ fn operand_window_dims(rank: usize, collapsed_or_inserted: &[usize]) -> Vec<usiz
 
 fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
-    cache: &mut IndexedPlanCache,
+    cache: &CpuPlanCache,
     exec_context: &ExecContext,
     operand: &TypedTensor<T>,
     start_indices: &IndexTensor,
@@ -1293,7 +1294,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
 
 fn typed_scatter<T>(
     buffers: &mut BufferPool,
-    cache: &mut IndexedPlanCache,
+    cache: &CpuPlanCache,
     exec_context: &ExecContext,
     operand: &TypedTensor<T>,
     scatter_indices: &IndexTensor,
@@ -1587,7 +1588,7 @@ where
 
 fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
-    cache: &mut IndexedPlanCache,
+    cache: &CpuPlanCache,
     exec_context: &ExecContext,
     input: &TypedTensor<T>,
     starts: &IndexTensor,
@@ -1713,7 +1714,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
 
 fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
-    cache: &mut IndexedPlanCache,
+    cache: &CpuPlanCache,
     exec_context: &ExecContext,
     operand: &TypedTensor<T>,
     update: &TypedTensor<T>,

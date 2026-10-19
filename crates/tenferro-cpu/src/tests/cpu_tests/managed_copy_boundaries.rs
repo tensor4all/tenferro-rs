@@ -1,5 +1,7 @@
 //! Managed-domain materialization and the read-to-write copy boundary.
 
+#[allow(unused_imports)]
+use crate::test_support::RunErased;
 use std::any::Any;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -7,13 +9,13 @@ use std::sync::{Arc, Mutex};
 
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, DType, DynRank,
-    ErasedHostTensor, Host, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
+    AllocationDomainId, AllocationId, BackendStorage, DType, DynRank, ErasedHostTensor, Host,
+    HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
     SharedTensorAllocationDomain, StorageBuffer, Tensor, TensorRead, TensorScalar, TensorView,
     TensorWrite, TypedTensor, TypedTensorView,
 };
 
-use crate::{CpuBackend, Error};
+use crate::{CpuEngine, Error};
 
 struct FakeManagedBuffer<T> {
     values: Mutex<Vec<T>>,
@@ -186,16 +188,17 @@ impl SharedTensorAllocationDomain for FaultyDomain {
     }
 }
 
-fn backend_in(domain: Arc<dyn SharedTensorAllocationDomain>) -> CpuBackend {
-    CpuBackend::with_threads(1)
+fn backend_in(domain: Arc<dyn SharedTensorAllocationDomain>) -> CpuEngine {
+    crate::test_support::cpu_engine(1)
         .unwrap()
         .with_allocation_domain(domain)
 }
 
-fn to_contiguous(backend: &mut CpuBackend, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-    backend
-        .with_backend_session(|session| session.to_contiguous_read(TensorRead::from_tensor(input)))
-        .unwrap()
+fn to_contiguous(backend: &mut CpuEngine, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
+    crate::test_support::on_engine(backend, |session| {
+        session.to_contiguous_read(TensorRead::from_tensor(input))
+    })
+    .unwrap()
 }
 
 /// The managed buffer's elements, its domain, and its allocation id.
@@ -343,7 +346,7 @@ fn to_contiguous_copies_an_externally_defined_payload_into_owned_storage() {
     );
     let element = payload.element_type_id();
     let input = Tensor::external(payload);
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
 
     let output = to_contiguous(&mut backend, &input).unwrap();
 
@@ -370,9 +373,9 @@ fn to_contiguous_copies_an_externally_defined_payload_into_owned_storage() {
 }
 
 fn copy_into(read: TensorRead<'_>, write: TensorWrite<'_>) -> tenferro_tensor::Result<()> {
-    CpuBackend::with_threads(1)
+    crate::test_support::cpu_engine(1)
         .unwrap()
-        .with_backend_session(|session| session.copy_read_into(read, write))
+        .run_erased(|session| session.copy_read_into(read, write))
         .unwrap()
 }
 
