@@ -21,6 +21,7 @@ mod elementwise_tests;
 mod fusion_tests;
 mod gemm_accum_tests;
 mod gemm_tests;
+mod host_path_phases;
 mod indexing_tests;
 mod kernel_specialization_tests;
 mod memoized_addr_tests;
