@@ -2024,7 +2024,7 @@ pub(super) fn run_prepared_in(
 ) -> Result<Vec<Tensor>> {
     let mut deferred =
         begin_prepared_deferred(runtime, session, prepared, "Runtime::run_prepared_in")?;
-    deferred.run_prepared_deferred(prepared, inputs)?;
+    deferred.run_prepared_deferred(inputs)?;
     let mut runs = deferred.finish_prepared()?;
     if runs.len() != 1 {
         return Err(Error::runtime_state(
@@ -2036,13 +2036,7 @@ pub(super) fn run_prepared_in(
             ),
         ));
     }
-    runs.pop().ok_or_else(|| {
-        Error::runtime_state(
-            "Runtime::run_prepared_in",
-            ErrorPhase::Execution,
-            "the synchronous prepared route produced no output package",
-        )
-    })
+    Ok(runs.remove(0))
 }
 
 /// Deferred prepared execution on one caller-held backend session.
@@ -2081,54 +2075,63 @@ impl fmt::Debug for PreparedDeferred<'_> {
 impl<'a> PreparedDeferred<'a> {
     /// Enqueue one prepared run without its retirement barrier.
     ///
-    /// Returns this run's index in the vector later returned by
+    /// This executes the prepared graph borrowed when the guard was opened.
+    /// Returns the run's index in the vector later returned by
     /// [`Self::finish_prepared`]. `inputs` must outlive this guard; the borrow
     /// checker enforces that because the run keeps device work reading them
     /// until finish.
     ///
-    /// Host-side failures return here after retiring any work already
+    /// Every host-side failure returns here after retiring work already
     /// enqueued. Device-side failures discovered by retirement return from
     /// [`Self::finish_prepared`].
     ///
     /// # Errors
     ///
-    /// Returns the same prepared-handle, input-metadata, engine, session, and
-    /// instruction-support failures as [`Runtime::run_prepared_in`]. Returns
-    /// [`crate::Error::Unsupported`] when `prepared` is not the exact graph
-    /// this guard was opened for.
-    pub fn run_prepared_deferred(
-        &mut self,
-        prepared: &PreparedCompiledGraph,
-        inputs: &'a [&'a Tensor],
-    ) -> Result<usize> {
+    /// Returns the same input-metadata, engine, session, and
+    /// instruction-support failures as [`Runtime::run_prepared_in`], plus a
+    /// stale runtime epoch.
+    pub fn run_prepared_deferred(&mut self, inputs: &'a [&'a Tensor]) -> Result<usize> {
         let caller = "Runtime::run_prepared_deferred";
-        if !Arc::ptr_eq(&self.prepared.prepared, &prepared.prepared) {
-            return Err(Error::unsupported(
-                caller,
-                ErrorPhase::Execution,
-                "the deferred guard was opened for another prepared graph; open one guard per \
-                 prepared graph",
-            ));
-        }
-        validate_prepared_runtime(self.runtime, prepared, caller)?;
-        let inputs = resolve_input_refs(&prepared.program, inputs, prepared.bound_input_check())?;
-        let root = prepared.prepared.root();
-        let result = {
-            let mut runner = ScheduledRunner::Borrowed {
-                session: &mut *self.session,
-                extension_caches: self.state.extension_caches_mut(),
-            };
-            execute_scheduled_reads_with_domains(
-                root.staging(),
-                root.schedule(),
-                root.regions(),
-                root.region_counters(),
-                prepared.prepared.operations(),
-                &inputs,
-                &mut runner,
-                &mut self.event_domains,
-            )
+        let result = match self.resolve_deferred_inputs(caller, inputs) {
+            Ok(inputs) => self.enqueue_deferred_inputs(&inputs),
+            Err(error) => Err(error),
         };
+        self.finish_deferred_call(result)
+    }
+
+    fn resolve_deferred_inputs(
+        &self,
+        caller: &'static str,
+        inputs: &'a [&'a Tensor],
+    ) -> Result<RuntimeInputReads<'a>> {
+        validate_prepared_runtime(self.runtime, self.prepared, caller)?;
+        resolve_input_refs(
+            &self.prepared.program,
+            inputs,
+            self.prepared.bound_input_check(),
+        )
+    }
+
+    fn enqueue_deferred_inputs(&mut self, inputs: &[TensorRead<'_>]) -> Result<Vec<Tensor>> {
+        let prepared = self.prepared;
+        let root = prepared.prepared.root();
+        let mut runner = ScheduledRunner::Borrowed {
+            session: &mut *self.session,
+            extension_caches: self.state.extension_caches_mut(),
+        };
+        execute_scheduled_reads_with_domains(
+            root.staging(),
+            root.schedule(),
+            root.regions(),
+            root.region_counters(),
+            prepared.prepared.operations(),
+            inputs,
+            &mut runner,
+            &mut self.event_domains,
+        )
+    }
+
+    fn finish_deferred_call(&mut self, result: Result<Vec<Tensor>>) -> Result<usize> {
         match result {
             Ok(outputs) => {
                 let index = self.pending_outputs.len();
@@ -2229,8 +2232,16 @@ pub(super) fn begin_prepared_deferred<'a>(
 fn common_scheduled_executor(
     schedule: &ScheduledGraph,
 ) -> Option<Arc<dyn ErasedTensorBackendExecutor>> {
-    // The root location always names one engine witness, so there is no
-    // "no engine" case to report: every other scheduled location must match it.
+    common_scheduled_executor_ref(schedule).map(Arc::clone)
+}
+
+/// Borrow the executor shared by every scheduled location.
+///
+/// The root location always names one engine witness, so there is no "no
+/// engine" case to report: every other scheduled location must match it.
+fn common_scheduled_executor_ref(
+    schedule: &ScheduledGraph,
+) -> Option<&Arc<dyn ErasedTensorBackendExecutor>> {
     let first = schedule.root_location().witness().executor();
     let same_engine = |witness: &super::snapshot::ExecutableEngineSnapshot| {
         Arc::ptr_eq(first, witness.executor())
@@ -2247,7 +2258,7 @@ fn common_scheduled_executor(
             .nodes()
             .iter()
             .all(|node| same_engine(node.event_domain_witness()));
-    single_engine.then(|| Arc::clone(first))
+    single_engine.then_some(first)
 }
 
 /// Whether `schedule` bridges providers with a transfer node.
@@ -2269,32 +2280,14 @@ fn single_engine_executor_ref<'a>(
     schedule: &'a ScheduledGraph,
     caller: &'static str,
 ) -> Result<&'a Arc<dyn ErasedTensorBackendExecutor>> {
-    let first = schedule.root_location().witness().executor();
-    let same_engine = |witness: &super::snapshot::ExecutableEngineSnapshot| {
-        Arc::ptr_eq(first, witness.executor())
-    };
-    let single_engine = schedule
-        .input_locations()
-        .iter()
-        .all(|location| same_engine(location.witness()))
-        && schedule
-            .operation_locations()
-            .iter()
-            .all(|location| same_engine(location.witness()))
-        && schedule
-            .nodes()
-            .iter()
-            .all(|node| same_engine(node.event_domain_witness()));
-    if single_engine {
-        Ok(first)
-    } else {
-        Err(Error::unsupported(
+    common_scheduled_executor_ref(schedule).ok_or_else(|| {
+        Error::unsupported(
             caller,
             ErrorPhase::Execution,
             "the prepared graph spans multiple engines; Runtime::run_prepared_in runs one engine on \
              a caller-borrowed session, so use Runtime::run_prepared outside a session",
-        ))
-    }
+        )
+    })
 }
 
 /// Reject any prepared instruction that cannot execute on a borrowed session.

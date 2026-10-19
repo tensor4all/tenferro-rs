@@ -300,7 +300,7 @@ fn host_path_phases() {
                     let inputs: [&Tensor; 0] = [];
                     let mut deferred = runtime.begin_prepared_deferred(view, &prepared)?;
                     for _ in 0..DEFERRED_CALLS {
-                        deferred.run_prepared_deferred(&prepared, &inputs)?;
+                        deferred.run_prepared_deferred(&inputs)?;
                     }
                     deferred.finish_prepared()
                 })

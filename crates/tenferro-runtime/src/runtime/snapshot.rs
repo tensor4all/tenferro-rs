@@ -1198,8 +1198,8 @@ impl Runtime {
     /// let inputs: [&tenferro_tensor::Tensor; 0] = [];
     /// let batches = backend.with_backend_session(|session| {
     ///     let mut deferred = runtime.begin_prepared_deferred(session, &prepared)?;
-    ///     deferred.run_prepared_deferred(&prepared, &inputs)?;
-    ///     deferred.run_prepared_deferred(&prepared, &inputs)?;
+    ///     deferred.run_prepared_deferred(&inputs)?;
+    ///     deferred.run_prepared_deferred(&inputs)?;
     ///     deferred.finish_prepared()
     /// })??;
     /// assert_eq!(batches.len(), 2);

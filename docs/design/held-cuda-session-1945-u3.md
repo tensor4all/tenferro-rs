@@ -294,7 +294,8 @@ reported, and everything else belongs to the substrate.
   state for its lifetime, which prevents unrelated work from using that session between runs. It owns
   each run's outputs until finish, so dropping a caller-visible result cannot release device storage
   before retirement (finding 2); inputs are tied to the guard lifetime, so they also outlive pending
-  work. `Drop` retires best-effort and cannot report, while `finish_prepared` surfaces device-side
+  work. A host-side validation failure retires the batch's already-enqueued work before returning.
+  `Drop` retires best-effort and cannot report, while `finish_prepared` surfaces device-side
   retirement errors. This does not define a queue-full policy for an unbounded detached submit loop
   (finding 5); the caller bounds the batch by how many deferred runs it issues before finishing.
 - **Stage 2 (full async submission and completion-aware reuse outside the guard) is still open.**

@@ -87,11 +87,11 @@ barrier per call:
 
 ```rust
 let mut session = backend.open_session()?;
+let inputs: [&Tensor; 1] = [&input];
 let batches = session.with_session(|view| {
     let mut deferred = runtime.begin_prepared_deferred(view, &prepared)?;
-    let inputs: [&Tensor; 1] = [&input];
     for _ in 0..64 {
-        deferred.run_prepared_deferred(&prepared, &inputs)?;
+        deferred.run_prepared_deferred(&inputs)?;
     }
     deferred.finish_prepared()
 })??;
@@ -107,12 +107,14 @@ outlive the guard, so neither can be released while device work is pending. The
 guard also borrows the session and holds the executor-state lease, so unrelated
 work cannot use that session between deferred runs. A device-side retirement
 failure is returned by `finish_prepared`; dropping an unfinished guard retires
-best-effort and cannot report an error. Host-side validation failures still come
-from the deferred call itself.
+best-effort and cannot report an error. A host-side validation failure still
+comes from the deferred call itself, after it retires earlier work in that
+batch.
 
-Use `run_prepared_in` when each individual call must return retired outputs, or
-when a graph spans more than one engine; the deferred guard supports the same
-single-engine graphs as the caller-borrowed synchronous route.
+Use `run_prepared_in` when each individual call must return retired outputs. A
+graph that spans more than one engine is outside both caller-borrowed routes;
+use `run_prepared` outside a session instead. The deferred guard supports the
+same single-engine graphs as `run_prepared_in`.
 
 ## Rules the session keeps
 

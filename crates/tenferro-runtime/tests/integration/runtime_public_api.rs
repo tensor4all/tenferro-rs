@@ -79,7 +79,7 @@ fn deferred_identity_runs_match_the_input<T>(
         .with_backend_session(|session| {
             let mut deferred = runtime.begin_prepared_deferred(session, &prepared)?;
             for _ in 0..3 {
-                deferred.run_prepared_deferred(&prepared, &inputs)?;
+                deferred.run_prepared_deferred(&inputs)?;
             }
             deferred.finish_prepared()
         })
@@ -176,9 +176,9 @@ fn prepared_deferred_host_error_retires_and_keeps_completed_runs() {
     let runs = backend
         .with_backend_session(|session| {
             let mut deferred = runtime.begin_prepared_deferred(session, &prepared)?;
-            deferred.run_prepared_deferred(&prepared, &inputs)?;
+            deferred.run_prepared_deferred(&inputs)?;
             let error = deferred
-                .run_prepared_deferred(&prepared, &bad_inputs)
+                .run_prepared_deferred(&bad_inputs)
                 .expect_err("a wrong input shape must fail before enqueueing");
             assert!(
                 error.to_string().contains("shape"),

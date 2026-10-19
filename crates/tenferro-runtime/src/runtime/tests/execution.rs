@@ -1088,6 +1088,114 @@ impl EventDomainDriver for FailingDrainDriver {
     }
 }
 
+#[derive(Debug)]
+struct CountingDrainDriver {
+    inner: ImmediateEventDomainDriver,
+    drains: Arc<AtomicUsize>,
+}
+
+impl CountingDrainDriver {
+    fn new(drains: Arc<AtomicUsize>) -> Self {
+        Self {
+            inner: ImmediateEventDomainDriver::new(),
+            drains,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CountingDrainRun {
+    inner: Box<dyn EventDomainRun>,
+    drains: Arc<AtomicUsize>,
+}
+
+impl EventDomainRun for CountingDrainRun {
+    fn domain(&self) -> EventDomainId {
+        self.inner.domain()
+    }
+
+    fn enqueue(
+        &mut self,
+        dependencies: &[Arc<dyn EventToken>],
+        launch: &mut dyn FnMut() -> crate::Result<()>,
+    ) -> crate::Result<Arc<dyn EventToken>> {
+        self.inner.enqueue(dependencies, launch)
+    }
+
+    fn drain(&mut self) -> crate::Result<()> {
+        self.drains.fetch_add(1, Ordering::SeqCst);
+        self.inner.drain()
+    }
+}
+
+impl EventDomainDriver for CountingDrainDriver {
+    fn begin_run(&self, domain: EventDomainId) -> crate::Result<Box<dyn EventDomainRun>> {
+        Ok(Box::new(CountingDrainRun {
+            inner: self.inner.begin_run(domain)?,
+            drains: Arc::clone(&self.drains),
+        }))
+    }
+}
+
+#[test]
+fn prepared_deferred_host_error_retires_before_returning() {
+    let mut host = CountingSessionHost::new();
+    let drains = Arc::new(AtomicUsize::new(0));
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(counting_engine_registration_with_driver(
+            &host,
+            Arc::new(CountingDrainDriver::new(Arc::clone(&drains))),
+        ))
+        .expect("register counting-drain engine");
+    let runtime = builder.build().expect("runtime");
+
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("input");
+    let y = (&x + &x).expect("add");
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .expect("compile");
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("input tensor");
+    let wrong_shape =
+        Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).expect("wrong input");
+    let prepared = runtime
+        .prepare_compiled(&program, &[&input])
+        .expect("prepare");
+    let inputs: [&Tensor; 1] = [&input];
+    let bad_inputs: [&Tensor; 1] = [&wrong_shape];
+
+    host.with_backend_session(|session| {
+        let mut deferred = runtime
+            .begin_prepared_deferred(session, &prepared)
+            .expect("deferred guard");
+        deferred
+            .run_prepared_deferred(&inputs)
+            .expect("first deferred run");
+        assert_eq!(drains.load(Ordering::SeqCst), 0);
+        let error = deferred
+            .run_prepared_deferred(&bad_inputs)
+            .expect_err("a wrong input shape must fail before enqueueing");
+        assert!(
+            error.to_string().contains("shape"),
+            "unexpected host error: {error}"
+        );
+        assert_eq!(
+            drains.load(Ordering::SeqCst),
+            1,
+            "the rejected call must retire the earlier deferred run before returning"
+        );
+        let runs = deferred
+            .finish_prepared()
+            .expect("finish after the early retirement");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0][0].as_slice::<f64>().expect("host values"),
+            &[2.0, 4.0]
+        );
+    })
+    .expect("backend session entry");
+}
+
 #[test]
 fn prepared_deferred_finish_returns_the_device_side_retirement_error() {
     let mut host = CountingSessionHost::new();
@@ -1116,7 +1224,7 @@ fn prepared_deferred_finish_returns_the_device_side_retirement_error() {
             .begin_prepared_deferred(session, &prepared)
             .expect("deferred guard");
         deferred
-            .run_prepared_deferred(&prepared, &inputs)
+            .run_prepared_deferred(&inputs)
             .expect("the deferred run itself only enqueues");
         let error = deferred
             .finish_prepared()

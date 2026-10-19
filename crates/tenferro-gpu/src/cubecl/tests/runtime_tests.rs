@@ -774,7 +774,7 @@ fn prepared_deferred_batch_retires_once_and_matches_synchronous_runs() {
         .with_session(|view| {
             let mut deferred = runtime.begin_prepared_deferred(view, &prepared)?;
             for _ in 0..8 {
-                deferred.run_prepared_deferred(&prepared, &inputs)?;
+                deferred.run_prepared_deferred(&inputs)?;
             }
             deferred.finish_prepared()
         })
@@ -824,40 +824,72 @@ fn prepared_deferred_interleaves_cubecl_and_vendor_nodes() {
     let runtime = builder.build().expect("runtime");
 
     let x = TracedTensor::input_symbolic_shape(DType::F64, 2).expect("input");
-    let product = x.matmul(&x).expect("vendor matmul");
-    let y = (&product + &x).expect("CubeCL add");
+    let square = (&x * &x).expect("CubeCL square");
+    let product = square
+        .matmul(&x)
+        .expect("vendor matmul reads CubeCL output");
+    let y = (&product + &square).expect("CubeCL add reads vendor output");
     let program = GraphCompiler::new()
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[16, 16])])
         .expect("compile");
-    let host = prepared_matmul_chain_input();
-    let gpu_input = upload_tensor(backend.runtime(), &host).expect("upload");
+
+    // Distinct inputs make a reversed or misassociated output package fail.
+    let base = prepared_matmul_chain_input();
+    let base_values = base.as_slice::<f64>().expect("host values");
+    let host_inputs = (0..4)
+        .map(|run| {
+            let values = base_values
+                .iter()
+                .map(|value| value + run as f64 * 0.05)
+                .collect::<Vec<_>>();
+            Tensor::from_vec_col_major(vec![16, 16], values).expect("host input")
+        })
+        .collect::<Vec<_>>();
+    let gpu_inputs = host_inputs
+        .iter()
+        .map(|host| upload_tensor(backend.runtime(), host).expect("upload input"))
+        .collect::<Vec<_>>();
+    let run_inputs = gpu_inputs
+        .iter()
+        .map(|input| [input])
+        .collect::<Vec<[&Tensor; 1]>>();
     let prepared = runtime
-        .prepare_compiled(&program, &[&gpu_input])
+        .prepare_compiled(&program, &[&gpu_inputs[0]])
         .expect("prepare");
+    let expected = gpu_inputs
+        .iter()
+        .map(|input| {
+            let synchronous = runtime
+                .run_prepared(&prepared, &[input])
+                .expect("synchronous prepared run");
+            download_tensor(backend.runtime(), &synchronous[0]).expect("download output")
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(
+        expected[0].as_slice::<f64>().expect("host values"),
+        expected[1].as_slice::<f64>().expect("host values"),
+        "the distinct inputs must produce distinct references"
+    );
 
-    let synchronous = runtime
-        .run_prepared(&prepared, &[&gpu_input])
-        .expect("synchronous prepared run");
-    let expected = download_tensor(backend.runtime(), &synchronous[0]).expect("download");
-
-    let inputs: [&Tensor; 1] = [&gpu_input];
     let mut session = backend.open_session().expect("held session");
     let runs = session
         .with_session(|view| {
             let mut deferred = runtime.begin_prepared_deferred(view, &prepared)?;
-            for _ in 0..4 {
-                deferred.run_prepared_deferred(&prepared, &inputs)?;
+            let mut indices = Vec::with_capacity(run_inputs.len());
+            for input in &run_inputs {
+                indices.push(deferred.run_prepared_deferred(input)?);
             }
+            assert_eq!(indices, (0..run_inputs.len()).collect::<Vec<_>>());
             deferred.finish_prepared()
         })
         .expect("held callback")
         .expect("deferred prepared runs");
     session.close().expect("close");
 
-    assert_eq!(runs.len(), 4);
-    for run in &runs {
+    assert_eq!(runs.len(), expected.len());
+    for (index, run) in runs.iter().enumerate() {
         let actual = download_tensor(backend.runtime(), &run[0]).expect("download run output");
-        assert_tensors_close(&actual, &expected);
+        assert_tensors_close(&actual, &expected[index]);
     }
 }
 
@@ -879,7 +911,7 @@ fn prepared_deferred_guard_drop_retires_pending_work() {
     session
         .with_session(|view| {
             let mut deferred = runtime.begin_prepared_deferred(view, &prepared)?;
-            deferred.run_prepared_deferred(&prepared, &inputs)?;
+            deferred.run_prepared_deferred(&inputs)?;
             Ok::<(), tenferro_runtime::Error>(())
         })
         .expect("held callback")
