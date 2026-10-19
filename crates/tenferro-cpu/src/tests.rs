@@ -15,11 +15,11 @@ use crate::{
 #[cfg(feature = "blas")]
 use tenferro_tensor::StridedSliceSpec;
 use tenferro_tensor::{
-    ContractionScalar, DotGeneralAccumulation, TensorAnalytic, TensorDot, TensorElementwise,
-    TensorStructural,
+    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use tenferro_tensor::{
-    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+    ContractionScalar, DotGeneralAccumulation, TensorAnalytic, TensorDot, TensorElementwise,
+    TensorStructural,
 };
 use tenferro_tensor::{
     DType, Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensor,
@@ -32,18 +32,18 @@ pub(crate) use crate::test_support::with_cpu_session;
 fn with_cpu_engine_checks_exact_marker_and_scopes_borrow() {
     let mut backend = crate::CpuEngine::serial();
     let value = crate::test_support::on_engine(&mut backend, |session| {
-            // The session the owner builds is the CPU execution session, which
-            // is what the capability bridge recognizes.
-            assert!(session.native_engine().is_some_and(|token| {
-                token.has_marker::<crate::exec_session::CpuEngineMarker>()
-            }));
-            with_cpu_engine(session, |session: &mut CpuEngine| {
-                let _: &mut CpuEngine = session;
-                17usize
-            })
+        // The session the owner builds is the CPU execution session, which
+        // is what the capability bridge recognizes.
+        assert!(session
+            .native_engine()
+            .is_some_and(|token| { token.has_marker::<crate::exec_session::CpuEngineMarker>() }));
+        with_cpu_engine(session, |session: &mut CpuEngine| {
+            let _: &mut CpuEngine = session;
+            17usize
         })
-        .unwrap()
-        .expect("CpuEngine must expose its scoped CpuEngine");
+    })
+    .unwrap()
+    .expect("CpuEngine must expose its scoped CpuEngine");
     assert_eq!(value, 17);
 }
 
@@ -52,13 +52,13 @@ fn with_cpu_engine_checks_exact_marker_and_scopes_borrow() {
 fn faer_parallelism_capability_runs_inside_a_cpu_session() {
     let mut backend = crate::test_support::cpu_engine(2).unwrap();
     crate::test_support::on_engine(&mut backend, |session| {
-            session.with_faer_parallelism(|parallel| {
-                let _ = parallel;
-                Ok(())
-            })
+        session.with_faer_parallelism(|parallel| {
+            let _ = parallel;
+            Ok(())
         })
-        .unwrap()
-        .unwrap();
+    })
+    .unwrap()
+    .unwrap();
 
     // A session that is not a CPU execution session is rejected with
     // `Unsupported`; `test_default_backend_session_methods_cover_cache_fallbacks`

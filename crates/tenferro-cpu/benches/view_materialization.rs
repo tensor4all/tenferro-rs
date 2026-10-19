@@ -1,8 +1,28 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{
-    BackendSessionHost, TensorViewCanonicalization, TypedTensor, TypedTensorView,
-};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{TensorViewCanonicalization, TypedTensor, TypedTensorView};
+
+/// Run `f` on `engine` (keeps the measured call shape of the former session entry).
+fn run<R>(
+    engine: &mut CpuEngine,
+    f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
+) -> Result<R, std::convert::Infallible> {
+    Ok(f(engine))
+}
+
+/// An engine with `threads` workers (serial for one).
+fn engine(threads: usize) -> CpuEngine {
+    if threads <= 1 {
+        CpuEngine::serial()
+    } else {
+        CpuEngine::new(
+            tenferro_cpu::thread_pool_builder()
+                .num_threads(threads)
+                .build()
+                .expect("benchmark pool"),
+        )
+    }
+}
 
 const TN_24D_PERM: [usize; 24] = [
     0, 1, 2, 3, 22, 4, 23, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
@@ -181,19 +201,18 @@ fn verify_exact_output(case: &MaterializationCase, output: &[f64]) {
 /// Materialize `view` through one CPU session entry; the backend owner is not
 /// an execution surface (#1946 F6), so each call enters its own session.
 fn to_contiguous_in_session(
-    backend: &mut CpuBackend,
+    backend: &mut CpuEngine,
     view: &TypedTensorView<'_, f64>,
 ) -> tenferro_tensor::Result<TypedTensor<f64>> {
-    backend
-        .with_backend_session(|session| {
-            tenferro_cpu::with_cpu_exec_session(session, |cpu| cpu.to_contiguous(view))
-                .expect("CPU backend session exposes its CPU execution session")
-        })
-        .expect("CPU session entry is admitted")
+    run(backend, |session| {
+        tenferro_cpu::with_cpu_engine(session, |cpu| cpu.to_contiguous(view))
+            .expect("CPU backend session exposes its CPU execution session")
+    })
+    .expect("CPU session entry is admitted")
 }
 
 fn verify_case_once(
-    backend: &mut CpuBackend,
+    backend: &mut CpuEngine,
     view: &TypedTensorView<'_, f64>,
     case: &MaterializationCase,
 ) {
@@ -221,8 +240,7 @@ fn bench_view_materialization(c: &mut Criterion) {
             let view =
                 TypedTensorView::from_slice(&view_shape, &view_strides, case.offset, &case.storage)
                     .expect("benchmark view layout is valid");
-            let mut backend = CpuBackend::with_threads(threads)
-                .expect("benchmark CPU thread configuration is valid");
+            let mut backend = engine(threads);
             assert_eq!(backend.num_threads(), threads);
 
             // The checked tensor is dropped when this helper returns, before
@@ -244,20 +262,20 @@ fn bench_view_materialization(c: &mut Criterion) {
                     .clone()
                     .into_tensor_read()
                     .expect("erased borrowed input");
-                let checked = backend
-                    .with_backend_session(|session| session.to_contiguous_read(read.clone()))
-                    .unwrap()
-                    .expect("pre-timing session copy succeeds");
+                let checked = run(&mut backend, |session| {
+                    session.to_contiguous_read(read.clone())
+                })
+                .unwrap()
+                .expect("pre-timing session copy succeeds");
                 verify_exact_output(&case, checked.as_slice::<f64>().expect("CPU host output"));
                 group.bench_function("tiny_transpose_erased_session", |b| {
                     b.iter(|| {
                         black_box(
-                            backend
-                                .with_backend_session(|session| {
-                                    session.to_contiguous_read(black_box(read.clone()))
-                                })
-                                .unwrap()
-                                .expect("timed session copy succeeds"),
+                            run(&mut backend, |session| {
+                                session.to_contiguous_read(black_box(read.clone()))
+                            })
+                            .unwrap()
+                            .expect("timed session copy succeeds"),
                         );
                     });
                 });

@@ -5,8 +5,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_tensor::backend::{ElementwiseFusionPlan, Engine};
 use tenferro_tensor::{
     ActivationOp, CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp,
-    GatherConfig, PadConfig, ScatterConfig, SliceConfig, TensorView,
-    TypedTensor,
+    GatherConfig, PadConfig, ScatterConfig, SliceConfig, TensorView, TypedTensor,
 };
 use tenferro_tensor::{
     DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
@@ -921,9 +920,7 @@ impl Engine for CpuEngine {
         input: TensorRead<'_>,
     ) -> crate::Result<Option<Tensor>> {
         crate::blas1::validate_cpu_read(op.label(), &input)?;
-        self.run_native(|buffers| {
-            activation::fused_activation_read_with_pool(buffers, op, input)
-        })
+        self.run_native(|buffers| activation::fused_activation_read_with_pool(buffers, op, input))
     }
 
     fn axpby_read_into_accum(

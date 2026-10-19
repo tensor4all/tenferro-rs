@@ -9,10 +9,10 @@ use strided_kernel::{
 use tinyvec::TinyVec;
 
 use super::indexed_plan_cache::{IndexedPlanFamily, IndexedPlanKey};
-use crate::CpuPlanCache;
 use super::typed_host_data;
 use super::PooledUninitOutput;
 use crate::buffer_pool::{BufferPool, PoolScalar};
+use crate::CpuPlanCache;
 use tenferro_tensor::TensorScalar;
 use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use tenferro_tensor::{Tensor, TypedTensor};

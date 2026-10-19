@@ -47,7 +47,10 @@ pub(crate) fn on_engine<E: TestEngine + ?Sized, R>(
 }
 
 /// Run `f` on the engine itself (kept so older call sites read unchanged).
-pub(crate) fn with_cpu_session<R>(engine: &mut CpuEngine, f: impl FnOnce(&mut CpuEngine) -> R) -> R {
+pub(crate) fn with_cpu_session<R>(
+    engine: &mut CpuEngine,
+    f: impl FnOnce(&mut CpuEngine) -> R,
+) -> R {
     f(engine)
 }
 

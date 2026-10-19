@@ -2,14 +2,12 @@ use std::mem::{size_of, size_of_val};
 
 use tenferro_runtime::program::CoreSemanticOp;
 use tenferro_runtime::{
-    CompareDir, DType, DotGeneralConfig, InputSignature, InputSignatureEntry, InputSpecializationProjection,
-    InputSpecializationRequirements, LayoutClass, LayoutSpecialization,
-    PlacementSpecialization, SpecializationError,
-    SpecializationRequirements,
+    CompareDir, DType, DotGeneralConfig, InputSignature, InputSignatureEntry,
+    InputSpecializationProjection, InputSpecializationRequirements, LayoutClass,
+    LayoutSpecialization, PlacementSpecialization, SpecializationError, SpecializationRequirements,
 };
 use tenferro_tensor::{
-    GatherConfig, PadConfig, Placement, ScatterConfig, ShapeVec, SliceConfig,
-    StrideVec,
+    GatherConfig, PadConfig, Placement, ScatterConfig, ShapeVec, SliceConfig, StrideVec,
 };
 
 use super::{

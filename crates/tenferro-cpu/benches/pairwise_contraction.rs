@@ -2,9 +2,30 @@ use std::env;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::BackendSessionHost;
-use tenferro_tensor::{BackendRuntimeCache, DotGeneralConfig, Tensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{DotGeneralConfig, Tensor};
+
+/// Run `f` on `engine` (keeps the measured call shape of the former session entry).
+fn run<R>(
+    engine: &mut CpuEngine,
+    f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
+) -> Result<R, std::convert::Infallible> {
+    Ok(f(engine))
+}
+
+/// An engine with `threads` workers (serial for one).
+fn engine(threads: usize) -> CpuEngine {
+    if threads <= 1 {
+        CpuEngine::serial()
+    } else {
+        CpuEngine::new(
+            tenferro_cpu::thread_pool_builder()
+                .num_threads(threads)
+                .build()
+                .expect("benchmark pool"),
+        )
+    }
+}
 
 const PHYS_DIM: usize = 2;
 const CHIS: &[usize] = &[1, 2, 4, 8, 16, 32];
@@ -100,26 +121,47 @@ fn benchmark_threads() -> usize {
 }
 
 fn run_case_normal(
-    backend: &mut CpuBackend,
+    backend: &mut CpuEngine,
     fixtures: &Fixtures,
     configs: &Configs,
     case: PairwiseCase,
 ) -> Tensor {
     match case {
-        PairwiseCase::FirstSite => backend
-            .with_backend_session(|__s| {
-                __s.dot_general_with_conj(
-                    &fixtures.bra_first,
-                    &fixtures.ket_first,
-                    &configs.first_site,
-                    true,
-                    false,
-                )
-            })
-            .unwrap()
-            .expect("first-site contraction should succeed"),
-        PairwiseCase::EnvBra => backend
-            .with_backend_session(|__s| {
+        PairwiseCase::FirstSite => run(backend, |__s| {
+            __s.dot_general_with_conj(
+                &fixtures.bra_first,
+                &fixtures.ket_first,
+                &configs.first_site,
+                true,
+                false,
+            )
+        })
+        .unwrap()
+        .expect("first-site contraction should succeed"),
+        PairwiseCase::EnvBra => run(backend, |__s| {
+            __s.dot_general_with_conj(
+                &fixtures.env,
+                &fixtures.bra_bulk,
+                &configs.env_bra,
+                false,
+                true,
+            )
+        })
+        .unwrap()
+        .expect("environment-bra contraction should succeed"),
+        PairwiseCase::TmpKet => run(backend, |__s| {
+            __s.dot_general_with_conj(
+                &fixtures.tmp,
+                &fixtures.ket_bulk,
+                &configs.tmp_ket,
+                false,
+                false,
+            )
+        })
+        .unwrap()
+        .expect("temporary-ket contraction should succeed"),
+        PairwiseCase::SiteUpdate => {
+            let tmp = run(backend, |__s| {
                 __s.dot_general_with_conj(
                     &fixtures.env,
                     &fixtures.bra_bulk,
@@ -129,71 +171,62 @@ fn run_case_normal(
                 )
             })
             .unwrap()
-            .expect("environment-bra contraction should succeed"),
-        PairwiseCase::TmpKet => backend
-            .with_backend_session(|__s| {
-                __s.dot_general_with_conj(
-                    &fixtures.tmp,
-                    &fixtures.ket_bulk,
-                    &configs.tmp_ket,
-                    false,
-                    false,
-                )
+            .expect("environment-bra contraction should succeed");
+            run(backend, |__s| {
+                __s.dot_general_with_conj(&tmp, &fixtures.ket_bulk, &configs.tmp_ket, false, false)
             })
             .unwrap()
-            .expect("temporary-ket contraction should succeed"),
-        PairwiseCase::SiteUpdate => {
-            let tmp = backend
-                .with_backend_session(|__s| {
-                    __s.dot_general_with_conj(
-                        &fixtures.env,
-                        &fixtures.bra_bulk,
-                        &configs.env_bra,
-                        false,
-                        true,
-                    )
-                })
-                .unwrap()
-                .expect("environment-bra contraction should succeed");
-            backend
-                .with_backend_session(|__s| {
-                    __s.dot_general_with_conj(
-                        &tmp,
-                        &fixtures.ket_bulk,
-                        &configs.tmp_ket,
-                        false,
-                        false,
-                    )
-                })
-                .unwrap()
-                .expect("temporary-ket contraction should succeed")
+            .expect("temporary-ket contraction should succeed")
         }
     }
 }
 
 fn run_case_cached(
-    backend: &mut CpuBackend,
-    cache: &mut <CpuBackend as BackendRuntimeCache>::RuntimeCache,
+    backend: &mut CpuEngine,
+    _cache: &mut tenferro_cpu::CpuPlanCache,
     fixtures: &Fixtures,
     configs: &Configs,
     case: PairwiseCase,
 ) -> Tensor {
     match case {
-        PairwiseCase::FirstSite => backend
-            .with_backend_session_cached(cache, |__s| {
-                __s.dot_general_with_conj_cached(
-                    Some(0),
-                    &fixtures.bra_first,
-                    &fixtures.ket_first,
-                    &configs.first_site,
-                    true,
-                    false,
-                )
-            })
-            .unwrap()
-            .expect("first-site contraction should succeed"),
-        PairwiseCase::EnvBra => backend
-            .with_backend_session_cached(cache, |__s| {
+        PairwiseCase::FirstSite => run(backend, |__s| {
+            __s.dot_general_with_conj_cached(
+                Some(0),
+                &fixtures.bra_first,
+                &fixtures.ket_first,
+                &configs.first_site,
+                true,
+                false,
+            )
+        })
+        .unwrap()
+        .expect("first-site contraction should succeed"),
+        PairwiseCase::EnvBra => run(backend, |__s| {
+            __s.dot_general_with_conj_cached(
+                Some(0),
+                &fixtures.env,
+                &fixtures.bra_bulk,
+                &configs.env_bra,
+                false,
+                true,
+            )
+        })
+        .unwrap()
+        .expect("environment-bra contraction should succeed"),
+        PairwiseCase::TmpKet => run(backend, |__s| {
+            __s.dot_general_with_conj_cached(
+                Some(0),
+                &fixtures.tmp,
+                &fixtures.ket_bulk,
+                &configs.tmp_ket,
+                false,
+                false,
+            )
+        })
+        .unwrap()
+        .expect("temporary-ket contraction should succeed"),
+        PairwiseCase::SiteUpdate => {
+            let tmp = run(backend, |__s| {
                 __s.dot_general_with_conj_cached(
                     Some(0),
                     &fixtures.env,
@@ -204,12 +237,11 @@ fn run_case_cached(
                 )
             })
             .unwrap()
-            .expect("environment-bra contraction should succeed"),
-        PairwiseCase::TmpKet => backend
-            .with_backend_session_cached(cache, |__s| {
+            .expect("environment-bra contraction should succeed");
+            run(backend, |__s| {
                 __s.dot_general_with_conj_cached(
-                    Some(0),
-                    &fixtures.tmp,
+                    Some(1),
+                    &tmp,
                     &fixtures.ket_bulk,
                     &configs.tmp_ket,
                     false,
@@ -217,34 +249,7 @@ fn run_case_cached(
                 )
             })
             .unwrap()
-            .expect("temporary-ket contraction should succeed"),
-        PairwiseCase::SiteUpdate => {
-            let tmp = backend
-                .with_backend_session_cached(cache, |__s| {
-                    __s.dot_general_with_conj_cached(
-                        Some(0),
-                        &fixtures.env,
-                        &fixtures.bra_bulk,
-                        &configs.env_bra,
-                        false,
-                        true,
-                    )
-                })
-                .unwrap()
-                .expect("environment-bra contraction should succeed");
-            backend
-                .with_backend_session_cached(cache, |__s| {
-                    __s.dot_general_with_conj_cached(
-                        Some(1),
-                        &tmp,
-                        &fixtures.ket_bulk,
-                        &configs.tmp_ket,
-                        false,
-                        false,
-                    )
-                })
-                .unwrap()
-                .expect("temporary-ket contraction should succeed")
+            .expect("temporary-ket contraction should succeed")
         }
     }
 }
@@ -273,7 +278,7 @@ fn bench_pairwise_contraction(c: &mut Criterion) {
             let case_params = format!("{}/{}", case.name(), params);
 
             group.bench_function(BenchmarkId::new("normal_per_call", &case_params), |b| {
-                let mut backend = CpuBackend::with_threads(threads).unwrap();
+                let mut backend = engine(threads);
                 b.iter(|| {
                     let output = run_case_normal(
                         black_box(&mut backend),
@@ -288,8 +293,8 @@ fn bench_pairwise_contraction(c: &mut Criterion) {
             group.bench_function(
                 BenchmarkId::new("cached_analysis_per_call", &case_params),
                 |b| {
-                    let mut backend = CpuBackend::with_threads(threads).unwrap();
-                    let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
+                    let mut backend = engine(threads);
+                    let mut cache = tenferro_cpu::CpuPlanCache::default();
                     b.iter(|| {
                         let output = run_case_cached(
                             black_box(&mut backend),

@@ -1,6 +1,28 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSessionHost, ContractionScalar, Tensor, TensorRead, TensorWrite};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{ContractionScalar, Tensor, TensorRead, TensorWrite};
+
+/// Run `f` on `engine` (keeps the measured call shape of the former session entry).
+fn run<R>(
+    engine: &mut CpuEngine,
+    f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
+) -> Result<R, std::convert::Infallible> {
+    Ok(f(engine))
+}
+
+/// An engine with `threads` workers (serial for one).
+fn engine(threads: usize) -> CpuEngine {
+    if threads <= 1 {
+        CpuEngine::serial()
+    } else {
+        CpuEngine::new(
+            tenferro_cpu::thread_pool_builder()
+                .num_threads(threads)
+                .build()
+                .expect("benchmark pool"),
+        )
+    }
+}
 
 fn bench_axpby(c: &mut Criterion) {
     let mut group = c.benchmark_group("cpu_blas1_axpby");
@@ -10,24 +32,23 @@ fn bench_axpby(c: &mut Criterion) {
             let mut fused = Tensor::from_vec_col_major(vec![len], vec![2.0_f64; len]).unwrap();
             let x_ref = x.as_slice::<f64>().unwrap().to_vec();
             let mut manual = vec![2.0_f64; len];
-            let mut backend = CpuBackend::with_threads(threads).unwrap();
+            let mut backend = engine(threads);
 
             group.bench_with_input(
                 BenchmarkId::new(format!("fused_threads_{threads}"), len),
                 &len,
                 |bench, _| {
                     bench.iter(|| {
-                        backend
-                            .with_backend_session(|session| {
-                                session.axpby_read_into_accum(
-                                    ContractionScalar::F64(black_box(0.5)),
-                                    TensorRead::from_tensor(black_box(&x)),
-                                    ContractionScalar::F64(black_box(0.5)),
-                                    TensorWrite::from_tensor(black_box(&mut fused)),
-                                )
-                            })
-                            .unwrap()
-                            .unwrap();
+                        run(&mut backend, |session| {
+                            session.axpby_read_into_accum(
+                                ContractionScalar::F64(black_box(0.5)),
+                                TensorRead::from_tensor(black_box(&x)),
+                                ContractionScalar::F64(black_box(0.5)),
+                                TensorWrite::from_tensor(black_box(&mut fused)),
+                            )
+                        })
+                        .unwrap()
+                        .unwrap();
                     });
                 },
             );

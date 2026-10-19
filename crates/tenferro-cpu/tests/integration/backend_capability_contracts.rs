@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendRuntimeCache, Engine, BackendSessionHost, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    BackendRuntimeCache, BackendSessionHost, Engine, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
 

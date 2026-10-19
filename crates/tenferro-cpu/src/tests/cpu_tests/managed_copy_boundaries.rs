@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendStorage, DType, DynRank,
-    ErasedHostTensor, Host, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
+    AllocationDomainId, AllocationId, BackendStorage, DType, DynRank, ErasedHostTensor, Host,
+    HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
     SharedTensorAllocationDomain, StorageBuffer, Tensor, TensorRead, TensorScalar, TensorView,
     TensorWrite, TypedTensor, TypedTensorView,
 };
@@ -195,8 +195,10 @@ fn backend_in(domain: Arc<dyn SharedTensorAllocationDomain>) -> CpuEngine {
 }
 
 fn to_contiguous(backend: &mut CpuEngine, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-    crate::test_support::on_engine(backend, |session| session.to_contiguous_read(TensorRead::from_tensor(input)))
-        .unwrap()
+    crate::test_support::on_engine(backend, |session| {
+        session.to_contiguous_read(TensorRead::from_tensor(input))
+    })
+    .unwrap()
 }
 
 /// The managed buffer's elements, its domain, and its allocation id.

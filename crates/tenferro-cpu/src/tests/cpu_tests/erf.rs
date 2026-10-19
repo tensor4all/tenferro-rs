@@ -192,10 +192,10 @@ fn erf_session_path_reads_strided_views_and_rejects_non_real_dtypes() {
         TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.5, 1.0, 2.0, 3.0]).unwrap();
     let transposed = base.as_view().transpose_view([1, 0]).unwrap();
     let out = crate::test_support::on_engine(&mut backend, |session| {
-            session.erf_read(TensorRead::from_view(TensorView::F64(transposed)))
-        })
-        .unwrap()
-        .unwrap();
+        session.erf_read(TensorRead::from_view(TensorView::F64(transposed)))
+    })
+    .unwrap()
+    .unwrap();
     let out = out.as_slice::<f64>().unwrap();
     // Column-major [[0.5, 2.0], [1.0, 3.0]] transposed reads 0.5, 2.0, 1.0, 3.0.
     assert_eq!(out[1], libm::erf(2.0));
@@ -206,9 +206,11 @@ fn erf_session_path_reads_strided_views_and_rejects_non_real_dtypes() {
         Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex32::new(0.5, 0.0)]).unwrap(),
         Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap(),
     ] {
-        let err = crate::test_support::on_engine(&mut backend, |session| session.erf_read(TensorRead::from_tensor(&input)))
-            .unwrap()
-            .unwrap_err();
+        let err = crate::test_support::on_engine(&mut backend, |session| {
+            session.erf_read(TensorRead::from_tensor(&input))
+        })
+        .unwrap()
+        .unwrap_err();
         assert!(
             matches!(err, crate::Error::UnsupportedDType { op: "erf", .. }),
             "{err:?}"

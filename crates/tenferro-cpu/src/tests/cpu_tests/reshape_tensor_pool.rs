@@ -127,10 +127,10 @@ fn reshape_read_reads_a_non_contiguous_view_in_logical_order() {
             .transpose_view([1, 0])
             .unwrap();
         let out = crate::test_support::on_engine(&mut backend, |session| {
-                session.reshape_read(TensorRead::from_view(TensorView::F64(view)), &[N * N])
-            })
-            .unwrap()
-            .unwrap();
+            session.reshape_read(TensorRead::from_view(TensorView::F64(view)), &[N * N])
+        })
+        .unwrap()
+        .unwrap();
         assert_eq!(out.shape(), &[N * N], "threads={threads}");
         assert_eq!(
             out.as_slice::<f64>().unwrap(),

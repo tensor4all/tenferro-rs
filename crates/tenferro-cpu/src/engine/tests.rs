@@ -53,7 +53,10 @@ fn operation_from_own_pool_worker_is_rejected() {
             .add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&a))
             .map(|tensor| tensor.as_slice::<f64>().map(<[f64]>::to_vec))
     });
-    assert_eq!(ok.expect("foreign pool caller").expect("f64"), vec![2.0, 4.0]);
+    assert_eq!(
+        ok.expect("foreign pool caller").expect("f64"),
+        vec![2.0, 4.0]
+    );
 
     // A worker of the engine's own pool may not: every operation and `exec`
     // start with this entry check.

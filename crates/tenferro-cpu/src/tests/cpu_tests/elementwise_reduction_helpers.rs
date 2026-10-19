@@ -17,13 +17,13 @@ fn elementwise_add_accepts_transposed_host_view_input() {
     let mut backend = crate::CpuEngine::serial();
 
     let out = crate::test_support::on_engine(&mut backend, |__s| {
-            __s.add_read(
-                TensorRead::from_view(TensorView::F64(b.clone())),
-                TensorRead::from_view(TensorView::F64(b)),
-            )
-        })
-        .unwrap()
-        .unwrap();
+        __s.add_read(
+            TensorRead::from_view(TensorView::F64(b.clone())),
+            TensorRead::from_view(TensorView::F64(b)),
+        )
+    })
+    .unwrap()
+    .unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 6.0, 4.0, 8.0]);
@@ -42,13 +42,13 @@ fn elementwise_add_read_promotes_rank0_f64_view_with_c64_tensor() {
     let mut backend = crate::CpuEngine::serial();
 
     let out = crate::test_support::on_engine(&mut backend, |__s| {
-            __s.add_read(
-                TensorRead::from_view(TensorView::F64(scalar.as_view())),
-                TensorRead::from_tensor(&rhs),
-            )
-        })
-        .unwrap()
-        .unwrap();
+        __s.add_read(
+            TensorRead::from_view(TensorView::F64(scalar.as_view())),
+            TensorRead::from_tensor(&rhs),
+        )
+    })
+    .unwrap()
+    .unwrap();
 
     assert_eq!(out.shape(), &[2]);
     assert_eq!(
@@ -70,13 +70,13 @@ fn elementwise_add_read_promotes_c32_tensor_with_rank0_f32_view() {
     let mut backend = crate::CpuEngine::serial();
 
     let out = crate::test_support::on_engine(&mut backend, |__s| {
-            __s.add_read(
-                TensorRead::from_tensor(&lhs),
-                TensorRead::from_view(TensorView::F32(scalar.as_view())),
-            )
-        })
-        .unwrap()
-        .unwrap();
+        __s.add_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_view(TensorView::F32(scalar.as_view())),
+        )
+    })
+    .unwrap()
+    .unwrap();
 
     assert_eq!(out.shape(), &[2]);
     assert_eq!(
@@ -92,10 +92,10 @@ fn reduce_sum_accepts_transposed_host_view_input() {
     let mut backend = crate::CpuEngine::serial();
 
     let out = crate::test_support::on_engine(&mut backend, |__s| {
-            __s.reduce_sum_read(TensorRead::from_view(TensorView::F64(b)), &[0])
-        })
-        .unwrap()
-        .unwrap();
+        __s.reduce_sum_read(TensorRead::from_view(TensorView::F64(b)), &[0])
+    })
+    .unwrap()
+    .unwrap();
 
     assert_eq!(out.shape(), &[2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
@@ -109,20 +109,20 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
         TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_sum_read(TensorRead::from_view(TensorView::F32(f32s.as_view())), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<f32>()
-            .unwrap(),
+            .reduce_sum_read(TensorRead::from_view(TensorView::F32(f32s.as_view())), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<f32>()
+        .unwrap(),
         &[3.0, 7.0]
     );
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_max_read(TensorRead::from_view(TensorView::F32(f32s.as_view())), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<f32>()
-            .unwrap(),
+            .reduce_max_read(TensorRead::from_view(TensorView::F32(f32s.as_view())), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<f32>()
+        .unwrap(),
         &[2.0, 4.0]
     );
 
@@ -130,33 +130,33 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
         TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_min_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
+            .reduce_min_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap(),
         &[1.0, 3.0]
     );
 
     let i32s = TypedTensor::<i32>::from_vec_col_major(vec![2, 2], vec![1, 2, 3, 4]).unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_sum_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<i32>()
-            .unwrap(),
+            .reduce_sum_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<i32>()
+        .unwrap(),
         &[3, 7]
     );
 
     let i64s = TypedTensor::<i64>::from_vec_col_major(vec![2, 2], vec![1, 2, 3, 4]).unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_prod_read(TensorRead::from_view(TensorView::I64(i64s.as_view())), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<i64>()
-            .unwrap(),
+            .reduce_prod_read(TensorRead::from_view(TensorView::I64(i64s.as_view())), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<i64>()
+        .unwrap(),
         &[2, 12]
     );
 
@@ -167,11 +167,11 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
     .unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_sum_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<Complex32>()
-            .unwrap(),
+            .reduce_sum_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<Complex32>()
+        .unwrap(),
         &[Complex32::new(3.0, 0.0)]
     );
 
@@ -182,23 +182,23 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
     .unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_prod_read(TensorRead::from_view(TensorView::C64(c64s.as_view())), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<Complex64>()
-            .unwrap(),
+            .reduce_prod_read(TensorRead::from_view(TensorView::C64(c64s.as_view())), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<Complex64>()
+        .unwrap(),
         &[Complex64::new(3.0, 1.0)]
     );
 
     let bools = TypedTensor::<bool>::from_vec_col_major(vec![2], vec![true, false]).unwrap();
     let sum_error = crate::test_support::on_engine(&mut backend, |__s| {
-            __s.reduce_sum_read(
-                TensorRead::from_view(TensorView::Bool(bools.as_view())),
-                &[0],
-            )
-        })
-        .unwrap()
-        .unwrap_err();
+        __s.reduce_sum_read(
+            TensorRead::from_view(TensorView::Bool(bools.as_view())),
+            &[0],
+        )
+    })
+    .unwrap()
+    .unwrap_err();
     assert!(matches!(
         sum_error,
         crate::Error::Unsupported {
@@ -207,13 +207,13 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
         } if message == "unsupported dtype Bool; supported dtypes: F32/F64/I32/I64/C32/C64"
     ));
     let prod_error = crate::test_support::on_engine(&mut backend, |__s| {
-            __s.reduce_prod_read(
-                TensorRead::from_view(TensorView::Bool(bools.as_view())),
-                &[0],
-            )
-        })
-        .unwrap()
-        .unwrap_err();
+        __s.reduce_prod_read(
+            TensorRead::from_view(TensorView::Bool(bools.as_view())),
+            &[0],
+        )
+    })
+    .unwrap()
+    .unwrap_err();
     assert!(matches!(
         prod_error,
         crate::Error::Unsupported {
@@ -223,17 +223,17 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
     ));
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_max_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<i32>()
-            .unwrap(),
+            .reduce_max_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<i32>()
+        .unwrap(),
         &[2, 4]
     );
     assert!(matches!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_min_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[0]))
-            .unwrap(),
+            .reduce_min_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[0]))
+        .unwrap(),
         Err(crate::Error::Unsupported {
             op: "reduce_min",
             ..
@@ -241,8 +241,8 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
     ));
     assert!(matches!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_sum_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[2]))
-            .unwrap(),
+            .reduce_sum_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[2]))
+        .unwrap(),
         Err(crate::Error::Validation {
             op: "reduce_sum",
             source: tenferro_tensor::ValidationError::AxisOutOfBounds { axis: 2, rank: 2 }
@@ -250,10 +250,10 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
     ));
     assert!(matches!(
         crate::test_support::on_engine(&mut backend, |__s| __s.reduce_prod_read(
-                TensorRead::from_view(TensorView::F64(f64s.as_view())),
-                &[0, 0]
-            ))
-            .unwrap(),
+            TensorRead::from_view(TensorView::F64(f64s.as_view())),
+            &[0, 0]
+        ))
+        .unwrap(),
         Err(crate::Error::Validation {
             op: "reduce_prod",
             source: tenferro_tensor::ValidationError::DuplicateAxis {
@@ -271,57 +271,57 @@ fn reduce_read_empty_axes_materializes_views_for_all_dtypes() {
     let f32s = TypedTensor::<f32>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_max_read(TensorRead::from_view(TensorView::F32(f32s.as_view())), &[]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<f32>()
-            .unwrap(),
+            .reduce_max_read(TensorRead::from_view(TensorView::F32(f32s.as_view())), &[]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<f32>()
+        .unwrap(),
         &[1.0, 2.0]
     );
 
     let f64s = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_min_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
+            .reduce_min_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap(),
         &[1.0, 2.0]
     );
 
     let i32s = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]).unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_max_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<i32>()
-            .unwrap(),
+            .reduce_max_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<i32>()
+        .unwrap(),
         &[1, 2]
     );
 
     let i64s = TypedTensor::<i64>::from_vec_col_major(vec![2], vec![1, 2]).unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_min_read(TensorRead::from_view(TensorView::I64(i64s.as_view())), &[]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<i64>()
-            .unwrap(),
+            .reduce_min_read(TensorRead::from_view(TensorView::I64(i64s.as_view())), &[]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<i64>()
+        .unwrap(),
         &[1, 2]
     );
 
     let bools = TypedTensor::<bool>::from_vec_col_major(vec![2], vec![true, false]).unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s.reduce_max_read(
-                TensorRead::from_view(TensorView::Bool(bools.as_view())),
-                &[]
-            ))
-            .unwrap()
-            .unwrap()
-            .as_slice::<bool>()
-            .unwrap(),
+            TensorRead::from_view(TensorView::Bool(bools.as_view())),
+            &[]
+        ))
+        .unwrap()
+        .unwrap()
+        .as_slice::<bool>()
+        .unwrap(),
         &[true, false]
     );
 
@@ -330,11 +330,11 @@ fn reduce_read_empty_axes_materializes_views_for_all_dtypes() {
             .unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_min_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<Complex32>()
-            .unwrap(),
+            .reduce_min_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<Complex32>()
+        .unwrap(),
         &[Complex32::new(1.0, -1.0)]
     );
 
@@ -343,11 +343,11 @@ fn reduce_read_empty_axes_materializes_views_for_all_dtypes() {
             .unwrap();
     assert_eq!(
         crate::test_support::on_engine(&mut backend, |__s| __s
-                .reduce_max_read(TensorRead::from_view(TensorView::C64(c64s.as_view())), &[]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<Complex64>()
-            .unwrap(),
+            .reduce_max_read(TensorRead::from_view(TensorView::C64(c64s.as_view())), &[]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<Complex64>()
+        .unwrap(),
         &[Complex64::new(2.0, 3.0)]
     );
 }
@@ -360,19 +360,21 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         TypedTensor::<f32>::from_vec_col_major(vec![2], vec![2.0, 3.0]).unwrap(),
     );
     assert_eq!(
-        crate::test_support::on_engine(&mut backend, |__s| __s.reduce_sum_read(TensorRead::from_tensor(&f32s), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<f32>()
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s
+            .reduce_sum_read(TensorRead::from_tensor(&f32s), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<f32>()
+        .unwrap(),
         &[5.0]
     );
     assert_eq!(
-        crate::test_support::on_engine(&mut backend, |__s| __s.reduce_max_read(TensorRead::from_tensor(&f32s), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<f32>()
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s
+            .reduce_max_read(TensorRead::from_tensor(&f32s), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<f32>()
+        .unwrap(),
         &[3.0]
     );
 
@@ -380,19 +382,21 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0]).unwrap(),
     );
     assert_eq!(
-        crate::test_support::on_engine(&mut backend, |__s| __s.reduce_prod_read(TensorRead::from_tensor(&f64s), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s
+            .reduce_prod_read(TensorRead::from_tensor(&f64s), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap(),
         &[6.0]
     );
     assert_eq!(
-        crate::test_support::on_engine(&mut backend, |__s| __s.reduce_min_read(TensorRead::from_tensor(&f64s), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s
+            .reduce_min_read(TensorRead::from_tensor(&f64s), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap(),
         &[2.0]
     );
 
@@ -400,19 +404,21 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         TypedTensor::<i32>::from_vec_col_major(vec![2], vec![2, 3]).unwrap(),
     );
     assert_eq!(
-        crate::test_support::on_engine(&mut backend, |__s| __s.reduce_prod_read(TensorRead::from_tensor(&i32s), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<i32>()
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s
+            .reduce_prod_read(TensorRead::from_tensor(&i32s), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<i32>()
+        .unwrap(),
         &[6]
     );
     assert_eq!(
-        crate::test_support::on_engine(&mut backend, |__s| __s.reduce_max_read(TensorRead::from_tensor(&i32s), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<i32>()
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s
+            .reduce_max_read(TensorRead::from_tensor(&i32s), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<i32>()
+        .unwrap(),
         &[3]
     );
 
@@ -420,19 +426,21 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         TypedTensor::<i64>::from_vec_col_major(vec![2], vec![2, 3]).unwrap(),
     );
     assert_eq!(
-        crate::test_support::on_engine(&mut backend, |__s| __s.reduce_sum_read(TensorRead::from_tensor(&i64s), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<i64>()
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s
+            .reduce_sum_read(TensorRead::from_tensor(&i64s), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<i64>()
+        .unwrap(),
         &[5]
     );
     assert_eq!(
-        crate::test_support::on_engine(&mut backend, |__s| __s.reduce_min_read(TensorRead::from_tensor(&i64s), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<i64>()
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s
+            .reduce_min_read(TensorRead::from_tensor(&i64s), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<i64>()
+        .unwrap(),
         &[2]
     );
 
@@ -440,16 +448,18 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         TypedTensor::<bool>::from_vec_col_major(vec![2], vec![true, false]).unwrap(),
     );
     assert!(matches!(
-        crate::test_support::on_engine(&mut backend, |__s| __s.reduce_sum_read(TensorRead::from_tensor(&bools), &[0]))
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s
+            .reduce_sum_read(TensorRead::from_tensor(&bools), &[0]))
+        .unwrap(),
         Err(crate::Error::Unsupported {
             op: "reduce_sum",
             ..
         })
     ));
     assert!(matches!(
-        crate::test_support::on_engine(&mut backend, |__s| __s.reduce_prod_read(TensorRead::from_tensor(&bools), &[0]))
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s
+            .reduce_prod_read(TensorRead::from_tensor(&bools), &[0]))
+        .unwrap(),
         Err(crate::Error::Unsupported {
             op: "reduce_prod",
             ..
@@ -464,11 +474,12 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         .unwrap(),
     );
     assert_eq!(
-        crate::test_support::on_engine(&mut backend, |__s| __s.reduce_sum_read(TensorRead::from_tensor(&c32s), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<Complex32>()
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s
+            .reduce_sum_read(TensorRead::from_tensor(&c32s), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<Complex32>()
+        .unwrap(),
         &[Complex32::new(3.0, 0.0)]
     );
 
@@ -480,11 +491,12 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         .unwrap(),
     );
     assert_eq!(
-        crate::test_support::on_engine(&mut backend, |__s| __s.reduce_prod_read(TensorRead::from_tensor(&c64s), &[0]))
-            .unwrap()
-            .unwrap()
-            .as_slice::<Complex64>()
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s
+            .reduce_prod_read(TensorRead::from_tensor(&c64s), &[0]))
+        .unwrap()
+        .unwrap()
+        .as_slice::<Complex64>()
+        .unwrap(),
         &[Complex64::new(3.0, 1.0)]
     );
 }
@@ -819,17 +831,19 @@ fn empty_reduction_axes_are_noop_before_dtype_dispatch() {
 
     let sum_owned = reduce_sum(&bools, &[], &strided_kernel::ExecContext::serial()).unwrap();
     let prod_owned = reduce_prod(&bools, &[], &strided_kernel::ExecContext::serial()).unwrap();
-    let sum_read = crate::test_support::on_engine(&mut backend, |__s| __s.reduce_sum_read(TensorRead::from_tensor(&bools), &[]))
-        .unwrap()
-        .unwrap();
+    let sum_read = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.reduce_sum_read(TensorRead::from_tensor(&bools), &[])
+    })
+    .unwrap()
+    .unwrap();
     let prod_read = crate::test_support::on_engine(&mut backend, |__s| {
-            __s.reduce_prod_read(
-                TensorRead::from_view(TensorView::Bool(bool_tensor.as_view())),
-                &[],
-            )
-        })
-        .unwrap()
-        .unwrap();
+        __s.reduce_prod_read(
+            TensorRead::from_view(TensorView::Bool(bool_tensor.as_view())),
+            &[],
+        )
+    })
+    .unwrap()
+    .unwrap();
 
     for tensor in [sum_owned, prod_owned, sum_read, prod_read] {
         assert_eq!(tensor.shape(), &[2]);

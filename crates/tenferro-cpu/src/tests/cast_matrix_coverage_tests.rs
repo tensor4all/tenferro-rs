@@ -21,8 +21,7 @@ fn cast_matrix_covers_every_preset_pair() {
         for to in dtypes {
             // A pair the matrix covers returns a tensor of the requested dtype; one it does not
             // returns a typed error. Both are outcomes this table owns.
-            match crate::test_support::on_engine(&mut backend, |__s| __s.cast(&input, to))
-                .unwrap()
+            match crate::test_support::on_engine(&mut backend, |__s| __s.cast(&input, to)).unwrap()
             {
                 Ok(out) => assert_eq!(out.dtype(), to),
                 Err(_) => continue,

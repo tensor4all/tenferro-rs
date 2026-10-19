@@ -12,10 +12,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::gemm::GemmAnalysisCache;
 use crate::indexed_plan_cache::{IndexedPlanCache, IndexedPlanCacheLimits, IndexedPlanKey};
+use crate::CacheStats;
 use strided_kernel::{
     ErasedDynamicSlicePlan, ErasedDynamicUpdateSlicePlan, ErasedGatherPlan, ErasedScatterPlan,
 };
-use crate::CacheStats;
 
 /// A shareable, bounded cache of immutable CPU numerical plans.
 ///

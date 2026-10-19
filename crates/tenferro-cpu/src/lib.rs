@@ -320,12 +320,14 @@ where
         &mut self,
         callback: impl FnOnce(faer::Par) -> tenferro_tensor::Result<()> + Send,
     ) -> tenferro_tensor::Result<()> {
-        with_cpu_engine(self, |engine| engine.with_faer_parallelism(callback)).unwrap_or_else(|| {
-            Err(tenferro_tensor::Error::unsupported(
-                "with_faer_parallelism",
-                "selected engine is not a CPU/faer engine",
-            ))
-        })
+        with_cpu_engine(self, |engine| engine.with_faer_parallelism(callback)).unwrap_or_else(
+            || {
+                Err(tenferro_tensor::Error::unsupported(
+                    "with_faer_parallelism",
+                    "selected engine is not a CPU/faer engine",
+                ))
+            },
+        )
     }
 }
 

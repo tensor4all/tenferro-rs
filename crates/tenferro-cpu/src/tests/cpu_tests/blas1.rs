@@ -15,16 +15,18 @@ fn run_blas1(threads: usize, mut f: impl FnMut(&mut CpuEngine)) {
 
 fn vdot(backend: &mut CpuEngine, lhs: &Tensor, rhs: &Tensor) -> Tensor {
     crate::test_support::on_engine(backend, |session| {
-            session.vdot_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
-        .unwrap()
-        .unwrap()
+        session.vdot_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+    })
+    .unwrap()
+    .unwrap()
 }
 
 fn norm_squared(backend: &mut CpuEngine, input: &Tensor) -> Tensor {
-    crate::test_support::on_engine(backend, |session| session.norm_squared_read(TensorRead::from_tensor(input)))
-        .unwrap()
-        .unwrap()
+    crate::test_support::on_engine(backend, |session| {
+        session.norm_squared_read(TensorRead::from_tensor(input))
+    })
+    .unwrap()
+    .unwrap()
 }
 
 fn axpby(
@@ -35,15 +37,15 @@ fn axpby(
     y: &mut Tensor,
 ) {
     crate::test_support::on_engine(backend, |session| {
-            session.axpby_read_into_accum(
-                alpha,
-                TensorRead::from_tensor(x),
-                beta,
-                TensorWrite::from_tensor(y),
-            )
-        })
-        .unwrap()
-        .unwrap();
+        session.axpby_read_into_accum(
+            alpha,
+            TensorRead::from_tensor(x),
+            beta,
+            TensorWrite::from_tensor(y),
+        )
+    })
+    .unwrap()
+    .unwrap();
 }
 
 #[test]
@@ -176,15 +178,15 @@ fn blas1_compact_view_destinations_cover_all_supported_dtypes() {
             let mut storage = vec![$two, $one];
             let view = TypedTensorViewMut::from_slice([2], [1], 0, &mut storage).unwrap();
             crate::test_support::on_engine(&mut backend, |session| {
-                    session.axpby_read_into_accum(
-                        ContractionScalar::$scalar_variant($one),
-                        TensorRead::from_tensor(&x),
-                        ContractionScalar::$scalar_variant($one),
-                        TensorWrite::from_view(TensorViewMut::$view_variant(view)),
-                    )
-                })
-                .unwrap()
-                .unwrap();
+                session.axpby_read_into_accum(
+                    ContractionScalar::$scalar_variant($one),
+                    TensorRead::from_tensor(&x),
+                    ContractionScalar::$scalar_variant($one),
+                    TensorWrite::from_view(TensorViewMut::$view_variant(view)),
+                )
+            })
+            .unwrap()
+            .unwrap();
             assert_eq!(storage, vec![$one + $two, $one + $two]);
         }};
     }
@@ -212,15 +214,15 @@ fn blas1_compact_view_destinations_cover_all_supported_dtypes() {
     let mut empty_storage = Vec::<f64>::new();
     let empty_view = TypedTensorViewMut::from_slice([0], [1], 0, &mut empty_storage).unwrap();
     crate::test_support::on_engine(&mut backend, |session| {
-            session.axpby_read_into_accum(
-                ContractionScalar::F64(1.0),
-                TensorRead::from_tensor(&empty_x),
-                ContractionScalar::F64(1.0),
-                TensorWrite::from_view(TensorViewMut::F64(empty_view)),
-            )
-        })
-        .unwrap()
-        .unwrap();
+        session.axpby_read_into_accum(
+            ContractionScalar::F64(1.0),
+            TensorRead::from_tensor(&empty_x),
+            ContractionScalar::F64(1.0),
+            TensorWrite::from_view(TensorViewMut::F64(empty_view)),
+        )
+    })
+    .unwrap()
+    .unwrap();
 }
 
 #[test]
@@ -275,33 +277,33 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
     let mut backend = crate::test_support::cpu_engine(2).unwrap();
 
     let dot = crate::test_support::on_engine(&mut backend, |session| {
-            session.vdot_read(
-                TensorRead::from_view(TensorView::F64(lhs_view.clone())),
-                TensorRead::from_view(TensorView::F64(rhs_view)),
-            )
-        })
-        .unwrap()
-        .unwrap();
+        session.vdot_read(
+            TensorRead::from_view(TensorView::F64(lhs_view.clone())),
+            TensorRead::from_view(TensorView::F64(rhs_view)),
+        )
+    })
+    .unwrap()
+    .unwrap();
     assert_eq!(dot.as_slice::<f64>().unwrap(), &[182.0]);
     let norm = crate::test_support::on_engine(&mut backend, |session| {
-            session.norm_squared_read(TensorRead::from_view(TensorView::F64(lhs_view.clone())))
-        })
-        .unwrap()
-        .unwrap();
+        session.norm_squared_read(TensorRead::from_view(TensorView::F64(lhs_view.clone())))
+    })
+    .unwrap()
+    .unwrap();
     assert_eq!(norm.as_slice::<f64>().unwrap(), &[91.0]);
 
     let mut out = Tensor::from_vec_col_major(vec![3, 2], vec![10.0_f64; 6]).unwrap();
     crate::blas1::reset_materializations_for_test();
     crate::test_support::on_engine(&mut backend, |session| {
-            session.axpby_read_into_accum(
-                ContractionScalar::F64(2.0),
-                TensorRead::from_view(TensorView::F64(lhs_view.clone())),
-                ContractionScalar::F64(0.5),
-                TensorWrite::from_tensor(&mut out),
-            )
-        })
-        .unwrap()
-        .unwrap();
+        session.axpby_read_into_accum(
+            ContractionScalar::F64(2.0),
+            TensorRead::from_view(TensorView::F64(lhs_view.clone())),
+            ContractionScalar::F64(0.5),
+            TensorWrite::from_tensor(&mut out),
+        )
+    })
+    .unwrap()
+    .unwrap();
     assert_eq!(
         out.as_slice::<f64>().unwrap(),
         &[7.0, 11.0, 15.0, 9.0, 13.0, 17.0]
@@ -317,15 +319,15 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
         TypedTensorViewMut::from_slice(vec![3, 2], vec![1, 4], 0, &mut strided_storage).unwrap();
     crate::blas1::reset_materializations_for_test();
     crate::test_support::on_engine(&mut backend, |session| {
-            session.axpby_read_into_accum(
-                ContractionScalar::F64(2.0),
-                TensorRead::from_view(TensorView::F64(lhs_view)),
-                ContractionScalar::F64(0.5),
-                TensorWrite::from_view(TensorViewMut::F64(strided_destination)),
-            )
-        })
-        .unwrap()
-        .unwrap();
+        session.axpby_read_into_accum(
+            ContractionScalar::F64(2.0),
+            TensorRead::from_view(TensorView::F64(lhs_view)),
+            ContractionScalar::F64(0.5),
+            TensorWrite::from_view(TensorViewMut::F64(strided_destination)),
+        )
+    })
+    .unwrap()
+    .unwrap();
     assert_eq!(crate::blas1::materializations_for_test(), 0);
 }
 
@@ -361,15 +363,15 @@ fn blas1_strided_destination_region_preserves_surrounding_bytes() {
         TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 4], 5, &mut storage).unwrap();
     crate::blas1::reset_materializations_for_test();
     crate::test_support::on_engine(&mut backend, |session| {
-            session.axpby_read_into_accum(
-                ContractionScalar::F64(alpha),
-                TensorRead::from_tensor(&x),
-                ContractionScalar::F64(beta),
-                TensorWrite::from_view(TensorViewMut::F64(destination)),
-            )
-        })
-        .unwrap()
-        .unwrap();
+        session.axpby_read_into_accum(
+            ContractionScalar::F64(alpha),
+            TensorRead::from_tensor(&x),
+            ContractionScalar::F64(beta),
+            TensorWrite::from_view(TensorViewMut::F64(destination)),
+        )
+    })
+    .unwrap()
+    .unwrap();
     assert_eq!(storage, expected);
     assert_eq!(crate::blas1::materializations_for_test(), 0);
 
@@ -387,15 +389,15 @@ fn blas1_strided_destination_region_preserves_surrounding_bytes() {
         TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 4], 5, &mut storage).unwrap();
     crate::blas1::reset_materializations_for_test();
     crate::test_support::on_engine(&mut backend, |session| {
-            session.axpby_read_into_accum(
-                ContractionScalar::F64(alpha),
-                TensorRead::from_view(TensorView::F64(source_view)),
-                ContractionScalar::F64(beta),
-                TensorWrite::from_view(TensorViewMut::F64(destination)),
-            )
-        })
-        .unwrap()
-        .unwrap();
+        session.axpby_read_into_accum(
+            ContractionScalar::F64(alpha),
+            TensorRead::from_view(TensorView::F64(source_view)),
+            ContractionScalar::F64(beta),
+            TensorWrite::from_view(TensorViewMut::F64(destination)),
+        )
+    })
+    .unwrap()
+    .unwrap();
     assert_eq!(storage, expected);
     assert_eq!(source, source_before);
     assert_eq!(crate::blas1::materializations_for_test(), 0);
@@ -410,15 +412,15 @@ fn assert_axpby_rejects_without_mutating(
 ) {
     let before = y.as_slice::<f64>().unwrap().to_vec();
     assert!(crate::test_support::on_engine(backend, |session| {
-            session.axpby_read_into_accum(
-                alpha,
-                TensorRead::from_tensor(x),
-                beta,
-                TensorWrite::from_tensor(y),
-            )
-        })
-        .unwrap()
-        .is_err());
+        session.axpby_read_into_accum(
+            alpha,
+            TensorRead::from_tensor(x),
+            beta,
+            TensorWrite::from_tensor(y),
+        )
+    })
+    .unwrap()
+    .is_err());
     assert_eq!(y.as_slice::<f64>().unwrap(), before.as_slice());
 }
 
@@ -509,30 +511,30 @@ fn blas1_invalid_axpby_requests_leave_y_byte_identical() {
     let wrong_shape_y =
         TypedTensorViewMut::from_slice(vec![2], vec![2], 0, &mut noncompact_storage).unwrap();
     assert!(crate::test_support::on_engine(&mut backend, |session| {
-            session.axpby_read_into_accum(
-                ContractionScalar::F64(1.0),
-                TensorRead::from_tensor(&wrong_shape_x),
-                ContractionScalar::F64(1.0),
-                TensorWrite::from_view(TensorViewMut::F64(wrong_shape_y)),
-            )
-        })
-        .unwrap()
-        .is_err());
+        session.axpby_read_into_accum(
+            ContractionScalar::F64(1.0),
+            TensorRead::from_tensor(&wrong_shape_x),
+            ContractionScalar::F64(1.0),
+            TensorWrite::from_view(TensorViewMut::F64(wrong_shape_y)),
+        )
+    })
+    .unwrap()
+    .is_err());
     assert_eq!(noncompact_storage, before);
 
     let wrong_dtype_x = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let wrong_dtype_y =
         TypedTensorViewMut::from_slice(vec![2], vec![2], 0, &mut noncompact_storage).unwrap();
     assert!(crate::test_support::on_engine(&mut backend, |session| {
-            session.axpby_read_into_accum(
-                ContractionScalar::F32(1.0),
-                TensorRead::from_tensor(&wrong_dtype_x),
-                ContractionScalar::F32(1.0),
-                TensorWrite::from_view(TensorViewMut::F64(wrong_dtype_y)),
-            )
-        })
-        .unwrap()
-        .is_err());
+        session.axpby_read_into_accum(
+            ContractionScalar::F32(1.0),
+            TensorRead::from_tensor(&wrong_dtype_x),
+            ContractionScalar::F32(1.0),
+            TensorWrite::from_view(TensorViewMut::F64(wrong_dtype_y)),
+        )
+    })
+    .unwrap()
+    .is_err());
     assert_eq!(noncompact_storage, before);
 }
 
@@ -543,10 +545,12 @@ fn blas1_vdot_and_norm_reject_invalid_metadata_and_placement() {
     let wrong_shape = Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
     let wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     for rhs in [&wrong_shape, &wrong_dtype] {
-        assert!(crate::test_support::on_engine(&mut backend, |session| session
+        assert!(
+            crate::test_support::on_engine(&mut backend, |session| session
                 .vdot_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(rhs),))
             .unwrap()
-            .is_err());
+            .is_err()
+        );
     }
 
     let mut device = x.duplicate().unwrap();
@@ -557,15 +561,20 @@ fn blas1_vdot_and_norm_reject_invalid_metadata_and_placement() {
             cpu_affinity: None,
         });
     }
-    assert!(crate::test_support::on_engine(&mut backend, |session| session.vdot_read(
+    assert!(
+        crate::test_support::on_engine(&mut backend, |session| session.vdot_read(
             TensorRead::from_tensor(&device),
             TensorRead::from_tensor(&device),
         ))
         .unwrap()
-        .is_err());
-    assert!(crate::test_support::on_engine(&mut backend, |session| session.norm_squared_read(TensorRead::from_tensor(&device)))
+        .is_err()
+    );
+    assert!(
+        crate::test_support::on_engine(&mut backend, |session| session
+            .norm_squared_read(TensorRead::from_tensor(&device)))
         .unwrap()
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]
@@ -576,9 +585,9 @@ fn blas1_norm_rejects_integer_and_bool_without_allocating_a_result() {
         Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap(),
     ] {
         let result = crate::test_support::on_engine(&mut backend, |session| {
-                session.norm_squared_read(TensorRead::from_tensor(&input))
-            })
-            .unwrap();
+            session.norm_squared_read(TensorRead::from_tensor(&input))
+        })
+        .unwrap();
         assert!(matches!(result, Err(Error::Unsupported { .. })));
     }
 }
@@ -596,35 +605,35 @@ fn blas1_cg_microfixture_uses_session_primitives_without_element_loops() {
 
     for _ in 0..2 {
         crate::test_support::on_engine(&mut backend, |__s| {
-                __s.copy_read_into(
-                    TensorRead::from_tensor(&p),
-                    TensorWrite::from_tensor(&mut ap),
-                )
-            })
-            .unwrap()
-            .unwrap();
+            __s.copy_read_into(
+                TensorRead::from_tensor(&p),
+                TensorWrite::from_tensor(&mut ap),
+            )
+        })
+        .unwrap()
+        .unwrap();
         let computed_ap = crate::test_support::on_engine(&mut backend, |__s| {
-                __s.dot_general_read(
-                    TensorRead::from_tensor(&a),
-                    TensorRead::from_tensor(&ap),
-                    &DotGeneralConfig {
-                        lhs_contracting_dims: [1].as_slice().into(),
-                        rhs_contracting_dims: [0].as_slice().into(),
-                        lhs_batch_dims: [].as_slice().into(),
-                        rhs_batch_dims: [].as_slice().into(),
-                    },
-                )
-            })
-            .unwrap()
-            .unwrap();
+            __s.dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&ap),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
+        .unwrap()
+        .unwrap();
         crate::test_support::on_engine(&mut backend, |__s| {
-                __s.copy_read_into(
-                    TensorRead::from_tensor(&computed_ap),
-                    TensorWrite::from_tensor(&mut ap),
-                )
-            })
-            .unwrap()
-            .unwrap();
+            __s.copy_read_into(
+                TensorRead::from_tensor(&computed_ap),
+                TensorWrite::from_tensor(&mut ap),
+            )
+        })
+        .unwrap()
+        .unwrap();
         let rs_value = rs.as_slice::<f64>().unwrap()[0];
         let pap = vdot(&mut backend, &p, &ap).as_slice::<f64>().unwrap()[0];
         let alpha = rs_value / pap;

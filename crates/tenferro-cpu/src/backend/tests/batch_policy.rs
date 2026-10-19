@@ -213,9 +213,8 @@ struct NonCpuSession;
 mod non_cpu_session {
     use super::NonCpuSession;
     use tenferro_tensor::{
-        Engine, CompareDir,
-        DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig, ScatterConfig,
-        SliceConfig, Tensor, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
+        CompareDir, DType, DotGeneralConfig, ElementwiseReadOp, Engine, GatherConfig, PadConfig,
+        ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
         TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction,
         TensorStructural, TensorWrite,
     };

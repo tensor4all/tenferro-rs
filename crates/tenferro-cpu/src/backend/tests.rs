@@ -249,9 +249,9 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
     };
 
     let dot_error = crate::test_support::on_engine(&mut backend, |__s| {
-            __s.dot_general_cached(Some(0), &lhs, &rhs, &config)
-        })
-        .unwrap();
+        __s.dot_general_cached(Some(0), &lhs, &rhs, &config)
+    })
+    .unwrap();
     assert!(matches!(
         dot_error,
         Err(crate::Error::Validation {
@@ -261,9 +261,9 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
     ));
 
     let dot_conj_error = crate::test_support::on_engine(&mut backend, |__s| {
-            __s.dot_general_with_conj_cached(Some(1), &lhs, &rhs, &config, true, false)
-        })
-        .unwrap();
+        __s.dot_general_with_conj_cached(Some(1), &lhs, &rhs, &config, true, false)
+    })
+    .unwrap();
     assert!(matches!(
         dot_conj_error,
         Err(crate::Error::Validation {

@@ -5,19 +5,18 @@ use std::sync::Arc;
 use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef, SemanticOperationView};
 use tenferro_runtime::runtime::ImmediateEventDomainDriver;
 use tenferro_runtime::{
-    assemble_executable_engine_registration, CoreCapabilityBundle,
-    CoreCapabilityKind, CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest,
-    ElementwisePrepareRequest, ElementwiseRuntime, EngineId, EngineRegistration,
-    EngineRegistrationMetadata, ExecutableEngineRegistrationConfig, ExecutionContextIdentity,
-    HardwareClassId, IndexingPrepareRequest, IndexingRuntime, InputIngressContract,
-    InputPlacementContract, InputSignature, InputSignatureContract, InputSpecializationProjection,
+    assemble_executable_engine_registration, CoreCapabilityBundle, CoreCapabilityKind,
+    CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest,
+    ElementwiseRuntime, EngineId, EngineRegistration, EngineRegistrationMetadata,
+    ExecutableEngineRegistrationConfig, ExecutionContextIdentity, HardwareClassId,
+    IndexingPrepareRequest, IndexingRuntime, InputIngressContract, InputPlacementContract,
+    InputSignature, InputSignatureContract, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
     LayoutSpecialization, MemoryKind, PrepareCapability, PrepareError, PreparedOperation,
     PreparedOperationBinding, PreparedOperationPlan, ProviderContractError, ProviderDeviceIdentity,
     ProviderId, ReductionPrepareRequest, ReductionRuntime, ResidentOutputContract,
-    RuntimeConfigError, RuntimeInputContract, SpecializationError,
-    SpecializationProjection, SpecializationRequirements, StorageClass, TensorRead,
-    UnsupportedReason,
+    RuntimeConfigError, RuntimeInputContract, SpecializationError, SpecializationProjection,
+    SpecializationRequirements, StorageClass, TensorRead, UnsupportedReason,
 };
 
 use crate::CpuEngine;
