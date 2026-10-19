@@ -1,9 +1,10 @@
+use crate::cubecl::tests::EngineRun;
 // Run with: cargo test --features cuda -- --ignored
 use crate::config::CompareDir;
 use crate::cubecl::gpu_available;
 use crate::{DType, DeviceKind, GpuBackendKind, Tensor};
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::{BackendSessionHost, ErrorKind, TensorRead, TensorView, TensorWrite};
+use tenferro_tensor::{ErrorKind, TensorRead, TensorView, TensorWrite};
 
 use super::{
     assert_cuda_numerical_error, assert_cuda_unsupported_dtype, assert_dtype_mismatch,
@@ -31,7 +32,7 @@ fn elementwise_read_into_writes_owned_output_without_mutating_inputs() {
     let gpu_lhs = upload(&gpu, &lhs);
     let gpu_rhs = upload(&gpu, &rhs);
     let mut gpu_out = upload(&gpu, &tensor_f32(vec![2, 2], vec![0.0; 4]));
-    gpu.with_backend_session(|__s| {
+    gpu.run(|__s| {
         __s.mul_read_into(
             TensorRead::from_tensor(&gpu_lhs),
             TensorRead::from_tensor(&gpu_rhs),
@@ -58,7 +59,7 @@ fn elementwise_read_compact_view_chain_uses_native_kernels() {
     let host_rhs = tensor_f32(vec![2, 2], vec![2.0, 4.0, -0.5, 1.5]);
     let mut cpu = cpu_backend();
     let sum = cpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.add_read(
                 TensorRead::from_tensor(&host_lhs),
                 TensorRead::from_tensor(&host_rhs),
@@ -67,7 +68,7 @@ fn elementwise_read_compact_view_chain_uses_native_kernels() {
         .unwrap()
         .unwrap();
     let product = cpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.mul_read(
                 TensorRead::from_tensor(&sum),
                 TensorRead::from_tensor(&host_rhs),
@@ -76,7 +77,7 @@ fn elementwise_read_compact_view_chain_uses_native_kernels() {
         .unwrap()
         .unwrap();
     let expected = cpu
-        .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&product)))
+        .run(|__s| __s.tanh_read(TensorRead::from_tensor(&product)))
         .unwrap()
         .unwrap();
 
@@ -84,7 +85,7 @@ fn elementwise_read_compact_view_chain_uses_native_kernels() {
     let lhs = upload(&gpu, &host_lhs);
     let rhs = upload(&gpu, &host_rhs);
     let sum = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.add_read(
                 TensorRead::from_view(TensorView::F32(lhs.as_typed::<f32>().unwrap().as_view())),
                 TensorRead::from_view(TensorView::F32(rhs.as_typed::<f32>().unwrap().as_view())),
@@ -93,7 +94,7 @@ fn elementwise_read_compact_view_chain_uses_native_kernels() {
         .unwrap()
         .unwrap();
     let product = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.mul_read(
                 TensorRead::from_view(TensorView::F32(sum.as_typed::<f32>().unwrap().as_view())),
                 TensorRead::from_view(TensorView::F32(rhs.as_typed::<f32>().unwrap().as_view())),
@@ -102,7 +103,7 @@ fn elementwise_read_compact_view_chain_uses_native_kernels() {
         .unwrap()
         .unwrap();
     let actual = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.tanh_read(TensorRead::from_view(TensorView::F32(
                 product.as_typed::<f32>().unwrap().as_view(),
             )))
@@ -141,28 +142,25 @@ fn elementwise_read_preserves_offset_and_strided_layouts() {
         let read = TensorRead::from_view(TensorView::F64(device_view));
         let expected_read = TensorRead::from_view(TensorView::F64(host_view));
         let expected = cpu
-            .with_backend_session(|__s| __s.add_read(expected_read.clone(), expected_read.clone()))
+            .run(|__s| __s.add_read(expected_read.clone(), expected_read.clone()))
             .unwrap()
             .unwrap();
         let actual = gpu
-            .with_backend_session(|__s| __s.add_read(read.clone(), read.clone()))
+            .run(|__s| __s.add_read(read.clone(), read.clone()))
             .unwrap()
             .unwrap();
         assert_tensor_close(&download(&gpu, &actual), &expected, 1e-12);
         let expected = cpu
-            .with_backend_session(|__s| __s.tanh_read(expected_read))
+            .run(|__s| __s.tanh_read(expected_read))
             .unwrap()
             .unwrap();
-        let actual = gpu
-            .with_backend_session(|__s| __s.tanh_read(read))
-            .unwrap()
-            .unwrap();
+        let actual = gpu.run(|__s| __s.tanh_read(read)).unwrap().unwrap();
         assert_tensor_close(&download(&gpu, &actual), &expected, 1e-12);
     }
     assert_tensor_close(&download(&gpu, &device), &host, 0.0);
     let mut host_output = tensor_f64(vec![2, 3], vec![0.; 6]);
     assert!(gpu
-        .with_backend_session(|__s| __s.neg_read_into(
+        .run(|__s| __s.neg_read_into(
             TensorRead::from_tensor(&device),
             TensorWrite::from_tensor(&mut host_output)
         ))
@@ -314,14 +312,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             (
                 "scalar+complex",
                 ZeroSign::Strict,
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.add_read(
                         TensorRead::from_tensor(&scalar),
                         TensorRead::from_tensor(&complex),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.add_read(
                         TensorRead::from_tensor(&gpu_scalar),
                         TensorRead::from_tensor(&gpu_complex),
@@ -332,14 +330,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             (
                 "complex+scalar",
                 ZeroSign::Strict,
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.add_read(
                         TensorRead::from_tensor(&complex),
                         TensorRead::from_tensor(&scalar),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.add_read(
                         TensorRead::from_tensor(&gpu_complex),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -350,14 +348,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             (
                 "scalar-complex",
                 ZeroSign::Strict,
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.sub_read(
                         TensorRead::from_tensor(&scalar),
                         TensorRead::from_tensor(&complex),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.sub_read(
                         TensorRead::from_tensor(&gpu_scalar),
                         TensorRead::from_tensor(&gpu_complex),
@@ -368,14 +366,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             (
                 "complex-scalar",
                 ZeroSign::Strict,
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.sub_read(
                         TensorRead::from_tensor(&complex),
                         TensorRead::from_tensor(&scalar),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.sub_read(
                         TensorRead::from_tensor(&gpu_complex),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -386,14 +384,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             (
                 "scalar*complex",
                 ZeroSign::Strict,
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.mul_read(
                         TensorRead::from_tensor(&scalar),
                         TensorRead::from_tensor(&complex),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.mul_read(
                         TensorRead::from_tensor(&gpu_scalar),
                         TensorRead::from_tensor(&gpu_complex),
@@ -404,14 +402,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             (
                 "complex*scalar",
                 ZeroSign::Strict,
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.mul_read(
                         TensorRead::from_tensor(&complex),
                         TensorRead::from_tensor(&scalar),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.mul_read(
                         TensorRead::from_tensor(&gpu_complex),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -422,14 +420,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             (
                 "scalar/complex",
                 ZeroSign::Unchecked,
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&scalar),
                         TensorRead::from_tensor(&complex),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&gpu_scalar),
                         TensorRead::from_tensor(&gpu_complex),
@@ -440,14 +438,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             (
                 "complex/scalar",
                 ZeroSign::Unchecked,
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&complex),
                         TensorRead::from_tensor(&scalar),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&gpu_complex),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -471,7 +469,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
         for (op, result, expected_lhs, expected_rhs) in [
             (
                 "pow",
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&gpu_scalar),
                         TensorRead::from_tensor(&gpu_complex),
@@ -483,7 +481,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "pow",
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&gpu_complex),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -495,15 +493,13 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "rem",
-                gpu.with_backend_session(|__s| __s.rem(&gpu_scalar, &gpu_complex))
-                    .unwrap(),
+                gpu.run(|__s| __s.rem(&gpu_scalar, &gpu_complex)).unwrap(),
                 scalar.dtype(),
                 complex.dtype(),
             ),
             (
                 "rem",
-                gpu.with_backend_session(|__s| __s.rem(&gpu_complex, &gpu_scalar))
-                    .unwrap(),
+                gpu.run(|__s| __s.rem(&gpu_complex, &gpu_scalar)).unwrap(),
                 complex.dtype(),
                 scalar.dtype(),
             ),
@@ -543,14 +539,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
         let gpu_complex = upload(&gpu, &complex);
         for (expected, actual) in [
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.add_read(
                         TensorRead::from_tensor(&scalar),
                         TensorRead::from_tensor(&complex),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.add_read(
                         TensorRead::from_tensor(&gpu_scalar),
                         TensorRead::from_tensor(&gpu_complex),
@@ -559,14 +555,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
                 .unwrap(),
             ),
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.add_read(
                         TensorRead::from_tensor(&complex),
                         TensorRead::from_tensor(&scalar),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.add_read(
                         TensorRead::from_tensor(&gpu_complex),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -575,14 +571,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
                 .unwrap(),
             ),
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.sub_read(
                         TensorRead::from_tensor(&scalar),
                         TensorRead::from_tensor(&complex),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.sub_read(
                         TensorRead::from_tensor(&gpu_scalar),
                         TensorRead::from_tensor(&gpu_complex),
@@ -591,14 +587,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
                 .unwrap(),
             ),
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.sub_read(
                         TensorRead::from_tensor(&complex),
                         TensorRead::from_tensor(&scalar),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.sub_read(
                         TensorRead::from_tensor(&gpu_complex),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -607,14 +603,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
                 .unwrap(),
             ),
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.mul_read(
                         TensorRead::from_tensor(&scalar),
                         TensorRead::from_tensor(&complex),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.mul_read(
                         TensorRead::from_tensor(&gpu_scalar),
                         TensorRead::from_tensor(&gpu_complex),
@@ -623,14 +619,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
                 .unwrap(),
             ),
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.mul_read(
                         TensorRead::from_tensor(&complex),
                         TensorRead::from_tensor(&scalar),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.mul_read(
                         TensorRead::from_tensor(&gpu_complex),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -639,14 +635,14 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
                 .unwrap(),
             ),
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&complex),
                         TensorRead::from_tensor(&scalar),
                     )
                 })
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&gpu_complex),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -699,7 +695,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
         let gpu_scalar = upload(&gpu, &scalar);
         let gpu_complex = upload(&gpu, &complex);
         let quotient = gpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.div_read(
                     TensorRead::from_tensor(&gpu_scalar),
                     TensorRead::from_tensor(&gpu_complex),
@@ -770,7 +766,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
         for (op, result) in [
             (
                 "add",
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.add_read(
                         TensorRead::from_tensor(&gpu_lhs),
                         TensorRead::from_tensor(&gpu_rhs),
@@ -780,7 +776,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "sub",
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.sub_read(
                         TensorRead::from_tensor(&gpu_lhs),
                         TensorRead::from_tensor(&gpu_rhs),
@@ -790,7 +786,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "mul",
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.mul_read(
                         TensorRead::from_tensor(&gpu_lhs),
                         TensorRead::from_tensor(&gpu_rhs),
@@ -800,7 +796,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "div",
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&gpu_lhs),
                         TensorRead::from_tensor(&gpu_rhs),
@@ -815,7 +811,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
         for (op, result) in [
             (
                 "add",
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.add_read(
                         TensorRead::from_tensor(&gpu_rhs),
                         TensorRead::from_tensor(&gpu_lhs),
@@ -825,7 +821,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "sub",
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.sub_read(
                         TensorRead::from_tensor(&gpu_rhs),
                         TensorRead::from_tensor(&gpu_lhs),
@@ -835,7 +831,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "mul",
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.mul_read(
                         TensorRead::from_tensor(&gpu_rhs),
                         TensorRead::from_tensor(&gpu_lhs),
@@ -845,7 +841,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "div",
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&gpu_rhs),
                         TensorRead::from_tensor(&gpu_lhs),
@@ -891,7 +887,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
         let gpu_scalar = upload(&gpu, &scalar);
         for (expected, actual) in [
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&scalar),
                         TensorRead::from_tensor(&tensor),
@@ -899,7 +895,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 })
                 .unwrap()
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&gpu_scalar),
                         TensorRead::from_tensor(&gpu_tensor),
@@ -909,7 +905,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 .map(|value| download(&gpu, &value)),
             ),
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&tensor),
                         TensorRead::from_tensor(&scalar),
@@ -917,7 +913,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 })
                 .unwrap()
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&gpu_tensor),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -927,18 +923,14 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 .map(|value| download(&gpu, &value)),
             ),
             (
-                cpu.with_backend_session(|__s| __s.rem(&scalar, &tensor))
-                    .unwrap()
-                    .unwrap(),
-                gpu.with_backend_session(|__s| __s.rem(&gpu_scalar, &gpu_tensor))
+                cpu.run(|__s| __s.rem(&scalar, &tensor)).unwrap().unwrap(),
+                gpu.run(|__s| __s.rem(&gpu_scalar, &gpu_tensor))
                     .unwrap()
                     .map(|value| download(&gpu, &value)),
             ),
             (
-                cpu.with_backend_session(|__s| __s.rem(&tensor, &scalar))
-                    .unwrap()
-                    .unwrap(),
-                gpu.with_backend_session(|__s| __s.rem(&gpu_tensor, &gpu_scalar))
+                cpu.run(|__s| __s.rem(&tensor, &scalar)).unwrap().unwrap(),
+                gpu.run(|__s| __s.rem(&gpu_tensor, &gpu_scalar))
                     .unwrap()
                     .map(|value| download(&gpu, &value)),
             ),
@@ -966,12 +958,9 @@ fn test_scalar_div_rem_pow_match_cpu() {
         let gpu_negative_multiple = upload(&gpu, &negative_multiple);
         let gpu_divisor = upload(&gpu, &divisor);
 
-        let expected = cpu
-            .with_backend_session(|__s| __s.rem(&tensor, &divisor))
-            .unwrap()
-            .unwrap();
+        let expected = cpu.run(|__s| __s.rem(&tensor, &divisor)).unwrap().unwrap();
         let actual = gpu
-            .with_backend_session(|__s| __s.rem(&gpu_tensor, &gpu_divisor))
+            .run(|__s| __s.rem(&gpu_tensor, &gpu_divisor))
             .unwrap()
             .unwrap();
         let actual = download(&gpu, &actual);
@@ -981,12 +970,9 @@ fn test_scalar_div_rem_pow_match_cpu() {
             (&negative_zero, &gpu_negative_zero),
             (&negative_multiple, &gpu_negative_multiple),
         ] {
-            let expected = cpu
-                .with_backend_session(|__s| __s.rem(scalar, &tensor))
-                .unwrap()
-                .unwrap();
+            let expected = cpu.run(|__s| __s.rem(scalar, &tensor)).unwrap().unwrap();
             let actual = gpu
-                .with_backend_session(|__s| __s.rem(gpu_scalar, &gpu_tensor))
+                .run(|__s| __s.rem(gpu_scalar, &gpu_tensor))
                 .unwrap()
                 .unwrap();
             let actual = download(&gpu, &actual);
@@ -1009,7 +995,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
         let gpu_lhs = upload(&gpu, &lhs);
         let gpu_zero = upload(&gpu, &zero);
         let error = gpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.div_read(
                     TensorRead::from_tensor(&gpu_lhs),
                     TensorRead::from_tensor(&gpu_zero),
@@ -1019,7 +1005,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
             .unwrap_err();
         assert_cuda_numerical_error(&error, "div", dtype, false);
         let error = gpu
-            .with_backend_session(|__s| __s.rem(&gpu_lhs, &gpu_zero))
+            .run(|__s| __s.rem(&gpu_lhs, &gpu_zero))
             .unwrap()
             .unwrap_err();
         assert_cuda_numerical_error(&error, "rem", dtype, false);
@@ -1032,7 +1018,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
         let gpu_scalar_one = upload(&gpu, &scalar_one);
         let gpu_zero_rhs = upload(&gpu, &zero_rhs);
         let error = gpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.div_read(
                     TensorRead::from_tensor(&gpu_scalar_one),
                     TensorRead::from_tensor(&gpu_zero_rhs),
@@ -1042,7 +1028,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
             .unwrap_err();
         assert_cuda_numerical_error(&error, "div", dtype, false);
         let error = gpu
-            .with_backend_session(|__s| __s.rem(&gpu_scalar_one, &gpu_zero_rhs))
+            .run(|__s| __s.rem(&gpu_scalar_one, &gpu_zero_rhs))
             .unwrap()
             .unwrap_err();
         assert_cuda_numerical_error(&error, "rem", dtype, false);
@@ -1054,7 +1040,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
         };
         let gpu_minus_one = upload(&gpu, &minus_one);
         let expected_div = cpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.div_read(
                     TensorRead::from_tensor(&lhs),
                     TensorRead::from_tensor(&minus_one),
@@ -1062,12 +1048,9 @@ fn test_scalar_div_rem_pow_match_cpu() {
             })
             .unwrap()
             .unwrap();
-        let expected_rem = cpu
-            .with_backend_session(|__s| __s.rem(&lhs, &minus_one))
-            .unwrap()
-            .unwrap();
+        let expected_rem = cpu.run(|__s| __s.rem(&lhs, &minus_one)).unwrap().unwrap();
         let gpu_div = gpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.div_read(
                     TensorRead::from_tensor(&gpu_lhs),
                     TensorRead::from_tensor(&gpu_minus_one),
@@ -1076,7 +1059,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
             .unwrap()
             .unwrap();
         let gpu_rem = gpu
-            .with_backend_session(|__s| __s.rem(&gpu_lhs, &gpu_minus_one))
+            .run(|__s| __s.rem(&gpu_lhs, &gpu_minus_one))
             .unwrap()
             .unwrap();
         let actual_div = download(&gpu, &gpu_div);
@@ -1098,7 +1081,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
         let gpu_min_scalar = upload(&gpu, &min_scalar);
         let gpu_minus_one_rhs = upload(&gpu, &minus_one_rhs);
         let expected_div = cpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.div_read(
                     TensorRead::from_tensor(&min_scalar),
                     TensorRead::from_tensor(&minus_one_rhs),
@@ -1107,11 +1090,11 @@ fn test_scalar_div_rem_pow_match_cpu() {
             .unwrap()
             .unwrap();
         let expected_rem = cpu
-            .with_backend_session(|__s| __s.rem(&min_scalar, &minus_one_rhs))
+            .run(|__s| __s.rem(&min_scalar, &minus_one_rhs))
             .unwrap()
             .unwrap();
         let gpu_div = gpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.div_read(
                     TensorRead::from_tensor(&gpu_min_scalar),
                     TensorRead::from_tensor(&gpu_minus_one_rhs),
@@ -1120,7 +1103,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
             .unwrap()
             .unwrap();
         let gpu_rem = gpu
-            .with_backend_session(|__s| __s.rem(&gpu_min_scalar, &gpu_minus_one_rhs))
+            .run(|__s| __s.rem(&gpu_min_scalar, &gpu_minus_one_rhs))
             .unwrap()
             .unwrap();
         assert_tensor_close(&download(&gpu, &gpu_div), &expected_div, 0.0);
@@ -1143,7 +1126,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
         let gpu_scalar = upload(&gpu, &scalar);
         for (expected, actual) in [
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&scalar),
                         TensorRead::from_tensor(&tensor),
@@ -1151,7 +1134,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 })
                 .unwrap()
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&gpu_scalar),
                         TensorRead::from_tensor(&gpu_tensor),
@@ -1161,7 +1144,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 .map(|value| download(&gpu, &value)),
             ),
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&tensor),
                         TensorRead::from_tensor(&scalar),
@@ -1169,7 +1152,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 })
                 .unwrap()
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&gpu_tensor),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -1193,7 +1176,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
         let gpu_scalar = upload(&gpu, &scalar);
         for (expected, actual) in [
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&scalar),
                         TensorRead::from_tensor(&empty),
@@ -1201,7 +1184,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 })
                 .unwrap()
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&gpu_scalar),
                         TensorRead::from_tensor(&gpu_empty),
@@ -1211,7 +1194,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 .unwrap(),
             ),
             (
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&empty),
                         TensorRead::from_tensor(&scalar),
@@ -1219,7 +1202,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 })
                 .unwrap()
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&gpu_empty),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -1256,7 +1239,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
         let gpu_base = upload(&gpu, &base);
         let gpu_exponent = upload(&gpu, &exponent);
         let error = gpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.pow_read(
                     TensorRead::from_tensor(&gpu_base),
                     TensorRead::from_tensor(&gpu_exponent),
@@ -1270,7 +1253,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
     let unequal_lhs = upload(&gpu, &tensor_f32(vec![2], vec![2.0, 3.0]));
     let unequal_rhs = upload(&gpu, &tensor_f32(vec![3], vec![2.0, 3.0, 4.0]));
     let error = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.pow_read(
                 TensorRead::from_tensor(&unequal_lhs),
                 TensorRead::from_tensor(&unequal_rhs),
@@ -1301,7 +1284,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
         for (label, expected, actual) in [
             (
                 "scalar exponent pow",
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&tensor),
                         TensorRead::from_tensor(&scalar),
@@ -1309,7 +1292,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 })
                 .unwrap()
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&gpu_tensor),
                         TensorRead::from_tensor(&gpu_scalar),
@@ -1320,7 +1303,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
             ),
             (
                 "scalar base pow",
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&scalar),
                         TensorRead::from_tensor(&tensor),
@@ -1328,7 +1311,7 @@ fn test_scalar_div_rem_pow_match_cpu() {
                 })
                 .unwrap()
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.pow_read(
                         TensorRead::from_tensor(&gpu_scalar),
                         TensorRead::from_tensor(&gpu_tensor),
@@ -1383,12 +1366,12 @@ fn test_cubecl_complex_abs_matches_cpu() {
 
     for input in cases {
         let expected = cpu
-            .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&input)))
+            .run(|__s| __s.abs_read(TensorRead::from_tensor(&input)))
             .unwrap()
             .unwrap();
         let gpu_input = upload(&gpu, &input);
         let gpu_output = gpu
-            .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_input)))
+            .run(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_input)))
             .unwrap()
             .unwrap();
         let actual = download(&gpu, &gpu_output);
@@ -1442,7 +1425,7 @@ fn test_broadcast_multiply_scalar_operands_match_cpu() {
     let gpu_vector = upload(&backend, &vector);
 
     let lhs_scalar = backend
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.execute_broadcast_multiply(
                 TensorRead::from_tensor(&gpu_scalar),
                 &[3],
@@ -1456,7 +1439,7 @@ fn test_broadcast_multiply_scalar_operands_match_cpu() {
         .unwrap()
         .expect("scalar lhs broadcast multiply should fuse");
     let rhs_scalar = backend
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.execute_broadcast_multiply(
                 TensorRead::from_tensor(&gpu_vector),
                 &[3],
@@ -1493,7 +1476,7 @@ fn test_broadcast_multiply_integer_overflow_matches_cpu_wrapping() {
         ),
     ] {
         let expected = cpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.mul_read(
                     TensorRead::from_tensor(&scalar),
                     TensorRead::from_tensor(&vector),
@@ -1504,7 +1487,7 @@ fn test_broadcast_multiply_integer_overflow_matches_cpu_wrapping() {
         let gpu_scalar = upload(&gpu, &scalar);
         let gpu_vector = upload(&gpu, &vector);
         let actual = gpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.execute_broadcast_multiply(
                     TensorRead::from_tensor(&gpu_scalar),
                     &[2],
@@ -1532,7 +1515,7 @@ fn test_log1p_small_x_f32_precision() {
     let gpu_input = super::upload(&backend, &cpu_input);
 
     let gpu_out = backend
-        .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(&gpu_input)))
+        .run(|__s| __s.log1p_read(TensorRead::from_tensor(&gpu_input)))
         .unwrap()
         .unwrap();
     let result = super::download(&backend, &gpu_out);
@@ -1563,9 +1546,7 @@ fn test_expm1_small_x_f32_precision() {
     let gpu_input = super::upload(&backend, &cpu_input);
 
     let gpu_out = backend
-        .with_backend_session(|__s| {
-            __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&gpu_input))
-        })
+        .run(|__s| __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&gpu_input)))
         .unwrap()
         .unwrap();
     let result = super::download(&backend, &gpu_out);
@@ -1598,13 +1579,11 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     let gpu_rhs = upload(&gpu, &rhs);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.add_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -1616,13 +1595,11 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.mul_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.mul_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.mul_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -1634,13 +1611,11 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.div_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.div_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.div_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -1651,25 +1626,17 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    let expected = cpu
-        .with_backend_session(|__s| __s.rem(&lhs, &rhs))
-        .unwrap()
-        .unwrap();
-    let gpu_out = gpu
-        .with_backend_session(|__s| __s.rem(&gpu_lhs, &gpu_rhs))
-        .unwrap()
-        .unwrap();
+    let expected = cpu.run(|__s| __s.rem(&lhs, &rhs)).unwrap().unwrap();
+    let gpu_out = gpu.run(|__s| __s.rem(&gpu_lhs, &gpu_rhs)).unwrap().unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.maximum_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -1681,13 +1648,11 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.minimum_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -1699,7 +1664,7 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.pow_read(
                 TensorRead::from_tensor(&tensor_f64(vec![4], vec![1.5, 2.0, 3.0, 4.0])),
                 TensorRead::from_tensor(&tensor_f64(vec![4], vec![2.0, 3.0, 0.5, 1.0])),
@@ -1710,7 +1675,7 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     let gpu_base = upload(&gpu, &tensor_f64(vec![4], vec![1.5, 2.0, 3.0, 4.0]));
     let gpu_exp = upload(&gpu, &tensor_f64(vec![4], vec![2.0, 3.0, 0.5, 1.0]));
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.pow_read(
                 TensorRead::from_tensor(&gpu_base),
                 TensorRead::from_tensor(&gpu_exp),
@@ -1744,12 +1709,12 @@ fn test_cubecl_maximum_minimum_propagate_nan_independent_of_argument_order() {
         for (label, expected, actual) in [
             (
                 "maximum",
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
                 })
                 .unwrap()
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.maximum_read(
                         TensorRead::from_tensor(&gpu_lhs),
                         TensorRead::from_tensor(&gpu_rhs),
@@ -1760,12 +1725,12 @@ fn test_cubecl_maximum_minimum_propagate_nan_independent_of_argument_order() {
             ),
             (
                 "minimum",
-                cpu.with_backend_session(|__s| {
+                cpu.run(|__s| {
                     __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
                 })
                 .unwrap()
                 .unwrap(),
-                gpu.with_backend_session(|__s| {
+                gpu.run(|__s| {
                     __s.minimum_read(
                         TensorRead::from_tensor(&gpu_lhs),
                         TensorRead::from_tensor(&gpu_rhs),
@@ -1902,7 +1867,7 @@ fn test_cubecl_float_div_rem_preserve_ieee_special_values() {
         let gpu_rem_rhs = upload(&gpu, &rem_rhs);
 
         let expected = cpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.div_read(
                     TensorRead::from_tensor(&lhs),
                     TensorRead::from_tensor(&div_rhs),
@@ -1911,7 +1876,7 @@ fn test_cubecl_float_div_rem_preserve_ieee_special_values() {
             .unwrap()
             .unwrap();
         let gpu_out = gpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.div_read(
                     TensorRead::from_tensor(&gpu_lhs),
                     TensorRead::from_tensor(&gpu_div_rhs),
@@ -1922,12 +1887,9 @@ fn test_cubecl_float_div_rem_preserve_ieee_special_values() {
         let actual = download(&gpu, &gpu_out);
         assert_float_classes_and_zero_signs_match("div", &actual, &expected);
 
-        let expected = cpu
-            .with_backend_session(|__s| __s.rem(&lhs, &rem_rhs))
-            .unwrap()
-            .unwrap();
+        let expected = cpu.run(|__s| __s.rem(&lhs, &rem_rhs)).unwrap().unwrap();
         let gpu_out = gpu
-            .with_backend_session(|__s| __s.rem(&gpu_lhs, &gpu_rem_rhs))
+            .run(|__s| __s.rem(&gpu_lhs, &gpu_rem_rhs))
             .unwrap()
             .unwrap();
         let actual = download(&gpu, &gpu_out);
@@ -1951,11 +1913,11 @@ fn test_float_unary_special_values_match_cpu() {
         let gpu_input = upload(&gpu, &input);
 
         let expected_abs = cpu
-            .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&input)))
+            .run(|__s| __s.abs_read(TensorRead::from_tensor(&input)))
             .unwrap()
             .unwrap();
         let gpu_abs = gpu
-            .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_input)))
+            .run(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_input)))
             .unwrap()
             .unwrap();
         let actual_abs = download(&gpu, &gpu_abs);
@@ -1990,11 +1952,11 @@ fn test_float_unary_special_values_match_cpu() {
         }
 
         let expected_sign = cpu
-            .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&input)))
+            .run(|__s| __s.sign_read(TensorRead::from_tensor(&input)))
             .unwrap()
             .unwrap();
         let gpu_sign = gpu
-            .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&gpu_input)))
+            .run(|__s| __s.sign_read(TensorRead::from_tensor(&gpu_input)))
             .unwrap()
             .unwrap();
         let actual_sign = download(&gpu, &gpu_sign);
@@ -2044,136 +2006,132 @@ fn test_cubecl_unary_float_elementwise_matches_cpu() {
     let gpu_signed = upload(&gpu, &signed);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&signed)))
+        .run(|__s| __s.neg_read(TensorRead::from_tensor(&signed)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&gpu_signed)))
+        .run(|__s| __s.neg_read(TensorRead::from_tensor(&gpu_signed)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&signed)))
+        .run(|__s| __s.abs_read(TensorRead::from_tensor(&signed)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_signed)))
+        .run(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_signed)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&signed)))
+        .run(|__s| __s.sign_read(TensorRead::from_tensor(&signed)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&gpu_signed)))
+        .run(|__s| __s.sign_read(TensorRead::from_tensor(&gpu_signed)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&positive)))
+        .run(|__s| __s.exp_read(TensorRead::from_tensor(&positive)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&gpu_positive)))
+        .run(|__s| __s.exp_read(TensorRead::from_tensor(&gpu_positive)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(&positive)))
+        .run(|__s| __s.log_read(TensorRead::from_tensor(&positive)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(&gpu_positive)))
+        .run(|__s| __s.log_read(TensorRead::from_tensor(&gpu_positive)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(&positive)))
+        .run(|__s| __s.sin_read(TensorRead::from_tensor(&positive)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(&gpu_positive)))
+        .run(|__s| __s.sin_read(TensorRead::from_tensor(&gpu_positive)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(&positive)))
+        .run(|__s| __s.cos_read(TensorRead::from_tensor(&positive)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(&gpu_positive)))
+        .run(|__s| __s.cos_read(TensorRead::from_tensor(&gpu_positive)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&positive)))
+        .run(|__s| __s.tanh_read(TensorRead::from_tensor(&positive)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&gpu_positive)))
+        .run(|__s| __s.tanh_read(TensorRead::from_tensor(&gpu_positive)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&positive)))
+        .run(|__s| __s.sqrt_read(TensorRead::from_tensor(&positive)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&gpu_positive)))
+        .run(|__s| __s.sqrt_read(TensorRead::from_tensor(&gpu_positive)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&positive)))
+        .run(|__s| __s.rsqrt_read(TensorRead::from_tensor(&positive)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&gpu_positive)))
+        .run(|__s| __s.rsqrt_read(TensorRead::from_tensor(&gpu_positive)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&positive))
-        })
+        .run(|__s| __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&positive)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
-            __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&gpu_positive))
-        })
+        .run(|__s| __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&gpu_positive)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(&positive)))
+        .run(|__s| __s.log1p_read(TensorRead::from_tensor(&positive)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(&gpu_positive)))
+        .run(|__s| __s.log1p_read(TensorRead::from_tensor(&gpu_positive)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
@@ -2196,7 +2154,7 @@ fn test_cubecl_float_compare_select_and_clamp_match_cpu() {
     let gpu_upper = upload(&gpu, &upper);
 
     let expected = cpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.compare_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -2206,7 +2164,7 @@ fn test_cubecl_float_compare_select_and_clamp_match_cpu() {
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.compare_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2218,7 +2176,7 @@ fn test_cubecl_float_compare_select_and_clamp_match_cpu() {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
-    cpu.with_backend_session(|__s| {
+    cpu.run(|__s| {
         __s.select_read(
             TensorRead::from_tensor(&expected),
             TensorRead::from_tensor(&lhs),
@@ -2228,7 +2186,7 @@ fn test_cubecl_float_compare_select_and_clamp_match_cpu() {
     .unwrap()
     .unwrap();
     let gpu_pred = upload(&gpu, &actual);
-    gpu.with_backend_session(|__s| {
+    gpu.run(|__s| {
         __s.select_read(
             TensorRead::from_tensor(&gpu_pred),
             TensorRead::from_tensor(&gpu_lhs),
@@ -2241,7 +2199,7 @@ fn test_cubecl_float_compare_select_and_clamp_match_cpu() {
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.clamp_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&lower),
@@ -2251,7 +2209,7 @@ fn test_cubecl_float_compare_select_and_clamp_match_cpu() {
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.clamp_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_lower),
@@ -2293,13 +2251,11 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let gpu_rhs = upload(&gpu, rhs);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
+        .run(|__s| __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.add_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2311,13 +2267,11 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
+        .run(|__s| __s.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.sub_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2329,13 +2283,11 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
+        .run(|__s| __s.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.mul_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2347,13 +2299,11 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
+        .run(|__s| __s.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.div_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2364,21 +2314,15 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
-    let expected = cpu
-        .with_backend_session(|__s| __s.rem(lhs, rhs))
-        .unwrap()
-        .unwrap();
-    let gpu_out = gpu
-        .with_backend_session(|__s| __s.rem(&gpu_lhs, &gpu_rhs))
-        .unwrap()
-        .unwrap();
+    let expected = cpu.run(|__s| __s.rem(lhs, rhs)).unwrap().unwrap();
+    let gpu_out = gpu.run(|__s| __s.rem(&gpu_lhs, &gpu_rhs)).unwrap().unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
     let pow_rhs = nonnegative_integer_exponents_like(rhs);
     let gpu_pow_rhs = upload(&gpu, &pow_rhs);
     let expected = cpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.pow_read(
                 TensorRead::from_tensor(lhs),
                 TensorRead::from_tensor(&pow_rhs),
@@ -2387,7 +2331,7 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.pow_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_pow_rhs),
@@ -2399,13 +2343,11 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
+        .run(|__s| __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.maximum_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2417,13 +2359,11 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
+        .run(|__s| __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.minimum_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2435,40 +2375,40 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(lhs)))
+        .run(|__s| __s.neg_read(TensorRead::from_tensor(lhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&gpu_lhs)))
+        .run(|__s| __s.neg_read(TensorRead::from_tensor(&gpu_lhs)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(lhs)))
+        .run(|__s| __s.abs_read(TensorRead::from_tensor(lhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_lhs)))
+        .run(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_lhs)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(lhs)))
+        .run(|__s| __s.sign_read(TensorRead::from_tensor(lhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&gpu_lhs)))
+        .run(|__s| __s.sign_read(TensorRead::from_tensor(&gpu_lhs)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected_pred = cpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.compare_read(
                 TensorRead::from_tensor(lhs),
                 TensorRead::from_tensor(rhs),
@@ -2478,7 +2418,7 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
         .unwrap()
         .unwrap();
     let gpu_pred = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.compare_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2490,7 +2430,7 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     let actual_pred = download(&gpu, &gpu_pred);
     assert_tensor_close(&actual_pred, &expected_pred, 0.0);
 
-    cpu.with_backend_session(|__s| {
+    cpu.run(|__s| {
         __s.select_read(
             TensorRead::from_tensor(&expected_pred),
             TensorRead::from_tensor(lhs),
@@ -2499,7 +2439,7 @@ fn assert_integer_binary_and_select_matches_cpu(lhs: &Tensor, rhs: &Tensor) {
     })
     .unwrap()
     .unwrap();
-    gpu.with_backend_session(|__s| {
+    gpu.run(|__s| {
         __s.select_read(
             TensorRead::from_tensor(&gpu_pred),
             TensorRead::from_tensor(&gpu_lhs),
@@ -2548,7 +2488,7 @@ fn test_cubecl_integer_domain_errors_match_cpu() {
     let gpu_zero_rhs = upload(&gpu, &zero_rhs);
 
     let err = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.div_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_zero_rhs),
@@ -2559,7 +2499,7 @@ fn test_cubecl_integer_domain_errors_match_cpu() {
     assert_cuda_numerical_error(&err, "div", DType::I32, false);
 
     let err = gpu
-        .with_backend_session(|__s| __s.rem(&gpu_lhs, &gpu_zero_rhs))
+        .run(|__s| __s.rem(&gpu_lhs, &gpu_zero_rhs))
         .unwrap()
         .unwrap_err();
     assert_cuda_numerical_error(&err, "rem", DType::I32, false);
@@ -2567,7 +2507,7 @@ fn test_cubecl_integer_domain_errors_match_cpu() {
     let exp = tensor_i32(vec![2], vec![2, -1]);
     let gpu_exp = upload(&gpu, &exp);
     let err = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.pow_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_exp),
@@ -2604,13 +2544,11 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     let gpu_rhs = upload(&gpu, &rhs);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.add_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2622,13 +2560,11 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.sub_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.sub_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.sub_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2640,13 +2576,11 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.mul_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.mul_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.mul_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2658,13 +2592,11 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.div_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.div_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.div_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2676,52 +2608,52 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let err = gpu
-        .with_backend_session(|__s| __s.rem(&gpu_lhs, &gpu_rhs))
+        .run(|__s| __s.rem(&gpu_lhs, &gpu_rhs))
         .unwrap()
         .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "rem", DType::C64);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&lhs)))
+        .run(|__s| __s.neg_read(TensorRead::from_tensor(&lhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&gpu_lhs)))
+        .run(|__s| __s.neg_read(TensorRead::from_tensor(&gpu_lhs)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(&lhs)))
+        .run(|__s| __s.conj_read(TensorRead::from_tensor(&lhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(&gpu_lhs)))
+        .run(|__s| __s.conj_read(TensorRead::from_tensor(&gpu_lhs)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&lhs)))
+        .run(|__s| __s.abs_read(TensorRead::from_tensor(&lhs)))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_lhs)))
+        .run(|__s| __s.abs_read(TensorRead::from_tensor(&gpu_lhs)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let err = gpu
-        .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&gpu_lhs)))
+        .run(|__s| __s.exp_read(TensorRead::from_tensor(&gpu_lhs)))
         .unwrap()
         .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "exp", DType::C64);
 
     let err = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.compare_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2733,7 +2665,7 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     assert_cuda_unsupported_dtype(&err, "compare", DType::C64);
 
     let err = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.select_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_lhs),
@@ -2745,7 +2677,7 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     assert_cuda_unsupported_dtype(&err, "select", DType::C64);
 
     let err = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.clamp_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_lhs),
@@ -2757,7 +2689,7 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     assert_cuda_unsupported_dtype(&err, "clamp", DType::C64);
 
     let converted = gpu
-        .with_backend_session(|__s| __s.convert(&gpu_lhs, DType::C64))
+        .run(|__s| __s.convert(&gpu_lhs, DType::C64))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &converted);
@@ -2773,7 +2705,7 @@ fn test_cubecl_float_to_complex_convert_preserves_resident_device() {
     let gpu_input = upload(&gpu, &input);
 
     let converted = gpu
-        .with_backend_session(|__s| __s.convert(&gpu_input, DType::C64))
+        .run(|__s| __s.convert(&gpu_input, DType::C64))
         .unwrap()
         .unwrap();
 
@@ -2803,7 +2735,7 @@ fn test_cubecl_conj_real_clone_rejects_missing_resident_device_metadata() {
     gpu_input.set_placement(placement);
 
     let err = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.conj_read(TensorRead::from_tensor(&Tensor::from_typed::<f64>(
                 gpu_input,
             )))
@@ -2838,7 +2770,7 @@ fn complex_division_is_scale_robust() {
     let gpu_lhs = upload(&gpu, &lhs);
     let gpu_rhs = upload(&gpu, &rhs);
     let result = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.div_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -2879,7 +2811,7 @@ fn complex_division_is_scale_robust() {
     let gpu_lhs32 = upload(&gpu, &lhs32);
     let gpu_rhs32 = upload(&gpu, &rhs32);
     let result32 = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.div_read(
                 TensorRead::from_tensor(&gpu_lhs32),
                 TensorRead::from_tensor(&gpu_rhs32),
@@ -2918,7 +2850,7 @@ fn complex_division_is_scale_robust() {
         let gpu_lhs = upload(&gpu, lhs);
         let gpu_rhs = upload(&gpu, rhs);
         let result = gpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.div_read(
                     TensorRead::from_tensor(&gpu_lhs),
                     TensorRead::from_tensor(&gpu_rhs),
@@ -2942,7 +2874,7 @@ fn complex_division_is_scale_robust() {
     let gpu_real32_mixed = upload(&gpu, &real32_mixed);
     let gpu_huge32_mixed = upload(&gpu, &huge32_mixed);
     let mixed32 = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.div_read(
                 TensorRead::from_tensor(&gpu_real32_mixed),
                 TensorRead::from_tensor(&gpu_huge32_mixed),
@@ -3039,12 +2971,12 @@ fn test_erf_cuda_matches_cpu_within_ulp_bound() {
 
     let input = tensor_f64(vec![values.len()], values.clone());
     let expected = cpu
-        .with_backend_session(|s| s.erf_read(TensorRead::from_tensor(&input)))
+        .run(|s| s.erf_read(TensorRead::from_tensor(&input)))
         .unwrap()
         .unwrap();
     let gpu_input = upload(&gpu, &input);
     let actual = gpu
-        .with_backend_session(|s| s.erf_read(TensorRead::from_tensor(&gpu_input)))
+        .run(|s| s.erf_read(TensorRead::from_tensor(&gpu_input)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &actual);
@@ -3067,12 +2999,12 @@ fn test_erf_cuda_matches_cpu_within_ulp_bound() {
     let values32: Vec<f32> = values.iter().map(|&v| v as f32).collect();
     let input = tensor_f32(vec![values32.len()], values32.clone());
     let expected = cpu
-        .with_backend_session(|s| s.erf_read(TensorRead::from_tensor(&input)))
+        .run(|s| s.erf_read(TensorRead::from_tensor(&input)))
         .unwrap()
         .unwrap();
     let gpu_input = upload(&gpu, &input);
     let actual = gpu
-        .with_backend_session(|s| s.erf_read(TensorRead::from_tensor(&gpu_input)))
+        .run(|s| s.erf_read(TensorRead::from_tensor(&gpu_input)))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &actual);
@@ -3103,7 +3035,7 @@ fn test_erf_cuda_reads_strided_views_and_rejects_complex() {
     let typed = gpu_input.as_typed::<f64>().unwrap();
     let transposed = typed.as_view().transpose_view([1, 0]).unwrap();
     let out = gpu
-        .with_backend_session(|s| s.erf_read(TensorRead::from_view(TensorView::F64(transposed))))
+        .run(|s| s.erf_read(TensorRead::from_view(TensorView::F64(transposed))))
         .unwrap()
         .unwrap();
     let out = download(&gpu, &out);
@@ -3116,7 +3048,7 @@ fn test_erf_cuda_reads_strided_views_and_rejects_complex() {
 
     let complex = upload(&gpu, &tensor_c64(vec![1], vec![Complex64::new(0.5, 0.0)]));
     let err = gpu
-        .with_backend_session(|s| s.erf_read(TensorRead::from_tensor(&complex)))
+        .run(|s| s.erf_read(TensorRead::from_tensor(&complex)))
         .unwrap()
         .unwrap_err();
     assert_eq!(err.kind(), ErrorKind::Unsupported, "{err:?}");
@@ -3127,7 +3059,7 @@ fn libm_free_erf_reference(x: f64) -> f64 {
     let mut cpu = cpu_backend();
     let input = tensor_f64(vec![1], vec![x]);
     let out = cpu
-        .with_backend_session(|s| s.erf_read(TensorRead::from_tensor(&input)))
+        .run(|s| s.erf_read(TensorRead::from_tensor(&input)))
         .unwrap()
         .unwrap();
     out.as_slice::<f64>().unwrap()[0]
@@ -3150,7 +3082,7 @@ fn cuda_bool_output_reuses_a_retained_pool_handle() {
     let gpu_rhs = upload(&gpu, &rhs);
 
     let out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.compare_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -3163,7 +3095,7 @@ fn cuda_bool_output_reuses_a_retained_pool_handle() {
     drop(out);
 
     let out = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.compare_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -3207,7 +3139,7 @@ fn cuda_output_pool_belongs_to_its_runtime() {
     let first_lhs = upload(&first, &lhs);
     let first_rhs = upload(&first, &rhs);
     let out = first
-        .with_backend_session(|session| {
+        .run(|session| {
             session.add_read(
                 TensorRead::from_tensor(&first_lhs),
                 TensorRead::from_tensor(&first_rhs),

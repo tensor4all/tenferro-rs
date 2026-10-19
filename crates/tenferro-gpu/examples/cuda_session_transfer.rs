@@ -1,17 +1,16 @@
-//! Holding one CUDA session across a stage, and moving pinned data without a host wait.
+//! Driving one CUDA engine through a stage, and moving pinned data without a host wait.
 //!
 //! Run with `cargo run -p tenferro-gpu --features cuda --example cuda_session_transfer`.
 //!
-//! The first half keeps one session open for a chain of operations and pays the session entry once;
-//! the second half moves host↔device data through caller-owned pinned buffers with a pending handle
-//! whose completion the caller polls. Both are the CUDA counterparts of the CPU held session in
-//! `tenferro-cpu`'s `held_session_driver` example; see `docs/guides/cuda-sessions-and-transfers.md`
-//! for the rules each one keeps.
+//! The first half issues a chain of operations and a prepared graph on one engine, which owns its
+//! stream and queues everything there without a host wait; the second half moves host↔device data
+//! through caller-owned pinned buffers with a pending handle whose completion the caller polls.
 
 use tenferro_gpu::cuda::{
     cuda_devices, download_pending, upload_pending, upload_tensor, CudaEngine, PinnedHostBuffer,
 };
-use tenferro_tensor::{Tensor, TensorRead};
+use tenferro_runtime::ExecutionEngine;
+use tenferro_tensor::{Tensor, TensorElementwise, TensorRead};
 
 fn vector(values: &[f64]) -> Result<Tensor, Box<dyn std::error::Error>> {
     Ok(Tensor::from_vec_col_major(
@@ -41,57 +40,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("no CUDA device available");
         return Ok(());
     };
-    let mut backend = CudaEngine::new(device.id())?;
+    let mut backend = CudaEngine::open(device.id())?;
     let runtime = backend.runtime().clone();
 
-    // A stage: one session entry, several dependent operations, one explicit submit.
+    // A stage: several dependent operations queued on the engine's stream, one explicit flush.
     let seed = upload_tensor(&runtime, &vector(&[1.0, 2.0, 3.0, 4.0])?)?;
     // snippet-start:cuda_held_session
-    let mut session = backend.open_session()?;
-    let mut state = session.with_session(|view| {
-        view.add_read(
-            TensorRead::from_tensor(&seed),
-            TensorRead::from_tensor(&seed),
-        )
-    })??;
+    let mut state = backend.add_read(
+        TensorRead::from_tensor(&seed),
+        TensorRead::from_tensor(&seed),
+    )?;
     for _ in 0..2 {
-        state = session.with_session(|view| {
-            view.add_read(
-                TensorRead::from_tensor(&state),
-                TensorRead::from_tensor(&state),
-            )
-        })??;
+        state = backend.add_read(
+            TensorRead::from_tensor(&state),
+            TensorRead::from_tensor(&state),
+        )?;
     }
-    session.submit()?;
-    let stats = session.close()?;
+    backend.flush()?;
     // snippet-end:cuda_held_session
-    assert_eq!(stats.held_operations, 3);
-    println!(
-        "held session: {} operations, {} submits, {} syncs",
-        stats.held_operations, stats.close_submits, stats.explicit_synchronizes
-    );
+    assert_eq!(state.shape(), &[4]);
 
-    // A prepared compiled graph runs on the same held session, so steady-state replay does not
-    // re-open a scoped session per call.
+    // A prepared compiled graph runs on the same engine, so steady-state replay reuses its stream,
+    // handles and caches.
     // snippet-start:cuda_prepared_in_held
     let mut prepared_builder = tenferro_runtime::Runtime::builder();
     prepared_builder.register_engine(tenferro_gpu::cuda::cuda_runtime_engine_registration(
         &backend,
-        tenferro_runtime::EngineId::new("tenferro.example.held-prepared.v1")?,
     )?)?;
     let prepared_runtime = prepared_builder.build()?;
     let x = tenferro_runtime::TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 1)?;
     let y = (&x * &x)?;
     let program = tenferro_runtime::GraphCompiler::new()
         .compile_with_input_specs(&y, &[(&x, tenferro_runtime::DType::F64, &[4])])?;
-    let prepared = prepared_runtime.prepare_compiled(&program, &[&seed])?;
-    let prepared_inputs: [&Tensor; 1] = [&seed];
-    let mut prepared_session = backend.open_session()?;
-    let outputs = prepared_session.with_session(|view| {
-        prepared_runtime.run_prepared_in(view, &prepared, &prepared_inputs)
-    })??;
-    prepared_session.close()?;
-    assert_eq!(outputs[0].shape(), &[4]);
+    let prepared = prepared_runtime.prepare(
+        &program,
+        &[TensorRead::from_tensor(&seed)],
+        &[backend.target()],
+    )?;
+    let outputs = prepared_runtime.run(
+        &mut [&mut backend],
+        &prepared,
+        &[TensorRead::from_tensor(&seed)],
+    )?;
+    assert_eq!(outputs.len(), 1);
+    drop(outputs);
+    backend.synchronize()?;
     // snippet-end:cuda_prepared_in_held
 
     // Owning transfers: the value and the buffer are moved in and come back from `wait`, so neither is

@@ -12,11 +12,11 @@
 //! exposes no way to enumerate compiled kernels or ask whether a kernel type
 //! was loaded. See docs/design/cubecl-011-compile-count-hook.md; the assertion
 //! returns when that hook exists upstream.
+use crate::cubecl::tests::EngineRun;
 
 use num_complex::Complex64;
 use tenferro_tensor::{
-    backend::BackendSessionHost, ContractionScalar, TensorRead, TensorView, TensorViewMut,
-    TensorWrite,
+    backend::ContractionScalar, TensorRead, TensorView, TensorViewMut, TensorWrite,
 };
 
 use super::super::interop::fill_zero_write;
@@ -318,7 +318,7 @@ fn axpby_strided_source_kernel_compiles_once_per_rank() {
             let x = typed_f64(&source)
                 .backend_region_view(shape.to_vec(), strides.to_vec(), offset)
                 .unwrap();
-            gpu.with_backend_session(|session| {
+            gpu.run(|session| {
                 session.axpby_read_into_accum(
                     ContractionScalar::F64(2.0),
                     TensorRead::from_view(TensorView::F64(x)),
@@ -363,7 +363,7 @@ fn axpby_strided_source_kernel_compiles_once_per_rank() {
                 .unwrap()
                 .backend_region_view(shape.to_vec(), strides.to_vec(), offset)
                 .unwrap();
-            gpu.with_backend_session(|session| {
+            gpu.run(|session| {
                 session.axpby_read_into_accum(
                     ContractionScalar::C64(Complex64::new(1.0, 0.0)),
                     TensorRead::from_view(TensorView::C64(x)),
@@ -394,14 +394,10 @@ fn assert_cpu_parity(
     inputs: &[&Tensor],
     op: impl Fn(&mut dyn tenferro_tensor::backend::Engine, &[&Tensor]) -> Tensor + Sync,
 ) {
-    let expected = cpu_backend()
-        .with_backend_session(|session| op(session, inputs))
-        .unwrap();
+    let expected = cpu_backend().run(|session| op(session, inputs)).unwrap();
     let device_inputs: Vec<Tensor> = inputs.iter().map(|input| upload(gpu, input)).collect();
     let device_refs: Vec<&Tensor> = device_inputs.iter().collect();
-    let actual = gpu
-        .with_backend_session(|session| op(session, &device_refs))
-        .unwrap();
+    let actual = gpu.run(|session| op(session, &device_refs)).unwrap();
     let actual = download(gpu, &actual);
     assert_eq!(actual.shape(), expected.shape());
     assert_bits_eq(

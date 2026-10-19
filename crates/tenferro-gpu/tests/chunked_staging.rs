@@ -17,7 +17,7 @@ const CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
 fn backend() -> CudaEngine {
     assert!(gpu_available(), "CUDA test requires an available device");
-    CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
+    CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
 }
 
 fn runtime_of(backend: &CudaEngine) -> CudaRuntime {

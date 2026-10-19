@@ -54,7 +54,7 @@ fn backend() -> CudaEngine {
         gpu_available(),
         "transfer measurements require a CUDA device"
     );
-    CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
+    CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
 }
 
 fn host_vector(elements: usize) -> Tensor {

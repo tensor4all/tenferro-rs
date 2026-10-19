@@ -3,7 +3,7 @@
 //! The owner-level operation traits (`TensorElementwise`, `TensorAnalytic`,
 //! `TensorStructural`, `TensorReduction`, `TensorDot`, `TensorIndexing`,
 //! `TensorFusion`) and the owner `Engine` no longer exist: the session
-//! is the only route, so these bodies live here and `CudaExecSession`'s
+//! is the only route, so these bodies live here and `CudaEngine`'s
 //! implementations forward to them. Each function takes the same arguments as
 //! the trait method it came from, with the receiver replaced by an explicit
 //! `&mut CudaEngine`.

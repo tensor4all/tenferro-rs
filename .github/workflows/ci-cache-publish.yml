@@ -155,7 +155,7 @@ jobs:
             -p tenferro-gpu \
             -p tenferro-ad \
             -p tenferro-linalg \
-            --features cuda
+            --features cuda,tenferro-gpu/cubecl-interop
 
       - name: Build PJRT test archive
         if: steps.archive_lookup.outputs.cache-hit != 'true'

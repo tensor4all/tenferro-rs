@@ -1,9 +1,9 @@
 error[E0382]: borrow of moved value: `value`
  --> tests/ui/cuda_source_publication_moves_the_value.rs:7:23
   |
-5 | fn use_after_publish(session: &mut CudaHeldSession<'_>, value: Tensor) {
-  |                                                         ----- move occurs because `value` has type `tenferro_tensor::Tensor`, which does not implement the `Copy` trait
-6 |     let _publication = unsafe { session.publish(value) }.expect("published");
-  |                                                 ----- value moved here
+5 | fn use_after_publish(engine: &mut CudaEngine, value: Tensor) {
+  |                                               ----- move occurs because `value` has type `tenferro_tensor::Tensor`, which does not implement the `Copy` trait
+6 |     let _publication = engine.publish(value).expect("published");
+  |                                       ----- value moved here
 7 |     let _still_mine = value.shape().len();
   |                       ^^^^^ value borrowed here after move

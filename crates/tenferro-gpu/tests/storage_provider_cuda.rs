@@ -6,14 +6,15 @@
 //! roots and provider-native bindings. Explicit execution fails without a device;
 //! the source-level API contract remains runnable on hosts without CUDA.
 
+#[path = "integration/engine_run.rs"]
+mod engine_run;
+use engine_run::EngineRun;
 use std::fs;
 use std::path::Path;
 
 use tenferro_gpu::{
-    cuda::gpu_available, cuda::upload_tensor, cuda::with_cuda_exec_session, cuda::CudaDeviceId,
-    cuda::CudaEngine,
+    cuda::gpu_available, cuda::upload_tensor, cuda::CudaDeviceId, cuda::CudaEngine,
 };
-use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor, TensorRead};
 
 fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
@@ -28,7 +29,7 @@ fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId
 fn cuda_tensor_view_keeps_the_single_root_identity() {
     assert!(gpu_available(), "CUDA test requires an available device");
 
-    let backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
     let (domain, allocation) = identity(&input);
@@ -41,12 +42,15 @@ fn cuda_tensor_view_keeps_the_single_root_identity() {
     assert_eq!(view.allocation_id(), allocation);
 }
 
+#[cfg(feature = "cubecl-interop")]
 #[test]
 #[ignore = "requires CUDA"]
 fn cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping() {
+    use tenferro_gpu::cuda::with_cuda_engine;
+
     assert!(gpu_available(), "CUDA test requires an available device");
 
-    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
     let Some(tensor) = input.as_typed::<f32>() else {
@@ -63,8 +67,8 @@ fn cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping() {
     drop(prepared);
 
     let binding = backend
-        .with_backend_session(|session| {
-            with_cuda_exec_session(session, |sess| {
+        .run(|session| {
+            with_cuda_engine(session, |sess| {
                 sess.with_cubecl("storage_provider_cuda", |cubecl| unsafe {
                     cubecl.tensor_binding(tensor, "storage_provider_cuda")
                 })
@@ -81,13 +85,13 @@ fn cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping() {
 fn cuda_duplicate_is_explicit_same_placement_allocation() {
     assert!(gpu_available(), "CUDA test requires an available device");
 
-    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
     let (domain, allocation) = identity(&input);
 
     let duplicate = backend
-        .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&input)))
+        .run(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&input)))
         .unwrap()
         .unwrap();
     let (duplicate_domain, duplicate_allocation) = identity(&duplicate);

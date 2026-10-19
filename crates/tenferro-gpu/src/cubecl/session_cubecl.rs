@@ -40,7 +40,7 @@ use cubecl::frontend::Scalar;
 /// Public CubeCL extension session.
 ///
 /// Not constructible by users; obtained only from
-/// [`CudaEngine::with_cubecl`](super::exec_session::CudaExecSession::with_cubecl).
+/// [`CudaEngine::with_cubecl`](super::exec_session::CudaEngine::with_cubecl).
 /// The session borrows the exact tenferro CubeCL client for the request scope
 /// and is `!Send + !Sync` by construction, so the execution authority cannot
 /// migrate to another thread.

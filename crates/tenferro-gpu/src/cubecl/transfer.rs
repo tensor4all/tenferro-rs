@@ -1795,7 +1795,7 @@ impl SourcePublication {
                 crate::Error::invalid_argument(
                     PUBLICATION_OP,
                     "consumer",
-                    "the consumer session does not belong to the publication's runtime instance",
+                    "the consumer engine does not belong to the publication's runtime instance",
                 ),
             ));
         }

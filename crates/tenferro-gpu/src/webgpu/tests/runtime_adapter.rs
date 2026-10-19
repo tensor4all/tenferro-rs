@@ -14,8 +14,8 @@ use tenferro_runtime::{
 };
 #[cfg(not(target_family = "wasm"))]
 use tenferro_tensor::{
-    AllocationId, BackendAllocation, BackendSessionHost, BackendStorage, DeviceId, StorageBuffer,
-    Tensor, TensorRead, TypedTensor,
+    AllocationId, BackendAllocation, BackendStorage, DeviceId, StorageBuffer, Tensor, TensorRead,
+    TypedTensor,
 };
 
 use super::super::WebGpuBuffer;
@@ -336,7 +336,7 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
                 first_launches += 1;
                 first_output = Some(
                     backend
-                        .with_backend_session(|__s| {
+                        .run(|__s| {
                             __s.transpose_read(TensorRead::from_tensor(&input_for_first), &[1, 0])
                         })
                         .unwrap()
@@ -363,9 +363,7 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         second_launches += 1;
         second_output = Some(
             backend
-                .with_backend_session(|__s| {
-                    __s.transpose_read(TensorRead::from_tensor(&first_output), &[1, 0])
-                })
+                .run(|__s| __s.transpose_read(TensorRead::from_tensor(&first_output), &[1, 0]))
                 .unwrap()
                 .map_err(tenferro_runtime::Error::from)?,
         );
@@ -385,9 +383,7 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         let mut panicking = || -> tenferro_runtime::Result<()> {
             panic_output = Some(
                 backend
-                    .with_backend_session(|__s| {
-                        __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0])
-                    })
+                    .run(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
                     .unwrap()
                     .map_err(tenferro_runtime::Error::from)?,
             );
@@ -429,7 +425,7 @@ fn webgpu_with_backend_session_rejects_nested_entry() {
     }
     let mut backend = WebGpuBackend::new_default().expect("WebGPU backend");
     let nested = backend
-        .with_backend_session(|_session| {
+        .run(|_session| {
             // The backend override wraps its closure in the portable in-session
             // guard, so re-entering any session-entry point on this thread
             // (here the shared helper directly) is rejected before its callback
@@ -454,13 +450,11 @@ fn webgpu_with_backend_session_restores_the_in_session_flag_after_panic() {
     }
     let mut backend = WebGpuBackend::new_default().expect("WebGPU backend");
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|_session| panic!("boom"))
-            .unwrap()
+        backend.run(|_session| panic!("boom")).unwrap()
     }));
     assert!(outcome.is_err());
     // The flag is usable again on the same thread.
-    let value = backend.with_backend_session(|_session| 7usize).unwrap();
+    let value = backend.run(|_session| 7usize).unwrap();
     assert_eq!(value, 7);
 }
 

@@ -113,11 +113,6 @@ name = "blas1_cuda"
 path = "tests/blas1_cuda.rs"
 
 [[test]]
-name = "held_cuda_session"
-path = "tests/held_cuda_session.rs"
-required-features = ["cuda"]
-
-[[test]]
 name = "source_publication"
 path = "tests/source_publication.rs"
 required-features = ["cuda"]

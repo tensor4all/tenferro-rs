@@ -1,7 +1,7 @@
 //! Type-safe raw CUDA extension session (issue #1597).
 //!
 //! [`Session`] is the typed context capability exposed by
-//! [`CudaExecSession::with_raw`](super::exec_session::CudaExecSession::with_raw):
+//! [`CudaEngine::with_raw`](super::exec_session::CudaEngine::with_raw):
 //! while a raw session is alive the tenferro primary context is activated on
 //! the current thread with a single captured execution stream bound.
 //!
@@ -488,11 +488,11 @@ impl<'s> Session<'s> {
     ///
     /// ```
     /// use tenferro_gpu::cuda::{
-    ///     cuda_devices, gpu_available, with_cuda_exec_session, CudaEngine, CudaExecSession,
+    ///     cuda_devices, gpu_available, with_cuda_engine, CudaEngine, CudaEngine,
     /// };
     /// use tenferro_tensor::backend::BackendSessionHost;
     ///
-    /// fn flush(session: &mut CudaExecSession<'_>) -> tenferro_tensor::Result<()> {
+    /// fn flush(session: &mut CudaEngine) -> tenferro_tensor::Result<()> {
     ///     session.with_raw("docs.flush_cubecl", |raw| raw.flush_cubecl())
     /// }
     ///
@@ -506,9 +506,9 @@ impl<'s> Session<'s> {
     ///     .ok_or_else(|| {
     ///         tenferro_tensor::Error::runtime_state("docs.flush_cubecl", "no CUDA device")
     ///     })?;
-    /// let mut backend = CudaEngine::new(device)?;
+    /// let mut backend = CudaEngine::open(device)?;
     /// backend
-    ///     .with_backend_session(|session| with_cuda_exec_session(session, flush))?
+    ///     .with_backend_session(|session| with_cuda_engine(session, flush))?
     ///     .ok_or_else(|| {
     ///         tenferro_tensor::Error::runtime_state("docs.flush_cubecl", "not a CUDA backend")
     ///     })??;
@@ -605,10 +605,10 @@ impl<'s> Session<'s> {
     ///
     /// ```
     /// use tenferro_gpu::cuda::cudarc::cublas::sys as cublas_sys;
-    /// use tenferro_gpu::cuda::CudaExecSession;
+    /// use tenferro_gpu::cuda::CudaEngine;
     ///
-    /// // Method-call check only: `CudaExecSession` is not user-constructible.
-    /// fn check(session: &mut CudaExecSession<'_>) -> tenferro_tensor::Result<()> {
+    /// // Method-call check only: `CudaEngine` is not user-constructible.
+    /// fn check(session: &mut CudaEngine) -> tenferro_tensor::Result<()> {
     ///     session.with_raw("test.raw_cublas", |raw| {
     ///         raw.with_cublas_handle(
     ///             "test.raw_cublas",
@@ -736,7 +736,7 @@ impl<'s> Session<'s> {
     ///   read it under [`Session::launch`]'s aliasing contract.
     /// - **Caller-owned lifetime through completion**: the allocation must stay
     ///   alive and unmoved until all work that touches it has completed.
-    ///   [`CudaExecSession::with_raw`](super::exec_session::CudaExecSession::with_raw)
+    ///   [`CudaEngine::with_raw`](super::exec_session::CudaEngine::with_raw)
     ///   does not synchronize on return, including on its error paths, so
     ///   dropping or freeing the external allocation immediately after the
     ///   callback is a use-after-free unless the caller has observed completion
@@ -1180,7 +1180,7 @@ impl<'s> Session<'s> {
     /// `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`, readable as
     /// `CubeCL`'s `client().properties().hardware.max_shared_memory_size`
     /// through
-    /// [`CudaExecSession::with_cubecl`](super::exec_session::CudaExecSession::with_cubecl).
+    /// [`CudaEngine::with_cubecl`](super::exec_session::CudaEngine::with_cubecl).
     /// A request above it is rejected by the driver and returned as
     /// [`crate::Error::BackendSource`]; the value is never clamped.
     ///

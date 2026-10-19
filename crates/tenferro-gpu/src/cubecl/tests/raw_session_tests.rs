@@ -2,6 +2,7 @@
 //!
 //! These tests require CUDA hardware and are therefore ignored by default,
 //! matching the regular CUDA test convention in this crate.
+use crate::cubecl::tests::EngineRun;
 
 use crate::cubecl::CudaRuntime;
 use crate::cuda::raw;
@@ -12,7 +13,7 @@ use super::*;
 fn first_cuda_backend() -> Option<CudaEngine> {
     let devices = crate::cuda::cuda_devices().ok()?;
     let device = devices.first()?;
-    CudaEngine::new(device.id()).ok()
+    CudaEngine::open(device.id()).ok()
 }
 
 #[test]
@@ -37,7 +38,7 @@ fn raw_session_exposes_stream_and_runtime_identity() {
 }
 
 fn session_after_raw_still_runs(backend: &mut CudaEngine) -> bool {
-    backend.runtime().synchronize().is_ok()
+    backend.synchronize().is_ok()
 }
 
 #[test]
@@ -255,7 +256,7 @@ fn raw_session_entry_is_not_a_host_barrier() {
     let mut queued = Vec::new();
     for _ in 0..8 {
         let out = backend
-            .with_backend_session(|session| {
+            .run(|session| {
                 session.dot_general_read(
                     TensorRead::from_tensor(&lhs),
                     TensorRead::from_tensor(&rhs),

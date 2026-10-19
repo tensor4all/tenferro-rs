@@ -1,3 +1,4 @@
+use crate::cubecl::tests::EngineRun;
 // Run with: cargo test --features cuda -- --ignored
 use num_complex::{Complex32, Complex64};
 use std::num::NonZeroUsize;
@@ -11,17 +12,13 @@ use super::super::batched_gemm::{
 };
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f32,
-    tensor_f64, upload, CpuBackend, CudaEngine,
+    tensor_f64, upload, CpuEngine, CudaEngine,
 };
-use tenferro_tensor::BackendSessionHost;
+
 use tenferro_tensor::{TensorRead, TensorView};
 
 /// Run one `rows x 64` by `64 x 63` f64 matmul on both backends.
-fn compare_rows_matmul(
-    cpu: &mut CpuBackend,
-    gpu: &mut CudaEngine,
-    rows: usize,
-) -> (Tensor, Tensor) {
+fn compare_rows_matmul(cpu: &mut CpuEngine, gpu: &mut CudaEngine, rows: usize) -> (Tensor, Tensor) {
     let lhs = tensor_f64(
         vec![rows, 64],
         (0..rows * 64)
@@ -33,7 +30,7 @@ fn compare_rows_matmul(
         (0..64 * 63).map(|i| (i % 7) as f64 * 0.2 - 0.3).collect(),
     );
     let expected = cpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -45,7 +42,7 @@ fn compare_rows_matmul(
     let lhs_gpu = upload(gpu, &lhs);
     let rhs_gpu = upload(gpu, &rhs);
     let actual = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&lhs_gpu),
                 TensorRead::from_tensor(&rhs_gpu),
@@ -62,7 +59,7 @@ fn run_dot_general_case(lhs: Tensor, rhs: Tensor, config: DotGeneralConfig, tol:
     let mut gpu = gpu_backend();
 
     let expected = cpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -74,7 +71,7 @@ fn run_dot_general_case(lhs: Tensor, rhs: Tensor, config: DotGeneralConfig, tol:
     let gpu_lhs = upload(&gpu, &lhs);
     let gpu_rhs = upload(&gpu, &rhs);
     let actual_gpu = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -102,7 +99,7 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
     let lhs_b = tensor_f32(vec![65, 64], vec![1.0; 65 * 64]);
     let rhs_b = tensor_f32(vec![64, 65], vec![1.0; 64 * 65]);
     let expected_a = cpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&lhs_a),
                 TensorRead::from_tensor(&rhs_a),
@@ -112,7 +109,7 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
         .unwrap()
         .unwrap();
     let expected_b = cpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&lhs_b),
                 TensorRead::from_tensor(&rhs_b),
@@ -127,7 +124,7 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
     let gpu_lhs_b = upload(&gpu, &lhs_b);
     let gpu_rhs_b = upload(&gpu, &rhs_b);
     let actual_a = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&gpu_lhs_a),
                 TensorRead::from_tensor(&gpu_rhs_a),
@@ -142,7 +139,7 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
     );
 
     let actual_b = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&gpu_lhs_b),
                 TensorRead::from_tensor(&gpu_rhs_b),
@@ -160,7 +157,7 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
 
     // Eviction keeps shared scratch alive; same-stream execution orders reuse
     // after the first launch without requiring a barrier at each eviction.
-    gpu.runtime().synchronize().unwrap();
+    gpu.synchronize().unwrap();
     assert_tensor_close(&download(&gpu, &actual_a), &expected_a, 1e-4);
     assert_tensor_close(&download(&gpu, &actual_b), &expected_b, 1e-4);
 }
@@ -482,7 +479,7 @@ fn cuda_cutensor_plan_is_shared_by_an_owned_and_an_equivalent_view_operand() {
     let gpu_rhs = upload(&gpu, &rhs);
 
     let owned = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -502,7 +499,7 @@ fn cuda_cutensor_plan_is_shared_by_an_owned_and_an_equivalent_view_operand() {
         .backend_region_view(vec![8, 64], vec![1, 8], 0)
         .unwrap();
     let viewed = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_view(TensorView::F64(region)),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -749,7 +746,7 @@ fn batch_16_layouts() -> Batch16Layouts {
 
 fn cpu_dot_general(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> Tensor {
     let mut cpu = cpu_backend();
-    cpu.with_backend_session(|__s| {
+    cpu.run(|__s| {
         __s.dot_general_read(
             TensorRead::from_tensor(lhs),
             TensorRead::from_tensor(rhs),
@@ -786,7 +783,7 @@ fn cuda_standard_batched_matmul_batch_16_matches_the_cutensor_path() {
 
     reset_batched_gemm_launches_for_test();
     let fast = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -802,7 +799,7 @@ fn cuda_standard_batched_matmul_batch_16_matches_the_cutensor_path() {
     );
 
     let general = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&lhs_outer),
                 TensorRead::from_tensor(&rhs_outer),
@@ -851,7 +848,7 @@ fn cuda_batched_matmul_16_a100_fast_path_timing() {
             reset_batched_gemm_launches_for_test();
             let start = Instant::now();
             let result = gpu
-                .with_backend_session(|__s| {
+                .run(|__s| {
                     __s.dot_general_read(
                         TensorRead::from_tensor(black_box(lhs)),
                         TensorRead::from_tensor(black_box(rhs)),
@@ -860,7 +857,7 @@ fn cuda_batched_matmul_16_a100_fast_path_timing() {
                 })
                 .unwrap();
             black_box(result).unwrap();
-            gpu.runtime().synchronize().unwrap();
+            gpu.synchronize().unwrap();
             start.elapsed().as_secs_f64() * 1e3
         };
         for _ in 0..3 {
@@ -891,7 +888,7 @@ fn cuda_batched_matmul_16_a100_fast_path_timing() {
     let (cutensor_ms, cutensor_launches) = measure(&mut gpu, &lhs_outer, &rhs_outer, &outer_config);
 
     let fast = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -901,7 +898,7 @@ fn cuda_batched_matmul_16_a100_fast_path_timing() {
         .unwrap()
         .unwrap();
     let general = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&lhs_outer),
                 TensorRead::from_tensor(&rhs_outer),
@@ -974,9 +971,7 @@ fn cuda_conjugated_complex_batched_matmul_stays_on_the_cutensor_path() {
 
     let mut cpu = cpu_backend();
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.dot_general_with_conj(&lhs_host, &rhs_host, &config, true, false)
-        })
+        .run(|__s| __s.dot_general_with_conj(&lhs_host, &rhs_host, &config, true, false))
         .unwrap()
         .unwrap();
 
@@ -985,7 +980,7 @@ fn cuda_conjugated_complex_batched_matmul_stays_on_the_cutensor_path() {
     let rhs = upload(&gpu, &rhs_host);
     reset_batched_gemm_launches_for_test();
     let actual = gpu
-        .with_backend_session(|__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, false))
+        .run(|__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, false))
         .unwrap()
         .unwrap();
     assert_eq!(

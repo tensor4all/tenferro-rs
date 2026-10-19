@@ -197,7 +197,7 @@ pub enum DownloadIntoError<T> {
 ///     .ok_or_else(|| {
 ///         tenferro_tensor::Error::runtime_state("download_tensor_into", "no CUDA device")
 ///     })?;
-/// let backend = CudaEngine::new(device)?;
+/// let backend = CudaEngine::open(device)?;
 /// let runtime = backend.runtime().clone();
 /// let device_tensor =
 ///     upload_tensor(&runtime, &Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;

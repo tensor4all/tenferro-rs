@@ -1,7 +1,8 @@
 #![cfg(all(feature = "webgpu", target_os = "macos"))]
 
+use crate::engine_run::EngineRun;
 use tenferro_gpu::{apple::AppleContext, apple::AppleTransferStats};
-use tenferro_tensor::{BackendSessionHost, HostAccessError, Tensor, TensorRead, TypedTensor};
+use tenferro_tensor::{HostAccessError, Tensor, TensorRead, TypedTensor};
 
 fn apple_context() -> Option<AppleContext> {
     match AppleContext::new() {
@@ -114,7 +115,7 @@ fn metal_output_stays_in_the_context_domain_without_host_transfers() {
     let before = context.transfer_stats();
     let mut metal = context.metal_backend().clone();
     let output = metal
-        .with_backend_session(|session| {
+        .run(|session| {
             session.dot_general_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),

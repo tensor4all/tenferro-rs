@@ -71,7 +71,7 @@
 //!     let Some(device) = devices.first() else {
 //!         return Ok(None);
 //!     };
-//!     Ok(Some(CudaEngine::new(device.id())?))
+//!     Ok(Some(CudaEngine::open(device.id())?))
 //! }
 //!
 //! let _example: fn() -> Result<Option<CudaEngine>, CudaDeviceError> = first_cuda_backend;
@@ -401,7 +401,7 @@ pub struct CudaEngine {
 }
 
 /// Bound on prepared-program runs kept unretired by one engine.
-const MAX_PENDING_RUNS: usize = 16;
+pub(crate) const MAX_PENDING_RUNS: usize = 16;
 
 struct CudaEngineState {
     // CUDA library handles are dropped before `rt`; Rust drops fields in
@@ -1098,7 +1098,7 @@ impl CudaEngine {
     /// // example also runs in CPU-only doctest environments.
     /// if gpu_available() {
     ///     let device = cuda_devices()?.remove(0);
-    ///     let backend = CudaEngine::new(device.id())?;
+    ///     let backend = CudaEngine::open(device.id())?;
     ///     let stats = backend.cutensor_workspace_stats()?;
     ///     println!("{:?}", (stats.retained_entries, stats.retained_bytes));
     /// }
@@ -1126,7 +1126,7 @@ impl CudaEngine {
     /// // example also runs in CPU-only doctest environments.
     /// if gpu_available() {
     ///     let device = cuda_devices()?.remove(0);
-    ///     let backend = CudaEngine::new(device.id())?;
+    ///     let backend = CudaEngine::open(device.id())?;
     ///     println!("{} bytes retained", backend.cutensor_workspace_bytes()?);
     /// }
     /// # Ok(())
@@ -1158,7 +1158,7 @@ impl CudaEngine {
     /// // example also runs in CPU-only doctest environments.
     /// if gpu_available() {
     ///     let device = cuda_devices()?.remove(0);
-    ///     let backend = CudaEngine::new(device.id())?;
+    ///     let backend = CudaEngine::open(device.id())?;
     ///     println!("cap {} bytes", backend.cutensor_workspace_max_retained_bytes());
     /// }
     /// # Ok(())
@@ -1203,7 +1203,7 @@ impl CudaEngine {
     /// // example also runs in CPU-only doctest environments.
     /// if gpu_available() {
     ///     let device = cuda_devices()?.remove(0);
-    ///     let backend = CudaEngine::new(device.id())?;
+    ///     let backend = CudaEngine::open(device.id())?;
     ///     backend.set_cutensor_workspace_max_retained_bytes(4 << 30)?;
     /// }
     /// # Ok(())
@@ -1253,7 +1253,7 @@ impl CudaEngine {
     /// // example also runs in CPU-only doctest environments.
     /// if gpu_available() {
     ///     let device = cuda_devices()?.remove(0);
-    ///     let backend = CudaEngine::new(device.id())?;
+    ///     let backend = CudaEngine::open(device.id())?;
     ///     println!("{} temporary uses", backend.cutensor_workspace_temporary_uses());
     /// }
     /// # Ok(())

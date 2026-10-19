@@ -1,3 +1,4 @@
+use crate::cubecl::tests::EngineRun;
 // CUDA-native dot-general accumulation (tensor4all/tenferro-rs#1287).
 // Run with: cargo test --features cuda -- --ignored
 use num_complex::Complex64;
@@ -5,8 +6,8 @@ use num_complex::Complex64;
 use crate::DotGeneralConfig;
 use crate::Tensor;
 use tenferro_tensor::{
-    BackendSessionHost, ContractionScalar, DotGeneralAccumulation, TensorRead, TensorView,
-    TensorViewMut, TensorWrite, TypedTensorView,
+    ContractionScalar, DotGeneralAccumulation, TensorRead, TensorView, TensorViewMut, TensorWrite,
+    TypedTensorView,
 };
 
 use super::{
@@ -36,7 +37,7 @@ fn run_accum_case(
     let mut gpu = gpu_backend();
 
     let mut expected = out_init.duplicate().expect("host output duplication");
-    cpu.with_backend_session(|__s| {
+    cpu.run(|__s| {
         __s.dot_general_read_into_accum(
             TensorRead::from_tensor(&lhs),
             TensorRead::from_tensor(&rhs),
@@ -51,7 +52,7 @@ fn run_accum_case(
     let gpu_lhs = upload(&gpu, &lhs);
     let gpu_rhs = upload(&gpu, &rhs);
     let mut gpu_out = upload(&gpu, &out_init);
-    gpu.with_backend_session(|__s| {
+    gpu.run(|__s| {
         __s.dot_general_read_into_accum(
             TensorRead::from_tensor(&gpu_lhs),
             TensorRead::from_tensor(&gpu_rhs),
@@ -158,7 +159,7 @@ fn test_accum_dtype_mismatch_rejected() {
     let rhs = upload(&gpu, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
     let mut out = upload(&gpu, &tensor_f64(vec![2, 2], vec![0.0; 4]));
     let result = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read_into_accum(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -191,7 +192,7 @@ fn test_accum_view_output_is_explicit_error() {
     let shape = [2usize, 2usize];
     let view = tenferro_tensor::TensorViewMut::f64(&shape, &mut out_host).unwrap();
     let result = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read_into_accum(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -219,7 +220,7 @@ fn test_accum_zero_contraction_rejects_cpu_tensors() {
     let rhs = tensor_f64(vec![0, 2], vec![]);
     let mut gpu_out = upload(&gpu, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
     let result = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read_into_accum(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
@@ -240,7 +241,7 @@ fn test_accum_zero_contraction_rejects_cpu_tensors() {
     let gpu_rhs = upload(&gpu, &rhs);
     let mut cpu_out = tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let result = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read_into_accum(
                 TensorRead::from_tensor(&gpu_lhs),
                 TensorRead::from_tensor(&gpu_rhs),
@@ -362,7 +363,7 @@ fn test_accum_view_operands_offset_regions_f64() {
     let out_view = out_t
         .backend_region_view_mut(vec![2, 2], vec![1, 4], 3)
         .unwrap();
-    gpu.with_backend_session(|__s| {
+    gpu.run(|__s| {
         __s.dot_general_read_into_accum(
             TensorRead::from_view(TensorView::F64(lhs_view)),
             TensorRead::from_view(TensorView::F64(rhs_view)),
@@ -409,7 +410,7 @@ fn test_read_view_operands_allocating_f64() {
         .map(|i| region_get(&rhs_host, 7, &[1, 3], &[i % 3, i / 3]))
         .collect();
     let expected = cpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_tensor(&tensor_f64(vec![2, 3], lhs_compact)),
                 TensorRead::from_tensor(&tensor_f64(vec![3, 2], rhs_compact)),
@@ -431,7 +432,7 @@ fn test_read_view_operands_allocating_f64() {
         .backend_region_view(vec![3, 2], vec![1, 3], 7)
         .unwrap();
     let actual = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read(
                 TensorRead::from_view(TensorView::F64(lhs_view)),
                 TensorRead::from_view(TensorView::F64(rhs_view)),
@@ -503,7 +504,7 @@ fn test_accum_block_diagonal_regions_of_one_buffer_f64() {
         let out_view = out_t
             .backend_region_view_mut(vec![2, 2], vec![1, 4], offset)
             .unwrap();
-        gpu.with_backend_session(|__s| {
+        gpu.run(|__s| {
             __s.dot_general_read_into_accum(
                 TensorRead::from_tensor(lhs),
                 TensorRead::from_tensor(rhs),
@@ -541,7 +542,7 @@ fn test_accum_host_view_operand_rejected() {
     let rhs = upload(&gpu, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
     let mut out = upload(&gpu, &tensor_f64(vec![2, 2], vec![0.0; 4]));
     let result = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read_into_accum(
                 TensorRead::from_view(TensorView::F64(lhs_view)),
                 TensorRead::from_tensor(&rhs),
@@ -575,7 +576,7 @@ fn test_accum_negative_stride_view_rejected() {
     let rhs = upload(&gpu, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
     let mut out = upload(&gpu, &tensor_f64(vec![2, 2], vec![0.0; 4]));
     let result = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.dot_general_read_into_accum(
                 TensorRead::from_view(TensorView::F64(lhs_view)),
                 TensorRead::from_tensor(&rhs),
@@ -617,7 +618,7 @@ fn test_accum_zero_contraction_view_output_beta_error() {
             .backend_region_view_mut(vec![2, 2], vec![1, 4], 1)
             .unwrap();
         let result = gpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.dot_general_read_into_accum(
                     TensorRead::from_tensor(&lhs),
                     TensorRead::from_tensor(&rhs),
@@ -660,7 +661,7 @@ fn test_workspace_retirement_defers_eviction_barrier_f64() {
         let lhs_gpu = upload(&gpu, &lhs);
         let rhs_gpu = upload(&gpu, &rhs);
         let actual = gpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.dot_general_read(
                     TensorRead::from_tensor(&lhs_gpu),
                     TensorRead::from_tensor(&rhs_gpu),
@@ -670,7 +671,7 @@ fn test_workspace_retirement_defers_eviction_barrier_f64() {
             .unwrap()
             .unwrap();
         let reference = cpu
-            .with_backend_session(|__s| {
+            .run(|__s| {
                 __s.dot_general_read(
                     TensorRead::from_tensor(&lhs),
                     TensorRead::from_tensor(&rhs),
@@ -696,7 +697,7 @@ fn test_workspace_retirement_defers_eviction_barrier_f64() {
     );
 
     // An explicit barrier resolves every deferred retirement.
-    gpu.runtime().synchronize().unwrap();
+    gpu.synchronize().unwrap();
     let stats = gpu.cutensor_workspace_retirement_stats().unwrap();
     assert_eq!(
         stats.in_flight, 0,

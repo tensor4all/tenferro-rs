@@ -12,7 +12,7 @@
 //!     let Some(device) = devices.first() else {
 //!         return Ok(None);
 //!     };
-//!     Ok(Some(CudaEngine::new(device.id())?))
+//!     Ok(Some(CudaEngine::open(device.id())?))
 //! }
 //!
 //! // This ordinary doctest checks the discovery-based selection API without
@@ -41,6 +41,13 @@ mod event_retirement;
 mod kernels;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod native_permutation;
+// TODO(#2206 webgpu): the WebGPU backend and the Apple shared-allocation bridge
+// still use the removed session/backend contracts; they move to the engine
+// shape (one engine owning its queue, caches and pending runs) in their own unit.
+#[cfg(feature = "webgpu")]
+compile_error!(
+    "TODO(#2206 webgpu): the `webgpu` feature is disabled until WebGPU and the Apple bridge move to the engine model"
+);
 #[cfg(feature = "webgpu")]
 pub mod webgpu;
 
@@ -395,6 +402,24 @@ impl CubeclBuffer {
             ordered: true,
         });
         Ok(addr)
+    }
+
+    /// The pinned address when it is ordered after every queued CubeCL write.
+    #[cfg(test)]
+    pub(crate) fn cached_device_addr(&self) -> Option<u64> {
+        let pin = self.pin.lock().unwrap_or_else(|error| error.into_inner());
+        pin.as_ref()
+            .filter(|existing| existing.ordered)
+            .map(|existing| existing.resource.resource().ptr)
+    }
+
+    /// Whether the buffer holds its allocation's binding (#2207).
+    #[cfg(test)]
+    pub(crate) fn holds_binding(&self) -> bool {
+        self.pin
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some()
     }
 
     /// Mark the pinned address unordered because a CubeCL kernel was queued to

@@ -13,7 +13,7 @@ use super::{
     alloc_tensor_in_runtime, download_webgpu_tensor, upload_webgpu_tensor, WebGpuBackend,
     WebGpuRuntime,
 };
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_tensor::{AllocationDomainId, DType, SharedTensorAllocationDomain, Tensor};
 
 /// Explicit host/device transfer counters for one [`AppleContext`].
@@ -123,7 +123,7 @@ impl SharedTensorAllocationDomain for AppleAllocationDomain {
 #[derive(Clone)]
 pub struct AppleContext {
     state: Arc<AppleDomainState>,
-    cpu: CpuBackend,
+    cpu: CpuEngine,
     metal: WebGpuBackend,
 }
 
@@ -196,7 +196,7 @@ impl AppleContext {
         let domain: Arc<dyn SharedTensorAllocationDomain> = Arc::new(AppleAllocationDomain {
             state: Arc::clone(&state),
         });
-        let cpu = CpuBackend::new().with_allocation_domain(domain);
+        let cpu = CpuEngine::serial().with_allocation_domain(domain);
         let metal = WebGpuBackend::from_runtime(state.runtime());
         Ok(Self { state, cpu, metal })
     }
@@ -243,7 +243,7 @@ impl AppleContext {
     ///     )),
     /// }
     /// ```
-    pub fn cpu_backend(&self) -> &CpuBackend {
+    pub fn cpu_backend(&self) -> &CpuEngine {
         &self.cpu
     }
 

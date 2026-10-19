@@ -17,37 +17,29 @@ fn vector(data: &[f64]) -> Tensor {
     Tensor::from_vec_col_major(vec![data.len()], data.to_vec()).expect("vector")
 }
 
-fn produced_value(session: &mut crate::cuda::CudaHeldSession<'_>, seed: &Tensor) -> Tensor {
-    session
-        .with_session(|view| {
-            view.add_read(TensorRead::from_tensor(seed), TensorRead::from_tensor(seed))
-        })
-        .expect("held callback")
-        .expect("held add")
+fn produced_value(engine: &mut CudaEngine, seed: &Tensor) -> Tensor {
+    use tenferro_tensor::TensorElementwise;
+    engine
+        .add_read(TensorRead::from_tensor(seed), TensorRead::from_tensor(seed))
+        .expect("engine add")
 }
 
 fn publication(backend: &mut CudaEngine) -> crate::cuda::SourcePublication {
     let runtime = backend.runtime().clone();
     let seed = upload_tensor(&runtime, &vector(&values(32))).expect("seed");
-    let mut session = backend.open_session().expect("open");
-    let value = produced_value(&mut session, &seed);
-    // SAFETY: the value is produced through this session, with no other outstanding write.
-    let publication = unsafe { session.publish(value) }.expect("publish");
-    session.close().expect("close");
-    publication
+    let value = produced_value(backend, &seed);
+    backend.publish(value).expect("publish")
 }
 
 #[test]
 #[ignore = "requires a CUDA device"]
 fn a_recoverable_preparation_failure_refuses_with_the_publication() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("backend");
     let publication = publication(&mut backend);
 
     crate::cubecl::transfer::copy_fault_injection::arm_preparation("injected preparation failure");
-    let mut consumer = backend.open_session().expect("open consumer");
-    let error = publication.copy_into(&mut consumer).expect_err("refused");
-    consumer.close().expect("close consumer");
+    let error = publication.copy_into(&mut backend).expect_err("refused");
 
     let PublicationError::CopyRejected {
         error: reason,
@@ -67,15 +59,13 @@ fn a_recoverable_preparation_failure_refuses_with_the_publication() {
 #[ignore = "requires a CUDA device"]
 fn a_completion_record_failure_is_unproven_and_retains_the_package() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("backend");
     let runtime = backend.runtime().clone();
     let publication = publication(&mut backend);
     let retained_before = runtime.pending_transfer_retirements();
 
     crate::cubecl::transfer::copy_fault_injection::arm_record("injected completion-record failure");
-    let mut consumer = backend.open_session().expect("open consumer");
-    let error = publication.copy_into(&mut consumer).expect_err("unproven");
-    consumer.close().expect("close consumer");
+    let error = publication.copy_into(&mut backend).expect_err("unproven");
 
     match error {
         PublicationError::Unproven { error } => {

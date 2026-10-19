@@ -1,10 +1,10 @@
 error[E0308]: mismatched types
  --> tests/ui/cuda_backend_rejects_bare_integer.rs:4:30
   |
-4 |     let _ = CudaEngine::new(0);
+4 |     let _ = CudaEngine::open(0);
   |             ---------------- ^ expected `CudaDeviceId`, found integer
   |             |
   |             arguments to this function are incorrect
   |
 note: associated function defined here
- --> src/cubecl/mod.rs:801:11
+ --> src/cubecl/mod.rs:860:11

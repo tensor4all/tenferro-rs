@@ -68,11 +68,11 @@ fn cuda_public_api_requires_typed_device_and_caller_selected_engine() {
         cuda::cuda_runtime_engine_registration, cuda::CudaDeviceError, cuda::CudaDeviceId,
         cuda::CudaEngine, cuda::CudaRuntime,
     };
-    use tenferro_runtime::{EngineId, EngineRegistration, RuntimeConfigError};
+    use tenferro_runtime::{EngineRegistration, RuntimeConfigError};
 
     let _: fn(CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> = CudaRuntime::new;
-    let _: fn(CudaDeviceId) -> Result<CudaEngine, CudaDeviceError> = CudaEngine::new;
-    let _: fn(&CudaEngine, EngineId) -> Result<EngineRegistration, RuntimeConfigError> =
+    let _: fn(CudaDeviceId) -> Result<CudaEngine, CudaDeviceError> = CudaEngine::open;
+    let _: fn(&CudaEngine) -> Result<EngineRegistration, RuntimeConfigError> =
         cuda_runtime_engine_registration;
 }
 

@@ -2,6 +2,7 @@
 //!
 //! These tests require CUDA hardware and are therefore ignored by default,
 //! matching the regular CUDA test convention in this crate.
+use crate::cubecl::tests::EngineRun;
 
 use crate::cuda::{gpu_available, CudaEngine};
 
@@ -10,7 +11,7 @@ use super::*;
 fn first_cuda_backend() -> Option<CudaEngine> {
     let devices = crate::cuda::cuda_devices().ok()?;
     let device = devices.first()?;
-    CudaEngine::new(device.id()).ok()
+    CudaEngine::open(device.id()).ok()
 }
 
 #[test]
@@ -244,46 +245,6 @@ fn cubecl_session_flushes_after_error_callback() {
     });
 }
 
-#[test]
-#[ignore = "requires CUDA"]
-fn cuda_with_backend_session_rejects_nested_entry() {
-    assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
-    let nested = backend
-        .with_backend_session(|_session| {
-            // The backend override wraps its closure in the portable in-session
-            // guard, so re-entering any session-entry point on this thread
-            // (here the shared helper directly) is rejected before its callback
-            // runs (issue #1680 Phase 3).
-            tenferro_tensor::with_session_entry_guard("nested", || ())
-        })
-        .unwrap();
-    assert!(
-        matches!(
-            nested,
-            Err(tenferro_tensor::SessionEntryError::Reentered { backend: "nested" })
-        ),
-        "nested session entry must be rejected with a typed error: {nested:?}"
-    );
-}
-
-#[cfg(debug_assertions)]
-#[test]
-#[ignore = "requires CUDA"]
-fn cuda_with_backend_session_restores_the_in_session_flag_after_panic() {
-    assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|_session| panic!("boom"))
-            .unwrap()
-    }));
-    assert!(outcome.is_err());
-    // The flag is usable again on the same thread.
-    let value = backend.with_backend_session(|_session| 7usize).unwrap();
-    assert_eq!(value, 7);
-}
-
 /// An allocation the device refuses must reach the caller as a typed error on
 /// the buffer: never a panic on CubeCL's device thread, and never an `Ok` that
 /// hands back bytes nothing wrote (#2081).
@@ -303,7 +264,7 @@ fn cuda_with_backend_session_restores_the_in_session_flag_after_panic() {
 #[ignore = "requires CUDA"]
 fn cubecl_refused_allocation_is_reported_on_the_buffer() {
     use cubecl_runtime::server::Handle;
-    use tenferro_tensor::{backend::BackendSessionHost, TensorRead};
+    use tenferro_tensor::TensorRead;
 
     assert!(gpu_available(), "CUDA test requires an available device");
     let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
@@ -350,7 +311,7 @@ fn cubecl_refused_allocation_is_reported_on_the_buffer() {
     let input = tensor_f32(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
     let uploaded = upload(&backend, &input);
     let difference = backend
-        .with_backend_session(|session| {
+        .run(|session| {
             session.sub_read(
                 TensorRead::from_tensor(&uploaded),
                 TensorRead::from_tensor(&uploaded),
