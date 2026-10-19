@@ -127,6 +127,10 @@ pub struct CpuEngine {
     pub(crate) allocation_domain: Option<Arc<dyn SharedTensorAllocationDomain>>,
     runtime_clears: u64,
     pub(crate) broken: bool,
+    /// Runtime engine id this engine runs prepared programs as.
+    pub(crate) runtime_engine_id: tenferro_runtime::EngineId,
+    /// Extension caches the runtime lends to extension executors during a run.
+    pub(crate) extension_caches: tenferro_runtime::ExtensionCacheStore,
 }
 
 impl std::fmt::Debug for CpuEngine {
@@ -150,6 +154,8 @@ impl CpuEngine {
             allocation_domain: None,
             runtime_clears: 0,
             broken: false,
+            runtime_engine_id: crate::runtime_adapter::default_runtime_engine_id(),
+            extension_caches: tenferro_runtime::ExtensionCacheStore::default(),
         }
     }
 
@@ -215,6 +221,25 @@ impl CpuEngine {
     /// ```
     pub fn plan_cache(&self) -> &CpuPlanCache {
         &self.plans
+    }
+
+    /// Run prepared programs under a runtime engine id other than the default
+    /// [`crate::runtime_engine_id`]; it must match the id this engine kind was
+    /// registered under.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::EngineId;
+    /// let id = EngineId::new("example.cpu.v1")?;
+    /// let engine = tenferro_cpu::CpuEngine::serial().with_runtime_engine_id(id.clone());
+    /// assert_eq!(tenferro_runtime::ExecutionEngine::target(&engine).engine_id(), &id);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn with_runtime_engine_id(mut self, id: tenferro_runtime::EngineId) -> Self {
+        self.runtime_engine_id = id;
+        self
     }
 
     /// Bind outputs and managed inputs to a shared allocation domain.

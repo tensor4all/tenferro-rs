@@ -3,7 +3,6 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef, SemanticOperationView};
-use tenferro_runtime::runtime::ImmediateEventDomainDriver;
 use tenferro_runtime::{
     assemble_executable_engine_registration, CoreCapabilityBundle, CoreCapabilityKind,
     CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest,
@@ -20,11 +19,6 @@ use tenferro_runtime::{
 };
 
 use crate::CpuEngine;
-
-// TODO(#2206 merge): this adapter targets the pre-#2206 runtime registration
-// API, which still requires an owned `TensorBackend` executor. It registers a
-// fresh serial engine sharing the caller's plan cache and allocation domain;
-// the runtime rewrite replaces this module with target descriptions.
 
 /// Stateless CPU preparation witness: CPU preparation reads no engine state.
 #[derive(Debug, Clone, Copy, Default)]
@@ -43,6 +37,14 @@ const UNKNOWN_CORE_OPERATION: &str = "unknown-core-operation";
 /// runtime identifier validation.
 pub fn runtime_engine_id() -> Result<EngineId, RuntimeConfigError> {
     EngineId::new(CPU_ENGINE_ID).map_err(RuntimeConfigError::from)
+}
+
+/// The built-in CPU engine id, which is a valid identifier by construction.
+pub(crate) fn default_runtime_engine_id() -> EngineId {
+    match EngineId::new(CPU_ENGINE_ID) {
+        Ok(id) => id,
+        Err(_) => unreachable!("the built-in CPU engine id is a valid identifier"),
+    }
 }
 
 /// Return the canonical CPU runtime hardware class.
@@ -86,12 +88,6 @@ pub fn runtime_engine_registration_with_id(
     let indexing: Arc<dyn IndexingRuntime> = preparer.clone();
     let dot_general: Arc<dyn DotGeneralPreparation> = preparer.clone();
     let layout: Arc<dyn LayoutRuntime> = preparer;
-    let mut execution_backend = CpuEngine::serial()
-        .with_plan_cache(engine.plan_cache().clone())
-        .with_batch_policy(engine.batch_policy());
-    if let Some(domain) = engine.shared_allocation_domain() {
-        execution_backend = execution_backend.with_allocation_domain(Arc::clone(domain));
-    }
 
     let mut capabilities = CoreCapabilityBundle::builder();
     capabilities
@@ -139,10 +135,8 @@ pub fn runtime_engine_registration_with_id(
     );
     assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
         metadata,
-        LegacyExecutor(execution_backend),
-        Arc::new(ImmediateEventDomainDriver::new()),
+        ExecutionContextIdentity::of::<CpuEngine>(),
         ingress,
-        None,
     ))
 }
 
@@ -287,44 +281,27 @@ impl LayoutRuntime for CpuPreparer {
     }
 }
 
-// TODO(#2206 merge): the pre-#2206 executor requires an owned session host.
-// This wrapper is that host for the old runtime only; it is not an engine.
-struct LegacyExecutor(CpuEngine);
-
-impl tenferro_tensor::BackendRuntimeCache for LegacyExecutor {
-    type RuntimeCache = crate::GemmAnalysisCache;
-}
-
-impl tenferro_tensor::BackendSessionHost for LegacyExecutor {
-    fn with_backend_session<R>(
-        &mut self,
-        f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
-    ) -> Result<R, tenferro_tensor::SessionEntryError> {
-        Ok(f(&mut self.0))
+impl tenferro_runtime::ExecutionEngine for CpuEngine {
+    fn target(&self) -> tenferro_runtime::EngineTarget {
+        tenferro_runtime::EngineTarget::new(
+            self.runtime_engine_id.clone(),
+            ExecutionContextIdentity::of::<CpuEngine>(),
+            self.allocation_domain(),
+        )
     }
 
-    fn owns_session(&self, session: &mut dyn tenferro_tensor::Engine) -> bool {
-        crate::with_cpu_engine(session, |cpu| std::ptr::eq(cpu, &self.0)).unwrap_or(false)
-    }
-}
-
-impl tenferro_tensor::TensorDeviceTransfer for LegacyExecutor {
-    fn download_to_host(
-        &mut self,
-        tensor: tenferro_tensor::TensorRead<'_>,
-    ) -> crate::Result<tenferro_tensor::Tensor> {
-        tenferro_tensor::TensorDeviceTransfer::download_to_host(&mut self.0, tensor)
+    fn take_extension_caches(&mut self) -> tenferro_runtime::ExtensionCacheStore {
+        std::mem::take(&mut self.extension_caches)
     }
 
-    fn upload_host_tensor(
-        &mut self,
-        tensor: tenferro_tensor::TensorRead<'_>,
-    ) -> crate::Result<tenferro_tensor::Tensor> {
-        tenferro_tensor::TensorDeviceTransfer::upload_host_tensor(&mut self.0, tensor)
+    fn restore_extension_caches(&mut self, caches: tenferro_runtime::ExtensionCacheStore) {
+        self.extension_caches = caches;
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
-
-impl tenferro_tensor::TensorBackend for LegacyExecutor {}
 
 fn prepare_cpu(
     operation: SemanticOperationView<'_>,
@@ -363,7 +340,7 @@ fn prepare_cpu(
 }
 
 fn validate_cpu_runtime_context(context: &CorePrepareContext<'_>) -> Result<(), PrepareError> {
-    let expected_context = ExecutionContextIdentity::of::<LegacyExecutor>();
+    let expected_context = ExecutionContextIdentity::of::<CpuEngine>();
     if context.binding().context_identity() != expected_context {
         return Err(PrepareError::ProviderContract {
             source: ProviderContractError::WrongOperationFamily {
