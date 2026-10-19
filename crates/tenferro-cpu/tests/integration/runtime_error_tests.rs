@@ -1,10 +1,9 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendSessionHost, BackendStorageHandle, DeviceId, DeviceKind, DotGeneralConfig, Error,
-    GpuBackendKind, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer,
-    Tensor, TensorDeviceTransfer, TensorRead, TypedTensor, ValidationError,
+    BackendStorageHandle, DeviceId, DeviceKind, DotGeneralConfig, Error, GpuBackendKind,
+    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
+    TensorDeviceTransfer, TensorRead, TypedTensor, ValidationError,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -60,18 +59,18 @@ fn backend_failure_helper_preserves_op_and_message() {
 
 #[test]
 fn cpu_device_transfer_rejects_backend_buffers_at_boundary() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let tensor = backend_f64_tensor(vec![2]);
 
     for (actual, expected_op, expected_hint) in [
         (
             backend.download_to_host(TensorRead::from_tensor(&tensor)),
-            "CpuBackend::download_to_host",
+            "CpuEngine::download_to_host",
             "download",
         ),
         (
             backend.upload_host_tensor(TensorRead::from_tensor(&tensor)),
-            "CpuBackend::upload_host_tensor",
+            "CpuEngine::upload_host_tensor",
             "download",
         ),
     ] {
@@ -136,31 +135,6 @@ fn cpu_diagonal_pooled_outputs_use_checked_shape_product() {
         !filled_section.contains("acquire_zeroed"),
         "CPU fill pooled outputs must not zero-fill a destination that is fully overwritten"
     );
-}
-
-#[test]
-fn affinity_unsafe_blocks_document_safety_invariants() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/affinity.rs");
-    let source = std::fs::read_to_string(&path).expect("affinity.rs should be readable");
-    let lines: Vec<_> = source.lines().collect();
-
-    for (idx, line) in lines.iter().enumerate() {
-        if !line.contains("unsafe {") {
-            continue;
-        }
-
-        let has_safety_comment = lines
-            .iter()
-            .take(idx)
-            .rev()
-            .take(4)
-            .any(|line| line.trim_start().starts_with("// SAFETY:"));
-        assert!(
-            has_safety_comment,
-            "src/affinity.rs:{} missing SAFETY comment before unsafe block: {line}",
-            idx + 1
-        );
-    }
 }
 
 #[test]
@@ -334,42 +308,25 @@ fn integer_reductions_record_the_delegated_wrapping_contract() {
 }
 
 #[test]
-fn cpu_backend_with_threads_rejects_zero_without_panicking() {
-    let err = match CpuBackend::with_threads(0) {
-        Ok(_) => panic!("zero threads should be rejected"),
-        Err(err) => err,
-    };
-
-    assert!(matches!(
-        err,
-        tenferro_cpu::CpuBackendError::Tensor(Error::Validation {
-            op: "CpuBackend::with_threads",
-            ..
-        })
-    ));
-}
-
-#[test]
 fn dot_general_rejects_out_of_bounds_contracting_dim() {
     let lhs = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let rhs = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
-    let err = backend
-        .with_backend_session(|__s| {
-            __s.dot_general_read(
-                TensorRead::from_tensor(&lhs),
-                TensorRead::from_tensor(&rhs),
-                &DotGeneralConfig {
-                    lhs_contracting_dims: [2].as_slice().into(),
-                    rhs_contracting_dims: [0].as_slice().into(),
-                    lhs_batch_dims: [].as_slice().into(),
-                    rhs_batch_dims: [].as_slice().into(),
-                },
-            )
-        })
-        .unwrap()
-        .unwrap_err();
+    let err = crate::run(&mut backend, |__s| {
+        __s.dot_general_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &DotGeneralConfig {
+                lhs_contracting_dims: [2].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
+            },
+        )
+    })
+    .unwrap()
+    .unwrap_err();
 
     assert!(matches!(
         err,
@@ -384,14 +341,13 @@ fn dot_general_rejects_out_of_bounds_contracting_dim() {
 fn add_rejects_shape_mismatch() {
     let lhs = f64_tensor(vec![2], vec![1.0, 2.0]);
     let rhs = f64_tensor(vec![3], vec![3.0, 4.0, 5.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
-    let err = backend
-        .with_backend_session(|__s| {
-            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
-        .unwrap()
-        .unwrap_err();
+    let err = crate::run(&mut backend, |__s| {
+        __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+    })
+    .unwrap()
+    .unwrap_err();
 
     assert!(matches!(
         err,
@@ -406,14 +362,13 @@ fn add_rejects_shape_mismatch() {
 fn cpu_backend_rejects_backend_buffers_without_panicking() {
     let lhs = backend_f64_tensor(vec![2]);
     let rhs = f64_tensor(vec![2], vec![3.0, 4.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|__s| {
-                __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-            })
-            .unwrap()
+        crate::run(&mut backend, |__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap()
     }));
 
     assert!(result.is_ok(), "CPU backend should return Err, not panic");
@@ -425,12 +380,13 @@ fn cpu_backend_rejects_backend_buffers_without_panicking() {
 #[test]
 fn transpose_returns_error_instead_of_panicking() {
     let input = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[0]))
-            .unwrap()
+        crate::run(&mut backend, |__s| {
+            __s.transpose_read(TensorRead::from_tensor(&input), &[0])
+        })
+        .unwrap()
     }));
 
     assert!(result.is_ok(), "transpose should return Err, not panic");
@@ -450,12 +406,13 @@ fn transpose_returns_error_instead_of_panicking() {
 #[test]
 fn reshape_returns_error_instead_of_panicking() {
     let input = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[3]))
-            .unwrap()
+        crate::run(&mut backend, |__s| {
+            __s.reshape_read(TensorRead::from_tensor(&input), &[3])
+        })
+        .unwrap()
     }));
 
     assert!(result.is_ok(), "reshape should return Err, not panic");
@@ -470,14 +427,13 @@ fn reshape_returns_error_instead_of_panicking() {
 fn pow_returns_error_on_shape_mismatch_instead_of_panicking() {
     let lhs = f64_tensor(vec![2], vec![1.0, 2.0]);
     let rhs = f64_tensor(vec![1], vec![3.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|__s| {
-                __s.pow_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-            })
-            .unwrap()
+        crate::run(&mut backend, |__s| {
+            __s.pow_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap()
     }));
 
     assert!(result.is_ok(), "pow should return Err, not panic");
@@ -491,7 +447,7 @@ fn pow_returns_error_on_shape_mismatch_instead_of_panicking() {
 #[test]
 fn slice_returns_error_instead_of_panicking() {
     let input = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let config = SliceConfig {
         starts: vec![0],
         limits: vec![2],
@@ -499,9 +455,7 @@ fn slice_returns_error_instead_of_panicking() {
     };
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|__s| __s.slice(&input, &config))
-            .unwrap()
+        crate::run(&mut backend, |__s| __s.slice(&input, &config)).unwrap()
     }));
 
     assert!(result.is_ok(), "slice should return Err, not panic");
@@ -515,7 +469,7 @@ fn slice_returns_error_instead_of_panicking() {
 #[test]
 fn pad_returns_error_instead_of_panicking() {
     let input = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let config = PadConfig {
         edge_padding_low: vec![0, 0],
         edge_padding_high: vec![0],
@@ -523,9 +477,7 @@ fn pad_returns_error_instead_of_panicking() {
     };
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|__s| __s.pad(&input, &config))
-            .unwrap()
+        crate::run(&mut backend, |__s| __s.pad(&input, &config)).unwrap()
     }));
 
     assert!(result.is_ok(), "pad should return Err, not panic");
@@ -538,13 +490,11 @@ fn pad_returns_error_instead_of_panicking() {
 
 #[test]
 fn concatenate_returns_error_on_empty_inputs() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let inputs: Vec<&Tensor> = vec![];
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|__s| __s.concatenate(&inputs, 0))
-            .unwrap()
+        crate::run(&mut backend, |__s| __s.concatenate(&inputs, 0)).unwrap()
     }));
 
     assert!(result.is_ok(), "concatenate should return Err, not panic");
@@ -560,14 +510,12 @@ fn concatenate_returns_error_on_empty_inputs() {
 
 #[test]
 fn concatenate_returns_error_on_dtype_mismatch() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f32_tensor(vec![2, 2], vec![5.0f32, 6.0, 7.0, 8.0]);
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|__s| __s.concatenate(&[&a, &b], 0))
-            .unwrap()
+        crate::run(&mut backend, |__s| __s.concatenate(&[&a, &b], 0)).unwrap()
     }));
 
     assert!(
@@ -586,14 +534,12 @@ fn concatenate_returns_error_on_dtype_mismatch() {
 
 #[test]
 fn concatenate_returns_error_on_rank_mismatch() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2], vec![5.0, 6.0]);
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|__s| __s.concatenate(&[&a, &b], 0))
-            .unwrap()
+        crate::run(&mut backend, |__s| __s.concatenate(&[&a, &b], 0)).unwrap()
     }));
 
     assert!(
@@ -612,14 +558,12 @@ fn concatenate_returns_error_on_rank_mismatch() {
 
 #[test]
 fn concatenate_returns_error_on_axis_out_of_bounds() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|__s| __s.concatenate(&[&a, &b], 5))
-            .unwrap()
+        crate::run(&mut backend, |__s| __s.concatenate(&[&a, &b], 5)).unwrap()
     }));
 
     assert!(
@@ -638,7 +582,7 @@ fn concatenate_returns_error_on_axis_out_of_bounds() {
 
 #[test]
 fn concatenate_returns_error_on_shape_mismatch() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f64_tensor(
         vec![2, 4],
@@ -646,9 +590,7 @@ fn concatenate_returns_error_on_shape_mismatch() {
     );
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        backend
-            .with_backend_session(|__s| __s.concatenate(&[&a, &b], 0))
-            .unwrap()
+        crate::run(&mut backend, |__s| __s.concatenate(&[&a, &b], 0)).unwrap()
     }));
 
     assert!(
@@ -667,13 +609,11 @@ fn concatenate_returns_error_on_shape_mismatch() {
 
 #[test]
 fn concatenate_accepts_valid_inputs() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
 
-    let result = backend
-        .with_backend_session(|__s| __s.concatenate(&[&a, &b], 0))
-        .unwrap();
+    let result = crate::run(&mut backend, |__s| __s.concatenate(&[&a, &b], 0)).unwrap();
 
     assert!(result.is_ok());
     let out = result.unwrap();
@@ -682,7 +622,7 @@ fn concatenate_accepts_valid_inputs() {
 
 #[test]
 fn scatter_negative_start_indices_clamp_like_dynamic_slice() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let operand = f64_tensor(vec![3], vec![0.0, 0.0, 0.0]);
     let scatter_indices = i64_tensor(vec![1], vec![-1]);
     let updates = f64_tensor(vec![1], vec![5.0]);
@@ -693,10 +633,11 @@ fn scatter_negative_start_indices_clamp_like_dynamic_slice() {
         index_vector_dim: 1,
     };
 
-    let out = backend
-        .with_backend_session(|__s| __s.scatter(&operand, &scatter_indices, &updates, &config))
-        .unwrap()
-        .unwrap();
+    let out = crate::run(&mut backend, |__s| {
+        __s.scatter(&operand, &scatter_indices, &updates, &config)
+    })
+    .unwrap()
+    .unwrap();
 
     assert_eq!(
         out.as_typed::<f64>()

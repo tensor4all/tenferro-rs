@@ -6,7 +6,7 @@ use tenferro_tensor::{ContractionScalar, Tensor, TensorRead, TensorWrite};
 fn run<R>(
     engine: &mut CpuEngine,
     f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
-) -> Result<R, std::convert::Infallible> {
+) -> tenferro_tensor::Result<R> {
     Ok(f(engine))
 }
 
