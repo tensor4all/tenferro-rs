@@ -2,6 +2,7 @@
 # Audit additions and helper chains; never classify by test-name substrings.
 benchmark	tenferro-gpu	cubecl::tests::structural_tests::cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark
 benchmark	tenferro-gpu	cubecl::tests::alloc_zero_baseline_tests::alloc_zero_baseline
+benchmark	tenferro-gpu	cubecl::tests::host_path_phases::host_path_phases
 compile-only	tenferro-ad::integration	eager_backend_capability_contract::eager_backend_capability_boundary
 compile-only	tenferro-gpu::integration	session_contract::execution_session_capability_cannot_project_or_escape_owner_borrow
 gpu	tenferro-ad	extension::tests::eager_extension_cuda_host_input_is_rejected_before_factory
@@ -191,6 +192,9 @@ gpu	tenferro-gpu	cubecl::tests::runtime_tests::cuda_event_domain_keeps_per_node_
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_coalesced_error_retires_before_returning
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_identity_run_retires_collection_before_returning
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_in_held_single_domain_run_coalesces_scheduler_events
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_deferred_batch_retires_once_and_matches_synchronous_runs
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_deferred_guard_drop_retires_pending_work
+gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_deferred_interleaves_cubecl_and_vendor_nodes
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_run_dispatches_cubecl_launches_before_recording_retirement
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::prepared_single_domain_run_coalesces_scheduler_events
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::test_backend_add_matches_cpu_reference

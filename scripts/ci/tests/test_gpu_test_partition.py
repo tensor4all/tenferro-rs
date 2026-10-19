@@ -70,7 +70,7 @@ class GpuTestPartitionTests(unittest.TestCase):
         pjrt = read_partition(ROOT / "scripts/ci/pjrt_test_partition.tsv")
         self.assertEqual(sum(v == "two-gpu" for v in cuda.values()), 1)
         self.assertEqual(sum(v == "compile-only" for v in cuda.values()), 2)
-        self.assertEqual(sum(v == "benchmark" for v in cuda.values()), 2)
+        self.assertEqual(sum(v == "benchmark" for v in cuda.values()), 3)
         self.assertEqual(sum(v == "external-tool" for v in pjrt.values()), 3)
         self.assertIn("NOT RUN (two-gpu):", report(cuda, "gpu"))
         self.assertIn("NOT RUN (external-tool):", report(pjrt, "host"))

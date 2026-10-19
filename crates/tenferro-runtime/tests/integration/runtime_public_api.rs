@@ -50,6 +50,157 @@ fn runtime_prepared_compiled_graph_runs_repeated_inputs() {
     assert!(other_runtime.run_prepared(&prepared, &[&first]).is_err());
 }
 
+fn cpu_backend_and_runtime() -> (CpuBackend, Runtime) {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .unwrap();
+    (backend, builder.build().unwrap())
+}
+
+fn deferred_identity_runs_match_the_input<T>(
+    runtime: &Runtime,
+    backend: &mut CpuBackend,
+    dtype: DType,
+    host: Tensor,
+) where
+    T: tenferro_tensor::TensorScalar + PartialEq + std::fmt::Debug,
+{
+    let x = TracedTensor::input_symbolic_shape(dtype, 1).unwrap();
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&x, &[(&x, dtype, &[3])])
+        .unwrap();
+    let prepared = runtime.prepare_compiled(&program, &[&host]).unwrap();
+    let expected = host.as_slice::<T>().unwrap().to_vec();
+    let inputs: [&Tensor; 1] = [&host];
+
+    let runs = backend
+        .with_backend_session(|session| {
+            let mut deferred = runtime.begin_prepared_deferred(session, &prepared)?;
+            for _ in 0..3 {
+                deferred.run_prepared_deferred(&inputs)?;
+            }
+            deferred.finish_prepared()
+        })
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(runs.len(), 3);
+    for run in runs {
+        assert_eq!(run.len(), 1);
+        assert_eq!(run[0].dtype(), dtype);
+        assert_eq!(run[0].as_slice::<T>().unwrap(), expected.as_slice());
+    }
+}
+
+#[test]
+fn prepared_deferred_identity_runs_match_the_input_for_every_dtype() {
+    use num_complex::{Complex32, Complex64};
+
+    let (mut backend, runtime) = cpu_backend_and_runtime();
+    deferred_identity_runs_match_the_input::<f64>(
+        &runtime,
+        &mut backend,
+        DType::F64,
+        Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
+    );
+    deferred_identity_runs_match_the_input::<f32>(
+        &runtime,
+        &mut backend,
+        DType::F32,
+        Tensor::from_vec_col_major(vec![3], vec![1.0_f32, 2.0, 3.0]).unwrap(),
+    );
+    deferred_identity_runs_match_the_input::<i64>(
+        &runtime,
+        &mut backend,
+        DType::I64,
+        Tensor::from_vec_col_major(vec![3], vec![-1_i64, 2, 3]).unwrap(),
+    );
+    deferred_identity_runs_match_the_input::<i32>(
+        &runtime,
+        &mut backend,
+        DType::I32,
+        Tensor::from_vec_col_major(vec![3], vec![-1_i32, 2, 3]).unwrap(),
+    );
+    deferred_identity_runs_match_the_input::<bool>(
+        &runtime,
+        &mut backend,
+        DType::Bool,
+        Tensor::from_vec_col_major(vec![3], vec![true, false, true]).unwrap(),
+    );
+    deferred_identity_runs_match_the_input::<Complex32>(
+        &runtime,
+        &mut backend,
+        DType::C32,
+        Tensor::from_vec_col_major(
+            vec![3],
+            vec![
+                Complex32::new(1.0, 2.0),
+                Complex32::new(3.0, 4.0),
+                Complex32::new(5.0, 6.0),
+            ],
+        )
+        .unwrap(),
+    );
+    deferred_identity_runs_match_the_input::<Complex64>(
+        &runtime,
+        &mut backend,
+        DType::C64,
+        Tensor::from_vec_col_major(
+            vec![3],
+            vec![
+                Complex64::new(1.0, 2.0),
+                Complex64::new(3.0, 4.0),
+                Complex64::new(5.0, 6.0),
+            ],
+        )
+        .unwrap(),
+    );
+}
+
+#[test]
+fn prepared_deferred_host_error_retires_and_keeps_completed_runs() {
+    let (mut backend, runtime) = cpu_backend_and_runtime();
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let y = (&x + &x).unwrap();
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .unwrap();
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let wrong_shape = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
+    let inputs: [&Tensor; 1] = [&input];
+    let bad_inputs: [&Tensor; 1] = [&wrong_shape];
+
+    let runs = backend
+        .with_backend_session(|session| {
+            let mut deferred = runtime.begin_prepared_deferred(session, &prepared)?;
+            deferred.run_prepared_deferred(&inputs)?;
+            let error = deferred
+                .run_prepared_deferred(&bad_inputs)
+                .expect_err("a wrong input shape must fail before enqueueing");
+            assert!(
+                error.to_string().contains("shape"),
+                "unexpected host error: {error}"
+            );
+            deferred.finish_prepared()
+        })
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        runs.len(),
+        1,
+        "the failed run must not add an output package"
+    );
+    assert_eq!(
+        runs[0][0].as_slice::<f64>().unwrap(),
+        &[2.0, 4.0],
+        "the completed run remains valid after the host error retired the batch"
+    );
+}
+
 #[test]
 fn prepared_execution_checks_retained_defaults_preparation_did_not_validate() {
     use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};

@@ -285,13 +285,23 @@ reported, and everything else belongs to the substrate.
   per-node completion event, CUDA event record and dispatch fence because same-stream submission order
   already orders its nodes, and keeps one dispatch fence plus the unchanged retirement barrier in
   `drain`, after output collection, for identity graphs too. Ineligible runs keep the per-node path.
-- **Stage 2 (full async submission) is still open, and neither candidate is complete.** Deferring
-  completion to the held session needs completion-aware reuse and pending ownership, not only moved
-  inputs: a held session does not prove runtime-wide exclusivity because a scoped callback or a
-  runtime-only `upload_pending` can still race it (finding 1); dropping an output returns its
-  allocation to the free pool before the pending work drains (finding 2); and an unbounded submit loop
-  needs a defined queue-full policy that reclaims ready events and rejects before enqueue when still
-  full (finding 5).
+- **Deferred prepared completion (P3-U8) is implemented as a caller-batched guard, not full async
+  submission.** `Runtime::begin_prepared_deferred(session, prepared)` returns a `PreparedDeferred`
+  guard; `run_prepared_deferred` enqueues a run and returns its index without the retirement barrier,
+  and `finish_prepared` drains one event-domain run for all runs since the previous finish and returns
+  the outputs. `run_prepared_in` is the same path with an immediate finish, so there is no second
+  execution implementation. The guard borrows the session and prepared graph and leases the executor
+  state for its lifetime, which prevents unrelated work from using that session between runs. It owns
+  each run's outputs until finish, so dropping a caller-visible result cannot release device storage
+  before retirement (finding 2); inputs are tied to the guard lifetime, so they also outlive pending
+  work. A host-side validation failure retires the batch's already-enqueued work before returning.
+  `Drop` retires best-effort and cannot report, while `finish_prepared` surfaces device-side
+  retirement errors. This does not define a queue-full policy for an unbounded detached submit loop
+  (finding 5); the caller bounds the batch by how many deferred runs it issues before finishing.
+- **Stage 2 (full async submission and completion-aware reuse outside the guard) is still open.**
+  Detaching completion from the caller-held session needs a runtime-wide exclusivity protocol that
+  also covers scoped callbacks and runtime-only `upload_pending` (finding 1), and a bounded pending
+  queue with a defined queue-full policy (finding 5).
 - **A waiting admission policy** (a CUDA arbiter with the CPU's queueing semantics), multi-device P2P,
   and the WebGPU held session.
 

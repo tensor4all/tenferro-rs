@@ -53,9 +53,9 @@ pub use event_domain::{
 };
 pub use execution::{
     ExecutionBundle, ExecutionHandle, ExecutionInputs, ExecutionOutcome, OutputAccessError,
-    OutputExtractError, OutputMetadata, OutputRef, PreparedCompiledGraph, ScopedExecutionBundle,
-    ScopedExecutionOutcome, ScopedOutput, ScopedOutputExtractError, ScopedReadBinding,
-    ScopedReadInputs, ScopedSubmitRejected, SubmitError,
+    OutputExtractError, OutputMetadata, OutputRef, PreparedCompiledGraph, PreparedDeferred,
+    ScopedExecutionBundle, ScopedExecutionOutcome, ScopedOutput, ScopedOutputExtractError,
+    ScopedReadBinding, ScopedReadInputs, ScopedSubmitRejected, SubmitError,
 };
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
 pub use extension_provider::{ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest};
