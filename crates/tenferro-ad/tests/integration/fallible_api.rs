@@ -117,10 +117,6 @@ fn eager_runtime_lock_scopes_are_bounded_source_contract() {
         "the owner-context fallback must accept extension ops only"
     );
     assert!(
-        extension_fallback.contains("Lock ordering:"),
-        "backend/extension lock ordering must be documented at the helper that co-holds the locks"
-    );
-    assert!(
         !source.contains("fn exec_outputs_with_runtime"),
         "the mixed standard/extension owner-context helper is removed"
     );
@@ -223,7 +219,7 @@ fn eager_binary_methods_return_shape_errors() {
 
     let err = x
         .runtime()
-        .with_eager_session(|s| s.add(&x, &y))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.add(&x, &y))
         .unwrap_err();
 
     assert!(matches!(

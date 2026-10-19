@@ -5,12 +5,9 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
-use tenferro_runtime::{ErrorPhase, GraphCompiler, Runtime};
+use tenferro_runtime::{ErrorPhase, ExecutionEngine, GraphCompiler, Runtime};
 use tenferro_tensor::DotGeneralConfig;
-use tenferro_tensor::{
-    Engine, BackendSessionHost, DType, PadConfig, SliceConfig, Tensor, TensorRead,
-    TypedTensor,
-};
+use tenferro_tensor::{DType, Engine, PadConfig, SliceConfig, Tensor, TensorRead, TypedTensor};
 
 use crate::error::{Error, Result};
 use crate::scalar_semantics::dynamic_truncate_size;
@@ -223,38 +220,35 @@ pub(crate) fn exec_dot_general_with_conj_on_tensor_reads_in_session(
 /// This core helper rejects extension ops because they require a runtime owner
 /// with an installed extension module.
 #[cfg(test)]
-pub(crate) fn exec_op_on_tensors<B: BackendSessionHost>(
+pub(crate) fn exec_op_on_tensors(
     op: &StdTensorOp,
     inputs: &[&Tensor],
-    backend: &mut B,
+    engine: &mut dyn Engine,
 ) -> Result<Vec<Tensor>> {
     if let StdTensorOp::Extension(ext) = op {
         return Err(missing_extension_module_error(ext.as_ref()));
     }
-
-    backend.with_backend_session(|session| {
-        exec_standard_op_on_tensors_with_session(op, inputs, session)
-    })?
+    exec_standard_op_on_tensors_with_session(op, inputs, engine)
 }
 
-/// Run the owner-context fallback for an extension op that has no prepared
-/// session executor: canonicalize the reads in one backend session, then run
-/// the extension as a one-op compiled program on the runtime.
-pub(crate) fn exec_extension_op_on_tensor_reads<B: BackendSessionHost>(
+/// Run an extension op that has no prepared session executor: canonicalize the
+/// reads on `engine`, then run the extension as a one-op compiled program on
+/// the same engine. The engine kind must already be registered with `runtime`.
+pub(crate) fn exec_extension_op_on_tensor_reads(
     op: &Arc<dyn ExtensionOp>,
     inputs: &[TensorRead<'_>],
-    backend: &mut B,
+    engine: &mut dyn ExecutionEngine,
     runtime: &Runtime,
 ) -> Result<Vec<Tensor>> {
-    let concrete_inputs =
-        backend.with_backend_session(|exec| concrete_tensor_reads(exec, inputs))??;
+    let concrete_inputs = concrete_tensor_reads(&mut *engine, inputs)?;
     let input_refs: Vec<&Tensor> = concrete_inputs.iter().map(|input| input.tensor()).collect();
-    execute_extension_op_via_runtime(Arc::clone(op), &input_refs, runtime)
+    execute_extension_op_via_runtime(Arc::clone(op), &input_refs, engine, runtime)
 }
 
 fn execute_extension_op_via_runtime(
     op: Arc<dyn ExtensionOp>,
     inputs: &[&Tensor],
+    engine: &mut dyn ExecutionEngine,
     runtime: &Runtime,
 ) -> Result<Vec<Tensor>> {
     ensure_extension_module_family(op.as_ref(), runtime)?;
@@ -281,7 +275,13 @@ fn execute_extension_op_via_runtime(
         Error::runtime_state_source("extension", tenferro_runtime::ErrorPhase::Execution, source)
     })?;
     let program = GraphCompiler::new().compile_frozen_program(&frozen)?;
-    runtime.run_compiled(&program, inputs)
+    let reads = inputs
+        .iter()
+        .map(|tensor| TensorRead::from_tensor(tensor))
+        .collect::<Vec<_>>();
+    let target = engine.target();
+    let prepared = runtime.prepare(&program, &reads, std::slice::from_ref(&target))?;
+    crate::eager::run_prepared_on(runtime, engine, &prepared, &reads)
 }
 
 fn ensure_extension_module_family(op: &dyn ExtensionOp, runtime: &Runtime) -> Result<()> {

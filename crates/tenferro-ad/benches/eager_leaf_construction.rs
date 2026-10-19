@@ -1,7 +1,7 @@
 //! Eager leaf construction cost (#1704).
 //!
 //! Frozen one-thread protocol: the runtime is built with
-//! `CpuBackend::with_threads(1)` and the effective worker count is asserted, so
+//! `tenferro_cpu::CpuEngine::with_threads(1)` and the effective worker count is asserted, so
 //! a run cannot silently measure an all-core configuration. The paired
 //! baseline/candidate comparison and the acceptance gate are recorded in
 //! `docs/worklogs/issue-1704-eager-leaf-session.md`.
@@ -11,17 +11,16 @@ use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
 use tenferro_tensor::Tensor;
 
 fn runtime() -> Arc<EagerRuntime> {
-    let backend = CpuBackend::with_threads(1).expect("one-thread cpu backend");
+    let backend = tenferro_cpu::CpuEngine::serial();
     assert_eq!(
         backend.num_threads(),
         1,
         "the #1704 experiment requires exactly one CPU worker"
     );
-    EagerRuntime::with_cpu_backend(backend).expect("one-thread eager runtime")
+    EagerRuntime::new().expect("eager runtime")
 }
 
 fn leaf(runtime: &Arc<EagerRuntime>, dims: &[usize]) {
@@ -44,13 +43,6 @@ fn bench_leaf_construction(c: &mut Criterion) {
             let tensor =
                 Tensor::from_vec_col_major(vec![2, 2, 2], vec![1.0_f64; 8]).expect("valid tensor");
             black_box(tensor);
-        })
-    });
-    group.bench_function("session_open_empty", |b| {
-        b.iter(|| {
-            runtime
-                .with_execution_session(|_session| ())
-                .expect("session");
         })
     });
     group.bench_function("from_tensor_in_8", |b| {

@@ -1,7 +1,6 @@
 use std::num::NonZeroUsize;
 
 use tenferro_ad::{AdContext, AdTransformCacheLimits, EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, TracedTensor};
 
 use crate::support::{cpu_runtime, run_compiled_one};
@@ -55,7 +54,6 @@ fn executor_clear_caches_clears_executor_owned_runtime_caches() {
 
     let after = executor.cache_stats().expect("cache stats");
     assert_eq!(after.extensions.entries, 0);
-    assert_eq!(after.engines.entries, 0);
     assert_eq!(after.prepared_plans.entries, 0);
 }
 
@@ -82,7 +80,7 @@ fn ad_context_transform_cache_limits_stats_and_clear_are_public() {
 #[test]
 fn eager_runtime_built_from_ad_context_uses_shared_transform_cache() {
     let ad = AdContext::builder().build().unwrap();
-    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad).unwrap();
+    let ctx = EagerRuntime::with_ad_context(&ad).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
         ctx.clone(),
@@ -93,10 +91,14 @@ fn eager_runtime_built_from_ad_context_uses_shared_transform_cache() {
         ctx.clone(),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
+    let y = ctx
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &x))
+        .unwrap();
 
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
-    let _ = ctx.vjp(&y, &x, &seed).unwrap();
+    let _ = ctx
+        .vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &x, &seed)
+        .unwrap();
     assert!(ad.ad_transform_cache_stats().unwrap().entries > 0);
 
     ad.clear_ad_transform_caches().unwrap();
@@ -108,7 +110,7 @@ fn ad_transform_cache_entry_limit_evicts_lru_entries() {
     let ad = AdContext::builder().build().unwrap();
     ad.set_ad_transform_cache_limits(AdTransformCacheLimits::new(NonZeroUsize::new(1).unwrap()))
         .unwrap();
-    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad).unwrap();
+    let ctx = EagerRuntime::with_ad_context(&ad).unwrap();
 
     let x0 = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
@@ -126,10 +128,18 @@ fn ad_transform_cache_entry_limit_evicts_lru_entries() {
     )
     .unwrap();
 
-    let output0 = ctx.with_eager_session(|s| s.mul(&x0, &x0)).unwrap();
-    let _ = ctx.vjp(&output0, &x0, &seed).unwrap();
-    let output1 = ctx.with_eager_session(|s| s.mul(&x1, &x1)).unwrap();
-    let _ = ctx.vjp(&output1, &x1, &seed).unwrap();
+    let output0 = ctx
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x0, &x0))
+        .unwrap();
+    let _ = ctx
+        .vjp(&mut tenferro_cpu::CpuEngine::serial(), &output0, &x0, &seed)
+        .unwrap();
+    let output1 = ctx
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x1, &x1))
+        .unwrap();
+    let _ = ctx
+        .vjp(&mut tenferro_cpu::CpuEngine::serial(), &output1, &x1, &seed)
+        .unwrap();
 
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
 }
@@ -182,7 +192,7 @@ fn eager_backward_shape_churn_keeps_transform_cache_shape_specific() {
         let x = EagerTensor::requires_grad_in(tensor(shape.clone(), seed), ctx.clone()).unwrap();
         let weight = EagerTensor::from_tensor_in(tensor(shape, seed + 1000), ctx.clone()).unwrap();
         let loss = ctx
-            .with_eager_session(|s| {
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                 let weighted = s.mul(&x, &weight)?;
                 let quadratic = s.mul(&weighted, &x)?;
                 let axes: Vec<_> = (0..quadratic.shape().len()).collect();
@@ -192,7 +202,7 @@ fn eager_backward_shape_churn_keeps_transform_cache_shape_specific() {
         Fixture { x, loss }
     }
 
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let fixtures = [
         fixture(&ctx, vec![8, 4, 10], 0),
         fixture(&ctx, vec![10, 4, 12], 1),
@@ -200,7 +210,10 @@ fn eager_backward_shape_churn_keeps_transform_cache_shape_specific() {
 
     for fixture in &fixtures {
         ctx.clear_grads().unwrap();
-        fixture.loss.backward().unwrap();
+        fixture
+            .loss
+            .backward(&mut tenferro_cpu::CpuEngine::serial())
+            .unwrap();
         let grad = fixture.x.grad().unwrap().unwrap();
         assert_eq!(grad.shape(), fixture.x.shape());
     }

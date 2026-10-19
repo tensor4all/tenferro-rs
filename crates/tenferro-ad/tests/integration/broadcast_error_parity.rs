@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Error, ErrorPhase, TracedTensor};
 use tenferro_tensor::{Error as TensorError, ShapeMismatch, ValidationError};
 
@@ -35,7 +34,7 @@ fn assert_rank_mismatch(source: &ValidationError, expected: usize, actual: usize
 
 #[test]
 fn eager_and_traced_broadcast_errors_share_payloads_across_discovery_phases() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let cases = [
         "incompatible_binary",
         "incompatible_input",
@@ -47,17 +46,24 @@ fn eager_and_traced_broadcast_errors_share_payloads_across_discovery_phases() {
             "incompatible_binary" => {
                 let lhs = eager_tensor(ctx.clone(), vec![2]);
                 let rhs = eager_tensor(ctx.clone(), vec![3]);
-                ctx.with_eager_session(|s| s.add(&lhs, &rhs)).unwrap_err()
+                ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.add(&lhs, &rhs)
+                })
+                .unwrap_err()
             }
             "incompatible_input" => {
                 let input = eager_tensor(ctx.clone(), vec![2, 3]);
-                ctx.with_eager_session(|s| s.broadcast_in_dim(&input, &[2, 4], &[0, 1]))
-                    .unwrap_err()
+                ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.broadcast_in_dim(&input, &[2, 4], &[0, 1])
+                })
+                .unwrap_err()
             }
             "rank_too_large" => {
                 let input = eager_tensor(ctx.clone(), vec![2, 3]);
-                ctx.with_eager_session(|s| s.broadcast_in_dim(&input, &[3], &[0, 0]))
-                    .unwrap_err()
+                ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.broadcast_in_dim(&input, &[3], &[0, 0])
+                })
+                .unwrap_err()
             }
             _ => unreachable!(),
         };

@@ -31,7 +31,12 @@ fn checkpoint_preserves_eval_value() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
     let mut y = (&x * &x).unwrap();
 
-    y.checkpoint(&mut compiler, &executor).unwrap();
+    y.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
 
     let value = y
         .attached_value()
@@ -52,7 +57,12 @@ fn checkpoint_downstream_eval_uses_leaf() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
     let mut y = (&x * &x).unwrap();
 
-    y.checkpoint(&mut compiler, &executor).unwrap();
+    y.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
 
     let one = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0)).unwrap();
     let z = (&y + &one).unwrap();
@@ -69,7 +79,12 @@ fn checkpoint_grad_correct() {
 
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_value)).unwrap();
     let mut y = (&x * &x).unwrap();
-    y.checkpoint(&mut compiler, &executor).unwrap();
+    y.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
 
     let z = (&y * &y).unwrap();
     let grad = z.grad(&x).unwrap();
@@ -88,7 +103,12 @@ fn checkpoint_hvp_correct() {
 
     let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_value)).unwrap();
     let mut y = (&x * &x).unwrap();
-    y.checkpoint(&mut compiler, &executor).unwrap();
+    y.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
     let z = (&y * &y).unwrap();
 
     let grad = z.grad(&x).unwrap();
@@ -106,7 +126,12 @@ fn checkpoint_hvp_correct() {
         let mut y = (&x * &x).unwrap();
         let mut compiler = GraphCompiler::new();
         let executor = cpu_runtime();
-        y.checkpoint(&mut compiler, &executor).unwrap();
+        y.checkpoint(
+            &mut compiler,
+            &executor,
+            &mut tenferro_cpu::CpuEngine::serial(),
+        )
+        .unwrap();
         let z = (&y * &y).unwrap();
         let grad = z.grad(&x).unwrap();
         get_f64_scalar(&eval_tensor(grad))
@@ -132,7 +157,12 @@ fn checkpoint_loop_grad_correct() {
 
     for _ in 0..steps {
         x = (&a * &x.cos().unwrap()).unwrap();
-        x.checkpoint(&mut compiler, &executor).unwrap();
+        x.checkpoint(
+            &mut compiler,
+            &executor,
+            &mut tenferro_cpu::CpuEngine::serial(),
+        )
+        .unwrap();
     }
 
     let grad = x.grad(&a).unwrap();
@@ -165,8 +195,18 @@ fn grad_both_independently_checkpointed_add_wrt_rhs() {
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
 
-    x2.checkpoint(&mut compiler, &executor).unwrap();
-    y2.checkpoint(&mut compiler, &executor).unwrap();
+    x2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
+    y2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
 
     let z = (&x2 + &y2).unwrap();
 
@@ -191,8 +231,18 @@ fn grad_both_independently_checkpointed_add_wrt_lhs() {
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
 
-    x2.checkpoint(&mut compiler, &executor).unwrap();
-    y2.checkpoint(&mut compiler, &executor).unwrap();
+    x2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
+    y2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
 
     let z = (&x2 + &y2).unwrap();
 
@@ -217,8 +267,18 @@ fn grad_both_independently_checkpointed_mul_wrt_rhs() {
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
 
-    x2.checkpoint(&mut compiler, &executor).unwrap();
-    y2.checkpoint(&mut compiler, &executor).unwrap();
+    x2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
+    y2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
 
     let z = (&x2 * &y2).unwrap();
 
@@ -247,8 +307,18 @@ fn grad_both_independently_checkpointed_matches_fd() {
     let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(y_val)).unwrap();
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
-    x2.checkpoint(&mut compiler, &executor).unwrap();
-    y2.checkpoint(&mut compiler, &executor).unwrap();
+    x2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
+    y2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
     let z = (&x2 + &y2).unwrap();
     let grad_y = z.grad(&y).unwrap();
     let ad_value = get_f64_scalar(&grad_y.run_with(&engine).unwrap());
@@ -270,8 +340,18 @@ fn grad_mul_both_independently_checkpointed_wrt_rhs() {
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
 
-    x2.checkpoint(&mut compiler, &executor).unwrap();
-    y2.checkpoint(&mut compiler, &executor).unwrap();
+    x2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
+    y2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
 
     let z = (&x2 * &y2).unwrap();
 
@@ -296,8 +376,18 @@ fn grad_mul_both_independently_checkpointed_wrt_lhs() {
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
 
-    x2.checkpoint(&mut compiler, &executor).unwrap();
-    y2.checkpoint(&mut compiler, &executor).unwrap();
+    x2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
+    y2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
 
     let z = (&x2 * &y2).unwrap();
 
@@ -325,8 +415,18 @@ fn grad_mul_both_independently_checkpointed_matches_fd() {
     let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(y_val)).unwrap();
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
-    x2.checkpoint(&mut compiler, &executor).unwrap();
-    y2.checkpoint(&mut compiler, &executor).unwrap();
+    x2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
+    y2.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
     let z = (&x2 * &y2).unwrap();
     let grad_y = z.grad(&y).unwrap();
     let ad_value = get_f64_scalar(&grad_y.run_with(&engine).unwrap());

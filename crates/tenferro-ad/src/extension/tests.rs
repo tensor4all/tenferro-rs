@@ -8,7 +8,6 @@ use super::{
     ExtensionOp,
 };
 use crate::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
 use tenferro_ops::{ExtensionShapeContext, SymDim};
 use tenferro_runtime::{
     EngineId, ErasedExecutionContext, Error, ErrorPhase, ExecutionContextIdentity, ExtensionEngine,
@@ -20,9 +19,7 @@ use tenferro_runtime::{
 };
 #[cfg(feature = "cuda")]
 use tenferro_tensor::MemoryKind;
-use tenferro_tensor::{
-    Engine, BackendSessionHost, DType, Tensor, TensorRead, TensorStructural, TensorValue,
-};
+use tenferro_tensor::{DType, Engine, Tensor, TensorRead, TensorStructural, TensorValue};
 
 #[derive(Clone, Debug)]
 struct BridgeProbe {
@@ -125,7 +122,7 @@ impl ExtensionEngine for BridgeEngine {
     }
 
     fn context_identity(&self) -> ExecutionContextIdentity {
-        ExecutionContextIdentity::of::<CpuBackend>()
+        ExecutionContextIdentity::of::<tenferro_cpu::CpuEngine>()
     }
 
     fn prepare(
@@ -184,7 +181,7 @@ impl PreparedOperationExecutor for BridgePrepared {
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {
         let backend = context
-            .downcast_mut::<CpuBackend>(self.binding.context_identity())
+            .downcast_mut::<tenferro_cpu::CpuEngine>(self.binding.context_identity())
             .map_err(|source| {
                 tenferro_runtime::Error::runtime_state_source(
                     "eager-extension-bridge-test",
@@ -193,8 +190,7 @@ impl PreparedOperationExecutor for BridgePrepared {
                 )
             })?;
         let output = backend
-            .with_backend_session(|__s| __s.to_contiguous_read(inputs[0].clone()))
-            .unwrap()
+            .to_contiguous_read(inputs[0].clone())
             .map_err(tenferro_runtime::Error::from)?;
         Ok(vec![output])
     }
@@ -305,7 +301,12 @@ fn execute_probe(
     input: &EagerTensor,
     factory: impl FnOnce(EagerExtensionTarget) -> tenferro_runtime::Result<Arc<dyn ExtensionModule>>,
 ) -> tenferro_runtime::Result<Vec<EagerTensor>> {
-    apply_eager_with_targeted_extension_session(op, &[input], factory)
+    apply_eager_with_targeted_extension_session(
+        &mut tenferro_cpu::CpuEngine::serial(),
+        op,
+        &[input],
+        factory,
+    )
 }
 
 fn execute_legacy_probe(
@@ -313,12 +314,12 @@ fn execute_legacy_probe(
     input: &EagerTensor,
     module: Arc<dyn ExtensionModule>,
 ) -> tenferro_runtime::Result<Vec<EagerTensor>> {
-    apply_eager_with_extension_session(op, &[input], module)
+    apply_eager_with_extension_session(&mut tenferro_cpu::CpuEngine::serial(), op, &[input], module)
 }
 
 #[test]
 fn legacy_eager_extension_bridge_keeps_arc_module_contract() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let input = input(&ctx);
     let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
     let outputs = execute_legacy_probe(
@@ -333,7 +334,7 @@ fn legacy_eager_extension_bridge_keeps_arc_module_contract() {
 
 #[test]
 fn eager_extension_native_context_path_executes_through_erased_backend() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let input = input(&ctx);
     let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
     // A context-only prepared op (supports_session == false) must execute
@@ -347,13 +348,15 @@ fn eager_extension_native_context_path_executes_through_erased_backend() {
     .unwrap();
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].shape(), &[1]);
-    let value = outputs[0].to_tensor().unwrap();
+    let value = outputs[0]
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert_eq!(value.as_slice::<f64>().unwrap(), &[1.0]);
 }
 
 #[test]
 fn eager_extension_factory_receives_exact_cpu_target() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let input = input(&ctx);
     let seen = Arc::new(Mutex::new(None));
     let seen_by_factory = Arc::clone(&seen);
@@ -376,12 +379,12 @@ fn eager_extension_factory_receives_exact_cpu_target() {
 
 #[test]
 fn eager_extension_targeted_install_and_execution_reuse_the_borrowed_session() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let value = input(&ctx);
     let seen = Arc::new(Mutex::new(None));
     let seen_by_factory = Arc::clone(&seen);
     let outputs = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             super::apply_eager_with_targeted_extension_in_session(
                 session,
                 Arc::new(BridgeProbe::one()),
@@ -408,9 +411,11 @@ fn eager_extension_targeted_install_and_execution_reuse_the_borrowed_session() {
 
 #[test]
 fn eager_extension_target_resolves_under_a_borrowed_session() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let target = ctx
-        .with_eager_session(|_session| ctx.eager_extension_target())
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            ctx.eager_extension_target(session.engine())
+        })
         .unwrap();
     assert_eq!(target.engine_id, tenferro_cpu::runtime_engine_id().unwrap());
     assert_eq!(target.backend_kind, EagerExtensionBackendKind::Cpu);
@@ -418,14 +423,14 @@ fn eager_extension_target_resolves_under_a_borrowed_session() {
 
 #[test]
 fn eager_extension_prepared_executor_uses_borrowed_session() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let value = input(&ctx);
     let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
     ctx.install_extension_module(BridgeModule::for_engine(engine_id))
         .unwrap();
 
     let outputs = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             super::apply_eager_in_session(session, Arc::new(BridgeProbe::one()), &[&value])
         })
         .unwrap();
@@ -434,10 +439,10 @@ fn eager_extension_prepared_executor_uses_borrowed_session() {
         &[1.0]
     );
 
-    let foreign_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let foreign_ctx = EagerRuntime::new().unwrap();
     let foreign = input(&foreign_ctx);
     let error = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             super::apply_eager_in_session(session, Arc::new(BridgeProbe::one()), &[&foreign])
         })
         .unwrap_err();
@@ -446,7 +451,7 @@ fn eager_extension_prepared_executor_uses_borrowed_session() {
 
 #[test]
 fn eager_extension_borrowed_recording_materializes_untracked_inputs_in_session() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     ctx.install_extension_module(BridgeModule::for_engine(
         tenferro_cpu::runtime_engine_id().unwrap(),
     ))
@@ -456,7 +461,7 @@ fn eager_extension_borrowed_recording_materializes_untracked_inputs_in_session()
         .unwrap();
     let constant = input(&ctx);
     let output = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             super::apply_eager_in_session(
                 session,
                 Arc::new(BridgeProbe::two()),
@@ -471,21 +476,27 @@ fn eager_extension_borrowed_recording_materializes_untracked_inputs_in_session()
 }
 
 #[test]
-fn eager_extension_native_context_fallback_requires_a_separate_region() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+fn eager_extension_native_context_executor_runs_on_the_callers_engine() {
+    let ctx = EagerRuntime::new().unwrap();
     let input = input(&ctx);
     let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
     ctx.install_extension_module(BridgeModule::for_engine_context_only(engine_id))
         .unwrap();
     let op: Arc<dyn ExtensionOp> = Arc::new(BridgeProbe::one());
 
-    let error = ctx
-        .with_eager_session(|session| {
+    // A context-only executor reaches the concrete engine through the typed
+    // escape, inside a session as well as through the top-level entry.
+    let in_session = ctx
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             super::apply_eager_in_session(session, Arc::clone(&op), &[&input])
         })
-        .unwrap_err();
-    assert!(matches!(error, Error::Unsupported { .. }));
-    let outputs = super::apply_eager(op, &[&input]).unwrap();
+        .unwrap();
+    assert_eq!(
+        in_session[0].value().unwrap().as_slice::<f64>().unwrap(),
+        &[1.0]
+    );
+    let outputs =
+        super::apply_eager(&mut tenferro_cpu::CpuEngine::serial(), op, &[&input]).unwrap();
     assert_eq!(
         outputs[0].value().unwrap().as_slice::<f64>().unwrap(),
         &[1.0]
@@ -494,7 +505,7 @@ fn eager_extension_native_context_fallback_requires_a_separate_region() {
 
 #[test]
 fn eager_extension_cpu_input_signature_is_accepted_before_factory() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let input = input(&ctx);
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let calls_by_factory = Arc::clone(&calls);
@@ -510,11 +521,16 @@ fn eager_extension_cpu_input_signature_is_accepted_before_factory() {
 
 #[test]
 fn consuming_preparation_checks_recording_and_installs_without_taking_ownership() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let value = input(&ctx);
     let family = BridgeProbe::one().family_id();
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+    // Register the engine kind first so the epoch below only reflects module
+    // installation.
+    ctx.with_eager_session(&mut engine, |_| Ok::<_, Error>(()))
+        .unwrap();
     let before = ctx.runtime().epoch().unwrap();
-    let error = super::prepare_eager_in_place_input(&value, family, |_| {
+    let error = super::prepare_eager_in_place_input(&mut engine, &value, family, |_| {
         Err(Error::runtime_state(
             "test factory",
             ErrorPhase::Execution,
@@ -525,31 +541,37 @@ fn consuming_preparation_checks_recording_and_installs_without_taking_ownership(
     assert!(error.to_string().contains("factory failure"));
     assert_eq!(ctx.runtime().epoch().unwrap(), before);
     for _ in 0..2 {
-        super::prepare_eager_in_place_input(&value, family, |target| {
+        super::prepare_eager_in_place_input(&mut engine, &value, family, |target| {
             Ok(BridgeModule::for_engine(target.engine_id))
         })
         .unwrap();
     }
     assert!(ctx.runtime().epoch().unwrap() > before);
     // Preparation only checks eligibility; the caller still owns a usable value.
-    assert!(value.to_tensor().is_ok());
+    assert!(value
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .is_ok());
     let tracked = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major([1], vec![1.0_f64]).unwrap(),
         Arc::clone(&ctx),
     )
     .unwrap();
     let epoch = ctx.runtime().epoch().unwrap();
-    assert!(super::prepare_eager_in_place_input(&tracked, family, |_| {
-        panic!("tracked input must be rejected before the factory")
-    })
-    .is_err());
+    assert!(
+        super::prepare_eager_in_place_input(&mut engine, &tracked, family, |_| {
+            panic!("tracked input must be rejected before the factory")
+        })
+        .is_err()
+    );
     assert_eq!(ctx.runtime().epoch().unwrap(), epoch);
-    assert!(tracked.to_tensor().is_ok());
+    assert!(tracked
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .is_ok());
 }
 
 #[test]
 fn eager_extension_targeted_install_is_idempotent_for_fresh_modules() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let input = input(&ctx);
     let before = ctx.runtime().epoch().unwrap();
     execute_probe(Arc::new(BridgeProbe::one()), &input, |target| {
@@ -569,7 +591,7 @@ fn eager_extension_targeted_install_is_idempotent_for_fresh_modules() {
 
 #[test]
 fn eager_extension_warm_same_id_invalid_module_is_ignored() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let input = input(&ctx);
     execute_probe(Arc::new(BridgeProbe::one()), &input, |target| {
         Ok(BridgeModule::for_engine(target.engine_id))
@@ -594,7 +616,7 @@ fn eager_extension_warm_same_id_invalid_module_is_ignored() {
 
 #[test]
 fn eager_extension_targeted_install_is_atomic_under_concurrent_writers() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let target = EagerExtensionTarget {
         engine_id: tenferro_cpu::runtime_engine_id().unwrap(),
         backend_kind: EagerExtensionBackendKind::Cpu,
@@ -640,14 +662,15 @@ fn eager_extension_targeted_install_is_atomic_under_concurrent_writers() {
 
 #[test]
 fn eager_extension_input_context_mismatch_is_reported_before_factory() {
-    let lhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    let rhs_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let lhs_ctx = EagerRuntime::new().unwrap();
+    let rhs_ctx = EagerRuntime::new().unwrap();
     let lhs = input(&lhs_ctx);
     let rhs = input(&rhs_ctx);
     let called = Arc::new(Mutex::new(false));
     let called_by_factory = Arc::clone(&called);
 
     let error = apply_eager_with_targeted_extension_session(
+        &mut tenferro_cpu::CpuEngine::serial(),
         Arc::new(BridgeProbe::two()),
         &[&lhs, &rhs],
         move |_target| {
@@ -709,7 +732,7 @@ fn eager_extension_target_rejects_extension_engine_without_direct_engine() {
 
 #[test]
 fn eager_extension_module_without_target_engine_is_rejected_before_backend_session() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let input = input(&ctx);
     let error = execute_probe(Arc::new(BridgeProbe::one()), &input, |_target| {
         Ok(BridgeModule::without_engine())
@@ -740,7 +763,7 @@ fn eager_extension_module_without_target_engine_is_rejected_before_backend_sessi
 
 #[test]
 fn eager_extension_module_for_different_engine_is_rejected_before_backend_session() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let input = input(&ctx);
     let expected_engine = tenferro_cpu::runtime_engine_id().unwrap();
     let different_engine = EngineId::new("tenferro-tests.other-eager-engine").unwrap();
@@ -773,7 +796,7 @@ fn eager_extension_module_for_different_engine_is_rejected_before_backend_sessio
 
 #[test]
 fn eager_extension_factory_errors_are_returned_without_entering_backend_session() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let input = input(&ctx);
     let missing_engine = EngineId::new("tenferro-tests.factory-missing-engine").unwrap();
     let error = execute_probe(Arc::new(BridgeProbe::one()), &input, |_target| {
@@ -803,7 +826,7 @@ fn eager_extension_factory_errors_are_returned_without_entering_backend_session(
 
 #[test]
 fn eager_extension_warm_factory_errors_are_propagated_unchanged() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let input = input(&ctx);
     execute_probe(Arc::new(BridgeProbe::one()), &input, |target| {
         Ok(BridgeModule::for_engine(target.engine_id))
@@ -991,7 +1014,9 @@ fn eager_extension_factory_receives_exact_webgpu_target() {
     .unwrap();
 
     let copied = ctx
-        .with_eager_session(|session| session.duplicate_value(&input))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.duplicate_value(&input)
+        })
         .unwrap();
     let host = ctx
         .with_execution_session(|session| {
@@ -1019,7 +1044,7 @@ fn eager_extension_factory_receives_exact_webgpu_target() {
 
 #[test]
 fn adopt_untracked_eager_value_registers_value() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     let value = TensorValue::from_tensor(tensor);
     let eager = adopt_untracked_eager_value(Arc::clone(&ctx), value).unwrap();
@@ -1033,7 +1058,7 @@ fn apply_eager_falls_back_to_compiled_on_unsupported_prepare() {
     // path decline; apply_eager then falls back to the compiled-program path
     // (exec_extension_outputs_read). The compiled path shares the same engine, so the
     // fallback surfaces the engine's unsupported error rather than panicking.
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let input = input(&ctx);
     let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
     let result = execute_legacy_probe(
