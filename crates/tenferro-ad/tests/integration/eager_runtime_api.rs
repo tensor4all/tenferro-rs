@@ -1,57 +1,32 @@
 use std::sync::Arc;
 
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
-#[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::CudaBackend;
-#[cfg(feature = "webgpu")]
-use tenferro_gpu::webgpu::WebGpuBackend;
 use tenferro_runtime::Tensor;
 
 #[test]
 fn eager_runtime_constructors_return_typed_results() {
     let _: fn() -> tenferro_ad::Result<Arc<EagerRuntime>> = EagerRuntime::new;
-    let _: fn(CpuBackend) -> tenferro_ad::Result<Arc<EagerRuntime>> =
-        EagerRuntime::with_cpu_backend;
-    let _: fn(CpuBackend, &tenferro_ad::AdContext) -> tenferro_ad::Result<Arc<EagerRuntime>> =
-        EagerRuntime::with_cpu_backend_and_ad_context;
-
-    #[cfg(feature = "cuda")]
-    {
-        let _: fn(CudaBackend) -> tenferro_ad::Result<Arc<EagerRuntime>> =
-            EagerRuntime::with_cuda_backend;
-        let _: fn(CudaBackend, &tenferro_ad::AdContext) -> tenferro_ad::Result<Arc<EagerRuntime>> =
-            EagerRuntime::with_cuda_backend_and_ad_context;
-    }
-
-    #[cfg(feature = "webgpu")]
-    {
-        let _: fn(WebGpuBackend) -> tenferro_ad::Result<Arc<EagerRuntime>> =
-            EagerRuntime::with_webgpu_backend;
-        let _: fn(
-            WebGpuBackend,
-            &tenferro_ad::AdContext,
-        ) -> tenferro_ad::Result<Arc<EagerRuntime>> =
-            EagerRuntime::with_webgpu_backend_and_ad_context;
-    }
+    let _: fn(&tenferro_ad::AdContext) -> tenferro_ad::Result<Arc<EagerRuntime>> =
+        EagerRuntime::with_ad_context;
 }
 
 #[test]
 fn eager_runtime_replaces_eager_context_public_name() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let runtime = EagerRuntime::new().unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         runtime.clone(),
     )
     .unwrap();
     let loss = runtime
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let squared = s.mul(&x, &x)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
         .unwrap();
 
-    loss.backward().unwrap();
+    loss.backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     assert_eq!(
         x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
@@ -59,13 +34,6 @@ fn eager_runtime_replaces_eager_context_public_name() {
     );
     runtime.clear_grads().unwrap();
     assert!(x.grad().unwrap().is_none());
-}
-
-#[test]
-fn eager_runtime_synchronize_is_available_and_cpu_noop() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-
-    runtime.synchronize().unwrap();
 }
 
 #[test]

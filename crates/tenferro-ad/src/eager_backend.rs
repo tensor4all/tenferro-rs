@@ -299,6 +299,8 @@ impl TensorDot for RecordingEngine {
 #[cfg(test)]
 impl TensorFusion for RecordingEngine {}
 #[cfg(test)]
+impl tenferro_tensor::SessionCachedDot for RecordingEngine {}
+#[cfg(test)]
 impl TensorBuffer for RecordingEngine {}
 #[cfg(test)]
 impl TensorDeviceTransfer for RecordingEngine {

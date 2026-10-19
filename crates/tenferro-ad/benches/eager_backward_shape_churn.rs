@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
 
 const BOND_DIMS: &[(usize, usize)] = &[
     (8, 10),
@@ -52,7 +51,7 @@ fn fixture(ctx: &Arc<EagerRuntime>, left_bond: usize, right_bond: usize, seed: u
     let x = EagerTensor::requires_grad_in(tensor(shape.clone(), seed), Arc::clone(ctx)).unwrap();
     let weight = EagerTensor::from_tensor_in(tensor(shape, seed + 1000), Arc::clone(ctx)).unwrap();
     let loss = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let weighted = s.mul(&x, &weight)?;
             let quadratic = s.mul(&weighted, &x)?;
             let axes: Vec<usize> = (0..quadratic.shape().len()).collect();
@@ -68,7 +67,10 @@ fn fixture(ctx: &Arc<EagerRuntime>, left_bond: usize, right_bond: usize, seed: u
 
 fn run_backward(fixture: &Fixture) {
     fixture.ctx.clear_grads().unwrap();
-    fixture.loss.backward().unwrap();
+    fixture
+        .loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     let grad = fixture.x.grad().unwrap().unwrap();
     black_box(grad.shape());
     black_box(grad.as_slice::<f64>().unwrap()[0]);
@@ -76,7 +78,7 @@ fn run_backward(fixture: &Fixture) {
 
 fn bench_eager_backward_shape_churn(c: &mut Criterion) {
     let threads = bench_threads();
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(threads).unwrap()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let fixtures = BOND_DIMS
         .iter()
         .enumerate()

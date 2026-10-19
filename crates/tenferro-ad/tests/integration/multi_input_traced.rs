@@ -13,7 +13,7 @@ use tenferro_runtime::extension::{
     ExtensionOp, ExtensionShapeContext,
 };
 use tenferro_runtime::{DType, GraphCompiler, Runtime, Tensor, TracedTensor};
-use tenferro_tensor::{TensorBackend, TensorRead};
+use tenferro_tensor::TensorRead;
 
 use crate::support::{cpu_runtime, RunTraced};
 
@@ -126,13 +126,13 @@ fn execute_force(
         .collect()
 }
 
-fn action_session_supported<B: TensorBackend + 'static>(_op: &ActionOp) -> bool {
+fn action_session_supported<B: tenferro_tensor::Engine + 'static>(_op: &ActionOp) -> bool {
     // The family runs through a session on every backend.
     let _ = std::any::TypeId::of::<B>();
     true
 }
 
-fn force_session_supported<B: TensorBackend + 'static>(_op: &ForceOp) -> bool {
+fn force_session_supported<B: tenferro_tensor::Engine + 'static>(_op: &ForceOp) -> bool {
     // The family runs through a session on every backend.
     let _ = std::any::TypeId::of::<B>();
     true
@@ -231,7 +231,7 @@ fn four_input_extension_vjp_emits_one_force_node_and_executes_once() {
         .iter()
         .all(|value| Arc::ptr_eq(value.graph(), first_graph)));
 
-    let backend = tenferro_cpu::CpuBackend::new();
+    let backend = tenferro_cpu::CpuEngine::serial();
     let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
     let mut runtime_builder = Runtime::builder();
     runtime_builder
@@ -239,19 +239,18 @@ fn four_input_extension_vjp_emits_one_force_node_and_executes_once() {
         .unwrap();
     runtime_builder
         .install_extension_module(
-            action_runtime::extension_module::<tenferro_cpu::CpuBackend>(engine_id.clone())
-                .unwrap(),
+            action_runtime::extension_module::<tenferro_cpu::CpuEngine>(engine_id.clone()).unwrap(),
         )
         .unwrap();
     runtime_builder
         .install_extension_module(
-            force_runtime::extension_module::<tenferro_cpu::CpuBackend>(engine_id).unwrap(),
+            force_runtime::extension_module::<tenferro_cpu::CpuEngine>(engine_id).unwrap(),
         )
         .unwrap();
     let runtime = runtime_builder.build().unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&force_outputs).unwrap();
-    let outputs = runtime.run_compiled(&program, &[]).unwrap();
+    let outputs = crate::support::run_on_cpu(&runtime, &program, &[]).unwrap();
 
     let expected = [120.0, 80.0, 60.0, 48.0];
     for (output, expected) in outputs.iter().zip(expected) {
@@ -268,7 +267,7 @@ fn four_input_extension_vjp_emits_one_force_node_and_executes_once() {
         .collect::<Vec<_>>();
     let subset_refs = subset.iter().collect::<Vec<_>>();
     let subset_program = compiler.compile_many(&subset_refs).unwrap();
-    let subset_outputs = runtime.run_compiled(&subset_program, &[]).unwrap();
+    let subset_outputs = crate::support::run_on_cpu(&runtime, &subset_program, &[]).unwrap();
     for (output, expected) in subset_outputs.iter().zip([120.0, 60.0]) {
         assert_eq!(output.as_slice::<f64>().unwrap(), &[expected]);
     }

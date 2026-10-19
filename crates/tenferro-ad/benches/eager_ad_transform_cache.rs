@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
 
 const LEN: usize = 1024;
 
@@ -13,7 +12,7 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let data = (0..LEN)
         .map(|index| (index as f64 + 1.0) / LEN as f64)
         .collect::<Vec<_>>();
@@ -23,7 +22,7 @@ fn fixture() -> Fixture {
     )
     .unwrap();
     let loss = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let x2 = s.mul(&x, &x)?;
             let x3 = s.mul(&x2, &x)?;
             s.reduce_sum(&x3, Some(&[0]))
@@ -34,7 +33,10 @@ fn fixture() -> Fixture {
 
 fn run_backward(fixture: &Fixture) {
     fixture.ctx.clear_grads().unwrap();
-    fixture.loss.backward().unwrap();
+    fixture
+        .loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     let grad = fixture.x.grad().unwrap().unwrap();
     black_box(grad.as_slice::<f64>().unwrap()[0]);
 }

@@ -119,7 +119,7 @@ fn eager_ad_seed_and_missing_tangent_zeroes_are_uploaded() {
     let eager = ad_source("eager.rs");
     let eager_zero_like = source_section(
         &eager,
-        "pub(crate) fn zero_like_tensor<B: TensorBackend>",
+        "pub(crate) fn zero_like_tensor(",
         "pub(crate) fn one_like_tensor",
     );
     assert!(eager_zero_like.contains(".upload_host_tensor(TensorRead::from_tensor(&host))"));

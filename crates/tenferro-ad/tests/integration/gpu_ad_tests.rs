@@ -101,12 +101,17 @@ fn test_gpu_eager_backward_smoke() {
     let x = EagerTensor::requires_grad_in(x_gpu, ctx.clone()).unwrap();
     let seed = EagerTensor::from_tensor_in(seed_gpu, ctx.clone()).unwrap();
     let y = ctx
-        .with_eager_session(|session| session.mul(&x, &x))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.mul(&x, &x)
+        })
         .unwrap();
 
-    y.backward_with(&seed).unwrap();
+    y.backward_with(&mut tenferro_cpu::CpuEngine::serial(), &seed)
+        .unwrap();
     let grad = x.grad().unwrap().unwrap();
-    let grad_tensor = grad.to_tensor().unwrap();
+    let grad_tensor = grad
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     let grad_host = ctx
         .with_execution_session(|session| {
             session.download_to_host(TensorRead::from_tensor(&grad_tensor))
@@ -137,9 +142,13 @@ fn test_gpu_borrowed_reduce_sum_preserves_residency_and_gradient() {
     let x = EagerTensor::requires_grad_in(x_gpu, ctx.clone()).unwrap();
     let seed = EagerTensor::from_tensor_in(seed_gpu, ctx.clone()).unwrap();
     let sum = ctx
-        .with_eager_session(|session| session.reduce_sum(&x, Some(&[0])))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.reduce_sum(&x, Some(&[0]))
+        })
         .unwrap();
-    let result = sum.to_tensor().unwrap();
+    let result = sum
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert_device_backed(&result);
     let host = ctx
         .with_execution_session(|session| {
@@ -149,8 +158,14 @@ fn test_gpu_borrowed_reduce_sum_preserves_residency_and_gradient() {
         .unwrap();
     assert_f64_tensor_close(&host, &f64_tensor(vec![2], vec![3.0, 7.0]), 1e-10, 1e-10);
 
-    sum.backward_with(&seed).unwrap();
-    let grad = x.grad().unwrap().unwrap().to_tensor().unwrap();
+    sum.backward_with(&mut tenferro_cpu::CpuEngine::serial(), &seed)
+        .unwrap();
+    let grad = x
+        .grad()
+        .unwrap()
+        .unwrap()
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert_device_backed(&grad);
     let host = ctx
         .with_execution_session(|session| session.download_to_host(TensorRead::from_tensor(&grad)))
@@ -175,7 +190,7 @@ fn test_gpu_borrowed_concat_gather_and_index_select_stay_resident() {
     let x = EagerTensor::from_tensor_in(x_gpu, ctx.clone()).unwrap();
     let indices = EagerTensor::from_tensor_in(indices_gpu, ctx.clone()).unwrap();
     let (joined, selected, indexed) = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let joined = session.concatenate(&[&x, &x], 0)?;
             let selected = session.gather(
                 &joined,
@@ -192,9 +207,15 @@ fn test_gpu_borrowed_concat_gather_and_index_select_stay_resident() {
             Ok::<_, tenferro_ad::Error>((joined, selected, indexed))
         })
         .unwrap();
-    let joined = joined.to_tensor().unwrap();
-    let selected = selected.to_tensor().unwrap();
-    let indexed = indexed.to_tensor().unwrap();
+    let joined = joined
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
+    let selected = selected
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
+    let indexed = indexed
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert_device_backed(&joined);
     assert_device_backed(&selected);
     assert_device_backed(&indexed);
@@ -264,7 +285,7 @@ fn test_gpu_matmul_vjp() {
     let b_gpu = EagerTensor::from_tensor_in(b_device, ctx.clone()).unwrap();
     let cotangent_gpu = EagerTensor::from_tensor_in(cotangent_device, ctx.clone()).unwrap();
     let y_gpu = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             // Def 1 (active-edge): functional VJP over untracked leaves requires
             // explicit capture on the session's calling thread.
             let _capture = ctx.capture_trace();
@@ -281,14 +302,24 @@ fn test_gpu_matmul_vjp() {
         })
         .unwrap();
     let gpu_grad_a = ctx
-        .vjp(&y_gpu, &a_gpu, &cotangent_gpu)
+        .vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &y_gpu,
+            &a_gpu,
+            &cotangent_gpu,
+        )
         .unwrap()
-        .to_tensor()
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap();
     let gpu_grad_b = ctx
-        .vjp(&y_gpu, &b_gpu, &cotangent_gpu)
+        .vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &y_gpu,
+            &b_gpu,
+            &cotangent_gpu,
+        )
         .unwrap()
-        .to_tensor()
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap();
     assert_device_backed(&gpu_grad_a);
     assert_device_backed(&gpu_grad_b);
@@ -376,8 +407,7 @@ fn test_gpu_scale_real_and_scale_complex_match_cpu() {
             let program = GraphCompiler::new()
                 .compile_with_input_specs(&scaled, &specs)
                 .unwrap();
-            runtime
-                .run_compiled(&program, &[binding])
+            crate::support::run_on_cpu(&runtime, &program, &[binding])
                 .unwrap()
                 .pop()
                 .unwrap()
@@ -455,12 +485,16 @@ fn test_gpu_scale_real_and_scale_complex_match_cpu() {
         let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
         let x = EagerTensor::from_tensor_in(uploaded, ctx.clone()).unwrap();
         let scaled = ctx
-            .with_eager_session(|session| apply(session, &x))
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                apply(session, &x)
+            })
             .unwrap();
         // Materialize outside the execution session: `to_tensor` needs the
         // runtime's own session entry, so calling it inside `with_execution_session`
         // re-enters it.
-        let value = scaled.to_tensor().unwrap();
+        let value = scaled
+            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+            .unwrap();
         ctx.with_execution_session(|session| {
             session.download_to_host(TensorRead::from_tensor(&value))
         })
@@ -491,7 +525,8 @@ fn test_gpu_scale_real_and_scale_complex_match_cpu() {
     let ctx = EagerRuntime::with_cuda_backend(backend).unwrap();
     let x = EagerTensor::from_tensor_in(uploaded, ctx.clone()).unwrap();
     assert!(ctx
-        .with_eager_session(|session| session.scale_complex(&x, Complex64::new(0.0, 1.0)))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session
+            .scale_complex(&x, Complex64::new(0.0, 1.0)))
         .is_err());
 }
 
@@ -564,17 +599,20 @@ fn eager_op_f64_decode_add_host_cost_benchmark() {
 
     let warm = |iters: usize, keep: bool| -> f64 {
         let started = Instant::now();
-        ctx.with_eager_session(|s| -> tenferro_ad::Result<()> {
-            let mut held = Vec::new();
-            for _ in 0..iters {
-                let out = s.add(&x, &y)?;
-                if keep {
-                    held.push(out);
+        ctx.with_eager_session(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            |s| -> tenferro_ad::Result<()> {
+                let mut held = Vec::new();
+                for _ in 0..iters {
+                    let out = s.add(&x, &y)?;
+                    if keep {
+                        held.push(out);
+                    }
                 }
-            }
-            drop(held);
-            Ok(())
-        })
+                drop(held);
+                Ok(())
+            },
+        )
         .unwrap();
         runtime.synchronize().unwrap();
         started.elapsed().as_secs_f64() * 1e6 / iters as f64

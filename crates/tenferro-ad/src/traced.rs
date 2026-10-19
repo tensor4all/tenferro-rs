@@ -226,19 +226,21 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
     ///
     /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
     ///     let mut compiler = GraphCompiler::new();
     ///     let program = compiler.compile(tensor).unwrap();
-    ///     let backend = CpuBackend::new();
+    ///     let mut engine = tenferro_cpu::CpuEngine::serial();
     ///     let mut builder = Runtime::builder();
     ///     builder
-    ///         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///         .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
     ///         .unwrap();
     ///     let runtime = builder.build().unwrap();
-    ///     runtime.run_compiled(&program, &[]).unwrap().pop().unwrap()
+    ///     let target = tenferro_runtime::ExecutionEngine::target(&engine);
+    ///     let prepared = runtime.prepare(&program, &[], &[target]).unwrap();
+    ///     let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[]).unwrap();
+    ///     outputs.pop().unwrap().into_owned().unwrap()
     /// }
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
@@ -300,11 +302,10 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
     ///
     /// let mut compiler = GraphCompiler::new();
-    /// let backend = CpuBackend::new();
+    /// let backend = tenferro_cpu::CpuEngine::serial();
     /// let mut builder = Runtime::builder();
     /// builder
     ///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
@@ -339,19 +340,21 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
     ///
     /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
     ///     let mut compiler = GraphCompiler::new();
     ///     let program = compiler.compile(tensor).unwrap();
-    ///     let backend = CpuBackend::new();
+    ///     let mut engine = tenferro_cpu::CpuEngine::serial();
     ///     let mut builder = Runtime::builder();
     ///     builder
-    ///         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///         .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
     ///         .unwrap();
     ///     let runtime = builder.build().unwrap();
-    ///     runtime.run_compiled(&program, &[]).unwrap().pop().unwrap()
+    ///     let target = tenferro_runtime::ExecutionEngine::target(&engine);
+    ///     let prepared = runtime.prepare(&program, &[], &[target]).unwrap();
+    ///     let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[]).unwrap();
+    ///     outputs.pop().unwrap().into_owned().unwrap()
     /// }
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
@@ -423,19 +426,21 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
     ///
     /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
     ///     let mut compiler = GraphCompiler::new();
     ///     let program = compiler.compile(tensor).unwrap();
-    ///     let backend = CpuBackend::new();
+    ///     let mut engine = tenferro_cpu::CpuEngine::serial();
     ///     let mut builder = Runtime::builder();
     ///     builder
-    ///         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///         .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
     ///         .unwrap();
     ///     let runtime = builder.build().unwrap();
-    ///     runtime.run_compiled(&program, &[]).unwrap().pop().unwrap()
+    ///     let target = tenferro_runtime::ExecutionEngine::target(&engine);
+    ///     let prepared = runtime.prepare(&program, &[], &[target]).unwrap();
+    ///     let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[]).unwrap();
+    ///     outputs.pop().unwrap().into_owned().unwrap()
     /// }
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();

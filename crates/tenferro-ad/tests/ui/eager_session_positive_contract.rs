@@ -1,8 +1,10 @@
 use tenferro_ad::EagerRuntime;
-use tenferro_cpu::CpuBackend;
 
 fn main() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let runtime = EagerRuntime::new().unwrap();
+    let mut engine = tenferro_cpu::CpuEngine::serial();
 
-    runtime.with_execution_session(|_session| 7_u8).unwrap();
+    runtime
+        .with_eager_session(&mut engine, |_session| Ok::<_, tenferro_ad::Error>(7_u8))
+        .unwrap();
 }

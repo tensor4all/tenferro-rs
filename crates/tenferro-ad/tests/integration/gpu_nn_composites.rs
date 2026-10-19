@@ -9,7 +9,6 @@
 use std::sync::Arc;
 
 use tenferro_ad::{EagerRuntime, EagerSession, EagerTensor};
-use tenferro_cpu::CpuBackend;
 use tenferro_gpu::cuda::{
     cuda_runtime_engine_registration, download_tensor, gpu_available, upload_tensor, CudaBackend,
     CudaDeviceId,
@@ -17,7 +16,6 @@ use tenferro_gpu::cuda::{
 use tenferro_runtime::{
     DType, EngineId, GraphCompiler, Runtime, Tensor, TensorRead, TensorSessionOpsExt, TracedTensor,
 };
-use tenferro_tensor::BackendSessionHost;
 
 fn cuda_backend() -> CudaBackend {
     CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap()
@@ -199,13 +197,24 @@ fn eager_op(
 /// `sum(finite(y) * w)` with respect to x (non-finite outputs get weight 0).
 fn eager_value_and_grad(ctx: &Arc<EagerRuntime>, op: Op, host: &Inputs) -> (Vec<f64>, Vec<f64>) {
     let x = ctx
-        .with_eager_session(|s| s.constant_from_host(host.x.duplicate()?))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.constant_from_host(host.x.duplicate()?)
+        })
         .unwrap();
-    let x = EagerTensor::requires_grad_in(x.to_tensor().unwrap(), ctx.clone()).unwrap();
+    let x = EagerTensor::requires_grad_in(
+        x.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
     let y = ctx
-        .with_eager_session(|s| eager_op(s, op, &x, host))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            eager_op(s, op, &x, host)
+        })
         .unwrap_or_else(|err| panic!("{op:?} {:?}: {err:?}", host.x.dtype()));
-    let value = host_f64(&download(ctx, &y.to_tensor().unwrap()));
+    let value = host_f64(&download(
+        ctx,
+        &y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap(),
+    ));
     let weights: Vec<f64> = value
         .iter()
         .enumerate()
@@ -226,10 +235,19 @@ fn eager_value_and_grad(ctx: &Arc<EagerRuntime>, op: Op, host: &Inputs) -> (Vec<
         }
     };
     let cotangent = ctx
-        .with_eager_session(|s| s.constant_from_host(cotangent))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.constant_from_host(cotangent)
+        })
         .unwrap();
-    let grad = ctx.vjp(&y, &x, &cotangent).unwrap();
-    let grad = host_f64(&download(ctx, &grad.to_tensor().unwrap()));
+    let grad = ctx
+        .vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &x, &cotangent)
+        .unwrap();
+    let grad = host_f64(&download(
+        ctx,
+        &grad
+            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+            .unwrap(),
+    ));
     (value, grad)
 }
 
@@ -257,7 +275,7 @@ fn tolerance(dtype: DType) -> f64 {
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn test_gpu_composites_eager_values_and_gradients_match_cpu() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let cpu = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let cpu = EagerRuntime::new().unwrap();
     let gpu = EagerRuntime::with_cuda_backend(cuda_backend()).unwrap();
     for dtype in [DType::F64, DType::F32] {
         let host = inputs(dtype);
@@ -302,7 +320,7 @@ fn test_gpu_composites_eager_values_and_gradients_match_cpu() {
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn test_gpu_softmax_nan_and_infinity_policy_matches_cpu() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let cpu = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let cpu = EagerRuntime::new().unwrap();
     let gpu = EagerRuntime::with_cuda_backend(cuda_backend()).unwrap();
     // Columns: [NaN, 1, 2], [1, +inf, 3], [-inf, -inf, -inf], [0, -inf, 1].
     let x = Tensor::from_vec_col_major(
@@ -326,7 +344,7 @@ fn test_gpu_softmax_nan_and_infinity_policy_matches_cpu() {
     for log in [false, true] {
         let run = |ctx: &Arc<EagerRuntime>| {
             let y = ctx
-                .with_eager_session(|s| {
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                     let x = s.constant_from_host(x.duplicate()?)?;
                     if log {
                         s.log_softmax(&x, 0)
@@ -335,7 +353,10 @@ fn test_gpu_softmax_nan_and_infinity_policy_matches_cpu() {
                     }
                 })
                 .unwrap();
-            host_f64(&download(ctx, &y.to_tensor().unwrap()))
+            host_f64(&download(
+                ctx,
+                &y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap(),
+            ))
         };
         let cpu_value = run(&cpu);
         let gpu_value = run(&gpu);
@@ -406,7 +427,7 @@ fn run_traced(runtime: &Runtime, y: &TracedTensor, bindings: &[(TracedTensor, Te
         .compile_with_input_specs(y, &specs)
         .unwrap();
     let inputs: Vec<&Tensor> = bindings.iter().map(|(_, t)| t).collect();
-    let mut outputs = runtime.run_compiled(&program, &inputs).unwrap();
+    let mut outputs = crate::support::run_on_cpu(&runtime, &program, &inputs).unwrap();
     outputs.pop().unwrap()
 }
 
@@ -446,7 +467,7 @@ fn test_gpu_composites_traced_values_match_cpu() {
 fn test_gpu_composites_concrete_session_matches_cpu() {
     assert!(gpu_available(), "CUDA test requires an available device");
     let mut gpu = cuda_backend();
-    let mut cpu = CpuBackend::new();
+    let mut cpu = tenferro_cpu::CpuEngine::serial();
     let host = inputs(DType::F64);
     let device = |t: &Tensor| upload_tensor(gpu.runtime(), t).unwrap();
     let (x, mask, w, b, rows) = (
@@ -496,15 +517,11 @@ fn test_gpu_composites_concrete_session_matches_cpu() {
         ),
     ];
     for (name, f) in cases {
-        let expected = cpu
-            .with_backend_session(|s| {
-                f(&host.x, &host.mask, &host.weight, &host.bias, &host.rows, s)
-            })
-            .unwrap()
-            .unwrap();
-        let out = gpu
-            .with_backend_session(|s| f(&x, &mask, &w, &b, &rows, s))
-            .unwrap()
+        let expected = (|s: &mut dyn tenferro_tensor::Engine| {
+            f(&host.x, &host.mask, &host.weight, &host.bias, &host.rows, s)
+        })(&mut cpu)
+        .unwrap();
+        let out = (|s: &mut dyn tenferro_tensor::Engine| f(&x, &mask, &w, &b, &rows, s))(&mut gpu)
             .unwrap();
         let out = download_tensor(gpu.runtime(), &out).unwrap();
         assert_parity(&host_f64(&out), &host_f64(&expected), 1e-12, 1e-6, name);

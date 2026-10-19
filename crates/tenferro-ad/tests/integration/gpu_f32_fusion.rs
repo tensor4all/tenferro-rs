@@ -29,12 +29,12 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let b = EagerTensor::from_tensor_in(b_device, ctx.clone()).unwrap();
     let c = EagerTensor::from_tensor_in(c_device, ctx.clone()).unwrap();
     let result = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let sum = s.add(&a, &b)?;
             s.mul(&sum, &c)
         })
         .unwrap()
-        .to_tensor()
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap();
 
     let result = ctx

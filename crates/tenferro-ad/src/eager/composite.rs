@@ -165,7 +165,7 @@ impl<'a> EagerSession<'a> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![3], vec![-700.0_f64, 0.0, 1000.0])?)?;
     ///     s.sigmoid(&x)
     /// })?;
@@ -197,7 +197,7 @@ impl<'a> EagerSession<'a> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![3], vec![-1.0_f64, 0.0, 1.0])?)?;
     ///     s.silu(&x)
     /// })?;
@@ -228,7 +228,7 @@ impl<'a> EagerSession<'a> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![3], vec![-1000.0_f64, 0.0, 1000.0])?)?;
     ///     s.softplus(&x)
     /// })?;
@@ -260,7 +260,7 @@ impl<'a> EagerSession<'a> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![3], vec![-1.0_f64, 0.0, 1.0])?)?;
     ///     s.gelu(&x)
     /// })?;
@@ -291,7 +291,7 @@ impl<'a> EagerSession<'a> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![3], vec![-1.0_f64, 0.0, 1.0])?)?;
     ///     s.gelu_tanh(&x)
     /// })?;
@@ -323,7 +323,7 @@ impl<'a> EagerSession<'a> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
     ///     s.reduce_mean(&x, Some(&[1]))
     /// })?;
@@ -354,7 +354,7 @@ impl<'a> EagerSession<'a> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![2], vec![0.0_f64, f64::NEG_INFINITY])?)?;
     ///     s.softmax(&x, 0)
     /// })?;
@@ -380,7 +380,7 @@ impl<'a> EagerSession<'a> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0])?)?;
     ///     s.log_softmax(&x, 0)
     /// })?;
@@ -407,7 +407,7 @@ impl<'a> EagerSession<'a> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 1.0, f64::NAN])?)?;
     ///     let mask = s.constant_from_host(Tensor::from_vec_col_major(vec![3], vec![true, true, false])?)?;
     ///     s.masked_softmax(&x, &mask, 0)
@@ -441,7 +441,7 @@ impl<'a> EagerSession<'a> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?)?;
     ///     let mask = s.constant_from_host(Tensor::from_vec_col_major(vec![2], vec![true, false])?)?;
     ///     s.masked_log_softmax(&x, &mask, 0)
@@ -477,7 +477,7 @@ impl<'a> EagerSession<'a> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?)?;
     ///     s.layer_norm(&x, 0, None, None, 0.0)
     /// })?;
@@ -513,7 +513,7 @@ impl<'a> EagerSession<'a> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0])?)?;
     ///     s.rms_norm(&x, 0, None, None, 1e-6)
     /// })?;
@@ -551,7 +551,7 @@ impl<'a> EagerSession<'a> {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
     /// // Per-batch row gather: out[i, j, b] = x[idx[i, b], j, b].
-    /// let y = ctx.with_eager_session(|s| {
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let x = s.constant_from_host(Tensor::from_vec_col_major(vec![2, 2, 2], (0..8).map(f64::from).collect::<Vec<_>>())?)?;
     ///     let idx = s.constant_from_host(Tensor::from_vec_col_major(vec![2, 1, 2], vec![1_i64, 0, 0, 0])?)?;
     ///     s.take_along_axis(&x, &idx, 0)

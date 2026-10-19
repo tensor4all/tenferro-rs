@@ -8,7 +8,6 @@ use super::{eager_input_promotion_plan, exec_op_on_tensors};
 use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;
-use tenferro_cpu::CpuBackend;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -43,23 +42,21 @@ fn planned_input_dtypes(op: &StdTensorOp, input_dtypes: &[DType]) -> Vec<DType> 
 #[test]
 fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     use super::exec_standard_op_on_tensor_reads_in_session as execute;
-    use crate::eager_backend::EagerBackend;
+    use crate::eager_backend::RecordingEngine;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
+    use tenferro_tensor::{TensorRead, TensorView};
 
     let copies = Arc::new(AtomicUsize::new(0));
-    let mut backend = EagerBackend::recording_cpu(Arc::clone(&copies));
+    let mut backend = RecordingEngine::new(Arc::clone(&copies));
     let input = f64t(vec![2, 3], vec![1., 2., 3., 4., 5., 6.]);
     let TensorView::F64(view) = TensorRead::from_tensor(&input).tensor_view() else {
         panic!("f64 view")
     };
     let read = TensorRead::from_view(TensorView::F64(view.transpose_view([1, 0]).unwrap()));
-    let result = backend
-        .with_backend_session(|session| {
-            execute(&StdTensorOp::Mul, &[read.clone(), read.clone()], session)
-        })
-        .unwrap()
-        .unwrap();
+    let result = (|session: &mut dyn tenferro_tensor::Engine| {
+        execute(&StdTensorOp::Mul, &[read.clone(), read.clone()], session)
+    })(&mut backend)
+    .unwrap();
     assert_eq!(data(&result[0]), vec![1., 9., 25., 4., 16., 36.]);
     assert_eq!(
         copies.load(Ordering::Relaxed),
@@ -70,10 +67,10 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
 
     let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![2.0_f32; 6]).unwrap();
     let rhs = TensorRead::from_view(TensorRead::from_tensor(&rhs).tensor_view());
-    let result = backend
-        .with_backend_session(|session| execute(&StdTensorOp::Mul, &[read.clone(), rhs], session))
-        .unwrap()
-        .unwrap();
+    let result = (|session: &mut dyn tenferro_tensor::Engine| {
+        execute(&StdTensorOp::Mul, &[read.clone(), rhs], session)
+    })(&mut backend)
+    .unwrap();
     assert_eq!(data(&result[0]), vec![2., 6., 10., 4., 8., 12.]);
     assert_eq!(
         copies.swap(0, Ordering::Relaxed),
@@ -82,34 +79,33 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     );
 
     // Owned-only operations retain their explicit materialization boundary.
-    let result = backend
-        .with_backend_session(|session| {
-            execute(
-                &StdTensorOp::Tril { k: 0 },
-                std::slice::from_ref(&read),
-                session,
-            )
-        })
-        .unwrap()
-        .unwrap();
+    let result = (|session: &mut dyn tenferro_tensor::Engine| {
+        execute(
+            &StdTensorOp::Tril { k: 0 },
+            std::slice::from_ref(&read),
+            session,
+        )
+    })(&mut backend)
+    .unwrap();
     assert_eq!(data(&result[0]), vec![1., 3., 5., 0., 4., 6.]);
     assert_eq!(copies.swap(0, Ordering::Relaxed), 1);
 
     // Default read hooks reject views; never conceal unsupported capabilities
     // with an implicit eager copy. Production CPU sessions override exp_read.
-    let error = backend
-        .with_backend_session(|session| execute(&StdTensorOp::Exp, &[read], session))
-        .unwrap()
+    let error =
+        (|session: &mut dyn tenferro_tensor::Engine| execute(&StdTensorOp::Exp, &[read], session))(
+            &mut backend,
+        )
         .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Unsupported);
     assert_eq!(copies.load(Ordering::Relaxed), 0);
 
     let empty = f64t(vec![0, 3], vec![]);
     let read = TensorRead::from_view(TensorRead::from_tensor(&empty).tensor_view());
-    let result = backend
-        .with_backend_session(|session| execute(&StdTensorOp::Mul, &[read.clone(), read], session))
-        .unwrap()
-        .unwrap();
+    let result = (|session: &mut dyn tenferro_tensor::Engine| {
+        execute(&StdTensorOp::Mul, &[read.clone(), read], session)
+    })(&mut backend)
+    .unwrap();
     assert_eq!(result[0].shape(), &[0, 3]);
     assert!(data(&result[0]).is_empty());
     assert_eq!(copies.load(Ordering::Relaxed), 0);
@@ -199,7 +195,7 @@ fn data(t: &Tensor) -> Vec<f64> {
 
 #[test]
 fn dynamic_truncate_rounds_non_integer_size() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![5], vec![1.0, 2.0, 3.0, 4.0, 5.0]);
     let size = scalar(2.7);
     let result = exec_op_on_tensors(
@@ -213,7 +209,7 @@ fn dynamic_truncate_rounds_non_integer_size() {
 
 #[test]
 fn dynamic_truncate_clamps_negative_to_zero() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![3], vec![1.0, 2.0, 3.0]);
     let size = scalar(-5.0);
     let result = exec_op_on_tensors(
@@ -227,7 +223,7 @@ fn dynamic_truncate_clamps_negative_to_zero() {
 
 #[test]
 fn dynamic_truncate_clamps_oversize() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![3], vec![1.0, 2.0, 3.0]);
     let size = scalar(100.0);
     let result = exec_op_on_tensors(
@@ -241,7 +237,7 @@ fn dynamic_truncate_clamps_oversize() {
 
 #[test]
 fn dynamic_truncate_rejects_nan_size() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![3], vec![1.0, 2.0, 3.0]);
     let size = scalar(f64::NAN);
     let err = exec_op_on_tensors(
@@ -259,7 +255,7 @@ fn dynamic_truncate_rejects_nan_size() {
 
 #[test]
 fn dynamic_truncate_accepts_i64_scalar_size() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
     let size = i64_scalar(2);
     let result = exec_op_on_tensors(
@@ -273,7 +269,7 @@ fn dynamic_truncate_accepts_i64_scalar_size() {
 
 #[test]
 fn dynamic_truncate_rejects_non_scalar_size() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![4], vec![1.0, 2.0, 3.0, 4.0]);
     let size = f64t(vec![2], vec![1.0, 2.0]);
     let err = exec_op_on_tensors(
@@ -290,7 +286,7 @@ fn dynamic_truncate_rejects_non_scalar_size() {
 
 #[test]
 fn pad_to_match_noop_when_already_larger() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![5], vec![1.0, 2.0, 3.0, 4.0, 5.0]);
     let reference = f64t(vec![3], vec![0.0; 3]);
     let result = exec_op_on_tensors(
@@ -304,7 +300,7 @@ fn pad_to_match_noop_when_already_larger() {
 
 #[test]
 fn pad_to_match_pads_with_zeros() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![2], vec![1.0, 2.0]);
     let reference = f64t(vec![5], vec![0.0; 5]);
     let result = exec_op_on_tensors(
@@ -318,7 +314,7 @@ fn pad_to_match_pads_with_zeros() {
 
 #[test]
 fn dynamic_truncate_invalid_axis_returns_tensor_runtime_error() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![3], vec![1.0, 2.0, 3.0]);
     let size = scalar(2.0);
     let err = exec_op_on_tensors(
@@ -339,7 +335,7 @@ fn dynamic_truncate_invalid_axis_returns_tensor_runtime_error() {
 
 #[test]
 fn pad_to_match_rejects_reference_axis_out_of_bounds_without_panicking() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![2], vec![1.0, 2.0]);
     let reference = scalar(0.0);
     let err = exec_op_on_tensors(
@@ -360,7 +356,7 @@ fn pad_to_match_rejects_reference_axis_out_of_bounds_without_panicking() {
 
 #[test]
 fn eager_shape_expr_resolution_returns_error_instead_of_panicking() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![2], vec![1.0, 2.0]);
     let err = exec_op_on_tensors(
         &StdTensorOp::Reshape {
@@ -387,7 +383,7 @@ fn eager_shape_expr_resolution_returns_error_instead_of_panicking() {
 
 #[test]
 fn constant_f64_parses_bytes() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let result = exec_op_on_tensors(
         &StdTensorOp::Constant {
             dtype: DType::F64,
@@ -402,7 +398,7 @@ fn constant_f64_parses_bytes() {
 
 #[test]
 fn constant_f32_parses_bytes() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let result = exec_op_on_tensors(
         &StdTensorOp::Constant {
             dtype: DType::F32,
@@ -417,7 +413,7 @@ fn constant_f32_parses_bytes() {
 
 #[test]
 fn reshape_resolves_dim_exprs() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![6], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let result = exec_op_on_tensors(
         &StdTensorOp::Reshape {
@@ -432,7 +428,7 @@ fn reshape_resolves_dim_exprs() {
 
 #[test]
 fn shape_of_each_axis() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = f64t(vec![3, 7, 5], vec![0.0; 105]);
     for (axis, expected) in [(0, 3.0), (1, 7.0), (2, 5.0)] {
         let result = exec_op_on_tensors(&StdTensorOp::ShapeOf { axis }, &[&x], &mut b).unwrap();
@@ -445,33 +441,31 @@ fn generated_outputs_use_the_callers_borrowed_session() {
     use super::{
         exec_standard_op_on_tensor_reads_with_session, exec_standard_op_on_tensors_with_session,
     };
-    use tenferro_tensor::{BackendSessionHost, TensorRead};
+    use tenferro_tensor::TensorRead;
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let input = f64t(vec![2, 3], vec![0.0; 6]);
-    backend
-        .with_backend_session(|session| {
-            let constant = StdTensorOp::Constant {
-                dtype: DType::F64,
-                bytes: 3.125_f64.to_le_bytes().to_vec(),
-            };
-            let values = exec_standard_op_on_tensor_reads_with_session(&constant, &[], session)?;
-            assert_eq!(data(&values[0]), vec![3.125]);
-            let shape = StdTensorOp::ShapeOf { axis: 1 };
-            let reads = [TensorRead::from_tensor(&input)];
-            let values = exec_standard_op_on_tensor_reads_with_session(&shape, &reads, session)?;
-            assert_eq!(data(&values[0]), vec![3.0]);
-            let values = exec_standard_op_on_tensors_with_session(&shape, &[&input], session)?;
-            assert_eq!(data(&values[0]), vec![3.0]);
-            Ok::<_, tenferro_runtime::Error>(())
-        })
-        .unwrap()
-        .unwrap();
+    (|session: &mut dyn tenferro_tensor::Engine| {
+        let constant = StdTensorOp::Constant {
+            dtype: DType::F64,
+            bytes: 3.125_f64.to_le_bytes().to_vec(),
+        };
+        let values = exec_standard_op_on_tensor_reads_with_session(&constant, &[], session)?;
+        assert_eq!(data(&values[0]), vec![3.125]);
+        let shape = StdTensorOp::ShapeOf { axis: 1 };
+        let reads = [TensorRead::from_tensor(&input)];
+        let values = exec_standard_op_on_tensor_reads_with_session(&shape, &reads, session)?;
+        assert_eq!(data(&values[0]), vec![3.0]);
+        let values = exec_standard_op_on_tensors_with_session(&shape, &[&input], session)?;
+        assert_eq!(data(&values[0]), vec![3.0]);
+        Ok::<_, tenferro_runtime::Error>(())
+    })(&mut backend)
+    .unwrap();
 }
 
 #[test]
 fn extension_op_requires_installed_extension_module_runtime() {
-    let mut b = CpuBackend::new();
+    let mut b = tenferro_cpu::CpuEngine::serial();
     let x = scalar(1.0);
     let err = exec_op_on_tensors(
         &StdTensorOp::Extension(Arc::new(TestExtension)),

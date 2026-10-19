@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorScalar};
 
 const FD_H: f64 = 1.0e-6;
@@ -24,7 +23,7 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 }
 
 fn test_ctx() -> Arc<EagerRuntime> {
-    EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap()
+    EagerRuntime::new().unwrap()
 }
 
 fn eager_input<T: TensorScalar>(
@@ -45,7 +44,9 @@ fn assert_values<T>(tensor: &EagerTensor, expected: &[T])
 where
     T: TensorScalar + Debug + PartialEq,
 {
-    let actual = tensor.to_tensor().unwrap();
+    let actual = tensor
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert_eq!(actual.as_slice::<T>().unwrap(), expected);
 }
 
@@ -98,7 +99,7 @@ fn eager_maximum_and_minimum_gradients_match_finite_diff() {
     .unwrap();
 
     let loss = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let max = session.maximum(&x, &y)?;
             let max_weighted = session.mul(&max, &max_weights_tensor)?;
             let max_loss = session.reduce_sum(&max_weighted, Some(&[0]))?;
@@ -108,7 +109,9 @@ fn eager_maximum_and_minimum_gradients_match_finite_diff() {
             session.add(&max_loss, &min_loss)
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     let grad_x = x.grad().unwrap().unwrap();
     let grad_y = y.grad().unwrap().unwrap();
@@ -147,11 +150,19 @@ fn eager_maximum_and_minimum_gradients_match_finite_diff() {
     };
 
     assert_close(
-        f64_data(&grad_x.to_tensor().unwrap()),
+        f64_data(
+            &grad_x
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &finite_diff_unary(loss_for_x, &x_data),
     );
     assert_close(
-        f64_data(&grad_y.to_tensor().unwrap()),
+        f64_data(
+            &grad_y
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &finite_diff_unary(loss_for_y, &y_data),
     );
 }
@@ -186,13 +197,15 @@ fn eager_select_gradients_match_finite_diff() {
     .unwrap();
 
     let loss = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let selected = session.select(&condition, &on_true, &on_false)?;
             let weighted = session.mul(&selected, &weights_tensor)?;
             session.reduce_sum(&weighted, Some(&[0]))
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     let loss_for_true = |values: &[f64]| {
         weighted_sum(
@@ -216,11 +229,25 @@ fn eager_select_gradients_match_finite_diff() {
     };
 
     assert_close(
-        f64_data(&on_true.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &on_true
+                .grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &finite_diff_unary(loss_for_true, &true_data),
     );
     assert_close(
-        f64_data(&on_false.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &on_false
+                .grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &finite_diff_unary(loss_for_false, &false_data),
     );
 }
@@ -255,13 +282,15 @@ fn eager_clamp_gradients_match_finite_diff() {
     .unwrap();
 
     let loss = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let clamped = session.clamp(&input, &lower, &upper)?;
             let weighted = session.mul(&clamped, &weights_tensor)?;
             session.reduce_sum(&weighted, Some(&[0]))
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     let loss_with = |xs: &[f64], lows: &[f64], highs: &[f64]| {
         weighted_sum(
@@ -274,18 +303,39 @@ fn eager_clamp_gradients_match_finite_diff() {
     };
 
     assert_close(
-        f64_data(&input.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &input
+                .grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &finite_diff_unary(|xs| loss_with(xs, &lower_data, &upper_data), &input_data),
     );
     assert_close(
-        f64_data(&lower.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &lower
+                .grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &finite_diff_unary(
             |lows| loss_with(&input_data, lows, &upper_data),
             &lower_data,
         ),
     );
     assert_close(
-        f64_data(&upper.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &upper
+                .grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &finite_diff_unary(
             |highs| loss_with(&input_data, &lower_data, highs),
             &upper_data,
@@ -311,22 +361,30 @@ fn eager_extract_diag_rectangular_gradient_matches_finite_diff() {
     .unwrap();
 
     let diagonal = ctx
-        .with_eager_session(|session| session.extract_diag(&input, 0, 1))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.extract_diag(&input, 0, 1)
+        })
         .unwrap();
     let loss = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let weighted = s.mul(&diagonal, &weights_tensor)?;
             s.reduce_sum(&weighted, Some(&[0]))
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     let loss_for_input = |values: &[f64]| weights[0] * values[0] + weights[1] * values[3];
 
     let grad = input.grad().unwrap().unwrap();
     assert_eq!(grad.shape(), &[2, 3]);
     assert_close(
-        f64_data(&grad.to_tensor().unwrap()),
+        f64_data(
+            &grad
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &finite_diff_unary(loss_for_input, &input_data),
     );
 }
@@ -353,15 +411,19 @@ fn eager_embed_diag_shifted_axis_gradient_matches_finite_diff() {
     .unwrap();
 
     let embedded = ctx
-        .with_eager_session(|session| session.embed_diag(&input, 1, 0))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.embed_diag(&input, 1, 0)
+        })
         .unwrap();
     let loss = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let weighted = s.mul(&embedded, &weights_tensor)?;
             s.reduce_sum(&weighted, Some(&[0, 1, 2]))
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     let loss_for_input = |values: &[f64]| {
         (0..input_shape[1])
@@ -377,7 +439,11 @@ fn eager_embed_diag_shifted_axis_gradient_matches_finite_diff() {
     let grad = input.grad().unwrap().unwrap();
     assert_eq!(grad.shape(), input_shape.as_slice());
     assert_close(
-        f64_data(&grad.to_tensor().unwrap()),
+        f64_data(
+            &grad
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &finite_diff_unary(loss_for_input, &input_data),
     );
 }
@@ -412,15 +478,19 @@ fn eager_concatenate_gradients_match_finite_diff() {
     .unwrap();
 
     let concatenated = ctx
-        .with_eager_session(|session| session.concatenate(&[&left, &middle, &right], 0))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.concatenate(&[&left, &middle, &right], 0)
+        })
         .unwrap();
     let loss = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let weighted = s.mul(&concatenated, &weights_tensor)?;
             s.reduce_sum(&weighted, Some(&[0]))
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     let loss_for_left = |values: &[f64]| {
         weighted_sum(
@@ -454,15 +524,36 @@ fn eager_concatenate_gradients_match_finite_diff() {
     };
 
     assert_close(
-        f64_data(&left.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &left
+                .grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &finite_diff_unary(loss_for_left, &left_data),
     );
     assert_close(
-        f64_data(&middle.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &middle
+                .grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &finite_diff_unary(loss_for_middle, &middle_data),
     );
     assert_close(
-        f64_data(&right.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &right
+                .grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &finite_diff_unary(loss_for_right, &right_data),
     );
 }
@@ -490,25 +581,51 @@ fn run_exact_concatenate_case<T>(
     let cotangent = eager_input(&ctx, vec![2, 4], cotangent_data, false);
 
     let output = ctx
-        .with_eager_session(|session| session.concatenate(&[&left, &middle, &right], 1))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.concatenate(&[&left, &middle, &right], 1)
+        })
         .unwrap();
     assert_values(&output, expected_output);
     assert_values(
-        &ctx.vjp(&output, &left, &cotangent).unwrap(),
+        &ctx.vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &left,
+            &cotangent,
+        )
+        .unwrap(),
         expected_left_vjp,
     );
     assert_values(
-        &ctx.vjp(&output, &middle, &cotangent).unwrap(),
+        &ctx.vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &middle,
+            &cotangent,
+        )
+        .unwrap(),
         expected_middle_vjp,
     );
     assert_values(
-        &ctx.vjp(&output, &right, &cotangent).unwrap(),
+        &ctx.vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &right,
+            &cotangent,
+        )
+        .unwrap(),
         expected_right_vjp,
     );
 
     let middle_tangent = eager_input(&ctx, vec![2, 2], middle_tangent_data, false);
     assert_values(
-        &ctx.jvp(&output, &middle, &middle_tangent).unwrap(),
+        &ctx.jvp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &middle,
+            &middle_tangent,
+        )
+        .unwrap(),
         expected_jvp,
     );
 }
@@ -584,11 +701,15 @@ fn run_mixed_concatenate_case(tracked_first: bool) {
         false,
     );
     let output = if tracked_first {
-        ctx.with_eager_session(|session| session.concatenate(&[&tracked, &inactive], 1))
-            .unwrap()
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.concatenate(&[&tracked, &inactive], 1)
+        })
+        .unwrap()
     } else {
-        ctx.with_eager_session(|session| session.concatenate(&[&inactive, &tracked], 1))
-            .unwrap()
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.concatenate(&[&inactive, &tracked], 1)
+        })
+        .unwrap()
     };
 
     let expected_output = if tracked_first {
@@ -603,7 +724,13 @@ fn run_mixed_concatenate_case(tracked_first: bool) {
     };
     assert_values(&output, expected_output);
     assert_values(
-        &ctx.vjp(&output, &tracked, &cotangent).unwrap(),
+        &ctx.vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &tracked,
+            &cotangent,
+        )
+        .unwrap(),
         expected_vjp,
     );
 }
@@ -634,26 +761,47 @@ fn run_mixed_stack_case<T>(
     let tracked = eager_input(&ctx, vec![2], tracked_data, true);
     let inactive = eager_input(&ctx, vec![2], inactive_data, false);
     let output = if tracked_first {
-        ctx.with_eager_session(|session| session.stack(&[&tracked, &inactive], dim))
-            .unwrap()
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.stack(&[&tracked, &inactive], dim)
+        })
+        .unwrap()
     } else {
-        ctx.with_eager_session(|session| session.stack(&[&inactive, &tracked], dim))
-            .unwrap()
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.stack(&[&inactive, &tracked], dim)
+        })
+        .unwrap()
     };
     let cotangent = eager_input(&ctx, vec![2, 2], cotangent_data, false);
     let tangent = eager_input(&ctx, vec![2], tangent_data, false);
 
     assert_values(&output, &expected_output);
     assert_values(
-        &ctx.vjp(&output, &tracked, &cotangent).unwrap(),
+        &ctx.vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &tracked,
+            &cotangent,
+        )
+        .unwrap(),
         &expected_vjp,
     );
     assert!(ctx
-        .vjp_optional(&output, &inactive, &cotangent)
+        .vjp_optional(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &inactive,
+            &cotangent
+        )
         .unwrap()
         .is_none());
     assert_values(
-        &ctx.jvp(&output, &tracked, &tangent).unwrap(),
+        &ctx.jvp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &tracked,
+            &tangent,
+        )
+        .unwrap(),
         &expected_jvp,
     );
 }
@@ -717,21 +865,37 @@ fn eager_mixed_stack_vjp_then_jvp_remains_composable() {
     let tracked = eager_input(&ctx, vec![2], &[2.0_f64, 3.0], true);
     let inactive = eager_input(&ctx, vec![2], &[5.0_f64, 7.0], false);
     let stacked = ctx
-        .with_eager_session(|session| session.stack(&[&tracked, &inactive], -1))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.stack(&[&tracked, &inactive], -1)
+        })
         .unwrap();
     let loss = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let squared = s.mul(&stacked, &stacked)?;
             s.reduce_sum(&squared, Some(&[0, 1]))
         })
         .unwrap();
     let seed = eager_input(&ctx, vec![], &[1.0_f64], false);
 
-    let gradient = ctx.vjp(&loss, &tracked, &seed).unwrap();
+    let gradient = ctx
+        .vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &loss,
+            &tracked,
+            &seed,
+        )
+        .unwrap();
     assert_values(&gradient, &[4.0, 6.0]);
 
     let tangent = eager_input(&ctx, vec![2], &[0.5_f64, -1.25], false);
-    let hvp = ctx.jvp(&gradient, &tracked, &tangent).unwrap();
+    let hvp = ctx
+        .jvp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &gradient,
+            &tracked,
+            &tangent,
+        )
+        .unwrap();
     assert_values(&hvp, &[1.0, -2.5]);
 }
 
@@ -743,7 +907,9 @@ fn eager_concatenate_cache_isolated_for_compatible_shapes() {
     let first_left = eager_input(&ctx, vec![2, 1], &[1.0_f64, 2.0], true);
     let first_right = eager_input(&ctx, vec![2, 2], &[3.0_f64, 4.0, 5.0, 6.0], true);
     let first_output = ctx
-        .with_eager_session(|session| session.concatenate(&[&first_left, &first_right], 1))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.concatenate(&[&first_left, &first_right], 1)
+        })
         .unwrap();
     let first_cotangent = eager_input(
         &ctx,
@@ -752,8 +918,13 @@ fn eager_concatenate_cache_isolated_for_compatible_shapes() {
         false,
     );
     assert_values(
-        &ctx.vjp(&first_output, &first_right, &first_cotangent)
-            .unwrap(),
+        &ctx.vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &first_output,
+            &first_right,
+            &first_cotangent,
+        )
+        .unwrap(),
         &[2.0, 1.5, -0.25, 0.75],
     );
     assert_eq!(ctx.cache_stats().unwrap().prepared_derivatives.entries, 1);
@@ -761,7 +932,9 @@ fn eager_concatenate_cache_isolated_for_compatible_shapes() {
     let second_left = eager_input(&ctx, vec![2, 2], &[7.0_f64, 8.0, 9.0, 10.0], true);
     let second_right = eager_input(&ctx, vec![2, 1], &[11.0_f64, 12.0], true);
     let second_output = ctx
-        .with_eager_session(|session| session.concatenate(&[&second_left, &second_right], 1))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.concatenate(&[&second_left, &second_right], 1)
+        })
         .unwrap();
     let second_cotangent = eager_input(
         &ctx,
@@ -770,8 +943,13 @@ fn eager_concatenate_cache_isolated_for_compatible_shapes() {
         false,
     );
     assert_values(
-        &ctx.vjp(&second_output, &second_right, &second_cotangent)
-            .unwrap(),
+        &ctx.vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &second_output,
+            &second_right,
+            &second_cotangent,
+        )
+        .unwrap(),
         &[3.0, 0.25],
     );
     assert_eq!(ctx.cache_stats().unwrap().prepared_derivatives.entries, 2);

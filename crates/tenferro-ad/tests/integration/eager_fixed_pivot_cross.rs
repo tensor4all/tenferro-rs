@@ -1,13 +1,12 @@
 use std::sync::Arc;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 
-use tenferro_cpu::CpuBackend;
 use tenferro_runtime::Tensor;
 
 const TOL: f64 = 1.0e-10;
 
 fn test_ctx() -> Arc<EagerRuntime> {
-    EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap()
+    EagerRuntime::new().unwrap()
 }
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
@@ -43,41 +42,65 @@ fn take_axis_rows_cols_and_block_select_static_indices() {
     .unwrap();
 
     let rows = ctx
-        .with_eager_session(|session| session.take_rows(&x, &[2, 0]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.take_rows(&x, &[2, 0])
+        })
         .unwrap();
     assert_eq!(rows.shape(), &[2, 4]);
     assert_close_slice(
-        f64_data(&rows.to_tensor().unwrap()),
+        f64_data(
+            &rows
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[3.0, 1.0, 6.0, 4.0, 9.0, 7.0, 12.0, 10.0],
         TOL,
     );
 
     let cols = ctx
-        .with_eager_session(|session| session.take_cols(&x, &[3, 1]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.take_cols(&x, &[3, 1])
+        })
         .unwrap();
     assert_eq!(cols.shape(), &[3, 2]);
     assert_close_slice(
-        f64_data(&cols.to_tensor().unwrap()),
+        f64_data(
+            &cols
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[10.0, 11.0, 12.0, 4.0, 5.0, 6.0],
         TOL,
     );
 
     let block = ctx
-        .with_eager_session(|session| session.take_block(&x, &[2, 0], &[3, 1]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.take_block(&x, &[2, 0], &[3, 1])
+        })
         .unwrap();
     assert_eq!(block.shape(), &[2, 2]);
     assert_close_slice(
-        f64_data(&block.to_tensor().unwrap()),
+        f64_data(
+            &block
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[12.0, 10.0, 6.0, 4.0],
         TOL,
     );
 
     let axis = ctx
-        .with_eager_session(|session| session.take_axis(&x, 1, &[0, 2]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.take_axis(&x, 1, &[0, 2])
+        })
         .unwrap();
     assert_eq!(axis.shape(), &[3, 2]);
     assert_close_slice(
-        f64_data(&axis.to_tensor().unwrap()),
+        f64_data(
+            &axis
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[1.0, 2.0, 3.0, 7.0, 8.0, 9.0],
         TOL,
     );
@@ -107,18 +130,28 @@ fn take_block_backward_accumulates_to_source() {
     .unwrap();
 
     let block = ctx
-        .with_eager_session(|session| session.take_block(&x, &[2, 0, 2], &[3, 1]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.take_block(&x, &[2, 0, 2], &[3, 1])
+        })
         .unwrap();
     let loss = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let weighted = s.mul(&block, &weights)?;
             s.reduce_sum(&weighted, Some(&[0, 1]))
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     assert_close_slice(
-        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &x.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[0.0, 0.0, 0.0, 5.0, 0.0, 10.0, 0.0, 0.0, 0.0, 2.0, 0.0, 4.0],
         TOL,
     );
