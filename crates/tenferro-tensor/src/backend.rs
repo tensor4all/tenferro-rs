@@ -6,8 +6,8 @@ use crate::types::{
 };
 use crate::validate::validate_convert_dtype;
 use crate::{
-    AllocationDomainId, AllocationId, DType, Error,
-    ShapeMismatch, ShapeVec, Tensor, TensorRead, TensorValue, TensorWrite, ValidationError,
+    AllocationDomainId, AllocationId, DType, Error, ShapeMismatch, ShapeVec, Tensor, TensorRead,
+    TensorValue, TensorWrite, ValidationError,
 };
 use num_complex::{Complex32, Complex64};
 
@@ -2829,7 +2829,6 @@ pub trait SessionCachedDot: TensorDot {
     ) -> crate::Result<()> {
         self.dot_general_read_into_accum(lhs, rhs, config, accumulation, out)
     }
-
 }
 
 /// Indexing, slicing, and padding operations.
@@ -3438,4 +3437,3 @@ pub trait Engine: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
         None
     }
 }
-

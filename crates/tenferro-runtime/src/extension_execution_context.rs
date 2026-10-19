@@ -111,7 +111,7 @@ impl<'a, B: Engine + ?Sized> ExtensionExecutionContext<'a, B> {
 mod tests {
     use super::*;
     use tenferro_cpu::CpuBackend;
-    use tenferro_tensor::{Engine, BackendSessionHost, Tensor, TensorRead};
+    use tenferro_tensor::{BackendSessionHost, Engine, Tensor, TensorRead};
 
     use crate::ExtensionCacheSelector;
 

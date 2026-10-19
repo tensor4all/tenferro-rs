@@ -133,7 +133,6 @@ pub struct CacheOwnerFailure {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum FrozenCacheOwnerKind {
-    Engine,
     Extension,
 }
 

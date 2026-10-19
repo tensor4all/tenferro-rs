@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::TensorSessionOpsExt;
 use tenferro_tensor::TensorRead;
-use tenferro_tensor::{Engine, BackendSessionHost, CompareDir, DotGeneralConfig, Tensor};
+use tenferro_tensor::{BackendSessionHost, CompareDir, DotGeneralConfig, Engine, Tensor};
 
 const LEN: usize = 4096;
 const INPUT_BYTES: usize = LEN * size_of::<f64>();

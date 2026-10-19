@@ -7,8 +7,8 @@ use std::marker::PhantomData;
 
 use tenferro_ops::broadcast::{broadcast_shape, broadcast_shapes};
 use tenferro_tensor::{
-    Engine, CompareDir, DType, Error, GatherConfig, Result, Tensor, TensorRead,
-    TensorScalar, TensorValue, TypedTensor,
+    CompareDir, DType, Engine, Error, GatherConfig, Result, Tensor, TensorRead, TensorScalar,
+    TensorValue, TypedTensor,
 };
 
 use super::{

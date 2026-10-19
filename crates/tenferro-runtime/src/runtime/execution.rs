@@ -1,37 +1,35 @@
 //! Runtime-owned compiled-graph execution boundary.
 //!
-//! This module owns the private execution bridge used by
-//! `Runtime::run_compiled*`.
+//! [`crate::Runtime::prepare`] turns a compiled graph into a [`Prepared`]
+//! program for a set of engine targets, and [`crate::Runtime::run`] runs it on
+//! the engines the caller passes in. The runtime holds no engine and no
+//! execution state between calls.
 
 use num_complex::{Complex32, Complex64};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::fmt;
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
-use std::thread::{self, ThreadId};
+use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 
 use smallvec::SmallVec;
 use tenferro_ops::shape_extent::ShapeExtent;
-use tenferro_tensor::{
-    AllocationGroup, Engine, DType, DescriptorSlot, GroupError, MemoryKind, Tensor,
-    TensorBackend, TensorRead, TensorValue, TensorView,
-};
+use tenferro_tensor::{DType, Engine, Tensor, TensorRead};
 use tinyvec::TinyVec;
 
 use crate::error::ErrorPhase;
 use crate::exec::{ExecInstruction, ExecProgram, ExecSlot, ExtensionExecutionDispatch};
-use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
+use crate::extension_cache::ExtensionCacheStore;
 use crate::graph::CompiledGraph;
 use crate::runtime::schedule::{
     EventDependency, ExecutionLocation, ScheduledGraph, ScheduledNode, ScheduledNodeKind,
     ScheduledTransfer, UnsupportedScheduledNodeError,
 };
 use crate::runtime::{
-    CacheOwnerError, CacheStats, EventDomainError, EventDomainOperation, EventDomainRun,
-    EventToken, InputSignature, PrepareError, PrepareOptions, PreparedOperationPlan, Runtime,
-    RuntimeCacheOwner, SubmissionError, TransferError, TransferProviderContractError,
-    TransferRequest,
+    EngineId, EngineTarget, EventDomainDriver, EventDomainError, EventDomainOperation,
+    EventDomainRun, EventToken, ExecutionEngine, InputSignature, Output, PrepareError,
+    PrepareOptions, PreparedOperationPlan, ProgramPlacementConstraint, Runtime, TransferError,
+    TransferProviderContractError, TransferRequest,
 };
 use crate::{Error, Result};
 
@@ -42,19 +40,25 @@ type RuntimeInputReads<'a> = SmallVec<[TensorRead<'a>; 8]>;
 type RuntimeInputShapes<'a> = TinyVec<[&'a [usize]; 8]>;
 type RuntimeShapeScratch = TinyVec<[usize; 8]>;
 
-#[derive(Clone, Copy, Debug)]
-pub(super) enum RuntimeOutputMode {
-    Tensor,
-    Value,
-}
-
-/// Runtime-prepared compiled graph execution handle.
+/// A compiled graph prepared for a set of engine targets.
 ///
-/// This handle keeps the prepared execution staging and its direct provider
-/// witnesses inside the immutable schedule. It is tied to the runtime epoch
-/// that created it and becomes stale after runtime reconfiguration.
+/// A prepared program holds the execution plan and the requirements each
+/// target slot puts on its engine; it holds no engine, stream or event state,
+/// so any engines that report the same targets can run it, and several callers
+/// can run it at the same time on their own engines. It is tied to the runtime
+/// epoch that created it and becomes stale after runtime reconfiguration.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::Prepared;
+///
+/// fn target_count(prepared: &Prepared) -> usize {
+///     prepared.targets().len()
+/// }
+/// ```
 #[derive(Clone)]
-pub struct PreparedCompiledGraph {
+pub struct Prepared {
     runtime_id: super::RuntimeId,
     epoch: super::RuntimeEpoch,
     program: CompiledGraph,
@@ -65,9 +69,40 @@ pub struct PreparedCompiledGraph {
     /// Preparation that replaced every input validated the replacements only,
     /// so its prepared handle must re-check the defaults at execution time.
     defaults_validated: bool,
+    /// The engine targets, in slot order, that a run must bind.
+    targets: Arc<[EngineTarget]>,
 }
 
-impl PreparedCompiledGraph {
+impl fmt::Debug for Prepared {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Prepared")
+            .field("runtime_id", &self.runtime_id)
+            .field("epoch", &self.epoch)
+            .field("targets", &self.targets)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Prepared {
+    /// The engine targets this program was prepared for, in slot order.
+    ///
+    /// [`crate::Runtime::run`] binds slot `i` to the `i`-th engine it receives.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::Prepared;
+    ///
+    /// fn first_engine(prepared: &Prepared) -> Option<&str> {
+    ///     prepared.targets().first().map(|target| target.engine_id().as_str())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn targets(&self) -> &[EngineTarget] {
+        &self.targets
+    }
+
     /// How executions must treat this handle's retained inputs.
     ///
     /// Skipping the check is sound only when preparation itself ran it on those
@@ -120,1427 +155,6 @@ impl PreparedCompiledGraph {
     }
 }
 
-/// Asynchronous runtime execution handle returned by [`Runtime::submit`].
-pub struct ExecutionHandle {
-    submission: Arc<InFlightSubmission>,
-}
-
-/// Move-only input package for detached runtime submission.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_runtime::runtime::ExecutionInputs;
-///
-/// let inputs = ExecutionInputs::new(Vec::new())?;
-/// assert!(format!("{inputs:?}").contains("ExecutionInputs"));
-/// # Ok::<(), tenferro_runtime::Error>(())
-/// ```
-pub struct ExecutionInputs {
-    group: AllocationGroup,
-    bindings: Box<[DescriptorSlot]>,
-}
-
-impl ExecutionInputs {
-    /// Construct a package from already-owned tensors.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::RuntimeState`] when a tensor binding cannot be
-    /// registered in the allocation group.
-    pub fn new(tensors: Vec<Tensor>) -> Result<Self> {
-        let (group, bindings) = AllocationGroup::from_tensors(tensors).map_err(|error| {
-            Error::runtime_state(
-                "ExecutionInputs::new",
-                ErrorPhase::Execution,
-                error.to_string(),
-            )
-        })?;
-        Ok(Self { group, bindings })
-    }
-
-    pub(crate) fn as_reads(&self) -> Result<Vec<TensorRead<'_>>> {
-        self.group.read_views(&self.bindings).map_err(|error| {
-            Error::runtime_state(
-                "ExecutionInputs::as_reads",
-                ErrorPhase::Execution,
-                error.to_string(),
-            )
-        })
-    }
-}
-
-impl fmt::Debug for ExecutionInputs {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ExecutionInputs")
-            .field("len", &self.bindings.len())
-            .finish()
-    }
-}
-
-/// Borrowed immutable inputs for synchronous, retirement-before-return execution.
-pub struct ScopedReadInputs<'env> {
-    bindings: Box<[ScopedReadBinding<'env>]>,
-}
-
-impl<'env> ScopedReadInputs<'env> {
-    /// Build a scoped input package from borrowed dtype-erased views.
-    pub fn new(bindings: Vec<TensorView<'env>>) -> Self {
-        Self {
-            bindings: bindings
-                .into_iter()
-                .map(|tensor| ScopedReadBinding { tensor })
-                .collect(),
-        }
-    }
-
-    fn as_reads(&self) -> Vec<TensorRead<'env>> {
-        self.bindings
-            .iter()
-            .map(|binding| TensorRead::from_view(binding.tensor.clone()))
-            .collect()
-    }
-
-    fn has_non_host_provider(&self) -> bool {
-        self.bindings.iter().any(|binding| {
-            !matches!(
-                binding.tensor.placement().memory_kind,
-                MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
-            )
-        })
-    }
-
-    /// Return the number of borrowed bindings.
-    pub fn len(&self) -> usize {
-        self.bindings.len()
-    }
-
-    /// Return whether no borrowed bindings were supplied.
-    pub fn is_empty(&self) -> bool {
-        self.bindings.is_empty()
-    }
-}
-
-/// One immutable borrowed binding in a scoped input package.
-pub struct ScopedReadBinding<'env> {
-    tensor: TensorView<'env>,
-}
-
-impl<'env> ScopedReadBinding<'env> {
-    /// Wrap one immutable dtype-erased view.
-    pub fn new(tensor: TensorView<'env>) -> Self {
-        Self { tensor }
-    }
-
-    /// Borrow the binding's dtype-erased view.
-    pub fn tensor(&self) -> &TensorView<'env> {
-        &self.tensor
-    }
-}
-
-impl fmt::Debug for ScopedReadInputs<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ScopedReadInputs")
-            .field("len", &self.bindings.len())
-            .finish()
-    }
-}
-
-/// A synchronous scoped execution result.
-// INVARIANT: these variants keep the borrowed execution contract allocation-free
-// at the API boundary; boxing would add an avoidable ownership allocation.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum ScopedExecutionOutcome<'env> {
-    /// All provider work retired before this call returned.
-    Completed(ScopedExecutionBundle<'env>),
-    /// Execution retired with an ordinary error and the original borrows remain available.
-    RetiredFailed {
-        error: Error,
-        inputs: ScopedReadInputs<'env>,
-    },
-}
-
-/// Metadata for a storage-free scoped output.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OutputMetadata {
-    /// Scalar dtype of the logical output.
-    pub dtype: DType,
-    /// Logical shape of the output.
-    pub shape: Box<[usize]>,
-}
-
-/// Owned outputs and borrowed identity views from one completed scoped call.
-pub struct ScopedExecutionBundle<'env> {
-    owned: AllocationGroup,
-    outputs: Box<[ScopedOutput<'env>]>,
-}
-
-impl fmt::Debug for ScopedExecutionBundle<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ScopedExecutionBundle")
-            .field("len", &self.outputs.len())
-            .finish()
-    }
-}
-
-impl<'env> ScopedExecutionBundle<'env> {
-    /// Borrow one completed output.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OutputAccessError::InvalidOutput`] for an invalid output
-    /// index or [`OutputAccessError::Group`] when the completed descriptor
-    /// group reports an output access failure.
-    pub fn output(&self, index: usize) -> std::result::Result<OutputRef<'_>, OutputAccessError> {
-        let output = self
-            .outputs
-            .get(index)
-            .ok_or(OutputAccessError::InvalidOutput { index })?;
-        match output {
-            ScopedOutput::Borrowed(view) => Ok(OutputRef::Tensor(view.clone())),
-            ScopedOutput::Owned(slot) => output_ref_from_group(&self.owned, *slot),
-            ScopedOutput::Metadata(metadata) => Ok(OutputRef::Metadata(metadata)),
-        }
-    }
-
-    /// Consume the bundle and extract a fresh owned output.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ScopedOutputExtractError::InvalidOutput`],
-    /// [`ScopedOutputExtractError::BorrowedOutput`], or
-    /// [`ScopedOutputExtractError::MetadataOutput`] for an output that cannot
-    /// be consumed, and [`ScopedOutputExtractError::Output`] for a structural
-    /// group extraction failure. Each error returns the unchanged bundle.
-    #[allow(clippy::result_large_err)]
-    pub fn into_owned_output(
-        self,
-        index: usize,
-    ) -> std::result::Result<Tensor, (Self, ScopedOutputExtractError)> {
-        let slot = match self.outputs.get(index) {
-            Some(ScopedOutput::Owned(slot)) => *slot,
-            Some(ScopedOutput::Borrowed(_)) => {
-                return Err((self, ScopedOutputExtractError::BorrowedOutput))
-            }
-            Some(ScopedOutput::Metadata(_)) => {
-                return Err((self, ScopedOutputExtractError::MetadataOutput))
-            }
-            None => return Err((self, ScopedOutputExtractError::InvalidOutput { index })),
-        };
-        let Self { owned, outputs } = self;
-        match owned.into_tensor(slot) {
-            Ok(tensor) => Ok(tensor),
-            Err((owned, error)) => Err((
-                Self { owned, outputs },
-                ScopedOutputExtractError::Output(OutputExtractError::Group(error)),
-            )),
-        }
-    }
-}
-
-/// Output classification used by scoped providers.
-// INVARIANT: borrowed views stay inline so scoped output classification does
-// not materialize an extra owner or heap allocation.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum ScopedOutput<'env> {
-    /// A result that aliases an immutable caller input.
-    Borrowed(TensorView<'env>),
-    /// A fresh result owned by the scoped bundle's allocation group.
-    Owned(DescriptorSlot),
-    /// Metadata-only output with no tensor payload.
-    Metadata(OutputMetadata),
-}
-
-/// Failure while consuming a scoped output.
-#[derive(Debug, thiserror::Error)]
-pub enum ScopedOutputExtractError {
-    #[error("scoped output index {index} is outside the output set")]
-    InvalidOutput { index: usize },
-    #[error("scoped output is borrowed from the caller")]
-    BorrowedOutput,
-    #[error("scoped output contains metadata only")]
-    MetadataOutput,
-    #[error("scoped owned output cannot be extracted: {0}")]
-    Output(#[from] OutputExtractError),
-}
-
-/// A pre-admission scoped submission rejection. The original borrows remain available.
-#[derive(Debug)]
-pub struct ScopedSubmitRejected<'env> {
-    source: Box<Error>,
-    inputs: ScopedReadInputs<'env>,
-}
-
-impl<'env> ScopedSubmitRejected<'env> {
-    /// Consume the rejection and preserve its original environment lifetime.
-    pub fn into_parts(self) -> (Error, ScopedReadInputs<'env>) {
-        (*self.source, self.inputs)
-    }
-}
-
-impl fmt::Display for ScopedSubmitRejected<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "scoped submission rejected before admission: {}",
-            self.source
-        )
-    }
-}
-
-impl StdError for ScopedSubmitRejected<'_> {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        Some(self.source.as_ref())
-    }
-}
-
-/// A detached execution result retaining one allocation group for all outputs.
-#[derive(Debug)]
-pub struct ExecutionBundle {
-    group: AllocationGroup,
-    outputs: Box<[DescriptorSlot]>,
-}
-
-/// A borrowed output view from an [`ExecutionBundle`].
-// INVARIANT: this read-only result is a zero-allocation projection of an
-// already-prepared view; boxing would add work on the output hot path.
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum OutputRef<'a> {
-    Tensor(TensorView<'a>),
-    Metadata(&'a OutputMetadata),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum OutputAccessError {
-    #[error("execution output index {index} is outside the output set")]
-    InvalidOutput { index: usize },
-    #[error("execution output group is invalid: {0}")]
-    Group(#[from] GroupError),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum OutputExtractError {
-    #[error("execution output index {index} is outside the output set")]
-    InvalidOutput { index: usize },
-    #[error("execution output cannot be extracted: {0}")]
-    Group(#[from] GroupError),
-}
-
-impl ExecutionBundle {
-    fn from_inputs_and_outputs(inputs: ExecutionInputs, outputs: Vec<Tensor>) -> Result<Self> {
-        let mut group = inputs.group;
-        let mut output_slots = Vec::with_capacity(outputs.len());
-        for output in outputs {
-            let slot = group.append_tensor(output).map_err(|error| {
-                Error::runtime_state(
-                    "ExecutionBundle::from_inputs_and_outputs",
-                    ErrorPhase::Execution,
-                    error.to_string(),
-                )
-            })?;
-            output_slots.push(slot);
-        }
-        Ok(Self {
-            group,
-            outputs: output_slots.into_boxed_slice(),
-        })
-    }
-
-    #[cfg(test)]
-    pub(super) fn from_outputs(outputs: Vec<Tensor>) -> Result<Self> {
-        let (group, bindings) = AllocationGroup::from_tensors(outputs).map_err(|error| {
-            Error::runtime_state(
-                "ExecutionBundle::from_outputs",
-                ErrorPhase::Execution,
-                error.to_string(),
-            )
-        })?;
-        Ok(Self {
-            group,
-            outputs: bindings,
-        })
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`OutputAccessError::InvalidOutput`] for an invalid output
-    /// index or [`OutputAccessError::Group`] when the output descriptor group
-    /// reports an access failure.
-    pub fn output(&self, index: usize) -> std::result::Result<OutputRef<'_>, OutputAccessError> {
-        let slot = *self
-            .outputs
-            .get(index)
-            .ok_or(OutputAccessError::InvalidOutput { index })?;
-        let mut views = self.group.read_views(std::slice::from_ref(&slot))?;
-        let view = views
-            .pop()
-            .ok_or(OutputAccessError::InvalidOutput { index })?;
-        match view {
-            TensorRead::View(view) => Ok(OutputRef::Tensor(view)),
-            TensorRead::Tensor(_) => Err(OutputAccessError::InvalidOutput { index }),
-        }
-    }
-
-    // INVARIANT: extraction errors return the unchanged move-only bundle so
-    // callers can retry or inspect it without a hidden copy.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OutputExtractError::InvalidOutput`] for an invalid index or
-    /// [`OutputExtractError::Group`] for a structural group extraction
-    /// failure. Each error returns the unchanged bundle without copying.
-    #[allow(clippy::result_large_err)]
-    pub fn into_output(
-        self,
-        index: usize,
-    ) -> std::result::Result<Tensor, (Self, OutputExtractError)> {
-        let slot = match self.outputs.get(index).copied() {
-            Some(slot) => slot,
-            None => return Err((self, OutputExtractError::InvalidOutput { index })),
-        };
-        let ExecutionBundle { group, outputs } = self;
-        match group.into_tensor(slot) {
-            Ok(tensor) => Ok(tensor),
-            Err((group, error)) => Err((Self { group, outputs }, OutputExtractError::Group(error))),
-        }
-    }
-}
-
-/// The result of a detached submission after the provider retirement point.
-#[derive(Debug)]
-pub enum ExecutionOutcome {
-    /// The scheduled graph completed and produced one alias-safe output bundle.
-    Completed(Box<ExecutionBundle>),
-    /// The graph retired with an ordinary execution error; the input owner is
-    /// available again because retirement was observed.
-    RetiredFailed {
-        error: Error,
-        inputs: Box<ExecutionInputs>,
-    },
-    /// Completion could not be proven. No owner is exposed and the private
-    /// in-flight record retains all provider state permanently.
-    CompletionUnproven {
-        error: Error,
-        diagnostic_keys: Box<[String]>,
-    },
-}
-
-/// A detached submission failed before ownership could be transferred to the
-/// in-flight worker.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_runtime::{Error, runtime::{ExecutionInputs, SubmitError}};
-///
-/// let error = SubmitError::PreAdmission {
-///     source: Box::new(Error::Internal("input rejected".into())),
-///     inputs: Box::new(ExecutionInputs::new(Vec::new())?),
-/// };
-/// assert!(error.to_string().contains("before admission"));
-/// # Ok::<(), tenferro_runtime::Error>(())
-/// ```
-#[derive(Debug)]
-pub enum SubmitError {
-    /// Preparation/admission rejected the request. The exact input package is
-    /// returned unchanged to the caller.
-    PreAdmission {
-        source: Box<Error>,
-        inputs: Box<ExecutionInputs>,
-    },
-}
-
-impl SubmitError {
-    /// Recover the unchanged package from a pre-admission rejection.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{Error, runtime::{ExecutionInputs, SubmitError}};
-    ///
-    /// let error = SubmitError::PreAdmission {
-    ///     source: Box::new(Error::Internal("input rejected".into())),
-    ///     inputs: Box::new(ExecutionInputs::new(Vec::new())?),
-    /// };
-    /// assert!(error.into_pre_admission().is_some());
-    /// # Ok::<(), tenferro_runtime::Error>(())
-    /// ```
-    pub fn into_pre_admission(self) -> Option<(Error, ExecutionInputs)> {
-        match self {
-            Self::PreAdmission { source, inputs } => Some((*source, *inputs)),
-        }
-    }
-}
-
-impl fmt::Display for SubmitError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::PreAdmission { source, .. } => {
-                write!(formatter, "submission rejected before admission: {source}")
-            }
-        }
-    }
-}
-
-impl StdError for SubmitError {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        match self {
-            Self::PreAdmission { source, .. } => {
-                // Keep the pre-admission typed source at the same depth as the
-                // historical runtime error chain while the owner travels in
-                // this wrapper.
-                source.source().or(Some(source.as_ref()))
-            }
-        }
-    }
-}
-
-impl From<SubmitError> for Error {
-    fn from(error: SubmitError) -> Self {
-        match error {
-            SubmitError::PreAdmission { source, .. } => *source,
-        }
-    }
-}
-
-impl ExecutionHandle {
-    /// Wait for submitted work to finish and return its tensor outputs.
-    ///
-    /// # Errors
-    ///
-    /// Returns the submitted runtime execution [`Error`], including
-    /// [`ErrorKind::RuntimeState`](tenferro_tensor::ErrorKind::RuntimeState)
-    /// when the handle was already consumed or the worker panicked.
-    pub fn wait(self) -> Result<ExecutionOutcome> {
-        self.submission.wait()
-    }
-}
-
-impl fmt::Debug for ExecutionHandle {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ExecutionHandle")
-            .field("pending", &self.submission.is_pending())
-            .finish_non_exhaustive()
-    }
-}
-
-pub(super) struct InFlightSubmission {
-    work: Mutex<Option<InFlightWork>>,
-    completion: Mutex<Option<Result<ExecutionOutcome>>>,
-    completed: Condvar,
-}
-
-struct AdmittedExecution {
-    prepared: PreparedCompiledGraph,
-    inputs: ExecutionInputs,
-}
-
-enum InFlightWork {
-    Admitted(Box<AdmittedExecution>),
-    #[cfg(test)]
-    Test {
-        inputs: Box<ExecutionInputs>,
-        work: Box<dyn FnOnce() -> Result<Vec<Tensor>> + Send>,
-    },
-}
-
-impl InFlightSubmission {
-    fn new(prepared: PreparedCompiledGraph, inputs: ExecutionInputs) -> Self {
-        Self {
-            work: Mutex::new(Some(InFlightWork::Admitted(Box::new(AdmittedExecution {
-                prepared,
-                inputs,
-            })))),
-            completion: Mutex::new(None),
-            completed: Condvar::new(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn for_test(work: impl FnOnce() -> Result<Vec<Tensor>> + Send + 'static) -> Self {
-        Self {
-            work: Mutex::new(Some(InFlightWork::Test {
-                inputs: Box::new(ExecutionInputs::new(Vec::new()).expect("empty test inputs")),
-                work: Box::new(work),
-            })),
-            completion: Mutex::new(None),
-            completed: Condvar::new(),
-        }
-    }
-
-    fn into_unstarted_inputs(self) -> ExecutionInputs {
-        let work = match self.work.into_inner() {
-            Ok(work) => work,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        match work {
-            Some(InFlightWork::Admitted(admitted)) => admitted.inputs,
-            #[cfg(test)]
-            Some(InFlightWork::Test { inputs, .. }) => *inputs,
-            None => unreachable!("unstarted submission must still contain its owner"),
-        }
-    }
-
-    pub(super) fn run(&self) {
-        let work = match self.work.lock() {
-            Ok(mut work) => work.take(),
-            Err(poisoned) => poisoned.into_inner().take(),
-        };
-        let result = match work {
-            Some(InFlightWork::Admitted(admitted)) => run_admitted_work(admitted),
-            #[cfg(test)]
-            Some(InFlightWork::Test { work, .. }) => {
-                let result = catch_unwind(AssertUnwindSafe(work));
-                match result {
-                    Ok(Ok(outputs)) => ExecutionBundle::from_outputs(outputs)
-                        .map(|bundle| ExecutionOutcome::Completed(Box::new(bundle))),
-                    Ok(Err(error)) => Err(error),
-                    Err(payload) => Ok(ExecutionOutcome::CompletionUnproven {
-                        error: Error::runtime_state(
-                            "ExecutionHandle::wait",
-                            ErrorPhase::Execution,
-                            panic_payload_message(payload),
-                        ),
-                        diagnostic_keys: Box::from(["execution.retirement-unproven".to_owned()]),
-                    }),
-                }
-            }
-            None => Err(Error::runtime_state(
-                "Runtime::submit",
-                ErrorPhase::Execution,
-                "in-flight submission work was already consumed",
-            )),
-        };
-        match self.completion.lock() {
-            Ok(mut completion) => {
-                *completion = Some(result);
-            }
-            Err(poisoned) => {
-                *poisoned.into_inner() = Some(Err(Error::runtime_state(
-                    "ExecutionHandle::wait",
-                    ErrorPhase::Execution,
-                    "in-flight completion lock poisoned",
-                )));
-            }
-        }
-        self.completed.notify_all();
-    }
-
-    fn wait(&self) -> Result<ExecutionOutcome> {
-        let mut completion = self.completion.lock().map_err(|_| {
-            Error::runtime_state(
-                "ExecutionHandle::wait",
-                ErrorPhase::Execution,
-                "in-flight completion lock poisoned",
-            )
-        })?;
-        loop {
-            if let Some(result) = completion.take() {
-                return result;
-            }
-            completion = self.completed.wait(completion).map_err(|_| {
-                Error::runtime_state(
-                    "ExecutionHandle::wait",
-                    ErrorPhase::Execution,
-                    "in-flight completion lock poisoned while waiting",
-                )
-            })?;
-        }
-    }
-
-    fn is_pending(&self) -> bool {
-        self.completion
-            .lock()
-            .map_or(true, |completion| completion.is_none())
-    }
-}
-
-fn run_admitted_work(admitted: Box<AdmittedExecution>) -> Result<ExecutionOutcome> {
-    let execution = catch_unwind(AssertUnwindSafe(|| {
-        let input_reads = admitted.inputs.as_reads()?;
-        execute_admitted(&admitted.prepared, &input_reads)
-    }));
-    match execution {
-        Ok(Ok(outputs)) => {
-            let AdmittedExecution { inputs, .. } = *admitted;
-            match ExecutionBundle::from_inputs_and_outputs(inputs, outputs) {
-                Ok(bundle) => Ok(ExecutionOutcome::Completed(Box::new(bundle))),
-                Err(error) => Ok(ExecutionOutcome::CompletionUnproven {
-                    error,
-                    diagnostic_keys: Box::from(["execution.bundle-build".to_owned()]),
-                }),
-            }
-        }
-        Ok(Err(error)) => {
-            let AdmittedExecution { inputs, .. } = *admitted;
-            Ok(ExecutionOutcome::RetiredFailed {
-                error,
-                inputs: Box::new(inputs),
-            })
-        }
-        Err(payload) => {
-            let error = Error::runtime_state(
-                "ExecutionHandle::wait",
-                ErrorPhase::Execution,
-                panic_payload_message(payload),
-            );
-            // The completion witness was lost after admission. Leak the
-            // private record deliberately: no owner or provider state may be
-            // exposed while retirement is unproven.
-            Box::leak(admitted);
-            Ok(ExecutionOutcome::CompletionUnproven {
-                error,
-                diagnostic_keys: Box::from(["execution.retirement-unproven".to_owned()]),
-            })
-        }
-    }
-}
-
-pub(super) trait SubmissionSpawner {
-    fn spawn(&self, submission: Arc<InFlightSubmission>) -> std::io::Result<()>;
-}
-
-pub(super) fn spawn_in_flight(
-    submission: Arc<InFlightSubmission>,
-    spawner: &dyn SubmissionSpawner,
-) -> std::result::Result<ExecutionHandle, Box<(ExecutionInputs, Error)>> {
-    if let Err(source) = spawner.spawn(Arc::clone(&submission)) {
-        // INVARIANT: a SubmissionSpawner error means it did not take or start
-        // the submission, so the sole Arc can be unwrapped and the exact
-        // pre-admission owner recovered.
-        let submission = match Arc::try_unwrap(submission) {
-            Ok(submission) => submission,
-            Err(_) => unreachable!("failed spawner must not retain submission"),
-        };
-        let inputs = submission.into_unstarted_inputs();
-        let error = Error::runtime_state_source(
-            "Runtime::submit",
-            ErrorPhase::Execution,
-            SubmissionError::WorkerSpawn { source },
-        );
-        return Err(Box::new((inputs, error)));
-    }
-    Ok(ExecutionHandle { submission })
-}
-
-pub(super) struct OsThreadSpawner;
-
-impl SubmissionSpawner for OsThreadSpawner {
-    fn spawn(&self, submission: Arc<InFlightSubmission>) -> std::io::Result<()> {
-        thread::Builder::new()
-            .name("tenferro-runtime-submit".to_string())
-            .spawn(move || submission.run())
-            .map(drop)
-    }
-}
-
-impl fmt::Debug for PreparedCompiledGraph {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PreparedCompiledGraph")
-            .field("runtime_id", &self.runtime_id)
-            .field("epoch", &self.epoch)
-            .field("program", &self.program)
-            .finish_non_exhaustive()
-    }
-}
-
-fn panic_payload_message(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        format!("submitted execution panicked: {message}")
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        format!("submitted execution panicked: {message}")
-    } else {
-        "submitted execution panicked".to_string()
-    }
-}
-
-#[allow(
-    dead_code,
-    reason = "Phase 5 runtime execution task adds erased dispatch methods"
-)]
-pub(super) trait ErasedTensorBackendExecutor: fmt::Debug + Send + Sync {
-    fn backend_type_name(&self) -> &'static str;
-    /// Lease this executor's state once without waiting, for the caller-borrowed
-    /// session route. The returned state stays leased for the whole run.
-    fn try_lease_session_state<'a>(
-        &'a self,
-        caller: &'static str,
-    ) -> Result<Box<dyn BorrowedExecutorSessionState + 'a>>;
-    fn extension_cache_stats(&self) -> std::result::Result<CacheStats, CacheOwnerError>;
-    fn clear_extension_caches(&self) -> std::result::Result<(), CacheOwnerError>;
-    fn execute(
-        &self,
-        program: &ExecProgram,
-        operations: &[PreparedOperationPlan],
-        inputs: Vec<Tensor>,
-    ) -> Result<Vec<Tensor>>;
-    fn execute_tensor_refs(
-        &self,
-        program: &ExecProgram,
-        operations: &[PreparedOperationPlan],
-        inputs: &[&Tensor],
-    ) -> Result<Vec<Tensor>>;
-    fn execute_values(
-        &self,
-        program: &ExecProgram,
-        operations: &[PreparedOperationPlan],
-        inputs: Vec<Tensor>,
-    ) -> Result<Vec<TensorValue>>;
-    fn execute_value_refs(
-        &self,
-        program: &ExecProgram,
-        operations: &[PreparedOperationPlan],
-        inputs: &[&Tensor],
-    ) -> Result<Vec<TensorValue>>;
-    fn execute_slot_instruction<'input>(
-        &self,
-        instruction_index: usize,
-        instruction: &ExecInstruction,
-        operations: &[PreparedOperationPlan],
-        slots: &mut [Option<ExecSlot<'input>>],
-        output_mode: RuntimeOutputMode,
-        terminal_slots: &[bool],
-    ) -> Result<()>;
-    /// Run a whole eligible prepared graph on one internally opened session.
-    ///
-    /// This is the steady-state default route of `Runtime::run_prepared`: the
-    /// executor state is leased once and a single backend session is entered
-    /// around the complete scheduled run, instead of one lease and one session
-    /// entry per instruction.
-    ///
-    /// Returns `Ok(None)` when this graph must keep the per-instruction leased
-    /// route, before any session entry or execution. Only a whole-program
-    /// session-compatibility failure selects that route; an execution error is
-    /// never retried on the leased path.
-    fn execute_prepared_single_session(
-        &self,
-        program: &ExecProgram,
-        schedule: &ScheduledGraph,
-        regions: &[super::region::ElementwiseRegion],
-        region_counters: &super::region::RegionExecutionCounters,
-        operations: &[PreparedOperationPlan],
-        inputs: &[TensorRead<'_>],
-    ) -> Result<Option<Vec<Tensor>>>;
-    /// Execute one planned elementwise region as a single fused command.
-    ///
-    /// Reads `input_slots` from `slots`, runs `plan`, and writes the fused
-    /// outputs into `output_slots`. Returns `Ok(false)` when the backend
-    /// rejects the fusion, in which case the caller executes the region's
-    /// instructions one by one; nothing is written in that case.
-    fn execute_elementwise_fusion_slots<'input>(
-        &self,
-        input_slots: &[usize],
-        instruction_count: usize,
-        plan: &tenferro_tensor::backend::ElementwiseFusionPlan,
-        slots: &mut [Option<ExecSlot<'input>>],
-        output_slots: &[usize],
-    ) -> Result<bool>;
-    fn materialize_slot<'input>(&self, slot: ExecSlot<'input>) -> Result<Tensor>;
-    fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> Result<TensorValue>;
-}
-
-pub(super) fn erased_tensor_backend_executor<B>(backend: B) -> Arc<dyn ErasedTensorBackendExecutor>
-where
-    B: TensorBackend + Send + Sync + 'static,
-{
-    Arc::new(TensorBackendExecutor::<B>::new(backend))
-}
-
-pub(super) fn extension_cache_owner(
-    executor: Arc<dyn ErasedTensorBackendExecutor>,
-) -> Arc<dyn RuntimeCacheOwner> {
-    Arc::new(TensorBackendExtensionCacheOwner { executor })
-}
-
-#[derive(Debug)]
-struct TensorBackendExtensionCacheOwner {
-    executor: Arc<dyn ErasedTensorBackendExecutor>,
-}
-
-impl RuntimeCacheOwner for TensorBackendExtensionCacheOwner {
-    fn cache_stats(&self) -> std::result::Result<CacheStats, CacheOwnerError> {
-        self.executor.extension_cache_stats()
-    }
-
-    fn clear_caches(&self) -> std::result::Result<(), CacheOwnerError> {
-        self.executor.clear_extension_caches()
-    }
-}
-
-#[allow(
-    dead_code,
-    reason = "Phase 5 runtime execution task consumes backend execution state"
-)]
-struct TensorBackendExecutorState<B: TensorBackend + 'static> {
-    backend: B,
-    backend_cache: B::RuntimeCache,
-    extension_caches: ExtensionCacheStore,
-    slot_workspace: Vec<Option<ExecSlot<'static>>>,
-    borrowed_slot_workspace_capacity: usize,
-}
-
-struct TensorBackendExecutor<B: TensorBackend + 'static> {
-    state: Mutex<TensorBackendExecutorSlot<B>>,
-    available: Condvar,
-}
-
-struct TensorBackendExecutorSlot<B: TensorBackend + 'static> {
-    state: Option<TensorBackendExecutorState<B>>,
-    active_thread: Option<ThreadId>,
-    execution_poisoned: bool,
-}
-
-impl<B> TensorBackendExecutor<B>
-where
-    B: TensorBackend + Send + Sync + 'static,
-{
-    fn new(backend: B) -> Self {
-        Self {
-            state: Mutex::new(TensorBackendExecutorSlot {
-                state: Some(TensorBackendExecutorState {
-                    backend,
-                    backend_cache: B::RuntimeCache::default(),
-                    extension_caches: ExtensionCacheStore::new(),
-                    slot_workspace: Vec::new(),
-                    borrowed_slot_workspace_capacity: 0,
-                }),
-                active_thread: None,
-                execution_poisoned: false,
-            }),
-            available: Condvar::new(),
-        }
-    }
-
-    fn lease_state(&self, caller: &'static str) -> Result<TensorBackendExecutorLease<'_, B>> {
-        // A held session owns execution admission across many operations, so a thread that
-        // holds one must not block here waiting for another owner: the state it would wait for
-        // may be held by work that depends on that session. Check before taking the lock,
-        // exactly as the eager owner lock does.
-        if tenferro_tensor::has_held_backend_session() {
-            return Err(Error::runtime_state(
-                caller,
-                ErrorPhase::Execution,
-                "a held backend session is active on this thread; pass the entered session \
-                 instead of leasing another executor",
-            ));
-        }
-        let current = thread::current().id();
-        let mut slot = self.lock_slot(caller)?;
-        loop {
-            if slot.execution_poisoned {
-                return Err(Error::runtime_state(
-                    caller,
-                    ErrorPhase::Execution,
-                    "tensor backend executor state poisoned by panic during prior execution",
-                ));
-            }
-            if let Some(state) = slot.state.take() {
-                slot.active_thread = Some(current);
-                return Ok(TensorBackendExecutorLease {
-                    executor: self,
-                    state: Some(state),
-                });
-            }
-            if slot.active_thread == Some(current) {
-                return Err(Error::runtime_state(
-                    caller,
-                    ErrorPhase::Execution,
-                    "reentrant tensor backend executor call would deadlock",
-                ));
-            }
-            slot = self.available.wait(slot).map_err(|_| {
-                Error::runtime_state(
-                    caller,
-                    ErrorPhase::Execution,
-                    "tensor backend executor state lock poisoned while waiting",
-                )
-            })?;
-        }
-    }
-
-    /// Lease the executor state once without waiting, for the caller-borrowed
-    /// session route.
-    ///
-    /// Unlike [`Self::lease_state`] this deliberately does **not** reject a thread
-    /// that already holds a backend session: `run_prepared_in` is the route that
-    /// runs *inside* the caller's session. It never blocks on another owner
-    /// (no condvar wait) and reports contention as a typed error so the borrowed
-    /// call cannot deadlock behind work that depends on the caller's session.
-    fn try_lease_state(&self, caller: &'static str) -> Result<TensorBackendExecutorLease<'_, B>> {
-        let current = thread::current().id();
-        let mut slot = match self.state.try_lock() {
-            Ok(slot) => slot,
-            Err(TryLockError::WouldBlock) => {
-                return Err(Error::runtime_state(
-                    caller,
-                    ErrorPhase::Execution,
-                    "tensor backend executor state is busy on another thread; \
-                     Runtime::run_prepared_in never waits for another executor owner",
-                ));
-            }
-            Err(TryLockError::Poisoned(_)) => {
-                return Err(Error::runtime_state(
-                    caller,
-                    ErrorPhase::Execution,
-                    "tensor backend executor state lock poisoned",
-                ));
-            }
-        };
-        if slot.execution_poisoned {
-            return Err(Error::runtime_state(
-                caller,
-                ErrorPhase::Execution,
-                "tensor backend executor state poisoned by panic during prior execution",
-            ));
-        }
-        let Some(state) = slot.state.take() else {
-            let message = if slot.active_thread == Some(current) {
-                "reentrant tensor backend executor call would deadlock"
-            } else {
-                "tensor backend executor state is busy on another thread; \
-                 Runtime::run_prepared_in never waits for another executor owner"
-            };
-            return Err(Error::runtime_state(caller, ErrorPhase::Execution, message));
-        };
-        slot.active_thread = Some(current);
-        Ok(TensorBackendExecutorLease {
-            executor: self,
-            state: Some(state),
-        })
-    }
-
-    fn lock_slot(
-        &self,
-        caller: &'static str,
-    ) -> Result<MutexGuard<'_, TensorBackendExecutorSlot<B>>> {
-        self.state.lock().map_err(|_| {
-            Error::runtime_state(
-                caller,
-                ErrorPhase::Execution,
-                "tensor backend executor state lock poisoned",
-            )
-        })
-    }
-}
-
-struct TensorBackendExecutorLease<'a, B: TensorBackend + 'static> {
-    executor: &'a TensorBackendExecutor<B>,
-    state: Option<TensorBackendExecutorState<B>>,
-}
-
-impl<B: TensorBackend + 'static> TensorBackendExecutorLease<'_, B> {
-    fn state_mut(&mut self) -> &mut TensorBackendExecutorState<B> {
-        self.state
-            .as_mut()
-            .expect("executor state lease always owns state before drop")
-    }
-}
-
-impl<B: TensorBackend + 'static> Drop for TensorBackendExecutorLease<'_, B> {
-    fn drop(&mut self) {
-        let Some(state) = self.state.take() else {
-            return;
-        };
-        let panicking = thread::panicking();
-        let mut wake_all_waiters = panicking;
-        match self.executor.state.lock() {
-            Ok(mut slot) => {
-                slot.state = Some(state);
-                slot.active_thread = None;
-                slot.execution_poisoned |= panicking;
-            }
-            Err(poisoned_lock) => {
-                let mut slot = poisoned_lock.into_inner();
-                slot.state = Some(state);
-                slot.active_thread = None;
-                slot.execution_poisoned = true;
-                wake_all_waiters = true;
-            }
-        }
-        if wake_all_waiters {
-            self.executor.available.notify_all();
-        } else {
-            self.executor.available.notify_one();
-        }
-    }
-}
-
-impl<B: TensorBackend + 'static> fmt::Debug for TensorBackendExecutor<B> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("TensorBackendExecutor")
-            .field("backend_type", &std::any::type_name::<B>())
-            .field("state_lock_poisoned", &self.state.is_poisoned())
-            .finish_non_exhaustive()
-    }
-}
-
-/// One executor state leased for the whole caller-borrowed run.
-///
-/// `Runtime::run_prepared_in` holds this while every node of the graph executes
-/// on the caller's session, so the state is acquired once instead of once per
-/// instruction and the caller's session is never replaced by a fresh one. The
-/// trait erases `B` so `run_prepared_in` can hold a lease obtained from the
-/// type-erased [`ErasedTensorBackendExecutor`].
-pub(super) trait BorrowedExecutorSessionState {
-    /// Whether the executor's backend state owns `session`.
-    fn owns_session(&self, session: &mut dyn Engine) -> bool;
-    /// The extension cache store the scheduled extension instructions use.
-    fn extension_caches_mut(&mut self) -> &mut ExtensionCacheStore;
-}
-
-impl<B: TensorBackend + 'static> BorrowedExecutorSessionState
-    for TensorBackendExecutorLease<'_, B>
-{
-    fn owns_session(&self, session: &mut dyn Engine) -> bool {
-        self.state
-            .as_ref()
-            .expect("executor state lease always owns state before drop")
-            .backend
-            .owns_session(session)
-    }
-
-    fn extension_caches_mut(&mut self) -> &mut ExtensionCacheStore {
-        &mut self.state_mut().extension_caches
-    }
-}
-
-impl<B> ErasedTensorBackendExecutor for TensorBackendExecutor<B>
-where
-    B: TensorBackend + Send + Sync + 'static,
-{
-    fn backend_type_name(&self) -> &'static str {
-        std::any::type_name::<B>()
-    }
-
-    fn try_lease_session_state<'a>(
-        &'a self,
-        caller: &'static str,
-    ) -> Result<Box<dyn BorrowedExecutorSessionState + 'a>> {
-        Ok(Box::new(self.try_lease_state(caller)?))
-    }
-
-    fn extension_cache_stats(&self) -> std::result::Result<CacheStats, CacheOwnerError> {
-        let lease = self
-            .lease_state("Runtime::extension_cache_stats")
-            .map_err(cache_owner_error)?;
-        let state = lease
-            .state
-            .as_ref()
-            .expect("executor state lease always owns state before drop");
-        Ok(cache_stats_from_tensor_stats(
-            state.extension_caches.stats(ExtensionCacheSelector::All),
-        ))
-    }
-
-    fn clear_extension_caches(&self) -> std::result::Result<(), CacheOwnerError> {
-        let mut lease = self
-            .lease_state("Runtime::clear_extension_caches")
-            .map_err(cache_owner_error)?;
-        lease.state_mut().extension_caches.clear();
-        Ok(())
-    }
-
-    fn execute(
-        &self,
-        program: &ExecProgram,
-        operations: &[PreparedOperationPlan],
-        inputs: Vec<Tensor>,
-    ) -> Result<Vec<Tensor>> {
-        validate_exec_input_count(program, inputs.len())?;
-        let mut lease = self.lease_state("Runtime::run_compiled")?;
-        let TensorBackendExecutorState {
-            backend,
-            backend_cache,
-            extension_caches,
-            slot_workspace,
-            borrowed_slot_workspace_capacity: _,
-        } = lease.state_mut();
-        let mut extension_dispatch = ExtensionExecutionDispatch {
-            operations,
-            caches: extension_caches,
-        };
-        crate::segment::eval_exec_segmented_with_cache_and_workspace(
-            backend,
-            program,
-            inputs,
-            slot_workspace,
-            backend_cache,
-            Some(&mut extension_dispatch),
-        )
-    }
-
-    fn execute_tensor_refs(
-        &self,
-        program: &ExecProgram,
-        operations: &[PreparedOperationPlan],
-        inputs: &[&Tensor],
-    ) -> Result<Vec<Tensor>> {
-        validate_exec_input_count(program, inputs.len())?;
-        let inputs = inputs
-            .iter()
-            .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
-            .collect();
-        let mut lease = self.lease_state("Runtime::run_compiled")?;
-        let TensorBackendExecutorState {
-            backend,
-            backend_cache,
-            extension_caches,
-            borrowed_slot_workspace_capacity,
-            ..
-        } = lease.state_mut();
-        let mut extension_dispatch = ExtensionExecutionDispatch {
-            operations,
-            caches: extension_caches,
-        };
-        let mut slot_workspace = Vec::with_capacity(*borrowed_slot_workspace_capacity);
-        let result = crate::segment::eval_exec_segmented_slots_with_cache_and_workspace(
-            backend,
-            program,
-            inputs,
-            &mut slot_workspace,
-            backend_cache,
-            Some(&mut extension_dispatch),
-        );
-        *borrowed_slot_workspace_capacity = slot_workspace.capacity();
-        result
-    }
-
-    fn execute_values(
-        &self,
-        program: &ExecProgram,
-        operations: &[PreparedOperationPlan],
-        inputs: Vec<Tensor>,
-    ) -> Result<Vec<TensorValue>> {
-        validate_exec_input_count(program, inputs.len())?;
-        let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
-        let mut lease = self.lease_state("Runtime::run_compiled_values")?;
-        let TensorBackendExecutorState {
-            backend,
-            backend_cache,
-            extension_caches,
-            slot_workspace,
-            borrowed_slot_workspace_capacity: _,
-        } = lease.state_mut();
-        let mut extension_dispatch = ExtensionExecutionDispatch {
-            operations,
-            caches: extension_caches,
-        };
-        crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
-            backend,
-            program,
-            inputs,
-            slot_workspace,
-            backend_cache,
-            Some(&mut extension_dispatch),
-        )
-    }
-
-    fn execute_value_refs(
-        &self,
-        program: &ExecProgram,
-        operations: &[PreparedOperationPlan],
-        inputs: &[&Tensor],
-    ) -> Result<Vec<TensorValue>> {
-        validate_exec_input_count(program, inputs.len())?;
-        let inputs = inputs
-            .iter()
-            .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
-            .collect();
-        let mut lease = self.lease_state("Runtime::run_compiled_values")?;
-        let TensorBackendExecutorState {
-            backend,
-            backend_cache,
-            extension_caches,
-            borrowed_slot_workspace_capacity,
-            ..
-        } = lease.state_mut();
-        let mut extension_dispatch = ExtensionExecutionDispatch {
-            operations,
-            caches: extension_caches,
-        };
-        let mut slot_workspace = Vec::with_capacity(*borrowed_slot_workspace_capacity);
-        let result = crate::segment::eval_exec_segmented_slot_values_with_cache_and_workspace(
-            backend,
-            program,
-            inputs,
-            &mut slot_workspace,
-            backend_cache,
-            Some(&mut extension_dispatch),
-        );
-        *borrowed_slot_workspace_capacity = slot_workspace.capacity();
-        result
-    }
-
-    fn execute_slot_instruction<'input>(
-        &self,
-        instruction_index: usize,
-        instruction: &ExecInstruction,
-        operations: &[PreparedOperationPlan],
-        slots: &mut [Option<ExecSlot<'input>>],
-        output_mode: RuntimeOutputMode,
-        terminal_slots: &[bool],
-    ) -> Result<()> {
-        let mut lease = self.lease_state("Runtime::run_compiled scheduled instruction")?;
-        let TensorBackendExecutorState {
-            backend,
-            backend_cache,
-            extension_caches,
-            ..
-        } = lease.state_mut();
-        // The extension owner fallback forms its own session and cannot run on a
-        // borrowed one; the borrowed route's preflight rejects every prepared
-        // operation without session support before it can reach this branch.
-        let owner_fallback = crate::exec::is_ffi_instruction(instruction)
-            && crate::exec::needs_owner_extension_fallback(
-                instruction,
-                Some(&ExtensionExecutionDispatch {
-                    operations,
-                    caches: extension_caches,
-                }),
-            );
-        if owner_fallback {
-            let mut extension_dispatch = ExtensionExecutionDispatch {
-                operations,
-                caches: extension_caches,
-            };
-            let value_mode = matches!(output_mode, RuntimeOutputMode::Value);
-            if !(value_mode
-                && crate::exec::instruction_may_be_terminal_value(instruction, terminal_slots)
-                && backend.with_backend_session(|exec| {
-                    crate::exec::try_execute_terminal_value_instruction(
-                        exec,
-                        slots,
-                        instruction,
-                        terminal_slots,
-                    )
-                })??)
-            {
-                crate::exec::execute_owner_extension_fallback(
-                    backend,
-                    slots,
-                    instruction,
-                    Some(&mut extension_dispatch),
-                )?;
-            }
-            crate::exec::reclaim_last_use_inputs_via_session(backend, slots, instruction);
-            return Ok(());
-        }
-        // One session per instruction. The terminal-value probe, the execution and
-        // the last-use reclaim all share a single entry; opening one each cost two
-        // extra session constructions per instruction (issue #1929 measurement: a
-        // two-instruction compiled graph paid ~+14 us).
-        backend.with_backend_session_cached(backend_cache, |exec| {
-            execute_slot_instruction_in_session(
-                exec,
-                extension_caches,
-                operations,
-                instruction_index,
-                instruction,
-                slots,
-                output_mode,
-                terminal_slots,
-            )
-        })?
-    }
-
-    fn execute_prepared_single_session(
-        &self,
-        program: &ExecProgram,
-        schedule: &ScheduledGraph,
-        regions: &[super::region::ElementwiseRegion],
-        region_counters: &super::region::RegionExecutionCounters,
-        operations: &[PreparedOperationPlan],
-        inputs: &[TensorRead<'_>],
-    ) -> Result<Option<Vec<Tensor>>> {
-        // The normal blocking lease, exactly like the per-instruction route: two
-        // ordinary callers still serialize on the executor instead of failing with
-        // a busy-state error, and the lease already rejects entry from a thread that
-        // holds a caller-borrowed session.
-        let mut lease = self.lease_state("Runtime::run_prepared")?;
-        let TensorBackendExecutorState {
-            backend,
-            backend_cache,
-            extension_caches,
-            ..
-        } = lease.state_mut();
-        // Whole-program session compatibility decides the route. It is the same
-        // predicate the caller-borrowed route uses, so a graph with an owner-only
-        // extension (which forms its own session) keeps the leased path. Nothing has
-        // been entered or executed when this returns `None`.
-        if !crate::exec::can_run_in_single_exec_session_with_extensions(
-            program,
-            Some(&ExtensionExecutionDispatch {
-                operations,
-                caches: extension_caches,
-            }),
-        ) {
-            return Ok(None);
-        }
-        // One session entry for the whole run: every node, an accepted fusion, a
-        // declined fusion, and output materialization share this session, and the
-        // event domains drain inside it before the entry closes.
-        let outputs = backend.with_backend_session_cached(backend_cache, |session| {
-            let mut runner = ScheduledRunner::Borrowed {
-                session,
-                extension_caches,
-            };
-            execute_scheduled_reads(
-                program,
-                schedule,
-                regions,
-                region_counters,
-                operations,
-                inputs,
-                &mut runner,
-            )
-        })??;
-        Ok(Some(outputs))
-    }
-
-    fn execute_elementwise_fusion_slots<'input>(
-        &self,
-        input_slots: &[usize],
-        instruction_count: usize,
-        plan: &tenferro_tensor::backend::ElementwiseFusionPlan,
-        slots: &mut [Option<ExecSlot<'input>>],
-        output_slots: &[usize],
-    ) -> Result<bool> {
-        let mut lease = self.lease_state("Runtime::run_prepared elementwise region")?;
-        let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| {
-            execute_elementwise_fusion_slots_in_session(
-                exec,
-                input_slots,
-                instruction_count,
-                plan,
-                slots,
-                output_slots,
-            )
-        })?
-    }
-
-    fn materialize_slot<'input>(&self, slot: ExecSlot<'input>) -> Result<Tensor> {
-        let mut lease = self.lease_state("Runtime::run_compiled collect outputs")?;
-        let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| slot.into_tensor(exec))?
-    }
-
-    fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> Result<TensorValue> {
-        let mut lease = self.lease_state("Runtime::run_compiled_values collect outputs")?;
-        let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| slot.into_value(exec))?
-    }
-}
-
 /// Run one scheduled instruction on `exec` without entering a session.
 ///
 /// This is the shared body of the leased scheduler path and the
@@ -1549,51 +163,48 @@ where
 /// preflight rejects every non-session-capable prepared operation, and the leased
 /// path handles that fallback before entering this function.
 #[allow(clippy::too_many_arguments)]
-fn execute_slot_instruction_in_session<'input>(
-    exec: &mut dyn Engine,
+fn execute_slot_instruction_on_engine<'input>(
+    engine: &mut dyn ExecutionEngine,
     extension_caches: &mut ExtensionCacheStore,
     operations: &[PreparedOperationPlan],
     instruction_index: usize,
     instruction: &ExecInstruction,
     slots: &mut [Option<ExecSlot<'input>>],
-    output_mode: RuntimeOutputMode,
-    terminal_slots: &[bool],
 ) -> Result<()> {
+    if crate::exec::is_ffi_instruction(instruction)
+        && crate::exec::needs_owner_extension_fallback(
+            instruction,
+            Some(&ExtensionExecutionDispatch {
+                operations,
+                caches: extension_caches,
+            }),
+        )
+    {
+        // A prepared operation that executes against the concrete engine type
+        // instead of the engine operations receives the engine itself.
+        let identity = engine.target().context_identity();
+        let mut extension_dispatch = ExtensionExecutionDispatch {
+            operations,
+            caches: extension_caches,
+        };
+        crate::exec::execute_owner_extension_fallback(
+            engine.as_any_mut(),
+            identity,
+            slots,
+            instruction,
+            Some(&mut extension_dispatch),
+        )?;
+        crate::exec::reclaim_last_use_inputs_exec(slots, instruction, engine);
+        return Ok(());
+    }
+    let exec: &mut dyn Engine = engine;
     let mut extension_dispatch = ExtensionExecutionDispatch {
         operations,
         caches: extension_caches,
     };
-    let value_mode = matches!(output_mode, RuntimeOutputMode::Value);
     if crate::exec::is_host_instruction(instruction) {
-        if value_mode
-            && crate::exec::try_execute_terminal_value_instruction(
-                exec,
-                slots,
-                instruction,
-                terminal_slots,
-            )?
-        {
-            crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
-            return Ok(());
-        }
         crate::exec::execute_host_instruction_exec(exec, slots, instruction)?;
-        crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
     } else if crate::exec::is_ffi_instruction(instruction) {
-        debug_assert!(
-            !crate::exec::needs_owner_extension_fallback(instruction, Some(&extension_dispatch)),
-            "owner extension fallback must be resolved before the shared session body"
-        );
-        if value_mode
-            && crate::exec::try_execute_terminal_value_instruction(
-                exec,
-                slots,
-                instruction,
-                terminal_slots,
-            )?
-        {
-            crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
-            return Ok(());
-        }
         crate::exec::execute_ffi_instruction_exec(
             exec,
             slots,
@@ -1601,28 +212,16 @@ fn execute_slot_instruction_in_session<'input>(
             Some(instruction_index),
             Some(&mut extension_dispatch),
         )?;
-        crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
-    } else if value_mode
-        && crate::exec::instruction_may_be_terminal_value(instruction, terminal_slots)
-        && crate::exec::try_execute_terminal_value_instruction(
-            exec,
-            slots,
-            instruction,
-            terminal_slots,
-        )?
-    {
-        // Already handled as a metadata-only TensorValue.
-        crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
     } else {
         let result = crate::exec::execute_backend_op(exec, slots, instruction)?;
         slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
-        crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
     }
+    crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
     Ok(())
 }
 
-/// Run one planned elementwise region on `exec` without entering a session.
-fn execute_elementwise_fusion_slots_in_session<'input>(
+/// Run one planned elementwise region on `exec`.
+fn execute_elementwise_fusion_slots_on_engine<'input>(
     exec: &mut dyn Engine,
     input_slots: &[usize],
     instruction_count: usize,
@@ -1689,740 +288,135 @@ fn execute_elementwise_fusion_slots_in_session<'input>(
     Ok(true)
 }
 
-fn cache_owner_error(error: Error) -> CacheOwnerError {
-    CacheOwnerError::new(Arc::new(error))
-}
-
-fn cache_stats_from_tensor_stats(stats: tenferro_tensor::CacheStats) -> CacheStats {
-    CacheStats {
-        entries: stats.entries,
-        retained_bytes: stats.retained_bytes,
-        hits: stats.hits,
-        misses: stats.misses,
-        evictions: stats.evictions,
-        clears: stats.clears,
+/// Prepare `program` for the engines described by `targets`.
+pub(super) fn prepare(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[TensorRead<'_>],
+    targets: &[EngineTarget],
+) -> Result<Prepared> {
+    const CALLER: &str = "Runtime::prepare";
+    if targets.is_empty() {
+        return Err(Error::invalid_argument(
+            CALLER,
+            ErrorPhase::Execution,
+            "targets",
+            "prepare needs at least one engine target",
+        ));
     }
-}
-
-pub(super) fn run_compiled(
-    runtime: &Runtime,
-    program: &CompiledGraph,
-    inputs: &[&Tensor],
-) -> Result<Vec<Tensor>> {
-    let inputs = resolve_input_refs(program, inputs, BoundInputCheck::Validate)?;
-    let signature = input_signature_reads(&inputs)?;
-    let prepared = prepare(runtime, program, &signature)?;
-    validate_prepared_epoch(runtime, prepared.root().epoch(), "Runtime::run_compiled")?;
-    execute_scheduled_reads(
-        prepared.root().staging(),
-        prepared.root().schedule(),
-        prepared.root().regions(),
-        prepared.root().region_counters(),
-        prepared.operations(),
-        &inputs,
-        &mut ScheduledRunner::Leased,
-    )
-}
-
-/// Execute one immutable borrowed package synchronously through provider retirement.
-///
-/// Asynchronous or non-host providers are rejected before preparation can enqueue
-/// work. CPU/host execution returns only after the schedule has retired.
-pub(super) fn execute_scoped_read_only<'env>(
-    runtime: &Runtime,
-    program: &CompiledGraph,
-    inputs: ScopedReadInputs<'env>,
-) -> std::result::Result<ScopedExecutionOutcome<'env>, ScopedSubmitRejected<'env>> {
-    if inputs.has_non_host_provider() {
-        return Err(ScopedSubmitRejected {
-            source: Box::new(Error::unsupported(
-                "Runtime::execute_scoped_read_only",
+    let snapshot = runtime
+        .snapshot()
+        .map_err(|source| Error::runtime_state_source(CALLER, ErrorPhase::Execution, source))?;
+    let mut engine_ids = Vec::with_capacity(targets.len());
+    for (index, target) in targets.iter().enumerate() {
+        if targets[..index]
+            .iter()
+            .any(|earlier| earlier.engine_id() == target.engine_id())
+        {
+            return Err(Error::invalid_argument(
+                CALLER,
                 ErrorPhase::Execution,
-                "scoped borrowed execution requires host/CPU storage",
-            )),
-            inputs,
-        });
-    }
-
-    let reads = inputs.as_reads();
-    let prepared = match prepare_compiled_reads(runtime, program, &reads) {
-        Ok(prepared) => prepared,
-        Err(source) => {
-            return Err(ScopedSubmitRejected {
-                source: Box::new(source),
-                inputs,
-            })
+                "targets",
+                format!(
+                    "engine {:?} is named by more than one target",
+                    target.engine_id().as_str()
+                ),
+            ));
         }
-    };
-    if !schedule_supports_scoped_execution(prepared.prepared.root().schedule()) {
-        return Err(ScopedSubmitRejected {
-            source: Box::new(Error::unsupported(
-                "Runtime::execute_scoped_read_only",
-                ErrorPhase::Execution,
-                "the selected provider does not prove retirement before scoped return",
-            )),
-            inputs,
-        });
-    }
-
-    match execute_scoped_admitted(
-        prepared.prepared.root().staging(),
-        prepared.prepared.root().schedule(),
-        prepared.prepared.operations(),
-        &reads,
-    ) {
-        Ok(bundle) => Ok(ScopedExecutionOutcome::Completed(bundle)),
-        Err(error) => Ok(ScopedExecutionOutcome::RetiredFailed { error, inputs }),
-    }
-}
-
-fn execute_scoped_admitted<'env>(
-    program: &ExecProgram,
-    schedule: &ScheduledGraph,
-    operations: &[PreparedOperationPlan],
-    inputs: &[TensorRead<'env>],
-) -> Result<ScopedExecutionBundle<'env>> {
-    validate_exec_input_count(program, inputs.len())?;
-    crate::exec::validate_exec_program(program, "scoped tensor executor")?;
-    let input_slots = inputs.iter().cloned().map(ExecSlot::Read).collect();
-    let ScheduledExecution {
-        mut outputs,
-        event_domains,
-    } = execute_scheduled_slots(
-        program,
-        schedule,
-        &[],
-        &super::region::RegionExecutionCounters::default(),
-        operations,
-        input_slots,
-        RuntimeOutputMode::Tensor,
-        &mut ScheduledRunner::Leased,
-    )?;
-    let collection = collect_scoped_outputs(program, &mut outputs);
-    drain_after_collection(collection, event_domains)
-}
-
-pub(crate) fn collect_scoped_outputs<'env>(
-    program: &ExecProgram,
-    outputs: &mut [Option<LocatedExecSlot<'env>>],
-) -> Result<ScopedExecutionBundle<'env>> {
-    let mut owned = AllocationGroup::from_tensors(Vec::new())
-        .map(|(group, _)| group)
-        .map_err(|error| {
+        let view = snapshot.engine(target.engine_id()).ok_or_else(|| {
             Error::runtime_state(
-                "Runtime::collect_scoped_outputs",
+                CALLER,
                 ErrorPhase::Execution,
-                error.to_string(),
+                format!(
+                    "no engine {:?} is registered with this runtime",
+                    target.engine_id().as_str()
+                ),
             )
         })?;
-    let mut scoped = Vec::with_capacity(program.output_slots.len());
-    for &slot in &program.output_slots {
-        let located = outputs
-            .get_mut(slot)
-            .and_then(Option::take)
-            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
-        let output = match located.value {
-            ExecSlot::Read(read) => ScopedOutput::Borrowed(read.tensor_view()),
-            ExecSlot::Owned(tensor) => {
-                let slot = owned.append_tensor(tensor).map_err(|error| {
-                    Error::runtime_state(
-                        "Runtime::collect_scoped_outputs",
-                        ErrorPhase::Execution,
-                        error.to_string(),
-                    )
-                })?;
-                ScopedOutput::Owned(slot)
-            }
-            ExecSlot::Value(value) => {
-                let (group, slot, dtype, shape) = value.try_into_group_parts().map_err(|_| {
-                    Error::runtime_state(
-                        "Runtime::collect_scoped_outputs",
-                        ErrorPhase::Execution,
-                        "scoped value output was retained by another owner",
-                    )
-                })?;
-                let slot = owned.append_group(group, slot).map_err(|error| {
-                    Error::runtime_state(
-                        "Runtime::collect_scoped_outputs",
-                        ErrorPhase::Execution,
-                        error.to_string(),
-                    )
-                })?;
-                let _ = (dtype, shape);
-                ScopedOutput::Owned(slot)
-            }
-        };
-        scoped.push(output);
+        if view.context_identity() != target.context_identity() {
+            return Err(Error::runtime_state(
+                CALLER,
+                ErrorPhase::Execution,
+                format!(
+                    "engine {:?} is registered for context {:?}, but the target reports {:?}",
+                    target.engine_id().as_str(),
+                    view.context_identity(),
+                    target.context_identity()
+                ),
+            ));
+        }
+        engine_ids.push(target.engine_id().clone());
     }
-    outputs.iter_mut().for_each(|output| *output = None);
-    Ok(ScopedExecutionBundle {
-        owned,
-        outputs: scoped.into_boxed_slice(),
-    })
-}
-
-fn output_ref_from_group<'a>(
-    group: &'a AllocationGroup,
-    slot: DescriptorSlot,
-) -> std::result::Result<OutputRef<'a>, OutputAccessError> {
-    let mut views = group.read_views(std::slice::from_ref(&slot))?;
-    match views.pop() {
-        Some(TensorRead::View(view)) => Ok(OutputRef::Tensor(view)),
-        Some(TensorRead::Tensor(_)) | None => Err(OutputAccessError::InvalidOutput {
-            index: slot.index(),
-        }),
-    }
-}
-
-fn schedule_supports_scoped_execution(schedule: &ScheduledGraph) -> bool {
-    let supports = |location: &ExecutionLocation| {
-        location
-            .witness()
-            .event_domain_driver()
-            .supports_scoped_read_only()
-    };
-    supports(schedule.root_location())
-        && schedule.input_locations().iter().all(supports)
-        && schedule.operation_locations().iter().all(supports)
-        && schedule.nodes().iter().all(|node| {
-            node.event_domain_witness()
-                .event_domain_driver()
-                .supports_scoped_read_only()
-        })
-}
-
-pub(super) fn prepare_compiled(
-    runtime: &Runtime,
-    program: &CompiledGraph,
-    inputs: &[&Tensor],
-) -> Result<PreparedCompiledGraph> {
-    let defaults_validated = retained_inputs_validated(program, inputs);
-    let inputs = resolve_input_refs(program, inputs, BoundInputCheck::Validate)?;
+    let defaults_validated = retained_inputs_validated(program, inputs.len());
+    let inputs = resolve_input_reads(program, inputs, BoundInputCheck::Validate)?;
     let signature = input_signature_reads(&inputs)?;
-    let prepared = prepare(runtime, program, &signature)?;
-    validate_prepared_epoch(
-        runtime,
-        prepared.root().epoch(),
-        "Runtime::prepare_compiled",
-    )?;
-    Ok(PreparedCompiledGraph {
+    let placement = ProgramPlacementConstraint::new(engine_ids, None)
+        .map_err(|source| Error::runtime_state_source(CALLER, ErrorPhase::Execution, source))?;
+    let options = PrepareOptions::new().with_placement(placement);
+    let prepared = runtime
+        .prepare_compiled_for(program, &signature, &options)
+        .map_err(prepare_error)?;
+    validate_prepared_epoch(runtime, prepared.root().epoch(), CALLER)?;
+    Ok(Prepared {
         runtime_id: runtime.id(),
         epoch: prepared.root().epoch(),
         program: program.clone(),
         prepared,
         defaults_validated,
+        targets: targets.into(),
     })
 }
 
-/// Whether resolving `inputs` makes [`resolve_input_refs`] check the graph's
-/// retained inputs.
+/// Whether resolving `input_count` inputs makes [`resolve_input_reads`] check
+/// the graph's retained inputs.
 ///
 /// Empty inputs resolve to the retained values, and a partial list still
 /// resolves every bound input, so both validate them. A list that covers every
 /// input replaces all of them, which leaves the retained values unchecked.
-fn retained_inputs_validated(program: &CompiledGraph, inputs: &[&Tensor]) -> bool {
+fn retained_inputs_validated(program: &CompiledGraph, input_count: usize) -> bool {
     let expected = program.program().inputs().len();
-    inputs.len() != expected || expected == 0
+    input_count != expected || expected == 0
 }
 
-pub(super) fn submit(
+/// Run `prepared` on the engines the caller passes in.
+pub(super) fn run<'a>(
     runtime: &Runtime,
-    program: &CompiledGraph,
-    inputs: ExecutionInputs,
-) -> std::result::Result<ExecutionHandle, SubmitError> {
-    submit_with_spawner(runtime, program, inputs, &OsThreadSpawner)
-}
-
-pub(super) fn submit_with_spawner(
-    runtime: &Runtime,
-    program: &CompiledGraph,
-    inputs: ExecutionInputs,
-    spawner: &dyn SubmissionSpawner,
-) -> std::result::Result<ExecutionHandle, SubmitError> {
-    let prepared = match prepare_submission(runtime, program, &inputs) {
-        Ok(prepared) => prepared,
-        Err(source) => {
-            return Err(SubmitError::PreAdmission {
-                source: Box::new(source),
-                inputs: Box::new(inputs),
-            })
-        }
-    };
-    let submission = Arc::new(InFlightSubmission::new(prepared, inputs));
-    match spawn_in_flight(submission, spawner) {
-        Ok(handle) => Ok(handle),
-        Err(failure) => {
-            let (inputs, source) = *failure;
-            Err(SubmitError::PreAdmission {
-                source: Box::new(source),
-                inputs: Box::new(inputs),
-            })
-        }
-    }
-}
-
-pub(super) fn run_prepared(
-    runtime: &Runtime,
-    prepared: &PreparedCompiledGraph,
-    inputs: &[&Tensor],
-) -> Result<Vec<Tensor>> {
-    validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared")?;
-    let inputs = resolve_input_refs(&prepared.program, inputs, prepared.bound_input_check())?;
+    engines: &mut [&mut dyn ExecutionEngine],
+    prepared: &'a Prepared,
+    inputs: &[TensorRead<'a>],
+) -> Result<Vec<Output<'a>>> {
+    const CALLER: &str = "Runtime::run";
+    validate_prepared_runtime(runtime, prepared, CALLER)?;
+    let mut engines = EngineSet::bind(engines, &prepared.targets, CALLER)?;
+    let inputs = resolve_input_reads(&prepared.program, inputs, prepared.bound_input_check())?;
     let root = prepared.prepared.root();
-    // The steady-state route holds one session around the whole graph, so repeated
-    // `run_prepared` calls pay one session entry instead of one per instruction.
-    //
-    // Two graph shapes keep the per-instruction leased route:
-    // - a schedule that spans more than one engine, because one session cannot
-    //   execute on two engines;
-    // - a schedule with any transfer node, including a same-engine transfer
-    //   between storage classes, because a transfer provider runs between
-    //   sessions today and receives no session.
-    // A single-engine graph whose prepared operations are not session compatible
-    // (an owner-only extension) is declined by the hook itself, also before any
-    // session entry.
-    if !schedule_has_transfer(root.schedule())
-        && let Some(executor) = common_scheduled_executor(root.schedule())
-        && let Some(outputs) = executor.execute_prepared_single_session(
-            root.staging(),
-            root.schedule(),
-            root.regions(),
-            root.region_counters(),
-            prepared.prepared.operations(),
-            &inputs,
-        )?
-    {
-        return Ok(outputs);
-    }
-    execute_scheduled_reads(
+    engines.take_caches();
+    let result = execute_scheduled(
         root.staging(),
         root.schedule(),
         root.regions(),
         root.region_counters(),
         prepared.prepared.operations(),
-        &inputs,
-        &mut ScheduledRunner::Leased,
-    )
-}
-
-/// Run a prepared single-engine graph on a backend session the caller entered.
-///
-/// Every node executes on `session`; the executor state is leased exactly once
-/// without waiting, and no fresh session is opened anywhere on this path. The
-/// preflight below rejects a multi-engine graph, a session that belongs to a
-/// different backend state, and a prepared operation that does not support a
-/// borrowed session, all before the first launch.
-///
-/// This is the deferred run followed by one immediate finish, so both routes
-/// share one execution path. The GPU event run retires before this returns,
-/// success or failure.
-pub(super) fn run_prepared_in(
-    runtime: &Runtime,
-    session: &mut dyn Engine,
-    prepared: &PreparedCompiledGraph,
-    inputs: &[&Tensor],
-) -> Result<Vec<Tensor>> {
-    let mut deferred =
-        begin_prepared_deferred(runtime, session, prepared, "Runtime::run_prepared_in")?;
-    deferred.run_prepared_deferred(inputs)?;
-    let mut runs = deferred.finish_prepared()?;
-    if runs.len() != 1 {
-        return Err(Error::runtime_state(
-            "Runtime::run_prepared_in",
-            ErrorPhase::Execution,
-            format!(
-                "the synchronous prepared route enqueued one run but finish returned {}",
-                runs.len()
-            ),
-        ));
-    }
-    Ok(runs.remove(0))
-}
-
-/// Deferred prepared execution on one caller-held backend session.
-///
-/// A deferred run enqueues a prepared graph and materializes its outputs
-/// without retiring the event domains. The outputs are not valid for host or
-/// device reads until [`Self::finish_prepared`] retires all work enqueued since
-/// the last finish; the guard owns those outputs internally, so caller code
-/// cannot release their device storage before retirement.
-///
-/// The guard borrows the session and the prepared graph for its lifetime, so
-/// unrelated work cannot use that session between deferred runs. It leases the
-/// executor state once, without waiting, for the same reason. [`Drop`] retires
-/// pending work best-effort when the caller forgets to finish, but that path
-/// cannot report a device-side error; call [`Self::finish_prepared`] to observe
-/// it.
-pub struct PreparedDeferred<'a> {
-    runtime: &'a Runtime,
-    prepared: &'a PreparedCompiledGraph,
-    session: &'a mut dyn Engine,
-    state: Box<dyn BorrowedExecutorSessionState + 'a>,
-    event_domains: Option<ScheduledEventDomains>,
-    pending_outputs: Vec<Vec<Tensor>>,
-}
-
-impl fmt::Debug for PreparedDeferred<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PreparedDeferred")
-            .field("pending_runs", &self.pending_outputs.len())
-            .field("has_pending_retirement", &self.event_domains.is_some())
-            .finish_non_exhaustive()
-    }
-}
-
-impl<'a> PreparedDeferred<'a> {
-    /// Enqueue one prepared run without its retirement barrier.
-    ///
-    /// This executes the prepared graph borrowed when the guard was opened.
-    /// Returns the run's index in the vector later returned by
-    /// [`Self::finish_prepared`]. `inputs` must outlive this guard; the borrow
-    /// checker enforces that because the run keeps device work reading them
-    /// until finish.
-    ///
-    /// Every host-side failure returns here after retiring work already
-    /// enqueued. Device-side failures discovered by retirement return from
-    /// [`Self::finish_prepared`].
-    ///
-    /// # Errors
-    ///
-    /// Returns `ValidationError::InvalidArgument` when the input count, shape,
-    /// dtype, or metadata does not match the prepared graph, and when the
-    /// runtime epoch is stale. Engine, session, and instruction-support
-    /// failures return the typed `Error::Extension` backend source.
-    pub fn run_prepared_deferred(&mut self, inputs: &'a [&'a Tensor]) -> Result<usize> {
-        let caller = "Runtime::run_prepared_deferred";
-        let result = match self.resolve_deferred_inputs(caller, inputs) {
-            Ok(inputs) => self.enqueue_deferred_inputs(&inputs),
-            Err(error) => Err(error),
-        };
-        self.finish_deferred_call(result)
-    }
-
-    fn resolve_deferred_inputs(
-        &self,
-        caller: &'static str,
-        inputs: &'a [&'a Tensor],
-    ) -> Result<RuntimeInputReads<'a>> {
-        validate_prepared_runtime(self.runtime, self.prepared, caller)?;
-        resolve_input_refs(
-            &self.prepared.program,
-            inputs,
-            self.prepared.bound_input_check(),
-        )
-    }
-
-    fn enqueue_deferred_inputs(&mut self, inputs: &[TensorRead<'_>]) -> Result<Vec<Tensor>> {
-        let prepared = self.prepared;
-        let root = prepared.prepared.root();
-        let mut runner = ScheduledRunner::Borrowed {
-            session: &mut *self.session,
-            extension_caches: self.state.extension_caches_mut(),
-        };
-        execute_scheduled_reads_with_domains(
-            root.staging(),
-            root.schedule(),
-            root.regions(),
-            root.region_counters(),
-            prepared.prepared.operations(),
-            inputs,
-            &mut runner,
-            &mut self.event_domains,
-        )
-    }
-
-    fn finish_deferred_call(&mut self, result: Result<Vec<Tensor>>) -> Result<usize> {
-        match result {
-            Ok(outputs) => {
-                let index = self.pending_outputs.len();
-                self.pending_outputs.push(outputs);
-                Ok(index)
-            }
-            Err(error) => match self.retire_pending_event_domains() {
-                Ok(()) => Err(error),
-                Err(cleanup) => {
-                    // A failed retirement makes every retained output
-                    // unproven, not only the failed run's.
-                    self.pending_outputs.clear();
-                    Err(scheduled_execution_cleanup_error(error, cleanup))
-                }
-            },
-        }
-    }
-
-    /// Retire every deferred run since the last finish and return their outputs.
-    ///
-    /// Outputs are returned in enqueue order, one package per deferred run.
-    /// A successful return is the first point at which those tensors may be
-    /// read. A device-side retirement failure is returned here and the
-    /// unproven outputs are dropped.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Extension` carrying the first provider retirement
-    /// failure, including a CubeCL dispatch failure or a device stream failure
-    /// at the barrier. The guard remains usable for a later batch after the
-    /// failed retirement.
-    pub fn finish_prepared(&mut self) -> Result<Vec<Vec<Tensor>>> {
-        match self.retire_pending_event_domains() {
-            Ok(()) => Ok(std::mem::take(&mut self.pending_outputs)),
-            Err(error) => {
-                self.pending_outputs.clear();
-                Err(error)
-            }
-        }
-    }
-
-    fn retire_pending_event_domains(&mut self) -> Result<()> {
-        match self.event_domains.take() {
-            Some(mut event_domains) => event_domains.drain(),
-            None => Ok(()),
-        }
-    }
-}
-
-impl Drop for PreparedDeferred<'_> {
-    fn drop(&mut self) {
-        if self.event_domains.is_some()
-            && let Err(error) = self.retire_pending_event_domains()
-        {
-            eprintln!(
-                "tenferro-runtime: failed to retire deferred prepared run during Drop: {error}"
-            );
-        }
-    }
-}
-
-pub(super) fn begin_prepared_deferred<'a>(
-    runtime: &'a Runtime,
-    session: &'a mut dyn Engine,
-    prepared: &'a PreparedCompiledGraph,
-    caller: &'static str,
-) -> Result<PreparedDeferred<'a>> {
-    validate_prepared_runtime(runtime, prepared, caller)?;
-    let schedule = prepared.prepared.root().schedule();
-    let executor = single_engine_executor_ref(schedule, caller)?;
-    let mut state = executor.try_lease_session_state(caller)?;
-    if !state.owns_session(session) {
-        return Err(Error::unsupported(
-            caller,
-            ErrorPhase::Execution,
-            "the borrowed session belongs to a different backend state than the prepared graph's \
-             engine; pass a session of the prepared engine, or use Runtime::run_prepared outside a \
-             session",
-        ));
-    }
-    ensure_instructions_support_session(
-        prepared.prepared.root().staging(),
-        prepared.prepared.operations(),
-        state.extension_caches_mut(),
-        caller,
-    )?;
-    Ok(PreparedDeferred {
-        runtime,
-        prepared,
-        session,
-        state,
-        event_domains: None,
-        pending_outputs: Vec::new(),
-    })
-}
-
-/// The executor shared by every scheduled location, or `None` when the graph
-/// spans more than one engine.
-fn common_scheduled_executor(
-    schedule: &ScheduledGraph,
-) -> Option<Arc<dyn ErasedTensorBackendExecutor>> {
-    common_scheduled_executor_ref(schedule).map(Arc::clone)
-}
-
-/// Borrow the executor shared by every scheduled location.
-///
-/// The root location always names one engine witness, so there is no "no
-/// engine" case to report: every other scheduled location must match it.
-fn common_scheduled_executor_ref(
-    schedule: &ScheduledGraph,
-) -> Option<&Arc<dyn ErasedTensorBackendExecutor>> {
-    let first = schedule.root_location().witness().executor();
-    let same_engine = |witness: &super::snapshot::ExecutableEngineSnapshot| {
-        Arc::ptr_eq(first, witness.executor())
-    };
-    let single_engine = schedule
-        .input_locations()
-        .iter()
-        .all(|location| same_engine(location.witness()))
-        && schedule
-            .operation_locations()
-            .iter()
-            .all(|location| same_engine(location.witness()))
-        && schedule
-            .nodes()
-            .iter()
-            .all(|node| same_engine(node.event_domain_witness()));
-    single_engine.then_some(first)
-}
-
-/// Whether `schedule` bridges providers with a transfer node.
-///
-/// A transfer bypasses the scheduler runner and calls its provider directly, so
-/// it cannot run while one graph-wide session is held.
-fn schedule_has_transfer(schedule: &ScheduledGraph) -> bool {
-    schedule
-        .nodes()
-        .iter()
-        .any(|node| matches!(node, ScheduledNode::Transfer(_)))
-}
-
-/// Borrow the single executor witness of `schedule` for a caller-held session.
-///
-/// A deferred guard keeps this borrow for its whole lifetime, so the executor
-/// state lease can be tied to the prepared graph the caller already holds.
-fn single_engine_executor_ref<'a>(
-    schedule: &'a ScheduledGraph,
-    caller: &'static str,
-) -> Result<&'a Arc<dyn ErasedTensorBackendExecutor>> {
-    common_scheduled_executor_ref(schedule).ok_or_else(|| {
-        Error::unsupported(
-            caller,
-            ErrorPhase::Execution,
-            "the prepared graph spans multiple engines; Runtime::run_prepared_in runs one engine on \
-             a caller-borrowed session, so use Runtime::run_prepared outside a session",
-        )
-    })
-}
-
-/// Reject any prepared instruction that cannot execute on a borrowed session.
-///
-/// This is the instruction-level projection of the scheduler's own
-/// [`crate::exec::is_session_compatible_instruction`] predicate, so a
-/// metadata-only extension plan (a plan with no executor bridge) is rejected
-/// before any launch instead of failing after an earlier node has already run.
-fn ensure_instructions_support_session(
-    program: &ExecProgram,
-    operations: &[PreparedOperationPlan],
-    caches: &mut ExtensionCacheStore,
-    caller: &'static str,
-) -> Result<()> {
-    let dispatch = ExtensionExecutionDispatch { operations, caches };
-    for (index, instruction) in program.instructions.iter().enumerate() {
-        if !crate::exec::is_session_compatible_instruction(instruction, Some(&dispatch)) {
-            return Err(Error::unsupported(
-                caller,
-                ErrorPhase::Execution,
-                format!(
-                    "prepared instruction {index} does not support a caller-borrowed session; use \
-                     Runtime::run_prepared outside a session"
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn prepare_submission(
-    runtime: &Runtime,
-    program: &CompiledGraph,
-    inputs: &ExecutionInputs,
-) -> Result<PreparedCompiledGraph> {
-    let input_reads = inputs.as_reads()?;
-    prepare_compiled_reads(runtime, program, &input_reads)
-}
-
-fn prepare_compiled_reads(
-    runtime: &Runtime,
-    program: &CompiledGraph,
-    inputs: &[TensorRead<'_>],
-) -> Result<PreparedCompiledGraph> {
-    validate_ordered_input_metadata_reads(program, inputs)?;
-    let signature = input_signature_reads(inputs)?;
-    let prepared = prepare(runtime, program, &signature)?;
-    validate_prepared_epoch(runtime, prepared.root().epoch(), "Runtime::submit")?;
-    Ok(PreparedCompiledGraph {
-        runtime_id: runtime.id(),
-        epoch: prepared.root().epoch(),
-        program: program.clone(),
-        prepared,
-        // This route validates the caller's complete read list, which need not
-        // be the graph's retained values, so a later default-input run must
-        // still check them.
-        defaults_validated: false,
-    })
-}
-
-fn execute_admitted(
-    prepared: &PreparedCompiledGraph,
-    inputs: &[TensorRead<'_>],
-) -> Result<Vec<Tensor>> {
-    execute_scheduled_reads(
-        prepared.prepared.root().staging(),
-        prepared.prepared.root().schedule(),
-        prepared.prepared.root().regions(),
-        prepared.prepared.root().region_counters(),
-        prepared.prepared.operations(),
         inputs,
-        &mut ScheduledRunner::Leased,
-    )
-}
-
-pub(super) fn run_compiled_values(
-    runtime: &Runtime,
-    program: &CompiledGraph,
-    inputs: &[&Tensor],
-) -> Result<Vec<TensorValue>> {
-    let inputs = resolve_input_refs(program, inputs, BoundInputCheck::Validate)?;
-    let signature = input_signature_reads(&inputs)?;
-    let prepared = prepare(runtime, program, &signature)?;
-    validate_prepared_epoch(
-        runtime,
-        prepared.root().epoch(),
-        "Runtime::run_compiled_values",
-    )?;
-    execute_scheduled_value_reads(
-        prepared.root().staging(),
-        prepared.root().schedule(),
-        prepared.operations(),
-        &inputs,
-        &mut ScheduledRunner::Leased,
-    )
+        &mut engines,
+    );
+    engines.restore_caches();
+    result
 }
 
 fn validate_prepared_runtime(
     runtime: &Runtime,
-    prepared: &PreparedCompiledGraph,
+    prepared: &Prepared,
     caller: &'static str,
 ) -> Result<()> {
     if runtime.id() != prepared.runtime_id {
         return Err(Error::runtime_state(
             caller,
             ErrorPhase::Execution,
-            "prepared compiled graph belongs to a different runtime",
+            "prepared program belongs to a different runtime",
         ));
     }
-    let epoch = runtime
-        .epoch()
-        .map_err(|source| Error::runtime_state_source(caller, ErrorPhase::Execution, source))?;
-    if epoch != prepared.epoch {
-        return Err(Error::runtime_state(
-            caller,
-            ErrorPhase::Execution,
-            format!(
-                "prepared epoch {:?} does not match current epoch {:?}",
-                prepared.epoch, epoch
-            ),
-        ));
-    }
-    Ok(())
-}
-
-fn prepare(
-    runtime: &Runtime,
-    program: &CompiledGraph,
-    signature: &InputSignature,
-) -> Result<Arc<super::preparation::PreparedProgram>> {
-    runtime
-        .prepare_compiled_for(program, signature, &PrepareOptions::new())
-        .map_err(prepare_error)
+    validate_prepared_epoch(runtime, prepared.epoch, caller)
 }
 
 fn validate_prepared_epoch(
@@ -2446,287 +440,240 @@ fn validate_prepared_epoch(
     Ok(())
 }
 
-/// How the scheduled executor obtains an executor state and a session for a node.
+/// The engines of one run, bound to the prepared targets.
 ///
-/// The scheduler is shared: `Leased` is the per-node fallback used by
-/// `Runtime::run_prepared` for ineligible graphs and by `Runtime::run_compiled`,
-/// while `Borrowed` runs every node on one session — the caller-entered one in
-/// `Runtime::run_prepared_in`, or the internally opened graph-wide one in an
-/// eligible `Runtime::run_prepared`.
-enum ScheduledRunner<'a> {
-    /// Each node leases its engine's executor state and opens its own session.
-    Leased,
-    /// Every node runs on `session` while one executor state stays leased for the
-    /// whole call.
-    ///
-    /// Both the caller-borrowed `Runtime::run_prepared_in` route and the
-    /// internally owned single-session route of `Runtime::run_prepared` use it;
-    /// only the source of `session` differs, so the runner keeps just the
-    /// extension-cache borrow it actually needs while executing.
-    Borrowed {
-        session: &'a mut dyn Engine,
-        extension_caches: &'a mut ExtensionCacheStore,
-    },
+/// Slot `i` of the prepared program runs on `engines[i]`; [`Self::bind`]
+/// checks once, before any launch, that every engine reports the target it is
+/// bound to. Extension caches are moved out of the engines for the duration of
+/// the run so an instruction can borrow an engine and its caches together.
+struct EngineSet<'e, 'r> {
+    engines: &'e mut [&'r mut dyn ExecutionEngine],
+    targets: &'e [EngineTarget],
+    caches: Vec<ExtensionCacheStore>,
 }
 
-impl ScheduledRunner<'_> {
-    #[allow(clippy::too_many_arguments)]
+impl<'e, 'r> EngineSet<'e, 'r> {
+    fn bind(
+        engines: &'e mut [&'r mut dyn ExecutionEngine],
+        targets: &'e [EngineTarget],
+        caller: &'static str,
+    ) -> Result<Self> {
+        if engines.len() != targets.len() {
+            return Err(Error::invalid_argument(
+                caller,
+                ErrorPhase::Execution,
+                "engines",
+                format!(
+                    "the program was prepared for {} engines, but {} were passed",
+                    targets.len(),
+                    engines.len()
+                ),
+            ));
+        }
+        for (index, (engine, target)) in engines.iter().zip(targets).enumerate() {
+            let actual = engine.target();
+            if &actual != target {
+                return Err(Error::invalid_argument(
+                    caller,
+                    ErrorPhase::Execution,
+                    "engines",
+                    format!(
+                        "engine {index} reports target {actual:?}, but the program was prepared for {target:?}"
+                    ),
+                ));
+            }
+        }
+        Ok(Self {
+            engines,
+            targets,
+            caches: Vec::new(),
+        })
+    }
+
+    fn take_caches(&mut self) {
+        self.caches = self
+            .engines
+            .iter_mut()
+            .map(|engine| engine.take_extension_caches())
+            .collect();
+    }
+
+    fn restore_caches(&mut self) {
+        for (engine, caches) in self.engines.iter_mut().zip(self.caches.drain(..)) {
+            engine.restore_extension_caches(caches);
+        }
+    }
+
+    fn index_of(&self, engine_id: &EngineId) -> Result<usize> {
+        self.targets
+            .iter()
+            .position(|target| target.engine_id() == engine_id)
+            .ok_or_else(|| {
+                Error::runtime_state(
+                    "Runtime::run",
+                    ErrorPhase::Execution,
+                    format!(
+                        "the prepared schedule uses engine {:?}, which is not among the run's engines",
+                        engine_id.as_str()
+                    ),
+                )
+            })
+    }
+
+    fn driver(&self, engine_id: &EngineId) -> Result<Arc<dyn EventDomainDriver>> {
+        let index = self.index_of(engine_id)?;
+        Ok(self.engines[index].event_domain_driver())
+    }
+
     fn execute_slot_instruction<'input>(
         &mut self,
-        executor: &Arc<dyn ErasedTensorBackendExecutor>,
+        location: &ExecutionLocation,
         instruction_index: usize,
         instruction: &ExecInstruction,
         operations: &[PreparedOperationPlan],
         slots: &mut [Option<ExecSlot<'input>>],
-        output_mode: RuntimeOutputMode,
-        terminal_slots: &[bool],
     ) -> Result<()> {
-        match self {
-            Self::Leased => executor.execute_slot_instruction(
-                instruction_index,
-                instruction,
-                operations,
-                slots,
-                output_mode,
-                terminal_slots,
-            ),
-            Self::Borrowed {
-                session,
-                extension_caches,
-            } => execute_slot_instruction_in_session(
-                &mut **session,
-                extension_caches,
-                operations,
-                instruction_index,
-                instruction,
-                slots,
-                output_mode,
-                terminal_slots,
-            ),
-        }
+        let index = self.index_of(location.engine_id())?;
+        let engine = &mut *self.engines[index];
+        let caches = match self.caches.get_mut(index) {
+            Some(caches) => caches,
+            None => {
+                return Err(Error::runtime_state(
+                    "Runtime::run",
+                    ErrorPhase::Execution,
+                    "engine extension caches were not taken before execution",
+                ))
+            }
+        };
+        execute_slot_instruction_on_engine(
+            engine,
+            caches,
+            operations,
+            instruction_index,
+            instruction,
+            slots,
+        )
     }
 
     fn execute_elementwise_fusion_slots<'input>(
         &mut self,
-        executor: &Arc<dyn ErasedTensorBackendExecutor>,
+        location: &ExecutionLocation,
         input_slots: &[usize],
         instruction_count: usize,
         plan: &tenferro_tensor::backend::ElementwiseFusionPlan,
         slots: &mut [Option<ExecSlot<'input>>],
         output_slots: &[usize],
     ) -> Result<bool> {
-        match self {
-            Self::Leased => executor.execute_elementwise_fusion_slots(
-                input_slots,
-                instruction_count,
-                plan,
-                slots,
-                output_slots,
-            ),
-            Self::Borrowed { session, .. } => execute_elementwise_fusion_slots_in_session(
-                &mut **session,
-                input_slots,
-                instruction_count,
-                plan,
-                slots,
-                output_slots,
-            ),
+        let index = self.index_of(location.engine_id())?;
+        execute_elementwise_fusion_slots_on_engine(
+            &mut *self.engines[index],
+            input_slots,
+            instruction_count,
+            plan,
+            slots,
+            output_slots,
+        )
+    }
+
+    /// Hand every event-domain run to the engine that owns its domain.
+    fn retire(&mut self, event_domains: ScheduledEventDomains) -> Result<()> {
+        let mut failures = Vec::new();
+        for (engine_id, run) in event_domains.into_pending_runs() {
+            let result = match self.index_of(&engine_id) {
+                Ok(index) => self.engines[index].retire_run(run),
+                Err(error) => {
+                    drop_event_domain_run(run);
+                    Err(error)
+                }
+            };
+            if let Err(error) = result {
+                failures.push(error);
+            }
         }
-    }
-
-    fn materialize_slot<'input>(
-        &mut self,
-        executor: &Arc<dyn ErasedTensorBackendExecutor>,
-        slot: ExecSlot<'input>,
-    ) -> Result<Tensor> {
-        match self {
-            Self::Leased => executor.materialize_slot(slot),
-            Self::Borrowed { session, .. } => slot.into_tensor(&mut **session),
+        let mut failures = failures.into_iter();
+        let Some(mut error) = failures.next() else {
+            return Ok(());
+        };
+        for failure in failures {
+            error = Error::with_suppressed(error, failure);
         }
-    }
-
-    fn materialize_slot_value<'input>(
-        &mut self,
-        executor: &Arc<dyn ErasedTensorBackendExecutor>,
-        slot: ExecSlot<'input>,
-    ) -> Result<TensorValue> {
-        match self {
-            Self::Leased => executor.materialize_slot_value(slot),
-            Self::Borrowed { session, .. } => slot.into_value(&mut **session),
-        }
+        Err(error)
     }
 }
 
-/// Output slots produced by a scheduled run whose event domains have not yet
-/// been retired.
-///
-/// The caller materializes the outputs (which can launch a device copy for a
-/// borrowed device tensor) and then calls [`drain_after_collection`], so output
-/// materialization happens inside the run's retirement lifetime.
-struct ScheduledExecution<'input> {
-    outputs: Vec<Option<LocatedExecSlot<'input>>>,
-    event_domains: ScheduledEventDomains,
-}
-
-/// Retire a scheduled run after its outputs were materialized.
-///
-/// Preserves a collection error, a drain error, or both, so a failed
-/// materialization cannot skip retirement and a failed retirement cannot hide
-/// the collection failure.
-fn drain_after_collection<T>(
-    collection: Result<T>,
-    mut event_domains: ScheduledEventDomains,
-) -> Result<T> {
-    let drain = event_domains.drain();
-    match (collection, drain) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-        (Err(primary), Err(cleanup)) => Err(scheduled_execution_cleanup_error(primary, cleanup)),
-    }
-}
-
-/// Retire a scheduled run that failed before its outputs could be materialized.
-fn drain_scheduled_error<T>(primary: Error, mut event_domains: ScheduledEventDomains) -> Result<T> {
-    match event_domains.drain() {
-        Ok(()) => Err(primary),
-        Err(cleanup) => Err(scheduled_execution_cleanup_error(primary, cleanup)),
-    }
-}
-
-fn execute_scheduled_reads(
+fn execute_scheduled<'input>(
     program: &ExecProgram,
     schedule: &ScheduledGraph,
     regions: &[super::region::ElementwiseRegion],
     region_counters: &super::region::RegionExecutionCounters,
     operations: &[PreparedOperationPlan],
-    inputs: &[TensorRead<'_>],
-    runner: &mut ScheduledRunner<'_>,
-) -> Result<Vec<Tensor>> {
-    let mut event_domains = None;
-    let result = execute_scheduled_reads_with_domains(
-        program,
-        schedule,
-        regions,
-        region_counters,
-        operations,
-        inputs,
-        runner,
-        &mut event_domains,
-    );
-    match event_domains {
-        Some(event_domains) => drain_after_collection(result, event_domains),
-        None => result,
-    }
-}
-
-/// Execute a scheduled tensor run without retiring its event domains.
-///
-/// The caller owns `event_domains`: a deferred guard keeps and reuses one set
-/// across runs so a single finish retires them all, while the synchronous
-/// route creates one set and drains it immediately. A validation failure before
-/// any domain is created leaves `event_domains` as `None`, so the caller does
-/// not take a retirement barrier for a run that never launched.
-#[allow(clippy::too_many_arguments)]
-fn execute_scheduled_reads_with_domains(
-    program: &ExecProgram,
-    schedule: &ScheduledGraph,
-    regions: &[super::region::ElementwiseRegion],
-    region_counters: &super::region::RegionExecutionCounters,
-    operations: &[PreparedOperationPlan],
-    inputs: &[TensorRead<'_>],
-    runner: &mut ScheduledRunner<'_>,
-    event_domains: &mut Option<ScheduledEventDomains>,
-) -> Result<Vec<Tensor>> {
+    inputs: RuntimeInputReads<'input>,
+    engines: &mut EngineSet<'_, '_>,
+) -> Result<Vec<Output<'input>>> {
     validate_exec_input_count(program, inputs.len())?;
     crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
-    if event_domains.is_none() {
-        *event_domains = Some(ScheduledEventDomains::new(schedule)?);
-    }
-    let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
-    let mut outputs = execute_scheduled_slots_into(
+    let mut event_domains = Some(ScheduledEventDomains::new(schedule, engines)?);
+    let inputs = inputs.into_iter().map(ExecSlot::Read).collect();
+    let executed = execute_scheduled_slots_into(
         program,
         schedule,
         regions,
         region_counters,
         operations,
         inputs,
-        RuntimeOutputMode::Tensor,
-        runner,
-        event_domains,
-    )?;
-    collect_tensor_outputs_with(program, &mut outputs, |location, slot| {
-        runner.materialize_slot(location.witness().executor(), slot)
-    })
-}
-
-fn execute_scheduled_value_reads(
-    program: &ExecProgram,
-    schedule: &ScheduledGraph,
-    operations: &[PreparedOperationPlan],
-    inputs: &[TensorRead<'_>],
-    runner: &mut ScheduledRunner<'_>,
-) -> Result<Vec<TensorValue>> {
-    validate_exec_input_count(program, inputs.len())?;
-    crate::exec::validate_exec_program(program, "scheduled value executor")?;
-    let inputs = inputs.iter().cloned().map(ExecSlot::Read).collect();
-    let ScheduledExecution {
-        mut outputs,
-        event_domains,
-    } = execute_scheduled_slots(
-        program,
-        schedule,
-        &[],
-        &super::region::RegionExecutionCounters::default(),
-        operations,
-        inputs,
-        RuntimeOutputMode::Value,
-        runner,
-    )?;
-    let collection = collect_value_outputs_with(program, &mut outputs, |location, slot| {
-        runner.materialize_slot_value(location.witness().executor(), slot)
-    });
-    drain_after_collection(collection, event_domains)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn execute_scheduled_slots<'input>(
-    program: &ExecProgram,
-    schedule: &ScheduledGraph,
-    regions: &[super::region::ElementwiseRegion],
-    region_counters: &super::region::RegionExecutionCounters,
-    operations: &[PreparedOperationPlan],
-    inputs: Vec<ExecSlot<'input>>,
-    output_mode: RuntimeOutputMode,
-    runner: &mut ScheduledRunner<'_>,
-) -> Result<ScheduledExecution<'input>> {
-    let mut event_domains = Some(ScheduledEventDomains::new(schedule)?);
-    match execute_scheduled_slots_into(
-        program,
-        schedule,
-        regions,
-        region_counters,
-        operations,
-        inputs,
-        output_mode,
-        runner,
+        engines,
         &mut event_domains,
-    ) {
-        Ok(outputs) => match event_domains.take() {
-            Some(event_domains) => Ok(ScheduledExecution {
-                outputs,
-                event_domains,
-            }),
-            None => Err(Error::runtime_state(
-                "Runtime::run_compiled",
+    );
+    let Some(event_domains) = event_domains.take() else {
+        return executed.and_then(|_| {
+            Err(Error::runtime_state(
+                "Runtime::run",
                 ErrorPhase::Execution,
                 "scheduled execution consumed its event domains before collecting outputs",
-            )),
-        },
-        Err(error) => match event_domains.take() {
-            Some(event_domains) => drain_scheduled_error(error, event_domains),
-            None => Err(error),
-        },
+            ))
+        });
+    };
+    let collected = executed.and_then(|mut outputs| collect_outputs(program, &mut outputs));
+    match collected {
+        Ok(outputs) => {
+            engines.retire(event_domains)?;
+            Ok(outputs)
+        }
+        Err(primary) => {
+            // On failure, nothing the run produced is handed out; retire the
+            // run now so its device work cannot outlive the error.
+            let mut event_domains = event_domains;
+            match event_domains.drain() {
+                Ok(()) => Err(primary),
+                Err(cleanup) => Err(scheduled_execution_cleanup_error(primary, cleanup)),
+            }
+        }
     }
+}
+
+/// Turn the located output slots into [`Output`]s.
+///
+/// A slot that still reads one of the run's inputs (the input itself or a view
+/// of it) is returned borrowed, without a copy. Owned results, which are
+/// always compact, are returned as they are.
+fn collect_outputs<'input>(
+    program: &ExecProgram,
+    outputs: &mut [Option<LocatedExecSlot<'input>>],
+) -> Result<Vec<Output<'input>>> {
+    program
+        .output_slots
+        .iter()
+        .map(|&slot| {
+            let located = outputs
+                .get_mut(slot)
+                .and_then(Option::take)
+                .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+            match located.value {
+                ExecSlot::Read(read) => Ok(Output::Borrowed(read)),
+                ExecSlot::Owned(tensor) => Ok(Output::Owned(tensor)),
+            }
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2737,8 +684,7 @@ fn execute_scheduled_slots_into<'input>(
     region_counters: &super::region::RegionExecutionCounters,
     operations: &[PreparedOperationPlan],
     inputs: Vec<ExecSlot<'input>>,
-    output_mode: RuntimeOutputMode,
-    runner: &mut ScheduledRunner<'_>,
+    engines: &mut EngineSet<'_, '_>,
     event_domains: &mut Option<ScheduledEventDomains>,
 ) -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
     let domains = event_domains.as_mut().ok_or_else(|| {
@@ -2748,11 +694,6 @@ fn execute_scheduled_slots_into<'input>(
             "scheduled execution has no event-domain run to submit into",
         )
     })?;
-    let terminal_slots = if matches!(output_mode, RuntimeOutputMode::Value) {
-        crate::exec::terminal_output_slots(program)
-    } else {
-        Vec::new()
-    };
     let mut staged = Vec::new();
     let mut located = (0..program.n_slots)
         .map(|_| Vec::new())
@@ -2762,18 +703,14 @@ fn execute_scheduled_slots_into<'input>(
     // A provider panic is caught after this body and drops the event-domain
     // run before this frame's staged tensor storage drops.
     // Planned elementwise regions: the start node executes the whole region as
-    // one fused command and the covered nodes are skipped. Regions apply to
-    // tensor output mode; value mode keeps the per-instruction path.
-    let regions_applicable = matches!(output_mode, RuntimeOutputMode::Tensor);
+    // one fused command and the covered nodes are skipped.
     let mut region_starts: HashMap<usize, usize> = HashMap::new();
     let mut region_covered: HashSet<usize> = HashSet::new();
-    if regions_applicable {
-        for (region_index, region) in regions.iter().enumerate() {
-            if let Some(&first) = region.node_indices.first() {
-                region_starts.insert(first, region_index);
-            }
-            region_covered.extend(region.node_indices.iter().copied());
+    for (region_index, region) in regions.iter().enumerate() {
+        if let Some(&first) = region.node_indices.first() {
+            region_starts.insert(first, region_index);
         }
+        region_covered.extend(region.node_indices.iter().copied());
     }
 
     let result = std::panic::catch_unwind(AssertUnwindSafe(
@@ -2841,8 +778,8 @@ fn execute_scheduled_slots_into<'input>(
                                             &mut staged,
                                         )?;
                                     }
-                                    let applied = runner.execute_elementwise_fusion_slots(
-                                        operation.executor(),
+                                    let applied = engines.execute_elementwise_fusion_slots(
+                                        &location,
                                         &region.input_slots,
                                         region.instructions.len(),
                                         &region.plan,
@@ -2882,14 +819,12 @@ fn execute_scheduled_slots_into<'input>(
                                             &mut located,
                                             &mut staged,
                                         )?;
-                                        runner.execute_slot_instruction(
-                                            member.executor(),
+                                        engines.execute_slot_instruction(
+                                            member.location(),
                                             instruction_index,
                                             instruction,
                                             operations,
                                             &mut staged,
-                                            output_mode,
-                                            &terminal_slots,
                                         )?;
                                         validate_instruction_outputs(
                                             instruction_index,
@@ -2976,14 +911,12 @@ fn execute_scheduled_slots_into<'input>(
                                     &mut located,
                                     &mut staged,
                                 )?;
-                                runner.execute_slot_instruction(
-                                    operation.executor(),
+                                engines.execute_slot_instruction(
+                                    operation.location(),
                                     instruction_index,
                                     instruction,
                                     operations,
                                     &mut staged,
-                                    output_mode,
-                                    &terminal_slots,
                                 )?;
                                 validate_instruction_outputs(
                                     instruction_index,
@@ -3087,7 +1020,7 @@ fn single_domain_coalescing_eligible(schedule: &ScheduledGraph) -> bool {
 }
 
 impl ScheduledEventDomains {
-    pub(crate) fn new(schedule: &ScheduledGraph) -> Result<Self> {
+    fn new(schedule: &ScheduledGraph, engines: &EngineSet<'_, '_>) -> Result<Self> {
         schedule.preflight().map_err(|source| {
             Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
         })?;
@@ -3097,10 +1030,11 @@ impl ScheduledEventDomains {
         // scanning every location into a driver table only to find one entry.
         if single_domain_coalescing_eligible(schedule) {
             let domain = schedule.root_location().event_domain_id();
-            let witness = schedule.root_location().witness();
+            let engine_id = schedule.root_location().engine_id().clone();
             let mut run = RuntimeOwnedEventDomainRun::new(
                 domain,
-                witness.event_domain_driver().begin_run(domain)?,
+                engine_id.clone(),
+                engines.driver(&engine_id)?.begin_run(domain)?,
             );
             let actual = run.domain(EventDomainOperation::BeginRun)?;
             if actual != domain {
@@ -3118,14 +1052,13 @@ impl ScheduledEventDomains {
             });
         }
         fn add_domain(
-            drivers: &mut Vec<(super::EventDomainId, Arc<dyn super::EventDomainDriver>)>,
+            drivers: &mut Vec<(super::EventDomainId, EngineId)>,
             seen_domains: &mut HashSet<super::EventDomainId>,
             domain: super::EventDomainId,
-            witness: &Arc<super::snapshot::ExecutableEngineSnapshot>,
+            engine_id: &EngineId,
         ) {
             if seen_domains.insert(domain) {
-                debug_assert_eq!(witness.event_domain_id(), domain);
-                drivers.push((domain, witness.event_domain_driver().clone()));
+                drivers.push((domain, engine_id.clone()));
             }
         }
         let mut drivers = Vec::new();
@@ -3139,14 +1072,14 @@ impl ScheduledEventDomains {
             &mut drivers,
             &mut seen_domains,
             schedule.root_location().event_domain_id(),
-            schedule.root_location().witness(),
+            schedule.root_location().engine_id(),
         );
         for location in schedule.input_locations() {
             add_domain(
                 &mut drivers,
                 &mut seen_domains,
                 location.event_domain_id(),
-                location.witness(),
+                location.engine_id(),
             );
         }
         for location in schedule.operation_locations() {
@@ -3154,7 +1087,7 @@ impl ScheduledEventDomains {
                 &mut drivers,
                 &mut seen_domains,
                 location.event_domain_id(),
-                location.witness(),
+                location.engine_id(),
             );
         }
         for node in schedule.nodes() {
@@ -3162,12 +1095,13 @@ impl ScheduledEventDomains {
                 &mut drivers,
                 &mut seen_domains,
                 node.completion().domain(),
-                node.event_domain_witness(),
+                node.event_domain_witness().engine_id(),
             );
         }
         let mut runs = Vec::with_capacity(drivers.len());
-        for (domain, driver) in drivers {
-            let run = RuntimeOwnedEventDomainRun::new(domain, driver.begin_run(domain)?);
+        for (domain, engine_id) in drivers {
+            let driver = engines.driver(&engine_id)?;
+            let run = RuntimeOwnedEventDomainRun::new(domain, engine_id, driver.begin_run(domain)?);
             let actual = run.domain(EventDomainOperation::BeginRun)?;
             if actual != domain {
                 return Err(event_domain_error(EventDomainError::RunDomainMismatch {
@@ -3191,7 +1125,9 @@ impl ScheduledEventDomains {
     ) -> Result<Self> {
         let mut runs = Vec::with_capacity(drivers.len());
         for (domain, driver) in drivers {
-            let run = RuntimeOwnedEventDomainRun::new(domain, driver.begin_run(domain)?);
+            let engine_id =
+                EngineId::new("tenferro-test.event-domain-engine").expect("test engine id");
+            let run = RuntimeOwnedEventDomainRun::new(domain, engine_id, driver.begin_run(domain)?);
             let actual = run.domain(EventDomainOperation::BeginRun)?;
             if actual != domain {
                 return Err(event_domain_error(EventDomainError::RunDomainMismatch {
@@ -3349,6 +1285,14 @@ impl ScheduledEventDomains {
         Err(missing_event_domain_driver(domain))
     }
 
+    /// Release every pending run, each with the engine that owns it.
+    fn into_pending_runs(self) -> Vec<(EngineId, Box<dyn EventDomainRun>)> {
+        self.runs
+            .into_iter()
+            .filter_map(RuntimeOwnedEventDomainRun::into_pending)
+            .collect()
+    }
+
     pub(crate) fn drain(&mut self) -> Result<()> {
         let mut failures = Vec::new();
         for run in &mut self.runs {
@@ -3392,14 +1336,32 @@ impl fmt::Display for EventDomainRunTerminalState {
 #[derive(Debug)]
 struct RuntimeOwnedEventDomainRun {
     requested_domain: super::EventDomainId,
+    /// The engine whose driver opened this run; it takes the run over once the
+    /// outputs are collected.
+    engine_id: EngineId,
     state: RuntimeOwnedEventDomainRunState,
 }
 
 impl RuntimeOwnedEventDomainRun {
-    fn new(requested_domain: super::EventDomainId, inner: Box<dyn EventDomainRun>) -> Self {
+    fn new(
+        requested_domain: super::EventDomainId,
+        engine_id: EngineId,
+        inner: Box<dyn EventDomainRun>,
+    ) -> Self {
         Self {
             requested_domain,
+            engine_id,
             state: RuntimeOwnedEventDomainRunState::Pending(inner),
+        }
+    }
+
+    /// Release the pending run to its engine, or `None` once it is terminal.
+    fn into_pending(mut self) -> Option<(EngineId, Box<dyn EventDomainRun>)> {
+        match std::mem::replace(&mut self.state, RuntimeOwnedEventDomainRunState::Retired) {
+            RuntimeOwnedEventDomainRunState::Pending(run) => Some((self.engine_id.clone(), run)),
+            RuntimeOwnedEventDomainRunState::Retired | RuntimeOwnedEventDomainRunState::Failed => {
+                None
+            }
         }
     }
 
@@ -3477,7 +1439,7 @@ impl RuntimeOwnedEventDomainRun {
         };
         let domain = self.requested_domain;
         let mut run = run;
-        let drain_result = catch_unwind(AssertUnwindSafe(|| run.drain()));
+        let drain_result = std::panic::catch_unwind(AssertUnwindSafe(|| run.drain()));
         drop_event_domain_run(run);
         match drain_result {
             Ok(Ok(())) => {
@@ -3527,7 +1489,7 @@ fn event_domain_run_state_error(
 }
 
 fn drop_event_domain_run(run: Box<dyn EventDomainRun>) {
-    if catch_unwind(AssertUnwindSafe(|| drop(run))).is_err() {
+    if std::panic::catch_unwind(AssertUnwindSafe(|| drop(run))).is_err() {
         // The provider run has been consumed; its cleanup panic is contained.
     }
 }
@@ -3569,10 +1531,7 @@ fn instruction_execution<'a>(
 ) -> Result<InstructionExecution<'a>> {
     let Some(operation_index) = instruction.semantic_operation_index else {
         let location = schedule.root_location();
-        return Ok(InstructionExecution {
-            witness: location.witness(),
-            location,
-        });
+        return Ok(InstructionExecution { location });
     };
     let location = schedule
         .operation_locations()
@@ -3587,22 +1546,14 @@ fn instruction_execution<'a>(
                 ),
             )
         })?;
-    Ok(InstructionExecution {
-        witness: location.witness(),
-        location,
-    })
+    Ok(InstructionExecution { location })
 }
 
 struct InstructionExecution<'a> {
-    witness: &'a super::snapshot::ExecutableEngineSnapshot,
     location: &'a ExecutionLocation,
 }
 
 impl InstructionExecution<'_> {
-    fn executor(&self) -> &Arc<dyn ErasedTensorBackendExecutor> {
-        self.witness.executor()
-    }
-
     fn location(&self) -> &ExecutionLocation {
         self.location
     }
@@ -3999,52 +1950,16 @@ fn collect_located_outputs<'input>(
     Ok(outputs)
 }
 
-pub(super) fn collect_tensor_outputs_with<'input>(
-    program: &ExecProgram,
-    outputs: &mut [Option<LocatedExecSlot<'input>>],
-    mut materialize: impl FnMut(&ExecutionLocation, ExecSlot<'input>) -> Result<Tensor>,
-) -> Result<Vec<Tensor>> {
-    program
-        .output_slots
-        .iter()
-        .map(|&slot| {
-            let located = outputs
-                .get_mut(slot)
-                .and_then(Option::take)
-                .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
-            materialize(&located.location, located.value)
-        })
-        .collect()
-}
-
-fn collect_value_outputs_with<'input>(
-    program: &ExecProgram,
-    outputs: &mut [Option<LocatedExecSlot<'input>>],
-    mut materialize: impl FnMut(&ExecutionLocation, ExecSlot<'input>) -> Result<TensorValue>,
-) -> Result<Vec<TensorValue>> {
-    program
-        .output_slots
-        .iter()
-        .map(|&slot| {
-            let located = outputs
-                .get_mut(slot)
-                .and_then(Option::take)
-                .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
-            materialize(&located.location, located.value)
-        })
-        .collect()
-}
-
 fn input_signature_reads(inputs: &[TensorRead<'_>]) -> Result<InputSignature> {
     InputSignature::from_reads(inputs).map_err(|source| prepare_error(Arc::new(source)))
 }
 
-/// Whether [`resolve_input_refs`] must re-validate the graph's retained inputs.
+/// Whether [`resolve_input_reads`] must re-validate the graph's retained inputs.
 ///
 /// A retained input's value is the program's own tensor and cannot change
 /// between calls, so a check that already ran on it need not run again. That is
 /// a fact about the resolution, not about preparedness:
-/// [`PreparedCompiledGraph::defaults_validated`] records whether preparation
+/// `Prepared::defaults_validated` records whether preparation
 /// itself checked these values, and only then may an execution skip the check.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BoundInputCheck {
@@ -4052,9 +1967,9 @@ enum BoundInputCheck {
     AlreadyValidatedAtPrepare,
 }
 
-fn resolve_input_refs<'a>(
+fn resolve_input_reads<'a>(
     program: &'a CompiledGraph,
-    inputs: &'a [&'a Tensor],
+    inputs: &[TensorRead<'a>],
     bound_inputs: BoundInputCheck,
 ) -> Result<RuntimeInputReads<'a>> {
     let expected = program.program().inputs().len();
@@ -4073,10 +1988,7 @@ fn resolve_input_refs<'a>(
         return Ok(resolved);
     }
     let resolved = if inputs.len() == expected {
-        inputs
-            .iter()
-            .map(|tensor| TensorRead::from_tensor(tensor))
-            .collect()
+        inputs.iter().cloned().collect()
     } else {
         let mut explicit = inputs.iter();
         let mut resolved = RuntimeInputReads::new();
@@ -4084,9 +1996,9 @@ fn resolve_input_refs<'a>(
             if let Some(retained) = program.bindings().tensor_ref_for_input(*value) {
                 resolved.push(retained.tensor_read()?);
             } else {
-                let tensor = explicit.next().ok_or_else(|| {
+                let read = explicit.next().ok_or_else(|| {
                     Error::invalid_argument(
-                        "Runtime::resolve_input_refs",
+                        "Runtime::run",
                         ErrorPhase::Execution,
                         "inputs",
                         format!(
@@ -4094,12 +2006,12 @@ fn resolve_input_refs<'a>(
                         ),
                     )
                 })?;
-                resolved.push(TensorRead::from_tensor(tensor));
+                resolved.push(read.clone());
             }
         }
         if explicit.next().is_some() {
             return Err(Error::invalid_argument(
-                "Runtime::resolve_input_refs",
+                "Runtime::run",
                 ErrorPhase::Execution,
                 "inputs",
                 format!("expected {expected} inputs, received {}", inputs.len()),
@@ -4241,692 +2153,5 @@ impl fmt::Display for SharedPrepareError {
 impl StdError for SharedPrepareError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         Some(self.0.as_ref())
-    }
-}
-
-#[cfg(test)]
-mod session_route_tests;
-
-#[cfg(test)]
-mod tests {
-    use std::any::Any;
-    use std::error::Error as StdError;
-    use std::hash::Hasher;
-    use std::num::NonZeroU64;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, TryLockError, Weak};
-
-    use tenferro_cpu::CpuBackend;
-    use tenferro_ops::dim_expr::DimExpr;
-    use tenferro_ops::ext_op::ExtensionOp;
-    use tenferro_ops::SymDim;
-    use tenferro_tensor::{
-        Engine, BackendSessionHost, DType, Tensor, TensorBackend, TensorRead, TypedTensor,
-    };
-
-    use crate::exec::{ExecInstruction, ExecOp, ExecProgram, ExecSlot};
-    use crate::runtime::{
-        CoreCapabilityBundle, EngineId, ErasedExecutionContext, EventDomainDriver, EventDomainId,
-        ExecutableEngineContract, ExecutionContextIdentity, HardwareClassId, InputIngressContract,
-        InputSignature, PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor,
-        PreparedOperationPlan, ProviderDeviceIdentity, ProviderId, RegistrationIdentity,
-        RuntimeCacheOwner, RuntimeEpoch, RuntimeId, SpecializationProjection,
-        SpecializationRequirements, StorageClass,
-    };
-    use crate::{Error, ErrorPhase, ExtensionCacheStore, Result};
-
-    use super::{
-        DuplicateTransferDestinationError, ErasedTensorBackendExecutor, LocatedExecSlot,
-        TensorBackendExecutor,
-    };
-    use crate::runtime::schedule::{
-        EventCompletion, EventSlotId, ExecutionLocation, ScheduledTransfer,
-    };
-
-    const LOCK_PROBE_FAMILY: &str = "runtime.lock-probe.v1";
-    const REENTRANT_PROBE_FAMILY: &str = "runtime.reentrant-probe.v1";
-
-    #[derive(Clone, Debug)]
-    struct LockProbeOp;
-
-    impl ExtensionOp for LockProbeOp {
-        fn family_id(&self) -> &'static str {
-            LOCK_PROBE_FAMILY
-        }
-
-        fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
-
-        fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-            other.as_any().downcast_ref::<Self>().is_some()
-        }
-
-        fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
-            Arc::new(self.clone())
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn input_count(&self) -> usize {
-            1
-        }
-
-        fn output_count(&self) -> usize {
-            1
-        }
-
-        fn infer_output_meta(
-            &self,
-            ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
-        ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-            Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    struct ReentrantProbeOp;
-
-    impl ExtensionOp for ReentrantProbeOp {
-        fn family_id(&self) -> &'static str {
-            REENTRANT_PROBE_FAMILY
-        }
-
-        fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
-
-        fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-            other.as_any().downcast_ref::<Self>().is_some()
-        }
-
-        fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
-            Arc::new(self.clone())
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn input_count(&self) -> usize {
-            1
-        }
-
-        fn output_count(&self) -> usize {
-            1
-        }
-
-        fn infer_output_meta(
-            &self,
-            ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
-        ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-            Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
-        }
-    }
-
-    #[derive(Debug)]
-    struct LockProbePreparedOperation {
-        binding: PreparedOperationBinding,
-        specialization: SpecializationProjection,
-        executor: Weak<TensorBackendExecutor<CpuBackend>>,
-        observed_unlocked_state: Arc<AtomicBool>,
-    }
-
-    impl PreparedOperation for LockProbePreparedOperation {
-        fn binding(&self) -> &PreparedOperationBinding {
-            &self.binding
-        }
-
-        fn specialization(&self) -> &SpecializationProjection {
-            &self.specialization
-        }
-
-        fn retained_bytes(&self) -> usize {
-            0
-        }
-    }
-
-    impl PreparedOperationExecutor for LockProbePreparedOperation {
-        fn execute(
-            &self,
-            context: &mut ErasedExecutionContext<'_>,
-            _extension_caches: &mut ExtensionCacheStore,
-            inputs: &[TensorRead<'_>],
-        ) -> Result<Vec<Tensor>> {
-            let executor = self.executor.upgrade().expect("executor still alive");
-            let unlocked = match executor.state.try_lock() {
-                Ok(_guard) => true,
-                Err(TryLockError::WouldBlock) => false,
-                Err(TryLockError::Poisoned(_)) => false,
-            };
-            self.observed_unlocked_state
-                .store(unlocked, Ordering::SeqCst);
-            let backend = context
-                .downcast_mut::<CpuBackend>(self.binding.context_identity())
-                .map_err(|source| {
-                    Error::runtime_state_source("lock_probe", ErrorPhase::Execution, source)
-                })?;
-            Ok(vec![backend.with_backend_session(|exec| {
-                exec.to_contiguous_read(inputs[0].clone())
-            })??])
-        }
-    }
-
-    #[derive(Debug)]
-    struct ReentrantProbePreparedOperation {
-        binding: PreparedOperationBinding,
-        specialization: SpecializationProjection,
-        executor: Weak<TensorBackendExecutor<CpuBackend>>,
-        observed_reentrant_error: Arc<AtomicBool>,
-    }
-
-    #[derive(Debug)]
-    pub(super) struct SessionProbePreparedOperation {
-        pub(super) binding: PreparedOperationBinding,
-        pub(super) specialization: SpecializationProjection,
-        pub(super) observed_session: Arc<AtomicBool>,
-    }
-
-    impl PreparedOperation for SessionProbePreparedOperation {
-        fn binding(&self) -> &PreparedOperationBinding {
-            &self.binding
-        }
-
-        fn specialization(&self) -> &SpecializationProjection {
-            &self.specialization
-        }
-
-        fn retained_bytes(&self) -> usize {
-            0
-        }
-    }
-
-    impl PreparedOperationExecutor for SessionProbePreparedOperation {
-        fn execute(
-            &self,
-            _context: &mut ErasedExecutionContext<'_>,
-            _extension_caches: &mut ExtensionCacheStore,
-            _inputs: &[TensorRead<'_>],
-        ) -> Result<Vec<Tensor>> {
-            Err(Error::unsupported(
-                "session_probe",
-                ErrorPhase::Execution,
-                "session probe must use the scheduler-owned session path",
-            ))
-        }
-
-        fn supports_session(&self) -> bool {
-            true
-        }
-
-        fn execute_in_session(
-            &self,
-            session: &mut dyn Engine,
-            _extension_caches: &mut ExtensionCacheStore,
-            inputs: &[TensorRead<'_>],
-        ) -> Result<Vec<Tensor>> {
-            self.observed_session.store(true, Ordering::SeqCst);
-            Ok(vec![session.to_contiguous_read(inputs[0].clone())?])
-        }
-    }
-
-    impl ReentrantProbePreparedOperation {
-        fn probe_reentrant_call(&self, input: Tensor) {
-            let executor = self.executor.upgrade().expect("executor still alive");
-            let nested = ErasedTensorBackendExecutor::execute(
-                executor.as_ref(),
-                &passthrough_program(),
-                &[],
-                vec![input],
-            );
-            let observed = nested.is_err_and(|error| {
-                error
-                    .to_string()
-                    .contains("reentrant tensor backend executor call would deadlock")
-            });
-            self.observed_reentrant_error
-                .store(observed, Ordering::SeqCst);
-        }
-    }
-
-    impl PreparedOperation for ReentrantProbePreparedOperation {
-        fn binding(&self) -> &PreparedOperationBinding {
-            &self.binding
-        }
-
-        fn specialization(&self) -> &SpecializationProjection {
-            &self.specialization
-        }
-
-        fn retained_bytes(&self) -> usize {
-            0
-        }
-    }
-
-    impl PreparedOperationExecutor for ReentrantProbePreparedOperation {
-        fn execute(
-            &self,
-            context: &mut ErasedExecutionContext<'_>,
-            _extension_caches: &mut ExtensionCacheStore,
-            inputs: &[TensorRead<'_>],
-        ) -> Result<Vec<Tensor>> {
-            let backend = context
-                .downcast_mut::<CpuBackend>(self.binding.context_identity())
-                .map_err(|source| {
-                    Error::runtime_state_source("reentrant_probe", ErrorPhase::Execution, source)
-                })?;
-            let materialized = backend
-                .with_backend_session(|exec| exec.to_contiguous_read(inputs[0].clone()))??;
-            self.probe_reentrant_call(materialized.duplicate()?);
-            Ok(vec![materialized])
-        }
-    }
-
-    pub(super) fn lock_probe_program() -> ExecProgram {
-        ExecProgram {
-            instructions: vec![ExecInstruction {
-                op: ExecOp::Extension(Arc::new(LockProbeOp)),
-                semantic_operation_index: Some(0),
-                input_slots: vec![0],
-                output_slots: vec![1],
-                dtype: DType::F64,
-                output_shapes: vec![vec![DimExpr::InputDim {
-                    input_idx: 0,
-                    axis: 0,
-                }]]
-                .into_iter()
-                .collect(),
-                output_extents: vec![vec![]].into_iter().collect(),
-                last_use: vec![false],
-            }],
-            input_slots: vec![0],
-            output_slots: vec![1],
-            n_slots: 2,
-            shape_guards: vec![],
-        }
-    }
-
-    fn partial_session_probe_program() -> ExecProgram {
-        let output_shape = || {
-            vec![DimExpr::InputDim {
-                input_idx: 0,
-                axis: 0,
-            }]
-        };
-        ExecProgram {
-            instructions: vec![
-                ExecInstruction {
-                    op: ExecOp::Extension(Arc::new(LockProbeOp)),
-                    semantic_operation_index: Some(0),
-                    input_slots: vec![0],
-                    output_slots: vec![1],
-                    dtype: DType::F64,
-                    output_shapes: vec![output_shape()].into_iter().collect(),
-                    output_extents: vec![vec![]].into_iter().collect(),
-                    last_use: vec![false],
-                },
-                ExecInstruction {
-                    op: ExecOp::Extension(Arc::new(LockProbeOp)),
-                    semantic_operation_index: Some(1),
-                    input_slots: vec![1],
-                    output_slots: vec![2],
-                    dtype: DType::F64,
-                    output_shapes: vec![output_shape()].into_iter().collect(),
-                    output_extents: vec![vec![]].into_iter().collect(),
-                    last_use: vec![false],
-                },
-            ],
-            input_slots: vec![0],
-            output_slots: vec![2],
-            n_slots: 3,
-            shape_guards: vec![],
-        }
-    }
-
-    fn reentrant_probe_program() -> ExecProgram {
-        ExecProgram {
-            instructions: vec![ExecInstruction {
-                op: ExecOp::Extension(Arc::new(ReentrantProbeOp)),
-                semantic_operation_index: Some(0),
-                input_slots: vec![0],
-                output_slots: vec![1],
-                dtype: DType::F64,
-                output_shapes: vec![vec![DimExpr::InputDim {
-                    input_idx: 0,
-                    axis: 0,
-                }]]
-                .into_iter()
-                .collect(),
-                output_extents: vec![vec![]].into_iter().collect(),
-                last_use: vec![false],
-            }],
-            input_slots: vec![0],
-            output_slots: vec![1],
-            n_slots: 2,
-            shape_guards: vec![],
-        }
-    }
-
-    fn passthrough_program() -> ExecProgram {
-        ExecProgram {
-            instructions: vec![],
-            input_slots: vec![0],
-            output_slots: vec![0],
-            n_slots: 1,
-            shape_guards: vec![],
-        }
-    }
-
-    fn f64_zeros(shape: Vec<usize>) -> Tensor {
-        Tensor::from_typed::<f64>(TypedTensor::zeros(shape).unwrap())
-    }
-
-    fn nz(value: u64) -> NonZeroU64 {
-        NonZeroU64::new(value).unwrap_or(NonZeroU64::MIN)
-    }
-
-    pub(super) fn probe_binding() -> PreparedOperationBinding {
-        PreparedOperationBinding::new(
-            RuntimeId::from_nonzero(nz(1)),
-            RuntimeEpoch::from_nonzero(nz(2)),
-            EngineId::new("tenferro.cpu").unwrap(),
-            RegistrationIdentity::new(nz(3), nz(4)),
-            ExecutionContextIdentity::of::<CpuBackend>(),
-            HardwareClassId::new("tenferro.cpu.host").unwrap(),
-        )
-    }
-
-    pub(super) fn probe_specialization() -> SpecializationProjection {
-        SpecializationRequirements::polymorphic(0)
-            .project(&InputSignature::new(Vec::new()))
-            .unwrap()
-    }
-
-    #[test]
-    fn tensor_backend_executor_releases_state_lock_during_extension_execution() {
-        let executor = Arc::new(TensorBackendExecutor::<CpuBackend>::new(CpuBackend::new()));
-        let observed_unlocked_state = Arc::new(AtomicBool::new(false));
-        let prepared = Arc::new(LockProbePreparedOperation {
-            binding: probe_binding(),
-            specialization: probe_specialization(),
-            executor: Arc::downgrade(&executor),
-            observed_unlocked_state: Arc::clone(&observed_unlocked_state),
-        });
-        let operations = vec![PreparedOperationPlan::executable(
-            prepared.clone(),
-            prepared,
-        )];
-
-        let output = ErasedTensorBackendExecutor::execute(
-            executor.as_ref(),
-            &lock_probe_program(),
-            &operations,
-            vec![f64_zeros(vec![2])],
-        )
-        .expect("extension executes");
-
-        assert_eq!(output[0].shape(), &[2]);
-        assert!(
-            observed_unlocked_state.load(Ordering::SeqCst),
-            "executor state lock must not be held while extension runtime callbacks execute"
-        );
-    }
-
-    #[test]
-    fn scheduled_execution_cleanup_error_preserves_primary_error() {
-        let primary = Error::runtime_state(
-            "primary-execution",
-            ErrorPhase::Execution,
-            "primary execution failure",
-        );
-        let cleanup = Error::runtime_state(
-            "event-domain-cleanup",
-            ErrorPhase::Execution,
-            "cleanup failure",
-        );
-        let primary_display = primary.to_string();
-
-        let combined = super::scheduled_execution_cleanup_error(primary, cleanup);
-        let primary_error = combined.primary().expect("primary execution error");
-        let cleanup_error = combined.suppressed().expect("cleanup error");
-        assert_eq!(primary_error.to_string(), primary_display);
-        assert_eq!(
-            cleanup_error.to_string(),
-            "event-domain-cleanup (Execution): runtime state failure: cleanup failure"
-        );
-        assert_eq!(
-            StdError::source(&combined)
-                .expect("primary error in the standard source chain")
-                .to_string(),
-            primary_display
-        );
-    }
-
-    #[test]
-    fn duplicate_scheduled_transfer_destination_reports_typed_fields() {
-        let domain = EventDomainId::runtime_created_for_test(
-            RuntimeId::from_nonzero(nz(1)),
-            RuntimeEpoch::from_nonzero(nz(1)),
-            RegistrationIdentity::new(nz(1), nz(1)),
-        );
-        let source = ExecutionLocation::new(
-            EngineId::new("tenferro-test.transfer-source").expect("source engine"),
-            ProviderDeviceIdentity::new(
-                ProviderId::new("tenferro-test.transfer").expect("provider id"),
-                "source",
-            )
-            .expect("source provider target"),
-            domain,
-            StorageClass::new("tenferro-test.transfer-source").expect("source storage"),
-        );
-        let destination = ExecutionLocation::new(
-            EngineId::new("tenferro-test.transfer-destination").expect("destination engine"),
-            ProviderDeviceIdentity::new(
-                ProviderId::new("tenferro-test.transfer").expect("provider id"),
-                "destination",
-            )
-            .expect("destination provider target"),
-            domain,
-            StorageClass::new("tenferro-test.transfer-destination").expect("destination storage"),
-        );
-        let transfer = ScheduledTransfer::new(
-            3,
-            source,
-            destination.clone(),
-            [],
-            EventCompletion::new(domain, EventSlotId::new(0), 0),
-        );
-        let mut located = vec![
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            vec![LocatedExecSlot {
-                location: destination.clone(),
-                value: ExecSlot::Owned(f64_zeros(vec![1])),
-            }],
-        ];
-
-        let error = super::execute_scheduled_transfer(&transfer, &mut located)
-            .expect_err("duplicate transfer destination");
-        let Error::RuntimeStateSource { source, .. } = error else {
-            panic!("duplicate transfer destination must retain a typed source");
-        };
-        let duplicate = source
-            .downcast_ref::<DuplicateTransferDestinationError>()
-            .expect("typed duplicate transfer destination source");
-        assert_eq!(duplicate.value_slot, 3);
-        assert_eq!(duplicate.destination, destination);
-    }
-
-    #[test]
-    fn tensor_backend_executor_reentrant_call_returns_error_instead_of_deadlocking() {
-        let executor = Arc::new(TensorBackendExecutor::<CpuBackend>::new(CpuBackend::new()));
-        let observed_reentrant_error = Arc::new(AtomicBool::new(false));
-        let prepared = Arc::new(ReentrantProbePreparedOperation {
-            binding: probe_binding(),
-            specialization: probe_specialization(),
-            executor: Arc::downgrade(&executor),
-            observed_reentrant_error: Arc::clone(&observed_reentrant_error),
-        });
-        let operations = vec![PreparedOperationPlan::executable(
-            prepared.clone(),
-            prepared,
-        )];
-
-        let output = ErasedTensorBackendExecutor::execute(
-            executor.as_ref(),
-            &reentrant_probe_program(),
-            &operations,
-            vec![f64_zeros(vec![2])],
-        )
-        .expect("outer extension executes");
-
-        assert_eq!(output[0].shape(), &[2]);
-        assert!(
-            observed_reentrant_error.load(Ordering::SeqCst),
-            "same-thread reentrant executor call must fail immediately instead of deadlocking"
-        );
-    }
-
-    #[test]
-    fn tensor_backend_executor_rejects_entry_while_a_held_session_is_live() {
-        let executor = Arc::new(TensorBackendExecutor::<CpuBackend>::new(CpuBackend::new()));
-        let prepared = Arc::new(ReentrantProbePreparedOperation {
-            binding: probe_binding(),
-            specialization: probe_specialization(),
-            executor: Arc::downgrade(&executor),
-            observed_reentrant_error: Arc::new(AtomicBool::new(false)),
-        });
-        let operations = vec![PreparedOperationPlan::executable(
-            prepared.clone(),
-            prepared,
-        )];
-
-        // A held session owns execution admission across operations; entering the executor on
-        // that thread must be reported before the state lock is taken.
-        let marker =
-            tenferro_tensor::HeldSessionMarker::enter("held session under test").expect("marker");
-        let error = ErasedTensorBackendExecutor::execute(
-            executor.as_ref(),
-            &reentrant_probe_program(),
-            &operations,
-            vec![f64_zeros(vec![2])],
-        )
-        .expect_err("a held session must reject executor entry");
-        assert!(
-            error.to_string().contains("held backend session is active"),
-            "{error}"
-        );
-        assert!(
-            executor.state.try_lock().is_ok(),
-            "the rejection must happen before the executor state lock is taken"
-        );
-        drop(marker);
-
-        let output = ErasedTensorBackendExecutor::execute(
-            executor.as_ref(),
-            &reentrant_probe_program(),
-            &operations,
-            vec![f64_zeros(vec![2])],
-        )
-        .expect("entry works once the held session ends");
-        assert_eq!(output[0].shape(), &[2]);
-    }
-
-    #[test]
-    fn tensor_backend_executor_dispatches_session_capable_extension_in_one_session_path() {
-        let executor = TensorBackendExecutor::<CpuBackend>::new(CpuBackend::new());
-        let observed_session = Arc::new(AtomicBool::new(false));
-        let prepared = Arc::new(SessionProbePreparedOperation {
-            binding: probe_binding(),
-            specialization: probe_specialization(),
-            observed_session: Arc::clone(&observed_session),
-        });
-        let operations = vec![PreparedOperationPlan::executable(
-            prepared.clone(),
-            prepared,
-        )];
-
-        let output = ErasedTensorBackendExecutor::execute(
-            &executor,
-            &lock_probe_program(),
-            &operations,
-            vec![f64_zeros(vec![2])],
-        )
-        .expect("session-capable extension executes");
-
-        assert_eq!(output[0].shape(), &[2]);
-        assert!(observed_session.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn tensor_backend_executor_batches_session_capable_region_after_boundary() {
-        let executor = Arc::new(TensorBackendExecutor::<CpuBackend>::new(CpuBackend::new()));
-        let observed_unlocked_state = Arc::new(AtomicBool::new(false));
-        let observed_session = Arc::new(AtomicBool::new(false));
-        let ordinary = Arc::new(LockProbePreparedOperation {
-            binding: probe_binding(),
-            specialization: probe_specialization(),
-            executor: Arc::downgrade(&executor),
-            observed_unlocked_state: Arc::clone(&observed_unlocked_state),
-        });
-        let session = Arc::new(SessionProbePreparedOperation {
-            binding: probe_binding(),
-            specialization: probe_specialization(),
-            observed_session: Arc::clone(&observed_session),
-        });
-        let operations = vec![
-            PreparedOperationPlan::executable(ordinary.clone(), ordinary),
-            PreparedOperationPlan::executable(session.clone(), session),
-        ];
-
-        let output = ErasedTensorBackendExecutor::execute(
-            executor.as_ref(),
-            &partial_session_probe_program(),
-            &operations,
-            vec![f64_zeros(vec![2])],
-        )
-        .expect("mixed session regions execute");
-
-        assert_eq!(output[0].shape(), &[2]);
-        assert!(observed_unlocked_state.load(Ordering::SeqCst));
-        assert!(observed_session.load(Ordering::SeqCst));
-
-        let values = ErasedTensorBackendExecutor::execute_values(
-            executor.as_ref(),
-            &partial_session_probe_program(),
-            &operations,
-            vec![f64_zeros(vec![2])],
-        )
-        .expect("mixed session regions execute in value mode");
-        assert_eq!(values[0].shape(), &[2]);
-    }
-
-    #[test]
-    fn tensor_backend_executor_bridge_does_not_require_clone_source_contract() {
-        type ContractConstructor<B> = fn(
-            ProviderDeviceIdentity,
-            CoreCapabilityBundle,
-            B,
-            Arc<dyn EventDomainDriver>,
-            InputIngressContract,
-            Option<Arc<dyn RuntimeCacheOwner>>,
-        ) -> ExecutableEngineContract;
-
-        fn factory_accepts_backend_without_clone_bound<B>()
-        where
-            B: TensorBackend + Send + Sync + 'static,
-        {
-            let _factory: fn(B) -> Arc<dyn ErasedTensorBackendExecutor> =
-                super::erased_tensor_backend_executor::<B>;
-        }
-
-        fn contract_accepts_backend_without_clone_bound<B>()
-        where
-            B: TensorBackend + Send + Sync + 'static,
-        {
-            let _constructor: ContractConstructor<B> = ExecutableEngineContract::new::<B>;
-        }
-
-        factory_accepts_backend_without_clone_bound::<CpuBackend>();
-        contract_accepts_backend_without_clone_bound::<CpuBackend>();
     }
 }

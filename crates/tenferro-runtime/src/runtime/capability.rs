@@ -605,6 +605,22 @@ impl<'a> ErasedExecutionContext<'a> {
     /// let erased = ErasedExecutionContext::new(&mut value);
     /// assert_eq!(erased.identity(), ExecutionContextIdentity::of::<u64>());
     /// ```
+    /// Wrap an engine already erased to `dyn Any`, with the identity of its
+    /// concrete type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{ErasedExecutionContext, ExecutionContextIdentity};
+    ///
+    /// let mut value = 7_u32;
+    /// let context = ErasedExecutionContext::from_dyn(ExecutionContextIdentity::of::<u32>(), &mut value);
+    /// assert_eq!(context.identity(), ExecutionContextIdentity::of::<u32>());
+    /// ```
+    pub fn from_dyn(identity: ExecutionContextIdentity, value: &'a mut dyn Any) -> Self {
+        Self { identity, value }
+    }
+
     pub fn identity(&self) -> ExecutionContextIdentity {
         self.identity
     }

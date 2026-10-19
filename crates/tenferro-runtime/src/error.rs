@@ -214,10 +214,6 @@ pub enum Error {
     #[error(transparent)]
     TensorRuntime(#[from] tenferro_tensor::Error),
 
-    /// A backend refused to open an execution session; no operation ran.
-    #[error("backend session entry failed: {0}")]
-    SessionEntry(#[source] tenferro_tensor::SessionEntryError),
-
     /// A typed extension-domain error crossed a runtime registry boundary.
     #[error("extension {family} ({phase:?}) failed for {op}: {source}")]
     Extension {
@@ -799,7 +795,6 @@ impl Error {
             Self::Unsupported { .. } | Self::UnsupportedAdRule { .. } => ErrorKind::Unsupported,
             Self::AdRuleSource { .. } => ErrorKind::Validation(ValidationKind::InvalidArgument),
             Self::TensorRuntime(error) => error.kind(),
-            Self::SessionEntry(error) => error.kind(),
             Self::Extension { kind, .. } => *kind,
             Self::RuntimeState { .. }
             | Self::RuntimeStateSource { .. }
@@ -848,7 +843,7 @@ impl Error {
     pub fn phase(&self) -> Option<ErrorPhase> {
         match self {
             Self::Validation { phase, .. } => Some(*phase),
-            Self::TensorRuntime(_) | Self::SessionEntry(_) => Some(ErrorPhase::Execution),
+            Self::TensorRuntime(_) => Some(ErrorPhase::Execution),
             Self::Unsupported { phase, .. } => Some(*phase),
             Self::Extension { phase, .. } => Some(*phase),
             Self::RuntimeState { phase, .. } | Self::RuntimeStateSource { phase, .. } => {
@@ -868,12 +863,6 @@ impl Error {
             Self::ShapeExpressionEvaluation { .. } => Some(ErrorPhase::Execution),
             _ => None,
         }
-    }
-}
-
-impl From<tenferro_tensor::SessionEntryError> for Error {
-    fn from(source: tenferro_tensor::SessionEntryError) -> Self {
-        Self::SessionEntry(source)
     }
 }
 

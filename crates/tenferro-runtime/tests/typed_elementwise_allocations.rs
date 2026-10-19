@@ -19,8 +19,8 @@ use tenferro_cpu::{scalar_binary_into, AddOp, CpuBackend};
 use tenferro_runtime::{TensorSessionOpsExt, TypedTensor, TypedTensorSessionOpsExt};
 use tenferro_tensor::backend::dot_general_output_shape;
 use tenferro_tensor::{
-    Engine, BackendSessionHost, ContractionScalar, DotGeneralAccumulation,
-    DotGeneralConfig, DynRank, Host, Tensor, TensorRead, TensorView, TensorWrite,
+    BackendSessionHost, ContractionScalar, DotGeneralAccumulation, DotGeneralConfig, DynRank,
+    Engine, Host, Tensor, TensorRead, TensorView, TensorWrite,
 };
 use tinyvec::tiny_vec;
 

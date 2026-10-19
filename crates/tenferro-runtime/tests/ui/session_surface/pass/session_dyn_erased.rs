@@ -5,14 +5,10 @@
 //! one-shot deletion it is the only way to write such a helper.
 
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{Engine, BackendSessionHost, Tensor, TensorRead};
+use tenferro_tensor::{BackendSessionHost, Engine, Tensor, TensorRead};
 
 /// Two chained additions inside the caller's session.
-fn add_twice(
-    session: &mut dyn Engine,
-    a: &Tensor,
-    b: &Tensor,
-) -> tenferro_tensor::Result<Tensor> {
+fn add_twice(session: &mut dyn Engine, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor> {
     let first = session.add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))?;
     session.add_read(TensorRead::from_tensor(&first), TensorRead::from_tensor(b))
 }

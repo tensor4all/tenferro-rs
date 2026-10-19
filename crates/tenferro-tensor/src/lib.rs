@@ -94,8 +94,8 @@ pub mod validate;
 pub use backend::{
     ActivationOp, ContractionScalar, DotGeneralAccumulation, ElementwiseReadOp, Engine,
     SessionCachedDot, TensorAnalytic, TensorBackendOps, TensorBuffer, TensorDeviceTransfer,
-    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction,
-    TensorStructural, TensorViewCanonicalization,
+    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
+    TensorViewCanonicalization,
 };
 pub use cache::{CacheStats, RuntimeCacheControl};
 pub use capability::{

@@ -12,8 +12,8 @@ use num_complex::Complex64;
 use tenferro_ops::broadcast::{broadcast_error_to_validation, broadcast_shape, broadcast_shapes};
 use tenferro_tensor::validate::matmul_config_for_shapes;
 use tenferro_tensor::{
-    ActivationOp, Engine, CompareDir, DType, DotGeneralConfig, Error, GatherConfig,
-    PadConfig, Result, ScatterConfig, SliceConfig, TensorRead,
+    ActivationOp, CompareDir, DType, DotGeneralConfig, Engine, Error, GatherConfig, PadConfig,
+    Result, ScatterConfig, SliceConfig, TensorRead,
 };
 
 use crate::typed_tensor::{broadcast_to_in_read, ReadInput};
@@ -36,11 +36,7 @@ impl TensorSessionOpsExt for Tensor {
         session.exp_read(TensorRead::from_tensor(self))
     }
 
-    fn reduce_sum(
-        &self,
-        axes: Option<&[usize]>,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
+    fn reduce_sum(&self, axes: Option<&[usize]>, session: &mut dyn Engine) -> Result<Tensor> {
         let axes = all_axes_if_none(self.shape().len(), axes);
         session.reduce_sum_read(TensorRead::from_tensor(self), &axes)
     }
@@ -135,12 +131,7 @@ impl TensorSessionOpsExt for Tensor {
         session.rsqrt_read(TensorRead::from_tensor(self))
     }
 
-    fn compare(
-        &self,
-        rhs: &Tensor,
-        dir: CompareDir,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
+    fn compare(&self, rhs: &Tensor, dir: CompareDir, session: &mut dyn Engine) -> Result<Tensor> {
         let (lhs, rhs) = broadcast_binary_in(self, rhs, session)?;
         session.compare_read(lhs.tensor_read(), rhs.tensor_read(), &dir)
     }
@@ -160,12 +151,7 @@ impl TensorSessionOpsExt for Tensor {
         )
     }
 
-    fn clamp(
-        &self,
-        lower: &Tensor,
-        upper: &Tensor,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
+    fn clamp(&self, lower: &Tensor, upper: &Tensor, session: &mut dyn Engine) -> Result<Tensor> {
         let (input, lower, upper) = broadcast_ternary_in(self, lower, upper, session)?;
         session.clamp_read(
             input.tensor_read(),
@@ -227,11 +213,7 @@ impl TensorSessionOpsExt for Tensor {
         session.pad(self, &config)
     }
 
-    fn concatenate(
-        inputs: &[&Tensor],
-        axis: usize,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
+    fn concatenate(inputs: &[&Tensor], axis: usize, session: &mut dyn Engine) -> Result<Tensor> {
         session.concatenate(inputs, axis)
     }
 
@@ -239,29 +221,17 @@ impl TensorSessionOpsExt for Tensor {
         session.reverse(self, axes)
     }
 
-    fn reduce_max(
-        &self,
-        axes: Option<&[usize]>,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
+    fn reduce_max(&self, axes: Option<&[usize]>, session: &mut dyn Engine) -> Result<Tensor> {
         let axes = all_axes_if_none(self.shape().len(), axes);
         session.reduce_max_read(TensorRead::from_tensor(self), &axes)
     }
 
-    fn reduce_min(
-        &self,
-        axes: Option<&[usize]>,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
+    fn reduce_min(&self, axes: Option<&[usize]>, session: &mut dyn Engine) -> Result<Tensor> {
         let axes = all_axes_if_none(self.shape().len(), axes);
         session.reduce_min_read(TensorRead::from_tensor(self), &axes)
     }
 
-    fn reduce_prod(
-        &self,
-        axes: Option<&[usize]>,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
+    fn reduce_prod(&self, axes: Option<&[usize]>, session: &mut dyn Engine) -> Result<Tensor> {
         let axes = all_axes_if_none(self.shape().len(), axes);
         session.reduce_prod_read(TensorRead::from_tensor(self), &axes)
     }
@@ -301,12 +271,7 @@ impl TensorSessionOpsExt for Tensor {
         session.extract_diagonal(self, axis_a, axis_b)
     }
 
-    fn embed_diag(
-        &self,
-        axis_a: usize,
-        axis_b: usize,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
+    fn embed_diag(&self, axis_a: usize, axis_b: usize, session: &mut dyn Engine) -> Result<Tensor> {
         session.embed_diagonal(self, axis_a, axis_b)
     }
 
@@ -391,11 +356,7 @@ impl TensorSessionOpsExt for Tensor {
         run_session_composite(session, |ops| composite::gelu_tanh(ops, &borrowed(self)))
     }
 
-    fn reduce_mean(
-        &self,
-        axes: Option<&[usize]>,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
+    fn reduce_mean(&self, axes: Option<&[usize]>, session: &mut dyn Engine) -> Result<Tensor> {
         run_session_composite(session, |ops| {
             composite::reduce_mean(ops, &borrowed(self), axes)
         })

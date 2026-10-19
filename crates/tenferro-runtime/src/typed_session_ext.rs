@@ -2,7 +2,7 @@
 
 use num_complex::Complex64;
 
-use crate::{Engine, CompareDir, DotGeneralConfig, TensorScalar, TypedTensor};
+use crate::{CompareDir, DotGeneralConfig, Engine, TensorScalar, TypedTensor};
 
 /// AD-free tensor operations on [`TypedTensor`], run inside a borrowed backend session.
 ///
@@ -386,10 +386,7 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn abs(
-        &self,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<TypedTensor<T::Real>>;
+    fn abs(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<TypedTensor<T::Real>>;
     /// Elementwise sign inside a session.
     ///
     /// # Examples
@@ -1136,8 +1133,7 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
     /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
     /// for a typed backend failure.
-    fn softplus(&self, session: &mut dyn Engine)
-        -> tenferro_tensor::Result<TypedTensor<T>>;
+    fn softplus(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// Exact GELU `x/2 * (1 + erf(x / sqrt(2)))` inside a session.
     ///
     /// Real `F32`/`F64` only (PyTorch `approximate="none"`).
@@ -1189,10 +1185,7 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
     /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
     /// for a typed backend failure.
-    fn gelu_tanh(
-        &self,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    fn gelu_tanh(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// Arithmetic mean over `axes` inside a session (`None` reduces every axis).
     ///
     /// Float and complex dtypes. The sum is divided by the element count; a mean

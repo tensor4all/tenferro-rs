@@ -6,7 +6,7 @@ use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt, TypedTensor, TypedTensorSessionOpsExt};
 use tenferro_tensor::{
-    Engine, BackendSessionHost, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
+    BackendSessionHost, DotGeneralConfig, Engine, GatherConfig, PadConfig, ScatterConfig,
     SliceConfig, TensorRead,
 };
 

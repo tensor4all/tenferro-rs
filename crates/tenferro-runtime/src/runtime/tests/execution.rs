@@ -8,8 +8,8 @@ use std::thread;
 
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendRuntimeCache, Engine, BackendSessionHost,
-    BackendStorage, DType, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
+    AllocationDomainId, AllocationId, BackendRuntimeCache, BackendSessionHost, BackendStorage,
+    DType, Engine, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
     SessionEntryError, StorageBuffer, Tensor, TensorBackend, TensorDeviceTransfer, TensorRead,
     TensorValue, TensorView, TypedTensor,
 };

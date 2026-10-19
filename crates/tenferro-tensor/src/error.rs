@@ -598,6 +598,5 @@ impl Error {
     }
 }
 
-
 /// Result type alias for runtime tensor operations.
 pub type Result<T> = std::result::Result<T, Error>;

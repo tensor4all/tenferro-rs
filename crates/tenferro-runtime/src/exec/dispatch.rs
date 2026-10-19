@@ -1,8 +1,8 @@
 use crate::error::{Error, Result};
 use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::{
-    Engine, GatherConfig, PadConfig, SliceConfig, Tensor, TensorBackendOps,
-    TensorDeviceTransfer, TensorRead,
+    Engine, GatherConfig, PadConfig, SliceConfig, Tensor, TensorBackendOps, TensorDeviceTransfer,
+    TensorRead,
 };
 
 use super::{
@@ -11,11 +11,8 @@ use super::{
 };
 use crate::scalar_semantics::dynamic_truncate_size;
 
-type BackendDispatchFn = for<'a> fn(
-    &mut dyn Engine,
-    &mut [Option<ExecSlot<'_>>],
-    &ExecInstruction,
-) -> Result<Tensor>;
+type BackendDispatchFn =
+    for<'a> fn(&mut dyn Engine, &mut [Option<ExecSlot<'_>>], &ExecInstruction) -> Result<Tensor>;
 
 pub(super) trait HostExecution: TensorBackendOps + TensorDeviceTransfer {}
 
@@ -277,7 +274,7 @@ fn ensure_host_owned<B: HostExecution + ?Sized>(
             .get(slot)
             .and_then(Option::as_ref)
             .ok_or_else(|| Error::Internal(format!("host input slot {slot} is empty")))?,
-        ExecSlot::Value(_) | ExecSlot::Read(TensorRead::View(_))
+        ExecSlot::Read(TensorRead::View(_))
     );
     if needs_materialization {
         let read = slots

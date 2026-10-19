@@ -7,8 +7,8 @@ use num_complex::Complex64;
 use tenferro_ops::broadcast::{broadcast_shape, broadcast_shapes, BroadcastError};
 use tenferro_tensor::validate::matmul_config_for_shapes;
 use tenferro_tensor::{
-    ActivationOp, Engine, CompareDir, DType, DotGeneralConfig, Error, Result, Tensor,
-    TensorRead, TensorScalar, TensorValue, ValidationError,
+    ActivationOp, CompareDir, DType, DotGeneralConfig, Engine, Error, Result, Tensor, TensorRead,
+    TensorScalar, TensorValue, ValidationError,
 };
 use tinyvec::TinyVec;
 
@@ -18,11 +18,7 @@ use crate::{TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt};
 use tenferro_tensor::TypedTensor;
 
 impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
-    fn add(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn add(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.add_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("add", out)
@@ -38,11 +34,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         session.add_read_into(lhs.tensor_read(), rhs.tensor_read(), T::tensor_write(out))
     }
 
-    fn mul(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn mul(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.mul_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("mul", out)
@@ -63,61 +55,37 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("reduce_sum", out)
     }
 
-    fn sub(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn sub(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.sub_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("sub", out)
     }
 
-    fn div(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn div(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.div_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("div", out)
     }
 
-    fn rem(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn rem(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.rem_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("rem", out)
     }
 
-    fn pow(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn pow(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.pow_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("pow", out)
     }
 
-    fn maximum(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn maximum(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.maximum_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("maximum", out)
     }
 
-    fn minimum(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn minimum(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.minimum_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("minimum", out)
@@ -214,11 +182,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("clamp", out)
     }
 
-    fn matmul(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn matmul(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let config = matmul_config_for_shapes("matmul", self.shape(), rhs.shape())?;
         let out = session.dot_general_read(T::tensor_read(self), T::tensor_read(rhs), &config)?;
         into_typed_result("matmul", out)
@@ -229,11 +193,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("reshape", out)
     }
 
-    fn transpose(
-        &self,
-        perm: &[usize],
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn transpose(&self, perm: &[usize], session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.transpose_read(T::tensor_read(self), perm)?;
         into_typed_result("transpose", out)
     }
@@ -323,11 +283,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         TypedTensorSessionOpsExt::mul(self, &scalar, session)
     }
 
-    fn scale_complex(
-        &self,
-        factor: Complex64,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn scale_complex(&self, factor: Complex64, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let scalar = crate::scale::complex_scale_scalar(T::dtype(), factor)?;
         let scalar = session.upload_host_tensor(TensorRead::from_tensor(&scalar))?;
         let scalar = into_typed_result::<T>("scale_complex", scalar)?;

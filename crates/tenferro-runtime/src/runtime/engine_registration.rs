@@ -2,11 +2,10 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::{
-    execution, CoreCapabilityBundle, EngineId, EventDomainDriver, ExecutionContextIdentity,
-    HardwareClassId, InputSignatureEntry, ProviderDeviceIdentity, RuntimeCacheOwner,
-    RuntimeConfigError, StorageClass,
+    CoreCapabilityBundle, EngineId, ExecutionContextIdentity, HardwareClassId, InputSignatureEntry,
+    ProviderDeviceIdentity, RuntimeConfigError, StorageClass,
 };
-use tenferro_tensor::{AllocationDomainId, Placement, TensorBackend, TensorRead};
+use tenferro_tensor::{AllocationDomainId, Placement, TensorRead};
 
 #[derive(Debug)]
 pub(super) struct CandidateRegistrationToken;
@@ -300,9 +299,10 @@ impl EngineRegistrationMetadata {
 
 /// Typed configuration for assembling an executable engine registration.
 ///
-/// The backend, event domain, ingress contract, and optional cache owner are
-/// kept together with the shared provider metadata until the runtime creates
-/// the complete execution witness.
+/// A registration describes one engine kind: its provider metadata, the
+/// context identity of the engine type, and its ingress contract. It holds no
+/// engine instance; engines are passed to [`crate::Runtime::run`] per call and
+/// must report a matching [`crate::EngineTarget`].
 ///
 /// # Examples
 ///
@@ -311,111 +311,22 @@ impl EngineRegistrationMetadata {
 ///
 /// use tenferro_runtime::{
 ///     CoreCapabilityBundle, EngineId, EngineRegistrationMetadata,
-///     ExecutableEngineRegistrationConfig, EventDomainDriver, HardwareClassId,
-///     ImmediateEventDomainDriver, InputIngressContract, InputPlacementContract,
-///     InputSignatureContract, ProviderDeviceIdentity, ProviderId, ResidentOutputContract,
-///     RuntimeInputContract, StorageClass,
+///     ExecutableEngineRegistrationConfig, ExecutionContextIdentity, HardwareClassId,
+///     InputIngressContract, InputPlacementContract, InputSignatureContract,
+///     ProviderDeviceIdentity, ProviderId, ResidentOutputContract, RuntimeInputContract,
+///     StorageClass,
 /// };
 ///
-/// fn make_config<B>(backend: B) -> ExecutableEngineRegistrationConfig<B> {
-///     let engine_id = EngineId::new("example.engine.v1").unwrap();
-///     let provider = ProviderDeviceIdentity::new(
-///         ProviderId::new("example.provider").unwrap(),
-///         "device:0",
-///     )
-///     .unwrap();
-///     let hardware = HardwareClassId::new("example.hardware.v1").unwrap();
-///     let storage = StorageClass::new("example.storage.v1").unwrap();
-///     let metadata = EngineRegistrationMetadata::new(
-///         engine_id,
-///         provider,
-///         hardware,
-///         Arc::from([storage.clone()]),
-///         storage,
-///         CoreCapabilityBundle::default(),
-///     );
-///     let ingress = InputIngressContract::new(
-///         InputPlacementContract::new(|_, _| true),
-///         InputSignatureContract::new(|_, _, _, _| true),
-///         RuntimeInputContract::new(|_, _| true),
-///         ResidentOutputContract::new(|_, _| true),
-///     );
-///     let event_domain_driver: Arc<dyn EventDomainDriver> =
-///         Arc::new(ImmediateEventDomainDriver::new());
-///     ExecutableEngineRegistrationConfig::new(
-///         metadata,
-///         backend,
-///         event_domain_driver,
-///         ingress,
-///         None,
-///     )
-/// }
+/// struct ExampleEngine;
 ///
-/// let _ = make_config(());
-/// ```
-pub struct ExecutableEngineRegistrationConfig<B> {
-    metadata: EngineRegistrationMetadata,
-    backend: B,
-    event_domain_driver: Arc<dyn EventDomainDriver>,
-    ingress: InputIngressContract,
-    cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
-}
-
-impl<B> fmt::Debug for ExecutableEngineRegistrationConfig<B> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ExecutableEngineRegistrationConfig")
-            .field("metadata", &self.metadata)
-            .field("backend_type", &std::any::type_name::<B>())
-            .field("event_domain_driver_present", &true)
-            .field("ingress_present", &true)
-            .field("cache_owner_present", &self.cache_owner.is_some())
-            .finish_non_exhaustive()
-    }
-}
-
-impl<B> ExecutableEngineRegistrationConfig<B> {
-    /// Construct an executable registration descriptor.
-    pub fn new(
-        metadata: EngineRegistrationMetadata,
-        backend: B,
-        event_domain_driver: Arc<dyn EventDomainDriver>,
-        ingress: InputIngressContract,
-        cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
-    ) -> Self {
-        Self {
-            metadata,
-            backend,
-            event_domain_driver,
-            ingress,
-            cache_owner,
-        }
-    }
-}
-
-/// Typed configuration for assembling a preparation-only engine registration.
-///
-/// Preparation-only registrations retain the provider's execution-context
-/// identity but intentionally contain no executable backend or event driver.
-///
-/// # Examples
-///
-/// ```
-/// use std::sync::Arc;
-///
-/// use tenferro_runtime::{
-///     CoreCapabilityBundle, EngineId, EngineRegistrationMetadata,
-///     ExecutionContextIdentity, HardwareClassId, PreparationOnlyEngineRegistrationConfig,
-///     ProviderDeviceIdentity, ProviderId, StorageClass,
-/// };
-///
-/// let engine_id = EngineId::new("example.engine.v1")?;
+/// let engine_id = EngineId::new("example.engine.v1").unwrap();
 /// let provider = ProviderDeviceIdentity::new(
-///     ProviderId::new("example.provider")?,
+///     ProviderId::new("example.provider").unwrap(),
 ///     "device:0",
-/// )?;
-/// let hardware = HardwareClassId::new("example.hardware.v1")?;
-/// let storage = StorageClass::new("example.storage.v1")?;
+/// )
+/// .unwrap();
+/// let hardware = HardwareClassId::new("example.hardware.v1").unwrap();
+/// let storage = StorageClass::new("example.storage.v1").unwrap();
 /// let metadata = EngineRegistrationMetadata::new(
 ///     engine_id,
 ///     provider,
@@ -424,13 +335,50 @@ impl<B> ExecutableEngineRegistrationConfig<B> {
 ///     storage,
 ///     CoreCapabilityBundle::default(),
 /// );
-/// let config = PreparationOnlyEngineRegistrationConfig::new(
-///     metadata,
-///     ExecutionContextIdentity::of::<()>(),
+/// let ingress = InputIngressContract::new(
+///     InputPlacementContract::new(|_, _| true),
+///     InputSignatureContract::new(|_, _, _, _| true),
+///     RuntimeInputContract::new(|_, _| true),
+///     ResidentOutputContract::new(|_, _| true),
 /// );
-/// let _ = config;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// let _config = ExecutableEngineRegistrationConfig::new(
+///     metadata,
+///     ExecutionContextIdentity::of::<ExampleEngine>(),
+///     ingress,
+/// );
 /// ```
+pub struct ExecutableEngineRegistrationConfig {
+    metadata: EngineRegistrationMetadata,
+    context_identity: ExecutionContextIdentity,
+    ingress: InputIngressContract,
+}
+
+impl fmt::Debug for ExecutableEngineRegistrationConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExecutableEngineRegistrationConfig")
+            .field("metadata", &self.metadata)
+            .field("context_identity", &self.context_identity)
+            .field("ingress_present", &true)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ExecutableEngineRegistrationConfig {
+    /// Build the immutable registration of one executable engine kind.
+    pub fn new(
+        metadata: EngineRegistrationMetadata,
+        context_identity: ExecutionContextIdentity,
+        ingress: InputIngressContract,
+    ) -> Self {
+        Self {
+            metadata,
+            context_identity,
+            ingress,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct PreparationOnlyEngineRegistrationConfig {
     metadata: EngineRegistrationMetadata,
@@ -456,56 +404,24 @@ pub(crate) struct ExecutableEngineContract {
     provider_device_identity: ProviderDeviceIdentity,
     context_identity: ExecutionContextIdentity,
     capabilities: CoreCapabilityBundle,
-    executor: Arc<dyn execution::ErasedTensorBackendExecutor>,
-    event_domain_driver: Arc<dyn EventDomainDriver>,
     ingress: InputIngressContract,
-    cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
 }
 
 impl ExecutableEngineContract {
     // This constructor is intentionally limited to the runtime assembly
     // boundary. Providers use assemble_executable_engine_registration instead
     // of manufacturing a partial contract and binding independently.
-    pub(super) fn new<B>(
-        provider_device_identity: ProviderDeviceIdentity,
-        capabilities: CoreCapabilityBundle,
-        backend: B,
-        event_domain_driver: Arc<dyn EventDomainDriver>,
-        ingress: InputIngressContract,
-        cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
-    ) -> Self
-    where
-        B: TensorBackend + Send + Sync + 'static,
-    {
-        Self {
-            provider_device_identity,
-            context_identity: ExecutionContextIdentity::of::<B>(),
-            capabilities,
-            executor: execution::erased_tensor_backend_executor(backend),
-            event_domain_driver,
-            ingress,
-            cache_owner,
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn from_erased_for_test(
+    pub(super) fn new(
         provider_device_identity: ProviderDeviceIdentity,
         context_identity: ExecutionContextIdentity,
         capabilities: CoreCapabilityBundle,
-        executor: Arc<dyn execution::ErasedTensorBackendExecutor>,
-        event_domain_driver: Arc<dyn EventDomainDriver>,
         ingress: InputIngressContract,
-        cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
     ) -> Self {
         Self {
             provider_device_identity,
             context_identity,
             capabilities,
-            executor,
-            event_domain_driver,
             ingress,
-            cache_owner,
         }
     }
 
@@ -519,18 +435,6 @@ impl ExecutableEngineContract {
 
     pub(super) fn context_identity(&self) -> ExecutionContextIdentity {
         self.context_identity
-    }
-
-    pub(super) fn executor(&self) -> &Arc<dyn execution::ErasedTensorBackendExecutor> {
-        &self.executor
-    }
-
-    pub(super) fn event_domain_driver(&self) -> &Arc<dyn EventDomainDriver> {
-        &self.event_domain_driver
-    }
-
-    pub(super) fn cache_owner(&self) -> Option<&Arc<dyn RuntimeCacheOwner>> {
-        self.cache_owner.as_ref()
     }
 
     pub(super) fn accepts_input_placement(
@@ -573,10 +477,7 @@ impl fmt::Debug for ExecutableEngineContract {
             .field("provider_device_identity", &self.provider_device_identity)
             .field("context_identity", &self.context_identity)
             .field("capabilities", &self.capabilities)
-            .field("executor", &self.executor.backend_type_name())
-            .field("event_domain_driver", &self.event_domain_driver)
             .field("ingress", &self.ingress)
-            .field("cache_owner", &self.cache_owner.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -912,12 +813,9 @@ impl EngineRegistration {
 /// Returns [`RuntimeConfigError`] if the descriptor contains empty or duplicate
 /// storage classes, or if its default storage class is not listed in the
 /// supported storage classes.
-pub fn assemble_executable_engine_registration<B>(
-    config: ExecutableEngineRegistrationConfig<B>,
-) -> Result<EngineRegistration, RuntimeConfigError>
-where
-    B: TensorBackend + Send + Sync + 'static,
-{
+pub fn assemble_executable_engine_registration(
+    config: ExecutableEngineRegistrationConfig,
+) -> Result<EngineRegistration, RuntimeConfigError> {
     let ExecutableEngineRegistrationConfig {
         metadata:
             EngineRegistrationMetadata {
@@ -928,18 +826,14 @@ where
                 default_storage_class,
                 capabilities,
             },
-        backend,
-        event_domain_driver,
+        context_identity,
         ingress,
-        cache_owner,
     } = config;
     let contract = ExecutableEngineContract::new(
         provider_device_identity,
+        context_identity,
         capabilities,
-        backend,
-        event_domain_driver,
         ingress,
-        cache_owner,
     );
     let binding = ProviderExecutableBinding::new(
         engine_id,

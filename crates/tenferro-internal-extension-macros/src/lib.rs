@@ -107,7 +107,7 @@ impl Parse for RuntimeArgs {
             execute_in_session,
             session_supported,
             backend_bound: backend_bound
-                .unwrap_or_else(|| syn::parse_quote!(tenferro_tensor::TensorBackend)),
+                .unwrap_or_else(|| syn::parse_quote!(tenferro_tensor::Engine)),
         })
     }
 }
@@ -212,20 +212,16 @@ fn expand_extension_runtime(args: RuntimeArgs) -> syn::Result<proc_macro2::Token
                 extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
                 inputs: &[tenferro_tensor::TensorRead<'_>],
             ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
-                // The runtime owns the region: the owner entry forms the session
-                // and the extension only ever runs through it.
-                let backend = context
+                // The context is the engine itself; the extension runs on it.
+                let engine = context
                     .downcast_mut::<B>(self.binding.context_identity())
                     .map_err(|source| tenferro_runtime::Error::runtime_state_source(
                         "extension",
                         tenferro_runtime::ErrorPhase::Execution,
                         source,
                     ))?;
-                backend.with_backend_session(
-                    |session| -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
-                        Ok(#execute_in_session(&self.op, session, extension_caches, inputs)?)
-                    },
-                )?
+                let engine: &mut dyn tenferro_tensor::Engine = engine;
+                Ok(#execute_in_session(&self.op, engine, extension_caches, inputs)?)
             }
         },
         (Some(execute_reads), None) => quote! {
@@ -235,24 +231,19 @@ fn expand_extension_runtime(args: RuntimeArgs) -> syn::Result<proc_macro2::Token
                 extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
                 inputs: &[tenferro_tensor::TensorRead<'_>],
             ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
-                let backend = context
+                let engine = context
                     .downcast_mut::<B>(self.binding.context_identity())
                     .map_err(|source| tenferro_runtime::Error::runtime_state_source(
                         "extension",
                         tenferro_runtime::ErrorPhase::Execution,
                         source,
                     ))?;
-                // As in the session route, the owner entry forms the session and
-                // the callback's context borrows that session, never the owner.
-                backend.with_backend_session(
-                    |session| -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
-                        let mut ctx = tenferro_runtime::ExtensionExecutionContext::new(
-                            session,
-                            extension_caches,
-                        );
-                        Ok(#execute_reads(&self.op, inputs, &mut ctx)?)
-                    },
-                )?
+                let engine: &mut dyn tenferro_tensor::Engine = engine;
+                let mut ctx = tenferro_runtime::ExtensionExecutionContext::new(
+                    engine,
+                    extension_caches,
+                );
+                Ok(#execute_reads(&self.op, inputs, &mut ctx)?)
             }
         },
         (Some(execute_reads), Some(_)) => {

@@ -8,8 +8,8 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{ShapeExtent, SymDim};
 use tenferro_tensor::{
-    Engine, BackendSessionHost, CompareDir, DType, DotGeneralConfig, GatherConfig,
-    PadConfig, ScatterConfig, SliceConfig, Tensor,
+    BackendSessionHost, CompareDir, DType, DotGeneralConfig, Engine, GatherConfig, PadConfig,
+    ScatterConfig, SliceConfig, Tensor,
 };
 
 use super::dispatch::{
@@ -123,10 +123,7 @@ fn host_dispatch_table_covers_host_exec_ops() {
 fn host_dispatch_table_excludes_backend_and_ffi_exec_ops() {
     for op in non_host_dispatch_cases() {
         assert_eq!(HostDispatchKey::for_op(&op), None, "{op:?}");
-        assert!(
-            host_dispatch_entry::<dyn Engine>(&op).is_none(),
-            "{op:?}"
-        );
+        assert!(host_dispatch_entry::<dyn Engine>(&op).is_none(), "{op:?}");
     }
 }
 

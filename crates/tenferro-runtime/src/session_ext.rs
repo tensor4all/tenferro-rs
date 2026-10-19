@@ -3,7 +3,7 @@
 use num_complex::Complex64;
 
 use crate::{
-    Engine, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
+    CompareDir, DType, DotGeneralConfig, Engine, GatherConfig, PadConfig, ScatterConfig,
     SliceConfig, Tensor,
 };
 
@@ -61,11 +61,7 @@ pub trait TensorSessionOpsExt {
     /// [`ShapeMismatch`](tenferro_tensor::ValidationError::ShapeMismatch) or
     /// `DTypeMismatch` payload when operands are incompatible, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn add(
-        &self,
-        rhs: &Tensor,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn add(&self, rhs: &Tensor, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise multiplication with NumPy-style broadcasting inside a session.
     ///
     /// Like [`Self::add`], broadcast and multiply run in the one `session`.
@@ -90,11 +86,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Validation`] with `ShapeMismatch` or
     /// `DTypeMismatch` for incompatible operands, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn mul(
-        &self,
-        rhs: &Tensor,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn mul(&self, rhs: &Tensor, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise exponential inside a session.
     ///
     /// # Examples
@@ -173,11 +165,7 @@ pub trait TensorSessionOpsExt {
     /// `InvalidArgument` for invalid tensor metadata, or
     /// [`tenferro_tensor::Error::BackendSource`] when the backend reports a
     /// typed failure.
-    fn convert(
-        &self,
-        to: DType,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn convert(&self, to: DType, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Cast to a different dtype using explicit lossy projection inside a session.
     ///
     /// # Examples
@@ -227,11 +215,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Validation`] with `ShapeMismatch` or
     /// `DTypeMismatch` for incompatible operands, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn sub(
-        &self,
-        rhs: &Tensor,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn sub(&self, rhs: &Tensor, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise division with NumPy-style broadcasting inside a session.
     ///
     /// # Examples
@@ -256,11 +240,7 @@ pub trait TensorSessionOpsExt {
     /// [`tenferro_tensor::Error::Extension`] with a numerical classification
     /// for a detected zero divisor, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn div(
-        &self,
-        rhs: &Tensor,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn div(&self, rhs: &Tensor, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise remainder with NumPy-style broadcasting inside a session.
     ///
     /// # Examples
@@ -284,11 +264,7 @@ pub trait TensorSessionOpsExt {
     /// `DTypeMismatch` for shape/dtype incompatibility, a numerical
     /// [`tenferro_tensor::Error::Extension`] for a detected zero divisor, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn rem(
-        &self,
-        rhs: &Tensor,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn rem(&self, rhs: &Tensor, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise power with NumPy-style broadcasting inside a session.
     ///
     /// # Examples
@@ -313,11 +289,7 @@ pub trait TensorSessionOpsExt {
     /// [`tenferro_tensor::Error::Extension`] for a detected negative integer
     /// exponent, or [`tenferro_tensor::Error::BackendSource`] for a typed
     /// backend failure.
-    fn pow(
-        &self,
-        rhs: &Tensor,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn pow(&self, rhs: &Tensor, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise maximum with NumPy-style broadcasting inside a session.
     ///
     /// # Examples
@@ -340,11 +312,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Validation`] with `ShapeMismatch` or
     /// `DTypeMismatch` for incompatible operands, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn maximum(
-        &self,
-        rhs: &Tensor,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn maximum(&self, rhs: &Tensor, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise minimum with NumPy-style broadcasting inside a session.
     ///
     /// # Examples
@@ -367,11 +335,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Validation`] with `ShapeMismatch` or
     /// `DTypeMismatch` for incompatible operands, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn minimum(
-        &self,
-        rhs: &Tensor,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn minimum(&self, rhs: &Tensor, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise negation inside a session.
     ///
     /// # Examples
@@ -786,11 +750,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Validation`] with `RankMismatch`,
     /// `ShapeMismatch`, or `DTypeMismatch` for incompatible matrices, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn matmul(
-        &self,
-        rhs: &Tensor,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn matmul(&self, rhs: &Tensor, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Reshape without changing element order inside a session.
     ///
     /// # Examples
@@ -813,11 +773,8 @@ pub trait TensorSessionOpsExt {
     /// `ShapeMismatch`, `RankMismatch`, or `InvalidArgument` when element
     /// counts or ranks are invalid, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn reshape(
-        &self,
-        shape: &[usize],
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn reshape(&self, shape: &[usize], session: &mut dyn Engine)
+        -> tenferro_tensor::Result<Tensor>;
     /// Permute axes inside a session.
     ///
     /// # Examples
@@ -992,11 +949,7 @@ pub trait TensorSessionOpsExt {
     ///
     /// Returns [`tenferro_tensor::Error::Validation`] for a padding configuration whose length does not match the input rank, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn pad(
-        &self,
-        config: PadConfig,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn pad(&self, config: PadConfig, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Concatenate tensors along `axis` inside a session.
     ///
     /// This has no receiver, like the eager `EagerSession::concatenate`: call it as
@@ -1048,11 +1001,7 @@ pub trait TensorSessionOpsExt {
     ///
     /// Returns [`tenferro_tensor::Error::Validation`] for an out-of-range or repeated axis, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn reverse(
-        &self,
-        axes: &[usize],
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn reverse(&self, axes: &[usize], session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Take the maximum over the selected axes inside a session. `None` reduces every axis and `Some(&[])` keeps the input shape.
     ///
     /// # Examples
@@ -1371,11 +1320,7 @@ pub trait TensorSessionOpsExt {
     /// Returns [`tenferro_tensor::Error::Validation`] with `InvalidArgument` for a
     /// non-finite factor, an integer factor out of range, or an external dtype,
     /// or [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn scale_real(
-        &self,
-        factor: f64,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn scale_real(&self, factor: f64, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Multiply a complex tensor by a complex scalar inside a session.
     ///
     /// # Examples
@@ -1591,11 +1536,7 @@ pub trait TensorSessionOpsExt {
     /// integer, or `Bool` input, [`tenferro_tensor::Error::Validation`] with
     /// `AxisOutOfBounds` for an invalid axis, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn softmax(
-        &self,
-        axis: usize,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn softmax(&self, axis: usize, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
     /// Max-subtracted log-softmax along `axis` inside a session.
     ///
     /// Real `F32`/`F64` only. A slice that is entirely `-inf` returns `-inf`
@@ -1621,11 +1562,8 @@ pub trait TensorSessionOpsExt {
     /// integer, or `Bool` input, [`tenferro_tensor::Error::Validation`] with
     /// `AxisOutOfBounds` for an invalid axis, or
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
-    fn log_softmax(
-        &self,
-        axis: usize,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn log_softmax(&self, axis: usize, session: &mut dyn Engine)
+        -> tenferro_tensor::Result<Tensor>;
     /// Softmax along `axis` over the entries where the `Bool` `mask` is true.
     ///
     /// `mask` broadcasts to the input shape. Masked-out entries are `0` whatever

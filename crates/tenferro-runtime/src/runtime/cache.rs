@@ -117,8 +117,6 @@ pub struct PreparedPlanCacheStats {
 pub struct RuntimeCacheStats {
     /// Runtime-owned prepared-plan cache statistics.
     pub prepared_plans: PreparedPlanCacheStats,
-    /// Direct engine cache-owner statistics.
-    pub engines: CacheStats,
     /// Extension module cache-owner statistics.
     pub extensions: CacheStats,
 }
@@ -1323,13 +1321,11 @@ impl<K: PreparedCacheKey, V: PreparedValue> RuntimeCacheSet<K, V> {
                 PreparedPlanCacheStats::default()
             }
         };
-        let mut engines = CacheStats::default();
         let mut extensions = CacheStats::default();
         let mut failures = Vec::new();
         for owner in owners {
             match owner.owner.cache_stats() {
                 Ok(stats) => match owner.kind {
-                    FrozenCacheOwnerKind::Engine => saturating_add_cache_stats(&mut engines, stats),
                     FrozenCacheOwnerKind::Extension => {
                         saturating_add_cache_stats(&mut extensions, stats);
                     }
@@ -1343,7 +1339,6 @@ impl<K: PreparedCacheKey, V: PreparedValue> RuntimeCacheSet<K, V> {
         if runtime_error.is_none() && failures.is_empty() {
             Ok(RuntimeCacheStats {
                 prepared_plans: prepared,
-                engines,
                 extensions,
             })
         } else {
