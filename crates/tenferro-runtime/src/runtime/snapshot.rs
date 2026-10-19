@@ -1210,9 +1210,10 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// Returns the same prepared-handle, engine, session, and
-    /// instruction-support failures as [`Self::run_prepared_in`], before any
-    /// work is enqueued.
+    /// Returns `ValidationError::InvalidArgument` when the prepared handle does
+    /// not match the runtime, and `Error::Extension` when the engine, session,
+    /// or instruction support rejects the prepared graph. Nothing is enqueued
+    /// on either failure.
     pub fn begin_prepared_deferred<'a>(
         &'a self,
         session: &'a mut dyn BackendSession,

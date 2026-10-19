@@ -2087,9 +2087,10 @@ impl<'a> PreparedDeferred<'a> {
     ///
     /// # Errors
     ///
-    /// Returns the same input-metadata, engine, session, and
-    /// instruction-support failures as [`Runtime::run_prepared_in`], plus a
-    /// stale runtime epoch.
+    /// Returns `ValidationError::InvalidArgument` when the input count, shape,
+    /// dtype, or metadata does not match the prepared graph, and when the
+    /// runtime epoch is stale. Engine, session, and instruction-support
+    /// failures return the typed `Error::Extension` backend source.
     pub fn run_prepared_deferred(&mut self, inputs: &'a [&'a Tensor]) -> Result<usize> {
         let caller = "Runtime::run_prepared_deferred";
         let result = match self.resolve_deferred_inputs(caller, inputs) {
@@ -2159,9 +2160,10 @@ impl<'a> PreparedDeferred<'a> {
     ///
     /// # Errors
     ///
-    /// Returns the first provider retirement error, including errors reported
-    /// by the CubeCL dispatch or the CUDA stream barrier. The guard remains
-    /// usable for a later batch after the failed retirement.
+    /// Returns `Error::Extension` carrying the first provider retirement
+    /// failure, including a CubeCL dispatch failure or a device stream failure
+    /// at the barrier. The guard remains usable for a later batch after the
+    /// failed retirement.
     pub fn finish_prepared(&mut self) -> Result<Vec<Vec<Tensor>>> {
         match self.retire_pending_event_domains() {
             Ok(()) => Ok(std::mem::take(&mut self.pending_outputs)),

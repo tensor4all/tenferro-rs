@@ -85,7 +85,7 @@ When a loop runs the same prepared graph several times and only needs completion
 before reading the batch's results, defer retirement instead of paying one stream
 barrier per call:
 
-```rust
+```text
 let mut session = backend.open_session()?;
 let inputs: [&Tensor; 1] = [&input];
 let batches = session.with_session(|view| {
