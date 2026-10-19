@@ -2,7 +2,7 @@
 //!
 //! These run without a device: they only exercise the shape/config predicate
 //! that decides between one `gemmStridedBatchedEx` and the general cuTENSOR
-//! contraction. Device parity between the two paths lives in
+//! contraction. Device parity between the paths lives in
 //! `crate::cubecl::tests::gemm_tests`.
 
 use cudarc::cublas::sys as cublas;
@@ -57,6 +57,19 @@ fn the_benchmark_shape_is_one_strided_batched_gemm() {
         (32 * 32, 32 * 32, 32 * 32)
     );
     assert_eq!(transposed(&launch), (false, false));
+    assert!(launch.use_cublaslt());
+}
+
+#[test]
+fn the_small_batched_threshold_selects_cublaslt() {
+    // Every dimension at the bound stays on cuBLASLt.
+    let at_bound = detect(&[64, 64, 16], &[64, 64, 16], &[1], &[0], &[2]).expect("64 cube");
+    assert!(at_bound.use_cublaslt());
+    // One extent above the bound keeps the cuBLAS strided-batched path.
+    let above = detect(&[65, 64, 16], &[64, 64, 16], &[1], &[0], &[2]).expect("65 rows");
+    assert!(!above.use_cublaslt());
+    let above_k = detect(&[64, 65, 16], &[65, 64, 16], &[1], &[0], &[2]).expect("65 inner");
+    assert!(!above_k.use_cublaslt());
 }
 
 #[test]

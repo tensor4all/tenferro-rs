@@ -4,11 +4,11 @@
 //! general contraction stays on cuTENSOR. A *standard* batched matmul — one
 //! contraction axis per operand, both matrix axes innermost, and batch axes
 //! trailing in the same ascending order on both sides — is exactly the shape
-//! cuBLAS' strided-batched GEMM addresses without any copy, and it reaches
-//! cuBLAS as one batched API call instead of the several small launches and
-//! plan-level synchronizations a cuTENSOR contraction of the same shape issues.
-//! The claim is about API calls: cuBLAS may still subdivide the batch into
-//! several physical kernels internally.
+//! cuBLAS' strided-batched GEMM addresses without any copy. Small geometries
+//! go further and use a cached cuBLASLt plan, whose batched kernel covers every
+//! slice in one launch; larger geometries keep the cuBLAS strided-batched call,
+//! which is one API call but may still subdivide the batch into several
+//! physical kernels internally.
 //!
 //! Scope of this path:
 //!
@@ -38,6 +38,7 @@
 use std::ffi::c_void;
 
 use cudarc::cublas::sys as cublas;
+use cudarc::cublaslt::sys as cublaslt;
 use num_complex::{Complex32, Complex64};
 
 use super::dispatch::cubecl_buffer;
@@ -53,6 +54,12 @@ const OP: &str = "dot_general";
 /// The dtype-erased cuBLAS symbol every scalar family calls, and the name a
 /// provider error reports.
 const GEMM_NAME: &str = "cublasGemmStridedBatchedEx";
+
+/// Largest per-matrix extent routed through cuBLASLt. The fused batched kernel
+/// replaces the strided call's per-batch kernels in this small-matrix regime;
+/// above it the strided call already launches usefully large kernels and the
+/// 1024-by-256 benchmark stays on that path.
+pub(super) const LT_MAX_DIM: i32 = 64;
 
 #[cfg(test)]
 thread_local! {
@@ -82,21 +89,34 @@ pub(crate) fn batched_gemm_launches_for_test() -> usize {
 /// and the three batch strides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct BatchedGemmLaunch {
-    trans_a: cublas::cublasOperation_t,
-    trans_b: cublas::cublasOperation_t,
-    m: i32,
-    n: i32,
-    k: i32,
-    lda: i32,
-    ldb: i32,
-    ldc: i32,
-    stride_a: i64,
-    stride_b: i64,
-    stride_c: i64,
-    batch_count: i32,
+    pub(super) trans_a: cublas::cublasOperation_t,
+    pub(super) trans_b: cublas::cublasOperation_t,
+    pub(super) m: i32,
+    pub(super) n: i32,
+    pub(super) k: i32,
+    pub(super) lda: i32,
+    pub(super) ldb: i32,
+    pub(super) ldc: i32,
+    pub(super) stride_a: i64,
+    pub(super) stride_b: i64,
+    pub(super) stride_c: i64,
+    pub(super) batch_count: i32,
 }
 
 impl BatchedGemmLaunch {
+    /// Whether this geometry belongs on the cuBLASLt fused batched kernel.
+    ///
+    /// The detected form already requires `batch_count >= 2`. Small matrices
+    /// are where cuBLAS' one-kernel-per-batch strided call loses to cuBLASLt;
+    /// larger slices stay on the strided path, where one call already produces
+    /// usefully large kernels.
+    pub(super) fn use_cublaslt(&self) -> bool {
+        self.batch_count >= 2
+            && self.m <= LT_MAX_DIM
+            && self.n <= LT_MAX_DIM
+            && self.k <= LT_MAX_DIM
+    }
+
     /// Detect the cuBLAS-addressable standard batched matmul, or `None`.
     ///
     /// `lhs_shape`, `rhs_shape`, and `config` are already validated; this only
@@ -192,6 +212,15 @@ pub(super) trait BatchedGemmScalar: TensorScalar + Scalar + Copy + 'static {
     const DATA_TYPE: cublas::cudaDataType;
     /// Arithmetic precision cuBLAS accumulates the product in.
     const COMPUTE_TYPE: cublas::cublasComputeType_t;
+    /// Data type of `A`, `B`, and `C` for cuBLASLt.
+    const LT_DATA_TYPE: cublaslt::cudaDataType;
+    /// Type of the `alpha`/`beta` coefficients for cuBLASLt.
+    const LT_SCALE_TYPE: cublaslt::cudaDataType;
+    /// Arithmetic precision cuBLASLt accumulates the product in.
+    const LT_COMPUTE_TYPE: cublaslt::cublasComputeType_t;
+
+    /// The overwrite coefficients `(1, 0)` in this dtype's scalar type.
+    fn lt_alpha_beta() -> (Self, Self);
 
     /// Enqueue `C = op(A) * op(B)` for every batch slice, with `alpha = 1` and
     /// `beta = 0`.
@@ -255,6 +284,14 @@ impl BatchedGemmScalar for f32 {
     const DATA_TYPE: cublas::cudaDataType = cublas::cudaDataType::CUDA_R_32F;
     const COMPUTE_TYPE: cublas::cublasComputeType_t =
         cublas::cublasComputeType_t::CUBLAS_COMPUTE_32F;
+    const LT_DATA_TYPE: cublaslt::cudaDataType = cublaslt::cudaDataType::CUDA_R_32F;
+    const LT_SCALE_TYPE: cublaslt::cudaDataType = cublaslt::cudaDataType::CUDA_R_32F;
+    const LT_COMPUTE_TYPE: cublaslt::cublasComputeType_t =
+        cublaslt::cublasComputeType_t::CUBLAS_COMPUTE_32F;
+
+    fn lt_alpha_beta() -> (Self, Self) {
+        (1.0, 0.0)
+    }
 
     unsafe fn gemm_strided_batched_ex(
         handle: cublas::cublasHandle_t,
@@ -283,6 +320,14 @@ impl BatchedGemmScalar for f64 {
     const DATA_TYPE: cublas::cudaDataType = cublas::cudaDataType::CUDA_R_64F;
     const COMPUTE_TYPE: cublas::cublasComputeType_t =
         cublas::cublasComputeType_t::CUBLAS_COMPUTE_64F;
+    const LT_DATA_TYPE: cublaslt::cudaDataType = cublaslt::cudaDataType::CUDA_R_64F;
+    const LT_SCALE_TYPE: cublaslt::cudaDataType = cublaslt::cudaDataType::CUDA_R_64F;
+    const LT_COMPUTE_TYPE: cublaslt::cublasComputeType_t =
+        cublaslt::cublasComputeType_t::CUBLAS_COMPUTE_64F;
+
+    fn lt_alpha_beta() -> (Self, Self) {
+        (1.0, 0.0)
+    }
 
     unsafe fn gemm_strided_batched_ex(
         handle: cublas::cublasHandle_t,
@@ -311,6 +356,14 @@ impl BatchedGemmScalar for Complex32 {
     const DATA_TYPE: cublas::cudaDataType = cublas::cudaDataType::CUDA_C_32F;
     const COMPUTE_TYPE: cublas::cublasComputeType_t =
         cublas::cublasComputeType_t::CUBLAS_COMPUTE_32F;
+    const LT_DATA_TYPE: cublaslt::cudaDataType = cublaslt::cudaDataType::CUDA_C_32F;
+    const LT_SCALE_TYPE: cublaslt::cudaDataType = cublaslt::cudaDataType::CUDA_C_32F;
+    const LT_COMPUTE_TYPE: cublaslt::cublasComputeType_t =
+        cublaslt::cublasComputeType_t::CUBLAS_COMPUTE_32F;
+
+    fn lt_alpha_beta() -> (Self, Self) {
+        (Complex32::new(1.0, 0.0), Complex32::new(0.0, 0.0))
+    }
 
     unsafe fn gemm_strided_batched_ex(
         handle: cublas::cublasHandle_t,
@@ -342,6 +395,14 @@ impl BatchedGemmScalar for Complex64 {
     const DATA_TYPE: cublas::cudaDataType = cublas::cudaDataType::CUDA_C_64F;
     const COMPUTE_TYPE: cublas::cublasComputeType_t =
         cublas::cublasComputeType_t::CUBLAS_COMPUTE_64F;
+    const LT_DATA_TYPE: cublaslt::cudaDataType = cublaslt::cudaDataType::CUDA_C_64F;
+    const LT_SCALE_TYPE: cublaslt::cudaDataType = cublaslt::cudaDataType::CUDA_C_64F;
+    const LT_COMPUTE_TYPE: cublaslt::cublasComputeType_t =
+        cublaslt::cublasComputeType_t::CUBLAS_COMPUTE_64F;
+
+    fn lt_alpha_beta() -> (Self, Self) {
+        (Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0))
+    }
 
     unsafe fn gemm_strided_batched_ex(
         handle: cublas::cublasHandle_t,
@@ -369,7 +430,8 @@ impl BatchedGemmScalar for Complex64 {
     }
 }
 
-/// Run one standard batched matmul as a single cuBLAS strided-batched GEMM.
+/// Run one standard batched matmul through the small-matrix cuBLASLt plan or,
+/// when no plan covers it, the cuBLAS strided-batched GEMM.
 ///
 /// The output is a fresh compact allocation, so it is resolved the same way the
 /// cuTENSOR path resolves it: `lhs`/`rhs`/`output` read their device addresses
@@ -394,6 +456,15 @@ pub(super) fn run_allocating<T: BatchedGemmScalar>(
             cubecl_buffer(output, OP)?.handle(),
         ],
     );
+    if args.use_cublaslt() {
+        let lt_handles = cross_stream_handles.clone();
+        let launched = rt.try_with_cublaslt(OP, lt_handles, |state| {
+            state.try_launch::<T>(rt, args, lhs_ptr, rhs_ptr, output_ptr)
+        })?;
+        if launched.is_some() {
+            return Ok(());
+        }
+    }
     rt.with_cublas_handle(
         OP,
         // Host pointer mode reads the coefficients from the stack locals during

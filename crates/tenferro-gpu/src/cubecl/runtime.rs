@@ -17,6 +17,7 @@ use cudarc::driver::sys::{CUcontext, CUdevice, CUevent, CUresult};
 use cudarc::runtime::{result as cuda_result, sys as cuda_sys, sys::cudaStream_t};
 use tenferro_tensor::AllocationDomainId;
 
+use super::cublaslt::{cublaslt_library_present, CudaLtStreamState};
 use super::device::{
     cuda_devices, unavailable_device_error, CudaDeviceError, CudaDeviceId, CudaDeviceInfo,
 };
@@ -225,6 +226,11 @@ pub(crate) struct CudaRuntimeState {
     // distinct `StreamId`s can map to the same physical stream, and cuBLAS
     // handle configuration is mutable.
     cublas_handles: Box<[Mutex<Option<CublasStreamHandle>>]>,
+    // One lazily created cuBLASLt handle per bounded CubeCL stream-pool slot,
+    // with that slot's geometry-keyed batched-GEMM plan cache. The slot lock
+    // serializes plan construction and the enqueue, while the enqueue itself is
+    // ordered on the CubeCL stream passed to `cublasLtMatmul`.
+    cublaslt_handles: Box<[Mutex<Option<CudaLtStreamState>>]>,
     // Lazily allocated pinned-host staging slot for single-scalar downloads
     // (`cudaHostAlloc`, `PINNED_SCALAR_BYTES` bytes). Freed in `Drop` with
     // `cudaFreeHost` while the primary context is still retained.
@@ -569,6 +575,9 @@ impl CudaRuntime {
                 cublas_handles: (0..cubecl_stream_slots())
                     .map(|_| Mutex::new(None))
                     .collect(),
+                cublaslt_handles: (0..cubecl_stream_slots())
+                    .map(|_| Mutex::new(None))
+                    .collect(),
                 pinned_scalar: Mutex::new(PinnedScalarSlot {
                     ptr: std::ptr::null_mut(),
                 }),
@@ -897,6 +906,52 @@ impl CudaRuntime {
             .with_cublas_handle(op, pointer_mode, cross_stream_handles, execute)
     }
 
+    /// Run one cuBLASLt enqueue with the handle and plan cache for the current
+    /// CubeCL stream.
+    ///
+    /// `execute` returns `Ok(None)` when no cuBLASLt plan covers the requested
+    /// geometry; in that case nothing was enqueued and the caller keeps its
+    /// cuBLAS/cuTENSOR fallback. The runtime's slot lock is held across plan
+    /// lookup and the enqueue, so cached descriptors, workspace, and handle use
+    /// are serialized per physical stream.
+    pub(super) fn try_with_cublaslt<R>(
+        &self,
+        op: &'static str,
+        cross_stream_handles: Vec<cubecl_runtime::server::Handle>,
+        execute: impl FnOnce(&mut CudaLtStreamState) -> crate::Result<Option<R>>,
+    ) -> crate::Result<Option<R>> {
+        if !cublaslt_library_present() {
+            return Ok(None);
+        }
+        let poisoned = || crate::Error::runtime_state(op, "cuBLASLt handle cache lock poisoned");
+        let slot = self.stream_slot();
+        let mut cached = self.inner.cublaslt_handles[slot]
+            .lock()
+            .map_err(|_| poisoned())?;
+        if cached.is_none() {
+            *cached = CudaLtStreamState::new();
+            if cached.is_none() {
+                return Ok(None);
+            }
+        }
+        let state = cached.as_mut().ok_or_else(|| {
+            crate::Error::runtime_state(op, "cuBLASLt handle initialization produced no state")
+        })?;
+        match execute(state) {
+            Ok(Some(value)) => self
+                .finish_vendor_enqueue(op, cross_stream_handles, Ok(value))
+                .map(Some),
+            Ok(None) => Ok(None),
+            Err(error) => {
+                // The enqueue may have been attempted before the error, so take
+                // the same cross-stream completion hand-off as a successful
+                // call; the original error is what the caller sees.
+                let _ = self.finish_vendor_enqueue(op, cross_stream_handles, Ok(()));
+                Err(error)
+            }
+        }
+    }
+
     pub(crate) fn finish_vendor_enqueue<R>(
         &self,
         op: &'static str,
@@ -1081,6 +1136,13 @@ impl CudaRuntimeState {
 
     fn stream_slot(&self) -> usize {
         self.stream_slot_for(StreamId::current())
+    }
+
+    /// The runtime's deferred vendor-workspace retirement queue.
+    pub(crate) fn workspace_retirements(
+        &self,
+    ) -> &Mutex<super::workspace_retirement::WorkspaceRetirementQueue> {
+        &self.workspace_retirements
     }
 
     fn stream_slot_for(&self, stream_id: StreamId) -> usize {
@@ -1411,6 +1473,16 @@ impl CudaRuntimeState {
                 }
             }
         }
+        // cuBLASLt state owns cached plans and their device workspaces. Every
+        // stream has retired before this point, so releasing the plans here is
+        // the same order the cuBLAS handles use.
+        for cached in &self.cublaslt_handles {
+            if let Ok(mut state) = cached.lock() {
+                if let Some(mut state) = state.take() {
+                    state.release();
+                }
+            }
+        }
         if let Ok(mut slot) = self.pinned_scalar.lock() {
             if !slot.ptr.is_null() {
                 // SAFETY: the slot owns exactly one live cudaHostAlloc allocation.
@@ -1544,6 +1616,16 @@ impl Drop for CudaRuntimeState {
             if let Ok(mut slot) = self.pinned_staging.lock() {
                 if let Some(buffer) = slot.buffer.take() {
                     std::mem::forget(buffer);
+                }
+            }
+            // cuBLASLt handles and their plan workspaces may still be referenced
+            // by work on an unconfirmed stream, so they leak with the rest of
+            // the raw library resources rather than being destroyed here.
+            for cached in &self.cublaslt_handles {
+                if let Ok(mut state) = cached.lock() {
+                    if let Some(state) = state.take() {
+                        std::mem::forget(state);
+                    }
                 }
             }
             // Records kept for soundness must not be freed by field destruction either, so they are

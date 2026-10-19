@@ -96,6 +96,12 @@ impl<K, V> LruPlanCache<K, V> {
         matches(&entry.key).then_some(&entry.value)
     }
 
+    /// Drop every retained entry.
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+        self.entry_retained_bytes = 0;
+    }
+
     pub(super) fn max_entries(&self) -> NonZeroUsize {
         self.entries.cap()
     }

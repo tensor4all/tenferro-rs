@@ -155,6 +155,7 @@ macro_rules! preset_scalar {
 mod batched_gemm;
 mod blas1;
 mod capability;
+mod cublaslt;
 mod device;
 pub(crate) mod dispatch;
 mod error;

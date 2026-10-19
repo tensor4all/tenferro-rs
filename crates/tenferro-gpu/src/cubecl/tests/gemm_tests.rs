@@ -9,6 +9,7 @@ use crate::Tensor;
 use super::super::batched_gemm::{
     batched_gemm_launches_for_test, reset_batched_gemm_launches_for_test,
 };
+use super::super::cublaslt::{lt_gemm_launches_for_test, reset_lt_gemm_launches_for_test};
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f32,
     tensor_f64, upload, CpuBackend, CudaBackend,
@@ -569,32 +570,54 @@ fn batched_matmul_config() -> DotGeneralConfig {
     }
 }
 
+/// Which contraction path a case must take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GemmPath {
+    Cutensor,
+    Strided,
+    CublasLt,
+}
+
+impl GemmPath {
+    fn of(strided: usize, lt: usize) -> Self {
+        match (strided, lt) {
+            (0, 0) => Self::Cutensor,
+            (1, 0) => Self::Strided,
+            (0, 1) => Self::CublasLt,
+            _ => panic!("unexpected launch counts: {strided} strided, {lt} cuBLASLt"),
+        }
+    }
+}
+
 /// Run one case against the CPU reference and assert which path served it.
 ///
-/// `expected_launches` is the number of cuBLAS strided-batched GEMMs the case
-/// must issue: `1` proves the fast path is taken, `0` proves the case fell back
-/// to cuTENSOR instead of matching only numerically.
+/// One launch on the expected path proves the fast path is taken; a cuTENSOR
+/// expectation proves the case fell back instead of matching only numerically.
 fn assert_case_launches(
     lhs: Tensor,
     rhs: Tensor,
     config: DotGeneralConfig,
     tol: f64,
-    expected_launches: usize,
+    expected: GemmPath,
 ) {
     reset_batched_gemm_launches_for_test();
+    reset_lt_gemm_launches_for_test();
     run_dot_general_case(lhs, rhs, config, tol);
     assert_eq!(
-        batched_gemm_launches_for_test(),
-        expected_launches,
+        GemmPath::of(
+            batched_gemm_launches_for_test(),
+            lt_gemm_launches_for_test()
+        ),
+        expected,
         "the case must be served by the expected contraction path"
     );
 }
 
-/// Every supported dtype takes the cuBLAS strided-batched GEMM for a standard
+/// Every supported dtype takes the cuBLASLt batched GEMM for a small standard
 /// batched matmul.
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
-fn cuda_standard_batched_matmul_uses_one_strided_batched_gemm() {
+fn cuda_standard_batched_matmul_uses_one_cublaslt_gemm() {
     let lhs_shape = vec![8, 5, 3];
     let rhs_shape = vec![5, 7, 3];
     let lhs = ramp(&lhs_shape, 0.1);
@@ -625,8 +648,53 @@ fn cuda_standard_batched_matmul_uses_one_strided_batched_gemm() {
         ),
     ];
     for (lhs, rhs, tol) in cases {
-        assert_case_launches(lhs, rhs, batched_matmul_config(), tol, 1);
+        assert_case_launches(lhs, rhs, batched_matmul_config(), tol, GemmPath::CublasLt);
     }
+}
+
+/// A two-matrix rectangular product takes the cuBLASLt path at both the low
+/// end of the batch range and a non-square matrix shape.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_standard_batched_matmul_covers_batch_two_and_rectangular_slices() {
+    let cases = [
+        (vec![5, 3, 2], vec![3, 7, 2]),
+        (vec![3, 5, 2], vec![7, 3, 2]),
+    ];
+    for (lhs_shape, rhs_shape) in cases {
+        let lhs_contracting = if lhs_shape[0] == 3 { 0 } else { 1 };
+        let rhs_contracting = if rhs_shape[0] == 7 { 1 } else { 0 };
+        let config = DotGeneralConfig {
+            lhs_contracting_dims: [lhs_contracting].as_slice().into(),
+            rhs_contracting_dims: [rhs_contracting].as_slice().into(),
+            lhs_batch_dims: [2].as_slice().into(),
+            rhs_batch_dims: [2].as_slice().into(),
+        };
+        assert_case_launches(
+            tensor_f64(lhs_shape.clone(), ramp(&lhs_shape, 0.1)),
+            tensor_f64(rhs_shape.clone(), ramp(&rhs_shape, -0.05)),
+            config,
+            1e-12,
+            GemmPath::CublasLt,
+        );
+    }
+}
+
+/// A matrix extent above the cuBLASLt threshold keeps the cuBLAS strided-batched
+/// path, so the threshold does not silently capture the large batched case.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_batched_matmul_above_the_small_threshold_stays_strided() {
+    let (m, n, k, batch) = (65usize, 63usize, 67usize, 2usize);
+    let lhs_shape = vec![m, k, batch];
+    let rhs_shape = vec![k, n, batch];
+    assert_case_launches(
+        tensor_f64(lhs_shape.clone(), ramp(&lhs_shape, 0.1)),
+        tensor_f64(rhs_shape.clone(), ramp(&rhs_shape, -0.05)),
+        batched_matmul_config(),
+        1e-11,
+        GemmPath::Strided,
+    );
 }
 
 /// Both transpose combinations per operand are expressed with `opA`/`opB`, so
@@ -654,7 +722,7 @@ fn cuda_standard_batched_matmul_covers_both_transpose_combinations() {
             tensor_f64(rhs_shape.clone(), ramp(&rhs_shape, -0.05)),
             config,
             1e-12,
-            1,
+            GemmPath::CublasLt,
         );
     }
 
@@ -676,7 +744,7 @@ fn cuda_standard_batched_matmul_covers_both_transpose_combinations() {
             tensor_c64(rhs_shape.clone(), as_c64(&ramp(&rhs_shape, -0.05))),
             config,
             1e-12,
-            1,
+            GemmPath::CublasLt,
         );
     }
 }
@@ -698,7 +766,7 @@ fn cuda_standard_batched_matmul_flattens_two_batch_axes() {
             rhs_batch_dims: [2, 3].as_slice().into(),
         },
         1e-12,
-        1,
+        GemmPath::CublasLt,
     );
 }
 
@@ -708,8 +776,8 @@ fn cuda_standard_batched_matmul_flattens_two_batch_axes() {
 /// Both layouts are filled from the same logical `(row, inner, batch)`
 /// function, so the two paths contract identical matrices and only the
 /// physical axis order differs: `lhs_standard`/`rhs_standard` are the trailing
-/// batch layout the cuBLAS fast path detects, and `lhs_outer`/`rhs_outer` are
-/// the batch-outer layout only cuTENSOR serves.
+/// batch layout the cuBLAS/cuBLASLt fast path detects, and
+/// `lhs_outer`/`rhs_outer` are the batch-outer layout only cuTENSOR serves.
 struct Batch16Layouts {
     lhs_standard: Tensor,
     rhs_standard: Tensor,
@@ -785,6 +853,7 @@ fn cuda_standard_batched_matmul_batch_16_matches_the_cutensor_path() {
     let rhs_outer = upload(&gpu, &layouts.rhs_outer);
 
     reset_batched_gemm_launches_for_test();
+    reset_lt_gemm_launches_for_test();
     let fast = gpu
         .with_backend_session(|__s| {
             __s.dot_general_read(
@@ -796,11 +865,18 @@ fn cuda_standard_batched_matmul_batch_16_matches_the_cutensor_path() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        batched_gemm_launches_for_test(),
+        lt_gemm_launches_for_test(),
         1,
-        "the 16-batch 32x32 case must be one cuBLAS strided-batched GEMM"
+        "the 16-batch 32x32 case must be one cuBLASLt batched GEMM"
+    );
+    assert_eq!(
+        batched_gemm_launches_for_test(),
+        0,
+        "the cuBLAS strided-batched path must not also run"
     );
 
+    reset_batched_gemm_launches_for_test();
+    reset_lt_gemm_launches_for_test();
     let general = gpu
         .with_backend_session(|__s| {
             __s.dot_general_read(
@@ -812,9 +888,12 @@ fn cuda_standard_batched_matmul_batch_16_matches_the_cutensor_path() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        batched_gemm_launches_for_test(),
-        1,
-        "the batch-outer form must not take the cuBLAS batched path"
+        (
+            batched_gemm_launches_for_test(),
+            lt_gemm_launches_for_test()
+        ),
+        (0, 0),
+        "the batch-outer form must not take either batched-GEMM fast path"
     );
 
     let fast = download(&gpu, &fast);
@@ -826,8 +905,7 @@ fn cuda_standard_batched_matmul_batch_16_matches_the_cutensor_path() {
 }
 
 /// A100 in-process timing of the same logical `16 x 32 x 32` f64 batched
-/// product through the cuBLAS strided-batched fast path and the cuTENSOR
-/// fallback.
+/// product through the cuBLASLt small-batch path and the cuTENSOR fallback.
 ///
 /// The external benchmark harness cannot compile against this tree, so this
 /// measures both backends through the public `dot_general_read` surface with a
@@ -846,9 +924,10 @@ fn cuda_batched_matmul_16_a100_fast_path_timing() {
         lhs: &Tensor,
         rhs: &Tensor,
         config: &DotGeneralConfig,
-    ) -> (f64, usize) {
+    ) -> (f64, usize, usize) {
         let mut run = || {
             reset_batched_gemm_launches_for_test();
+            reset_lt_gemm_launches_for_test();
             let start = Instant::now();
             let result = gpu
                 .with_backend_session(|__s| {
@@ -868,7 +947,11 @@ fn cuda_batched_matmul_16_a100_fast_path_timing() {
         }
         let mut samples: Vec<f64> = (0..7).map(|_| run()).collect();
         samples.sort_by(f64::total_cmp);
-        (samples[samples.len() / 2], batched_gemm_launches_for_test())
+        (
+            samples[samples.len() / 2],
+            batched_gemm_launches_for_test(),
+            lt_gemm_launches_for_test(),
+        )
     }
 
     let layouts = batch_16_layouts();
@@ -887,8 +970,10 @@ fn cuda_batched_matmul_16_a100_fast_path_timing() {
     let lhs_outer = upload(&gpu, &layouts.lhs_outer);
     let rhs_outer = upload(&gpu, &layouts.rhs_outer);
 
-    let (cublas_ms, cublas_launches) = measure(&mut gpu, &lhs, &rhs, &config);
-    let (cutensor_ms, cutensor_launches) = measure(&mut gpu, &lhs_outer, &rhs_outer, &outer_config);
+    let (cublas_ms, cublas_strided_launches, cublas_lt_launches) =
+        measure(&mut gpu, &lhs, &rhs, &config);
+    let (cutensor_ms, cutensor_launches, _) =
+        measure(&mut gpu, &lhs_outer, &rhs_outer, &outer_config);
 
     let fast = gpu
         .with_backend_session(|__s| {
@@ -920,9 +1005,64 @@ fn cuda_batched_matmul_16_a100_fast_path_timing() {
 
     println!(
         "16x32x32 f64 batched GEMM medians of 7 runs after 3 warmups (host API + sync): \
-         cuBLAS strided-batched {cublas_ms:.4} ms ({cublas_launches} launch(es)), \
+         cuBLASLt {cublas_ms:.4} ms ({cublas_lt_launches} launch(es), \
+         {cublas_strided_launches} strided launches), \
          cuTENSOR {cutensor_ms:.4} ms ({cutensor_launches} launch(es))"
     );
+}
+
+/// Threshold probe for the small-batch cuBLASLt routing.
+///
+/// Prints one median per square extent with 16 batches; the launch columns show
+/// which path served each extent. Run with:
+/// `cargo test -p tenferro-gpu --features cuda --lib -- --ignored --nocapture
+/// cuda_batched_matmul_cublaslt_threshold_timing`.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU; prints A100 threshold timings"]
+fn cuda_batched_matmul_cublaslt_threshold_timing() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    let batch = 16usize;
+    let config = batched_matmul_config();
+    let mut gpu = gpu_backend();
+    for dim in [16usize, 32, 48, 64, 96, 128] {
+        let lhs_shape = vec![dim, dim, batch];
+        let rhs_shape = vec![dim, dim, batch];
+        let lhs = upload(&gpu, &tensor_f64(lhs_shape.clone(), ramp(&lhs_shape, 0.1)));
+        let rhs = upload(
+            &gpu,
+            &tensor_f64(rhs_shape.clone(), ramp(&rhs_shape, -0.05)),
+        );
+        let mut run = || {
+            reset_batched_gemm_launches_for_test();
+            reset_lt_gemm_launches_for_test();
+            let start = Instant::now();
+            let result = gpu
+                .with_backend_session(|__s| {
+                    __s.dot_general_read(
+                        TensorRead::from_tensor(black_box(&lhs)),
+                        TensorRead::from_tensor(black_box(&rhs)),
+                        &config,
+                    )
+                })
+                .unwrap();
+            black_box(result).unwrap();
+            gpu.runtime().synchronize().unwrap();
+            start.elapsed().as_secs_f64() * 1e3
+        };
+        for _ in 0..3 {
+            black_box(run());
+        }
+        let mut samples: Vec<f64> = (0..7).map(|_| run()).collect();
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "batch={batch} dim={dim}: {:.4} ms ({} cuBLASLt, {} strided)",
+            samples[samples.len() / 2],
+            lt_gemm_launches_for_test(),
+            batched_gemm_launches_for_test(),
+        );
+    }
 }
 
 /// A single matrix keeps the cuTENSOR path and still matches.
@@ -934,7 +1074,7 @@ fn cuda_batched_matmul_with_one_batch_stays_on_the_cutensor_path() {
         tensor_f64(vec![5, 7, 1], ramp(&[5, 7, 1], -0.05)),
         batched_matmul_config(),
         1e-12,
-        0,
+        GemmPath::Cutensor,
     );
 }
 
@@ -956,7 +1096,7 @@ fn cuda_non_standard_dot_general_stays_on_the_cutensor_path() {
             rhs_batch_dims: [3].as_slice().into(),
         },
         1e-12,
-        0,
+        GemmPath::Cutensor,
     );
 }
 
