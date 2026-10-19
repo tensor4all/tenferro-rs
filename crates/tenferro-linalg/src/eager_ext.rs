@@ -44,6 +44,12 @@ use crate::{RankRevealingQrOptions, RankRevealingQrResult};
 /// ```
 #[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub trait EagerTensorLinalgExt {
+    /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
+    /// the forward solve path, so it performs no per-call non-singularity check
+    /// and issues no host round trip. An exactly singular input is left to the
+    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
+    /// still report their own exactly singular factor as `Error::Singular`.
+    ///
     /// # Errors
     ///
     /// Returns `Error::Validation` for incompatible matrix, batch, or dtype
@@ -265,6 +271,12 @@ pub trait EagerSessionLinalgExt {
     /// assert_eq!(x.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
+    /// the forward solve path, so it performs no per-call non-singularity check
+    /// and issues no host round trip. An exactly singular input is left to the
+    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
+    /// still report their own exactly singular factor as `Error::Singular`.
+    ///
     /// # Errors
     /// Returns typed validation, extension, backend, or unsupported-executor errors.
     fn solve(&mut self, matrix: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor>;
@@ -1012,6 +1024,12 @@ fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> E
 /// assert_eq!(x.shape(), &[2, 1]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
+/// the forward solve path, so it performs no per-call non-singularity check
+/// and issues no host round trip. An exactly singular input is left to the
+/// caller's verification, as in `torch.linalg.solve`. CPU providers may
+/// still report their own exactly singular factor as `Error::Singular`.
 ///
 /// # Errors
 ///

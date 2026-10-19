@@ -386,6 +386,12 @@ pub trait TensorLinalgExt {
         b: &Tensor,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
+    /// the forward solve path, so it performs no per-call non-singularity check
+    /// and issues no host round trip. An exactly singular input is left to the
+    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
+    /// still report their own exactly singular factor as `Error::Singular`.
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for incompatible inputs or a backend/singular-system error.
@@ -912,6 +918,12 @@ pub trait TensorReadLinalgExt {
         b: TensorRead<'_>,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
+    /// the forward solve path, so it performs no per-call non-singularity check
+    /// and issues no host round trip. An exactly singular input is left to the
+    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
+    /// still report their own exactly singular factor as `Error::Singular`.
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns incompatible-input validation, read/materialization, backend, or singular errors.
@@ -938,6 +950,12 @@ pub trait TensorReadLinalgExt {
     ///
     /// Backends with a native path may write directly into a compatible target;
     /// the trait default preserves the ordinary solve-read plus copy behavior.
+    ///
+    /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
+    /// the forward solve path, so it performs no per-call non-singularity check
+    /// and issues no host round trip. An exactly singular input is left to the
+    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
+    /// still report their own exactly singular factor as `Error::Singular`.
     ///
     /// # Errors
     /// Returns `tenferro_tensor_core::ShapeMismatch` or
@@ -1473,6 +1491,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
         b: &TypedTensor<T>,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
+    /// the forward solve path, so it performs no per-call non-singularity check
+    /// and issues no host round trip. An exactly singular input is left to the
+    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
+    /// still report their own exactly singular factor as `Error::Singular`.
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns incompatible-input validation, backend, singular, or typed-downcast errors.
