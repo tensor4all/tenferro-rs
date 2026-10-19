@@ -2,9 +2,7 @@
 use cubecl::prelude::*;
 
 use crate::cubecl::memory::{download_tensor, upload_tensor};
-use crate::cubecl::{
-    gpu_available, with_cuda_exec_session, CudaBackend, CudaDeviceId, CudaRuntime,
-};
+use crate::cubecl::{gpu_available, with_cuda_exec_session, CudaDeviceId, CudaEngine, CudaRuntime};
 use crate::{Error, Tensor};
 use tenferro_tensor::backend::BackendSessionHost;
 use tenferro_tensor::TensorRead;
@@ -153,7 +151,7 @@ gpu_test!(test_upload_download_c64, {
 });
 
 gpu_test!(test_pointer_bridge, {
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 
     let gpu = upload_tensor(backend.runtime(), &host).unwrap();
@@ -178,7 +176,7 @@ gpu_test!(test_pointer_bridge, {
 });
 
 gpu_test!(test_backend_add_matches_cpu_reference, {
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let mut cpu = tenferro_cpu::CpuBackend::new();
     let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
@@ -240,7 +238,7 @@ gpu_test!(
     test_zero_stride_view_materializes_without_cutensor_descriptor,
     {
         use tenferro_tensor::TensorValue;
-        let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+        let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
         let host = Tensor::from_vec_col_major([2], vec![2.0_f64, 5.0]).unwrap();
         let input = upload_tensor(backend.runtime(), &host).unwrap();
         let view = TensorValue::from_tensor(input)
@@ -314,7 +312,7 @@ gpu_test!(test_cached_scalar_read_observes_queued_writes, {
 
 gpu_test!(test_complex_sign_is_scale_safe, {
     use num_complex::{Complex32, Complex64};
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = Tensor::from_vec_col_major(
         [4],
         vec![
@@ -457,7 +455,7 @@ gpu_test!(test_full_round_trip_all_dtypes, {
 });
 
 gpu_test!(test_pointer_and_stream_bridge, {
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let t = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let gpu = upload_tensor(backend.runtime(), &t).unwrap();
 
@@ -548,7 +546,7 @@ fn prepared_run_dispatches_cubecl_launches_before_recording_retirement() {
     use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, TracedTensor};
 
     assert!(gpu_available(), "CUDA test requires an available device");
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("backend");
     let mut builder = Runtime::builder();
     builder
         .register_engine(
@@ -644,7 +642,7 @@ fn assert_tensors_close(actual: &Tensor, expected: &Tensor) {
 
 /// Build a runtime that owns a prepared eight-node CUDA matmul chain.
 fn prepared_matmul_chain(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     engine: &str,
 ) -> (
     tenferro_runtime::Runtime,
@@ -686,7 +684,7 @@ fn prepared_matmul_chain(
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn prepared_single_domain_run_coalesces_scheduler_events() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("backend");
     let counters = backend.runtime();
     let (runtime, prepared, input) =
         prepared_matmul_chain(&backend, "tenferro-cuda.test.coalesce.v1");
@@ -720,7 +718,7 @@ fn prepared_single_domain_run_coalesces_scheduler_events() {
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn prepared_in_held_single_domain_run_coalesces_scheduler_events() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("backend");
     let counters = backend.runtime().clone();
     let (runtime, prepared, input) =
         prepared_matmul_chain(&backend, "tenferro-cuda.test.coalesce-held.v1");
@@ -757,7 +755,7 @@ fn prepared_in_held_single_domain_run_coalesces_scheduler_events() {
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn prepared_deferred_batch_retires_once_and_matches_synchronous_runs() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("backend");
     let counters = backend.runtime().clone();
     let (runtime, prepared, input) =
         prepared_matmul_chain(&backend, "tenferro-cuda.test.deferred-batch.v1");
@@ -810,7 +808,7 @@ fn prepared_deferred_interleaves_cubecl_and_vendor_nodes() {
     use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, TracedTensor};
 
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("backend");
     let mut builder = Runtime::builder();
     builder
         .register_engine(
@@ -897,7 +895,7 @@ fn prepared_deferred_interleaves_cubecl_and_vendor_nodes() {
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn prepared_deferred_guard_drop_retires_pending_work() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("backend");
     let counters = backend.runtime().clone();
     let (runtime, prepared, input) =
         prepared_matmul_chain(&backend, "tenferro-cuda.test.deferred-drop.v1");
@@ -940,7 +938,7 @@ fn prepared_identity_run_retires_collection_before_returning() {
     use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, TracedTensor};
 
     assert!(gpu_available(), "CUDA test requires an available device");
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("backend");
     let counters = backend.runtime();
     let engine = EngineId::new("tenferro-cuda.test.coalesce-identity.v1").expect("engine id");
     let mut builder = Runtime::builder();
@@ -986,7 +984,7 @@ fn prepared_identity_run_retires_collection_before_returning() {
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn prepared_coalesced_error_retires_before_returning() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("owner backend");
+    let backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("owner backend");
     let counters = backend.runtime();
     let (runtime, prepared, owner_input) =
         prepared_matmul_chain(&backend, "tenferro-cuda.test.coalesce-error.v1");
@@ -994,7 +992,7 @@ fn prepared_coalesced_error_retires_before_returning() {
     // A tensor resident on a different CUDA runtime is rejected by ingress
     // after the run's coalesced event domains were created, so the run must
     // still retire before the error returns.
-    let foreign_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("foreign backend");
+    let foreign_backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("foreign backend");
     let foreign_input = upload_tensor(foreign_backend.runtime(), &prepared_matmul_chain_input())
         .expect("foreign upload");
 
@@ -1034,7 +1032,7 @@ fn cuda_event_domain_keeps_per_node_events_until_coalescing_is_enabled() {
     use tenferro_runtime::{EngineId, EventDomainDriver, Runtime};
 
     assert!(gpu_available(), "CUDA test requires an available device");
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("backend");
     let counters = backend.runtime();
     let engine = EngineId::new("tenferro-cuda.test.ineligible.v1").expect("engine id");
     let mut builder = Runtime::builder();

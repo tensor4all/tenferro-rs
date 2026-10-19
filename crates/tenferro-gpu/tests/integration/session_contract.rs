@@ -31,10 +31,10 @@ fn webgpu_session_exposes_backend_session_operations() {
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_session_type_is_distinct_from_owner() {
-    use tenferro_gpu::{cuda::CudaBackend, cuda::CudaExecSession};
+    use tenferro_gpu::{cuda::CudaEngine, cuda::CudaExecSession};
 
     assert_ne!(
-        type_name::<CudaBackend>(),
+        type_name::<CudaEngine>(),
         type_name::<CudaExecSession<'static>>()
     );
 }

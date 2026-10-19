@@ -2,7 +2,7 @@
 //! logical contraction, reported separately for enqueue and synchronized
 //! completion.
 //!
-//! Issue #1926 / umbrella #1929. `CudaBackend` used to implement the `Tensor*`
+//! Issue #1926 / umbrella #1929. `CudaEngine` used to implement the `Tensor*`
 //! operation traits by calling the same functions as its `Engine` impl
 //! — the backend was effectively its own session — so a one-shot call did not
 //! open a session, it ran *unbatched*. That owner spelling is deleted, so the
@@ -28,9 +28,7 @@
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use tenferro_gpu::cuda::{
-    download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId,
-};
+use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{
     BackendSessionHost, DotGeneralConfig, Tensor, TensorRead, TensorScalar, TensorWrite,
@@ -60,7 +58,7 @@ where
 }
 
 /// Session route: the kernel through a borrowed session.
-fn session(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) {
+fn session(backend: &mut CudaEngine, lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) {
     backend
         .with_backend_session(|exec| {
             exec.dot_general_read(
@@ -81,7 +79,7 @@ fn session(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor, config: &DotGe
 /// above; the two also differ in whether the destination allocation is reused
 /// across iterations and how the result is validated.
 fn session_into(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: &Tensor,
     rhs: &Tensor,
     config: &DotGeneralConfig,
@@ -104,7 +102,7 @@ fn bench_size<T>(c: &mut Criterion, label: &str, size: usize)
 where
     T: TensorScalar + From<f32> + PartialEq + std::fmt::Debug + 'static,
 {
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let lhs = upload_tensor(backend.runtime(), &matrix::<T>(size, size)).expect("upload lhs");
     let rhs = upload_tensor(backend.runtime(), &matrix::<T>(size, size)).expect("upload rhs");
     let config = matmul_config();
@@ -206,7 +204,7 @@ where
 }
 
 fn bench_sync_empty(c: &mut Criterion) {
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let mut group = c.benchmark_group("route_matrix_gpu/sync_empty");
     group.bench_function("synchronize", |bench| {
         bench.iter(|| {
@@ -225,7 +223,7 @@ fn bench_sync_empty(c: &mut Criterion) {
 /// arms pay the same end-of-call drain; the difference is the scoped session
 /// entry the standalone arm opens per call.
 fn prepared_routes(c: &mut Criterion) {
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let mut builder = Runtime::builder();
     builder
         .register_engine(
@@ -310,7 +308,7 @@ fn prepared_matmul_chain(c: &mut Criterion) {
     const SIZE: usize = 16;
     const MATMULS: usize = 8;
 
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let mut builder = Runtime::builder();
     builder
         .register_engine(

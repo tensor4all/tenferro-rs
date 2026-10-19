@@ -1,6 +1,6 @@
 use tenferro_tensor::backend::{
-    Engine, BackendSessionHost, ElementwiseReadOp, SessionCachedDot, TensorAnalytic,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    BackendSessionHost, ElementwiseReadOp, Engine, SessionCachedDot, TensorAnalytic, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
 use tenferro_tensor::config::{

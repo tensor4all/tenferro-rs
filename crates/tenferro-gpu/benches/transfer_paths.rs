@@ -36,7 +36,7 @@ use std::cell::RefCell;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use tenferro_gpu::cuda::{
     download_pending, download_tensor, download_tensor_into, gpu_available, upload_pending,
-    upload_tensor, CudaBackend, CudaDeviceId, PinnedHostBuffer,
+    upload_tensor, CudaDeviceId, CudaEngine, PinnedHostBuffer,
 };
 use tenferro_tensor::Tensor;
 
@@ -49,12 +49,12 @@ const SIZES: &[(usize, &str)] = &[
     (1024 * 1024, "8MiB"),
 ];
 
-fn backend() -> CudaBackend {
+fn backend() -> CudaEngine {
     assert!(
         gpu_available(),
         "transfer measurements require a CUDA device"
     );
-    CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
+    CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
 }
 
 fn host_vector(elements: usize) -> Tensor {
@@ -62,7 +62,7 @@ fn host_vector(elements: usize) -> Tensor {
     Tensor::from_vec_col_major(vec![elements], data).expect("host vector")
 }
 
-fn pinned_source(backend: &CudaBackend, elements: usize) -> PinnedHostBuffer {
+fn pinned_source(backend: &CudaEngine, elements: usize) -> PinnedHostBuffer {
     let bytes = elements * size_of::<f64>();
     let mut source = PinnedHostBuffer::new(backend.runtime(), bytes).expect("pinned buffer");
     let data: Vec<f64> = (0..elements).map(|index| index as f64 * 0.25).collect();

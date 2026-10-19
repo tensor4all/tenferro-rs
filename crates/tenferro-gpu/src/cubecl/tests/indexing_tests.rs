@@ -80,7 +80,7 @@ fn cuda_slice_limit_over_dimension_matches_cpu_invalid_argument() {
 fn cuda_float_index_validation_matches_cpu() {
     fn check_index(
         cpu: &mut tenferro_cpu::CpuBackend,
-        gpu: &mut crate::cubecl::CudaBackend,
+        gpu: &mut crate::cubecl::CudaEngine,
         index: crate::Tensor,
         valid: bool,
         label: &str,
@@ -753,7 +753,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
 fn cuda_float_index_validation_reports_first_invalid_value() {
     fn check_first_error(
         cpu: &mut tenferro_cpu::CpuBackend,
-        gpu: &mut crate::cubecl::CudaBackend,
+        gpu: &mut crate::cubecl::CudaEngine,
         starts: crate::Tensor,
         gather_indices: crate::Tensor,
         label: &str,

@@ -6,7 +6,7 @@
 //! (unproven, with the package retained). These tests are ignored by default; explicitly running them
 //! requires a CUDA device.
 
-use crate::cuda::{gpu_available, upload_tensor, CudaBackend, CudaDeviceId, PublicationError};
+use crate::cuda::{gpu_available, upload_tensor, CudaDeviceId, CudaEngine, PublicationError};
 use tenferro_tensor::{Tensor, TensorRead};
 
 fn values(len: usize) -> Vec<f64> {
@@ -26,7 +26,7 @@ fn produced_value(session: &mut crate::cuda::CudaHeldSession<'_>, seed: &Tensor)
         .expect("held add")
 }
 
-fn publication(backend: &mut CudaBackend) -> crate::cuda::SourcePublication {
+fn publication(backend: &mut CudaEngine) -> crate::cuda::SourcePublication {
     let runtime = backend.runtime().clone();
     let seed = upload_tensor(&runtime, &vector(&values(32))).expect("seed");
     let mut session = backend.open_session().expect("open");
@@ -41,7 +41,7 @@ fn publication(backend: &mut CudaBackend) -> crate::cuda::SourcePublication {
 #[ignore = "requires a CUDA device"]
 fn a_recoverable_preparation_failure_refuses_with_the_publication() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("backend");
     let publication = publication(&mut backend);
 
     crate::cubecl::transfer::copy_fault_injection::arm_preparation("injected preparation failure");
@@ -67,7 +67,7 @@ fn a_recoverable_preparation_failure_refuses_with_the_publication() {
 #[ignore = "requires a CUDA device"]
 fn a_completion_record_failure_is_unproven_and_retains_the_package() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("backend");
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("backend");
     let runtime = backend.runtime().clone();
     let publication = publication(&mut backend);
     let retained_before = runtime.pending_transfer_retirements();

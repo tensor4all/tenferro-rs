@@ -478,7 +478,7 @@ impl<'s> Session<'s> {
     ///
     /// ```
     /// use tenferro_gpu::cuda::{
-    ///     cuda_devices, gpu_available, with_cuda_exec_session, CudaBackend, CudaExecSession,
+    ///     cuda_devices, gpu_available, with_cuda_exec_session, CudaEngine, CudaExecSession,
     /// };
     /// use tenferro_tensor::backend::BackendSessionHost;
     ///
@@ -496,7 +496,7 @@ impl<'s> Session<'s> {
     ///     .ok_or_else(|| {
     ///         tenferro_tensor::Error::runtime_state("docs.flush_cubecl", "no CUDA device")
     ///     })?;
-    /// let mut backend = CudaBackend::new(device)?;
+    /// let mut backend = CudaEngine::new(device)?;
     /// backend
     ///     .with_backend_session(|session| with_cuda_exec_session(session, flush))?
     ///     .ok_or_else(|| {

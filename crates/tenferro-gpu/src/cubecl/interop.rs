@@ -6,6 +6,8 @@
 //! `CudaRuntime` or `CubeclBuffer` themselves. It is `pub(crate)` and is not
 //! re-exported publicly; operation-family crates consume the credentialed
 //! `cuda::raw`/`cuda::cubecl` sessions instead (issue #1597).
+// The CubeCL launch helpers below serve the `cubecl-interop` session only.
+#![cfg_attr(not(feature = "cubecl-interop"), allow(dead_code))]
 
 use std::ffi::c_void;
 use std::fmt;

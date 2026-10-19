@@ -3,14 +3,14 @@
 //! These tests require CUDA hardware and are therefore ignored by default,
 //! matching the regular CUDA test convention in this crate.
 
-use crate::cuda::{gpu_available, CudaBackend};
+use crate::cuda::{gpu_available, CudaEngine};
 
 use super::*;
 
-fn first_cuda_backend() -> Option<CudaBackend> {
+fn first_cuda_backend() -> Option<CudaEngine> {
     let devices = crate::cuda::cuda_devices().ok()?;
     let device = devices.first()?;
-    CudaBackend::new(device.id()).ok()
+    CudaEngine::new(device.id()).ok()
 }
 
 #[test]

@@ -37,7 +37,7 @@ use tenferro_tensor::backend::BackendSessionHost as _;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorRead, TensorWrite};
 
 use super::super::interop::fill_zero_write;
-use super::super::{batched_gemm, dispatch, CudaBackend, CudaDeviceId};
+use super::super::{batched_gemm, dispatch, CudaDeviceId, CudaEngine};
 use super::{cpu_backend, tensor_f64};
 
 const CALLS: usize = 400;
@@ -138,8 +138,8 @@ fn measure(mut call: impl FnMut()) -> Vec<Duration> {
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn host_path_phases() {
-    let mut backend: CudaBackend =
-        CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let mut backend: CudaEngine =
+        CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let mut builder = Runtime::builder();
     builder
         .register_engine(

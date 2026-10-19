@@ -21,7 +21,7 @@ use super::ffi::cutensor::{
 };
 use super::interop::cuda_device_ptr_from_addr;
 use super::plan_cache::LruPlanCache;
-use super::{CudaBackend, CudaRuntime};
+use super::{CudaEngine, CudaRuntime};
 use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
 use crate::{col_major_strides, CubeclBuffer, Error, Tensor, TypedTensor};
@@ -500,7 +500,7 @@ struct CachedCutensorContraction {
     _lhs_descriptor: TensorDescriptor,
 }
 
-// SAFETY: cached cuTENSOR state is tied to one `CudaBackend` and is only used
+// SAFETY: cached cuTENSOR state is tied to one `CudaEngine` and is only used
 // while holding the enclosing plan-cache mutex. The opaque cuTENSOR handles are
 // created and destroyed through the same loaded cuTENSOR library.
 unsafe impl Send for CachedCutensorContraction {}
@@ -634,7 +634,7 @@ fn gemm_pair_operands<'a, T: TensorScalar + Scalar>(
 }
 
 pub(super) fn dot_general_with_conj(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &Tensor,
     rhs: &Tensor,
     config: &DotGeneralConfig,
@@ -825,7 +825,7 @@ fn write_operand<'a, 'b, T: CutensorScalar + Scalar>(
 /// so a direct session call does not pay the contraction machinery either
 /// (invariant I4). Falls through to the cuTENSOR path for everything else.
 fn rewrite_degenerate_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
     config: &DotGeneralConfig,
@@ -844,7 +844,7 @@ fn rewrite_degenerate_read(
 }
 
 pub(super) fn dot_general_read_allocating(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
     config: &DotGeneralConfig,
@@ -886,7 +886,7 @@ pub(super) fn dot_general_read_allocating(
 }
 
 pub(super) fn dot_general_read_into_accum(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &TensorRead<'_>,
     rhs: &TensorRead<'_>,
     config: &DotGeneralConfig,
@@ -903,7 +903,7 @@ pub(super) fn dot_general_read_into_accum(
 }
 
 fn accum_erased<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &TensorRead<'_>,
     rhs: &TensorRead<'_>,
     config: &DotGeneralConfig,
@@ -941,7 +941,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn dot_general_typed_into_accum<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: ReadOperand<'_, '_, T>,
     rhs: ReadOperand<'_, '_, T>,
     config: &DotGeneralConfig,
@@ -1161,7 +1161,7 @@ where
 }
 
 fn dot_general_typed_with_conj<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
@@ -1282,7 +1282,7 @@ fn new_cutensor_plan_cache_state(
     )))
 }
 
-fn get_or_init_cutensor_plan_cache(backend: &CudaBackend) -> crate::Result<CutensorPlanCacheState> {
+fn get_or_init_cutensor_plan_cache(backend: &CudaEngine) -> crate::Result<CutensorPlanCacheState> {
     let guard = backend
         .cuda_extension_cache()
         .get_or_try_init::<CutensorPlanCacheState>(|| {
@@ -1302,7 +1302,7 @@ fn lock_cutensor_plan_cache(
         .map_err(|_| Error::runtime_state("cutensor_plan_cache", "plan cache lock poisoned"))
 }
 
-pub(super) fn cutensor_plan_cache_stats(backend: &CudaBackend) -> crate::Result<CacheStats> {
+pub(super) fn cutensor_plan_cache_stats(backend: &CudaEngine) -> crate::Result<CacheStats> {
     let Some(plan_cache) = backend
         .cuda_extension_cache()
         .get_cloned::<CutensorPlanCacheState>()?
@@ -1315,7 +1315,7 @@ pub(super) fn cutensor_plan_cache_stats(backend: &CudaBackend) -> crate::Result<
 
 /// Retained shared scratch and its occupancy, without creating cache state.
 pub(super) fn cutensor_workspace_stats(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
 ) -> crate::Result<CutensorWorkspaceStats> {
     let Some(plan_cache) = backend
         .cuda_extension_cache()
@@ -1333,7 +1333,7 @@ pub(super) fn cutensor_workspace_stats(
 /// retires it through the event queue, so this does not force a stream barrier
 /// and does not reclaim device memory synchronously.
 pub(super) fn set_cutensor_workspace_max_retained_bytes(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     limit: u64,
 ) -> crate::Result<()> {
     let Some(plan_cache) = backend
@@ -1351,7 +1351,7 @@ pub(super) fn set_cutensor_workspace_max_retained_bytes(
 
 /// Deferred workspace retirement counters for tests and diagnostics.
 pub(crate) fn cutensor_workspace_retirement_stats(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
 ) -> crate::Result<super::workspace_retirement::WorkspaceRetirementStats> {
     Ok(backend
         .runtime()
@@ -1366,9 +1366,7 @@ pub(crate) fn cutensor_workspace_retirement_stats(
         .stats())
 }
 
-pub(super) fn cutensor_plan_cache_max_entries(
-    backend: &CudaBackend,
-) -> crate::Result<NonZeroUsize> {
+pub(super) fn cutensor_plan_cache_max_entries(backend: &CudaEngine) -> crate::Result<NonZeroUsize> {
     let Some(plan_cache) = backend
         .cuda_extension_cache()
         .get_cloned::<CutensorPlanCacheState>()?
@@ -1380,7 +1378,7 @@ pub(super) fn cutensor_plan_cache_max_entries(
 }
 
 pub(super) fn set_cutensor_plan_cache_max_entries(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     max_entries: NonZeroUsize,
 ) -> crate::Result<()> {
     let plan_cache = get_or_init_cutensor_plan_cache(backend)?;
@@ -1393,7 +1391,7 @@ pub(super) fn set_cutensor_plan_cache_max_entries(
 }
 
 fn cached_cutensor_contraction<T, R>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     spec: &CutensorContractionSpec<'_>,
     cross_stream_handles: Vec<cubecl_runtime::server::Handle>,
     execute: impl FnOnce(&CutensorHandle, &Plan, &Workspace) -> crate::Result<R>,

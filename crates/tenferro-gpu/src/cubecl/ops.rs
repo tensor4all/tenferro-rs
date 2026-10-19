@@ -1,4 +1,4 @@
-//! CUDA operation bodies, as free functions over a `CudaBackend`.
+//! CUDA operation bodies, as free functions over a `CudaEngine`.
 //!
 //! The owner-level operation traits (`TensorElementwise`, `TensorAnalytic`,
 //! `TensorStructural`, `TensorReduction`, `TensorDot`, `TensorIndexing`,
@@ -6,12 +6,12 @@
 //! is the only route, so these bodies live here and `CudaExecSession`'s
 //! implementations forward to them. Each function takes the same arguments as
 //! the trait method it came from, with the receiver replaced by an explicit
-//! `&mut CudaBackend`.
+//! `&mut CudaEngine`.
 
 use super::*;
 
 pub(super) fn add_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -41,7 +41,7 @@ pub(super) fn add_read(
 }
 
 pub(super) fn sub_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -71,7 +71,7 @@ pub(super) fn sub_read(
 }
 
 pub(super) fn mul_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -100,7 +100,7 @@ pub(super) fn mul_read(
     )
 }
 
-pub(super) fn neg_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crate::Result<Tensor> {
+pub(super) fn neg_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     if let Some(result) = backend.unary_read_native(UnaryReadOp::Neg, input.clone()) {
         return result;
     }
@@ -116,7 +116,7 @@ pub(super) fn neg_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crat
     )
 }
 
-pub(super) fn conj_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crate::Result<Tensor> {
+pub(super) fn conj_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     let input = backend.read_input(input)?;
     let input = input.as_tensor();
     let op = op_name(
@@ -179,7 +179,7 @@ pub(super) fn conj_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> cra
 }
 
 pub(super) fn div_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -343,7 +343,7 @@ pub(super) fn div_read(
 }
 
 pub(super) fn rem_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -352,7 +352,7 @@ pub(super) fn rem_read(
     ops::rem(backend, lhs.as_tensor(), rhs.as_tensor())
 }
 
-pub(super) fn abs_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crate::Result<Tensor> {
+pub(super) fn abs_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     let input = backend.read_input(input)?;
     let input = input.as_tensor();
     let descriptor = op_descriptor::require_gpu_descriptor(
@@ -418,7 +418,7 @@ pub(super) fn abs_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crat
     }
 }
 
-pub(super) fn sign_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crate::Result<Tensor> {
+pub(super) fn sign_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     let input = backend.read_input(input)?;
     let input = input.as_tensor();
     dispatch::dispatch_unary_float_complex_int!(
@@ -432,7 +432,7 @@ pub(super) fn sign_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> cra
 }
 
 pub(super) fn maximum_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -451,7 +451,7 @@ pub(super) fn maximum_read(
 }
 
 pub(super) fn minimum_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -470,7 +470,7 @@ pub(super) fn minimum_read(
 }
 
 pub(super) fn compare_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
     dir: &CompareDir,
@@ -568,7 +568,7 @@ pub(super) fn compare_read(
 }
 
 pub(super) fn select_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     pred: TensorRead<'_>,
     on_true: TensorRead<'_>,
     on_false: TensorRead<'_>,
@@ -668,7 +668,7 @@ pub(super) fn select_read(
 }
 
 pub(super) fn clamp_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
     lower: TensorRead<'_>,
     upper: TensorRead<'_>,
@@ -730,7 +730,7 @@ pub(super) fn clamp_read(
     }
 }
 
-pub(super) fn rem(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+pub(super) fn rem(backend: &mut CudaEngine, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     let op = op_name(
         PrimitiveOpKind::Rem,
         op_descriptor::GpuLaunchKind::BinaryFloatInt,
@@ -853,7 +853,7 @@ pub(super) fn rem(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor) -> crat
     }
 }
 
-pub(super) fn exp_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crate::Result<Tensor> {
+pub(super) fn exp_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     if let Some(result) = backend.unary_read_native(UnaryReadOp::Exp, input.clone()) {
         return result;
     }
@@ -866,7 +866,7 @@ pub(super) fn exp_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crat
     )
 }
 
-pub(super) fn log_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crate::Result<Tensor> {
+pub(super) fn log_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     if let Some(result) = backend.unary_read_native(UnaryReadOp::Log, input.clone()) {
         return result;
     }
@@ -879,7 +879,7 @@ pub(super) fn log_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crat
     )
 }
 
-pub(super) fn sin_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crate::Result<Tensor> {
+pub(super) fn sin_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     if let Some(result) = backend.unary_read_native(UnaryReadOp::Sin, input.clone()) {
         return result;
     }
@@ -892,7 +892,7 @@ pub(super) fn sin_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crat
     )
 }
 
-pub(super) fn cos_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crate::Result<Tensor> {
+pub(super) fn cos_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     if let Some(result) = backend.unary_read_native(UnaryReadOp::Cos, input.clone()) {
         return result;
     }
@@ -905,7 +905,7 @@ pub(super) fn cos_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crat
     )
 }
 
-pub(super) fn tanh_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crate::Result<Tensor> {
+pub(super) fn tanh_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     if let Some(result) = backend.unary_read_native(UnaryReadOp::Tanh, input.clone()) {
         return result;
     }
@@ -918,7 +918,7 @@ pub(super) fn tanh_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> cra
     )
 }
 
-pub(super) fn sqrt_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crate::Result<Tensor> {
+pub(super) fn sqrt_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     if let Some(result) = backend.unary_read_native(UnaryReadOp::Sqrt, input.clone()) {
         return result;
     }
@@ -931,10 +931,7 @@ pub(super) fn sqrt_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> cra
     )
 }
 
-pub(super) fn rsqrt_read(
-    backend: &mut CudaBackend,
-    input: TensorRead<'_>,
-) -> crate::Result<Tensor> {
+pub(super) fn rsqrt_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     if let Some(result) = backend.unary_read_native(UnaryReadOp::Rsqrt, input.clone()) {
         return result;
     }
@@ -948,7 +945,7 @@ pub(super) fn rsqrt_read(
 }
 
 pub(super) fn pow_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -1089,10 +1086,7 @@ pub(super) fn pow_read(
     }
 }
 
-pub(super) fn expm1_read(
-    backend: &mut CudaBackend,
-    input: TensorRead<'_>,
-) -> crate::Result<Tensor> {
+pub(super) fn expm1_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     if let Some(result) = backend.unary_read_native(UnaryReadOp::Expm1, input.clone()) {
         return result;
     }
@@ -1105,10 +1099,7 @@ pub(super) fn expm1_read(
     )
 }
 
-pub(super) fn log1p_read(
-    backend: &mut CudaBackend,
-    input: TensorRead<'_>,
-) -> crate::Result<Tensor> {
+pub(super) fn log1p_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     if let Some(result) = backend.unary_read_native(UnaryReadOp::Log1p, input.clone()) {
         return result;
     }
@@ -1121,7 +1112,7 @@ pub(super) fn log1p_read(
     )
 }
 
-pub(super) fn erf_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crate::Result<Tensor> {
+pub(super) fn erf_read(backend: &mut CudaEngine, input: TensorRead<'_>) -> crate::Result<Tensor> {
     if let Some(result) = backend.unary_read_native(UnaryReadOp::Erf, input.clone()) {
         return result;
     }
@@ -1135,7 +1126,7 @@ pub(super) fn erf_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crat
 }
 
 pub(super) fn transpose_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
     perm: &[usize],
 ) -> crate::Result<Tensor> {
@@ -1187,7 +1178,7 @@ pub(super) fn transpose_read(
 }
 
 pub(super) fn reshape_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
     shape: &[usize],
 ) -> crate::Result<Tensor> {
@@ -1294,7 +1285,7 @@ pub(super) fn reshape_read(
 }
 
 pub(super) fn broadcast_in_dim_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
     shape: &[usize],
     dims: &[usize],
@@ -1353,14 +1344,14 @@ pub(super) fn broadcast_in_dim_read(
 }
 
 pub(super) fn to_contiguous_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     macro_rules! materialize_cutensor {
         ($variant:ident, $view:expr) => {{
             let view = $view;
             backend
-                .to_contiguous_view_cutensor_or_cubecl(&view, "CudaBackend::to_contiguous_read")
+                .to_contiguous_view_cutensor_or_cubecl(&view, "CudaEngine::to_contiguous_read")
                 .map(Tensor::from_typed::<preset_scalar!($variant)>)
         }};
     }
@@ -1368,7 +1359,7 @@ pub(super) fn to_contiguous_read(
         ($variant:ident, $view:expr) => {{
             let view = $view;
             backend
-                .to_contiguous_view_typed(&view, "CudaBackend::to_contiguous_read")
+                .to_contiguous_view_typed(&view, "CudaEngine::to_contiguous_read")
                 .map(Tensor::from_typed::<preset_scalar!($variant)>)
         }};
     }
@@ -1391,7 +1382,7 @@ pub(super) fn to_contiguous_read(
             DType::Bool => backend
                 .duplicate_bool(
                     contiguous_read_typed::<bool>(tensor)?,
-                    "CudaBackend::to_contiguous_read",
+                    "CudaEngine::to_contiguous_read",
                 )
                 .map(Tensor::from_typed::<bool>),
             DType::C32 => {
@@ -1402,7 +1393,7 @@ pub(super) fn to_contiguous_read(
             }
             // A caller-owned payload has no GPU implementation for this operation.
             DType::External(_) => Err(crate::Error::unsupported(
-                "CudaBackend::to_contiguous_read",
+                "CudaEngine::to_contiguous_read",
                 "an externally defined payload is not supported by this GPU operation",
             )),
         },
@@ -1411,7 +1402,7 @@ pub(super) fn to_contiguous_read(
         TensorRead::View(TensorView::I32(input)) => materialize_cubecl!(I32, input),
         TensorRead::View(TensorView::I64(input)) => materialize_cubecl!(I64, input),
         TensorRead::View(TensorView::Bool(input)) => backend
-            .to_contiguous_view_bool(&input, "CudaBackend::to_contiguous_read")
+            .to_contiguous_view_bool(&input, "CudaEngine::to_contiguous_read")
             .map(Tensor::from_typed::<bool>),
         TensorRead::View(TensorView::C32(input)) => materialize_cutensor!(C32, input),
         TensorRead::View(TensorView::C64(input)) => materialize_cutensor!(C64, input),
@@ -1419,7 +1410,7 @@ pub(super) fn to_contiguous_read(
 }
 
 pub(super) fn copy_read_into(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     src: TensorRead<'_>,
     dst: TensorWrite<'_>,
 ) -> crate::Result<()> {
@@ -1437,13 +1428,13 @@ pub(super) fn copy_read_into(
                         .as_typed_mut::<preset_scalar!($variant)>()
                         .expect("the dtype guard selects this arm");
                     let mut dst = dst.as_view_mut();
-                    backend.copy_view_to_view_typed(&src, &mut dst, "CudaBackend::copy_read_into")
+                    backend.copy_view_to_view_typed(&src, &mut dst, "CudaEngine::copy_read_into")
                 }
                 TensorWrite::View(TensorViewMut::$variant(mut dst)) => {
-                    backend.copy_view_to_view_typed(&src, &mut dst, "CudaBackend::copy_read_into")
+                    backend.copy_view_to_view_typed(&src, &mut dst, "CudaEngine::copy_read_into")
                 }
                 _ => Err(crate::Error::dtype_mismatch(
-                    "CudaBackend::copy_read_into",
+                    "CudaEngine::copy_read_into",
                     src_dtype,
                     dst_dtype,
                 )),
@@ -1470,17 +1461,17 @@ pub(super) fn copy_read_into(
                     backend.copy_view_to_view_cutensor_or_cubecl(
                         &src,
                         &mut dst,
-                        "CudaBackend::copy_read_into",
+                        "CudaEngine::copy_read_into",
                     )
                 }
                 TensorWrite::View(TensorViewMut::$variant(mut dst)) => backend
                     .copy_view_to_view_cutensor_or_cubecl(
                         &src,
                         &mut dst,
-                        "CudaBackend::copy_read_into",
+                        "CudaEngine::copy_read_into",
                     ),
                 _ => Err(crate::Error::dtype_mismatch(
-                    "CudaBackend::copy_read_into",
+                    "CudaEngine::copy_read_into",
                     src_dtype,
                     dst_dtype,
                 )),
@@ -1491,14 +1482,14 @@ pub(super) fn copy_read_into(
         () => {{
             match dst {
                 TensorWrite::Tensor(tensor) if tensor.dtype() == crate::DType::Bool => Err(
-                    unsupported_dtype("CudaBackend::copy_read_into", crate::DType::Bool),
+                    unsupported_dtype("CudaEngine::copy_read_into", crate::DType::Bool),
                 ),
                 TensorWrite::View(TensorViewMut::Bool(_)) => Err(unsupported_dtype(
-                    "CudaBackend::copy_read_into",
+                    "CudaEngine::copy_read_into",
                     crate::DType::Bool,
                 )),
                 _ => Err(crate::Error::dtype_mismatch(
-                    "CudaBackend::copy_read_into",
+                    "CudaEngine::copy_read_into",
                     src_dtype,
                     dst_dtype,
                 )),
@@ -1536,7 +1527,7 @@ pub(super) fn copy_read_into(
 }
 
 pub(super) fn cast(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: &Tensor,
     to: crate::DType,
 ) -> crate::Result<Tensor> {
@@ -1795,7 +1786,7 @@ pub(super) fn cast(
 }
 
 pub(super) fn extract_diagonal(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: &Tensor,
     axis_a: usize,
     axis_b: usize,
@@ -1853,7 +1844,7 @@ pub(super) fn extract_diagonal(
 }
 
 pub(super) fn embed_diagonal(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: &Tensor,
     axis_a: usize,
     axis_b: usize,
@@ -1910,7 +1901,7 @@ pub(super) fn embed_diagonal(
     }
 }
 
-pub(super) fn tril(backend: &mut CudaBackend, input: &Tensor, k: i64) -> crate::Result<Tensor> {
+pub(super) fn tril(backend: &mut CudaEngine, input: &Tensor, k: i64) -> crate::Result<Tensor> {
     match input.dtype() {
         DType::F32 => {
             let t = typed_or_unsupported::<f32>(input, "tril")?;
@@ -1952,7 +1943,7 @@ pub(super) fn tril(backend: &mut CudaBackend, input: &Tensor, k: i64) -> crate::
     }
 }
 
-pub(super) fn triu(backend: &mut CudaBackend, input: &Tensor, k: i64) -> crate::Result<Tensor> {
+pub(super) fn triu(backend: &mut CudaEngine, input: &Tensor, k: i64) -> crate::Result<Tensor> {
     match input.dtype() {
         DType::F32 => {
             let t = typed_or_unsupported::<f32>(input, "triu")?;
@@ -1995,7 +1986,7 @@ pub(super) fn triu(backend: &mut CudaBackend, input: &Tensor, k: i64) -> crate::
 }
 
 pub(super) fn reduce_sum_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
     axes: &[usize],
 ) -> crate::Result<Tensor> {
@@ -2052,7 +2043,7 @@ pub(super) fn reduce_sum_read(
 }
 
 pub(super) fn reduce_prod_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
     axes: &[usize],
 ) -> crate::Result<Tensor> {
@@ -2109,7 +2100,7 @@ pub(super) fn reduce_prod_read(
 }
 
 pub(super) fn reduce_max_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
     axes: &[usize],
 ) -> crate::Result<Tensor> {
@@ -2154,7 +2145,7 @@ pub(super) fn reduce_max_read(
 }
 
 pub(super) fn reduce_min_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
     axes: &[usize],
 ) -> crate::Result<Tensor> {
@@ -2199,7 +2190,7 @@ pub(super) fn reduce_min_read(
 }
 
 pub(super) fn reduce_sum_squares_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
     axes: &[usize],
 ) -> crate::Result<Tensor> {
@@ -2250,7 +2241,7 @@ pub(super) fn reduce_sum_squares_read(
 }
 
 pub(super) fn dot_general_with_conj(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: &Tensor,
     rhs: &Tensor,
     config: &DotGeneralConfig,
@@ -2261,7 +2252,7 @@ pub(super) fn dot_general_with_conj(
 }
 
 pub(super) fn dot_general_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
     config: &DotGeneralConfig,
@@ -2270,7 +2261,7 @@ pub(super) fn dot_general_read(
 }
 
 pub(super) fn dot_general_read_into_accum(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
     config: &DotGeneralConfig,
@@ -2294,7 +2285,7 @@ pub(super) fn dot_general_read_into_accum(
 /// the session then falls back to materializing them (invariant I1 keeps the
 /// decision at the boundary: the runtime does not copy by default).
 pub(super) fn gather_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     operand: &TensorRead<'_>,
     start_indices: &TensorRead<'_>,
     config: &GatherConfig,
@@ -2341,7 +2332,7 @@ pub(super) fn gather_read(
 }
 
 pub(super) fn gather(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     operand: &Tensor,
     start_indices: &Tensor,
     config: &GatherConfig,
@@ -2527,7 +2518,7 @@ pub(super) fn gather(
 }
 
 pub(super) fn scatter(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     operand: &Tensor,
     scatter_indices: &Tensor,
     updates: &Tensor,
@@ -2683,7 +2674,7 @@ pub(super) fn scatter(
 }
 
 pub(super) fn slice(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: &Tensor,
     config: &SliceConfig,
 ) -> crate::Result<Tensor> {
@@ -2739,7 +2730,7 @@ pub(super) fn slice(
 }
 
 pub(super) fn dynamic_slice(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: &Tensor,
     starts: &Tensor,
     slice_sizes: &[usize],
@@ -2925,7 +2916,7 @@ pub(super) fn dynamic_slice(
 }
 
 pub(super) fn dynamic_update_slice(
-    _backend: &mut CudaBackend,
+    _backend: &mut CudaEngine,
     _operand: &Tensor,
     _update: &Tensor,
     _starts: &Tensor,
@@ -2937,7 +2928,7 @@ pub(super) fn dynamic_update_slice(
 }
 
 pub(super) fn pad(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: &Tensor,
     config: &PadConfig,
 ) -> crate::Result<Tensor> {
@@ -2983,7 +2974,7 @@ pub(super) fn pad(
 }
 
 pub(super) fn concatenate(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     inputs: &[&Tensor],
     axis: usize,
 ) -> crate::Result<Tensor> {
@@ -3095,7 +3086,7 @@ pub(super) fn concatenate(
 }
 
 pub(super) fn reverse(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: &Tensor,
     axes: &[usize],
 ) -> crate::Result<Tensor> {
@@ -3151,7 +3142,7 @@ pub(super) fn reverse(
 }
 
 pub(super) fn execute_elementwise_fusion(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     inputs: &[&Tensor],
     plan: &crate::backend::ElementwiseFusionPlan,
 ) -> crate::Result<Option<Vec<Tensor>>> {
@@ -3159,7 +3150,7 @@ pub(super) fn execute_elementwise_fusion(
 }
 
 pub(super) fn execute_broadcast_multiply(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     lhs_shape: &[usize],
     lhs_dims: &[usize],
@@ -3361,7 +3352,7 @@ pub(super) fn execute_broadcast_multiply(
 }
 
 pub(super) fn vdot_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -3369,14 +3360,14 @@ pub(super) fn vdot_read(
 }
 
 pub(super) fn norm_squared_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     blas1::norm_squared_read(backend, input)
 }
 
 pub(super) fn axpby_read_into_accum(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     alpha: ContractionScalar,
     x: TensorRead<'_>,
     beta: ContractionScalar,

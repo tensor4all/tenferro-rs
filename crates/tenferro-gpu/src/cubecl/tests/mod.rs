@@ -4,7 +4,7 @@ use num_complex::{Complex32, Complex64};
 
 use crate::config::{GatherConfig, ScatterConfig};
 use crate::cubecl::{
-    download_tensor, upload_tensor, with_cuda_exec_session, CudaBackend, CudaDeviceId,
+    download_tensor, upload_tensor, with_cuda_exec_session, CudaDeviceId, CudaEngine,
     CudaExecSession,
 };
 use crate::{DType, Error, Tensor, TypedTensor};
@@ -42,7 +42,7 @@ mod transfer_tests;
 /// Mirrors the downstream pattern: `with_cuda_exec_session` must receive the
 /// session reconstructed by `with_backend_session`, not the raw backend.
 pub(crate) fn with_cuda_exec<R: Send>(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     f: impl FnOnce(&mut CudaExecSession<'_>) -> R + Send,
 ) -> R {
     backend
@@ -54,15 +54,15 @@ fn cpu_backend() -> CpuBackend {
     CpuBackend::new()
 }
 
-fn gpu_backend() -> CudaBackend {
-    CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap()
+fn gpu_backend() -> CudaEngine {
+    CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap()
 }
 
-fn upload(backend: &CudaBackend, tensor: &Tensor) -> Tensor {
+fn upload(backend: &CudaEngine, tensor: &Tensor) -> Tensor {
     upload_tensor(backend.runtime(), tensor).unwrap()
 }
 
-fn download(backend: &CudaBackend, tensor: &Tensor) -> Tensor {
+fn download(backend: &CudaEngine, tensor: &Tensor) -> Tensor {
     download_tensor(backend.runtime(), tensor).unwrap()
 }
 

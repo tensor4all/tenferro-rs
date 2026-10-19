@@ -4,7 +4,7 @@ use super::super::dispatch::{cubecl_buffer, launch_nullary_into};
 use super::super::gemm::typed_device_ptr;
 use super::super::interop::scale_typed_tensor;
 use super::super::{cube_count_for_len, cube_dim_1d};
-use crate::cuda::{download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId};
+use crate::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use crate::kernels::structural;
 use tenferro_tensor::Tensor;
 
@@ -18,7 +18,7 @@ use tenferro_tensor::Tensor;
 #[ignore = "requires CUDA"]
 fn queued_cubecl_write_drops_the_memoized_device_address() {
     assert!(gpu_available(), "requires a CUDA device");
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let rt = backend.runtime().clone();
     let host = Tensor::from_vec_col_major(vec![64_usize], vec![1.0_f64; 64]).unwrap();
     let x = upload_tensor(&rt, &host).unwrap();
@@ -80,7 +80,7 @@ fn queued_cubecl_write_drops_the_memoized_device_address() {
 #[ignore = "requires CUDA"]
 fn queued_scale_write_drops_the_memoized_device_address() {
     assert!(gpu_available(), "requires a CUDA device");
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let rt = backend.runtime().clone();
     let host = Tensor::from_vec_col_major(vec![64_usize], vec![1.0_f64; 64]).unwrap();
     let mut x = upload_tensor(&rt, &host).unwrap();
@@ -303,7 +303,7 @@ fn view_reads_share_the_root_memo_and_observe_queued_writes() {
     use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
 
     assert!(gpu_available(), "requires a CUDA device");
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let rt = backend.runtime().clone();
     let values: Vec<f64> = (0..32).map(|i| i as f64 * 0.25 - 3.0).collect();
     let mut x = upload_tensor(

@@ -5,14 +5,14 @@
 
 use crate::cubecl::CudaRuntime;
 use crate::cuda::raw;
-use crate::cuda::{gpu_available, CudaBackend, GpuExtensionCapability};
+use crate::cuda::{gpu_available, CudaEngine, GpuExtensionCapability};
 
 use super::*;
 
-fn first_cuda_backend() -> Option<CudaBackend> {
+fn first_cuda_backend() -> Option<CudaEngine> {
     let devices = crate::cuda::cuda_devices().ok()?;
     let device = devices.first()?;
-    CudaBackend::new(device.id()).ok()
+    CudaEngine::new(device.id()).ok()
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn raw_session_exposes_stream_and_runtime_identity() {
     assert!(session_after_raw_still_runs(&mut backend));
 }
 
-fn session_after_raw_still_runs(backend: &mut CudaBackend) -> bool {
+fn session_after_raw_still_runs(backend: &mut CudaEngine) -> bool {
     backend.runtime().synchronize().is_ok()
 }
 

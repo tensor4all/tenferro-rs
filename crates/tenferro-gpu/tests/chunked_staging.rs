@@ -8,19 +8,19 @@
 //! is what they are here to catch. Ignored by default; explicitly running them requires a CUDA device.
 
 use tenferro_gpu::cuda::{
-    download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId, CudaRuntime,
+    download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine, CudaRuntime,
 };
 use tenferro_tensor::{StorageBuffer, Tensor};
 
 /// The chunk the runtime stages at a time, mirrored from `cubecl::runtime::STAGING_CHUNK_BYTES`.
 const CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
-fn backend() -> CudaBackend {
+fn backend() -> CudaEngine {
     assert!(gpu_available(), "CUDA test requires an available device");
-    CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
+    CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
 }
 
-fn runtime_of(backend: &CudaBackend) -> CudaRuntime {
+fn runtime_of(backend: &CudaEngine) -> CudaRuntime {
     backend.runtime().clone()
 }
 
@@ -42,7 +42,7 @@ fn host_values(tensor: &Tensor) -> Vec<f64> {
 }
 
 /// Round-trip `elements` through the blocking routes and compare the values exactly.
-fn round_trip(backend: &CudaBackend, elements: usize) {
+fn round_trip(backend: &CudaEngine, elements: usize) {
     let runtime = runtime_of(backend);
     let data = values(elements);
     let device = upload_tensor(&runtime, &vector(&data)).expect("upload");

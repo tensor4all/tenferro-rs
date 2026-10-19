@@ -8,12 +8,12 @@ use std::sync::Arc;
 use super::*;
 use crate::cubecl::tests::with_cuda_exec;
 use crate::cuda::raw::{KernelArg, LaunchConfig, NvrtcOptions};
-use crate::cuda::{gpu_available, CudaBackend};
+use crate::cuda::{gpu_available, CudaEngine};
 
-fn first_cuda_backend() -> Option<CudaBackend> {
+fn first_cuda_backend() -> Option<CudaEngine> {
     let devices = crate::cuda::cuda_devices().ok()?;
     let device = devices.first()?;
-    CudaBackend::new(device.id()).ok()
+    CudaEngine::new(device.id()).ok()
 }
 
 /// A one-dimensional add kernel compiled from CUDA source by NVRTC.

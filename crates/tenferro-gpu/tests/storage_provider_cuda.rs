@@ -10,8 +10,8 @@ use std::fs;
 use std::path::Path;
 
 use tenferro_gpu::{
-    cuda::gpu_available, cuda::upload_tensor, cuda::with_cuda_exec_session, cuda::CudaBackend,
-    cuda::CudaDeviceId,
+    cuda::gpu_available, cuda::upload_tensor, cuda::with_cuda_exec_session, cuda::CudaDeviceId,
+    cuda::CudaEngine,
 };
 use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor, TensorRead};
@@ -28,7 +28,7 @@ fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId
 fn cuda_tensor_view_keeps_the_single_root_identity() {
     assert!(gpu_available(), "CUDA test requires an available device");
 
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
     let (domain, allocation) = identity(&input);
@@ -46,7 +46,7 @@ fn cuda_tensor_view_keeps_the_single_root_identity() {
 fn cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping() {
     assert!(gpu_available(), "CUDA test requires an available device");
 
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
     let Some(tensor) = input.as_typed::<f32>() else {
@@ -81,7 +81,7 @@ fn cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping() {
 fn cuda_duplicate_is_explicit_same_placement_allocation() {
     assert!(gpu_available(), "CUDA test requires an available device");
 
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
     let (domain, allocation) = identity(&input);

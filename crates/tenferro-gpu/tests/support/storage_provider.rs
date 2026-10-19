@@ -6,7 +6,7 @@
 
 #[cfg(feature = "cuda")]
 mod cuda {
-    use tenferro_gpu::{cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId};
+    use tenferro_gpu::{cuda::gpu_available, cuda::upload_tensor, cuda::CudaEngine, cuda::CudaDeviceId};
     use tenferro_tensor::{
         AllocationDomainId, AllocationId, BackendSessionHost, DType, Tensor, TensorRead,
     };
@@ -22,7 +22,7 @@ mod cuda {
     #[ignore = "requires CUDA"]
     fn explicit_duplicate_has_new_identity_in_the_same_cuda_domain() {
         assert!(gpu_available(), "CUDA test requires an available device");
-        let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+        let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
         let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
         let input = upload_tensor(backend.runtime(), &host).unwrap();
         let (domain, allocation) = identity(&input);
@@ -40,8 +40,8 @@ mod cuda {
     #[ignore = "requires CUDA"]
     fn cuda_runtime_rejects_a_foreign_allocation_domain_before_binding() {
         assert!(gpu_available(), "CUDA test requires an available device");
-        let first = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
-        let mut second = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+        let first = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
+        let mut second = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
         let host = Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap();
         let input = upload_tensor(first.runtime(), &host).unwrap();
 

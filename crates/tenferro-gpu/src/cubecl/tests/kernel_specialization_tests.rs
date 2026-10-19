@@ -20,7 +20,7 @@ use tenferro_tensor::{
 };
 
 use super::super::interop::fill_zero_write;
-use super::super::CudaBackend;
+use super::super::CudaEngine;
 use super::{cpu_backend, download, gpu_backend, tensor_f64, tensor_i64, upload};
 use crate::config::{GatherConfig, PadConfig, SliceConfig};
 use crate::{Tensor, TypedTensor};
@@ -31,10 +31,10 @@ use crate::{Tensor, TypedTensor};
 /// hook described in docs/design/cubecl-011-compile-count-hook.md; until it
 /// exists, the launches still run and each test checks its own result.
 fn assert_one_module_for_all_layouts(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     kernel: &str,
     layouts: usize,
-    mut launch: impl FnMut(&mut CudaBackend, usize),
+    mut launch: impl FnMut(&mut CudaEngine, usize),
 ) {
     assert!(layouts >= 4, "use several distinct layouts");
     let _ = kernel;
@@ -89,7 +89,7 @@ fn assert_bits_eq(actual: &[f64], expected: &[f64], what: &str) {
     }
 }
 
-fn host_f64(backend: &CudaBackend, tensor: &Tensor) -> Vec<f64> {
+fn host_f64(backend: &CudaEngine, tensor: &Tensor) -> Vec<f64> {
     download(backend, tensor)
         .as_slice::<f64>()
         .unwrap()
@@ -390,7 +390,7 @@ fn axpby_strided_source_kernel_compiles_once_per_rank() {
 
 /// Run the same session op on the CPU and CUDA backends and compare bit for bit.
 fn assert_cpu_parity(
-    gpu: &mut CudaBackend,
+    gpu: &mut CudaEngine,
     inputs: &[&Tensor],
     op: impl Fn(&mut dyn tenferro_tensor::backend::Engine, &[&Tensor]) -> Tensor + Sync,
 ) {

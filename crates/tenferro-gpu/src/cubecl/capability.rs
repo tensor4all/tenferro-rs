@@ -3,7 +3,7 @@ use tenferro_tensor::{
     BackendId, DType, OperationCapability, SupportLevel, TensorBackendCapability,
 };
 
-use super::CudaBackend;
+use super::CudaEngine;
 
 const U: SupportLevel = SupportLevel::Unsupported;
 const F: SupportLevel = SupportLevel::FallbackCopy;
@@ -29,7 +29,7 @@ pub const fn cuda_capabilities() -> &'static [OperationCapability] {
     CUDA_CAPABILITIES
 }
 
-impl TensorBackendCapability for CudaBackend {
+impl TensorBackendCapability for CudaEngine {
     fn backend_id(&self) -> BackendId {
         BackendId::Cuda
     }

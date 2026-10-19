@@ -21,10 +21,10 @@
 //!
 //! Nothing has to be cached downstream: the compiled artifact lives in CubeCL's
 //! per-device server, which the client returned by [`Session::client`] reaches,
-//! so it is reused by every later [`CudaExecSession::with_cubecl`] scope and by
+//! so it is reused by every later [`CudaEngine::with_cubecl`] scope and by
 //! any other backend constructed for the same device.
 //!
-//! [`CudaExecSession::with_cubecl`]: super::exec_session::CudaExecSession::with_cubecl
+//! [`CudaEngine::with_cubecl`]: super::CudaEngine::with_cubecl
 
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -40,7 +40,7 @@ use cubecl::frontend::Scalar;
 /// Public CubeCL extension session.
 ///
 /// Not constructible by users; obtained only from
-/// [`CudaExecSession::with_cubecl`](super::exec_session::CudaExecSession::with_cubecl).
+/// [`CudaEngine::with_cubecl`](super::exec_session::CudaExecSession::with_cubecl).
 /// The session borrows the exact tenferro CubeCL client for the request scope
 /// and is `!Send + !Sync` by construction, so the execution authority cannot
 /// migrate to another thread.

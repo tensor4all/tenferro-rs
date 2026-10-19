@@ -1,5 +1,5 @@
-use tenferro_gpu::cuda::CudaBackend;
+use tenferro_gpu::cuda::CudaEngine;
 
 fn main() {
-    let _ = CudaBackend::new(0);
+    let _ = CudaEngine::new(0);
 }

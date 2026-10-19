@@ -9,7 +9,7 @@ use tenferro_tensor::{
     TensorViewCanonicalization, TensorViewMut, TensorWrite,
 };
 
-use super::super::CudaBackend;
+use super::super::CudaEngine;
 use super::{
     assert_cuda_unsupported_dtype, assert_error_parity, assert_runtime_state,
     assert_shape_mismatch, assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool,
@@ -19,7 +19,7 @@ use super::{
 /// Run `f` on a CUDA execution session of `gpu`: typed view canonicalization
 /// lives on the session, not the backend owner (#1946 F6).
 fn in_cuda_session<R: Send>(
-    gpu: &mut CudaBackend,
+    gpu: &mut CudaEngine,
     f: impl for<'a> FnOnce(&'a mut crate::cuda::CudaExecSession<'a>) -> R + Send,
 ) -> R {
     gpu.with_backend_session(|session| {
@@ -1537,7 +1537,7 @@ fn cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark() {
     }
 
     fn measure(
-        gpu: &mut CudaBackend,
+        gpu: &mut CudaEngine,
         source: &Tensor,
         destination: &mut Tensor,
         permutation: &[usize],
@@ -1596,7 +1596,7 @@ fn cuda_runtime_copy_into_1522_a100_destination_reuse_benchmark() {
     // only the real/imaginary pair. Compare a permutation that keeps the
     // complex unit-stride axis with one that moves it.
     fn measure_c64(
-        gpu: &mut CudaBackend,
+        gpu: &mut CudaEngine,
         source: &Tensor,
         destination: &mut Tensor,
         permutation: &[usize],
@@ -1785,7 +1785,7 @@ fn cuda_runtime_bool_copy_reports_intentional_erased_limitation() {
         .unwrap()
         .unwrap_err();
 
-    assert_cuda_unsupported_dtype(&err, "CudaBackend::copy_read_into", DType::Bool);
+    assert_cuda_unsupported_dtype(&err, "CudaEngine::copy_read_into", DType::Bool);
 }
 
 #[test]

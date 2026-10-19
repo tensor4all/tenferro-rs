@@ -498,7 +498,7 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
     let meta_lexemes = rust_code_lexemes(source_section(
         mod_source,
         "fn scatter_launch_meta(",
-        "impl TensorIndexing for CudaBackend",
+        "impl TensorIndexing for CudaEngine",
     ));
     for required in [
         &[
@@ -561,7 +561,7 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
         (
             "scatter_complex_typed",
             "    fn scatter_complex_typed<",
-            "impl BackendRuntimeCache for CudaBackend",
+            "impl BackendRuntimeCache for CudaEngine",
             "indexing::scatter_complex_kernel::launch_unchecked",
         ),
     ] {
@@ -987,7 +987,7 @@ fn cubecl_binary_elementwise_kernels_do_not_materialize_scalar_broadcasts() {
         "pub(super) fn vdot_read(",
     );
     assert_ordered_needles(
-        "CudaBackend broadcast multiply hook",
+        "CudaEngine broadcast multiply hook",
         fusion_impl,
         &[
             "fn execute_broadcast_multiply(",
@@ -1393,7 +1393,7 @@ fn cubecl_scatter_validates_all_device_inputs_before_binding() {
     let scatter_complex = source_section(
         &mod_source,
         "    fn scatter_complex_typed<",
-        "impl BackendRuntimeCache for CudaBackend",
+        "impl BackendRuntimeCache for CudaEngine",
     );
     assert_ordered_needles(
         "scatter_complex_typed",
@@ -1654,7 +1654,7 @@ fn cubecl_extension_cache_guard_validates_downcast_before_deref() {
     let guard_source = source_section(
         &mod_source,
         "pub struct CudaExtensionCacheGuard",
-        "impl CudaBackend",
+        "impl CudaEngine",
     );
 
     assert!(

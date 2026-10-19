@@ -8,7 +8,7 @@ use tenferro_tensor::{
 
 use crate::config::CompareDir;
 use crate::cubecl::gpu_available;
-use crate::cuda::{cuda_capabilities, CudaBackend};
+use crate::cuda::{cuda_capabilities, CudaEngine};
 use crate::DotGeneralConfig;
 
 use super::{
@@ -227,7 +227,7 @@ fn dtype_name(dtype: DType) -> String {
 
 fn run_supported_case(
     cpu: &mut tenferro_cpu::CpuBackend,
-    gpu: &mut CudaBackend,
+    gpu: &mut CudaEngine,
     entry: OperationCapability,
 ) {
     match entry.op {
@@ -375,9 +375,9 @@ fn run_supported_case(
 
 fn assert_unary_matches(
     cpu: &mut tenferro_cpu::CpuBackend,
-    gpu: &mut CudaBackend,
+    gpu: &mut CudaEngine,
     entry: OperationCapability,
-    op: impl Fn(&mut CudaBackend, &Tensor) -> tenferro_tensor::Result<Tensor>,
+    op: impl Fn(&mut CudaEngine, &Tensor) -> tenferro_tensor::Result<Tensor>,
 ) {
     let input = sample_tensor(entry.dtype);
     let gpu_input = upload(gpu, &input);
@@ -389,9 +389,9 @@ fn assert_unary_matches(
 
 fn assert_binary_matches(
     cpu: &mut tenferro_cpu::CpuBackend,
-    gpu: &mut CudaBackend,
+    gpu: &mut CudaEngine,
     entry: OperationCapability,
-    op: impl Fn(&mut CudaBackend, &Tensor, &Tensor) -> tenferro_tensor::Result<Tensor>,
+    op: impl Fn(&mut CudaEngine, &Tensor, &Tensor) -> tenferro_tensor::Result<Tensor>,
 ) {
     let lhs = sample_tensor(entry.dtype);
     let rhs = sample_rhs_tensor(entry.dtype);
@@ -405,9 +405,9 @@ fn assert_binary_matches(
 
 fn assert_reduction_matches(
     cpu: &mut tenferro_cpu::CpuBackend,
-    gpu: &mut CudaBackend,
+    gpu: &mut CudaEngine,
     entry: OperationCapability,
-    op: impl Fn(&mut CudaBackend, &Tensor, &[usize]) -> tenferro_tensor::Result<Tensor>,
+    op: impl Fn(&mut CudaEngine, &Tensor, &[usize]) -> tenferro_tensor::Result<Tensor>,
 ) {
     let input = reduction_sample_tensor(entry.dtype);
     let gpu_input = upload(gpu, &input);
@@ -420,7 +420,7 @@ fn assert_reduction_matches(
 
 fn assert_compare_matches(
     cpu: &mut tenferro_cpu::CpuBackend,
-    gpu: &mut CudaBackend,
+    gpu: &mut CudaEngine,
     entry: OperationCapability,
 ) {
     let lhs = sample_tensor(entry.dtype);
@@ -453,7 +453,7 @@ fn assert_compare_matches(
 
 fn assert_select_matches(
     cpu: &mut tenferro_cpu::CpuBackend,
-    gpu: &mut CudaBackend,
+    gpu: &mut CudaEngine,
     entry: OperationCapability,
 ) {
     let pred = tensor_bool(vec![3], vec![true, false, true]);
@@ -488,7 +488,7 @@ fn assert_select_matches(
 
 fn assert_clamp_matches(
     cpu: &mut tenferro_cpu::CpuBackend,
-    gpu: &mut CudaBackend,
+    gpu: &mut CudaEngine,
     entry: OperationCapability,
 ) {
     let input = sample_tensor(entry.dtype);
@@ -523,7 +523,7 @@ fn assert_clamp_matches(
 
 fn assert_dot_matches(
     cpu: &mut tenferro_cpu::CpuBackend,
-    gpu: &mut CudaBackend,
+    gpu: &mut CudaEngine,
     entry: OperationCapability,
 ) {
     let (lhs, rhs) = dot_inputs(entry.dtype);

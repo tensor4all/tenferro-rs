@@ -12,16 +12,16 @@ use cubecl_environment::stream::StreamId;
 use tenferro_cpu::CpuBackend;
 use tenferro_gpu::cuda::{
     cuda_runtime_engine_registration, download_tensor, gpu_available, upload_tensor,
-    with_cuda_exec_session, CudaBackend, CudaDeviceId, GpuExtensionCapability,
+    with_cuda_exec_session, CudaDeviceId, CudaEngine, GpuExtensionCapability,
 };
 use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{
     has_held_backend_session, BackendSessionHost, SessionEntryError, Tensor, TensorRead,
 };
 
-fn cuda() -> CudaBackend {
+fn cuda() -> CudaEngine {
     assert!(gpu_available(), "CUDA test requires an available device");
-    CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
+    CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
 }
 
 fn vector(values: &[f64]) -> Tensor {
@@ -221,7 +221,7 @@ fn a_second_backend_state_cannot_be_opened_from_inside_a_held_callback() {
         matches!(
             nested,
             SessionEntryError::Reentered {
-                backend: "CudaBackend"
+                backend: "CudaEngine"
             }
         ),
         "the marker names the holding backend: {nested:?}"
@@ -236,7 +236,7 @@ fn a_second_backend_state_cannot_be_opened_from_inside_a_held_callback() {
 }
 
 /// Build a runtime whose single engine is `backend`, for prepared execution.
-fn prepared_runtime(backend: &CudaBackend) -> Runtime {
+fn prepared_runtime(backend: &CudaEngine) -> Runtime {
     let mut builder = Runtime::builder();
     builder
         .register_engine(

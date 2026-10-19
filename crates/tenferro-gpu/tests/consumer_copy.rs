@@ -9,7 +9,7 @@
 
 use cubecl_environment::stream::StreamId;
 use tenferro_gpu::cuda::{
-    download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId, CudaRuntime,
+    download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine, CudaRuntime,
     PublicationError,
 };
 use tenferro_tensor::{Tensor, TensorRead};
@@ -18,12 +18,12 @@ use tenferro_tensor::{Tensor, TensorRead};
 const CHAINED_ELEMENTS: usize = 16 * 1024 * 1024;
 const CHAINED_STEPS: usize = 64;
 
-fn backend() -> CudaBackend {
+fn backend() -> CudaEngine {
     assert!(gpu_available(), "CUDA test requires an available device");
-    CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
+    CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
 }
 
-fn runtime_of(backend: &CudaBackend) -> CudaRuntime {
+fn runtime_of(backend: &CudaEngine) -> CudaRuntime {
     backend.runtime().clone()
 }
 

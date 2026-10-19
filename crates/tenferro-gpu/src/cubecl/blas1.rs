@@ -54,7 +54,7 @@ use super::error::unsupported_dtype;
 use super::gemm::{typed_device_ptr, write_device_ptr};
 use super::interop::{alloc_zero_output, offset_device_ptr, upload_typed_tensor};
 use super::runtime::check_cublas;
-use super::{CudaBackend, CudaRuntime};
+use super::{CudaEngine, CudaRuntime};
 use crate::{
     col_major_strides, Error, Tensor, TensorScalar, TensorView, TensorViewMut, TypedTensor,
     TypedTensorView, TypedTensorViewMut,
@@ -118,7 +118,7 @@ const AXPBY_OP: &str = "Engine::axpby_read_into_accum";
 /// returns [`Error::Io`] when the cuBLAS library cannot be loaded and
 /// [`Error::RuntimeState`] when an input is not resident on this runtime.
 pub(super) fn vdot_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -166,7 +166,7 @@ pub(super) fn vdot_read(
 /// loaded and [`Error::RuntimeState`] when the input is not resident on this
 /// runtime.
 pub(super) fn norm_squared_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     validate_norm_squared_read(&input)?;
@@ -202,7 +202,7 @@ pub(super) fn norm_squared_read(
 /// loaded and [`Error::RuntimeState`] when an operand is not resident on this
 /// runtime.
 pub(super) fn axpby_read_into_accum(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     alpha: ContractionScalar,
     x: TensorRead<'_>,
     beta: ContractionScalar,
@@ -410,7 +410,7 @@ pub(super) fn blas1_len(n: usize, op: &'static str) -> crate::Result<i32> {
 }
 
 fn vdot_typed<T: CublasScalar>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &TensorRead<'_>,
     rhs: &TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -455,7 +455,7 @@ fn vdot_typed<T: CublasScalar>(
 }
 
 fn norm_squared_typed<T: CublasScalar>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     input: &TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     let rt = backend.runtime();
@@ -502,7 +502,7 @@ fn norm_squared_typed<T: CublasScalar>(
 }
 
 fn axpby_typed<T: CublasScalar>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     alpha: ContractionScalar,
     x: &TensorRead<'_>,
     beta: ContractionScalar,

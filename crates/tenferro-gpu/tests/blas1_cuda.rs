@@ -3,7 +3,7 @@
 //! Hardware parity gate for the cuBLAS-backed BLAS1 session hooks.
 //!
 //! `vdot_read`, `norm_squared_read`, and `axpby_read_into_accum` on
-//! [`CudaBackend`] bypass the generic `dot_general`/elementwise composition and
+//! [`CudaEngine`] bypass the generic `dot_general`/elementwise composition and
 //! call cuBLAS directly. These tests pin the numerics against the CPU backend,
 //! which keeps the composed reference semantics. They are ignored by default;
 //! explicitly running them requires a CUDA device and fails if none is available.
@@ -15,9 +15,7 @@
 use num_complex::{Complex32, Complex64};
 
 use tenferro_cpu::CpuBackend;
-use tenferro_gpu::cuda::{
-    download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId,
-};
+use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_tensor::{
     BackendSessionHost, ContractionScalar, Tensor, TensorRead, TensorView, TensorViewMut,
     TensorWrite, TypedTensorView,
@@ -39,9 +37,9 @@ fn sample(len: usize, seed: f64) -> Tensor {
     Tensor::from_vec_col_major(vec![len], data).unwrap()
 }
 
-fn backends() -> Option<(CudaBackend, CpuBackend)> {
+fn backends() -> Option<(CudaEngine, CpuBackend)> {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let cuda = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let cuda = CudaEngine::new(CudaDeviceId::from_ordinal(0)).unwrap();
     Some((cuda, CpuBackend::default()))
 }
 

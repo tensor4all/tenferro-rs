@@ -1,7 +1,7 @@
 //! Pending transfers, and the publication of a produced value (#1945 U4).
 //!
 //! The pending routes move a value between host and device with owned admission; `exec_session`'s
-//! `CudaHeldSession::publish` builds a [`SourcePublication`], which keeps an owned value, its retained
+//! `CudaEngine::publish` builds a [`SourcePublication`], which keeps an owned value, its retained
 //! allocation address and a frontier recorded on the producing session's stream, so a stage can publish
 //! now and consume after its session and backend handle are gone.
 //!
@@ -44,8 +44,8 @@ use cudarc::runtime::sys as cuda_sys;
 use tenferro_tensor::{DType, Tensor, TensorScalar};
 
 use super::dispatch;
-use super::exec_session::{with_cuda_exec_session, CudaHeldSession};
 use super::runtime::{CudaRuntime, CudaRuntimeState};
+use super::CudaEngine;
 use num_complex::{Complex32, Complex64};
 
 const OP: &str = "download_pending";
@@ -1777,17 +1777,14 @@ impl SourcePublication {
     /// ```no_run
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let publication: tenferro_gpu::cuda::SourcePublication = unimplemented!();
-    /// # let mut consumer: tenferro_gpu::cuda::CudaHeldSession<'_> = unimplemented!();
+    /// # let mut consumer: tenferro_gpu::cuda::CudaEngine = unimplemented!();
     /// let pending = publication.copy_into(&mut consumer).map_err(|err| err.to_string())?;
     /// let value = pending.wait()?;
     /// # let _ = value;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn copy_into(
-        mut self,
-        consumer: &mut CudaHeldSession<'_>,
-    ) -> Result<PendingRead, PublicationError> {
+    pub fn copy_into(mut self, consumer: &mut CudaEngine) -> Result<PendingRead, PublicationError> {
         // Eligibility and the terminal record are checked before the captured-stream entry, so a
         // refusal submits nothing at all.
         let consumer_runtime = consumer.runtime().clone();
@@ -1883,66 +1880,41 @@ impl SourcePublication {
 
         // The copy is submitted inside the consumer session's captured-stream entry, which reapplies
         // the logical stream and activates/restores the CUDA context.
-        let outcome = consumer
-            .with_session(|session| {
-                with_cuda_exec_session(session, |exec| {
-                    exec.with_raw(PUBLICATION_OP, |raw| {
-                        // SAFETY: the handle is valid for this closure, while the session's context is current.
-                        let stream = unsafe { raw.stream().raw_handle() } as usize as CUstream;
-                        if let Some(frontier) = frontier {
-                            // SAFETY: the frontier event is live and owned by this publication until it is
-                            // released below, and `stream` is the consumer's captured stream.
-                            unsafe {
-                                cuda_result::stream::wait_event(
-                                    stream,
-                                    frontier,
-                                    CUevent_wait_flags::CU_EVENT_WAIT_DEFAULT,
-                                )
-                            }
-                            .map_err(|err| crate::Error::backend_source(PUBLICATION_OP, err))?;
-                        }
-                        // SAFETY: `destination_pointer` is a device span of `byte_len` bytes owned by the package,
-                        // `source_address` is the device address of the allocation this publication retained, and
-                        // the copy is enqueued on the consumer's captured stream.
-                        unsafe {
-                            raw.copy_bytes(
-                                destination_pointer as *mut std::ffi::c_void,
-                                source_address as *const std::ffi::c_void,
-                                byte_len,
-                                PUBLICATION_OP,
-                            )?;
-                        }
-                        #[cfg(test)]
-                        if let Some(message) = copy_fault_injection::take_record() {
-                            return Err(crate::Error::runtime_state(PUBLICATION_OP, message));
-                        }
-                        // SAFETY: the event was created for this copy and is recorded on the same stream.
-                        unsafe { cuda_result::event::record(event, stream) }
-                            .map_err(|err| crate::Error::backend_source(PUBLICATION_OP, err))?;
-                        Ok(())
-                    })
-                })
-            })
-            .map_err(|error| {
-                crate::Error::runtime_state(
-                    PUBLICATION_OP,
-                    format!("the consumer session entry failed: {error}"),
-                )
-            })
-            .and_then(|outcome| {
-                outcome.ok_or_else(|| {
-                    crate::Error::runtime_state(
-                        PUBLICATION_OP,
-                        "the consumer session is not a CUDA execution session",
+        let outcome: crate::Result<()> = consumer.with_raw(PUBLICATION_OP, |raw| {
+            // SAFETY: the handle is valid for this closure, while the session's context is current.
+            let stream = unsafe { raw.stream().raw_handle() } as usize as CUstream;
+            if let Some(frontier) = frontier {
+                // SAFETY: the frontier event is live and owned by this publication until it is
+                // released below, and `stream` is the consumer's captured stream.
+                unsafe {
+                    cuda_result::stream::wait_event(
+                        stream,
+                        frontier,
+                        CUevent_wait_flags::CU_EVENT_WAIT_DEFAULT,
                     )
-                })
-            });
-        // Flatten the session entry's own result: an error from the copy closure must reach the unproven
-        // path below, not be swallowed by the entry's success.
-        let outcome: crate::Result<()> = match outcome {
-            Ok(inner) => inner,
-            Err(error) => Err(error),
-        };
+                }
+                .map_err(|err| crate::Error::backend_source(PUBLICATION_OP, err))?;
+            }
+            // SAFETY: `destination_pointer` is a device span of `byte_len` bytes owned by the package,
+            // `source_address` is the device address of the allocation this publication retained, and
+            // the copy is enqueued on the consumer's captured stream.
+            unsafe {
+                raw.copy_bytes(
+                    destination_pointer as *mut std::ffi::c_void,
+                    source_address as *const std::ffi::c_void,
+                    byte_len,
+                    PUBLICATION_OP,
+                )?;
+            }
+            #[cfg(test)]
+            if let Some(message) = copy_fault_injection::take_record() {
+                return Err(crate::Error::runtime_state(PUBLICATION_OP, message));
+            }
+            // SAFETY: the event was created for this copy and is recorded on the same stream.
+            unsafe { cuda_result::event::record(event, stream) }
+                .map_err(|err| crate::Error::backend_source(PUBLICATION_OP, err))?;
+            Ok(())
+        });
 
         if let Err(error) = outcome {
             // The copy may have been enqueued, so nothing is returned: the source value and the

@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use super::{gpu_available, is_invalid_device_lookup, CudaRuntime, CudaRuntimeIdentity};
-use crate::cuda::CudaBackend;
+use crate::cuda::CudaEngine;
 use cudarc::driver::{result::DriverError, sys::CUresult};
 
 #[test]
@@ -45,9 +45,9 @@ fn cuda_backend_identity_tracks_the_exact_runtime_when_hardware_is_available() {
         .next()
         .expect("CUDA device should be available")
         .id();
-    let first = CudaBackend::new(device).expect("CUDA backend should initialize");
+    let first = CudaEngine::new(device).expect("CUDA backend should initialize");
     let clone = first.clone();
-    let independent = CudaBackend::new(device).expect("second CUDA backend should initialize");
+    let independent = CudaEngine::new(device).expect("second CUDA backend should initialize");
 
     let first_identity = first.runtime_identity();
     let clone_identity = clone.runtime_identity();

@@ -15,9 +15,8 @@ use tenferro_tensor::{
 
 use super::*;
 use crate::cuda::{
-    cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend,
-    CudaComputeCapability, CudaDeviceError, CudaDeviceId, CudaDeviceInfo, CudaDeviceUuid,
-    CudaRuntime,
+    cuda_devices, download_tensor, gpu_available, upload_tensor, CudaComputeCapability,
+    CudaDeviceError, CudaDeviceId, CudaDeviceInfo, CudaDeviceUuid, CudaEngine, CudaRuntime,
 };
 
 fn test_info(id: CudaDeviceId, name: &str) -> CudaDeviceInfo {
@@ -33,11 +32,11 @@ fn test_info(id: CudaDeviceId, name: &str) -> CudaDeviceInfo {
 #[test]
 fn cuda_public_constructors_and_registration_require_typed_selection() {
     let _: fn(CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> = CudaRuntime::new;
-    let _: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
-    let _: fn(&CudaBackend, EngineId) -> Result<EngineRegistration, RuntimeConfigError> =
+    let _: fn(CudaDeviceId) -> Result<CudaEngine, CudaDeviceError> = CudaEngine::new;
+    let _: fn(&CudaEngine, EngineId) -> Result<EngineRegistration, RuntimeConfigError> =
         cuda_runtime_engine_registration;
     let _: fn(&CudaRuntime) -> CudaDeviceId = CudaRuntime::device_id;
-    let _: fn(&CudaBackend) -> CudaDeviceId = CudaBackend::device_id;
+    let _: fn(&CudaEngine) -> CudaDeviceId = CudaEngine::device_id;
 }
 
 #[test]
@@ -336,8 +335,8 @@ fn cuda_registration_preserves_two_caller_selected_engine_ids_and_devices() {
     }
     let first_device = devices[0].id();
     let second_device = devices[1].id();
-    let first_backend = CudaBackend::new(first_device).expect("first CUDA backend");
-    let second_backend = CudaBackend::new(second_device).expect("second CUDA backend");
+    let first_backend = CudaEngine::new(first_device).expect("first CUDA backend");
+    let second_backend = CudaEngine::new(second_device).expect("second CUDA backend");
     let first_runtime = first_backend.runtime().clone();
     let second_runtime = second_backend.runtime().clone();
     let first_engine =
@@ -544,7 +543,7 @@ fn cuda_registration_preserves_two_caller_selected_engine_ids_and_devices() {
 fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
     assert!(gpu_available(), "CUDA test requires an available device");
 
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let runtime = backend.runtime().clone();
     let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).expect("host input");
     let input = upload_tensor(&runtime, &host).expect("CUDA upload");
@@ -662,7 +661,7 @@ fn coalesced_event_domain_token_waits_on_its_captured_stream() {
 
     assert!(gpu_available(), "CUDA test requires an available device");
 
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let runtime = backend.runtime().clone();
     let driver = CudaEventDomainDriver::new(runtime.clone());
     let domain = test_event_domain("coalesced-native");
@@ -720,7 +719,7 @@ fn coalesced_event_domain_token_waits_on_its_captured_stream() {
 fn coalesced_event_domain_unwind_retires_before_the_panic_returns() {
     assert!(gpu_available(), "CUDA test requires an available device");
 
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let mut backend = CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let counters = backend.runtime().clone();
     let runtime = counters.clone();
     let driver = CudaEventDomainDriver::new(runtime.clone());

@@ -1,5 +1,5 @@
 use tenferro_gpu::{
-    cuda::cuda_devices, cuda::download_tensor, cuda::upload_tensor, cuda::CudaBackend,
+    cuda::cuda_devices, cuda::download_tensor, cuda::upload_tensor, cuda::CudaEngine,
 };
 use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{Tensor, TensorRead, TensorWrite};
@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
 
-    let mut backend = CudaBackend::new(device.id())?;
+    let mut backend = CudaEngine::new(device.id())?;
     let cpu_a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let cpu_b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 

@@ -11,7 +11,7 @@ use super::super::batched_gemm::{
 };
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f32,
-    tensor_f64, upload, CpuBackend, CudaBackend,
+    tensor_f64, upload, CpuBackend, CudaEngine,
 };
 use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{TensorRead, TensorView};
@@ -19,7 +19,7 @@ use tenferro_tensor::{TensorRead, TensorView};
 /// Run one `rows x 64` by `64 x 63` f64 matmul on both backends.
 fn compare_rows_matmul(
     cpu: &mut CpuBackend,
-    gpu: &mut CudaBackend,
+    gpu: &mut CudaEngine,
     rows: usize,
 ) -> (Tensor, Tensor) {
     let lhs = tensor_f64(
@@ -842,7 +842,7 @@ fn cuda_batched_matmul_16_a100_fast_path_timing() {
     use std::time::Instant;
 
     fn measure(
-        gpu: &mut CudaBackend,
+        gpu: &mut CudaEngine,
         lhs: &Tensor,
         rhs: &Tensor,
         config: &DotGeneralConfig,

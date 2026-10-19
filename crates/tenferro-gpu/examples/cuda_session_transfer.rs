@@ -9,7 +9,7 @@
 //! for the rules each one keeps.
 
 use tenferro_gpu::cuda::{
-    cuda_devices, download_pending, upload_pending, upload_tensor, CudaBackend, PinnedHostBuffer,
+    cuda_devices, download_pending, upload_pending, upload_tensor, CudaEngine, PinnedHostBuffer,
 };
 use tenferro_tensor::{Tensor, TensorRead};
 
@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("no CUDA device available");
         return Ok(());
     };
-    let mut backend = CudaBackend::new(device.id())?;
+    let mut backend = CudaEngine::new(device.id())?;
     let runtime = backend.runtime().clone();
 
     // A stage: one session entry, several dependent operations, one explicit submit.

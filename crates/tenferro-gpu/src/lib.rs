@@ -4,21 +4,21 @@
 //!
 //! ```rust
 //! #[cfg(feature = "cuda")]
-//! use tenferro_gpu::{cuda::cuda_devices, cuda::CudaBackend, cuda::CudaDeviceError};
+//! use tenferro_gpu::{cuda::cuda_devices, cuda::CudaEngine, cuda::CudaDeviceError};
 //!
 //! #[cfg(feature = "cuda")]
-//! fn first_cuda_backend() -> Result<Option<CudaBackend>, CudaDeviceError> {
+//! fn first_cuda_backend() -> Result<Option<CudaEngine>, CudaDeviceError> {
 //!     let devices = cuda_devices()?;
 //!     let Some(device) = devices.first() else {
 //!         return Ok(None);
 //!     };
-//!     Ok(Some(CudaBackend::new(device.id())?))
+//!     Ok(Some(CudaEngine::new(device.id())?))
 //! }
 //!
 //! // This ordinary doctest checks the discovery-based selection API without
 //! // requiring CUDA hardware at test time.
 //! #[cfg(feature = "cuda")]
-//! let _example: fn() -> Result<Option<CudaBackend>, CudaDeviceError> = first_cuda_backend;
+//! let _example: fn() -> Result<Option<CudaEngine>, CudaDeviceError> = first_cuda_backend;
 //! ```
 // A misaligned pointer handed to a CUDA library is undefined behaviour and
 // fails only on some library versions: `cuDoubleComplex` is `double2`, which
@@ -50,17 +50,17 @@ pub mod cuda {
     pub use super::cubecl::{
         cuda_capabilities, cuda_devices, cuda_runtime_engine_registration,
         cuda_runtime_hardware_class, download_pending, download_tensor, download_tensor_into,
-        gpu_available, upload_pending, upload_tensor, with_cuda_exec_session, CompletionUnproven,
-        CudaBackend, CudaComputeCapability, CudaDeviceError, CudaDeviceId, CudaDeviceInfo,
-        CudaDeviceUuid, CudaExecSession, CudaExtensionCache, CudaExtensionCacheGuard,
-        CudaHeldSession, CudaRuntime, CudaRuntimeIdentity, CudaSessionStats,
+        gpu_available, upload_pending, upload_tensor, with_cuda_engine, CompletionUnproven,
+        CudaComputeCapability, CudaDeviceError, CudaDeviceId, CudaDeviceInfo, CudaDeviceUuid,
+        CudaEngine, CudaExtensionCache, CudaExtensionCacheGuard, CudaRuntime, CudaRuntimeIdentity,
         CutensorWorkspaceStats, DownloadIntoError, GpuExtensionCapability, PendingDownload,
         PendingRead, PendingUpload, PinnedHostBuffer, PublicationAdmissionError, PublicationError,
         PublicationRejected, SourcePublication, TransferRejected, TransferSubmitError,
         WorkspaceRetirementStats,
     };
 
-    /// Public tenferro-wide CubeCL session (issue #1597).
+    /// Public tenferro-wide CubeCL session (issue #1597), behind the
+    /// `cubecl-interop` feature: the only place CubeCL types are public.
     ///
     /// Exposes a narrow prelude of the CubeCL types needed to write and launch
     /// `#[cube]` kernels against tenferro's GPU runtime. This module does not
@@ -73,6 +73,7 @@ pub mod cuda {
     /// documented, together with the `#[cube]` typing rules and the kernel-cache
     /// answer, in `docs/guides/custom-cuda-kernels.md`; `samples/cubecl-kernel`
     /// is the runnable fixture.
+    #[cfg(feature = "cubecl-interop")]
     pub mod cubecl {
         pub use super::super::cubecl::session_cubecl::Session;
         // Narrow prelude: only the types needed to describe a CubeCL launch.

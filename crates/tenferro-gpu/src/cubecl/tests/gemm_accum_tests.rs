@@ -307,7 +307,7 @@ fn flat_f64(len: usize, seed: f64) -> Vec<f64> {
     (0..len).map(|i| seed + 0.25 * i as f64).collect()
 }
 
-fn download_f64(gpu: &crate::cubecl::CudaBackend, tensor: &Tensor) -> Vec<f64> {
+fn download_f64(gpu: &crate::cubecl::CudaEngine, tensor: &Tensor) -> Vec<f64> {
     download(gpu, tensor)
         .as_typed::<f64>()
         .expect("the dtype guard selects this arm")

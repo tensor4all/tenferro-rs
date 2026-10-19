@@ -8,7 +8,7 @@
 //! releasing anything. They are ignored by default; explicitly running them requires a CUDA device.
 
 use tenferro_gpu::cuda::{
-    download_pending, gpu_available, upload_tensor, CudaBackend, CudaDeviceId, CudaRuntime,
+    download_pending, gpu_available, upload_tensor, CudaDeviceId, CudaEngine, CudaRuntime,
     PinnedHostBuffer, TransferSubmitError,
 };
 use tenferro_tensor::Tensor;
@@ -16,9 +16,9 @@ use tenferro_tensor::Tensor;
 /// Big enough that a copy of it cannot complete before an immediate poll observes the queue.
 const DELAYED_ELEMENTS: usize = 8 * 1024 * 1024;
 
-fn backend() -> CudaBackend {
+fn backend() -> CudaEngine {
     assert!(gpu_available(), "CUDA test requires an available device");
-    CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
+    CudaEngine::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
 }
 
 fn values(len: usize) -> Vec<f64> {
@@ -45,7 +45,7 @@ fn from_bytes(bytes: &[u8]) -> Vec<f64> {
         .collect()
 }
 
-fn runtime_of(backend: &CudaBackend) -> CudaRuntime {
+fn runtime_of(backend: &CudaEngine) -> CudaRuntime {
     backend.runtime().clone()
 }
 
