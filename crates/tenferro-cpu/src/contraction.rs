@@ -634,6 +634,22 @@ pub(crate) fn dot_into(
     dispatch!(F32, F64, C32, C64)
 }
 
+#[cfg(any(feature = "native", feature = "blas"))]
+impl crate::CpuPlanCache {
+    /// The shared contraction plan for `key`, looked up under the cache lock
+    /// and returned for execution after the lock is released.
+    fn binary_plan<T: Scalar>(
+        &self,
+        slot: Option<usize>,
+        key: Key,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Arc<BinaryPlan<T>>> {
+        let mut state = self.lock();
+        let capacity = state.gemm.capacity();
+        state.gemm.binary.plan::<T>(slot, capacity, key, config)
+    }
+}
+
 #[cfg(test)]
 mod retention_tests {
     use super::*;
@@ -714,20 +730,4 @@ pub(crate) fn dot_into(
     _out: TensorWrite<'_>,
 ) -> crate::Result<()> {
     Err(no_backend("dot_general"))
-}
-
-#[cfg(any(feature = "native", feature = "blas"))]
-impl crate::CpuPlanCache {
-    /// The shared contraction plan for `key`, looked up under the cache lock
-    /// and returned for execution after the lock is released.
-    fn binary_plan<T: Scalar>(
-        &self,
-        slot: Option<usize>,
-        key: Key,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Arc<BinaryPlan<T>>> {
-        let mut state = self.lock();
-        let capacity = state.gemm.capacity();
-        state.gemm.binary.plan::<T>(slot, capacity, key, config)
-    }
 }
