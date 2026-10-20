@@ -1,5 +1,5 @@
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{GraphCompiler, TracedTensor};
 use tenferro_tensor::Tensor;
@@ -10,25 +10,23 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
     let program = GraphCompiler::new()
         .compile_many(&[&det, &sign, &logabsdet])
         .unwrap();
-    let backend = CpuBackend::with_threads(1).unwrap();
-    let result = super::support::cpu_runtime_with_linalg(&backend)
-        .unwrap()
-        .run_compiled(&program, &[&input])
-        .unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    let runtime = super::support::cpu_runtime_with_linalg(&backend).unwrap();
+    let result = super::support::run_program(&runtime, &mut backend, &program, &[&input]).unwrap();
     #[cfg(feature = "autodiff")]
     {
         use tenferro_ad::{EagerRuntime, EagerTensor};
         use tenferro_linalg::EagerSessionLinalgExt;
-        let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+        let runtime = EagerRuntime::new().unwrap();
         let eager = EagerTensor::from_tensor_in(input, runtime.clone()).unwrap();
         let (det, sign, log) = runtime
-            .with_eager_session(|session| {
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
                 let (sign, log) = session.slogdet(&eager)?;
                 Ok::<_, tenferro_ad::Error>((session.det(&eager)?, sign, log))
             })
             .unwrap();
         for (actual, expected) in [det, sign, log].iter().zip(&result) {
-            let actual = actual.to_tensor().unwrap();
+            let actual = actual.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
             assert_eq!(actual.shape(), expected.shape());
             if let Ok(values) = actual.as_slice::<f64>() {
                 for (&a, &b) in values.iter().zip(expected.as_slice::<f64>().unwrap()) {
@@ -53,9 +51,7 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
 #[test]
 #[ignore = "requires CUDA"]
 fn cuda_complex_determinant_retains_existing_support() {
-    use tenferro_gpu::cuda::{
-        cuda_runtime_engine_registration, download_tensor, upload_tensor, CudaBackend, CudaDeviceId,
-    };
+    use tenferro_gpu::cuda::{cuda_runtime_engine_registration, download_tensor, upload_tensor, CudaBackend, CudaDeviceId};
     use tenferro_runtime::{EngineId, Runtime};
     let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
     let data = vec![

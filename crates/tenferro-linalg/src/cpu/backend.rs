@@ -15,11 +15,7 @@ use tenferro_cpu::same_variant_pair;
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_cpu::{CpuEngine, CpuExecutionContext};
-use tenferro_tensor::{
-    validate::validate_nonsingular_u, AllocationDomainId, DType, Error, HostAccessError,
-    MemoryKind, SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorStructural,
-    TensorView, TensorViewMut, TensorWrite, TypedTensor,
-};
+use tenferro_tensor::{validate::validate_nonsingular_u, AllocationDomainId, DType, Error, HostAccessError, MemoryKind, SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor};
 
 /// The Rust scalar type behind a preset variant name a macro received.
 macro_rules! preset_scalar {

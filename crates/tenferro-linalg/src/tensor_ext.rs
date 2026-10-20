@@ -12,10 +12,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::with_cpu_engine;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::with_cuda_engine;
-use tenferro_tensor::{
-    Engine, CompareDir, DType, DotGeneralConfig, Tensor, TensorRead, TensorScalar,
-    TensorWrite, TypedTensor,
-};
+use tenferro_tensor::{Engine, CompareDir, DType, DotGeneralConfig, Tensor, TensorRead, TensorScalar, TensorWrite, TypedTensor};
 
 use crate::extension::{EighOptions, QrOptions, SvdOptions};
 use crate::{LinalgBackend, RankRevealingQrOptions, RankRevealingQrResult};
@@ -130,13 +127,13 @@ pub type TypedEig<T> = (
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_linalg::TensorLinalgExt;
-/// use tenferro_tensor::{BackendSessionHost, Tensor};
+/// use tenferro_tensor::Tensor;
 ///
 /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-/// let mut host = CpuBackend::new();
-/// let (_u, singular_values, _vt) = host.with_backend_session(|session| a.svd(session))??;
+/// let mut host = tenferro_cpu::CpuEngine::serial();
+/// let (_u, singular_values, _vt) = (|session: &mut dyn tenferro_tensor::Engine| a.svd(session))(&mut host)?;
 /// assert_eq!(singular_values.as_slice::<f64>()?, &[4.0, 2.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -147,12 +144,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (_u, s, _vt) = host.with_backend_session(|session| a.svd(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (_u, s, _vt) = (|session: &mut dyn tenferro_tensor::Engine| a.svd(session))(&mut host)?;
     /// assert_eq!(s.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -170,12 +167,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| a.svdvals(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let values = (|session: &mut dyn tenferro_tensor::Engine| a.svdvals(session))(&mut host)?;
     /// assert_eq!(values.as_slice::<f64>()?, &[4.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -186,12 +183,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::{SvdOptions, TensorLinalgExt};
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (_u, s, _vt) = host.with_backend_session(|session| { a.svd_with_options(SvdOptions::default(), session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (_u, s, _vt) = (|session: &mut dyn tenferro_tensor::Engine| { a.svd_with_options(SvdOptions::default(), session) })(&mut host)?;
     /// assert_eq!(s.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -213,12 +210,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (u, s, vt) = host.with_backend_session(|session| a.svd_full(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (u, s, vt) = (|session: &mut dyn tenferro_tensor::Engine| a.svd_full(session))(&mut host)?;
     /// assert_eq!(u.shape(), &[1, 1]);
     /// assert_eq!(s.shape(), &[1]);
     /// assert_eq!(vt.shape(), &[2, 2]);
@@ -234,12 +231,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (q, r) = host.with_backend_session(|session| a.qr(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (q, r) = (|session: &mut dyn tenferro_tensor::Engine| a.qr(session))(&mut host)?;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -256,12 +253,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_linalg::TensorLinalgExt;
-    /// use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// use tenferro_tensor::Tensor;
     /// let a = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
-    /// let mut host = CpuBackend::new();
-    /// let qr = host.with_backend_session(|session| a.householder_qr(session))??;
+    /// let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let qr = (|session: &mut dyn tenferro_tensor::Engine| a.householder_qr(session))(&mut host)?;
     /// assert!(format!("{qr:?}").starts_with("HouseholderQr"));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -281,12 +278,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::{QrOptions, TensorLinalgExt};
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (q, r) = host.with_backend_session(|session| { a.qr_with_options(QrOptions::default(), session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (q, r) = (|session: &mut dyn tenferro_tensor::Engine| { a.qr_with_options(QrOptions::default(), session) })(&mut host)?;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -306,14 +303,14 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::{RankRevealingQrOptions, TensorLinalgExt};
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let result = host.with_backend_session(|session| {
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let result = (|session: &mut dyn tenferro_tensor::Engine| {
     ///     a.rank_revealing_qr(RankRevealingQrOptions::default().rtol(1e-12), session)
-    /// })??;
+    /// })(&mut host)?;
     /// assert_eq!(result.column_permutation.shape(), &[2]);
     /// assert_eq!(result.rank.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -329,12 +326,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (_p, l, u, parity) = host.with_backend_session(|session| a.lu(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (_p, l, u, parity) = (|session: &mut dyn tenferro_tensor::Engine| a.lu(session))(&mut host)?;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// assert_eq!(u.shape(), &[2, 2]);
     /// assert_eq!(parity.shape(), &[] as &[usize]);
@@ -350,12 +347,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (p, _l, _u, q, parity) = host.with_backend_session(|session| a.full_piv_lu(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (p, _l, _u, q, parity) = (|session: &mut dyn tenferro_tensor::Engine| a.full_piv_lu(session))(&mut host)?;
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(parity.shape(), &[] as &[usize]);
@@ -371,13 +368,13 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| a.full_piv_lu_solve(&b, session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let x = (|session: &mut dyn tenferro_tensor::Engine| a.full_piv_lu_solve(&b, session))(&mut host)?;
     /// assert_eq!(x.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -398,13 +395,13 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| a.solve(&b, session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let x = (|session: &mut dyn tenferro_tensor::Engine| a.solve(&b, session))(&mut host)?;
     /// assert_eq!(x.as_slice::<f64>()?, &[2.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -419,12 +416,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let l = host.with_backend_session(|session| a.cholesky(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let l = (|session: &mut dyn tenferro_tensor::Engine| a.cholesky(session))(&mut host)?;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -435,12 +432,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| a.eigh(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (values, vectors) = (|session: &mut dyn tenferro_tensor::Engine| a.eigh(session))(&mut host)?;
     /// assert_eq!(values.as_slice::<f64>()?, &[1.0, 3.0]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -452,12 +449,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::{EighOptions, TensorLinalgExt};
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| { a.eigh_with_options(EighOptions::default(), session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (values, vectors) = (|session: &mut dyn tenferro_tensor::Engine| { a.eigh_with_options(EighOptions::default(), session) })(&mut host)?;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -473,12 +470,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| a.eig(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (values, vectors) = (|session: &mut dyn tenferro_tensor::Engine| a.eig(session))(&mut host)?;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -494,13 +491,13 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| { a.triangular_solve(&b, true, false, false, false, session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let x = (|session: &mut dyn tenferro_tensor::Engine| { a.triangular_solve(&b, true, false, false, false, session) })(&mut host)?;
     /// assert_eq!(x.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -519,12 +516,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (sign, logabsdet) = host.with_backend_session(|session| a.slogdet(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (sign, logabsdet) = (|session: &mut dyn tenferro_tensor::Engine| a.slogdet(session))(&mut host)?;
     /// assert_eq!(sign.as_slice::<f64>()?, &[1.0]);
     /// assert_eq!(logabsdet.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -539,12 +536,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let determinant = host.with_backend_session(|session| a.det(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let determinant = (|session: &mut dyn tenferro_tensor::Engine| a.det(session))(&mut host)?;
     /// assert!((determinant.as_slice::<f64>()?[0] - 8.0).abs() < 1.0e-12);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -555,12 +552,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let inverse = host.with_backend_session(|session| a.inv(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let inverse = (|session: &mut dyn tenferro_tensor::Engine| a.inv(session))(&mut host)?;
     /// assert_eq!(inverse.as_slice::<f64>()?, &[0.5, 0.0, 0.0, 0.25]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -571,12 +568,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| a.eigvalsh(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let values = (|session: &mut dyn tenferro_tensor::Engine| a.eigvalsh(session))(&mut host)?;
     /// assert_eq!(values.as_slice::<f64>()?, &[1.0, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -587,12 +584,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| a.eigvals(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let values = (|session: &mut dyn tenferro_tensor::Engine| a.eigvals(session))(&mut host)?;
     /// assert_eq!(values.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -609,12 +606,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let pseudoinverse = host.with_backend_session(|session| a.pinv(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let pseudoinverse = (|session: &mut dyn tenferro_tensor::Engine| a.pinv(session))(&mut host)?;
     /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -631,12 +628,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let pseudoinverse = host.with_backend_session(|session| a.pinv_with_rtol(1.0e-12, session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let pseudoinverse = (|session: &mut dyn tenferro_tensor::Engine| a.pinv_with_rtol(1.0e-12, session))(&mut host)?;
     /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -651,12 +648,12 @@ pub trait TensorLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let frobenius = host.with_backend_session(|session| a.norm(None, None, false, session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let frobenius = (|session: &mut dyn tenferro_tensor::Engine| a.norm(None, None, false, session))(&mut host)?;
     /// assert_eq!(frobenius.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -674,15 +671,15 @@ pub trait TensorLinalgExt {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_linalg::TensorReadLinalgExt;
-/// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+/// use tenferro_tensor::{Tensor, TensorRead};
 ///
 /// let input = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-/// let mut host = CpuBackend::new();
-/// let (_q, r) = host.with_backend_session(|session| {
+/// let mut host = tenferro_cpu::CpuEngine::serial();
+/// let (_q, r) = (|session: &mut dyn tenferro_tensor::Engine| {
 ///     TensorRead::from_tensor(&input).qr_read(session)
-/// })??;
+/// })(&mut host)?;
 /// assert_eq!(r.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -693,14 +690,14 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (_u, s, _vt) = host.with_backend_session(|session| {
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (_u, s, _vt) = (|session: &mut dyn tenferro_tensor::Engine| {
     ///     TensorRead::from_tensor(&a).svd_read(session)
-    /// })??;
+    /// })(&mut host)?;
     /// assert_eq!(s.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -721,12 +718,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| TensorRead::from_tensor(&a).svdvals_read(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let values = (|session: &mut dyn tenferro_tensor::Engine| TensorRead::from_tensor(&a).svdvals_read(session))(&mut host)?;
     /// assert_eq!(values.as_slice::<f64>()?, &[4.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -737,14 +734,14 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::{SvdOptions, TensorReadLinalgExt};
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (_u, s, _vt) = host.with_backend_session(|session| {
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (_u, s, _vt) = (|session: &mut dyn tenferro_tensor::Engine| {
     ///     TensorRead::from_tensor(&a).svd_with_options_read(SvdOptions::default(), session)
-    /// })??;
+    /// })(&mut host)?;
     /// assert_eq!(s.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -771,14 +768,14 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (u, s, vt) = host.with_backend_session(|session| {
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (u, s, vt) = (|session: &mut dyn tenferro_tensor::Engine| {
     ///     TensorRead::from_tensor(&a).svd_full_read(session)
-    /// })??;
+    /// })(&mut host)?;
     /// assert_eq!(u.shape(), &[1, 1]);
     /// assert_eq!(s.shape(), &[1]);
     /// assert_eq!(vt.shape(), &[2, 2]);
@@ -794,12 +791,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (q, r) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).qr_read(session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (q, r) = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).qr_read(session) })(&mut host)?;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -812,14 +809,14 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::{QrOptions, TensorReadLinalgExt};
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (q, r) = host.with_backend_session(|session| {
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (q, r) = (|session: &mut dyn tenferro_tensor::Engine| {
     ///     TensorRead::from_tensor(&a).qr_with_options_read(QrOptions::default(), session)
-    /// })??;
+    /// })(&mut host)?;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -838,15 +835,15 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::{RankRevealingQrOptions, TensorReadLinalgExt};
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let result = host.with_backend_session(|session| {
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let result = (|session: &mut dyn tenferro_tensor::Engine| {
     ///     TensorRead::from_tensor(&a).rank_revealing_qr_read(
     ///         RankRevealingQrOptions::default(), session)
-    /// })??;
+    /// })(&mut host)?;
     /// assert_eq!(result.rank.as_slice::<i64>()?, &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -861,12 +858,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (_p, l, u, _parity) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).lu_read(session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (_p, l, u, _parity) = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).lu_read(session) })(&mut host)?;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// assert_eq!(u.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -881,12 +878,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (p, _l, _u, q, _parity) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).full_piv_lu_read(session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (p, _l, _u, q, _parity) = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).full_piv_lu_read(session) })(&mut host)?;
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -901,15 +898,15 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| {
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let x = (|session: &mut dyn tenferro_tensor::Engine| {
     ///     TensorRead::from_tensor(&a).full_piv_lu_solve_read(TensorRead::from_tensor(&b), session)
-    /// })??;
+    /// })(&mut host)?;
     /// assert_eq!(x.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -930,13 +927,13 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| { TensorRead::from_tensor(&a).solve_read(TensorRead::from_tensor(&b), session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let x = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).solve_read(TensorRead::from_tensor(&b), session) })(&mut host)?;
     /// assert_eq!(x.as_slice::<f64>()?, &[2.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -967,20 +964,20 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorWrite};
+    /// # use tenferro_tensor::{Tensor, TensorRead, TensorWrite};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0])?;
     /// # let mut out = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64; 2])?;
-    /// # let mut host = CpuBackend::new();
-    /// host.with_backend_session(|session| {
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// (|session: &mut dyn tenferro_tensor::Engine| {
     ///         TensorRead::from_tensor(&a).solve_read_into(
     ///             TensorRead::from_tensor(&b),
     ///             TensorWrite::from_tensor(&mut out),
     ///             session,
     ///         )
-    ///     })??;
+    ///     })(&mut host)?;
     /// assert_eq!(out.as_slice::<f64>()?, &[2.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1005,12 +1002,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let l = host.with_backend_session(|session| { TensorRead::from_tensor(&a).cholesky_read(session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let l = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).cholesky_read(session) })(&mut host)?;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1021,12 +1018,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).eigh_read(session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (values, vectors) = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).eigh_read(session) })(&mut host)?;
     /// assert_eq!(values.as_slice::<f64>()?, &[1.0, 3.0]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1041,14 +1038,14 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::{EighOptions, TensorReadLinalgExt};
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| {
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (values, vectors) = (|session: &mut dyn tenferro_tensor::Engine| {
     ///     TensorRead::from_tensor(&a).eigh_with_options_read(EighOptions::default(), session)
-    /// })??;
+    /// })(&mut host)?;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1064,12 +1061,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).eig_read(session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (values, vectors) = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).eig_read(session) })(&mut host)?;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1085,13 +1082,13 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| {
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let x = (|session: &mut dyn tenferro_tensor::Engine| {
     ///     TensorRead::from_tensor(&a).triangular_solve_read(
     ///         TensorRead::from_tensor(&b),
     ///         true,
@@ -1100,7 +1097,7 @@ pub trait TensorReadLinalgExt {
     ///         false,
     ///         session,
     ///     )
-    /// })??;
+    /// })(&mut host)?;
     /// assert_eq!(x.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1119,12 +1116,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (sign, logabsdet) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).slogdet_read(session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (sign, logabsdet) = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).slogdet_read(session) })(&mut host)?;
     /// assert_eq!(sign.as_slice::<f64>()?, &[1.0]);
     /// assert_eq!(logabsdet.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1139,12 +1136,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let determinant = host.with_backend_session(|session| { TensorRead::from_tensor(&a).det_read(session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let determinant = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).det_read(session) })(&mut host)?;
     /// assert!((determinant.as_slice::<f64>()?[0] - 8.0).abs() < 1.0e-12);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1155,12 +1152,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let inverse = host.with_backend_session(|session| { TensorRead::from_tensor(&a).inv_read(session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let inverse = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).inv_read(session) })(&mut host)?;
     /// assert_eq!(inverse.as_slice::<f64>()?, &[0.5, 0.0, 0.0, 0.25]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1171,12 +1168,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| { TensorRead::from_tensor(&a).eigvalsh_read(session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let values = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).eigvalsh_read(session) })(&mut host)?;
     /// assert_eq!(values.as_slice::<f64>()?, &[1.0, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1187,12 +1184,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| { TensorRead::from_tensor(&a).eigvals_read(session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let values = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).eigvals_read(session) })(&mut host)?;
     /// assert_eq!(values.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1209,12 +1206,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let pseudoinverse = host.with_backend_session(|session| { TensorRead::from_tensor(&a).pinv_read(session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let pseudoinverse = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).pinv_read(session) })(&mut host)?;
     /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1225,12 +1222,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let pseudoinverse = host.with_backend_session(|session| { TensorRead::from_tensor(&a).pinv_with_rtol_read(1.0e-12, session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let pseudoinverse = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).pinv_with_rtol_read(1.0e-12, session) })(&mut host)?;
     /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1245,12 +1242,12 @@ pub trait TensorReadLinalgExt {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TensorReadLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// # use tenferro_tensor::{Tensor, TensorRead};
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let frobenius = host.with_backend_session(|session| { TensorRead::from_tensor(&a).norm_read(None, None, false, session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let frobenius = (|session: &mut dyn tenferro_tensor::Engine| { TensorRead::from_tensor(&a).norm_read(None, None, false, session) })(&mut host)?;
     /// assert_eq!(frobenius.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1271,16 +1268,16 @@ pub trait TensorReadLinalgExt {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_linalg::TypedTensorLinalgExt;
-/// use tenferro_tensor::{BackendSessionHost, TypedTensor};
+/// use tenferro_tensor::TypedTensor;
 ///
 /// let input = TypedTensor::<f64>::from_vec_col_major(
 ///     vec![2, 2],
 ///     vec![2.0, 0.0, 0.0, 4.0],
 /// )?;
-/// let mut host = CpuBackend::new();
-/// let (_u, singular_values, _vt) = host.with_backend_session(|session| input.svd(session))??;
+/// let mut host = tenferro_cpu::CpuEngine::serial();
+/// let (_u, singular_values, _vt) = (|session: &mut dyn tenferro_tensor::Engine| input.svd(session))(&mut host)?;
 /// assert_eq!(singular_values.as_slice()?, &[4.0, 2.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -1291,12 +1288,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (_u, s, _vt) = host.with_backend_session(|session| a.svd(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (_u, s, _vt) = (|session: &mut dyn tenferro_tensor::Engine| a.svd(session))(&mut host)?;
     /// assert_eq!(s.as_slice()?, &[4.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1310,12 +1307,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| a.svdvals(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let values = (|session: &mut dyn tenferro_tensor::Engine| a.svdvals(session))(&mut host)?;
     /// assert_eq!(values.as_slice()?, &[4.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1329,12 +1326,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::{SvdOptions, TypedTensorLinalgExt};
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (_u, s, _vt) = host.with_backend_session(|session| { a.svd_with_options(SvdOptions::default(), session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (_u, s, _vt) = (|session: &mut dyn tenferro_tensor::Engine| { a.svd_with_options(SvdOptions::default(), session) })(&mut host)?;
     /// assert_eq!(s.as_slice()?, &[4.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1355,12 +1352,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![1, 2], vec![1.0, 1.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (u, s, vt) = host.with_backend_session(|session| a.svd_full(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (u, s, vt) = (|session: &mut dyn tenferro_tensor::Engine| a.svd_full(session))(&mut host)?;
     /// assert_eq!(u.shape(), &[1, 1]);
     /// assert_eq!(vt.shape(), &[2, 2]);
     /// assert!((s.as_slice()?[0] - 2.0_f64.sqrt()).abs() < 1e-12);
@@ -1373,12 +1370,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (q, r) = host.with_backend_session(|session| a.qr(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (q, r) = (|session: &mut dyn tenferro_tensor::Engine| a.qr(session))(&mut host)?;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1393,12 +1390,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::{QrOptions, TypedTensorLinalgExt};
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (q, r) = host.with_backend_session(|session| { a.qr_with_options(QrOptions::default(), session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (q, r) = (|session: &mut dyn tenferro_tensor::Engine| { a.qr_with_options(QrOptions::default(), session) })(&mut host)?;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1417,14 +1414,14 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::{RankRevealingQrOptions, TypedTensorLinalgExt};
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let result = host.with_backend_session(|session| {
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let result = (|session: &mut dyn tenferro_tensor::Engine| {
     ///     a.rank_revealing_qr(RankRevealingQrOptions::default(), session)
-    /// })??;
+    /// })(&mut host)?;
     /// assert_eq!(result.rank.as_slice()?, &[2_i64]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1439,12 +1436,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (_p, l, u, _parity) = host.with_backend_session(|session| a.lu(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (_p, l, u, _parity) = (|session: &mut dyn tenferro_tensor::Engine| a.lu(session))(&mut host)?;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// assert_eq!(u.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1456,12 +1453,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (p, _l, _u, q, _parity) = host.with_backend_session(|session| a.full_piv_lu(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (p, _l, _u, q, _parity) = (|session: &mut dyn tenferro_tensor::Engine| a.full_piv_lu(session))(&mut host)?;
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1476,13 +1473,13 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0])?;
     /// # let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![-1.0, 5.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| a.full_piv_lu_solve(&b, session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let x = (|session: &mut dyn tenferro_tensor::Engine| a.full_piv_lu_solve(&b, session))(&mut host)?;
     /// assert_eq!(x.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1503,13 +1500,13 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
     /// # let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![4.0, 8.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| a.solve(&b, session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let x = (|session: &mut dyn tenferro_tensor::Engine| a.solve(&b, session))(&mut host)?;
     /// assert_eq!(x.as_slice()?, &[2.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1524,12 +1521,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![4.0, 2.0, 2.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let l = host.with_backend_session(|session| a.cholesky(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let l = (|session: &mut dyn tenferro_tensor::Engine| a.cholesky(session))(&mut host)?;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1541,12 +1538,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| a.eigh(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (values, vectors) = (|session: &mut dyn tenferro_tensor::Engine| a.eigh(session))(&mut host)?;
     /// assert_eq!(values.as_slice()?, &[1.0, 3.0]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1561,12 +1558,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::{EighOptions, TypedTensorLinalgExt};
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| { a.eigh_with_options(EighOptions::default(), session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (values, vectors) = (|session: &mut dyn tenferro_tensor::Engine| { a.eigh_with_options(EighOptions::default(), session) })(&mut host)?;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1582,12 +1579,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (values, vectors) = host.with_backend_session(|session| a.eig(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (values, vectors) = (|session: &mut dyn tenferro_tensor::Engine| a.eig(session))(&mut host)?;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1603,13 +1600,13 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 1.0, 3.0])?;
     /// # let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![4.0, 9.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let x = host.with_backend_session(|session| { a.triangular_solve(&b, true, false, false, false, session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let x = (|session: &mut dyn tenferro_tensor::Engine| { a.triangular_solve(&b, true, false, false, false, session) })(&mut host)?;
     /// assert_eq!(x.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1628,12 +1625,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let (sign, logabsdet) = host.with_backend_session(|session| a.slogdet(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let (sign, logabsdet) = (|session: &mut dyn tenferro_tensor::Engine| a.slogdet(session))(&mut host)?;
     /// assert_eq!(sign.as_slice()?, &[1.0]);
     /// assert_eq!(logabsdet.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1648,12 +1645,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let determinant = host.with_backend_session(|session| a.det(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let determinant = (|session: &mut dyn tenferro_tensor::Engine| a.det(session))(&mut host)?;
     /// assert!((determinant.as_slice()?[0] - 8.0).abs() < 1.0e-12);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1664,12 +1661,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let inverse = host.with_backend_session(|session| a.inv(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let inverse = (|session: &mut dyn tenferro_tensor::Engine| a.inv(session))(&mut host)?;
     /// assert_eq!(inverse.as_slice()?, &[0.5, 0.0, 0.0, 0.25]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1680,12 +1677,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| a.eigvalsh(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let values = (|session: &mut dyn tenferro_tensor::Engine| a.eigvalsh(session))(&mut host)?;
     /// assert_eq!(values.as_slice()?, &[1.0, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1699,12 +1696,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let values = host.with_backend_session(|session| a.eigvals(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let values = (|session: &mut dyn tenferro_tensor::Engine| a.eigvals(session))(&mut host)?;
     /// assert_eq!(values.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1718,12 +1715,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let pseudoinverse = host.with_backend_session(|session| a.pinv(session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let pseudoinverse = (|session: &mut dyn tenferro_tensor::Engine| a.pinv(session))(&mut host)?;
     /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1734,12 +1731,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let pseudoinverse = host.with_backend_session(|session| { a.pinv_with_rtol(1.0e-12, session) })??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let pseudoinverse = (|session: &mut dyn tenferro_tensor::Engine| { a.pinv_with_rtol(1.0e-12, session) })(&mut host)?;
     /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1754,12 +1751,12 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::TypedTensorLinalgExt;
-    /// # use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// # use tenferro_tensor::TypedTensor;
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 4.0])?;
-    /// # let mut host = CpuBackend::new();
-    /// let frobenius = host.with_backend_session(|session| a.norm(None, None, false, session))??;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let frobenius = (|session: &mut dyn tenferro_tensor::Engine| a.norm(None, None, false, session))(&mut host)?;
     /// assert_eq!(frobenius.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```

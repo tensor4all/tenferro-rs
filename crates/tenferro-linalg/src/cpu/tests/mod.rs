@@ -9,25 +9,18 @@ use num_complex::{Complex32, Complex64};
 #[cfg(feature = "native")]
 use super::linalg::faer_linalg;
 use crate::LinalgBackend;
-use tenferro_cpu::{with_cpu_engine, CpuBackend, CpuExecSession};
-use tenferro_tensor::backend::{BackendSessionHost, TensorBackend};
-use tenferro_tensor::config::{
-    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
-};
+use tenferro_cpu::{with_cpu_engine, CpuEngine};
+use tenferro_tensor::config::{CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
 use tenferro_tensor::types::{DType, Tensor, TensorRead, TensorView, TypedTensor, TypedTensorView};
 
 pub(super) fn with_cpu_linalg<R>(
-    backend: &mut CpuBackend,
-    f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R + Send,
+    backend: &mut CpuEngine,
+    f: impl for<'a> FnOnce(&'a mut CpuEngine) -> R + Send,
 ) -> R
 where
     R: Send,
 {
-    backend
-        .with_backend_session(|session| {
-            with_cpu_engine(session, f).expect("CpuBackend must expose CpuExecSession")
-        })
-        .unwrap()
+    f(backend)
 }
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
@@ -303,4 +296,3 @@ mod dtype;
 mod faer_lanes;
 mod linalg;
 mod managed_cholesky;
-mod output_affinity;

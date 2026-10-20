@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::EagerSessionLinalgExt;
 use tenferro_runtime::DotGeneralConfig;
 
@@ -11,6 +11,7 @@ const DEFAULT_SIZES: &[usize] = &[256, 512];
 
 struct Fixture {
     ctx: Arc<EagerRuntime>,
+    engine: CpuEngine,
     matrix: EagerTensor,
     tangent: EagerTensor,
     lu_loss: EagerTensor,
@@ -42,13 +43,13 @@ fn bench_sizes() -> Vec<usize> {
         .unwrap_or_else(|| DEFAULT_SIZES.to_vec())
 }
 
-fn ad_ctx(threads: usize) -> Arc<EagerRuntime> {
+fn ad_ctx() -> Arc<EagerRuntime> {
     let ad = AdContext::builder()
         .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
         .unwrap()
         .build()
         .unwrap();
-    EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::with_threads(threads).unwrap(), &ad)
+    EagerRuntime::with_ad_context(&ad)
         .unwrap()
 }
 
@@ -112,7 +113,17 @@ fn upper_matrix(n: usize) -> Vec<f64> {
 }
 
 fn fixture(n: usize, threads: usize) -> Fixture {
-    let ctx = ad_ctx(threads);
+    let ctx = ad_ctx();
+    let mut engine = if threads == 1 {
+        CpuEngine::serial()
+    } else {
+        CpuEngine::new(
+            tenferro_cpu::thread_pool_builder()
+                .num_threads(threads)
+                .build()
+                .unwrap(),
+        )
+    };
     let matrix = variable(&ctx, vec![n, n], dense_matrix(n, 1));
     let tangent = eager(&ctx, vec![n, n], dense_matrix(n, 2));
     let lower_unit = eager(&ctx, vec![n, n], lower_unit_matrix(n));
@@ -120,9 +131,9 @@ fn fixture(n: usize, threads: usize) -> Fixture {
     let rhs = eager(&ctx, vec![n, n], dense_matrix(n, 3));
     let scalar_one = eager(&ctx, vec![], vec![1.0]);
 
-    let (_p, l, u, _parity) = ctx.with_eager_session(|s| s.lu(&matrix)).unwrap();
+    let (_p, l, u, _parity) = ctx.with_eager_session(&mut engine, |s| s.lu(&matrix)).unwrap();
     let lu_loss = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut engine, |s| {
             let l_axes: Vec<usize> = (0..l.shape().len()).collect();
             let u_axes: Vec<usize> = (0..u.shape().len()).collect();
             let l_sum = s.reduce_sum(&l, Some(&l_axes))?;
@@ -130,11 +141,12 @@ fn fixture(n: usize, threads: usize) -> Fixture {
             s.add(&l_sum, &u_sum)
         })
         .unwrap();
-    let warm = ctx.jvp(&lu_loss, &matrix, &tangent).unwrap();
+    let warm = ctx.jvp(&mut engine, &lu_loss, &matrix, &tangent).unwrap();
     consume_f64(&warm);
 
     Fixture {
         ctx,
+        engine,
         matrix,
         tangent,
         lu_loss,
@@ -146,7 +158,7 @@ fn fixture(n: usize, threads: usize) -> Fixture {
 }
 
 fn consume_f64(tensor: &EagerTensor) {
-    let materialized = tensor.to_tensor().unwrap();
+    let materialized = tensor.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
     black_box(materialized.shape());
     black_box(materialized.as_slice::<f64>().unwrap()[0]);
 }
@@ -162,13 +174,14 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
     let mut group = c.benchmark_group(format!("tenferro_linalg/lu_ad_breakdown/threads_{threads}"));
 
     for n in bench_sizes() {
-        let fixture = fixture(n, threads);
+        let mut fixture = fixture(n, threads);
 
         group.bench_function(BenchmarkId::new("lu_jvp_sum_lu_outputs", n), |bench| {
             bench.iter(|| {
                 let out = fixture
                     .ctx
                     .jvp(
+                        &mut fixture.engine,
                         black_box(&fixture.lu_loss),
                         black_box(&fixture.matrix),
                         black_box(&fixture.tangent),
@@ -182,7 +195,7 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
             bench.iter(|| {
                 let (p, l, u, parity) = fixture
                     .ctx
-                    .with_eager_session(|s| s.lu(black_box(&fixture.matrix)))
+                    .with_eager_session(&mut fixture.engine, |s| s.lu(black_box(&fixture.matrix)))
                     .unwrap();
                 consume_many(&[p, l, u, parity]);
             });
@@ -194,7 +207,7 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                 bench.iter(|| {
                     let out = fixture
                         .ctx
-                        .with_eager_session(|s| {
+                        .with_eager_session(&mut fixture.engine, |s| {
                             s.triangular_solve(
                                 black_box(&fixture.lower_unit),
                                 black_box(&fixture.rhs),
@@ -216,7 +229,7 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                 bench.iter(|| {
                     let out = fixture
                         .ctx
-                        .with_eager_session(|s| {
+                        .with_eager_session(&mut fixture.engine, |s| {
                             s.triangular_solve(
                                 black_box(&fixture.upper),
                                 black_box(&fixture.rhs),
@@ -238,7 +251,7 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                 bench.iter(|| {
                     let out = fixture
                         .ctx
-                        .with_eager_session(|session| {
+                        .with_eager_session(&mut fixture.engine, |session| {
                             let strict_lower = session.tril(black_box(&fixture.lower_unit), -1)?;
                             let diagonal = session.broadcast_in_dim(
                                 &fixture.scalar_one,
@@ -258,7 +271,7 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
             bench.iter(|| {
                 let out = fixture
                     .ctx
-                    .with_eager_session(|session| session.triu(black_box(&fixture.upper), 0))
+                    .with_eager_session(&mut fixture.engine, |session| session.triu(black_box(&fixture.upper), 0))
                     .unwrap();
                 consume_f64(&out);
             });
@@ -274,7 +287,7 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
             bench.iter(|| {
                 let out = fixture
                     .ctx
-                    .with_eager_session(|s| {
+                    .with_eager_session(&mut fixture.engine, |s| {
                         s.dot_general(
                             black_box(&fixture.matrix),
                             black_box(&fixture.rhs),

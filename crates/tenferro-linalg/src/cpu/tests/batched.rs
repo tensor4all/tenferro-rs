@@ -55,10 +55,10 @@ impl Dt {
 
 /// The single CPU backend this crate was compiled with, tagged with its
 /// provider id for failure messages.
-fn backends() -> [(&'static str, CpuBackend); 1] {
+fn backends() -> [(&'static str, CpuEngine); 1] {
     [(
         tenferro_cpu::cpu_provider_id(),
-        CpuBackend::with_threads(1).unwrap(),
+        tenferro_cpu::CpuEngine::serial(),
     )]
 }
 

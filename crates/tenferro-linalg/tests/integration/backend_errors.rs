@@ -2,16 +2,9 @@ use std::error::Error as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{LinalgBackend, QrOptions, TensorLinalgExt};
-use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, Engine, BackendSessionHost,
-    BackendStorageHandle, CompareDir, DType, DotGeneralConfig, ElementwiseReadOp, Error, ErrorKind,
-    GatherConfig, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer,
-    Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
-    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
-    TensorView, TensorWrite, TypedTensor, TypedTensorView, ValidationError,
-};
+use tenferro_tensor::{Engine, BackendStorageHandle, CompareDir, DType, DotGeneralConfig, ElementwiseReadOp, Error, ErrorKind, GatherConfig, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor, TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural, TensorView, TensorWrite, TypedTensor, TypedTensorView, ValidationError};
 
 use super::support;
 
@@ -123,10 +116,6 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
                 }
             )+
         };
-    }
-
-    impl BackendRuntimeCache for DefaultOnlyLinalgBackend {
-        type RuntimeCache = ();
     }
 
     impl TensorElementwise for DefaultOnlyLinalgBackend {
@@ -567,18 +556,9 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             ))
         }
     }
-    impl BackendCachedDot for DefaultOnlyLinalgBackend {}
+    impl tenferro_tensor::SessionCachedDot for DefaultOnlyLinalgBackend {}
 
     impl Engine for DefaultOnlyLinalgBackend {}
-    impl BackendSessionHost for DefaultOnlyLinalgBackend {
-        fn with_backend_session<R>(
-            &mut self,
-            f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
-        ) -> Result<R, tenferro_tensor::SessionEntryError> {
-            tenferro_tensor::with_session_entry_guard("test backend", || f(self))
-        }
-    }
-    impl TensorBackend for DefaultOnlyLinalgBackend {}
 
     impl LinalgBackend for DefaultOnlyLinalgBackend {
         panic_backend_methods! {
@@ -971,7 +951,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
 
 #[test]
 fn cpu_lu_solve_prepared_consumes_packed_factor_outputs() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     support::with_cpu_linalg(&mut backend, |backend| {
         let a = f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 3.0]);
@@ -1017,7 +997,7 @@ fn cpu_lu_solve_prepared_consumes_packed_factor_outputs() {
 
 #[test]
 fn cpu_lu_factor_covers_pivoted_real_and_complex_dtypes() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     support::with_cpu_linalg(&mut backend, |backend| {
         let a = f32_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]);
@@ -1052,7 +1032,7 @@ fn cpu_lu_factor_covers_pivoted_real_and_complex_dtypes() {
 
 #[test]
 fn cpu_values_only_decompositions_cover_real_complex_and_batched_inputs() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     support::with_cpu_linalg(&mut backend, |backend| {
         let s = backend
@@ -1137,7 +1117,7 @@ fn cpu_values_only_decompositions_cover_real_complex_and_batched_inputs() {
 
 #[test]
 fn cpu_lu_solve_prepared_restores_vector_rhs_and_validates_inputs() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     support::with_cpu_linalg(&mut backend, |backend| {
         let a = f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]);
         let factors = backend.lu_factor(&a).unwrap();
@@ -1203,7 +1183,7 @@ fn cpu_lu_solve_prepared_restores_vector_rhs_and_validates_inputs() {
 
 #[test]
 fn cpu_lu_solve_prepared_rejects_rank_less_than_two() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     support::with_cpu_linalg(&mut backend, |backend| {
         let a = f64_tensor(vec![2], vec![1.0, 2.0]);
         let b = f64_tensor(vec![2], vec![1.0, 2.0]);
@@ -1227,7 +1207,7 @@ fn cpu_lu_solve_prepared_rejects_rank_less_than_two() {
 fn cpu_linalg_rejects_backend_buffers_without_panicking_or_downloading() {
     let a = backend_f64_tensor(vec![2, 2], 101);
     let b = backend_f64_tensor(vec![2, 1], 102);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     support::with_cpu_linalg(&mut backend, |backend| {
         assert_no_panic_backend_download_error("cholesky", || backend.cholesky(&a));
@@ -1275,7 +1255,7 @@ fn cpu_linalg_rejects_backend_buffers_without_panicking_or_downloading() {
 fn cpu_linalg_rejects_backend_rhs_before_zero_dim_fast_paths() {
     let a = f64_tensor(vec![0, 0], Vec::new());
     let b = backend_f64_tensor(vec![0, 1], 103);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     support::with_cpu_linalg(&mut backend, |backend| {
         assert_no_panic_backend_download_error("solve", || backend.solve(&a, &b));
@@ -1287,7 +1267,7 @@ fn cpu_linalg_rejects_backend_rhs_before_zero_dim_fast_paths() {
 
 #[test]
 fn solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     support::with_cpu_linalg(&mut backend, |backend| {
         let f64_a = f64_tensor(vec![0, 0], Vec::new());
         let c64_b = c64_tensor(vec![0, 1], Vec::new());
@@ -1332,7 +1312,7 @@ fn solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
 
 #[test]
 fn full_piv_lu_solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     support::with_cpu_linalg(&mut backend, |backend| {
         let f64_a = f64_tensor(vec![0, 0], Vec::new());
         let c64_b = c64_tensor(vec![0, 1], Vec::new());
@@ -1368,7 +1348,7 @@ fn full_piv_lu_solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
 #[test]
 fn cholesky_rejects_rank_less_than_two_even_when_zero_dim() {
     let input = f64_tensor(vec![0], Vec::new());
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     support::with_cpu_linalg(&mut backend, |backend| {
         let result = catch_unwind(AssertUnwindSafe(|| backend.cholesky(&input)));
@@ -1392,7 +1372,7 @@ fn cholesky_rejects_rank_less_than_two_even_when_zero_dim() {
 fn solve_rejects_singular_matrix() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
     let b = f64_tensor(vec![2, 1], vec![1.0, 2.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     support::with_cpu_linalg(&mut backend, |backend| {
         let err = backend.solve(&a, &b).unwrap_err();
@@ -1418,7 +1398,7 @@ fn solve_rejects_singular_matrix() {
 
 #[test]
 fn triangular_solve_rejects_batch_mismatch_without_backend_panic() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let a = f64_tensor(vec![2, 2, 2], vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0]);
     let b = f64_tensor(vec![2, 1, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
@@ -1444,7 +1424,7 @@ fn triangular_solve_rejects_batch_mismatch_without_backend_panic() {
 
 #[test]
 fn full_piv_lu_solve_rejects_batch_mismatch_without_backend_panic() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let a = f64_tensor(vec![2, 2, 2], vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0]);
     let b = f64_tensor(vec![2, 1, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
@@ -1472,7 +1452,7 @@ fn full_piv_lu_solve_rejects_batch_mismatch_without_backend_panic() {
 fn cpu_solve_read_covers_direct_vector_and_matrix_rhs_views() {
     let a = f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 3.0]);
     let vector = f64_tensor(vec![2], vec![4.0, 6.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     support::with_cpu_linalg(&mut backend, |backend| {
         let vector_output = backend

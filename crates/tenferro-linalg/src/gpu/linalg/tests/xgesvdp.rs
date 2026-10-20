@@ -6,10 +6,8 @@
 // not be called" instead of computing a conjugate.
 use super::super::{svd_typed, SvdDriver};
 use num_complex::Complex64;
-use tenferro_gpu::cuda::{
-    download_tensor, upload_tensor, with_cuda_engine, CudaBackend, CudaDeviceId,
-};
-use tenferro_tensor::{BackendSessionHost, Tensor};
+use tenferro_gpu::cuda::{download_tensor, upload_tensor, with_cuda_engine, CudaBackend, CudaDeviceId};
+use tenferro_tensor::Tensor;
 
 #[test]
 #[ignore = "requires CUDA; full factors have no public driver option"]
@@ -22,8 +20,7 @@ fn test_cubecl_svd_xgesvdp_full_and_economy() {
         let host = Tensor::from_vec_col_major([m, n], data.clone()).unwrap();
         let device = upload_tensor(backend.runtime(), &host).unwrap();
         for full in [false, true] {
-            let (u, s, vt) = backend
-                .with_backend_session(|session| {
+            let (u, s, vt) = (|session: &mut dyn tenferro_tensor::Engine| {
                     with_cuda_engine(session, |session| {
                         svd_typed(
                             session,
@@ -33,8 +30,7 @@ fn test_cubecl_svd_xgesvdp_full_and_economy() {
                         )
                     })
                     .unwrap()
-                })
-                .unwrap()
+                })(&mut backend)
                 .unwrap();
             let (uc, vr, k) = (
                 if full { m } else { m.min(n) },

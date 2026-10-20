@@ -2,13 +2,13 @@
 
 use num_complex::Complex64;
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{EagerSessionLinalgExt, TracedTensorLinalgExt};
 use tenferro_runtime::{DType, Error, ErrorPhase, TracedTensor, TypedTensor};
 use tenferro_tensor::Error as TensorError;
 
-fn single_thread_backend() -> CpuBackend {
-    let backend = CpuBackend::with_threads(1).unwrap();
+fn single_thread_backend() -> CpuEngine {
+    let backend = tenferro_cpu::CpuEngine::serial();
     assert_eq!(backend.num_threads(), 1);
     backend
 }
@@ -16,7 +16,7 @@ fn single_thread_backend() -> CpuBackend {
 fn eager(data: Vec<f64>, shape: Vec<usize>) -> EagerTensor {
     EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(shape, data).unwrap(),
-        EagerRuntime::with_cpu_backend(single_thread_backend()).unwrap(),
+        EagerRuntime::new().unwrap(),
     )
     .unwrap()
 }
@@ -24,7 +24,7 @@ fn eager(data: Vec<f64>, shape: Vec<usize>) -> EagerTensor {
 fn eager_complex(data: Vec<Complex64>, shape: Vec<usize>) -> EagerTensor {
     EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(shape, data).unwrap(),
-        EagerRuntime::with_cpu_backend(single_thread_backend()).unwrap(),
+        EagerRuntime::new().unwrap(),
     )
     .unwrap()
 }
@@ -32,7 +32,7 @@ fn eager_complex(data: Vec<Complex64>, shape: Vec<usize>) -> EagerTensor {
 fn eager_i32(data: Vec<i32>, shape: Vec<usize>) -> EagerTensor {
     EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(shape, data).unwrap(),
-        EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap(),
+        EagerRuntime::new().unwrap(),
     )
     .unwrap()
 }
@@ -94,7 +94,7 @@ fn assert_lstsq_wide_error_contract(
 
 fn f64_values(tensor: &EagerTensor) -> Vec<f64> {
     tensor
-        .to_tensor()
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap()
         .as_slice::<f64>()
         .unwrap()
@@ -104,7 +104,7 @@ fn f64_values(tensor: &EagerTensor) -> Vec<f64> {
 fn eager_lstsq(matrix: &EagerTensor, rhs: &EagerTensor) -> tenferro_ad::Result<EagerTensor> {
     matrix
         .runtime()
-        .with_eager_session(|session| session.lstsq(matrix, rhs))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.lstsq(matrix, rhs))
 }
 
 fn eager_norm(
@@ -115,7 +115,7 @@ fn eager_norm(
 ) -> tenferro_ad::Result<EagerTensor> {
     input
         .runtime()
-        .with_eager_session(|session| session.norm(input, ord, dim, keepdim))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.norm(input, ord, dim, keepdim))
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn eager_composites_match_diagonal_matrix_values() {
 
     let (sign, logabsdet, det, inv, eigvalsh, eigvals, inverse, inverse_with_rtol) = a
         .runtime()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let (sign, logabsdet) = session.slogdet(&a)?;
             Ok::<_, tenferro_ad::Error>((
                 sign,
@@ -144,7 +144,7 @@ fn eager_composites_match_diagonal_matrix_values() {
     assert_eq!(f64_values(&inv), vec![0.5, 0.0, 0.0, 0.25]);
     assert_eq!(f64_values(&eigvalsh), vec![2.0, 4.0]);
     let mut eigvals = eigvals
-        .to_tensor()
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap()
         .as_slice::<Complex64>()
         .unwrap()
@@ -260,7 +260,7 @@ fn eager_composite_records_existing_primitives_for_backward() {
         .unwrap()
         .build()
         .unwrap();
-    let runtime = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad).unwrap();
+    let runtime = EagerRuntime::with_ad_context(&ad).unwrap();
     let a = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
         runtime,
@@ -268,9 +268,9 @@ fn eager_composite_records_existing_primitives_for_backward() {
     .unwrap();
 
     a.runtime()
-        .with_eager_session(|session| session.det(&a))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.det(&a))
         .unwrap()
-        .backward()
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap();
 
     let grad = a.grad().unwrap().unwrap();

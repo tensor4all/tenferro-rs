@@ -42,12 +42,9 @@ use std::time::Duration;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use num_complex::{Complex32, Complex64};
 use rayon::prelude::*;
-use tenferro_gpu::cuda::{
-    download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
-    CudaDeviceId, CudaHeldSession, CudaRuntime,
-};
+use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend, CudaDeviceId, CudaHeldSession, CudaRuntime};
 use tenferro_linalg::{LinalgBackend, SvdDriver, SvdOptions};
-use tenferro_tensor::{BackendSessionHost, DType, ErrorKind, Tensor};
+use tenferro_tensor::{DType, ErrorKind, Tensor};
 
 /// Square orders. 64 and 256 stay under the `Auto` `gesvdj` threshold; 1024 is
 /// the JAX-compatible boundary itself, where `Auto` still chooses `gesvdj`.
@@ -327,12 +324,10 @@ fn accuracy_row(
     device: &Tensor,
     options: SvdOptions,
 ) -> tenferro_tensor::Result<AccuracyRow> {
-    let outputs = backend
-        .with_backend_session(|session| {
+    let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
             with_cuda_exec_session(session, |exec| exec.svd_with_options(device, options))
                 .expect("scoped session is a CUDA execution session")
-        })
-        .expect("scoped CUDA admission")?;
+        })(&mut backend)?;
     let u = download_tensor(runtime, &outputs[0]).expect("download U");
     let s = download_tensor(runtime, &outputs[1]).expect("download S");
     let vt = download_tensor(runtime, &outputs[2]).expect("download Vt");

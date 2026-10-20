@@ -2,27 +2,17 @@ use std::ffi::c_void;
 use std::ops::Neg;
 use std::os::raw::c_char;
 
-use cubecl::prelude::{
-    ComplexCore, CubeElement, CubeMul, CubeNeg, CubePartialOrd, CubePrimitive, Scalar,
-};
+use cubecl::prelude::{ComplexCore, CubeElement, CubeMul, CubeNeg, CubePartialOrd, CubePrimitive, Scalar};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
-use super::ffi::cusolver::{
-    CublasDiagType, CublasFillMode, CublasOperation, CublasPointerMode, CublasSideMode,
-    CudaDataType, CudaLinalgHandles, CudaStream, CusolverEigMode,
-};
+use super::ffi::cusolver::{CublasDiagType, CublasFillMode, CublasOperation, CublasPointerMode, CublasSideMode, CudaDataType, CudaLinalgHandles, CudaStream, CusolverEigMode};
 use super::kernels as cubecl_linalg;
 use crate::backend::CompactQrResult;
 use crate::extension::{EighDriver, QrGauge, QrOptions, SvdDriver};
-use tenferro_gpu::{
-    cuda::cubecl::Session as CubeclSession, cuda::download_tensor, cuda::CudaEngine,
-};
+use tenferro_gpu::{cuda::cubecl::Session as CubeclSession, cuda::download_tensor, cuda::CudaEngine};
 use tenferro_tensor::config::SliceConfig;
-use tenferro_tensor::{
-    DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorRead, TensorReduction,
-    TensorScalar, TensorStructural, TypedTensor, ValidationError,
-};
+use tenferro_tensor::{DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorRead, TensorReduction, TensorScalar, TensorStructural, TypedTensor, ValidationError};
 
 type Result<T> = tenferro_tensor::Result<T>;
 
@@ -1194,7 +1184,7 @@ pub(super) fn eig(_backend: &mut CudaEngine, _input: &Tensor) -> Result<Vec<Tens
         "eig",
         "non-symmetric eigendecomposition is not supported on the CubeCL GPU backend \
                   because cuSOLVER does not provide it. Download to CPU explicitly via \
-                  `backend.download_to_host(&gpu_tensor)?` and then call `CpuBackend::eig`."
+                  `backend.download_to_host(&gpu_tensor)?` and then call `CpuEngine::eig`."
             .to_string(),
     ))
 }

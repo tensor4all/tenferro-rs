@@ -5,7 +5,7 @@
 //! call, or per-call module install). It is the pre/post gate for issue #1665.
 //!
 //! Remaining hard-to-avoid per-op costs (issue #1667): with a single worker
-//! (`CpuBackend::with_threads(1)`), the CPU session-open still pays the
+//! (`tenferro_cpu::CpuEngine::serial()`), the CPU session-open still pays the
 //! `enter_managed_session` wrapper (~5-8 us: owner/reentrancy guards + scoped-job
 //! indirection, with no Rayon pool to enter) and the eager view-read
 //! materialization inside `exec_body` (eager reads are `TensorRead::View`, so
@@ -17,12 +17,12 @@ use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{EagerSessionLinalgExt, EagerTensorLinalgExt};
 use tenferro_tensor::Tensor;
 
 fn runtime() -> Arc<EagerRuntime> {
-    EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).expect("cpu backend")).unwrap()
+    EagerRuntime::new().unwrap()
 }
 
 fn tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -43,8 +43,8 @@ fn eager_tracked_from(tensor: Tensor, rt: &Arc<EagerRuntime>) -> EagerTensor {
 }
 
 /// Materialize and consume the scalar result so lazy work actually runs.
-fn consume(output: EagerTensor) {
-    let t = output.to_tensor().expect("materialize");
+fn consume(engine: &mut CpuEngine, output: EagerTensor) {
+    let t = output.to_tensor(engine).expect("materialize");
     black_box(t.shape());
     black_box(t.as_slice::<f64>().expect("f64")[0]);
 }
@@ -68,6 +68,7 @@ fn leaf(rt: &Arc<EagerRuntime>, tracked: bool, tensor: Tensor) -> EagerTensor {
 
 fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
     let rt = runtime();
+    let mut engine = CpuEngine::serial();
     let mut group = c.benchmark_group(format!("eager_extension_dispatch/{label}"));
 
     // matmul (standard-op composite; reference row)
@@ -77,9 +78,9 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         group.bench_function(BenchmarkId::new("matmul_2x2", "f64"), |bench| {
             bench.iter(|| {
                 let out = rt
-                    .with_eager_session(|session| session.matmul(black_box(&a), black_box(&b)))
+                    .with_eager_session(&mut engine, |session| session.matmul(black_box(&a), black_box(&b)))
                     .expect("matmul");
-                consume(out);
+                consume(&mut engine, out);
             });
         });
     }
@@ -90,8 +91,8 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         let b = leaf(&rt, tracked, tensor(vec![2, 1], vec![1.0, 1.0]));
         group.bench_function(BenchmarkId::new("solve_2x2", "f64"), |bench| {
             bench.iter(|| {
-                let out = black_box(&a).solve(black_box(&b)).expect("solve");
-                consume(out);
+                let out = black_box(&a).solve(&mut engine, black_box(&b)).expect("solve");
+                consume(&mut engine, out);
             });
         });
     }
@@ -102,9 +103,9 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         group.bench_function(BenchmarkId::new("svd_2x2", "f64"), |bench| {
             bench.iter(|| {
                 let (u, _s, _vt) = rt
-                    .with_eager_session(|session| session.svd(black_box(&a)))
+                    .with_eager_session(&mut engine, |session| session.svd(black_box(&a)))
                     .expect("svd");
-                consume(u);
+                consume(&mut engine, u);
             });
         });
     }
@@ -115,9 +116,9 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         group.bench_function(BenchmarkId::new("eigh_2x2", "f64"), |bench| {
             bench.iter(|| {
                 let (w, _v) = rt
-                    .with_eager_session(|session| session.eigh(black_box(&a)))
+                    .with_eager_session(&mut engine, |session| session.eigh(black_box(&a)))
                     .expect("eigh");
-                consume(w);
+                consume(&mut engine, w);
             });
         });
     }

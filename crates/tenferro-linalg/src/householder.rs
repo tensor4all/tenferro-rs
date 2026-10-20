@@ -14,19 +14,19 @@ use crate::QrOptions;
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_linalg::{QrOptions, TensorLinalgExt};
-/// use tenferro_tensor::{BackendSessionHost, Tensor};
+/// use tenferro_tensor::Tensor;
 ///
 /// let a = Tensor::from_vec_col_major(
 ///     vec![3, 2],
 ///     vec![1.0_f64, 0.0, 1.0, 0.0, 1.0, 1.0],
 /// )?;
-/// let mut host = CpuBackend::new();
-/// let r = host.with_backend_session(|session| {
+/// let mut host = tenferro_cpu::CpuEngine::serial();
+/// let r = (|session: &mut dyn tenferro_tensor::Engine| {
 ///     let qr = a.householder_qr(session)?;
 ///     qr.r(QrOptions::default(), session)
-/// })??;
+/// })(&mut host)?;
 /// assert_eq!(r.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -152,7 +152,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// use tenferro_linalg::HouseholderQr;
     /// let ctx = EagerRuntime::new()?;
-    /// let state = ctx.with_eager_session(|s| {
+    /// let state = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let q = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![1.0_f64])?)?;
     ///     let r = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     HouseholderQr::<EagerTensor>::from_factors(&q, &r, s)
@@ -184,7 +184,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let state = ctx.with_eager_session(|s| {
+    /// let state = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 0.0])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![0.0_f64, 1.0])?)?;
     ///     s.householder_qr(&a)?.append_columns(&b, s)
@@ -216,7 +216,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::{EagerSessionLinalgExt, QrOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let r = ctx.with_eager_session(|s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
     ///     s.householder_qr(&a)?.r(QrOptions::default(), s)
     /// })?;
@@ -252,7 +252,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::{EagerSessionLinalgExt, QrOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let q = ctx.with_eager_session(|s| {
+    /// let q = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
     ///     s.householder_qr(&a)?.q_columns(0..1, QrOptions::default(), s)
     /// })?;

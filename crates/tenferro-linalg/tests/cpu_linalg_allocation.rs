@@ -20,9 +20,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use num_complex::Complex64;
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+use tenferro_cpu::{with_cpu_engine, CpuEngine};
 use tenferro_linalg::{LinalgBackend, RankRevealingQrOptions, TensorLinalgExt};
-use tenferro_tensor::{Engine, BackendSessionHost, Tensor, TypedTensor};
+use tenferro_tensor::{Engine, Tensor, TypedTensor};
 
 /// Counts allocations and live bytes while armed.
 struct CountingAllocator;
@@ -76,6 +76,14 @@ fn record_allocation(size: usize) {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
+/// The counting allocator sees every thread, so the tests of this binary must not
+/// overlap: each holds this lock for its whole run.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial_test() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct AllocationReport {
     allocations: usize,
@@ -102,13 +110,13 @@ fn measure(operation: impl FnOnce()) -> AllocationReport {
     }
 }
 
-fn faer_backend() -> CpuBackend {
-    CpuBackend::with_threads(1).expect("faer CPU backend")
+fn faer_backend() -> CpuEngine {
+    tenferro_cpu::CpuEngine::serial()
 }
 
 #[cfg(feature = "blas")]
-fn blas_backend() -> CpuBackend {
-    CpuBackend::with_threads(1).expect("BLAS CPU backend")
+fn blas_backend() -> CpuEngine {
+    tenferro_cpu::CpuEngine::serial()
 }
 
 fn sample_real(n: usize) -> Vec<f64> {
@@ -185,14 +193,12 @@ fn c64_matrix(n: usize) -> Tensor {
 
 /// Run `operation` until the report stops shrinking, so pooled scratch is already warm.
 fn steady_state(
-    host: &mut CpuBackend,
+    host: &mut CpuEngine,
     operation: impl Fn(&mut dyn Engine) + Send + Sync,
 ) -> AllocationReport {
     let mut best: Option<AllocationReport> = None;
     for _ in 0..4 {
-        let report = host
-            .with_backend_session(|session| measure(|| operation(session)))
-            .unwrap();
+        let report = measure(|| operation(&mut *host));
         if best.is_none_or(|best| report.allocations < best.allocations) {
             best = Some(report);
         }
@@ -212,9 +218,9 @@ fn svdvals_ext(input: &Tensor, session: &mut dyn Engine) {
 
 fn with_session<T>(
     session: &mut dyn Engine,
-    operation: impl FnOnce(&mut tenferro_cpu::CpuExecSession<'_>) -> T,
+    operation: impl FnOnce(&mut tenferro_cpu::CpuEngine) -> T,
 ) -> T {
-    with_cpu_exec_session(session, operation).expect("host exposes a CPU exec session")
+    with_cpu_engine(session, operation).expect("host exposes a CPU exec session")
 }
 
 /// Steady-state allocation ceiling per route and case.
@@ -296,7 +302,7 @@ fn ceiling(name: &str) -> usize {
 }
 
 fn check(
-    host: &mut CpuBackend,
+    host: &mut CpuEngine,
     failures: &mut Vec<String>,
     name: &str,
     operation: impl Fn(&mut dyn Engine) + Send + Sync,
@@ -318,13 +324,12 @@ fn check(
 
 #[test]
 fn cpu_linalg_routes_take_their_scratch_from_the_session_buffer_pool() {
+    let _serial = serial_test();
     let mut failures = Vec::new();
 
     let mut faer = faer_backend();
     let a = f64_matrix(48);
-    let packed = faer
-        .with_backend_session(|session| with_session(session, |cpu| cpu.lu_factor(&a).unwrap()))
-        .unwrap();
+    let packed = (|session: &mut dyn tenferro_tensor::Engine| with_session(session, |cpu| cpu.lu_factor(&a).unwrap()))(&mut faer);
     check(&mut faer, &mut failures, "faer/lu_factor/48", |session| {
         with_session(session, |cpu| {
             cpu.lu_factor(&a).unwrap();
@@ -367,9 +372,7 @@ fn cpu_linalg_routes_take_their_scratch_from_the_session_buffer_pool() {
     #[cfg(feature = "blas")]
     {
         let mut blas = blas_backend();
-        let packed = blas
-            .with_backend_session(|session| with_session(session, |cpu| cpu.lu_factor(&a).unwrap()))
-            .unwrap();
+        let packed = (|session: &mut dyn tenferro_tensor::Engine| with_session(session, |cpu| cpu.lu_factor(&a).unwrap()))(&mut blas);
         check(&mut blas, &mut failures, "blas/lu_factor/48", |session| {
             with_session(session, |cpu| {
                 cpu.lu_factor(&a).unwrap();
@@ -442,7 +445,7 @@ fn cpu_linalg_routes_take_their_scratch_from_the_session_buffer_pool() {
 }
 
 /// Every remaining family on one CPU kind, through the public tensor routes.
-fn check_remaining_families(host: &mut CpuBackend, kind: &str, failures: &mut Vec<String>) {
+fn check_remaining_families(host: &mut CpuEngine, kind: &str, failures: &mut Vec<String>) {
     let a = f64_matrix(48);
     let spd = f64_spd(48);
     let tall = f64_tall(64, 24);
@@ -509,6 +512,7 @@ fn check_remaining_families(host: &mut CpuBackend, kind: &str, failures: &mut Ve
 
 #[test]
 fn remaining_linalg_families_keep_their_steady_state_allocation_counts() {
+    let _serial = serial_test();
     let mut failures = Vec::new();
     check_remaining_families(&mut faer_backend(), "faer", &mut failures);
     #[cfg(feature = "blas")]

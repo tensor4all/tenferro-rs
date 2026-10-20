@@ -5,23 +5,17 @@
 use std::sync::Arc;
 
 use tenferro_ad::error::{Error, Result};
-use tenferro_ad::extension::{
-    apply_eager_with_targeted_extension_in_session, apply_eager_with_targeted_extension_session,
-    EagerExtensionBackendKind, EagerExtensionTarget,
-};
+use tenferro_ad::extension::{apply_eager_with_targeted_extension_in_session, apply_eager_with_targeted_extension_session, EagerExtensionBackendKind, EagerExtensionTarget};
 use tenferro_ad::{EagerSession, EagerTensor};
 use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::CudaEngine;
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::webgpu::WebGpuBackend;
-use tenferro_runtime::{ErrorPhase, ExtensionModule};
+use tenferro_runtime::{ErrorPhase, ExecutionEngine, ExtensionModule};
 
 use crate::eager_composites;
-use crate::extension::{
-    extension_module, validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions,
-    SvdOptions,
-};
+use crate::extension::{extension_module, validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions};
 use crate::rank_revealing_qr::validate_rank_revealing_qr_options;
 use crate::{RankRevealingQrOptions, RankRevealingQrResult};
 
@@ -38,7 +32,7 @@ use crate::{RankRevealingQrOptions, RankRevealingQrResult};
 /// # let ctx = EagerRuntime::new()?;
 /// # let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?, ctx.clone())?;
 /// # let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?, ctx)?;
-/// let x = a.solve(&b)?;
+/// let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b)?;
 /// assert_eq!(x.shape(), &[1, 1]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
@@ -61,7 +55,7 @@ pub trait EagerTensorLinalgExt {
     /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::EagerTensorLinalgExt;
-    /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// # let ctx = EagerRuntime::new()?;
     /// # let a = EagerTensor::from_tensor_in(
     /// #     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
     /// #     ctx.clone(),
@@ -70,16 +64,16 @@ pub trait EagerTensorLinalgExt {
     /// #     Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]).unwrap(),
     /// #     ctx,
     /// # )?;
-    /// let x = a.solve(&b)?;
+    /// let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b)?;
     /// assert_eq!(x.value()?.as_slice::<f64>()?, &[2.0, 2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    fn solve(&self, b: &EagerTensor) -> Result<EagerTensor>;
+    fn solve(&self, engine: &mut dyn ExecutionEngine, b: &EagerTensor) -> Result<EagerTensor>;
 }
 
 impl EagerTensorLinalgExt for EagerTensor {
-    fn solve(&self, b: &EagerTensor) -> Result<EagerTensor> {
-        solve(self, b)
+    fn solve(&self, engine: &mut dyn ExecutionEngine, b: &EagerTensor) -> Result<EagerTensor> {
+        solve(engine, self, b)
     }
 }
 
@@ -90,7 +84,7 @@ impl EagerTensorLinalgExt for EagerTensor {
 /// use tenferro_ad::{EagerRuntime, Tensor};
 /// use tenferro_linalg::EagerSessionLinalgExt;
 /// let ctx = EagerRuntime::new()?;
-/// let factor = ctx.with_eager_session(|session| {
+/// let factor = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
 ///     let input = session.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![4.0_f64])?)?;
 ///     session.cholesky(&input)
 /// })?;
@@ -106,7 +100,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let factor = ctx.with_eager_session(|session| {
+    /// let factor = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
     ///     let input = session.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![9.0_f64])?)?;
     ///     session.cholesky(&input)
     /// })?;
@@ -124,7 +118,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let (_u, values, _vt) = ctx.with_eager_session(|s| {
+    /// let (_u, values, _vt) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
     ///     s.svd(&a)
     /// })?;
@@ -142,7 +136,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::{EagerSessionLinalgExt, SvdOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let (_u, values, _vt) = ctx.with_eager_session(|s| {
+    /// let (_u, values, _vt) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
     ///     s.svd_with_options(&a, SvdOptions::default())
     /// })?;
@@ -164,7 +158,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let (u, values, vh) = ctx.with_eager_session(|s| {
+    /// let (u, values, vh) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 2], vec![1.0_f64, 1.0])?)?;
     ///     s.svd_full(&a)
     /// })?;
@@ -189,7 +183,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let (q, r) = ctx.with_eager_session(|s| {
+    /// let (q, r) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
     ///     s.qr(&a)
     /// })?;
@@ -213,7 +207,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::{EagerSessionLinalgExt, QrOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let (q, r) = ctx.with_eager_session(|s| {
+    /// let (q, r) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
     ///     s.qr_with_options(&a, QrOptions::default())
     /// })?;
@@ -236,7 +230,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let x = ctx.with_eager_session(|s| {
+    /// let x = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.triangular_solve(&a, &b, true, true, false, false)
@@ -263,7 +257,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let x = ctx.with_eager_session(|s| {
+    /// let x = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.solve(&a, &b)
@@ -288,7 +282,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let x = ctx.with_eager_session(|s| {
+    /// let x = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![2.0_f64, 4.0])?)?;
     ///     s.lstsq(&a, &b)
@@ -307,7 +301,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let (_p, _l, u, _parity) = ctx.with_eager_session(|s| {
+    /// let (_p, _l, u, _parity) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.lu(&a)
     /// })?;
@@ -328,7 +322,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let (sign, logabs) = ctx.with_eager_session(|s| {
+    /// let (sign, logabs) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.slogdet(&a)
     /// })?;
@@ -347,7 +341,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let det = ctx.with_eager_session(|s| {
+    /// let det = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.det(&a)
     /// })?;
@@ -365,7 +359,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let inverse = ctx.with_eager_session(|s| {
+    /// let inverse = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.inv(&a)
     /// })?;
@@ -383,7 +377,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let values = ctx.with_eager_session(|s| {
+    /// let values = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eigvalsh(&a)
     /// })?;
@@ -401,7 +395,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let values = ctx.with_eager_session(|s| {
+    /// let values = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eigvals(&a)
     /// })?;
@@ -419,7 +413,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let (values, vectors) = ctx.with_eager_session(|s| {
+    /// let (values, vectors) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eigh(&a)
     /// })?;
@@ -438,7 +432,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::{EagerSessionLinalgExt, EighOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let (values, _vectors) = ctx.with_eager_session(|s| {
+    /// let (values, _vectors) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eigh_with_options(&a, EighOptions::default())
     /// })?;
@@ -467,7 +461,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let (values, vectors) = ctx.with_eager_session(|s| {
+    /// let (values, vectors) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eig(&a)
     /// })?;
@@ -493,7 +487,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let inverse = ctx.with_eager_session(|s| {
+    /// let inverse = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.pinv(&a)
     /// })?;
@@ -517,7 +511,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let inverse = ctx.with_eager_session(|s| {
+    /// let inverse = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.pinv_with_rtol(&a, 1.0e-12)
     /// })?;
@@ -540,7 +534,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let result = ctx.with_eager_session(|s| {
+    /// let result = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0])?)?;
     ///     s.norm(&a, Some(2.0), Some(&[0]), false)
     /// })?;
@@ -566,7 +560,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let (p, _l, _u, q, parity) = ctx.with_eager_session(|s| {
+    /// let (p, _l, _u, q, parity) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?)?;
     ///     s.full_piv_lu(&a)
     /// })?;
@@ -595,7 +589,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let x = ctx.with_eager_session(|s| {
+    /// let x = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.full_piv_lu_solve(&a, &b)
@@ -615,7 +609,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::{EagerSessionLinalgExt, RankRevealingQrOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let result = ctx.with_eager_session(|s| {
+    /// let result = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?)?;
     ///     s.rank_revealing_qr(&a, RankRevealingQrOptions::default())
     /// })?;
@@ -642,7 +636,7 @@ pub trait EagerSessionLinalgExt {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let state = ctx.with_eager_session(|s| {
+    /// let state = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
     ///     s.householder_qr(&a)
     /// })?;
@@ -968,11 +962,12 @@ pub(crate) fn apply_linalg_eager_in_session(
 }
 
 pub(crate) fn apply_linalg_eager(
+    engine: &mut dyn ExecutionEngine,
     op: LinalgOp,
     inputs: &[&EagerTensor],
 ) -> Result<Vec<EagerTensor>> {
     let op = Arc::new(LinalgExtensionOp::new(op));
-    apply_eager_with_targeted_extension_session(op, inputs, eager_extension_module)
+    apply_eager_with_targeted_extension_session(engine, op, inputs, eager_extension_module)
 }
 
 fn eager_extension_module(target: EagerExtensionTarget) -> Result<Arc<dyn ExtensionModule>> {
@@ -1020,7 +1015,7 @@ fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> E
 ///     Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let x = a.solve(&b)?;
+/// let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b)?;
 /// assert_eq!(x.shape(), &[2, 1]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
@@ -1036,12 +1031,16 @@ fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> E
 /// Returns `Error::Validation` for incompatible matrix, batch, or dtype
 /// metadata, `Error::Extension` for an unsupported dtype or singular system,
 /// and `Error::RuntimeState` when the backend is unavailable.
-pub fn solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
+pub fn solve(
+    engine: &mut dyn ExecutionEngine,
+    a: &EagerTensor,
+    b: &EagerTensor,
+) -> Result<EagerTensor> {
     if !a.tracks_grad() && !b.tracks_grad() {
-        return one_output(apply_linalg_eager(LinalgOp::Solve, &[a, b])?, "solve");
+        return one_output(apply_linalg_eager(engine, LinalgOp::Solve, &[a, b])?, "solve");
     }
     validate_tracked_solve_inputs(a, b)?;
-    factor_solve_output(apply_linalg_eager(LinalgOp::LuFactorSolve, &[a, b])?)
+    factor_solve_output(apply_linalg_eager(engine, LinalgOp::LuFactorSolve, &[a, b])?)
 }
 
 fn validate_tracked_solve_inputs(a: &EagerTensor, b: &EagerTensor) -> Result<()> {
