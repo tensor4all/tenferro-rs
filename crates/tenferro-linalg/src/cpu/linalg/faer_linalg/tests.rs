@@ -2,8 +2,8 @@ use super::{checked_product, FaerEig};
 use crate::cpu::tests::with_cpu_linalg;
 use crate::{QrOptions, TensorLinalgExt};
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSessionHost, Tensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::Tensor;
 
 fn product(a: &[f64], a_rows: usize, a_cols: usize, b: &[f64], b_cols: usize) -> Vec<f64> {
     let mut out = vec![0.0; a_rows * b_cols];
@@ -41,9 +41,8 @@ fn compact_factor_and_append_reconstructs_f64() {
         .unwrap();
     let b = Tensor::from_vec_col_major(vec![4, 2], vec![3.0, -1.0, 2.0, 1.0, 0.5, 2.0, -2.0, 4.0])
         .unwrap();
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|session| {
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    (|session: &mut dyn tenferro_tensor::Engine| {
             let state = a.householder_qr(session)?;
             let state = state.append_columns(&b, session)?;
             let q = state.q_columns(0..4, QrOptions::default(), session)?;
@@ -53,8 +52,7 @@ fn compact_factor_and_append_reconstructs_f64() {
             ];
             assert_close(&product(f64_data(&q), 4, 4, f64_data(&r), 4), &expected);
             Ok::<(), tenferro_tensor::Error>(())
-        })
-        .unwrap()
+        })(&mut backend)
         .unwrap();
 }
 
@@ -63,9 +61,8 @@ fn compact_from_factors_reconstructs_f64() {
     let q = Tensor::from_vec_col_major(vec![4, 2], vec![1.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 1.0])
         .unwrap();
     let r = Tensor::from_vec_col_major(vec![2, 3], vec![2.0, 0.0, 3.0, 1.0, 4.0, 2.0]).unwrap();
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|session| {
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    (|session: &mut dyn tenferro_tensor::Engine| {
             let state = crate::HouseholderQr::<Tensor>::from_factors(&q, &r, session)?;
             let q_out = state.q_columns(0..3, QrOptions::default(), session)?;
             let r_out = state.r(QrOptions::default(), session)?;
@@ -75,8 +72,7 @@ fn compact_from_factors_reconstructs_f64() {
                 &expected,
             );
             Ok::<(), tenferro_tensor::Error>(())
-        })
-        .unwrap()
+        })(&mut backend)
         .unwrap();
 }
 
@@ -254,14 +250,14 @@ fn compact_factor_outputs_return_their_storage_to_the_pool() {
         }
     }
     let a = Tensor::from_vec_col_major(vec![64, 24], data).unwrap();
-    let mut backend = CpuBackend::new();
-    let empty = backend.buffer_pool_stats().unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    let empty = backend.buffer_pool_stats();
     assert_eq!(empty.capacity_bytes, 0, "a fresh backend retains nothing");
 
     let state = with_cpu_linalg(&mut backend, |session| a.householder_qr(session)).unwrap();
-    let checked_out = backend.buffer_pool_stats().unwrap();
+    let checked_out = backend.buffer_pool_stats();
     drop(state);
-    let returned = backend.buffer_pool_stats().unwrap();
+    let returned = backend.buffer_pool_stats();
     eprintln!(
         "checked out: {} buffers / {} B; returned: {} buffers / {} B",
         checked_out.buffers, checked_out.capacity_bytes, returned.buffers, returned.capacity_bytes
@@ -284,7 +280,7 @@ fn compact_factor_outputs_return_their_storage_to_the_pool() {
     // same storage must come back.
     let state = with_cpu_linalg(&mut backend, |session| a.householder_qr(session)).unwrap();
     drop(state);
-    let second = backend.buffer_pool_stats().unwrap();
+    let second = backend.buffer_pool_stats();
     assert_eq!(
         (second.buffers, second.capacity_bytes),
         (returned.buffers, returned.capacity_bytes),

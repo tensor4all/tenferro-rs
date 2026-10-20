@@ -70,8 +70,8 @@ fn batched_faer_lanes_reproduce_the_serial_batch() {
     let a = || faer_tensor(&[n, n, batch], &a_data);
     let b = || faer_tensor(&[n, batch], &b_data);
 
-    let mut serial = CpuBackend::with_threads(1).unwrap();
-    let mut parallel = CpuBackend::with_threads(4).unwrap();
+    let mut serial = tenferro_cpu::CpuEngine::serial();
+    let mut parallel = tenferro_cpu::CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(4).build().unwrap());
 
     let serial_factors = with_cpu_linalg(&mut serial, |s| s.lu_factor(&a())).unwrap();
     let parallel_factors = with_cpu_linalg(&mut parallel, |s| s.lu_factor(&a())).unwrap();
@@ -132,7 +132,7 @@ fn batched_faer_lanes_report_a_singular_member() {
         }
         let a = faer_tensor(&[n, n, batch], &a_data);
         let b = faer_tensor(&[n, batch], &rhs(n, 1, batch));
-        let mut backend = CpuBackend::with_threads(threads).unwrap();
+        let mut backend = tenferro_cpu::CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(threads).build().unwrap());
         let err = with_cpu_linalg(&mut backend, |s| s.lu_factor_solve(&a, &b)).unwrap_err();
         assert!(
             err.to_string().contains("singular"),
@@ -146,8 +146,8 @@ fn batched_faer_lanes_report_a_singular_member() {
 fn guarded_auto_batches_match_the_serial_results() {
     for (n, batch) in [(4usize, 64usize), (72, 2)] {
         let a = faer_tensor(&[n, n, batch], &pivoting(n, batch, 7));
-        let mut serial = CpuBackend::with_threads(1).unwrap();
-        let mut parallel = CpuBackend::with_threads(4).unwrap();
+        let mut serial = tenferro_cpu::CpuEngine::serial();
+        let mut parallel = tenferro_cpu::CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(4).build().unwrap());
         let reference = with_cpu_linalg(&mut serial, |s| s.lu(&a)).unwrap();
         let actual = with_cpu_linalg(&mut parallel, |s| s.lu(&a)).unwrap();
         for (actual, reference) in actual.iter().zip(&reference) {

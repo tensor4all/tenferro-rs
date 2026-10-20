@@ -246,11 +246,11 @@ fn traced_spectral_norm_preserves_signed_and_complex_input() {
         complex.norm(Some(-2.0), Some(&[0, 1]), false).unwrap(),
     ];
     let output_refs = outputs.iter().collect::<Vec<_>>();
-    let backend = tenferro_cpu::CpuBackend::with_threads(1).unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     assert_eq!(backend.num_threads(), 1);
     let runtime = support::cpu_runtime_with_linalg(&backend).unwrap();
     let program = GraphCompiler::new().compile_many(&output_refs).unwrap();
-    let results = runtime.run_compiled(&program, &[]).unwrap();
+    let results = support::run_program(&runtime, &mut backend, &program, &[]).unwrap();
 
     for result in results {
         assert!((get_f64_data(&result)[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);

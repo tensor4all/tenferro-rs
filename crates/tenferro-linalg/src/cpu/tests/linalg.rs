@@ -24,7 +24,7 @@ fn solve_read_accepts_owned_and_strided_inputs_for_compiled_providers() {
     let b_storage = vec![-1.0, 7.0, -1.0, 4.0];
 
     for _provider in compiled_linalg_providers() {
-        let mut backend = CpuBackend::with_threads(1).unwrap();
+        let mut backend = tenferro_cpu::CpuEngine::serial();
         with_cpu_linalg(&mut backend, |backend| {
             let owned = backend
                 .solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
@@ -62,7 +62,7 @@ fn solve_read_into_writes_owned_and_padded_column_major_outputs() {
     let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
 
     for _provider in compiled_linalg_providers() {
-        let mut backend = CpuBackend::with_threads(1).unwrap();
+        let mut backend = tenferro_cpu::CpuEngine::serial();
         with_cpu_linalg(&mut backend, |backend| {
             let mut owned = Tensor::from_vec_col_major([2, 1], vec![-9.0_f64; 2]).unwrap();
             backend
@@ -102,7 +102,7 @@ fn solve_read_into_rejects_bad_destination_before_mutation() {
     let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
 
     for _provider in compiled_linalg_providers() {
-        let mut backend = CpuBackend::with_threads(1).unwrap();
+        let mut backend = tenferro_cpu::CpuEngine::serial();
         with_cpu_linalg(&mut backend, |backend| {
             let mut out = Tensor::from_vec_col_major([3, 1], vec![-23.0_f64; 3]).unwrap();
             let error = backend
@@ -129,7 +129,7 @@ fn solve_read_into_covers_public_extension_complex_rhs_and_singular_atomicity() 
     let a = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap();
     let b = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 4.0, 4.0, 8.0]).unwrap();
     let mut out = Tensor::from_vec_col_major([2, 2], vec![-31.0_f64; 4]).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         TensorRead::from_tensor(&a)
             .solve_read_into(
@@ -208,7 +208,7 @@ fn output_from_rhs_view_covers_vector_matrix_and_rank_validation() {
     let rank3_storage = [19.0];
     let rank3 =
         TypedTensorView::from_slice(vec![1, 1, 1], vec![1, 1, 1], 0, &rank3_storage).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     with_cpu_linalg(&mut backend, |backend| {
         backend
@@ -307,7 +307,7 @@ fn output_from_rhs_view_covers_vector_matrix_and_rank_validation() {
 fn solve_accepts_tiny_nonzero_real_and_complex_pivots_for_compiled_providers() {
     // What: ordinary and prepared solve treat scaling as units, not as an implicit rank cutoff.
     for _provider in compiled_linalg_providers() {
-        let mut backend = CpuBackend::with_threads(1).unwrap();
+        let mut backend = tenferro_cpu::CpuEngine::serial();
         with_cpu_linalg(&mut backend, |backend| {
             let scale = 2.0_f32.powi(-80);
             let a = Tensor::from_vec_col_major([2, 2], vec![scale, 0.0, 0.0, 2.0 * scale]).unwrap();
@@ -404,7 +404,7 @@ fn triangular_solve_read_accepts_owned_and_strided_inputs_for_compiled_providers
     let b_storage = vec![-1.0, 5.0, -1.0, 6.0];
 
     for _provider in compiled_linalg_providers() {
-        let mut backend = CpuBackend::with_threads(1).unwrap();
+        let mut backend = tenferro_cpu::CpuEngine::serial();
         with_cpu_linalg(&mut backend, |backend| {
             let owned = backend
                 .triangular_solve_read(
@@ -442,7 +442,7 @@ fn triangular_solve_read_accepts_owned_and_strided_inputs_for_compiled_providers
 fn svd_read_accepts_an_owned_tensor_read() {
     let input = Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let outputs = with_cpu_linalg(&mut backend, |backend| {
         backend.svd_read(TensorRead::from_tensor(&input))
     })
@@ -479,7 +479,7 @@ fn svd_canonicalizes_transposed_host_view_before_lapack() {
     let data = vec![1.0, -2.0, 3.0, 0.5, -1.0, 4.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let outputs = with_cpu_linalg(&mut backend, |backend| {
         backend.svd_read(TensorRead::from_view(TensorView::F64(view)))
     })
@@ -514,7 +514,7 @@ fn qr_read_canonicalizes_transposed_host_view_before_lapack() {
     let data = vec![1.0, -2.0, 3.0, 0.5, -1.0, 4.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let outputs = with_cpu_linalg(&mut backend, |backend| {
         backend.qr_read(TensorRead::from_view(TensorView::F64(view)))
     })
@@ -546,7 +546,7 @@ fn qr_read_canonicalizes_transposed_complex_host_view_before_lapack() {
     ];
     let a = TypedTensor::<Complex64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let outputs = with_cpu_linalg(&mut backend, |backend| {
         backend.qr_read(TensorRead::from_view(TensorView::C64(view)))
     })
@@ -571,7 +571,7 @@ fn eigh_read_canonicalizes_transposed_host_view_before_lapack() {
     let data = vec![4.0, 1.0, 1.0, 3.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let outputs = with_cpu_linalg(&mut backend, |backend| {
         backend.eigh_read(TensorRead::from_view(TensorView::F64(view)))
     })
@@ -612,7 +612,7 @@ fn eigh_read_canonicalizes_transposed_complex_host_view_before_lapack() {
     ];
     let a = TypedTensor::<Complex64>::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let outputs = with_cpu_linalg(&mut backend, |backend| {
         backend.eigh_read(TensorRead::from_view(TensorView::C64(view)))
     })
@@ -667,7 +667,7 @@ fn qr_read_accepts_all_supported_linalg_view_dtypes() {
     )
     .unwrap();
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         for (view, dtype) in [
             (
@@ -732,7 +732,7 @@ fn eigh_read_accepts_all_supported_linalg_view_dtypes() {
     )
     .unwrap();
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         for (view, value_dtype, vector_dtype) in [
             (
@@ -805,7 +805,7 @@ fn linalg_read_rejects_non_float_view_dtypes() {
         TypedTensor::<bool>::from_vec_col_major(vec![2, 2], vec![true, false, false, true])
             .unwrap();
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         assert_unsupported_dtype(
             backend.svd_read(TensorRead::from_view(TensorView::I32(i32_input.as_view()))),
@@ -939,7 +939,7 @@ fn cholesky_read_canonicalizes_transposed_host_view_before_factorization() {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
     // Transposed view of a symmetric matrix is still the same matrix, so cholesky should succeed.
     let view = a.as_view().transpose_view([1, 0]).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let output = with_cpu_linalg(&mut backend, |backend| {
         backend.cholesky_read(TensorRead::from_view(TensorView::F64(view)))
     })
@@ -960,7 +960,7 @@ fn lu_read_canonicalizes_transposed_host_view_before_factorization() {
     let data = vec![1.0_f64, 2.0, 3.0, 4.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let outputs = with_cpu_linalg(&mut backend, |backend| {
         backend.lu_read(TensorRead::from_view(TensorView::F64(view)))
     })
@@ -990,7 +990,7 @@ fn full_piv_lu_read_canonicalizes_transposed_host_view_before_factorization() {
     let data = vec![1.0_f64, 2.0, 3.0, 4.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let outputs = with_cpu_linalg(&mut backend, |backend| {
         backend.full_piv_lu_read(TensorRead::from_view(TensorView::F64(view)))
     })
@@ -1022,7 +1022,7 @@ fn eig_read_returns_correct_outputs_for_diagonal_matrix() {
     // diagonal matrix [[2, 0], [0, 3]] col-major: [2, 0, 0, 3]
     let data = vec![2.0_f64, 0.0, 0.0, 3.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let outputs = with_cpu_linalg(&mut backend, |backend| {
         backend.eig_read(TensorRead::from_view(TensorView::F64(a.as_view())))
     })
@@ -1048,7 +1048,7 @@ macro_rules! real_rotation_eig_residual_test {
             );
 
             for _provider in compiled_linalg_providers() {
-                let mut backend = CpuBackend::with_threads(1).unwrap();
+                let mut backend = tenferro_cpu::CpuEngine::serial();
                 let outputs = with_cpu_linalg(&mut backend, |backend| backend.eig(&input)).unwrap();
                 let mut residual_squared = 0.0_f64;
                 let mut vector_squared = 0.0_f64;
@@ -1093,7 +1093,7 @@ real_rotation_eig_residual_test!(
 
 #[test]
 fn cholesky_read_accepts_all_supported_linalg_view_dtypes() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         let spd_f32 =
             TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![4.0_f32, 2.0, 2.0, 3.0])
@@ -1150,7 +1150,7 @@ fn cholesky_read_accepts_all_supported_linalg_view_dtypes() {
 
 #[test]
 fn lu_read_accepts_all_supported_linalg_view_dtypes() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         let mat_f32 =
             TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0])
@@ -1207,7 +1207,7 @@ fn lu_read_accepts_all_supported_linalg_view_dtypes() {
 
 #[test]
 fn full_piv_lu_read_accepts_all_supported_linalg_view_dtypes() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         let mat_f32 =
             TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0])
@@ -1264,7 +1264,7 @@ fn full_piv_lu_read_accepts_all_supported_linalg_view_dtypes() {
 
 #[test]
 fn eig_read_accepts_all_supported_linalg_view_dtypes() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         // Use diagonal matrices so eig is well-conditioned
         let mat_f32 =
@@ -1342,7 +1342,7 @@ fn test_batched_cholesky() {
         )
         .unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let out = with_cpu_linalg(&mut backend, |backend| backend.cholesky(&input)).unwrap();
 
     assert_eq!(out.shape(), &[3, 3, 2]);
@@ -1369,7 +1369,7 @@ fn test_batched_svd() {
         )
         .unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let out = with_cpu_linalg(&mut backend, |backend| backend.svd(&input)).unwrap();
 
     assert_eq!(out.len(), 3);
@@ -1400,7 +1400,7 @@ fn test_batched_qr() {
         )
         .unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let out = with_cpu_linalg(&mut backend, |backend| backend.qr(&input)).unwrap();
 
     assert_eq!(out.len(), 2);
@@ -1436,7 +1436,7 @@ fn test_batched_solve() {
             .unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
 
     assert_eq!(x.shape(), &[3, 1, 2]);
@@ -1462,7 +1462,7 @@ fn test_triangular_solve_lower() {
         TypedTensor::from_vec_col_major(vec![3, 1], b_data.clone()).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = with_cpu_linalg(&mut backend, |backend| {
         backend.triangular_solve(&l, &b, true, true, false, false)
     })
@@ -1491,7 +1491,7 @@ fn test_triangular_solve_right_side_unit_transpose() {
         TypedTensor::from_vec_col_major(vec![1, 2], b_data.clone()).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = with_cpu_linalg(&mut backend, |backend| {
         backend.triangular_solve(&a, &b, false, true, true, true)
     })
@@ -1545,7 +1545,7 @@ fn test_triangular_solve_covers_all_real_branch_combinations() {
                     let b = Tensor::from_typed::<f64>(
                         TypedTensor::from_vec_col_major(vec![2, 2], b_data).unwrap(),
                     );
-                    let mut backend = CpuBackend::new();
+                    let mut backend = tenferro_cpu::CpuEngine::serial();
                     let x = with_cpu_linalg(&mut backend, |backend| {
                         backend.triangular_solve(
                             &a,
@@ -1608,7 +1608,7 @@ fn test_batched_complex_solve() {
         .unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
 
     assert_eq!(x.shape(), &[2, 1, 2]);
@@ -1634,7 +1634,7 @@ fn test_real_solve_non_batched() {
         TypedTensor::from_vec_col_major(vec![2, 2], b_data.clone()).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
 
     let x_data = x
@@ -1653,7 +1653,7 @@ fn test_real_lu_returns_permutation_factors_and_parity() {
     let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]).unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let outputs = with_cpu_linalg(&mut backend, |backend| backend.lu(&input)).unwrap();
 
     assert_eq!(outputs.len(), 4);
@@ -1675,7 +1675,7 @@ fn test_real_eig_returns_complex_outputs() {
     let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]).unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let outputs = with_cpu_linalg(&mut backend, |backend| backend.eig(&input)).unwrap();
 
     assert_eq!(outputs.len(), 2);
@@ -1716,7 +1716,7 @@ fn test_batched_complex_eigh() {
         .unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let out = with_cpu_linalg(&mut backend, |backend| backend.eigh(&input)).unwrap();
 
     assert_eq!(out.len(), 2);
@@ -1749,7 +1749,7 @@ fn test_real_eigh() {
         TypedTensor::from_vec_col_major(vec![2, 2], a_data.clone()).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let out = with_cpu_linalg(&mut backend, |backend| backend.eigh(&input)).unwrap();
 
     assert_eq!(out.len(), 2);
@@ -1780,7 +1780,7 @@ fn test_real_cholesky_returns_error_for_non_positive_definite_input() {
     let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 2.0, 1.0]).unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let err = with_cpu_linalg(&mut backend, |backend| backend.cholesky(&input)).unwrap_err();
     assert!(matches!(
         err,
@@ -1800,7 +1800,7 @@ fn test_real_solve_returns_error_for_singular_matrix() {
     let b = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 1.0]).unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let err = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap_err();
     assert!(matches!(
         err,
@@ -1828,7 +1828,7 @@ fn test_complex_cholesky() {
         TypedTensor::from_vec_col_major(vec![2, 2], a.clone()).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let out = with_cpu_linalg(&mut backend, |backend| backend.cholesky(&input)).unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
@@ -1853,7 +1853,7 @@ fn test_complex_cholesky_returns_error_for_non_positive_definite_input() {
         )
         .unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let err = with_cpu_linalg(&mut backend, |backend| backend.cholesky(&input)).unwrap_err();
     assert!(matches!(
         err,
@@ -1879,7 +1879,7 @@ fn test_complex_qr() {
         TypedTensor::from_vec_col_major(vec![3, 2], input_data.clone()).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let out = with_cpu_linalg(&mut backend, |backend| backend.qr(&input)).unwrap();
 
     assert_eq!(out.len(), 2);
@@ -1907,7 +1907,7 @@ fn test_complex_svd() {
     let input = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(vec![3, 2], input_data.clone()).unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let out = with_cpu_linalg(&mut backend, |backend| backend.svd(&input)).unwrap();
 
     assert_eq!(out.len(), 3);
@@ -1949,7 +1949,7 @@ fn test_complex_triangular_solve_right_side_unit_transpose() {
         TypedTensor::from_vec_col_major(vec![1, 2], b_data.clone()).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = with_cpu_linalg(&mut backend, |backend| {
         backend.triangular_solve(&a, &b, false, true, true, true)
     })
@@ -2018,7 +2018,7 @@ fn test_triangular_solve_covers_all_complex_branch_combinations() {
                     let b = Tensor::from_typed::<tenferro_tensor::Complex64>(
                         TypedTensor::from_vec_col_major(vec![2, 2], b_data).unwrap(),
                     );
-                    let mut backend = CpuBackend::new();
+                    let mut backend = tenferro_cpu::CpuEngine::serial();
                     let x = with_cpu_linalg(&mut backend, |backend| {
                         backend.triangular_solve(
                             &a,
@@ -2066,7 +2066,7 @@ fn test_complex_solve_returns_error_for_singular_matrix() {
         )
         .unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let err = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap_err();
     assert!(matches!(
         err,
@@ -2084,7 +2084,7 @@ fn svd_read_faer_strided_view_matches_contiguous() {
     let data = vec![1.0_f64, -2.0, 3.0, 0.5, -1.0, 4.0]; // 2x3 col-major
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap(); // 3x2 strided
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let out = with_cpu_linalg(&mut backend, |backend| {
         backend.svd_read(TensorRead::from_view(TensorView::F64(view)))
     })
@@ -2116,7 +2116,7 @@ fn svd_read_faer_strided_c64_view() {
     ];
     let a = TypedTensor::<Complex64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap(); // 3x2 strided
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let out = with_cpu_linalg(&mut backend, |backend| {
         backend.svd_read(TensorRead::from_view(TensorView::C64(view)))
     })
@@ -2152,7 +2152,7 @@ fn qr_read_faer_strided_view_matches_contiguous() {
     let data = vec![1.0_f64, -2.0, 3.0, 0.5, -1.0, 4.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap(); // 3x2 strided
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let out = with_cpu_linalg(&mut backend, |backend| {
         backend.qr_read(TensorRead::from_view(TensorView::F64(view)))
     })
@@ -2176,7 +2176,7 @@ fn eigh_read_faer_strided_view_matches_contiguous() {
     let data = vec![4.0_f64, 1.0, 1.0, 3.0]; // 2x2 symmetric
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap(); // 2x2 strided (still symmetric)
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let out = with_cpu_linalg(&mut backend, |backend| {
         backend.eigh_read(TensorRead::from_view(TensorView::F64(view)))
     })
@@ -2331,7 +2331,7 @@ fn svd_read_to_contiguous_fallback_rank3_all_dtypes() {
     let c32_t = rank3_batched_2x2_c32();
     let c64_t = rank3_batched_2x2_c64();
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         // F32: view is rank-3 so faer_strided_ok returns false; fallback is taken.
         let outs = backend
@@ -2383,7 +2383,7 @@ fn qr_read_to_contiguous_fallback_rank3_all_dtypes() {
     let c32_t = rank3_batched_2x2_c32();
     let c64_t = rank3_batched_2x2_c64();
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         for (view, dtype) in [
             (
@@ -2461,7 +2461,7 @@ fn eigh_read_to_contiguous_fallback_rank3_all_dtypes() {
     )
     .unwrap();
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         // Real dtypes: eigenvalues are same dtype, eigenvectors same dtype.
         let outs = backend
@@ -2511,7 +2511,7 @@ fn cholesky_read_to_contiguous_fallback_rank3_all_dtypes() {
     let c32_t = rank3_batched_spd_2x2_c32();
     let c64_t = rank3_batched_spd_2x2_c64();
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         let out = backend
             .cholesky_read(TensorRead::from_view(TensorView::F32(f32_t.as_view())))
@@ -2547,7 +2547,7 @@ fn lu_read_to_contiguous_fallback_rank3_all_dtypes() {
     let c32_t = rank3_batched_2x2_c32();
     let c64_t = rank3_batched_2x2_c64();
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         for (view, dtype) in [
             (
@@ -2591,7 +2591,7 @@ fn full_piv_lu_read_to_contiguous_fallback_rank3_all_dtypes() {
     let c32_t = rank3_batched_2x2_c32();
     let c64_t = rank3_batched_2x2_c64();
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     with_cpu_linalg(&mut backend, |backend| {
         for (view, dtype) in [
             (

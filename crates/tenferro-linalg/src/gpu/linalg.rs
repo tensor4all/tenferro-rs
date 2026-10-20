@@ -2,27 +2,17 @@ use std::ffi::c_void;
 use std::ops::Neg;
 use std::os::raw::c_char;
 
-use cubecl::prelude::{
-    ComplexCore, CubeElement, CubeMul, CubeNeg, CubePartialOrd, CubePrimitive, Scalar,
-};
+use cubecl::prelude::{ComplexCore, CubeElement, CubeMul, CubeNeg, CubePartialOrd, CubePrimitive, Scalar};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
-use super::ffi::cusolver::{
-    CublasDiagType, CublasFillMode, CublasOperation, CublasPointerMode, CublasSideMode,
-    CudaDataType, CudaLinalgHandles, CudaStream, CusolverEigMode,
-};
+use super::ffi::cusolver::{CublasDiagType, CublasFillMode, CublasOperation, CublasPointerMode, CublasSideMode, CudaDataType, CudaLinalgHandles, CudaStream, CusolverEigMode};
 use super::kernels as cubecl_linalg;
 use crate::backend::CompactQrResult;
 use crate::extension::{EighDriver, QrGauge, QrOptions, SvdDriver};
-use tenferro_gpu::{
-    cuda::cubecl::Session as CubeclSession, cuda::download_tensor, cuda::CudaExecSession,
-};
+use tenferro_gpu::{cuda::cubecl::Session as CubeclSession, cuda::download_tensor, cuda::CudaEngine};
 use tenferro_tensor::config::SliceConfig;
-use tenferro_tensor::{
-    DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorRead, TensorReduction,
-    TensorScalar, TensorStructural, TypedTensor, ValidationError,
-};
+use tenferro_tensor::{DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorRead, TensorReduction, TensorScalar, TensorStructural, TypedTensor, ValidationError};
 
 type Result<T> = tenferro_tensor::Result<T>;
 
@@ -35,14 +25,14 @@ trait LinalgScalar:
     const NEEDS_RWORK: bool;
 
     fn copy_matrix_adjoint(
-        backend: &mut CudaExecSession<'_>,
+        backend: &mut CudaEngine,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
     ) -> Result<TypedTensor<Self>>;
 
     fn apply_positive_qr_gauge(
-        backend: &mut CudaExecSession<'_>,
+        backend: &mut CudaEngine,
         q: &mut TypedTensor<Self>,
         r: &mut TypedTensor<Self>,
         q_start: usize,
@@ -57,7 +47,7 @@ impl LinalgScalar for f32 {
     const NEEDS_RWORK: bool = false;
 
     fn copy_matrix_adjoint(
-        backend: &mut CudaExecSession<'_>,
+        backend: &mut CudaEngine,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
@@ -66,7 +56,7 @@ impl LinalgScalar for f32 {
     }
 
     fn apply_positive_qr_gauge(
-        backend: &mut CudaExecSession<'_>,
+        backend: &mut CudaEngine,
         q: &mut TypedTensor<Self>,
         r: &mut TypedTensor<Self>,
         q_start: usize,
@@ -83,7 +73,7 @@ impl LinalgScalar for f64 {
     const NEEDS_RWORK: bool = false;
 
     fn copy_matrix_adjoint(
-        backend: &mut CudaExecSession<'_>,
+        backend: &mut CudaEngine,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
@@ -92,7 +82,7 @@ impl LinalgScalar for f64 {
     }
 
     fn apply_positive_qr_gauge(
-        backend: &mut CudaExecSession<'_>,
+        backend: &mut CudaEngine,
         q: &mut TypedTensor<Self>,
         r: &mut TypedTensor<Self>,
         q_start: usize,
@@ -109,7 +99,7 @@ impl LinalgScalar for Complex32 {
     const NEEDS_RWORK: bool = true;
 
     fn copy_matrix_adjoint(
-        backend: &mut CudaExecSession<'_>,
+        backend: &mut CudaEngine,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
@@ -118,7 +108,7 @@ impl LinalgScalar for Complex32 {
     }
 
     fn apply_positive_qr_gauge(
-        backend: &mut CudaExecSession<'_>,
+        backend: &mut CudaEngine,
         q: &mut TypedTensor<Self>,
         r: &mut TypedTensor<Self>,
         q_start: usize,
@@ -135,7 +125,7 @@ impl LinalgScalar for Complex64 {
     const NEEDS_RWORK: bool = true;
 
     fn copy_matrix_adjoint(
-        backend: &mut CudaExecSession<'_>,
+        backend: &mut CudaEngine,
         v: &TypedTensor<Self>,
         vt_shape: &[usize],
         op: &'static str,
@@ -144,7 +134,7 @@ impl LinalgScalar for Complex64 {
     }
 
     fn apply_positive_qr_gauge(
-        backend: &mut CudaExecSession<'_>,
+        backend: &mut CudaEngine,
         q: &mut TypedTensor<Self>,
         r: &mut TypedTensor<Self>,
         q_start: usize,
@@ -297,7 +287,7 @@ fn ensure_cubecl_resident_typed<T: 'static>(
     }
 }
 
-pub(super) fn cholesky(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Tensor> {
+pub(super) fn cholesky(backend: &mut CudaEngine, input: &Tensor) -> Result<Tensor> {
     match input.dtype() {
         DType::F32 => cholesky_typed(backend, typed_host::<f32>("cholesky", input)?)
             .map(Tensor::from_typed::<f32>),
@@ -313,7 +303,7 @@ pub(super) fn cholesky(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Res
 }
 
 pub(super) fn triangular_solve(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     a: &Tensor,
     b: &Tensor,
     left_side: bool,
@@ -370,7 +360,7 @@ fn triangular_solve_operands<'a, T: TensorScalar>(
     Ok((a_t, b_t))
 }
 
-pub(super) fn lu(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn lu(backend: &mut CudaEngine, input: &Tensor) -> Result<Vec<Tensor>> {
     match input.dtype() {
         DType::F32 => {
             lu_typed(backend, typed_host::<f32>("lu", input)?).map(|(p, l, u, parity)| {
@@ -417,7 +407,7 @@ pub(super) fn lu(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Ve
     }
 }
 
-pub(super) fn lu_factor(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn lu_factor(backend: &mut CudaEngine, input: &Tensor) -> Result<Vec<Tensor>> {
     lu_factor_with_op(backend, input, "lu_factor")
 }
 
@@ -427,7 +417,7 @@ pub(super) fn lu_factor(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Re
 /// and the permutation parity. The forward solve uses `lu_factor_for_solve`
 /// instead and skips both.
 fn lu_factor_with_op(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &Tensor,
     op: &'static str,
 ) -> Result<Vec<Tensor>> {
@@ -482,7 +472,7 @@ fn lu_factor_with_op(
 /// acceptable. The public `lu_factor`/`lu` operations keep the status check and
 /// parity output.
 fn lu_factor_for_solve(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
     match input.dtype() {
@@ -530,7 +520,7 @@ fn lu_factor_for_solve(
 }
 
 pub(super) fn full_piv_lu(
-    _backend: &mut CudaExecSession<'_>,
+    _backend: &mut CudaEngine,
     _input: &Tensor,
 ) -> Result<Vec<Tensor>> {
     Err(Error::unsupported(
@@ -540,7 +530,7 @@ pub(super) fn full_piv_lu(
 }
 
 pub(super) fn full_piv_lu_solve(
-    _backend: &mut CudaExecSession<'_>,
+    _backend: &mut CudaEngine,
     _a: &Tensor,
     _b: &Tensor,
     _transpose_a: bool,
@@ -552,7 +542,7 @@ pub(super) fn full_piv_lu_solve(
 }
 
 pub(super) fn svd(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &Tensor,
     driver: SvdDriver,
 ) -> Result<Vec<Tensor>> {
@@ -560,12 +550,12 @@ pub(super) fn svd(
 }
 
 /// Full-matrices SVD: `U` is `m x m` and `Vt` is `n x n`.
-pub(super) fn svd_full(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn svd_full(backend: &mut CudaEngine, input: &Tensor) -> Result<Vec<Tensor>> {
     svd_dispatch(backend, input, true, SvdDriver::Auto)
 }
 
 fn svd_dispatch(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &Tensor,
     full: bool,
     driver: SvdDriver,
@@ -614,7 +604,7 @@ fn svd_dispatch(
 }
 
 pub(super) fn svd_values(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &Tensor,
     driver: SvdDriver,
 ) -> Result<Tensor> {
@@ -640,7 +630,7 @@ pub(super) fn svd_values(
     }
 }
 
-pub(super) fn qr(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn qr(backend: &mut CudaEngine, input: &Tensor) -> Result<Vec<Tensor>> {
     match input.dtype() {
         DType::F32 => qr_typed(backend, typed_host::<f32>("qr", input)?)
             .map(|(q, r)| vec![Tensor::from_typed::<f32>(q), Tensor::from_typed::<f32>(r)]),
@@ -664,7 +654,7 @@ pub(super) fn qr(backend: &mut CudaExecSession<'_>, input: &Tensor) -> Result<Ve
 }
 
 pub(super) fn rank_revealing_qr(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &Tensor,
     options: crate::RankRevealingQrOptions,
 ) -> Result<Vec<Tensor>> {
@@ -672,7 +662,7 @@ pub(super) fn rank_revealing_qr(
 }
 
 pub(super) fn householder_qr(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &Tensor,
 ) -> Result<CompactQrResult> {
     let (packed, coeff) = match input.dtype() {
@@ -729,7 +719,7 @@ pub(super) fn householder_qr(
 }
 
 fn upper_trapezoidal_violation_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     op: &'static str,
 ) -> Result<TypedTensor<i32>>
@@ -762,7 +752,7 @@ where
 }
 
 fn validate_upper_trapezoidal_gpu(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     r: &Tensor,
     op: &'static str,
 ) -> Result<()> {
@@ -822,7 +812,7 @@ fn compact_qr_operands<'a, T: TensorScalar>(
 }
 
 pub(super) fn householder_qr_from_factors(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     q: &Tensor,
     r: &Tensor,
 ) -> Result<CompactQrResult> {
@@ -880,7 +870,7 @@ fn qr_append_operands<'a, T: TensorScalar>(
 }
 
 pub(super) fn householder_qr_append(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     packed: &Tensor,
     coeff: &Tensor,
     block: &Tensor,
@@ -949,7 +939,7 @@ fn qr_q_columns_operands<'a, T: TensorScalar>(
 }
 
 pub(super) fn householder_qr_q_columns(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     packed: &Tensor,
     coeff: &Tensor,
     start: usize,
@@ -1032,7 +1022,7 @@ fn qr_r_operands<'a, T: TensorScalar>(
 }
 
 pub(super) fn householder_qr_r(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     packed: &Tensor,
     coeff: &Tensor,
     options: QrOptions,
@@ -1068,7 +1058,7 @@ pub(super) fn householder_qr_r(
 }
 
 pub(super) fn qr_with_options(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &Tensor,
     options: QrOptions,
 ) -> Result<Vec<Tensor>> {
@@ -1080,7 +1070,7 @@ pub(super) fn qr_with_options(
 }
 
 fn apply_qr_gauge_device(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     outputs: &mut [Tensor],
     q_start: usize,
     op: &'static str,
@@ -1130,7 +1120,7 @@ fn gauge_pair_mut<'a, T: TensorScalar>(
 }
 
 pub(super) fn eigh(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &Tensor,
     driver: EighDriver,
 ) -> Result<Vec<Tensor>> {
@@ -1161,7 +1151,7 @@ pub(super) fn eigh(
 }
 
 pub(super) fn eigh_values(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &Tensor,
     driver: EighDriver,
 ) -> Result<Tensor> {
@@ -1189,17 +1179,17 @@ pub(super) fn eigh_values(
     }
 }
 
-pub(super) fn eig(_backend: &mut CudaExecSession<'_>, _input: &Tensor) -> Result<Vec<Tensor>> {
+pub(super) fn eig(_backend: &mut CudaEngine, _input: &Tensor) -> Result<Vec<Tensor>> {
     Err(Error::unsupported(
         "eig",
         "non-symmetric eigendecomposition is not supported on the CubeCL GPU backend \
                   because cuSOLVER does not provide it. Download to CPU explicitly via \
-                  `backend.download_to_host(&gpu_tensor)?` and then call `CpuBackend::eig`."
+                  `backend.download_to_host(&gpu_tensor)?` and then call `CpuEngine::eig`."
             .to_string(),
     ))
 }
 
-pub(super) fn solve(backend: &mut CudaExecSession<'_>, a: &Tensor, b: &Tensor) -> Result<Tensor> {
+pub(super) fn solve(backend: &mut CudaEngine, a: &Tensor, b: &Tensor) -> Result<Tensor> {
     const OP: &str = "solve";
 
     ensure_cubecl_resident_tensor(OP, a)?;
@@ -1247,7 +1237,7 @@ fn lu_solve_operands<'a, T: TensorScalar>(
 }
 
 pub(super) fn lu_solve_prepared(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     a: &Tensor,
     packed_lu: &Tensor,
     pivots: &Tensor,
@@ -1318,7 +1308,7 @@ pub(super) fn lu_solve_prepared(
 }
 
 fn cholesky_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
 ) -> Result<TypedTensor<T>>
 where
@@ -1438,11 +1428,11 @@ where
         Ok(work)
     })?;
 
-    backend.tril_typed(&work, 0)
+    backend.linalg_tril_typed(&work, 0)
 }
 
 fn triangular_solve_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     left_side: bool,
@@ -1472,7 +1462,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn triangular_solve_typed_with_op<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
     left_side: bool,
@@ -1648,7 +1638,7 @@ where
 
 #[allow(clippy::type_complexity)]
 fn lu_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
 ) -> Result<(
     TypedTensor<T>,
@@ -1669,7 +1659,7 @@ where
 }
 
 fn lu_factor_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     op: &'static str,
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
@@ -1687,7 +1677,7 @@ where
 }
 
 fn lu_factor_for_solve_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     op: &'static str,
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>)>
@@ -1703,7 +1693,7 @@ where
 /// pivot as `Singular`; the forward solve passes `false` and issues no host
 /// round trip.
 fn lu_factor_core<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     op: &'static str,
     check_status: bool,
@@ -1844,7 +1834,7 @@ where
 }
 
 fn lu_solve_prepared_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     packed_lu: &TypedTensor<T>,
     pivots: &TypedTensor<i32>,
     b: &TypedTensor<T>,
@@ -1916,7 +1906,7 @@ where
 }
 
 fn copy_matrix_adjoint_real<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     v: &TypedTensor<T>,
     vt_shape: &[usize],
     op: &'static str,
@@ -1932,7 +1922,7 @@ where
 }
 
 fn copy_matrix_adjoint_complex<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     v: &TypedTensor<T>,
     vt_shape: &[usize],
     op: &'static str,
@@ -1948,7 +1938,7 @@ where
 }
 
 fn clone_device_tensor<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     op: &'static str,
 ) -> Result<TypedTensor<T>>
@@ -1974,7 +1964,7 @@ where
 }
 
 fn apply_positive_qr_gauge_real<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     q: &mut TypedTensor<T>,
     r: &mut TypedTensor<T>,
     q_start: usize,
@@ -2040,7 +2030,7 @@ where
 }
 
 fn apply_positive_qr_gauge_c32(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     q: &mut TypedTensor<Complex32>,
     r: &mut TypedTensor<Complex32>,
     q_start: usize,
@@ -2096,7 +2086,7 @@ fn apply_positive_qr_gauge_c32(
 }
 
 fn apply_positive_qr_gauge_c64(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     q: &mut TypedTensor<Complex64>,
     r: &mut TypedTensor<Complex64>,
     q_start: usize,
@@ -2217,7 +2207,7 @@ where
 
 #[allow(clippy::type_complexity)]
 fn svd_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     full: bool,
     driver: SvdDriver,
@@ -2627,7 +2617,7 @@ where
 /// upload, not a device-to-host-to-device roundtrip of computed values.
 #[allow(clippy::type_complexity)]
 fn empty_svd_outputs<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     full: bool,
     u_shape: &[usize],
@@ -2668,7 +2658,7 @@ where
 
 /// Upload a stack of column-major identity matrices shaped `[dim, dim, ..batch]`.
 fn upload_identity_stack<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     shape: &[usize],
     op: &'static str,
 ) -> Result<TypedTensor<T>>
@@ -2696,7 +2686,7 @@ where
 }
 
 fn svd_values_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     driver: SvdDriver,
 ) -> Result<TypedTensor<<T as LinalgScalar>::Real>>
@@ -3048,7 +3038,7 @@ mod tests;
 use householder_qr::*;
 
 fn qr_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
 ) -> Result<(TypedTensor<T>, TypedTensor<T>)>
 where
@@ -3255,13 +3245,13 @@ where
         Ok((q, work))
     })?;
 
-    let r_input = backend.slice_typed(&work, &matrix_slice_config(input.shape(), k, n))?;
-    let r = backend.triu_typed(&r_input, 0)?;
+    let r_input = backend.linalg_slice_typed(&work, &matrix_slice_config(input.shape(), k, n))?;
+    let r = backend.linalg_triu_typed(&r_input, 0)?;
     Ok((q, r))
 }
 
 fn eigh_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     driver: EighDriver,
 ) -> Result<(TypedTensor<<T as LinalgScalar>::Real>, TypedTensor<T>)>
@@ -3576,7 +3566,7 @@ where
 }
 
 fn eigh_values_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     driver: EighDriver,
 ) -> Result<TypedTensor<<T as LinalgScalar>::Real>>
@@ -3889,7 +3879,7 @@ where
 
 #[allow(clippy::type_complexity)]
 fn build_lu_outputs_device<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     lu: &TypedTensor<T>,
     pivots: &TypedTensor<i32>,
     m: usize,
@@ -3956,7 +3946,7 @@ where
 }
 
 fn build_lu_parity_device<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     pivots: &TypedTensor<i32>,
     k: usize,
     batch_shape: &[usize],
@@ -3988,7 +3978,7 @@ where
 }
 
 fn fill_one_device_tensor<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     shape: &[usize],
     op: &'static str,
 ) -> Result<TypedTensor<T>>
@@ -4016,7 +4006,7 @@ where
 }
 
 fn apply_lu_pivots_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     pivots: &TypedTensor<i32>,
     inverse: bool,
@@ -4057,7 +4047,7 @@ where
 }
 
 fn zero_sized_lu_factor_pair<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     shape: &[usize],
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>)>
 where
@@ -4243,7 +4233,7 @@ unsafe fn batch_const_ptr<T>(base: *const c_void, offset: usize) -> *const c_voi
 }
 
 fn zero_like_linalg_device_tensor(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &Tensor,
     op: &'static str,
 ) -> Result<Tensor> {

@@ -409,23 +409,51 @@ fn fixed_transpose_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension::{
-        EighDriver, EighGauge, QrGauge, SvdDriver, SvdGauge, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
-    };
+    use crate::extension::{EighDriver, EighGauge, QrGauge, SvdDriver, SvdGauge, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS};
     use computegraph::graph::GraphBuilder;
     use std::collections::HashSet;
     use tenferro_ops::input_key::TensorInputKey;
     use tenferro_ops::{ShapeExtent, SymDim, TensorMeta};
     use tenferro_tensor::DType;
 
-    fn cpu_runtime_with_linalg(backend: &tenferro_cpu::CpuBackend) -> tenferro_runtime::Runtime {
+    /// Prepare and run `program` on a fresh serial CPU engine, returning owned outputs.
+    fn run_compiled_cpu(
+        runtime: &tenferro_runtime::Runtime,
+        program: &tenferro_runtime::CompiledGraph,
+        inputs: &[&tenferro_tensor::Tensor],
+    ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
+        run_compiled_on(runtime, &mut tenferro_cpu::CpuEngine::serial(), program, inputs)
+    }
+
+    /// Prepare and run `program` on `engine`, returning owned outputs.
+    fn run_compiled_on(
+        runtime: &tenferro_runtime::Runtime,
+        engine: &mut tenferro_cpu::CpuEngine,
+        program: &tenferro_runtime::CompiledGraph,
+        inputs: &[&tenferro_tensor::Tensor],
+    ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
+        use tenferro_runtime::ExecutionEngine;
+        let reads: Vec<tenferro_tensor::TensorRead<'_>> =
+            inputs.iter().map(|tensor| tenferro_tensor::TensorRead::from_tensor(tensor)).collect();
+        let prepared = runtime.prepare(program, &reads, &[engine.target()])?;
+        let outputs = {
+            let mut engines: [&mut dyn ExecutionEngine; 1] = [&mut *engine];
+            runtime.run(&mut engines, &prepared, &reads)?
+        };
+        outputs
+            .into_iter()
+            .map(|output| Ok(output.into_tensor(&mut *engine)?))
+            .collect()
+    }
+
+    fn cpu_runtime_with_linalg(backend: &tenferro_cpu::CpuEngine) -> tenferro_runtime::Runtime {
         let mut builder = tenferro_runtime::Runtime::builder();
         builder
             .register_engine(tenferro_cpu::runtime_engine_registration(backend).unwrap())
             .unwrap();
         builder
             .install_extension_module(
-                crate::extension::extension_module::<tenferro_cpu::CpuBackend>(
+                crate::extension::extension_module::<tenferro_cpu::CpuEngine>(
                     tenferro_cpu::runtime_engine_id().unwrap(),
                 )
                 .unwrap(),
@@ -439,7 +467,7 @@ mod tests {
         program: &tenferro_runtime::CompiledGraph,
         inputs: &[&tenferro_tensor::Tensor],
     ) -> tenferro_runtime::Result<tenferro_tensor::Tensor> {
-        let mut outputs = runtime.run_compiled(program, inputs)?;
+        let mut outputs = run_compiled_cpu(&runtime, program, inputs)?;
         assert_eq!(outputs.len(), 1);
         Ok(outputs.remove(0))
     }
@@ -1274,7 +1302,7 @@ mod tests {
         let compiled = GraphCompiler::new()
             .compile_frozen_program(jvp.frozen())
             .unwrap();
-        let backend = tenferro_cpu::CpuBackend::new();
+        let backend = tenferro_cpu::CpuEngine::serial();
         let runtime = cpu_runtime_with_linalg(&backend);
         let tangent = run_one(&runtime, &compiled, &[&matrix, &rhs, &rhs_tangent]).unwrap();
         assert_eq!(tangent.as_slice::<f64>().unwrap(), &[1.0, 0.75]);
@@ -1377,7 +1405,7 @@ mod tests {
             .unwrap();
         let matrix = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap();
         let tangent = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap();
-        let backend = tenferro_cpu::CpuBackend::new();
+        let backend = tenferro_cpu::CpuEngine::serial();
         let runtime = cpu_runtime_with_linalg(&backend);
 
         let jvp = ad.jvp_program(&source, &[true]).unwrap();
@@ -1561,13 +1589,13 @@ mod tests {
             let source = builder.finish(&roots).unwrap();
             let matrix = Tensor::from_vec_col_major(vec![2, 2], case.matrix.to_vec()).unwrap();
             let tangent = Tensor::from_vec_col_major(vec![2, 2], case.tangent.to_vec()).unwrap();
-            let backend = tenferro_cpu::CpuBackend::new();
+            let backend = tenferro_cpu::CpuEngine::serial();
             let runtime = cpu_runtime_with_linalg(&backend);
 
             let primal = GraphCompiler::new()
                 .compile_frozen_program(&source)
                 .unwrap();
-            let primal_outputs = runtime.run_compiled(&primal, &[&matrix]).unwrap();
+            let primal_outputs = run_compiled_cpu(&runtime, &primal, &[&matrix]).unwrap();
             let cotangents: Vec<_> = primal_outputs
                 .iter()
                 .map(|output| ones_tensor(output.dtype(), output.shape().to_vec()).unwrap())
@@ -1577,7 +1605,7 @@ mod tests {
             let jvp = GraphCompiler::new()
                 .compile_frozen_program(jvp.frozen())
                 .unwrap();
-            let tangent_outputs = runtime.run_compiled(&jvp, &[&matrix, &tangent]).unwrap();
+            let tangent_outputs = run_compiled_cpu(&runtime, &jvp, &[&matrix, &tangent]).unwrap();
             assert_eq!(
                 tangent_outputs.len(),
                 cotangents.len(),
@@ -1593,8 +1621,7 @@ mod tests {
                 .unwrap();
             let mut vjp_inputs = vec![&matrix];
             vjp_inputs.extend(cotangents.iter());
-            let input_cotangents = runtime
-                .run_compiled(&vjp, &vjp_inputs)
+            let input_cotangents = run_compiled_cpu(&runtime, &vjp, &vjp_inputs)
                 .unwrap_or_else(|error| panic!("{} semantic VJP execution: {error}", case.name));
             assert_eq!(input_cotangents.len(), 1, "{} VJP input order", case.name);
 
@@ -1718,7 +1745,7 @@ mod tests {
                                     .unwrap(),
                                 )
                             };
-                            let backend = tenferro_cpu::CpuBackend::new();
+                            let backend = tenferro_cpu::CpuEngine::serial();
                             let runtime = cpu_runtime_with_linalg(&backend);
 
                             let jvp = ad.jvp_program(&source, &[true, true]).unwrap();
@@ -1738,8 +1765,7 @@ mod tests {
                             let vjp = GraphCompiler::new()
                                 .compile_frozen_program(vjp.frozen())
                                 .unwrap();
-                            let input_cotangents = runtime
-                                .run_compiled(&vjp, &[&matrix, &rhs, &cotangent])
+                            let input_cotangents = run_compiled_cpu(&runtime, &vjp, &[&matrix, &rhs, &cotangent])
                                 .unwrap();
                             assert_eq!(input_cotangents.len(), 2);
 
@@ -1902,7 +1928,7 @@ mod tests {
                     )
                 };
 
-                let backend = tenferro_cpu::CpuBackend::new();
+                let backend = tenferro_cpu::CpuEngine::serial();
                 let runtime = cpu_runtime_with_linalg(&backend);
                 let factor_outputs = if matches!(case, SolveCase::Prepared { .. }) {
                     let mut factor_builder = SemanticProgramBuilder::new();
@@ -1922,7 +1948,7 @@ mod tests {
                     let factor_program = GraphCompiler::new()
                         .compile_frozen_program(&factor_source)
                         .unwrap();
-                    runtime.run_compiled(&factor_program, &[&matrix]).unwrap()
+                    run_compiled_cpu(&runtime, &factor_program, &[&matrix]).unwrap()
                 } else {
                     Vec::new()
                 };
@@ -1954,8 +1980,7 @@ mod tests {
                 let mut vjp_inputs = primal_inputs;
                 vjp_inputs.push(&cotangent);
                 let input_cotangents =
-                    runtime
-                        .run_compiled(&vjp, &vjp_inputs)
+                    run_compiled_cpu(&runtime, &vjp, &vjp_inputs)
                         .unwrap_or_else(|error| {
                             panic!("{name} complex={complex} semantic VJP execution: {error}")
                         });
@@ -2054,7 +2079,7 @@ mod tests {
             let vjp = GraphCompiler::new()
                 .compile_frozen_program(vjp.frozen())
                 .unwrap();
-            let backend = tenferro_cpu::CpuBackend::new();
+            let backend = tenferro_cpu::CpuEngine::serial();
             let runtime = cpu_runtime_with_linalg(&backend);
 
             for (rows, cols) in [(3, 2), (2, 3)] {
@@ -2078,8 +2103,7 @@ mod tests {
                     .collect();
                 let matrix = Tensor::from_vec_col_major(vec![rows, cols], matrix_data).unwrap();
                 let tangent = Tensor::from_vec_col_major(vec![rows, cols], tangent_data).unwrap();
-                let primal_outputs = runtime
-                    .run_compiled(&primal, &[&row_anchor, &col_anchor, &matrix])
+                let primal_outputs = run_compiled_cpu(&runtime, &primal, &[&row_anchor, &col_anchor, &matrix])
                     .unwrap_or_else(|error| {
                         panic!("{name} {rows}x{cols} symbolic primal execution: {error}")
                     });
@@ -2087,16 +2111,14 @@ mod tests {
                     .iter()
                     .map(|output| ones_tensor(output.dtype(), output.shape().to_vec()).unwrap())
                     .collect();
-                let tangent_outputs = runtime
-                    .run_compiled(&jvp, &[&row_anchor, &col_anchor, &matrix, &tangent])
+                let tangent_outputs = run_compiled_cpu(&runtime, &jvp, &[&row_anchor, &col_anchor, &matrix, &tangent])
                     .unwrap_or_else(|error| {
                         panic!("{name} {rows}x{cols} symbolic JVP execution: {error}")
                     });
                 let mut vjp_inputs = vec![&row_anchor, &col_anchor, &matrix];
                 vjp_inputs.extend(&cotangents);
                 let input_cotangents =
-                    runtime
-                        .run_compiled(&vjp, &vjp_inputs)
+                    run_compiled_cpu(&runtime, &vjp, &vjp_inputs)
                         .unwrap_or_else(|error| {
                             panic!("{name} {rows}x{cols} symbolic VJP execution: {error}")
                         });
@@ -2183,7 +2205,7 @@ mod tests {
             let compiled = GraphCompiler::new()
                 .compile_frozen_program(jvp.frozen())
                 .unwrap();
-            let backend = tenferro_cpu::CpuBackend::new();
+            let mut backend = tenferro_cpu::CpuEngine::serial();
             let runtime = cpu_runtime_with_linalg(&backend);
             let matrix =
                 Tensor::from_vec_col_major(vec![3, 2], vec![3.0_f64, 0.5, 0.25, 1.0, 4.0, 0.75])
@@ -2191,14 +2213,13 @@ mod tests {
             let tangent =
                 Tensor::from_vec_col_major(vec![3, 2], vec![0.2_f64, -0.1, 0.05, 0.3, 0.4, -0.2])
                     .unwrap();
-            let outputs = runtime
-                .run_compiled(&compiled, &[&matrix, &tangent])
+            let outputs = run_compiled_on(&runtime, &mut backend, &compiled, &[&matrix, &tangent])
                 .unwrap();
             drop(outputs);
             (
                 jvp_operations,
                 vjp_operations,
-                backend.buffer_pool_stats().unwrap().capacity_bytes,
+                backend.buffer_pool_stats().capacity_bytes,
             )
         }
 

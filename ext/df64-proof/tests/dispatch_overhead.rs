@@ -1,12 +1,12 @@
-//! Session and dispatch overhead for the contribution's operations.
+//! Dispatch overhead for the contribution's operations.
 //!
-//! #1789's fifth acceptance item asks for allocation counts and session/dispatch overhead under
+//! #1789's fifth acceptance item asks for allocation counts and dispatch overhead under
 //! the exact-baseline protocol with a verified thread count. The allocation numbers for the
 //! numerical bodies live in `scratch_allocation.rs`; this file measures the layer around them:
 //! the same tiny operation is run (a) as a preset `f64` program through the runtime's prepared
 //! hot path, (b) as the contribution's program through that same path, and (c) by calling the
 //! contribution's body directly. The difference between (b) and (c) is what the runtime's
-//! session and dispatch layer costs for a contribution operation, and (b) against (a) shows
+//! dispatch layer costs for a contribution operation, and (b) against (a) shows
 //! whether a contribution operation pays more for that layer than a preset one. The two
 //! programs do not compute the same function, so the comparison is of the layer rather than of
 //! the arithmetic, and the numbers are a report rather than a threshold.
@@ -22,13 +22,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use tenferro_cpu::{scalar_fold, CpuBackend};
+use tenferro_cpu::{scalar_fold, CpuEngine};
 use tenferro_df64_proof::extension::{Df64Total, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
+
+mod support;
+use support::{prepare_on, run_prepared_on};
 
 /// Counts every allocation the test process makes.
 struct Counting;
@@ -64,10 +67,15 @@ fn measure(iterations: usize, mut body: impl FnMut()) -> (usize, f64) {
     )
 }
 
-fn runtime() -> (Runtime, usize) {
+fn runtime() -> (Runtime, CpuEngine, usize) {
     // One worker thread, so the numbers are a reproducible baseline rather than a function of
     // this machine's core count.
-    let backend = CpuBackend::with_threads(1).expect("single-threaded CPU backend");
+    let backend = CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(1)
+            .build()
+            .expect("single-threaded CPU thread pool"),
+    );
     let threads = backend.num_threads();
     let mut builder = Runtime::builder();
     builder
@@ -76,7 +84,11 @@ fn runtime() -> (Runtime, usize) {
     builder
         .install_extension_module(tenferro_df64_proof::extension::module().expect("module"))
         .expect("install the Df64 module");
-    (builder.build().expect("runtime with the module"), threads)
+    (
+        builder.build().expect("runtime with the module"),
+        backend,
+        threads,
+    )
 }
 
 fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
@@ -87,9 +99,9 @@ fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
 }
 
 #[test]
-fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
+fn report_dispatch_overhead_for_a_contribution_operation() {
     let iterations = 2_000;
-    let (runtime, threads) = runtime();
+    let (runtime, mut engine, threads) = runtime();
     let mut compiler = GraphCompiler::new();
 
     // The protocol asks for the build profile, the features, the compiler version, and the
@@ -119,8 +131,7 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
         .expect("compiled preset program");
     let ordinary_value =
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("shape matches data");
-    let prepared_ordinary = runtime
-        .prepare_compiled(&ordinary_program, &[&ordinary_value])
+    let prepared_ordinary = prepare_on(&runtime, &engine, &ordinary_program, &[&ordinary_value])
         .expect("prepared preset program");
 
     // (b) The contribution's program through the same path.
@@ -135,11 +146,15 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
         .compile(&outputs[0])
         .expect("compiled contribution program");
     let contribution_value = external(values.clone(), vec![2]);
-    let prepared_contribution = runtime
-        .prepare_compiled(&contribution_program, &[&contribution_value])
-        .expect("prepared contribution program");
+    let prepared_contribution = prepare_on(
+        &runtime,
+        &engine,
+        &contribution_program,
+        &[&contribution_value],
+    )
+    .expect("prepared contribution program");
 
-    // (c) The contribution's body, with neither session nor dispatch in the way.
+    // (c) The contribution's body, with no dispatch in the way.
     let stored = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], values)
         .expect("shape matches data");
 
@@ -147,8 +162,7 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
     let ordinary_prepare = {
         let start = Instant::now();
         drop(
-            runtime
-                .prepare_compiled(&ordinary_program, &[&ordinary_value])
+            prepare_on(&runtime, &engine, &ordinary_program, &[&ordinary_value])
                 .expect("prepared preset program"),
         );
         start.elapsed().as_secs_f64() * 1e9
@@ -156,9 +170,13 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
     let contribution_prepare = {
         let start = Instant::now();
         drop(
-            runtime
-                .prepare_compiled(&contribution_program, &[&contribution_value])
-                .expect("prepared contribution program"),
+            prepare_on(
+                &runtime,
+                &engine,
+                &contribution_program,
+                &[&contribution_value],
+            )
+            .expect("prepared contribution program"),
         );
         start.elapsed().as_secs_f64() * 1e9
     };
@@ -167,31 +185,47 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
     // the warm condition. The protocol requires both to be recorded.
     let cold_start = Instant::now();
     drop(
-        runtime
-            .run_prepared(&prepared_ordinary, &[&ordinary_value])
-            .expect("cold preset execution"),
+        run_prepared_on(
+            &runtime,
+            &mut engine,
+            &prepared_ordinary,
+            &[&ordinary_value],
+        )
+        .expect("cold preset execution"),
     );
     let ordinary_cold_ns = cold_start.elapsed().as_secs_f64() * 1e9;
     let cold_start = Instant::now();
     drop(
-        runtime
-            .run_prepared(&prepared_contribution, &[&contribution_value])
-            .expect("cold contribution execution"),
+        run_prepared_on(
+            &runtime,
+            &mut engine,
+            &prepared_contribution,
+            &[&contribution_value],
+        )
+        .expect("cold contribution execution"),
     );
     let contribution_cold_ns = cold_start.elapsed().as_secs_f64() * 1e9;
 
     let (ordinary_allocations, ordinary_ns) = measure(iterations, || {
         drop(
-            runtime
-                .run_prepared(&prepared_ordinary, &[&ordinary_value])
-                .expect("preset execution"),
+            run_prepared_on(
+                &runtime,
+                &mut engine,
+                &prepared_ordinary,
+                &[&ordinary_value],
+            )
+            .expect("preset execution"),
         );
     });
     let (contribution_allocations, contribution_ns) = measure(iterations, || {
         drop(
-            runtime
-                .run_prepared(&prepared_contribution, &[&contribution_value])
-                .expect("contribution execution"),
+            run_prepared_on(
+                &runtime,
+                &mut engine,
+                &prepared_contribution,
+                &[&contribution_value],
+            )
+            .expect("contribution execution"),
         );
     });
     let (direct_allocations, direct_ns) = measure(iterations, || {
@@ -201,7 +235,7 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
     });
 
     println!(
-        "session and dispatch overhead ({iterations} warm iterations, {threads} worker thread):\n\
+        "dispatch overhead ({iterations} warm iterations, {threads} worker thread):\n\
          \x20 preparation, preset program:          {ordinary_prepare:>10.1} ns, once\n\
          \x20 preparation, contribution:            {contribution_prepare:>10.1} ns, once\n\
          \x20 cold, preset program:                 {ordinary_cold_ns:>10.1} ns, first execution\n\
@@ -209,7 +243,7 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
          \x20 warm, preset program:                 {ordinary_ns:>10.1} ns/op, {ordinary_allocations:>5} allocations\n\
          \x20 warm, contribution, runtime path:     {contribution_ns:>10.1} ns/op, {contribution_allocations:>5} allocations\n\
          \x20 warm, contribution body, direct call: {direct_ns:>10.1} ns/op, {direct_allocations:>5} allocations\n\
-         \x20 session and dispatch for the contribution: {:.1} ns/op over its body",
+         \x20 dispatch for the contribution: {:.1} ns/op over its body",
         contribution_ns - direct_ns
     );
 
@@ -220,16 +254,24 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
     // double the allocations but must not do more.
     let (ordinary_twice, _) = measure(iterations * 2, || {
         drop(
-            runtime
-                .run_prepared(&prepared_ordinary, &[&ordinary_value])
-                .expect("preset execution"),
+            run_prepared_on(
+                &runtime,
+                &mut engine,
+                &prepared_ordinary,
+                &[&ordinary_value],
+            )
+            .expect("preset execution"),
         );
     });
     let (contribution_twice, _) = measure(iterations * 2, || {
         drop(
-            runtime
-                .run_prepared(&prepared_contribution, &[&contribution_value])
-                .expect("contribution execution"),
+            run_prepared_on(
+                &runtime,
+                &mut engine,
+                &prepared_contribution,
+                &[&contribution_value],
+            )
+            .expect("contribution execution"),
         );
     });
     assert!(

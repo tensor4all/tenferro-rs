@@ -3,11 +3,14 @@
 //! Each test drives a shape the contribution must refuse and asserts the refusal, so the
 //! error branches are behavior rather than uncovered lines.
 
+mod support;
+
 use std::sync::Arc;
 
+use support::run_compiled;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::ad::Df64VjpRule;
 use tenferro_df64_proof::extension::{
     module, Df64Expand, Df64FromF64, Df64Qr, Df64QrJvp, Df64QrVjp, Df64ToF64, DF64_SCALAR_IDENTITY,
@@ -30,7 +33,7 @@ fn preset(values: Vec<f64>, shape: Vec<usize>) -> Tensor {
 }
 
 fn runtime_with_module() -> Runtime {
-    let backend = CpuBackend::new();
+    let backend = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
@@ -59,7 +62,7 @@ fn execute(graph: &TracedTensor) -> tenferro_runtime::Result<Vec<Tensor>> {
     let runtime = runtime_with_module();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(graph).expect("compiled program");
-    runtime.run_compiled(&program, &[])
+    run_compiled(&runtime, &program, &[])
 }
 
 #[test]

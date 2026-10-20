@@ -4,11 +4,14 @@
 //! broadcast is the contribution's own operation, so the rule emits one extension
 //! node and the runtime executes it through the same registered module.
 
+mod support;
+
 use std::sync::Arc;
 
+use support::run_compiled;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::ad::Df64VjpRule;
 use tenferro_df64_proof::extension::{module, Df64Total, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
@@ -36,7 +39,7 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
 }
 
 fn runtime_with_module() -> Runtime {
-    let backend = CpuBackend::new();
+    let backend = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
@@ -85,9 +88,7 @@ fn the_total_sum_adjoint_broadcasts_the_cotangent() {
     let program = compiler
         .compile(input_gradient)
         .expect("compiled backward program");
-    let results = runtime
-        .run_compiled(&program, &[&cotangent_input])
-        .expect("executed adjoint");
+    let results = run_compiled(&runtime, &program, &[&cotangent_input]).expect("executed adjoint");
     assert_eq!(results.len(), 1);
     assert_eq!(
         payload(&results[0]),
@@ -131,9 +132,7 @@ fn the_adjoint_retains_low_order_information() {
     let program = compiler
         .compile(input_gradient)
         .expect("compiled backward program");
-    let results = runtime
-        .run_compiled(&program, &[&cotangent_input])
-        .expect("executed adjoint");
+    let results = run_compiled(&runtime, &program, &[&cotangent_input]).expect("executed adjoint");
     let expected = Df64::from_f64(1.0) + Df64::from_f64(low);
     assert_eq!(payload(&results[0]), vec![expected, expected]);
     assert_eq!(expected.lo, low, "the low component survives the adjoint");
@@ -174,9 +173,8 @@ fn the_total_sum_linearization_sums_the_tangents() {
     let runtime = runtime_with_module();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&jvp).expect("compiled forward program");
-    let results = runtime
-        .run_compiled(&program, &[&tangent_input])
-        .expect("executed linearization");
+    let results =
+        run_compiled(&runtime, &program, &[&tangent_input]).expect("executed linearization");
     assert_eq!(results.len(), 1);
     assert_eq!(
         payload(&results[0]),

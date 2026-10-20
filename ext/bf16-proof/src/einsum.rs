@@ -25,7 +25,7 @@ use tenferro_runtime::{
     PrepareError, PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor,
     PreparedOperationPlan, ProviderContractError, RuntimeConfigError, SpecializationProjection,
 };
-use tenferro_tensor::{DType, DynRank, Host, Tensor, TensorBackend, TensorRead, TypedTensor};
+use tenferro_tensor::{DType, DynRank, Engine, Host, Tensor, TensorRead, TypedTensor};
 
 use crate::Bf16;
 
@@ -416,9 +416,7 @@ struct Bf16EinsumEngine<B: std::fmt::Debug + Send + Sync> {
     _backend: PhantomData<B>,
 }
 
-impl<B: TensorBackend + std::fmt::Debug + Send + Sync + 'static> ExtensionEngine
-    for Bf16EinsumEngine<B>
-{
+impl<B: Engine + std::fmt::Debug + Send + Sync + 'static> ExtensionEngine for Bf16EinsumEngine<B> {
     fn family_id(&self) -> &'static str {
         self.family_id
     }
@@ -428,7 +426,7 @@ impl<B: TensorBackend + std::fmt::Debug + Send + Sync + 'static> ExtensionEngine
     }
 
     fn context_identity(&self) -> ExecutionContextIdentity {
-        ExecutionContextIdentity::of::<tenferro_cpu::CpuBackend>()
+        ExecutionContextIdentity::of::<B>()
     }
 
     fn prepare(
@@ -493,7 +491,7 @@ struct Bf16EinsumPrepared<B: std::fmt::Debug + Send + Sync> {
     _backend: PhantomData<B>,
 }
 
-impl<B: TensorBackend + std::fmt::Debug + Send + Sync + 'static> PreparedOperation
+impl<B: Engine + std::fmt::Debug + Send + Sync + 'static> PreparedOperation
     for Bf16EinsumPrepared<B>
 {
     fn binding(&self) -> &PreparedOperationBinding {
@@ -509,7 +507,7 @@ impl<B: TensorBackend + std::fmt::Debug + Send + Sync + 'static> PreparedOperati
     }
 }
 
-impl<B: TensorBackend + std::fmt::Debug + Send + Sync + 'static> PreparedOperationExecutor
+impl<B: Engine + std::fmt::Debug + Send + Sync + 'static> PreparedOperationExecutor
     for Bf16EinsumPrepared<B>
 {
     fn execute(
@@ -518,8 +516,8 @@ impl<B: TensorBackend + std::fmt::Debug + Send + Sync + 'static> PreparedOperati
         extension_caches: &mut ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {
-        // The body needs contiguous inputs, which a session on the binding's backend provides.
-        let backend = context
+        // The runtime passes the caller's engine; the body needs contiguous inputs.
+        let engine = context
             .downcast_mut::<B>(self.binding.context_identity())
             .map_err(|source| {
                 tenferro_runtime::Error::runtime_state_source(
@@ -529,14 +527,11 @@ impl<B: TensorBackend + std::fmt::Debug + Send + Sync + 'static> PreparedOperati
                 )
             })?;
         let _ = extension_caches;
-        let materialized = backend
-            .with_backend_session(|exec| {
-                inputs
-                    .iter()
-                    .cloned()
-                    .map(|input| exec.to_contiguous_read(input))
-                    .collect::<tenferro_tensor::Result<Vec<Tensor>>>()
-            })?
+        let materialized = inputs
+            .iter()
+            .cloned()
+            .map(|input| engine.to_contiguous_read(input))
+            .collect::<tenferro_tensor::Result<Vec<Tensor>>>()
             .map_err(tenferro_runtime::Error::from)?;
         let borrowed: Vec<&Tensor> = materialized.iter().collect();
         contract(self.op.as_ref(), &borrowed)
@@ -551,9 +546,7 @@ struct Bf16EinsumModule<B: std::fmt::Debug + Send + Sync> {
     _backend: PhantomData<B>,
 }
 
-impl<B: TensorBackend + std::fmt::Debug + Send + Sync + 'static> ExtensionModule
-    for Bf16EinsumModule<B>
-{
+impl<B: Engine + std::fmt::Debug + Send + Sync + 'static> ExtensionModule for Bf16EinsumModule<B> {
     fn module_id(&self) -> &ExtensionModuleId {
         &self.module_id
     }
@@ -592,7 +585,7 @@ impl<B: TensorBackend + std::fmt::Debug + Send + Sync + 'static> ExtensionModule
 /// assert!(module().is_ok());
 /// ```
 pub fn module() -> Result<Arc<dyn ExtensionModule>, RuntimeConfigError> {
-    Ok(Arc::new(Bf16EinsumModule::<tenferro_cpu::CpuBackend> {
+    Ok(Arc::new(Bf16EinsumModule::<tenferro_cpu::CpuEngine> {
         module_id: ExtensionModuleId::new("tenferro-bf16-proof.module")?,
         engine_id: tenferro_cpu::runtime_engine_id()?,
         _backend: PhantomData,

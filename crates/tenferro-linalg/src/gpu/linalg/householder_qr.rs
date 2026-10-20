@@ -3,7 +3,7 @@ use cubecl::prelude::Scalar;
 use super::*;
 
 fn initialize_q_columns_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     rows: usize,
     start: usize,
     end: usize,
@@ -40,7 +40,7 @@ where
 }
 
 fn build_explicit_v<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     packed: &TypedTensor<T>,
     columns: usize,
     op: &'static str,
@@ -86,7 +86,7 @@ fn linalg_scalar_bytes<T: LinalgScalar>(value: &T) -> &[u8] {
 }
 
 fn apply_householder_reflectors_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     packed: &TypedTensor<T>,
     coeff: &TypedTensor<T>,
     target: &mut TypedTensor<T>,
@@ -288,7 +288,7 @@ where
 }
 
 fn geqrf_trailing_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     matrix: &mut TypedTensor<T>,
     row_offset: usize,
     op: &'static str,
@@ -365,7 +365,7 @@ where
 }
 
 fn concatenate_compact_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     packed: &TypedTensor<T>,
     block: &TypedTensor<T>,
     coeff: &TypedTensor<T>,
@@ -432,7 +432,7 @@ where
 }
 
 fn gemm_nn_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     op: &'static str,
@@ -498,7 +498,7 @@ where
 }
 
 fn assemble_from_factors_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     packed_q: &TypedTensor<T>,
     coeff_q: &TypedTensor<T>,
     folded_r: &TypedTensor<T>,
@@ -547,7 +547,7 @@ where
 }
 
 pub(super) fn compact_qr_from_factors_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     q: &TypedTensor<T>,
     r: &TypedTensor<T>,
     op: &'static str,
@@ -575,7 +575,7 @@ where
 }
 
 pub(super) fn compact_qr_append_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     packed: &TypedTensor<T>,
     coeff: &TypedTensor<T>,
     block: &TypedTensor<T>,
@@ -625,7 +625,7 @@ where
 }
 
 pub(super) fn compact_qr_q_columns_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     packed: &TypedTensor<T>,
     coeff: &TypedTensor<T>,
     start: usize,
@@ -657,7 +657,7 @@ where
 }
 
 pub(super) fn compact_qr_r_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     packed: &TypedTensor<T>,
     coeff: &TypedTensor<T>,
     options: QrOptions,
@@ -667,8 +667,8 @@ where
     T: LinalgScalar + TensorScalar + Scalar,
 {
     let (m, n, k) = compact_qr_state_dims(packed, coeff, op)?;
-    let input = backend.slice_typed(packed, &matrix_slice_config(packed.shape(), k, n))?;
-    let mut r = backend.triu_typed(&input, 0)?;
+    let input = backend.linalg_slice_typed(packed, &matrix_slice_config(packed.shape(), k, n))?;
+    let mut r = backend.linalg_triu_typed(&input, 0)?;
     if options.gauge == QrGauge::PositiveDiagonal {
         let mut q = backend.with_cubecl(op, |cubecl| cubecl.alloc_output::<T>(&[m, 0]))?;
         T::apply_positive_qr_gauge(backend, &mut q, &mut r, 0, op)?;
@@ -677,7 +677,7 @@ where
 }
 
 pub(super) fn compact_qr_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     op: &'static str,
 ) -> Result<(TypedTensor<T>, TypedTensor<T>)>

@@ -9,24 +9,21 @@
 #![cfg(any(feature = "native", feature = "blas"))]
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{TensorLinalgExt, TensorReadLinalgExt, TypedTensorLinalgExt};
-use tenferro_tensor::{
-    BackendSessionHost, DType, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorView,
-    TypedTensor,
-};
+use tenferro_tensor::{DType, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorView, TypedTensor};
 
 /// Every CPU linalg provider compiled into this build.
-fn providers() -> Vec<(&'static str, CpuBackend)> {
+fn providers() -> Vec<(&'static str, CpuEngine)> {
     let name = tenferro_cpu::cpu_provider_id();
     let backend =
-        CpuBackend::with_threads(1).unwrap_or_else(|error| panic!("{name} CPU backend: {error}"));
+        tenferro_cpu::CpuEngine::serial();
     vec![(name, backend)]
 }
 
 #[cfg(feature = "native")]
-fn faer_backend() -> CpuBackend {
-    CpuBackend::with_threads(1).expect("faer CPU backend")
+fn faer_backend() -> CpuEngine {
+    tenferro_cpu::CpuEngine::serial()
 }
 
 /// Deterministic, well-scaled column-major test data with no repeated singular
@@ -221,7 +218,7 @@ fn owned_and_borrowed_full_svd_agree_for_every_dtype_and_shape() {
                 let input = tensor_of(dtype, &[m, n], &real, &imag);
                 let source = complex_values(&input);
 
-                host.with_backend_session(|session| {
+                (|session: &mut dyn tenferro_tensor::Engine| {
                     let (u, s, vt) = input.svd_full(session).unwrap();
                     assert_full_svd(dtype, m, n, &source, &u, &s, &vt);
 
@@ -241,8 +238,7 @@ fn owned_and_borrowed_full_svd_agree_for_every_dtype_and_shape() {
                             "full and thin spectra disagree: {full} vs {thin}"
                         );
                     }
-                })
-                .unwrap();
+                })(&mut host);
             }
         }
     }
@@ -293,7 +289,7 @@ fn full_svd_read_consumes_strided_offset_and_reversed_views_unchanged() {
             };
             let source = complex_values(&expected);
 
-            host.with_backend_session(|session| {
+            (|session: &mut dyn tenferro_tensor::Engine| {
                 let (u, s, vt) = TensorRead::from_view(TensorView::F64(view.clone()))
                     .svd_full_read(session)
                     .unwrap();
@@ -306,8 +302,7 @@ fn full_svd_read_consumes_strided_offset_and_reversed_views_unchanged() {
                         "{label}: borrowed and owned spectra disagree"
                     );
                 }
-            })
-            .unwrap();
+            })(&mut host);
         }
 
         assert_eq!(
@@ -326,7 +321,7 @@ fn full_svd_keeps_square_factors_when_a_core_dimension_is_empty() {
     for (_provider, mut host) in providers() {
         for (m, n) in [(0_usize, 3_usize), (3, 0), (0, 0)] {
             let input = tensor_of(DType::F64, &[m, n], &[], &[]);
-            host.with_backend_session(|session| {
+            (|session: &mut dyn tenferro_tensor::Engine| {
                 for (label, (u, s, vt)) in [
                     ("owned", input.svd_full(session).unwrap()),
                     (
@@ -344,8 +339,7 @@ fn full_svd_keeps_square_factors_when_a_core_dimension_is_empty() {
                     assert_isometric(&u, m, m, 1.0e-12, "empty U");
                     assert_isometric(&vt, n, n, 1.0e-12, "empty Vt");
                 }
-            })
-            .unwrap();
+            })(&mut host);
         }
     }
 }
@@ -359,7 +353,7 @@ fn full_svd_handles_batched_inputs_per_matrix() {
         let real = sample_real(m, n * batch);
         let input = tensor_of(DType::F64, &[m, n, batch], &real, &[]);
 
-        host.with_backend_session(|session| {
+        (|session: &mut dyn tenferro_tensor::Engine| {
             let (u, s, vt) = input.svd_full(session).unwrap();
             assert_eq!(u.shape(), &[m, m, batch]);
             assert_eq!(s.shape(), &[m.min(n), batch]);
@@ -394,8 +388,7 @@ fn full_svd_handles_batched_inputs_per_matrix() {
                     }
                 }
             }
-        })
-        .unwrap();
+        })(&mut host);
     }
 }
 
@@ -412,7 +405,7 @@ fn typed_full_svd_returns_real_singular_values() {
         )
         .unwrap();
 
-        host.with_backend_session(|session| {
+        (|session: &mut dyn tenferro_tensor::Engine| {
             let (u, s, vt) = input.svd_full(session).unwrap();
             assert_eq!(u.shape(), &[3, 3]);
             assert_eq!(s.shape(), &[2]);
@@ -420,8 +413,7 @@ fn typed_full_svd_returns_real_singular_values() {
             // `TypedSvd<Complex64>` types the singular values as f64.
             let values: &[f64] = s.as_slice().unwrap();
             assert!(values[0] >= values[1] && values[1] >= 0.0);
-        })
-        .unwrap();
+        })(&mut host);
     }
 }
 
@@ -430,13 +422,12 @@ fn full_svd_read_rejects_unsupported_dtypes_before_provider_entry() {
     for (_provider, mut host) in providers() {
         let input =
             TypedTensor::<i64>::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
-        host.with_backend_session(|session| {
+        (|session: &mut dyn tenferro_tensor::Engine| {
             let error = TensorRead::from_view(TensorView::I64(input.as_view()))
                 .svd_full_read(session)
                 .unwrap_err();
             assert_eq!(error.kind(), ErrorKind::Unsupported);
-        })
-        .unwrap();
+        })(&mut host);
     }
 }
 
@@ -456,18 +447,15 @@ fn faer_view_path_does_not_pool_an_input_copy() {
     );
 
     let mut view_host = faer_backend();
-    view_host
-        .with_backend_session(|session| {
+    (|session: &mut dyn tenferro_tensor::Engine| {
             TensorRead::from_tensor(&owned)
                 .svd_full_read(session)
                 .unwrap();
-        })
-        .unwrap();
-    let view_stats = view_host.buffer_pool_stats().unwrap();
+        })(&mut view_host);
+    let view_stats = view_host.buffer_pool_stats();
 
     let mut packed_host = faer_backend();
-    packed_host
-        .with_backend_session(|session| {
+    (|session: &mut dyn tenferro_tensor::Engine| {
             let reversed = base
                 .as_view()
                 .slice_view(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
@@ -475,9 +463,8 @@ fn faer_view_path_does_not_pool_an_input_copy() {
             TensorRead::from_view(TensorView::F64(reversed))
                 .svd_full_read(session)
                 .unwrap();
-        })
-        .unwrap();
-    let packed_stats = packed_host.buffer_pool_stats().unwrap();
+        })(&mut packed_host);
+    let packed_stats = packed_host.buffer_pool_stats();
 
     let input_copy_bytes = m * n * std::mem::size_of::<f64>();
     assert!(
@@ -497,10 +484,9 @@ fn owned_full_svd_reports_unsupported_dtypes_from_the_provider_boundary() {
         let input = Tensor::from_typed::<i64>(
             TypedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap(),
         );
-        host.with_backend_session(|session| {
+        (|session: &mut dyn tenferro_tensor::Engine| {
             let error = input.svd_full(session).unwrap_err();
             assert_eq!(error.kind(), ErrorKind::Unsupported);
-        })
-        .unwrap();
+        })(&mut host);
     }
 }

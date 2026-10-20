@@ -125,23 +125,26 @@ macro_rules! impl_faer_linalg {
                 let lhs = MatRef::from_column_major_slice($to_faer(a), a_rows, a_cols);
                 let rhs = MatRef::from_column_major_slice($to_faer(b), a_cols, b_cols);
                 let out = MatMut::from_column_major_slice_mut($to_faer_mut(c), a_rows, b_cols);
-                // faer fans out on the ambient registry, so install the
-                // selected pool for this one numerical call. The call is
-                // operation-local: the caller's continuation is never installed.
-                let run = || {
+                // The shared work model decides the width before any pool is
+                // entered: a small product stays on the calling thread (#2206).
+                let muladds = (a_rows as f64) * (a_cols as f64) * (b_cols as f64);
+                let width = ctx
+                    .contraction_exec()?
+                    .batch_decision(&tcontract_exec::BatchQuery::new(1, muladds))
+                    .map_err(|source| {
+                        tenferro_tensor::Error::backend_source("from_factors_2d", source)
+                    })?
+                    .item_threads;
+                ctx.with_faer_width(width, |par| {
                     faer::linalg::matmul::matmul(
                         out,
                         faer::Accum::Replace,
                         lhs,
                         rhs,
                         $faer_one,
-                        ctx.faer_parallelism(),
+                        par,
                     );
-                };
-                match ctx.rayon_pool() {
-                    Some(pool) => pool.install(run),
-                    None => run(),
-                }
+                });
                 Ok(())
             }
 

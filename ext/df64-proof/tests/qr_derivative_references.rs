@@ -17,11 +17,14 @@
 //! `dL/dA = [[6], [8]]` for `A = [[3], [4]]`, which is also what confirms the inputs were bound in
 //! the order the compiled program expects.
 
+mod support;
+
 use std::sync::Arc;
 
+use support::run_compiled;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::ad::{Df64LinearizeRule, Df64VjpRule};
 use tenferro_df64_proof::extension::{module, Df64Qr, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
@@ -49,7 +52,7 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
 }
 
 fn runtime_with_module() -> Runtime {
-    let backend = CpuBackend::new();
+    let backend = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
@@ -103,9 +106,12 @@ fn factorize(values: &[Df64], rows: usize, columns: usize) -> (Vec<Df64>, Vec<Df
     let program = compiler
         .compile_many(&[&outputs[0], &outputs[1]])
         .expect("compiled QR");
-    let results = runtime_with_module()
-        .run_compiled(&program, &[&external(values.to_vec(), vec![rows, columns])])
-        .expect("QR execution");
+    let results = run_compiled(
+        &runtime_with_module(),
+        &program,
+        &[&external(values.to_vec(), vec![rows, columns])],
+    )
+    .expect("QR execution");
     (payload(&results[0]), payload(&results[1]))
 }
 
@@ -174,36 +180,34 @@ fn the_jvp_and_vjp_satisfy_the_duality_identity() {
     let input_value = external(values.clone(), vec![rows, columns]);
     let tangent_value = external(tangent_values.clone(), vec![rows, columns]);
     let q_dot_value = payload(
-        &runtime
-            .run_compiled(&q_dot_program, &[&input_value, &tangent_value])
+        &run_compiled(&runtime, &q_dot_program, &[&input_value, &tangent_value])
             .expect("factor tangent execution")[0],
     );
     let r_dot_value = payload(
-        &runtime
-            .run_compiled(&r_dot_program, &[&input_value, &tangent_value])
+        &run_compiled(&runtime, &r_dot_program, &[&input_value, &tangent_value])
             .expect("triangular-factor tangent execution")[0],
     );
     let q_bar_value = payload(
-        &runtime
-            .run_compiled(
-                &q_bar_program,
-                &[
-                    &input_value,
-                    &external(q_cotangent.clone(), vec![rows, columns]),
-                ],
-            )
-            .expect("factor cotangent execution")[0],
+        &run_compiled(
+            &runtime,
+            &q_bar_program,
+            &[
+                &input_value,
+                &external(q_cotangent.clone(), vec![rows, columns]),
+            ],
+        )
+        .expect("factor cotangent execution")[0],
     );
     let r_bar_value = payload(
-        &runtime
-            .run_compiled(
-                &r_bar_program,
-                &[
-                    &input_value,
-                    &external(r_cotangent.clone(), vec![columns, columns]),
-                ],
-            )
-            .expect("triangular-factor cotangent execution")[0],
+        &run_compiled(
+            &runtime,
+            &r_bar_program,
+            &[
+                &input_value,
+                &external(r_cotangent.clone(), vec![columns, columns]),
+            ],
+        )
+        .expect("triangular-factor cotangent execution")[0],
     );
 
     // sum(Q_dot * w_Q) + sum(R_dot * w_R) == sum(v * (A_bar_Q + A_bar_R))
@@ -258,15 +262,15 @@ fn the_factor_gradient_matches_a_central_difference_of_the_loss() {
         .compile(&gradient)
         .expect("compiled input cotangent");
     let gradient_values = payload(
-        &runtime
-            .run_compiled(
-                &program,
-                &[
-                    &external(values.clone(), vec![rows, columns]),
-                    &external(r_cotangent.clone(), vec![columns, columns]),
-                ],
-            )
-            .expect("input cotangent execution")[0],
+        &run_compiled(
+            &runtime,
+            &program,
+            &[
+                &external(values.clone(), vec![rows, columns]),
+                &external(r_cotangent.clone(), vec![columns, columns]),
+            ],
+        )
+        .expect("input cotangent execution")[0],
     );
 
     println!("gradient {gradient_values:?}");

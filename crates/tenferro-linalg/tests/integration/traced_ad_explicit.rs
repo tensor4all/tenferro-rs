@@ -1667,7 +1667,7 @@ fn traced_primal_solve_compiles_to_one_fused_factor_solve() {
     );
 
     let solved = eval(&x);
-    let expected = support::with_cpu_linalg(&mut tenferro_cpu::CpuBackend::new(), |session| {
+    let expected = support::with_cpu_linalg(&mut tenferro_cpu::CpuEngine::serial(), |session| {
         use tenferro_linalg::LinalgBackend;
         session.solve(
             &f64_tensor(vec![3, 3, 2], a_data.clone()),

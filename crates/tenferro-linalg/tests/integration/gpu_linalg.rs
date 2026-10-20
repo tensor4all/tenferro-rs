@@ -3,24 +3,18 @@
 // Run with: cargo test --features cuda -- --ignored
 use super::full_svd_host_checks::assert_isometric;
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
-use tenferro_gpu::{
-    cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor, cuda::with_cuda_exec_session,
-    cuda::CudaBackend, cuda::CudaDeviceId, cuda::CudaExecSession,
-};
-use tenferro_linalg::{
-    EighDriver, EighOptions, HouseholderQr, LinalgBackend, QrGauge, QrOptions,
-    RankRevealingQrOptions, SvdDriver, SvdOptions, TensorLinalgExt,
-};
-use tenferro_tensor::{BackendSessionHost, DType, Error, Tensor, TensorRead, TypedTensor};
+use tenferro_cpu::{with_cpu_engine, CpuEngine};
+use tenferro_gpu::{cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor, cuda::with_cuda_exec_session, cuda::CudaBackend, cuda::CudaDeviceId, cuda::CudaExecSession};
+use tenferro_linalg::{EighDriver, EighOptions, HouseholderQr, LinalgBackend, QrGauge, QrOptions, RankRevealingQrOptions, SvdDriver, SvdOptions, TensorLinalgExt};
+use tenferro_tensor::{DType, Error, Tensor, TensorRead, TypedTensor};
 
 #[path = "gpu_linalg/svd_auto.rs"]
 mod svd_auto;
 #[path = "gpu_linalg/xgesvdp.rs"]
 mod xgesvdp;
 
-fn cpu_backend() -> CpuBackend {
-    CpuBackend::new()
+fn cpu_backend() -> CpuEngine {
+    tenferro_cpu::CpuEngine::serial()
 }
 
 fn gpu_backend() -> CudaBackend {
@@ -28,17 +22,15 @@ fn gpu_backend() -> CudaBackend {
 }
 
 fn with_cpu_linalg_session<R>(
-    backend: &mut CpuBackend,
-    f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R + Send,
+    backend: &mut CpuEngine,
+    f: impl for<'a> FnOnce(&'a mut CpuEngine) -> R + Send,
 ) -> R
 where
     R: Send,
 {
-    backend
-        .with_backend_session(|session| {
-            with_cpu_exec_session(session, f).expect("CPU backend session should be available")
-        })
-        .unwrap()
+    (|session: &mut dyn tenferro_tensor::Engine| {
+            with_cpu_engine(session, f).expect("CPU backend session should be available")
+        })(&mut backend)
 }
 
 fn with_cuda_linalg_session<R>(
@@ -48,11 +40,9 @@ fn with_cuda_linalg_session<R>(
 where
     R: Send,
 {
-    backend
-        .with_backend_session(|session| {
+    (|session: &mut dyn tenferro_tensor::Engine| {
             with_cuda_exec_session(session, f).expect("CUDA backend session should be available")
-        })
-        .unwrap()
+        })(&mut backend)
 }
 
 fn upload(backend: &CudaBackend, tensor: &Tensor) -> Tensor {

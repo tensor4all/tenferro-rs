@@ -2,7 +2,7 @@
 //!
 //! This crate is an optional peer executor over `tenferro-runtime`
 //! [`SemanticProgram`](tenferro_runtime::program::SemanticProgram) values. It does not
-//! implement `TensorBackend` and it does not change native CPU, CUDA, or
+//! implement `Engine` and it does not change native CPU, CUDA, or
 //! WebGPU execution.
 //!
 //! # Examples

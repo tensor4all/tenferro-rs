@@ -7,11 +7,14 @@
 //! component, and against a central difference of a scalar loss. The forward tangent stays refused,
 //! which the last test asserts rather than assumes.
 
+mod support;
+
 use std::sync::Arc;
 
+use support::run_compiled;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::ad::{Df64LinearizeRule, Df64VjpRule};
 use tenferro_df64_proof::extension::{module, Df64Einsum, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
@@ -39,7 +42,7 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
 }
 
 fn runtime_with_module() -> Runtime {
-    let backend = CpuBackend::new();
+    let backend = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
@@ -109,9 +112,8 @@ fn tangent(
         (None, None) => panic!("a tangent needs one operand's tangent"),
     }
     let borrowed: Vec<&Tensor> = inputs.iter().collect();
-    let results = runtime_with_module()
-        .run_compiled(&program, &borrowed)
-        .expect("tangent execution");
+    let results =
+        run_compiled(&runtime_with_module(), &program, &borrowed).expect("tangent execution");
     payload(&results[0])
 }
 
@@ -140,15 +142,15 @@ fn contract(
     let output = apply(Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output[0]).expect("compiled contraction");
-    let results = runtime_with_module()
-        .run_compiled(
-            &program,
-            &[
-                &external(lhs, lhs_shape.to_vec()),
-                &external(rhs, rhs_shape.to_vec()),
-            ],
-        )
-        .expect("contraction execution");
+    let results = run_compiled(
+        &runtime_with_module(),
+        &program,
+        &[
+            &external(lhs, lhs_shape.to_vec()),
+            &external(rhs, rhs_shape.to_vec()),
+        ],
+    )
+    .expect("contraction execution");
     payload(&results[0])
 }
 
@@ -173,16 +175,16 @@ fn adjoint(
         .expect("traced adjoint");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&gradient).expect("compiled adjoint");
-    let results = runtime_with_module()
-        .run_compiled(
-            &program,
-            &[
-                &external(lhs, lhs_shape.to_vec()),
-                &external(rhs, rhs_shape.to_vec()),
-                &external(cotangent, cotangent_shape.to_vec()),
-            ],
-        )
-        .expect("adjoint execution");
+    let results = run_compiled(
+        &runtime_with_module(),
+        &program,
+        &[
+            &external(lhs, lhs_shape.to_vec()),
+            &external(rhs, rhs_shape.to_vec()),
+            &external(cotangent, cotangent_shape.to_vec()),
+        ],
+    )
+    .expect("adjoint execution");
     payload(&results[0])
 }
 
@@ -396,17 +398,17 @@ fn the_adjoint_of_a_three_operand_contraction_matches_the_hand_written_products(
         .expect("the adjoint is defined for any operand count");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&gradient).expect("compiled adjoint");
-    let results = runtime_with_module()
-        .run_compiled(
-            &program,
-            &[
-                &external(numbers(&[1.0, 3.0, 2.0, 4.0]), vec![2, 2]),
-                &external(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]),
-                &external(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]),
-                &external(numbers(&[1.0, 1.0, 1.0, 1.0]), vec![2, 2]),
-            ],
-        )
-        .expect("adjoint execution");
+    let results = run_compiled(
+        &runtime_with_module(),
+        &program,
+        &[
+            &external(numbers(&[1.0, 3.0, 2.0, 4.0]), vec![2, 2]),
+            &external(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]),
+            &external(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]),
+            &external(numbers(&[1.0, 1.0, 1.0, 1.0]), vec![2, 2]),
+        ],
+    )
+    .expect("adjoint execution");
     assert_eq!(
         payload(&results[0]),
         numbers(&[1.0, 1.0, 1.0, 1.0]),
@@ -441,9 +443,8 @@ fn nary_tangent(
         .collect();
     values.push(external(tangent, operands[tangent_at].1.clone()));
     let borrowed: Vec<&Tensor> = values.iter().collect();
-    let results = runtime_with_module()
-        .run_compiled(&program, &borrowed)
-        .expect("tangent execution");
+    let results =
+        run_compiled(&runtime_with_module(), &program, &borrowed).expect("tangent execution");
     payload(&results[0])
 }
 
@@ -497,9 +498,8 @@ fn the_three_operand_tangent_and_adjoint_satisfy_duality() {
         .collect();
     values.push(external(cotangent.clone(), vec![2, 2]));
     let borrowed: Vec<&Tensor> = values.iter().collect();
-    let results = runtime_with_module()
-        .run_compiled(&program, &borrowed)
-        .expect("adjoint execution");
+    let results =
+        run_compiled(&runtime_with_module(), &program, &borrowed).expect("adjoint execution");
     let backward = payload(&results[0]);
     let backward_side = tangent_values
         .iter()
