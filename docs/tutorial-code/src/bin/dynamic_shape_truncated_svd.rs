@@ -36,6 +36,7 @@ fn truncated_expected(diagonal: &[f64], threshold: f64) -> Vec<f64> {
     values
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_case(
     runtime: &Runtime,
     engine: &mut CpuEngine,
@@ -52,7 +53,7 @@ fn run_case(
     ];
     let target = engine.target();
     let reconstructed_prepared =
-        runtime.prepare(reconstructed_program, &reads, &[target.clone()])?;
+        runtime.prepare(reconstructed_program, &reads, std::slice::from_ref(&target))?;
     let mut reconstructed_outputs = runtime.run(&mut [engine], &reconstructed_prepared, &reads)?;
     assert_eq!(reconstructed_outputs.len(), 1);
     let reconstructed = reconstructed_outputs
