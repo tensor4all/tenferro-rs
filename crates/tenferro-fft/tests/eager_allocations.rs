@@ -5,9 +5,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::{EagerSessionFftExt, EagerTensorFftExt, FftNorm};
-use tenferro_tensor::{BackendSessionHost, Tensor};
+use tenferro_tensor::Tensor;
 
 const LEN: usize = 4096;
 const INPUT_BYTES: usize = LEN * size_of::<Complex64>();
@@ -85,21 +85,21 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
     let _serial = MEASUREMENT_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    assert_eq!(backend.num_threads(), 1);
-    let runtime = EagerRuntime::with_cpu_backend(backend.clone()).unwrap();
+    let mut engine = CpuEngine::serial();
+    assert_eq!(engine.num_threads(), 1);
+    let runtime = EagerRuntime::new().unwrap();
     let input = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major([64, 64], vec![Complex64::new(1., 0.); LEN]).unwrap(),
         runtime.clone(),
     )
     .unwrap();
-    let transform = || {
+    let transform = |engine: &mut CpuEngine| {
         runtime
-            .with_eager_session(|s| s.fft(&input, None, 1, FftNorm::Backward))
+            .with_eager_session(engine, |s| s.fft(&input, None, 1, FftNorm::Backward))
             .unwrap()
     };
-    let first = measured((1, INPUT_BYTES), transform);
-    let second = measured((1, INPUT_BYTES), transform);
+    let first = measured((1, INPUT_BYTES), || transform(&mut engine));
+    let second = measured((1, INPUT_BYTES), || transform(&mut engine));
     assert_ne!(
         first
             .value()
@@ -116,7 +116,7 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
     );
     drop(first);
     drop(second);
-    let output = measured((0, 0), transform);
+    let output = measured((0, 0), || transform(&mut engine));
     let pointer = output
         .value()
         .unwrap()
@@ -124,7 +124,7 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
         .unwrap()
         .as_ptr();
     drop(output);
-    let output = measured((0, 0), transform);
+    let output = measured((0, 0), || transform(&mut engine));
     assert_eq!(
         output
             .value()
@@ -140,11 +140,12 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
     );
     measured((0, 0), || {
         let owned = output.into_value().unwrap();
-        backend
-            .with_backend_session(|s| s.reclaim_buffer(owned))
-            .unwrap();
+        {
+            let s: &mut dyn tenferro_tensor::Engine = &mut engine;
+            s.reclaim_buffer(owned)
+        };
     });
-    let output = measured((0, 0), transform);
+    let output = measured((0, 0), || transform(&mut engine));
     assert_eq!(
         output
             .value()
@@ -155,7 +156,9 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
         pointer
     );
     let output = measured((0, 0), || {
-        output.fft_in_place(1, FftNorm::Backward).unwrap()
+        output
+            .fft_in_place(&mut engine, 1, FftNorm::Backward)
+            .unwrap()
     });
     assert_eq!(
         output
@@ -167,7 +170,7 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
         pointer
     );
     drop(output);
-    assert!(backend.buffer_pool_stats().unwrap().buffers >= 1);
+    assert!(engine.buffer_pool_stats().buffers >= 1);
 }
 
 #[test]
@@ -182,24 +185,24 @@ fn whole_tensor_axis_fft_lane_comes_from_the_buffer_pool() {
     let _serial = MEASUREMENT_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let backend = CpuBackend::with_threads(1).unwrap();
-    assert_eq!(backend.num_threads(), 1);
-    let runtime = EagerRuntime::with_cpu_backend(backend.clone()).unwrap();
+    let mut engine = CpuEngine::serial();
+    assert_eq!(engine.num_threads(), 1);
+    let runtime = EagerRuntime::new().unwrap();
     let input = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major([LEN], vec![1.0f64; LEN]).unwrap(),
         runtime.clone(),
     )
     .unwrap();
-    let transform = || {
+    let transform = |engine: &mut CpuEngine| {
         runtime
-            .with_eager_session(|s| s.rfft(&input, None, 0, FftNorm::Backward))
+            .with_eager_session(engine, |s| s.rfft(&input, None, 0, FftNorm::Backward))
             .unwrap()
     };
     // Warm the plan cache and the buffer pool; only a steady-state call shows
     // whether the lane is recycled.
-    drop(transform());
-    let output = measured((1, INPUT_BYTES), transform);
+    drop(transform(&mut engine));
+    let output = measured((1, INPUT_BYTES), || transform(&mut engine));
     drop(output);
-    let output = measured((1, INPUT_BYTES), transform);
+    let output = measured((1, INPUT_BYTES), || transform(&mut engine));
     drop(output);
 }

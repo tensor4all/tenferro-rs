@@ -18,7 +18,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use tenferro_gpu::cuda::raw::DeviceBytes;
-use tenferro_gpu::cuda::{CudaExecSession, CudaRuntime};
+use tenferro_gpu::cuda::{CudaEngine, CudaRuntime};
 use tenferro_runtime::ExtensionCacheKey;
 use tenferro_tensor::{Tensor, TensorScalar, TypedTensor};
 
@@ -344,7 +344,7 @@ pub(crate) fn merge_execution_errors(
 /// One cached cuFFT plan and its required work-area byte size.
 //
 // INVARIANT: stream identity is intentionally omitted from `CufftPlanKey`;
-// mutable `CudaExecSession` access serializes the runtime's one selectable
+// mutable `CudaEngine` access serializes the runtime's one selectable
 // current CubeCL stream. A selectable multi-stream runtime must make stream
 // identity part of this key before concurrent plan reuse is allowed.
 //
@@ -417,7 +417,7 @@ fn fft_output<T: tenferro_tensor::TensorScalar>(
 impl CufftPlanEntry {
     /// Create a cached cuFFT plan entry on the exact retained runtime.
     pub(crate) fn create(
-        session: &mut CudaExecSession<'_>,
+        session: &mut CudaEngine,
         key: CufftPlanKey,
         descriptor: CufftPlanDescriptor,
     ) -> Result<Self, CudaFftError> {
@@ -426,7 +426,7 @@ impl CufftPlanEntry {
     }
 
     fn create_with_library(
-        session: &mut CudaExecSession<'_>,
+        session: &mut CudaEngine,
         library: Arc<CufftLibrary>,
         key: CufftPlanKey,
         descriptor: CufftPlanDescriptor,
@@ -460,7 +460,7 @@ impl CufftPlanEntry {
     /// still remain queued on that stream.
     pub(crate) fn execute(
         &mut self,
-        session: &mut CudaExecSession<'_>,
+        session: &mut CudaEngine,
         input: &Tensor,
         output: &mut Tensor,
     ) -> Result<(), CudaFftError> {
@@ -558,7 +558,7 @@ impl CufftPlanEntry {
 
     fn execute_pair<T, U>(
         &self,
-        session: &mut CudaExecSession<'_>,
+        session: &mut CudaEngine,
         input: &TypedTensor<T>,
         output: &mut TypedTensor<U>,
         mut call: impl FnMut(&CufftApi, CufftHandle, *mut c_void, *mut c_void) -> CufftStatus,

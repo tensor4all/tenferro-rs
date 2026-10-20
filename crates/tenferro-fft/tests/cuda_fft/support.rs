@@ -1,6 +1,6 @@
 use tenferro_gpu::cuda::{download_tensor, upload_tensor, CudaBackend};
 use tenferro_runtime::Tensor;
-use tenferro_tensor::{Engine, BackendSessionHost, TensorRead};
+use tenferro_tensor::{BackendSessionHost, Engine, TensorRead};
 
 pub fn with_cuda_fft_session<R>(
     backend: &mut CudaBackend,
