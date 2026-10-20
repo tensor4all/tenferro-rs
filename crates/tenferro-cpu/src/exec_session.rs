@@ -369,6 +369,10 @@ impl TensorStructural for CpuEngine {
         // Preserve the host-compact entry policy. Managed copies must enter
         // the configured execution scope for provider mapping and allocation,
         // just as views enter it for strided materialization.
+        if input.as_tensor().is_none() {
+            // Only a view is actually copied here; an owned read passes through.
+            self.resources.count_read_staging();
+        }
         let domain = self.shared_allocation_domain().cloned();
         if matches!(input, TensorRead::Tensor(_)) && input.backend_family().is_none() {
             self.check_entry("CpuEngine::to_contiguous_read")?;
@@ -554,6 +558,27 @@ impl TensorDot for CpuEngine {
         self.execute_dot_allocated(slot, lhs, rhs, config, false, false)
     }
 
+    fn dot_general_with_conj_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        // The contraction lane dispatches on the read's view and consumes its
+        // strides, so a conjugated operand needs no staging copy here (#2214).
+        let slot = eager_dot_cache_slot(
+            self.plans.contraction_capacity(),
+            &lhs,
+            &rhs,
+            config,
+            lhs_conj,
+            rhs_conj,
+        );
+        self.execute_dot_allocated(slot, lhs, rhs, config, lhs_conj, rhs_conj)
+    }
+
     fn dot_general_read_into(
         &mut self,
         lhs: TensorRead<'_>,
@@ -624,6 +649,19 @@ impl SessionCachedDot for CpuEngine {
         )
     }
 
+    fn dot_general_read_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        // The caller's slot reaches the same plan cache (keyed by layout, config
+        // and conjugation), so a view operand is consumed instead of staged
+        // (#2214). Do not copy CUDA's policy of ignoring the slot.
+        self.execute_dot_allocated(cache_slot, lhs, rhs, config, false, false)
+    }
+
     fn dot_general_with_conj_cached(
         &mut self,
         cache_slot: Option<usize>,
@@ -641,6 +679,18 @@ impl SessionCachedDot for CpuEngine {
             lhs_conj,
             rhs_conj,
         )
+    }
+
+    fn dot_general_with_conj_read_cached(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        self.execute_dot_allocated(cache_slot, lhs, rhs, config, lhs_conj, rhs_conj)
     }
 
     fn dot_general_read_into_accum_cached(

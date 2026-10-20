@@ -1676,3 +1676,88 @@ fn auto_allocated_batched_gemm_on_lanes_matches_reference() {
         }
     }
 }
+
+/// #2214: the dot read hooks consume a view operand instead of staging a copy.
+///
+/// The counter is the canonicalization spy: `to_contiguous_read` increments it
+/// only when it actually copies a view, so a hook that delegates to the
+/// trait default (which canonicalizes both reads) fails this test. Provider
+/// packing inside the contraction lane is a different layer and is not counted
+/// here.
+#[test]
+fn dot_read_hooks_do_not_stage_view_operands() {
+    use tenferro_tensor::{SessionCachedDot, TensorStructural, TensorValue};
+
+    let lhs = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+    );
+    let rhs = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]).unwrap(),
+    );
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
+    };
+    let mut engine = crate::CpuEngine::serial();
+
+    // Views are the read this hook must not materialize.
+    let lhs_value = TensorValue::from_tensor(lhs);
+    let rhs_value = TensorValue::from_tensor(rhs);
+
+    let out = engine
+        .dot_general_read_cached(
+            Some(0),
+            TensorRead::from_view(lhs_value.tensor_view()),
+            TensorRead::from_view(rhs_value.tensor_view()),
+            &config,
+        )
+        .unwrap();
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(
+        engine.resources.read_stagings(),
+        0,
+        "dot_general_read_cached must not stage a view operand"
+    );
+
+    let conj = engine
+        .dot_general_with_conj_read_cached(
+            Some(0),
+            TensorRead::from_view(lhs_value.tensor_view()),
+            TensorRead::from_view(rhs_value.tensor_view()),
+            &config,
+            false,
+            true,
+        )
+        .unwrap();
+    assert_eq!(conj.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(
+        engine.resources.read_stagings(),
+        0,
+        "dot_general_with_conj_read_cached must not stage a view operand"
+    );
+
+    let eager_conj = engine
+        .dot_general_with_conj_read(
+            TensorRead::from_view(lhs_value.tensor_view()),
+            TensorRead::from_view(rhs_value.tensor_view()),
+            &config,
+            true,
+            false,
+        )
+        .unwrap();
+    assert_eq!(eager_conj.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(
+        engine.resources.read_stagings(),
+        0,
+        "dot_general_with_conj_read must not stage a view operand"
+    );
+
+    // Positive control: canonicalizing a view is counted, so the assertions
+    // above cannot pass because the counter is dead.
+    let _ = engine
+        .to_contiguous_read(TensorRead::from_view(lhs_value.tensor_view()))
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), 1);
+}

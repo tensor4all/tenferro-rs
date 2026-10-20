@@ -118,6 +118,20 @@ Audit hints:
   Route owned inputs through borrowed execution where possible; allocating and
   `_into` operations should share the output-writing kernel, not allocate a
   temporary result and copy it into the caller's destination.
+- A `*_read` hook is the route that avoids the staging copy, so a backend that
+  inherits a materializing default must override it as soon as its kernel can
+  consume the read's strides, and the default must say at its own definition
+  that it stages. Do not work around a materializing hook at the call site with
+  `to_contiguous_read` or an owned-input API: fix the hook (#2214). A read hook
+  with no stride-consuming kernel keeps the materializing behaviour as an
+  explicit, documented boundary and must not back a user-facing form that
+  silently stages.
+- Regression evidence for a read hook must separate the operation's required
+  output storage from operand staging. Allocation counts alone do not separate
+  them: a warm buffer pool can serve the staging buffer without touching the
+  allocator. Count the canonicalization itself (a counter or spy on
+  `to_contiguous_read`), or the retained pool bytes, and keep a negative control
+  that fails when the hook falls back to the materializing default.
 - Trace copies across eager/runtime adapters, extension dispatch, and provider
   preparation. Reuse an existing read hook instead of packing before it, and
   avoid packing followed by another full copy into vendor work storage. Keep
