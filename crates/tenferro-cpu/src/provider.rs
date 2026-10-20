@@ -232,7 +232,10 @@ impl<'a> CpuExecutionContext<'a> {
     /// faer's `Par::rayon` schedules on the pool of the calling thread, so a
     /// parallel faer call must run inside the engine's pool; a serial context
     /// runs on the caller with `Par::Seq`.
-    pub(crate) fn with_faer_pool<R: Send>(&self, operation: impl FnOnce(faer::Par) -> R + Send) -> R {
+    pub(crate) fn with_faer_pool<R: Send>(
+        &self,
+        operation: impl FnOnce(faer::Par) -> R + Send,
+    ) -> R {
         let par = self.faer_parallelism();
         match (par, self.rayon_pool()) {
             (faer::Par::Rayon(_), Some(pool)) if pool.current_thread_index().is_none() => {

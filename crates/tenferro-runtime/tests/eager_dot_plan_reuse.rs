@@ -66,12 +66,10 @@ fn repeated_eager_matmul_does_not_rebuild_its_plan() {
     eprintln!("eager 64x64 matmul: first {first}, repeat {repeat} allocations");
     // Without a cache slot the eager path rebuilt the whole numerical plan on
     // every call: 84 allocations on this fixture, against 415 for the cold call
-    // that also warms the provider. What remains on the repeat is the engine
-    // buffer pool's in-flight accounting node, which `CpuEngine` clears when an
-    // operation returns; the contraction plan itself is not rebuilt.
-    const POOL_ACCOUNTING_ALLOCATIONS: usize = 1;
+    // that also warms the provider. The repeat allocates nothing: the plan is
+    // not rebuilt and the buffer pool keeps no per-operation bookkeeping.
     assert!(
-        repeat <= POOL_ACCOUNTING_ALLOCATIONS,
+        repeat == 0,
         "the repeated eager matmul still allocates: {first} then {repeat}"
     );
 }

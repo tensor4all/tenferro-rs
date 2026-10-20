@@ -47,6 +47,10 @@ unsafe impl GlobalAlloc for Allocator {
 #[global_allocator]
 static ALLOCATOR: Allocator = Allocator;
 
+/// The allocation counters are process-wide, so the tests of this binary must
+/// not measure while another one allocates.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn allocations(f: impl FnOnce() -> Tensor) -> (Tensor, usize) {
     struct Reset;
     impl Drop for Reset {
@@ -82,6 +86,9 @@ fn count_large_allocations(call: impl FnOnce() -> Tensor) -> usize {
 
 #[test]
 fn same_shape_wrappers_do_not_allocate_operand_copies() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let a = Tensor::from_vec_col_major([LEN], vec![2.0_f64; LEN]).unwrap();
     let b = Tensor::from_vec_col_major([LEN], vec![3.0_f64; LEN]).unwrap();
     let mut backend = CpuEngine::serial();
@@ -239,6 +246,9 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
 /// with either operand layout.
 #[test]
 fn canonical_fallback_contraction_does_not_copy_operands() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     const N: usize = 95;
     let a =
         Tensor::from_vec_col_major([N, N], (0..N * N).map(|i| i as f64 * 0.5).collect()).unwrap();

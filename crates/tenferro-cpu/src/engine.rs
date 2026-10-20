@@ -632,12 +632,10 @@ pub(crate) fn guard_unwind<R>(
     op: impl FnOnce(&mut BufferPool) -> R,
 ) -> R {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(&mut *buffers))) {
-        Ok(value) => {
-            buffers.clear_in_flight_retained();
-            value
-        }
+        Ok(value) => value,
         Err(payload) => {
-            buffers.replenish_in_flight_retained();
+            // The engine is never used again after a panic, so the buffers the
+            // operation had checked out need no accounting repair.
             *broken = true;
             std::panic::resume_unwind(payload)
         }

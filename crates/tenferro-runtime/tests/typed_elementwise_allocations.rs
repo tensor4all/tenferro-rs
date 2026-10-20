@@ -72,14 +72,9 @@ fn measure<T>(call: impl FnOnce() -> T) -> (T, usize, usize) {
     )
 }
 
-/// Every operation that checks a pooled output out of the engine's buffer pool
-/// pays one fixed-size allocation for the pool's in-flight accounting map node.
-///
-/// `CpuEngine` clears that accounting when an operation returns (the buffers
-/// that remain are the caller's outputs), so a steady acquire/release cycle
-/// re-inserts the node; the metadata of the operation itself stays allocation
-/// free, which is what these budgets pin.
-const POOL_ACCOUNTING_ALLOCATIONS: usize = 1;
+/// A warm pooled operation allocates nothing: the buffer pool keeps no
+/// per-operation bookkeeping (#2206).
+const POOL_ACCOUNTING_ALLOCATIONS: usize = 0;
 
 #[test]
 fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {

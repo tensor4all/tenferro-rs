@@ -169,7 +169,7 @@ fn with_linalg_pool_restores_backend_pool_and_context() {
 }
 
 #[test]
-fn linalg_pool_acquire_then_panic_replenishes_buffer_and_breaks_engine() {
+fn linalg_pool_acquire_then_panic_breaks_engine() {
     let mut backend = crate::test_support::cpu_engine(1).unwrap();
     with_cpu_session(&mut backend, |cpu| {
         cpu.with_linalg_pool(|_, pool| {
@@ -195,14 +195,10 @@ fn linalg_pool_acquire_then_panic_replenishes_buffer_and_breaks_engine() {
     }));
 
     assert!(result.is_err());
-    // The unwind replenished the pooled buffer the callback took, and the
-    // engine is marked broken because other workspace may be half updated.
+    // The engine is marked broken because its workspace may be half updated;
+    // it is never used again, so the buffer the callback took is not repaired.
     assert!(backend.is_broken());
-    assert_eq!(backend.buffer_pool_len(), 1);
-    assert_eq!(
-        backend.buffer_pool_stats().capacity_bytes,
-        1024 * std::mem::size_of::<f64>()
-    );
+    assert!(with_cpu_session(&mut backend, |cpu| cpu.with_linalg_pool(|_, _| Ok(()))).is_err());
 }
 
 #[test]

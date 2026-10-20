@@ -147,38 +147,6 @@ fn acquire_updates_retained_capacity_stats() {
 }
 
 #[test]
-fn replenish_in_flight_retained_restores_lost_capacity() {
-    let mut pool = BufferPool::new();
-    <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));
-
-    let _in_flight = pool.acquire_with_capacity::<f64>(8);
-    assert_eq!(pool.retained_capacity_bytes(), 0);
-    assert!(pool.is_empty());
-
-    pool.replenish_in_flight_retained();
-
-    assert_eq!(pool.len(), 1);
-    assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
-    assert!(!pool.is_empty());
-}
-
-#[test]
-fn replenish_in_flight_retained_skips_successfully_released_buffers() {
-    let mut pool = BufferPool::new();
-    <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));
-
-    let buf = pool.acquire_with_capacity::<f64>(8);
-    <f64 as PoolScalar>::pool_release(&mut pool, buf);
-
-    let stats_before = pool.stats();
-    pool.replenish_in_flight_retained();
-
-    assert_eq!(pool.stats(), stats_before);
-    assert_eq!(pool.len(), 1);
-    assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
-}
-
-#[test]
 fn stats_counts_typed_capacity_bytes() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(3));
@@ -255,7 +223,6 @@ fn pooled_uninit_guard_returns_partial_reused_storage() {
     // An abandoned destination never became a tensor, so the pool gets its storage back whole
     // instead of watching it go to the allocator.
     assert_eq!(pool.stats(), before);
-    assert!(pool.in_flight_is_empty());
 }
 
 #[test]
@@ -282,30 +249,6 @@ fn pooled_uninit_guard_fresh_handoff_and_panic_return_are_exact() {
     // The aborted checkout hands its own storage back as well.
     assert_eq!(pool.stats().buffers, 2);
     assert_eq!(pool.stats().capacity_bytes, (2 + 4) * size_of::<f64>());
-    assert!(pool.in_flight_is_empty());
-}
-
-#[test]
-fn pooled_uninit_guard_keeps_unrelated_dtype_markers_untouched() {
-    let mut pool = BufferPool::new();
-    <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 8]);
-    let unrelated = pool.acquire_with_capacity::<f64>(8);
-    let marker_before = super::lock_pool(&pool.state).f64_in_flight.clone();
-    assert_eq!(marker_before.get(&8), Some(&1));
-    <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 16]);
-    {
-        let _output = PooledUninitOutput::<f64>::new(&pool, vec![3]).unwrap();
-    }
-    // The unrelated 8-capacity checkout keeps its count of one. A retained
-    // zero entry may also appear for the 16-capacity buffer the guard took and
-    // returned; that is bookkeeping, not a checkout.
-    let after = super::lock_pool(&pool.state).f64_in_flight.clone();
-    assert_eq!(after.get(&8), marker_before.get(&8));
-    assert!(after
-        .iter()
-        .all(|(capacity, count)| *capacity == 8 || *count == 0));
-    drop(unrelated);
-    pool.clear_in_flight_retained();
 }
 
 #[test]
@@ -318,7 +261,6 @@ fn pooled_uninit_guard_bool_invalid_byte_error_returns_without_typed_read() {
         panic!("invalid bool partial panic");
     }));
     assert!(result.is_err());
-    assert!(pool.in_flight_is_empty());
     // The storage is only ever handed back out as uninitialized bytes or zero-filled, so an
     // invalid `bool` that was never read does not poison it.
     assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<bool>());
@@ -348,7 +290,6 @@ fn pooled_uninit_guard_reused_success_handoff_returns_on_drop() {
     assert_eq!(tensor.as_slice().unwrap(), &[1.0, 2.0, 3.0]);
     // While the tensor owns the buffer the pool holds neither its bytes nor a checkout claim.
     assert_eq!(pool.retained_capacity_bytes(), 0);
-    assert!(pool.in_flight_is_empty());
     drop(tensor);
     assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
     assert_eq!(
@@ -365,7 +306,6 @@ fn pooled_uninit_guard_reused_error_returns_exact_capacity() {
     let error =
         unsafe { output.assume_init_as_recycled::<tenferro_tensor::Rank<2>>() }.unwrap_err();
     assert!(error.to_string().contains("pooled_uninit_output"));
-    assert!(pool.in_flight_is_empty());
     // The handoff failed before a tensor could own the buffer, so it is the pool's again.
     assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
 }
@@ -381,7 +321,6 @@ fn pooled_uninit_guard_reused_partial_panic_returns_exact_capacity() {
         panic!("partial reused C>len panic");
     }));
     assert!(result.is_err());
-    assert!(pool.in_flight_is_empty());
     assert_eq!(pool.retained_capacity_bytes(), 8 * size_of::<f64>());
     assert_eq!(
         super::lock_pool(&pool.state).f64_pool.get(&8).map(Vec::len),
@@ -628,34 +567,4 @@ fn steady_cycle_keeps_one_bin_and_reuses_it() {
     }
     assert_eq!(pool.bin_count(), 2);
     assert_eq!(pool.empty_bin_count(), 0);
-}
-
-/// #2170: idle in-flight bookkeeping entries are kept, because only
-/// `replenish_in_flight_for` walks them and that is not an acquisition path.
-#[test]
-fn idle_in_flight_entries_are_kept() {
-    let mut pool = BufferPool::with_max_retained_capacity_bytes(usize::MAX);
-    let capacities: Vec<usize> = (0..=20).map(|shift| 1usize << shift).collect();
-    for &cap in &capacities {
-        // The first cycle allocates, the second reuses and so passes through the
-        // in-flight bookkeeping for this capacity.
-        for _ in 0..2 {
-            let buf = pool.acquire_with_capacity::<f64>(cap);
-            <f64 as PoolScalar>::pool_release(&mut pool, buf);
-        }
-    }
-    assert_eq!(
-        pool.in_flight_entries(),
-        capacities.len(),
-        "every capacity that was checked out keeps its bookkeeping entry"
-    );
-    assert!(pool.in_flight_is_empty());
-
-    // A live checkout is still counted, and stops being in flight when it returns.
-    <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(4096));
-    let held = pool.acquire_with_capacity::<f64>(4096);
-    assert!(pool.in_flight_entries() >= 1);
-    assert!(!pool.in_flight_is_empty());
-    <f64 as PoolScalar>::pool_release(&mut pool, held);
-    assert!(pool.in_flight_is_empty());
 }
