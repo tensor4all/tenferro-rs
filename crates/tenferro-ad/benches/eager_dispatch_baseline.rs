@@ -1,9 +1,14 @@
 //! Eager standard-op dispatch baseline (lazy vs materialized consume).
 //!
-//! The per-op floor includes the CPU session-open cost that issue #1667 tracks:
-//! for a single worker the `enter_managed_session` wrapper (~5-8 us) plus the
-//! eager view-read materialization are currently hard to avoid. See
-//! docs/design/cpu-session-open-cost.md.
+//! Each benchmark group reuses one caller-owned [`CpuEngine`], the supported
+//! caller pattern. Do not construct an engine inside `b.iter`: an engine owns
+//! its contraction workspace and plan cache, and a fresh workspace first enters
+//! the provider arena, which records a per-provider worker handle in a
+//! thread-local list that outlives the dropped owner. Re-creating an engine per
+//! iteration therefore measures cold workspace/plan turnover and an
+//! ever-growing thread-local scan, not eager dispatch.
+//!
+//! [`CpuEngine`]: tenferro_cpu::CpuEngine
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,10 +37,8 @@ fn consume_lazy(output: EagerTensor) {
     black_box(output.tensor_read());
 }
 
-fn consume_materialized(output: EagerTensor) {
-    let output = output
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-        .expect("output should materialize");
+fn consume_materialized(output: EagerTensor, engine: &mut tenferro_cpu::CpuEngine) {
+    let output = output.to_tensor(engine).expect("output should materialize");
     black_box(output.shape());
     black_box(output.as_slice::<f64>().expect("f64 output")[0]);
 }
@@ -51,6 +54,7 @@ fn matmul_config() -> DotGeneralConfig {
 
 fn bench_lazy(c: &mut Criterion) {
     let runtime = runtime();
+    let mut engine = tenferro_cpu::CpuEngine::serial();
     let mut group = c.benchmark_group("eager_dispatch_baseline/lazy");
 
     for &len in ELEMENT_COUNTS {
@@ -62,9 +66,7 @@ fn bench_lazy(c: &mut Criterion) {
             b.iter(|| {
                 consume_lazy(
                     runtime
-                        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-                            session.neg(black_box(&lhs))
-                        })
+                        .with_eager_session(&mut engine, |session| session.neg(black_box(&lhs)))
                         .expect("neg should succeed"),
                 )
             });
@@ -73,7 +75,7 @@ fn bench_lazy(c: &mut Criterion) {
             b.iter(|| {
                 consume_lazy(
                     runtime
-                        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                        .with_eager_session(&mut engine, |session| {
                             session.add(black_box(&lhs), black_box(&rhs))
                         })
                         .expect("add should succeed"),
@@ -84,7 +86,7 @@ fn bench_lazy(c: &mut Criterion) {
             b.iter(|| {
                 consume_lazy(
                     runtime
-                        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                        .with_eager_session(&mut engine, |session| {
                             session.reduce_sum(black_box(&lhs), Some(&axes))
                         })
                         .expect("reduce_sum should succeed"),
@@ -100,7 +102,7 @@ fn bench_lazy(c: &mut Criterion) {
             b.iter(|| {
                 consume_lazy(
                     runtime
-                        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                        .with_eager_session(&mut engine, |session| {
                             session.slice(black_box(&lhs), black_box(slice.clone()))
                         })
                         .expect("slice should succeed"),
@@ -117,7 +119,7 @@ fn bench_lazy(c: &mut Criterion) {
             b.iter(|| {
                 consume_lazy(
                     runtime
-                        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                        .with_eager_session(&mut engine, |session| {
                             session.dot_general(
                                 black_box(&lhs),
                                 black_box(&rhs),
@@ -134,6 +136,7 @@ fn bench_lazy(c: &mut Criterion) {
 
 fn bench_materialized(c: &mut Criterion) {
     let runtime = runtime();
+    let mut engine = tenferro_cpu::CpuEngine::serial();
     let mut group = c.benchmark_group("eager_dispatch_baseline/materialized");
 
     for &len in ELEMENT_COUNTS {
@@ -145,10 +148,9 @@ fn bench_materialized(c: &mut Criterion) {
             b.iter(|| {
                 consume_materialized(
                     runtime
-                        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-                            session.neg(black_box(&lhs))
-                        })
+                        .with_eager_session(&mut engine, |session| session.neg(black_box(&lhs)))
                         .expect("neg should succeed"),
+                    &mut engine,
                 )
             });
         });
@@ -156,10 +158,11 @@ fn bench_materialized(c: &mut Criterion) {
             b.iter(|| {
                 consume_materialized(
                     runtime
-                        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                        .with_eager_session(&mut engine, |session| {
                             session.add(black_box(&lhs), black_box(&rhs))
                         })
                         .expect("add should succeed"),
+                    &mut engine,
                 )
             });
         });
@@ -167,10 +170,11 @@ fn bench_materialized(c: &mut Criterion) {
             b.iter(|| {
                 consume_materialized(
                     runtime
-                        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                        .with_eager_session(&mut engine, |session| {
                             session.reduce_sum(black_box(&lhs), Some(&axes))
                         })
                         .expect("reduce_sum should succeed"),
+                    &mut engine,
                 )
             });
         });
@@ -183,10 +187,11 @@ fn bench_materialized(c: &mut Criterion) {
             b.iter(|| {
                 consume_materialized(
                     runtime
-                        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                        .with_eager_session(&mut engine, |session| {
                             session.slice(black_box(&lhs), black_box(slice.clone()))
                         })
                         .expect("slice should succeed"),
+                    &mut engine,
                 )
             });
         });
@@ -200,7 +205,7 @@ fn bench_materialized(c: &mut Criterion) {
             b.iter(|| {
                 consume_materialized(
                     runtime
-                        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                        .with_eager_session(&mut engine, |session| {
                             session.dot_general(
                                 black_box(&lhs),
                                 black_box(&rhs),
@@ -208,6 +213,7 @@ fn bench_materialized(c: &mut Criterion) {
                             )
                         })
                         .expect("dot_general should succeed"),
+                    &mut engine,
                 )
             });
         });
