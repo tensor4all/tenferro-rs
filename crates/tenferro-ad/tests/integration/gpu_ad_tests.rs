@@ -4,12 +4,21 @@ use crate::support;
 use support::{cpu_runtime, RunTraced};
 use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
 use tenferro_gpu::{
-    cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId,
+    cuda::gpu_available, cuda::upload_tensor, cuda::CudaDeviceId, cuda::CudaEngine,
 };
 use tenferro_runtime::{
     DType, DotGeneralConfig, GatherConfig, Tensor, TensorRead, TracedTensor, TypedTensor,
 };
 use tenferro_tensor::StorageBuffer;
+
+/// Run `f` on the engine; keeps the shape of the former session callbacks.
+#[allow(dead_code)]
+fn on_engine<R>(
+    engine: &mut tenferro_gpu::cuda::CudaEngine,
+    f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
+) -> tenferro_ad::Result<R> {
+    Ok(f(engine))
+}
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -86,7 +95,7 @@ fn matmul(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
 fn test_gpu_eager_backward_smoke() {
     assert!(gpu_available(), "CUDA test requires an available device");
 
-    let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut upload_backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let x_gpu = upload_tensor(
         upload_backend.runtime(),
         &f64_tensor(vec![2], vec![2.0_f64, 3.0]),
@@ -97,27 +106,25 @@ fn test_gpu_eager_backward_smoke() {
         &f64_tensor(vec![2], vec![1.0_f64, 1.0]),
     )
     .unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
-    let x = EagerTensor::requires_grad_in(x_gpu, ctx.clone()).unwrap();
-    let seed = EagerTensor::from_tensor_in(seed_gpu, ctx.clone()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
+    let x = ctx
+        .with_eager_session(&mut upload_backend, |s| s.variable_from(x_gpu))
+        .unwrap();
+    let seed = ctx
+        .with_eager_session(&mut upload_backend, |s| s.constant_from(seed_gpu))
+        .unwrap();
     let y = ctx
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            session.mul(&x, &x)
-        })
+        .with_eager_session(&mut upload_backend, |session| session.mul(&x, &x))
         .unwrap();
 
-    y.backward_with(&mut tenferro_cpu::CpuEngine::serial(), &seed)
-        .unwrap();
+    y.backward_with(&mut upload_backend, &seed).unwrap();
     let grad = x.grad().unwrap().unwrap();
-    let grad_tensor = grad
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-        .unwrap();
-    let grad_host = ctx
-        .with_execution_session(|session| {
-            session.download_to_host(TensorRead::from_tensor(&grad_tensor))
-        })
-        .unwrap()
-        .unwrap();
+    let grad_tensor = grad.to_tensor(&mut upload_backend).unwrap();
+    let grad_host = on_engine(&mut upload_backend, |session| {
+        session.download_to_host(TensorRead::from_tensor(&grad_tensor))
+    })
+    .unwrap()
+    .unwrap();
 
     assert_f64_tensor_close(
         &grad_host,
@@ -131,46 +138,40 @@ fn test_gpu_eager_backward_smoke() {
 #[ignore = "requires CUDA"]
 fn test_gpu_borrowed_reduce_sum_preserves_residency_and_gradient() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let x_gpu = upload_tensor(
         backend.runtime(),
         &f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]),
     )
     .unwrap();
     let seed_gpu = upload_tensor(backend.runtime(), &f64_tensor(vec![2], vec![1.0, 1.0])).unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(backend).unwrap();
-    let x = EagerTensor::requires_grad_in(x_gpu, ctx.clone()).unwrap();
-    let seed = EagerTensor::from_tensor_in(seed_gpu, ctx.clone()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
+    let x = ctx
+        .with_eager_session(&mut backend, |s| s.variable_from(x_gpu))
+        .unwrap();
+    let seed = ctx
+        .with_eager_session(&mut backend, |s| s.constant_from(seed_gpu))
+        .unwrap();
     let sum = ctx
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            session.reduce_sum(&x, Some(&[0]))
-        })
+        .with_eager_session(&mut backend, |session| session.reduce_sum(&x, Some(&[0])))
         .unwrap();
-    let result = sum
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-        .unwrap();
+    let result = sum.to_tensor(&mut backend).unwrap();
     assert_device_backed(&result);
-    let host = ctx
-        .with_execution_session(|session| {
-            session.download_to_host(TensorRead::from_tensor(&result))
-        })
-        .unwrap()
-        .unwrap();
+    let host = on_engine(&mut backend, |session| {
+        session.download_to_host(TensorRead::from_tensor(&result))
+    })
+    .unwrap()
+    .unwrap();
     assert_f64_tensor_close(&host, &f64_tensor(vec![2], vec![3.0, 7.0]), 1e-10, 1e-10);
 
-    sum.backward_with(&mut tenferro_cpu::CpuEngine::serial(), &seed)
-        .unwrap();
-    let grad = x
-        .grad()
-        .unwrap()
-        .unwrap()
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-        .unwrap();
+    sum.backward_with(&mut backend, &seed).unwrap();
+    let grad = x.grad().unwrap().unwrap().to_tensor(&mut backend).unwrap();
     assert_device_backed(&grad);
-    let host = ctx
-        .with_execution_session(|session| session.download_to_host(TensorRead::from_tensor(&grad)))
-        .unwrap()
-        .unwrap();
+    let host = on_engine(&mut backend, |session| {
+        session.download_to_host(TensorRead::from_tensor(&grad))
+    })
+    .unwrap()
+    .unwrap();
     assert_f64_tensor_close(&host, &f64_tensor(vec![2, 2], vec![1.0; 4]), 1e-10, 1e-10);
 }
 
@@ -178,7 +179,7 @@ fn test_gpu_borrowed_reduce_sum_preserves_residency_and_gradient() {
 #[ignore = "requires CUDA"]
 fn test_gpu_borrowed_concat_gather_and_index_select_stay_resident() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let x_gpu =
         upload_tensor(backend.runtime(), &f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
     let indices_gpu = upload_tensor(
@@ -186,11 +187,15 @@ fn test_gpu_borrowed_concat_gather_and_index_select_stay_resident() {
         &Tensor::from_vec_col_major(vec![2, 1], vec![4_i64, 1]).unwrap(),
     )
     .unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(backend).unwrap();
-    let x = EagerTensor::from_tensor_in(x_gpu, ctx.clone()).unwrap();
-    let indices = EagerTensor::from_tensor_in(indices_gpu, ctx.clone()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
+    let x = ctx
+        .with_eager_session(&mut backend, |s| s.constant_from(x_gpu))
+        .unwrap();
+    let indices = ctx
+        .with_eager_session(&mut backend, |s| s.constant_from(indices_gpu))
+        .unwrap();
     let (joined, selected, indexed) = ctx
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+        .with_eager_session(&mut backend, |session| {
             let joined = session.concatenate(&[&x, &x], 0)?;
             let selected = session.gather(
                 &joined,
@@ -207,25 +212,18 @@ fn test_gpu_borrowed_concat_gather_and_index_select_stay_resident() {
             Ok::<_, tenferro_ad::Error>((joined, selected, indexed))
         })
         .unwrap();
-    let joined = joined
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-        .unwrap();
-    let selected = selected
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-        .unwrap();
-    let indexed = indexed
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-        .unwrap();
+    let joined = joined.to_tensor(&mut backend).unwrap();
+    let selected = selected.to_tensor(&mut backend).unwrap();
+    let indexed = indexed.to_tensor(&mut backend).unwrap();
     assert_device_backed(&joined);
     assert_device_backed(&selected);
     assert_device_backed(&indexed);
     for output in [&selected, &indexed] {
-        let host = ctx
-            .with_execution_session(|session| {
-                session.download_to_host(TensorRead::from_tensor(output))
-            })
-            .unwrap()
-            .unwrap();
+        let host = on_engine(&mut backend, |session| {
+            session.download_to_host(TensorRead::from_tensor(output))
+        })
+        .unwrap()
+        .unwrap();
         assert_f64_tensor_close(&host, &f64_tensor(vec![2], vec![2.0, 2.0]), 0.0, 0.0);
     }
 }
@@ -276,16 +274,22 @@ fn test_gpu_matmul_vjp() {
     let cpu_grad_a = eval_cpu_tensor(&cpu_engine, &grad_a_cpu);
     let cpu_grad_b = eval_cpu_tensor(&cpu_engine, &grad_b_cpu);
 
-    let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut upload_backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let a_device = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_device = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
     let cotangent_device = upload_tensor(upload_backend.runtime(), &cotangent_host).unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
-    let a_gpu = EagerTensor::from_tensor_in(a_device, ctx.clone()).unwrap();
-    let b_gpu = EagerTensor::from_tensor_in(b_device, ctx.clone()).unwrap();
-    let cotangent_gpu = EagerTensor::from_tensor_in(cotangent_device, ctx.clone()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
+    let a_gpu = ctx
+        .with_eager_session(&mut upload_backend, |s| s.constant_from(a_device))
+        .unwrap();
+    let b_gpu = ctx
+        .with_eager_session(&mut upload_backend, |s| s.constant_from(b_device))
+        .unwrap();
+    let cotangent_gpu = ctx
+        .with_eager_session(&mut upload_backend, |s| s.constant_from(cotangent_device))
+        .unwrap();
     let y_gpu = ctx
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+        .with_eager_session(&mut upload_backend, |s| {
             // Def 1 (active-edge): functional VJP over untracked leaves requires
             // explicit capture on the session's calling thread.
             let _capture = ctx.capture_trace();
@@ -302,39 +306,27 @@ fn test_gpu_matmul_vjp() {
         })
         .unwrap();
     let gpu_grad_a = ctx
-        .vjp(
-            &mut tenferro_cpu::CpuEngine::serial(),
-            &y_gpu,
-            &a_gpu,
-            &cotangent_gpu,
-        )
+        .vjp(&mut upload_backend, &y_gpu, &a_gpu, &cotangent_gpu)
         .unwrap()
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .to_tensor(&mut upload_backend)
         .unwrap();
     let gpu_grad_b = ctx
-        .vjp(
-            &mut tenferro_cpu::CpuEngine::serial(),
-            &y_gpu,
-            &b_gpu,
-            &cotangent_gpu,
-        )
+        .vjp(&mut upload_backend, &y_gpu, &b_gpu, &cotangent_gpu)
         .unwrap()
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .to_tensor(&mut upload_backend)
         .unwrap();
     assert_device_backed(&gpu_grad_a);
     assert_device_backed(&gpu_grad_b);
-    let gpu_grad_a = ctx
-        .with_execution_session(|session| {
-            session.download_to_host(TensorRead::from_tensor(&gpu_grad_a))
-        })
-        .unwrap()
-        .unwrap();
-    let gpu_grad_b = ctx
-        .with_execution_session(|session| {
-            session.download_to_host(TensorRead::from_tensor(&gpu_grad_b))
-        })
-        .unwrap()
-        .unwrap();
+    let gpu_grad_a = on_engine(&mut upload_backend, |session| {
+        session.download_to_host(TensorRead::from_tensor(&gpu_grad_a))
+    })
+    .unwrap()
+    .unwrap();
+    let gpu_grad_b = on_engine(&mut upload_backend, |session| {
+        session.download_to_host(TensorRead::from_tensor(&gpu_grad_b))
+    })
+    .unwrap()
+    .unwrap();
 
     assert_f64_tensor_close(&gpu_grad_a, &cpu_grad_a, 1.0e-10, 1.0e-10);
     assert_f64_tensor_close(&gpu_grad_b, &cpu_grad_b, 1.0e-10, 1.0e-10);
@@ -359,7 +351,7 @@ fn test_gpu_matmul_vjp() {
 fn test_gpu_scale_real_and_scale_complex_match_cpu() {
     use num_complex::Complex64;
     use tenferro_gpu::cuda::{cuda_runtime_engine_registration, download_tensor};
-    use tenferro_runtime::{EngineId, GraphCompiler, Runtime};
+    use tenferro_runtime::{GraphCompiler, Runtime};
 
     assert!(gpu_available(), "CUDA test requires an available device");
 
@@ -374,11 +366,10 @@ fn test_gpu_scale_real_and_scale_complex_match_cpu() {
         TypedTensor::from_vec_col_major(shape.clone(), complex_values.clone()).unwrap(),
     );
 
-    let cuda_runtime = |backend: &CudaBackend| -> Runtime {
-        let engine_id = EngineId::new("tenferro-ad.scale.cuda.v1").unwrap();
+    let cuda_runtime = |engine: &CudaEngine| -> Runtime {
         let mut builder = Runtime::builder();
         builder
-            .register_engine(cuda_runtime_engine_registration(backend, engine_id).unwrap())
+            .register_engine(cuda_runtime_engine_registration(engine).unwrap())
             .unwrap();
         builder.build().unwrap()
     };
@@ -395,6 +386,7 @@ fn test_gpu_scale_real_and_scale_complex_match_cpu() {
     // no ingress for a host-resident binding, so the caller uploads it first.
     let execute =
         |runtime: &Runtime,
+         engine: &mut dyn tenferro_runtime::ExecutionEngine,
          binding: &Tensor,
          apply: &dyn Fn(&TracedTensor) -> Result<TracedTensor, tenferro_runtime::Error>|
          -> Tensor {
@@ -407,7 +399,7 @@ fn test_gpu_scale_real_and_scale_complex_match_cpu() {
             let program = GraphCompiler::new()
                 .compile_with_input_specs(&scaled, &specs)
                 .unwrap();
-            crate::support::run_on_cpu(&runtime, &program, &[binding])
+            crate::support::run_on(engine, runtime, &program, &[binding])
                 .unwrap()
                 .pop()
                 .unwrap()
@@ -415,10 +407,12 @@ fn test_gpu_scale_real_and_scale_complex_match_cpu() {
 
     // --- CPU reference on the same graph
     let cpu = cpu_runtime();
-    let cpu_real = execute(&cpu, &real, &factor(Some(2.5), None));
-    let cpu_complex_real = execute(&cpu, &complex, &factor(Some(2.5), None));
+    let mut cpu_engine = tenferro_cpu::CpuEngine::serial();
+    let cpu_real = execute(&cpu, &mut cpu_engine, &real, &factor(Some(2.5), None));
+    let cpu_complex_real = execute(&cpu, &mut cpu_engine, &complex, &factor(Some(2.5), None));
     let cpu_complex_complex = execute(
         &cpu,
+        &mut cpu_engine,
         &complex,
         &factor(None, Some(Complex64::new(0.0, 1.0))),
     );
@@ -447,14 +441,14 @@ fn test_gpu_scale_real_and_scale_complex_match_cpu() {
     }
 
     // --- traced on CUDA
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let traced_runtime = cuda_runtime(&backend);
-    let traced_case =
+    let mut traced_case =
         |input: &Tensor,
          apply: &dyn Fn(&TracedTensor) -> Result<TracedTensor, tenferro_runtime::Error>|
          -> Tensor {
             let device = upload_tensor(backend.runtime(), input).unwrap();
-            let out = execute(&traced_runtime, &device, apply);
+            let out = execute(&traced_runtime, &mut backend, &device, apply);
             download_tensor(backend.runtime(), &out).unwrap()
         };
     assert_real_like_close(
@@ -480,22 +474,17 @@ fn test_gpu_scale_real_and_scale_complex_match_cpu() {
         &EagerTensor,
     ) -> tenferro_ad::Result<EagerTensor>|
      -> Tensor {
-        let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
-        let uploaded = upload_tensor(upload_backend.runtime(), input).unwrap();
-        let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
-        let x = EagerTensor::from_tensor_in(uploaded, ctx.clone()).unwrap();
+        let mut engine = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
+        let uploaded = upload_tensor(engine.runtime(), input).unwrap();
+        let ctx = EagerRuntime::new().unwrap();
+        let x = ctx
+            .with_eager_session(&mut engine, |s| s.constant_from(uploaded))
+            .unwrap();
         let scaled = ctx
-            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-                apply(session, &x)
-            })
+            .with_eager_session(&mut engine, |session| apply(session, &x))
             .unwrap();
-        // Materialize outside the execution session: `to_tensor` needs the
-        // runtime's own session entry, so calling it inside `with_execution_session`
-        // re-enters it.
-        let value = scaled
-            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-            .unwrap();
-        ctx.with_execution_session(|session| {
+        let value = scaled.to_tensor(&mut engine).unwrap();
+        on_engine(&mut engine, |session| {
             session.download_to_host(TensorRead::from_tensor(&value))
         })
         .unwrap()
@@ -520,12 +509,14 @@ fn test_gpu_scale_real_and_scale_complex_match_cpu() {
     );
 
     // `scale_complex` still rejects a real input, on the device as on the host.
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let uploaded = upload_tensor(backend.runtime(), &real).unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(backend).unwrap();
-    let x = EagerTensor::from_tensor_in(uploaded, ctx.clone()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
+    let x = ctx
+        .with_eager_session(&mut backend, |s| s.constant_from(uploaded))
+        .unwrap();
     assert!(ctx
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session
+        .with_eager_session(&mut backend, |session| session
             .scale_complex(&x, Complex64::new(0.0, 1.0)))
         .is_err());
 }
@@ -588,31 +579,32 @@ fn eager_op_f64_decode_add_host_cost_benchmark() {
     let host_a = f64_tensor(shape.clone(), vec![1.0_f64; n]);
     let host_b = f64_tensor(shape.clone(), vec![2.0_f64; n]);
 
-    let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut upload_backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let runtime = upload_backend.runtime().clone();
     let ga = upload_tensor(upload_backend.runtime(), &host_a).unwrap();
     let gb = upload_tensor(upload_backend.runtime(), &host_b).unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
-    let x = EagerTensor::from_tensor_in(ga, ctx.clone()).unwrap();
-    let y = EagerTensor::from_tensor_in(gb, ctx.clone()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
+    let x = ctx
+        .with_eager_session(&mut upload_backend, |s| s.constant_from(ga))
+        .unwrap();
+    let y = ctx
+        .with_eager_session(&mut upload_backend, |s| s.constant_from(gb))
+        .unwrap();
     let iters = 2000usize;
 
-    let warm = |iters: usize, keep: bool| -> f64 {
+    let mut warm = |iters: usize, keep: bool| -> f64 {
         let started = Instant::now();
-        ctx.with_eager_session(
-            &mut tenferro_cpu::CpuEngine::serial(),
-            |s| -> tenferro_ad::Result<()> {
-                let mut held = Vec::new();
-                for _ in 0..iters {
-                    let out = s.add(&x, &y)?;
-                    if keep {
-                        held.push(out);
-                    }
+        ctx.with_eager_session(&mut upload_backend, |s| -> tenferro_ad::Result<()> {
+            let mut held = Vec::new();
+            for _ in 0..iters {
+                let out = s.add(&x, &y)?;
+                if keep {
+                    held.push(out);
                 }
-                drop(held);
-                Ok(())
-            },
-        )
+            }
+            drop(held);
+            Ok(())
+        })
         .unwrap();
         runtime.synchronize().unwrap();
         started.elapsed().as_secs_f64() * 1e6 / iters as f64

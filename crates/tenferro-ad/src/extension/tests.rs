@@ -862,26 +862,31 @@ fn eager_extension_warm_factory_errors_are_propagated_unchanged() {
 #[test]
 #[ignore = "requires CUDA device initialization"]
 fn eager_extension_factory_receives_exact_cuda_target() {
-    use tenferro_gpu::cuda::{cuda_devices, CudaBackend};
+    use tenferro_gpu::cuda::{cuda_devices, CudaEngine};
+    use tenferro_tensor::TensorDeviceTransfer;
 
     let device = cuda_devices().unwrap().into_iter().next().unwrap();
-    let backend = CudaBackend::new(device.id()).unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(backend).unwrap();
+    let mut engine = CudaEngine::open(device.id()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let host = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
-    let device_input = ctx
-        .with_execution_session(|session| {
-            session.upload_host_tensor(TensorRead::from_tensor(&host))
-        })
-        .unwrap()
+    let device_input = engine
+        .upload_host_tensor(TensorRead::from_tensor(&host))
         .unwrap();
-    let input = EagerTensor::from_tensor_in(device_input, ctx).unwrap();
+    let input = ctx
+        .with_eager_session(&mut engine, |s| s.constant_from(device_input))
+        .unwrap();
     let seen = Arc::new(Mutex::new(None));
     let seen_by_factory = Arc::clone(&seen);
 
-    execute_probe(Arc::new(BridgeProbe::one()), &input, move |target| {
-        *seen_by_factory.lock().unwrap() = Some(target.clone());
-        Ok(BridgeModule::for_engine(target.engine_id))
-    })
+    apply_eager_with_targeted_extension_session(
+        &mut engine,
+        Arc::new(BridgeProbe::one()),
+        &[&input],
+        move |target| {
+            *seen_by_factory.lock().unwrap() = Some(target.clone());
+            Ok(BridgeModule::for_engine(target.engine_id))
+        },
+    )
     .unwrap();
 
     assert_eq!(
@@ -896,7 +901,7 @@ fn eager_extension_factory_receives_exact_cuda_target() {
             .unwrap()
             .as_ref()
             .map(|target| target.engine_id.as_str()),
-        Some("tenferro-ad.cuda.default.v1")
+        Some("tenferro.cuda.default.v1")
     );
 }
 
@@ -904,11 +909,11 @@ fn eager_extension_factory_receives_exact_cuda_target() {
 #[test]
 #[ignore = "requires CUDA device initialization"]
 fn eager_extension_cuda_host_input_is_rejected_before_factory() {
-    use tenferro_gpu::cuda::{cuda_devices, CudaBackend};
+    use tenferro_gpu::cuda::{cuda_devices, CudaEngine};
 
     let device = cuda_devices().unwrap().into_iter().next().unwrap();
-    let backend = CudaBackend::new(device.id()).unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(backend).unwrap();
+    let mut engine = CudaEngine::open(device.id()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let host = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     let input =
         super::adopt_untracked_eager_value(Arc::clone(&ctx), TensorValue::from_tensor(host))
@@ -916,10 +921,15 @@ fn eager_extension_cuda_host_input_is_rejected_before_factory() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let calls_by_factory = Arc::clone(&calls);
 
-    let error = execute_probe(Arc::new(BridgeProbe::one()), &input, move |target| {
-        calls_by_factory.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(BridgeModule::for_engine(target.engine_id))
-    })
+    let error = apply_eager_with_targeted_extension_session(
+        &mut engine,
+        Arc::new(BridgeProbe::one()),
+        &[&input],
+        move |target| {
+            calls_by_factory.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(BridgeModule::for_engine(target.engine_id))
+        },
+    )
     .unwrap_err();
 
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -942,19 +952,18 @@ fn eager_extension_cuda_host_input_is_rejected_before_factory() {
 #[test]
 #[ignore = "requires CUDA device initialization"]
 fn eager_extension_foreign_cuda_input_is_rejected_before_factory() {
-    use tenferro_gpu::cuda::{cuda_devices, CudaBackend};
+    use tenferro_gpu::cuda::{cuda_devices, CudaEngine};
+    use tenferro_tensor::TensorDeviceTransfer;
 
     let device = cuda_devices().unwrap().into_iter().next().unwrap();
-    let target_ctx =
-        EagerRuntime::with_cuda_backend(CudaBackend::new(device.id()).unwrap()).unwrap();
-    let foreign_ctx =
-        EagerRuntime::with_cuda_backend(CudaBackend::new(device.id()).unwrap()).unwrap();
+    // Two engines opened on one ordinal own separate memory: a tensor of one
+    // is foreign to the other.
+    let mut engine = CudaEngine::open(device.id()).unwrap();
+    let mut foreign_engine = CudaEngine::open(device.id()).unwrap();
+    let target_ctx = EagerRuntime::new().unwrap();
     let host = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
-    let foreign_device = foreign_ctx
-        .with_execution_session(|session| {
-            session.upload_host_tensor(TensorRead::from_tensor(&host))
-        })
-        .unwrap()
+    let foreign_device = foreign_engine
+        .upload_host_tensor(TensorRead::from_tensor(&host))
         .unwrap();
     let input = super::adopt_untracked_eager_value(
         Arc::clone(&target_ctx),
@@ -964,10 +973,15 @@ fn eager_extension_foreign_cuda_input_is_rejected_before_factory() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let calls_by_factory = Arc::clone(&calls);
 
-    let error = execute_probe(Arc::new(BridgeProbe::one()), &input, move |target| {
-        calls_by_factory.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(BridgeModule::for_engine(target.engine_id))
-    })
+    let error = apply_eager_with_targeted_extension_session(
+        &mut engine,
+        Arc::new(BridgeProbe::one()),
+        &[&input],
+        move |target| {
+            calls_by_factory.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(BridgeModule::for_engine(target.engine_id))
+        },
+    )
     .unwrap_err();
 
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);

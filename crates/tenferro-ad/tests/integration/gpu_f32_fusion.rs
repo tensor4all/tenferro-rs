@@ -1,10 +1,12 @@
 #![cfg(feature = "cuda")]
 
+use tenferro_tensor::TensorDeviceTransfer;
+
 // Run with: cargo test --features cuda -- --ignored
 
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_gpu::{
-    cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId,
+    cuda::gpu_available, cuda::upload_tensor, cuda::CudaDeviceId, cuda::CudaEngine,
 };
 use tenferro_runtime::{Tensor, TensorRead, TypedTensor};
 
@@ -20,28 +22,31 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let b_host = f32_tensor(vec![3], vec![0.5, -1.0, 2.0]);
     let c_host = f32_tensor(vec![3], vec![0.1, 0.1, 0.1]);
 
-    let upload_backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut upload_backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let a_device = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_device = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
     let c_device = upload_tensor(upload_backend.runtime(), &c_host).unwrap();
-    let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
-    let a = EagerTensor::from_tensor_in(a_device, ctx.clone()).unwrap();
-    let b = EagerTensor::from_tensor_in(b_device, ctx.clone()).unwrap();
-    let c = EagerTensor::from_tensor_in(c_device, ctx.clone()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
+    let a = ctx
+        .with_eager_session(&mut upload_backend, |s| s.constant_from(a_device))
+        .unwrap();
+    let b = ctx
+        .with_eager_session(&mut upload_backend, |s| s.constant_from(b_device))
+        .unwrap();
+    let c = ctx
+        .with_eager_session(&mut upload_backend, |s| s.constant_from(c_device))
+        .unwrap();
     let result = ctx
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+        .with_eager_session(&mut upload_backend, |s| {
             let sum = s.add(&a, &b)?;
             s.mul(&sum, &c)
         })
         .unwrap()
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .to_tensor(&mut upload_backend)
         .unwrap();
 
-    let result = ctx
-        .with_execution_session(|session| {
-            session.download_to_host(TensorRead::from_tensor(&result))
-        })
-        .unwrap()
+    let result = upload_backend
+        .download_to_host(TensorRead::from_tensor(&result))
         .unwrap();
     let values = result
         .as_slice::<f32>()
