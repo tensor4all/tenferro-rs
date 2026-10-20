@@ -386,26 +386,28 @@ moves to caller-held engines. -->
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_24 -->
 ```rust
-use tenferro_cpu::CpuBackend;
 use tenferro_fft::{FftNorm, TensorFftExt};
 use tenferro_gpu::apple::AppleContext;
-use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::Tensor;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let context = AppleContext::new()?;
+    let mut context = AppleContext::new()?;
     let host = Tensor::from_vec_col_major([8], vec![1.0_f32; 8])?;
     let managed = context.upload_tensor(&host)?;
     let after_creation = context.transfer_stats();
 
-    let mut cpu = context.cpu_backend().clone();
-    let cpu_spectrum = cpu
-        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))??;
-
-    let mut metal = context.metal_backend().clone();
-    let metal_spectrum = metal
-        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))??;
-    metal.synchronize()?;
+    // The context lends both paired engines together; each FFT names the one
+    // that runs it, and the managed tensor never leaves the shared domain.
+    let cpu_spectrum = {
+        let (cpu, _metal) = context.parts();
+        managed.rfft(None, 0, FftNorm::Backward, cpu)?
+    };
+    let metal_spectrum = {
+        let (_cpu, metal) = context.parts();
+        let spectrum = managed.rfft(None, 0, FftNorm::Backward, metal)?;
+        metal.synchronize()?;
+        spectrum
+    };
 
     assert_eq!(cpu_spectrum.shape(), metal_spectrum.shape());
     assert_eq!(context.transfer_stats(), after_creation);

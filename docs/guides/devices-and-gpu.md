@@ -305,12 +305,13 @@ use tenferro_gpu::apple::AppleContext;
 use tenferro_tensor::Tensor;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let context = AppleContext::new()?;
+    let mut context = AppleContext::new()?;
     let host = Tensor::from_vec_col_major([4], vec![1.0_f32, 2.0, 3.0, 4.0])?;
     let managed = context.upload_tensor(&host)?;
-    let mut cpu = context.cpu_backend().clone();
-    let mut metal = context.metal_backend().clone();
-    let _ = (&managed, &mut cpu, &mut metal);
+    // The context lends both paired engines together; each operation names the
+    // one that executes it and the managed tensor keeps its domain either way.
+    let (cpu, metal) = context.parts();
+    let _ = (&managed, cpu, metal);
     Ok(())
 }
 ```

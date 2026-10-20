@@ -876,23 +876,25 @@ assert_eq!(cpu_x.as_slice::<f64>()?, &[1.0, 2.0]);
         Ok(())
     }
 
+    // Compiled wherever the feature is on; only run on Metal hardware.
     #[cfg(all(feature = "apple-shared", target_os = "macos"))]
     snippet_devices_and_gpu_32()?;
 
     // snippet source: docs/guides/devices-and-gpu.md:225
-    #[cfg(all(feature = "apple-shared", target_os = "macos"))]
+    #[cfg(feature = "apple-shared")]
     fn snippet_devices_and_gpu_32() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:devices_and_gpu_32
 use tenferro_gpu::apple::AppleContext;
 use tenferro_tensor::Tensor;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let context = AppleContext::new()?;
+    let mut context = AppleContext::new()?;
     let host = Tensor::from_vec_col_major([4], vec![1.0_f32, 2.0, 3.0, 4.0])?;
     let managed = context.upload_tensor(&host)?;
-    let mut cpu = context.cpu_backend().clone();
-    let mut metal = context.metal_backend().clone();
-    let _ = (&managed, &mut cpu, &mut metal);
+    // The context lends both paired engines together; each operation names the
+    // one that executes it and the managed tensor keeps its domain either way.
+    let (cpu, metal) = context.parts();
+    let _ = (&managed, cpu, metal);
     Ok(())
 }
         // snippet-end:devices_and_gpu_32

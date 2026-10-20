@@ -5,13 +5,11 @@ use tenferro_gpu::apple::AppleContext;
 #[cfg(target_os = "macos")]
 use tenferro_linalg::TensorLinalgExt;
 #[cfg(target_os = "macos")]
-use tenferro_tensor::BackendSessionHost;
-#[cfg(target_os = "macos")]
 use tenferro_tensor::Tensor;
 
 #[cfg(target_os = "macos")]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let context = AppleContext::new()?;
+    let mut context = AppleContext::new()?;
 
     // Column-major representation of the SPD matrix [[4, 2], [2, 3]].
     let host = Tensor::from_vec_col_major([2, 2], vec![4.0_f32, 2.0, 2.0, 3.0])?;
@@ -23,10 +21,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let input_allocation = managed_typed.allocation_id().expect("managed allocation");
     let after_creation = context.transfer_stats();
 
-    // Backend selection is explicit. Cholesky is the initial mapped CPU linalg
-    // operation; this is not an automatic or general linalg fallback.
-    let mut cpu = context.cpu_backend().clone();
-    let factor = cpu.with_backend_session(|session| managed.cholesky(session))??;
+    // Engine selection is explicit: the context lends its paired CPU engine,
+    // which runs Cholesky on the managed tensor without a download. This is the
+    // initial mapped CPU linalg operation, not a general linalg fallback.
+    let factor = {
+        let (cpu, _metal) = context.parts();
+        managed.cholesky(cpu)?
+    };
 
     assert_eq!(managed_typed.allocation_domain(), Some(input_domain));
     assert_eq!(managed_typed.allocation_id(), Some(input_allocation));
