@@ -211,7 +211,8 @@ pub trait ExecutionEngine: Engine {
 /// assert!(owned.into_owned().is_some());
 /// ```
 // `Tensor` is much larger than a borrowed read, and an output is a transient
-// value, so boxing the owned variant would cost an allocation per output.
+// value, so boxing the owned variant would cost an allocation per output;
+// `Borrowed` keeps the caller's read unboxed so a passthrough adds none.
 #[allow(clippy::large_enum_variant)]
 pub enum Output<'a> {
     /// A tensor the program computed.

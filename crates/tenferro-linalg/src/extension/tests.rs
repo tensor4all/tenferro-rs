@@ -6,7 +6,11 @@ use tenferro_ops::SymDim;
 use tenferro_runtime::extension::ExtensionOp;
 use tenferro_tensor::{DType, Error, Tensor, TypedTensor};
 
-use super::{apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, canonical_svd_gauge_layout, promote_dtypes, EighDriver, EighGauge, LinalgExtensionOp, LinalgOp, QrGauge, SvdDriver, SvdGauge, LINALG_EXTENSION_FAMILY_ID};
+use super::{
+    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, canonical_svd_gauge_layout, promote_dtypes,
+    EighDriver, EighGauge, LinalgExtensionOp, LinalgOp, QrGauge, SvdDriver, SvdGauge,
+    LINALG_EXTENSION_FAMILY_ID,
+};
 
 #[test]
 fn session_support_admits_every_cpu_linear_algebra_op() {
@@ -113,7 +117,7 @@ fn session_support_admits_every_cpu_linear_algebra_op() {
 
 #[test]
 fn extension_reads_preserve_strided_inputs() {
-    use tenferro_cpu::{with_cpu_engine, CpuEngine};
+    use tenferro_cpu::with_cpu_engine;
     use tenferro_tensor::{TensorRead, TensorView};
 
     // Owned, compact, transposed and offset reads describe the same spectrum.
@@ -132,20 +136,18 @@ fn extension_reads_preserve_strided_inputs() {
     ];
     let mut backend = tenferro_cpu::CpuEngine::serial();
     for read in reads {
-        let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-                with_cpu_engine(session, |session| {
-                    super::execute_linalg_extension_reads_in_session(
-                        &LinalgExtensionOp::new(LinalgOp::SvdVals {
-                            derivative_eps: 0.0,
-                            driver: SvdDriver::Auto,
-                        }),
-                        &[read],
-                        session,
-                    )
-                })
-                .unwrap()
-            })(&mut backend)
-            .unwrap();
+        let outputs = with_cpu_engine(&mut backend, |session| {
+            super::execute_linalg_extension_reads_in_session(
+                &LinalgExtensionOp::new(LinalgOp::SvdVals {
+                    derivative_eps: 0.0,
+                    driver: SvdDriver::Auto,
+                }),
+                &[read],
+                session,
+            )
+        })
+        .unwrap()
+        .unwrap();
         let values = outputs[0].as_slice::<f64>().unwrap();
         assert_eq!(values.len(), 2);
         assert!((values[0] - 3.).abs() < 1e-12);

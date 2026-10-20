@@ -1206,11 +1206,6 @@ host	tenferro-linalg	cpu::tests::managed_cholesky::managed_cholesky_stages_its_f
 host	tenferro-linalg	cpu::tests::managed_cholesky::managed_borrowed_cholesky_respects_offset_and_rejects_strides
 host	tenferro-linalg	cpu::tests::managed_cholesky::managed_snapshot_is_independent_and_rejects_foreign_storage
 host	tenferro-linalg	cpu::tests::managed_cholesky::managed_traced_cholesky_preserves_domain_and_values
-host	tenferro-linalg	cpu::tests::output_affinity::decomposition_vectors_tag_every_fresh_output_with_the_selected_domain
-host	tenferro-linalg	cpu::tests::output_affinity::linalg_fresh_tagging_is_field_only_and_allocation_free
-host	tenferro-linalg	cpu::tests::output_affinity::linalg_single_outputs_tag_the_selected_domain
-host	tenferro-linalg	cpu::tests::output_affinity::prepared_lu_composition_tags_its_final_permutation_output
-host	tenferro-linalg	cpu::tests::output_affinity::zero_extent_solve_output_is_still_tagged_as_a_fresh_allocation
 host	tenferro-linalg	cpu::tlinalg_error::tests::every_variant_rebuilds_tenferros_kind_role_and_source
 host	tenferro-linalg	error::tests::invalid_workspace_keeps_typed_backend_source
 host	tenferro-linalg	error::tests::provider_status_keeps_typed_backend_source

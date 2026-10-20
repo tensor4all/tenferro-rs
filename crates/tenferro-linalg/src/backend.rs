@@ -11,7 +11,10 @@ pub struct CompactQrResult {
 }
 
 pub(crate) use crate::error::unsupported_dtype;
-use crate::extension::{apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, validate_derivative_eps, EighDriver, EighOptions, QrOptions, SvdDriver, SvdOptions};
+use crate::extension::{
+    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, validate_derivative_eps, EighDriver,
+    EighOptions, QrOptions, SvdDriver, SvdOptions,
+};
 use crate::RankRevealingQrOptions;
 
 /// Backend surface required by the linalg extension runtime.
@@ -26,10 +29,10 @@ use crate::RankRevealingQrOptions;
 ///
 /// assert_linalg_backend::<CpuEngine>();
 /// let mut host = tenferro_cpu::CpuEngine::serial();
-/// (|session: &mut dyn tenferro_tensor::Engine| {
-///     with_cpu_engine(session, |_backend| ())
+/// {
+///     with_cpu_engine(&mut host, |_backend| ())
 ///         .expect("CpuEngine must expose a CpuEngine");
-/// })(&mut host);
+/// };
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub trait LinalgBackend: Engine {
@@ -79,8 +82,8 @@ pub trait LinalgBackend: Engine {
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0])?;
     /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0])?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let x = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let x = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.triangular_solve_read(
     ///             TensorRead::from_tensor(&a),
     ///             TensorRead::from_tensor(&b),
@@ -91,7 +94,7 @@ pub trait LinalgBackend: Engine {
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// let x = x.into_typed::<f64>().expect("F64 inputs return F64 output");
     /// assert_eq!(x.host_data()?, &[0.5, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -195,15 +198,15 @@ pub trait LinalgBackend: Engine {
     ///
     /// let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.svd_with_options(
     ///             &input,
     ///             SvdOptions::default().gauge(SvdGauge::CanonicalPivot),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs[1].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -274,12 +277,12 @@ pub trait LinalgBackend: Engine {
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(vec![1, 2], vec![1.0, 1.0])?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.svd_full_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs[0].shape(), &[1, 1]);
     /// assert_eq!(outputs[1].shape(), &[1]);
     /// assert_eq!(outputs[2].shape(), &[2, 2]);
@@ -339,12 +342,12 @@ pub trait LinalgBackend: Engine {
     ///     vec![1.0, 0.0, 0.0, 2.0],
     /// )?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.svd_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs[1].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -383,15 +386,15 @@ pub trait LinalgBackend: Engine {
     ///     vec![1.0, 0.0, 0.0, 2.0],
     /// )?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.svd_with_options_read(
     ///             TensorRead::from_view(TensorView::F64(input.as_view())),
     ///             SvdOptions::default().driver(SvdDriver::Gesvd),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs[1].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -469,15 +472,15 @@ pub trait LinalgBackend: Engine {
     ///
     /// let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.qr_with_options(
     ///             &input,
     ///             QrOptions::default().gauge(QrGauge::PositiveDiagonal),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs[0].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -522,12 +525,12 @@ pub trait LinalgBackend: Engine {
     ///     vec![1.0, 0.0, 0.0, 2.0],
     /// )?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.qr_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs[0].shape(), &[2, 2]);
     /// assert_eq!(outputs[1].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -559,15 +562,15 @@ pub trait LinalgBackend: Engine {
     ///
     /// let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.qr_with_options_read(
     ///             TensorRead::from_tensor(&input),
     ///             QrOptions::default().gauge(QrGauge::PositiveDiagonal),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs[0].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -704,8 +707,8 @@ pub trait LinalgBackend: Engine {
     ///
     /// let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.eigh_with_options(
     ///             &input,
     ///             EighOptions::default()
@@ -714,7 +717,7 @@ pub trait LinalgBackend: Engine {
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs[0].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -767,15 +770,15 @@ pub trait LinalgBackend: Engine {
     ///     vec![2.0, 0.0, 0.0, 3.0],
     /// )?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.eigh_with_options_read(
     ///             TensorRead::from_view(TensorView::F64(input.as_view())),
     ///             EighOptions::default().driver(EighDriver::Syevj),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs[0].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -816,12 +819,12 @@ pub trait LinalgBackend: Engine {
     ///     vec![1.0, 0.0, 0.0, 2.0],
     /// )?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.eigh_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs[0].shape(), &[2]);
     /// assert_eq!(outputs[1].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -856,12 +859,12 @@ pub trait LinalgBackend: Engine {
     ///     vec![4.0, 2.0, 2.0, 3.0],
     /// )?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let output = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let output = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.cholesky_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(output.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -895,12 +898,12 @@ pub trait LinalgBackend: Engine {
     ///     vec![1.0, 3.0, 2.0, 4.0],
     /// )?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.lu_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs.len(), 4);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -934,12 +937,12 @@ pub trait LinalgBackend: Engine {
     ///     vec![1.0, 3.0, 2.0, 4.0],
     /// )?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.full_piv_lu_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs.len(), 5);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -973,12 +976,12 @@ pub trait LinalgBackend: Engine {
     ///     vec![2.0, 0.0, 0.0, 3.0],
     /// )?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let outputs = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.eig_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(outputs.len(), 2);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1098,15 +1101,15 @@ pub trait LinalgBackend: Engine {
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0])?;
     /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0])?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let x = (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// let x = {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.solve_read(
     ///             TensorRead::from_tensor(&a),
     ///             TensorRead::from_tensor(&b),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// let x = x.into_typed::<f64>().expect("F64 inputs return F64 output");
     /// assert_eq!(x.host_data()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1168,8 +1171,8 @@ pub trait LinalgBackend: Engine {
     /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0])?;
     /// let mut out = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64; 2])?;
     /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// (|session: &mut dyn tenferro_tensor::Engine| {
-    ///     with_cpu_engine(session, |backend| {
+    /// {
+    ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.solve_read_into(
     ///             TensorRead::from_tensor(&a),
     ///             TensorRead::from_tensor(&b),
@@ -1177,7 +1180,7 @@ pub trait LinalgBackend: Engine {
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
-    /// })(&mut host)?;
+    /// }?;
     /// assert_eq!(out.as_slice::<f64>()?, &[2.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```

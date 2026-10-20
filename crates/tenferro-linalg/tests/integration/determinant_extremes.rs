@@ -1,5 +1,4 @@
 use num_complex::Complex64;
-use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{GraphCompiler, TracedTensor};
 use tenferro_tensor::Tensor;
@@ -26,7 +25,9 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
             })
             .unwrap();
         for (actual, expected) in [det, sign, log].iter().zip(&result) {
-            let actual = actual.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
+            let actual = actual
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap();
             assert_eq!(actual.shape(), expected.shape());
             if let Ok(values) = actual.as_slice::<f64>() {
                 for (&a, &b) in values.iter().zip(expected.as_slice::<f64>().unwrap()) {
@@ -51,9 +52,11 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
 #[test]
 #[ignore = "requires CUDA"]
 fn cuda_complex_determinant_retains_existing_support() {
-    use tenferro_gpu::cuda::{cuda_runtime_engine_registration, download_tensor, upload_tensor, CudaBackend, CudaDeviceId};
-    use tenferro_runtime::{EngineId, Runtime};
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    use tenferro_gpu::cuda::{
+        cuda_runtime_engine_registration, download_tensor, upload_tensor, CudaDeviceId, CudaEngine,
+    };
+    use tenferro_runtime::{ExecutionEngine, Runtime};
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let data = vec![
         Complex64::new(1.0, 1.0),
         Complex64::new(0.0, 0.0),
@@ -66,16 +69,27 @@ fn cuda_complex_determinant_retains_existing_support() {
     let program = GraphCompiler::new()
         .compile(&traced.det().unwrap())
         .unwrap();
-    let engine = EngineId::new("tenferro.test.cuda.det.v1").unwrap();
+    let engine = backend.runtime_engine_id().clone();
     let mut builder = Runtime::builder();
     builder
-        .register_engine(cuda_runtime_engine_registration(&backend, engine.clone()).unwrap())
+        .register_engine(cuda_runtime_engine_registration(&backend).unwrap())
         .unwrap();
     builder
-        .install_extension_module(tenferro_linalg::extension_module::<CudaBackend>(engine).unwrap())
+        .install_extension_module(tenferro_linalg::extension_module::<CudaEngine>(engine).unwrap())
         .unwrap();
     let runtime = builder.build().unwrap();
-    let result = runtime.run_compiled(&program, &[&input]).unwrap();
+    let reads = [tenferro_tensor::TensorRead::from_tensor(&input)];
+    let prepared = runtime
+        .prepare(&program, &reads, &[backend.target()])
+        .unwrap();
+    let result = {
+        let mut engines: [&mut dyn ExecutionEngine; 1] = [&mut backend];
+        runtime.run(&mut engines, &prepared, &reads).unwrap()
+    };
+    let result = result
+        .into_iter()
+        .map(|output| output.into_tensor(&mut backend).unwrap())
+        .collect::<Vec<_>>();
     let host = download_tensor(backend.runtime(), &result[0]).unwrap();
     assert!((host.as_slice::<Complex64>().unwrap()[0] - Complex64::new(3.0, 1.0)).norm() < 1e-12);
 }

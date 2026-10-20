@@ -13,7 +13,7 @@
 //! ```
 //! use tenferro_linalg::TracedTensorLinalgExt;
 //! use tenferro_cpu::CpuEngine;
-//! use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+//! use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 //!
 //! let a = TracedTensor::from_vec_col_major(
 //!     vec![2, 2],
@@ -24,7 +24,7 @@
 //!
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&l).unwrap();
-//! let backend = tenferro_cpu::CpuEngine::serial();
+//! let mut backend = tenferro_cpu::CpuEngine::serial();
 //! let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
 //! let mut builder = Runtime::builder();
 //! builder
@@ -34,7 +34,13 @@
 //!     .install_extension_module(tenferro_linalg::extension_module::<CpuEngine>(engine_id).unwrap())
 //!     .unwrap();
 //! let runtime = builder.build().unwrap();
-//! let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+//! let prepared = runtime.prepare(&program, &[], &[backend.target()]).unwrap();
+//! let out = {
+//!     let mut engines: [&mut dyn ExecutionEngine; 1] = [&mut backend];
+//!     runtime.run(&mut engines, &prepared, &[]).unwrap().pop().unwrap()
+//! }
+//! .into_tensor(&mut backend)
+//! .unwrap();
 //! assert_eq!(out.shape(), &[2, 2]);
 //! ```
 //!
@@ -64,10 +70,10 @@
 //! // Lower-triangular [[2, 0], [1, 1]] (column-major) and right-hand side.
 //! let l = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 1.0, 0.0, 1.0])?;
 //! let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![4.0, 5.0])?;
-//! let x = (|session: &mut dyn tenferro_tensor::Engine| {
+//! let x = {
 //!     // left_side, lower, transpose_a, unit_diagonal
-//!     l.triangular_solve(&b, true, true, false, false, session)
-//! })(&mut backend)?;
+//!     l.triangular_solve(&b, true, true, false, false, &mut backend)
+//! }?;
 //! assert_eq!(x.host_data()?, &[2.0, 3.0]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -102,7 +108,10 @@ mod validation;
 #[cfg(feature = "autodiff")]
 pub use ad::semantic_ad_rules;
 #[cfg(feature = "autodiff")]
-pub use ad::support::{all_linalg_ad_support, linalg_ad_support, LinalgAdModeSupport, LinalgAdOpKind, LinalgAdOutputSupport, LinalgAdRoute, LinalgAdRuleSupport, LinalgAdSupport};
+pub use ad::support::{
+    all_linalg_ad_support, linalg_ad_support, LinalgAdModeSupport, LinalgAdOpKind,
+    LinalgAdOutputSupport, LinalgAdRoute, LinalgAdRuleSupport, LinalgAdSupport,
+};
 pub use backend::LinalgBackend;
 #[cfg(feature = "autodiff")]
 #[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
@@ -116,8 +125,14 @@ compile_error!(
 );
 
 pub use error::{Error, Result};
-pub use extension::{extension_module, EighDriver, EighGauge, EighOptions, QrGauge, QrOptions, SvdDriver, SvdGauge, SvdOptions, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS, LINALG_EXTENSION_FAMILY_ID};
+pub use extension::{
+    extension_module, EighDriver, EighGauge, EighOptions, QrGauge, QrOptions, SvdDriver, SvdGauge,
+    SvdOptions, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS, LINALG_EXTENSION_FAMILY_ID,
+};
 pub use householder::HouseholderQr;
 pub use rank_revealing_qr::{RankRevealingQrOptions, RankRevealingQrResult};
-pub use tensor_ext::{LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TypedEig, TypedFullPivLu, TypedLu, TypedRankRevealingQrResult, TypedSvd, TypedTensorLinalgExt};
+pub use tensor_ext::{
+    LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TypedEig, TypedFullPivLu, TypedLu,
+    TypedRankRevealingQrResult, TypedSvd, TypedTensorLinalgExt,
+};
 pub use traced::TracedTensorLinalgExt;

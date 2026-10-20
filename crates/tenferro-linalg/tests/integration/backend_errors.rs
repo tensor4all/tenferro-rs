@@ -2,9 +2,14 @@ use std::error::Error as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{LinalgBackend, QrOptions, TensorLinalgExt};
-use tenferro_tensor::{Engine, BackendStorageHandle, CompareDir, DType, DotGeneralConfig, ElementwiseReadOp, Error, ErrorKind, GatherConfig, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor, TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural, TensorView, TensorWrite, TypedTensor, TypedTensorView, ValidationError};
+use tenferro_tensor::{
+    BackendStorageHandle, CompareDir, DType, DotGeneralConfig, ElementwiseReadOp, Engine, Error,
+    ErrorKind, GatherConfig, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig,
+    StorageBuffer, Tensor, TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot,
+    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
+    TensorView, TensorWrite, TypedTensor, TypedTensorView, ValidationError,
+};
 
 use super::support;
 

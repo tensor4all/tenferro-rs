@@ -1,12 +1,10 @@
-use tenferro_cpu::CpuEngine;
 use tenferro_linalg::prelude::*;
 
 #[test]
 fn prelude_calls_concrete_linalg_operation() {
     let input = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap();
     let mut backend = tenferro_cpu::CpuEngine::serial();
-    let (_u, singular_values, _vt) = (|session: &mut dyn tenferro_tensor::Engine| input.svd(session))(&mut backend)
-        .unwrap();
+    let (_u, singular_values, _vt) = input.svd(&mut backend).unwrap();
     assert_eq!(singular_values.shape(), &[2]);
 }
 
@@ -20,7 +18,9 @@ fn prelude_calls_eager_linalg_operation() {
     )
     .unwrap();
     let (_u, singular_values, _vt) = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.svd(&input))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.svd(&input)
+        })
         .unwrap();
     assert_eq!(singular_values.shape(), &[2]);
 }

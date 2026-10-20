@@ -2,7 +2,6 @@ use super::{checked_product, FaerEig};
 use crate::cpu::tests::with_cpu_linalg;
 use crate::{QrOptions, TensorLinalgExt};
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuEngine;
 use tenferro_tensor::Tensor;
 
 fn product(a: &[f64], a_rows: usize, a_cols: usize, b: &[f64], b_cols: usize) -> Vec<f64> {
@@ -36,44 +35,38 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 }
 
 #[test]
-fn compact_factor_and_append_reconstructs_f64() {
+fn compact_factor_and_append_reconstructs_f64() -> Result<(), tenferro_tensor::Error> {
     let a = Tensor::from_vec_col_major(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0])
         .unwrap();
     let b = Tensor::from_vec_col_major(vec![4, 2], vec![3.0, -1.0, 2.0, 1.0, 0.5, 2.0, -2.0, 4.0])
         .unwrap();
     let mut backend = tenferro_cpu::CpuEngine::serial();
-    (|session: &mut dyn tenferro_tensor::Engine| {
-            let state = a.householder_qr(session)?;
-            let state = state.append_columns(&b, session)?;
-            let q = state.q_columns(0..4, QrOptions::default(), session)?;
-            let r = state.r(QrOptions::default(), session)?;
-            let expected = [
-                1.0, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0, 3.0, -1.0, 2.0, 1.0, 0.5, 2.0, -2.0, 4.0,
-            ];
-            assert_close(&product(f64_data(&q), 4, 4, f64_data(&r), 4), &expected);
-            Ok::<(), tenferro_tensor::Error>(())
-        })(&mut backend)
-        .unwrap();
+    let state = a.householder_qr(&mut backend)?;
+    let state = state.append_columns(&b, &mut backend)?;
+    let q = state.q_columns(0..4, QrOptions::default(), &mut backend)?;
+    let r = state.r(QrOptions::default(), &mut backend)?;
+    let expected = [
+        1.0, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0, 3.0, -1.0, 2.0, 1.0, 0.5, 2.0, -2.0, 4.0,
+    ];
+    assert_close(&product(f64_data(&q), 4, 4, f64_data(&r), 4), &expected);
+    Ok::<(), tenferro_tensor::Error>(())
 }
 
 #[test]
-fn compact_from_factors_reconstructs_f64() {
+fn compact_from_factors_reconstructs_f64() -> Result<(), tenferro_tensor::Error> {
     let q = Tensor::from_vec_col_major(vec![4, 2], vec![1.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 1.0])
         .unwrap();
     let r = Tensor::from_vec_col_major(vec![2, 3], vec![2.0, 0.0, 3.0, 1.0, 4.0, 2.0]).unwrap();
     let mut backend = tenferro_cpu::CpuEngine::serial();
-    (|session: &mut dyn tenferro_tensor::Engine| {
-            let state = crate::HouseholderQr::<Tensor>::from_factors(&q, &r, session)?;
-            let q_out = state.q_columns(0..3, QrOptions::default(), session)?;
-            let r_out = state.r(QrOptions::default(), session)?;
-            let expected = product(f64_data(&q), 4, 2, f64_data(&r), 3);
-            assert_close(
-                &product(f64_data(&q_out), 4, 3, f64_data(&r_out), 3),
-                &expected,
-            );
-            Ok::<(), tenferro_tensor::Error>(())
-        })(&mut backend)
-        .unwrap();
+    let state = crate::HouseholderQr::<Tensor>::from_factors(&q, &r, &mut backend)?;
+    let q_out = state.q_columns(0..3, QrOptions::default(), &mut backend)?;
+    let r_out = state.r(QrOptions::default(), &mut backend)?;
+    let expected = product(f64_data(&q), 4, 2, f64_data(&r), 3);
+    assert_close(
+        &product(f64_data(&q_out), 4, 3, f64_data(&r_out), 3),
+        &expected,
+    );
+    Ok::<(), tenferro_tensor::Error>(())
 }
 
 #[test]
@@ -254,7 +247,7 @@ fn compact_factor_outputs_return_their_storage_to_the_pool() {
     let empty = backend.buffer_pool_stats();
     assert_eq!(empty.capacity_bytes, 0, "a fresh backend retains nothing");
 
-    let state = with_cpu_linalg(&mut backend, |session| a.householder_qr(session)).unwrap();
+    let state = with_cpu_linalg(&mut backend, |backend| a.householder_qr(backend)).unwrap();
     let checked_out = backend.buffer_pool_stats();
     drop(state);
     let returned = backend.buffer_pool_stats();
@@ -278,7 +271,7 @@ fn compact_factor_outputs_return_their_storage_to_the_pool() {
 
     // The warm pool serves the whole call: a second run must not grow the retained set, and the
     // same storage must come back.
-    let state = with_cpu_linalg(&mut backend, |session| a.householder_qr(session)).unwrap();
+    let state = with_cpu_linalg(&mut backend, |backend| a.householder_qr(backend)).unwrap();
     drop(state);
     let second = backend.buffer_pool_stats();
     assert_eq!(

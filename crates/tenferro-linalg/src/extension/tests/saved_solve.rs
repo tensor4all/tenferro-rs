@@ -1,22 +1,20 @@
 use crate::extension::{execute_linalg_extension_reads_in_session, LinalgExtensionOp, LinalgOp};
-use tenferro_cpu::{with_cpu_engine, CpuEngine};
+use tenferro_cpu::with_cpu_engine;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
 #[test]
 fn prepared_solve_preserves_mixed_owned_and_strided_inputs() {
     let mut backend = tenferro_cpu::CpuEngine::serial();
     let a = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
-    let factors = (|session: &mut dyn tenferro_tensor::Engine| {
-            with_cpu_engine(session, |session| {
-                execute_linalg_extension_reads_in_session(
-                    &LinalgExtensionOp::new(LinalgOp::LuFactor),
-                    &[TensorRead::from_tensor(&a)],
-                    session,
-                )
-            })
-            .unwrap()
-        })(&mut backend)
-        .unwrap();
+    let factors = with_cpu_engine(&mut backend, |session| {
+        execute_linalg_extension_reads_in_session(
+            &LinalgExtensionOp::new(LinalgOp::LuFactor),
+            &[TensorRead::from_tensor(&a)],
+            session,
+        )
+    })
+    .unwrap()
+    .unwrap();
     let b = Tensor::from_vec_col_major([2, 1], vec![4.0_f64, 9.0]).unwrap();
     let strided_data = [99.0_f64, 4.0, 99.0, 9.0, 99.0];
     let strided_rhs =
@@ -47,13 +45,11 @@ fn prepared_solve_preserves_mixed_owned_and_strided_inputs() {
                 transpose_a,
                 conjugate_a: true,
             });
-            let result = (|session: &mut dyn tenferro_tensor::Engine| {
-                    with_cpu_engine(session, |session| {
-                        execute_linalg_extension_reads_in_session(&op, &reads, session)
-                    })
-                    .unwrap()
-                })(&mut backend)
-                .unwrap();
+            let result = with_cpu_engine(&mut backend, |session| {
+                execute_linalg_extension_reads_in_session(&op, &reads, session)
+            })
+            .unwrap()
+            .unwrap();
             assert_eq!(result[0].as_slice::<f64>().unwrap(), &[2.0, 3.0]);
         }
     }
