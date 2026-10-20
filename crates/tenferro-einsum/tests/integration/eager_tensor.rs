@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::EagerSessionEinsumExt;
 use tenferro_einsum::{EinsumAxis, EinsumNotation, EinsumSubscripts, TensorDotAxes};
 use tenferro_runtime::{Error as RuntimeError, ErrorPhase, Tensor};
@@ -14,7 +14,7 @@ use tenferro_tensor::ValidationError;
 fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> tenferro_einsum::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(|s| s.einsum(inputs, subscripts))
+        .with_eager_session(&mut CpuEngine::serial(), |s| s.einsum(inputs, subscripts))
 }
 
 #[allow(dead_code)]
@@ -24,7 +24,9 @@ fn einsum_notation(
 ) -> tenferro_einsum::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(|s| s.einsum_notation(inputs, notation))
+        .with_eager_session(&mut CpuEngine::serial(), |s| {
+            s.einsum_notation(inputs, notation)
+        })
 }
 
 #[allow(dead_code)]
@@ -34,7 +36,9 @@ fn einsum_subscripts(
 ) -> tenferro_einsum::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(|s| s.einsum_subscripts(inputs, subscripts))
+        .with_eager_session(&mut CpuEngine::serial(), |s| {
+            s.einsum_subscripts(inputs, subscripts)
+        })
 }
 
 #[allow(dead_code)]
@@ -44,7 +48,7 @@ fn tensordot(
     axes: TensorDotAxes<'_>,
 ) -> tenferro_einsum::Result<EagerTensor> {
     lhs.runtime()
-        .with_eager_session(|s| s.tensordot(lhs, rhs, axes))
+        .with_eager_session(&mut CpuEngine::serial(), |s| s.tensordot(lhs, rhs, axes))
 }
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
@@ -56,7 +60,7 @@ fn test_ctx() -> Arc<EagerRuntime> {
         std::env::set_var("TENFERRO_PROFILE_EAGER_OP_AGG", "1");
         std::env::set_var("TENFERRO_PROFILE_EAGER_OP_PRINT_EVERY", "1");
     }
-    EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap()
+    EagerRuntime::new().unwrap()
 }
 
 #[test]
@@ -97,9 +101,16 @@ fn eager_tensor_einsum_ellipsis_broadcast_matches_programmatic_notation() {
 
     assert_eq!(string_result.shape(), &[2, 2, 2]);
     assert_eq!(programmatic_result.shape(), &[2, 2, 2]);
-    assert_eq!(f64_data(&string_result.to_tensor().unwrap()), &[3.0; 8]);
     assert_eq!(
-        f64_data(&programmatic_result.to_tensor().unwrap()),
+        f64_data(&string_result.to_tensor(&mut CpuEngine::serial()).unwrap()),
+        &[3.0; 8]
+    );
+    assert_eq!(
+        f64_data(
+            &programmatic_result
+                .to_tensor(&mut CpuEngine::serial())
+                .unwrap()
+        ),
         &[3.0; 8]
     );
 }
@@ -121,7 +132,10 @@ fn eager_tensor_einsum_matmul_primal_matches_expected_values() {
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
 
     assert_eq!(c.shape(), &[2, 2]);
-    assert_eq!(f64_data(&c.to_tensor().unwrap()), &[22.0, 28.0, 49.0, 64.0]);
+    assert_eq!(
+        f64_data(&c.to_tensor(&mut CpuEngine::serial()).unwrap()),
+        &[22.0, 28.0, 49.0, 64.0]
+    );
 }
 
 #[test]
@@ -134,14 +148,17 @@ fn eager_tensor_einsum_repeated_output_occurrences_keep_axis_order() {
     .unwrap();
 
     let out = einsum(&[&a], "ij->iji").unwrap();
-    let materialized = out.to_tensor().unwrap();
+    let materialized = out.to_tensor(&mut CpuEngine::serial()).unwrap();
 
     assert_eq!(materialized.shape(), &[2, 3, 2]);
     for i in 0..2 {
         for j in 0..3 {
             for k in 0..2 {
                 let expected = if i == k {
-                    *a.to_tensor().unwrap().get::<f64>(&[i, j]).unwrap()
+                    *a.to_tensor(&mut CpuEngine::serial())
+                        .unwrap()
+                        .get::<f64>(&[i, j])
+                        .unwrap()
                 } else {
                     0.0
                 };
@@ -174,7 +191,7 @@ fn eager_tensor_tensordot_count_contracts_last_lhs_with_first_rhs_axes() {
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(
-        f64_data(&out.to_tensor().unwrap()),
+        f64_data(&out.to_tensor(&mut CpuEngine::serial()).unwrap()),
         &[611.0, 650.0, 1475.0, 1586.0]
     );
 }
@@ -205,7 +222,7 @@ fn eager_tensor_tensordot_explicit_axes_accept_negative_indices() {
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(
-        f64_data(&out.to_tensor().unwrap()),
+        f64_data(&out.to_tensor(&mut CpuEngine::serial()).unwrap()),
         &[22.0, 28.0, 49.0, 64.0]
     );
 }
@@ -286,7 +303,10 @@ fn eager_tensor_einsum_integer_subscripts_match_string_path() {
     let c = einsum_subscripts(&[&a, &b], &subscripts).unwrap();
 
     assert_eq!(c.shape(), &[2, 2]);
-    assert_eq!(f64_data(&c.to_tensor().unwrap()), &[22.0, 28.0, 49.0, 64.0]);
+    assert_eq!(
+        f64_data(&c.to_tensor(&mut CpuEngine::serial()).unwrap()),
+        &[22.0, 28.0, 49.0, 64.0]
+    );
 }
 
 #[test]
@@ -305,16 +325,30 @@ fn eager_tensor_einsum_ellipsis_backward_matches_expected_values() {
 
     let c = einsum(&[&a, &b], "...ij,...jk->...ik").unwrap();
     let loss = ctx
-        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1, 2])))
+        .with_eager_session(&mut CpuEngine::serial(), |s| {
+            s.reduce_sum(&c, Some(&[0, 1, 2]))
+        })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss.backward(&mut CpuEngine::serial()).unwrap();
 
     assert_eq!(
-        f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &a.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut CpuEngine::serial())
+                .unwrap()
+        ),
         &[2.0; 12]
     );
     assert_eq!(
-        f64_data(&b.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &b.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut CpuEngine::serial())
+                .unwrap()
+        ),
         &[2.0; 12]
     );
 }
@@ -335,9 +369,11 @@ fn eager_tensor_einsum_backward_populates_input_grads() {
 
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = ctx
-        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .with_eager_session(&mut CpuEngine::serial(), |s| {
+            s.reduce_sum(&c, Some(&[0, 1]))
+        })
         .unwrap();
-    let _cotangents = loss.backward().unwrap();
+    let _cotangents = loss.backward(&mut CpuEngine::serial()).unwrap();
 
     let grad_a = a.grad().unwrap().unwrap();
     let grad_b = b.grad().unwrap().unwrap();
@@ -345,11 +381,11 @@ fn eager_tensor_einsum_backward_populates_input_grads() {
     assert_eq!(grad_a.shape(), &[2, 3]);
     assert_eq!(grad_b.shape(), &[3, 2]);
     assert_eq!(
-        f64_data(&grad_a.to_tensor().unwrap()),
+        f64_data(&grad_a.to_tensor(&mut CpuEngine::serial()).unwrap()),
         &[5.0, 5.0, 7.0, 7.0, 9.0, 9.0]
     );
     assert_eq!(
-        f64_data(&grad_b.to_tensor().unwrap()),
+        f64_data(&grad_b.to_tensor(&mut CpuEngine::serial()).unwrap()),
         &[3.0, 7.0, 11.0, 3.0, 7.0, 11.0]
     );
 }
@@ -370,36 +406,64 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
 
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = ctx
-        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .with_eager_session(&mut CpuEngine::serial(), |s| {
+            s.reduce_sum(&c, Some(&[0, 1]))
+        })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss.backward(&mut CpuEngine::serial()).unwrap();
     assert_eq!(
-        f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &a.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut CpuEngine::serial())
+                .unwrap()
+        ),
         &[5.0, 5.0, 7.0, 7.0, 9.0, 9.0]
     );
     assert_eq!(
-        f64_data(&b.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &b.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut CpuEngine::serial())
+                .unwrap()
+        ),
         &[3.0, 7.0, 11.0, 3.0, 7.0, 11.0]
     );
 
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = ctx
-        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .with_eager_session(&mut CpuEngine::serial(), |s| {
+            s.reduce_sum(&c, Some(&[0, 1]))
+        })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss.backward(&mut CpuEngine::serial()).unwrap();
     assert_eq!(
-        f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &a.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut CpuEngine::serial())
+                .unwrap()
+        ),
         &[10.0, 10.0, 14.0, 14.0, 18.0, 18.0]
     );
     assert_eq!(
-        f64_data(&b.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &b.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut CpuEngine::serial())
+                .unwrap()
+        ),
         &[6.0, 14.0, 22.0, 6.0, 14.0, 22.0]
     );
 }
 
 #[test]
 fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let a = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
         ctx.clone(),
@@ -413,9 +477,11 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
 
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = ctx
-        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .with_eager_session(&mut CpuEngine::serial(), |s| {
+            s.reduce_sum(&c, Some(&[0, 1]))
+        })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss.backward(&mut CpuEngine::serial()).unwrap();
 
     ctx.clear_grads().unwrap();
 
@@ -424,16 +490,30 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
 
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = ctx
-        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .with_eager_session(&mut CpuEngine::serial(), |s| {
+            s.reduce_sum(&c, Some(&[0, 1]))
+        })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss.backward(&mut CpuEngine::serial()).unwrap();
 
     assert_eq!(
-        f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &a.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut CpuEngine::serial())
+                .unwrap()
+        ),
         &[5.0, 5.0, 7.0, 7.0, 9.0, 9.0]
     );
     assert_eq!(
-        f64_data(&b.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &b.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut CpuEngine::serial())
+                .unwrap()
+        ),
         &[3.0, 7.0, 11.0, 3.0, 7.0, 11.0]
     );
 }
@@ -443,7 +523,7 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
 /// of them do (the N-ary program now runs in one borrowed session).
 #[test]
 fn eager_einsum_paths_follow_the_calling_threads_no_grad() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let leaf = |shape: Vec<usize>| {
         let len = shape.iter().product();
         EagerTensor::requires_grad_in(
@@ -458,7 +538,9 @@ fn eager_einsum_paths_follow_the_calling_threads_no_grad() {
         let _guard = ctx.no_grad();
         let binary = einsum(&[&a, &b], "ij,jk->ik").unwrap();
         let nary = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
-        let session = ctx.with_eager_session(|s| s.neg(&a)).unwrap();
+        let session = ctx
+            .with_eager_session(&mut CpuEngine::serial(), |s| s.neg(&a))
+            .unwrap();
         assert!(!binary.tracks_grad());
         assert!(!nary.tracks_grad());
         assert!(!session.tracks_grad());
@@ -466,14 +548,25 @@ fn eager_einsum_paths_follow_the_calling_threads_no_grad() {
 
     let nary = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
     assert!(nary.tracks_grad());
-    assert_eq!(f64_data(&nary.to_tensor().unwrap()), &[12.0; 4]);
+    assert_eq!(
+        f64_data(&nary.to_tensor(&mut CpuEngine::serial()).unwrap()),
+        &[12.0; 4]
+    );
     let loss = ctx
-        .with_eager_session(|s| s.reduce_sum(&nary, Some(&[0, 1])))
+        .with_eager_session(&mut CpuEngine::serial(), |s| {
+            s.reduce_sum(&nary, Some(&[0, 1]))
+        })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss.backward(&mut CpuEngine::serial()).unwrap();
     // d(sum(a b c))/da[i, j] = sum_{k, l} b[j, k] c[k, l] = 8 for all-ones inputs.
     assert_eq!(
-        f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &a.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut CpuEngine::serial())
+                .unwrap()
+        ),
         &[8.0; 6]
     );
 }

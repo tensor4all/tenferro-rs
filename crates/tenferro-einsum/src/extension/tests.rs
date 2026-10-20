@@ -3,10 +3,10 @@ use std::hash::Hasher;
 
 use super::*;
 use crate::optimize::EinsumPlanSpec;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_ops::ext_op::invoke_extension_shape_inference;
 use tenferro_runtime::{ExtensionCacheSelector, ExtensionCacheStore, ExtensionExecutionContext};
-use tenferro_tensor::{BackendSessionHost, TensorRead, TensorValue};
+use tenferro_tensor::{TensorRead, TensorValue};
 
 #[cfg(feature = "autodiff")]
 #[test]
@@ -244,16 +244,17 @@ fn execute_einsum_extension_reads_consumes_strided_view_inputs() {
         TensorValue::from_parts((*base).duplicate().unwrap(), vec![3, 2], vec![2, 1], 0).unwrap();
     let input = view.tensor_read();
     let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1]], &[0, 1]));
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
     let mut caches = ExtensionCacheStore::new();
 
-    let outputs = backend
-        .with_backend_session(|session| {
+    let outputs = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        {
             let mut ctx = ExtensionExecutionContext::new(session, &mut caches);
             execute_einsum_extension_session_reads(&op, &[input], &mut ctx)
-        })
-        .unwrap()
-        .expect("read-capable einsum extension execution");
+        }
+    }
+    .expect("read-capable einsum extension execution");
 
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].shape(), &[3, 2]);
@@ -265,7 +266,7 @@ fn execute_einsum_extension_reads_consumes_strided_view_inputs() {
 
 #[test]
 fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
     let mut caches = ExtensionCacheStore::new();
     let op = EinsumExtensionOp::with_plan_spec(
         EinsumSubscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]),
@@ -278,8 +279,9 @@ fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
         let mid = Tensor::from_vec_col_major(vec![k, n], sequential_f64(k * n, 10.0)).unwrap();
         let rhs = Tensor::from_vec_col_major(vec![n, p], sequential_f64(n * p, 100.0)).unwrap();
 
-        let outputs = backend
-            .with_backend_session(|session| {
+        let outputs = {
+            let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+            {
                 let mut ctx = ExtensionExecutionContext::new(session, &mut caches);
                 execute_einsum_extension_session_reads(
                     &op,
@@ -290,9 +292,9 @@ fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
                     ],
                     &mut ctx,
                 )
-            })
-            .unwrap()
-            .unwrap();
+            }
+        }
+        .unwrap();
 
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].shape(), &[m, p]);
@@ -303,8 +305,9 @@ fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
     let lhs = Tensor::from_vec_col_major(vec![m, k], sequential_f64(m * k, 1.0)).unwrap();
     let mid = Tensor::from_vec_col_major(vec![k, n], sequential_f64(k * n, 10.0)).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![n, p], sequential_f64(n * p, 100.0)).unwrap();
-    let outputs = backend
-        .with_backend_session(|session| {
+    let outputs = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        {
             let mut ctx = ExtensionExecutionContext::new(session, &mut caches);
             execute_einsum_extension_session_reads(
                 &op,
@@ -315,9 +318,9 @@ fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
                 ],
                 &mut ctx,
             )
-        })
-        .unwrap()
-        .unwrap();
+        }
+    }
+    .unwrap();
     assert_einsum_matches_matmul_chain(&outputs[0], &lhs, &mid, &rhs);
 
     let stats = caches.stats(ExtensionCacheSelector::All);

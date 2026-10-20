@@ -2,11 +2,11 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::{
     parse_einsum_subscripts, ConcreteEinsumPlan, TensorEinsumExt, TensorReadEinsumExt,
 };
-use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorView, TypedTensorView};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
 fn measure(name: &str, mut call: impl FnMut()) {
     for _ in 0..100 {
@@ -58,9 +58,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nth(1)
         .expect("argument: default or thread count");
     let mut backend = if threads == "default" {
-        CpuBackend::new()
+        CpuEngine::serial()
     } else {
-        CpuBackend::with_threads(threads.parse().unwrap()).unwrap()
+        CpuEngine::new(
+            tenferro_cpu::thread_pool_builder()
+                .num_threads(threads.parse().unwrap())
+                .build()
+                .unwrap(),
+        )
     };
     println!("case,sample,iterations,seconds,ns_per_call");
     for n in [2, 8, 32, 256] {
@@ -79,9 +84,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .collect();
         check(
-            &backend
-                .with_backend_session(|s| inputs.einsum("ij,jk->ik", s))?
-                .unwrap(),
+            &{
+                let s = &mut backend;
+                inputs.einsum("ij,jk->ik", s)
+            }
+            .unwrap(),
             &expected,
         );
         measure(&format!("prepare_string/{n}"), || {
@@ -97,28 +104,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         measure(&format!("ordinary_string/{n}"), || {
             observe(
-                backend
-                    .with_backend_session(|s| black_box(inputs).einsum(black_box("ij,jk->ik"), s))
-                    .unwrap()
-                    .unwrap(),
+                {
+                    let s = &mut backend;
+                    black_box(inputs).einsum(black_box("ij,jk->ik"), s)
+                }
+                .unwrap(),
             )
         });
         measure(&format!("ordinary_labels/{n}"), || {
             observe(
-                backend
-                    .with_backend_session(|s| {
+                {
+                    let s = &mut backend;
+                    {
                         black_box(inputs).einsum_subscripts(black_box(&subs), s)
-                    })
-                    .unwrap()
-                    .unwrap(),
+                    }
+                }
+                .unwrap(),
             )
         });
         measure(&format!("prepared/{n}"), || {
             observe(
-                backend
-                    .with_backend_session(|s| plan.execute(black_box(inputs), s))
-                    .unwrap()
-                    .unwrap(),
+                {
+                    let s = &mut backend;
+                    plan.execute(black_box(inputs), s)
+                }
+                .unwrap(),
             )
         });
     }
@@ -160,19 +170,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
             ] {
                 check(
-                    &backend
-                        .with_backend_session(|s| inputs.einsum_read(equation, s))?
-                        .unwrap(),
+                    &{
+                        let s = &mut backend;
+                        inputs.einsum_read(equation, s)
+                    }
+                    .unwrap(),
                     &expected,
                 );
                 measure(&format!("read_{layout}_{order}/{n}"), || {
                     observe(
-                        backend
-                            .with_backend_session(|s| {
+                        {
+                            let s = &mut backend;
+                            {
                                 black_box(&inputs).einsum_read(black_box(equation), s)
-                            })
-                            .unwrap()
-                            .unwrap(),
+                            }
+                        }
+                        .unwrap(),
                     )
                 });
             }
@@ -183,9 +196,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let b = Tensor::from_vec_col_major([8, 8, 4], vec![0.25_f64; 256]).unwrap();
     let batch = [&a, &b];
     check(
-        &backend
-            .with_backend_session(|s| batch.einsum("ijb,jkb->ikb", s))?
-            .unwrap(),
+        &{
+            let s = &mut backend;
+            batch.einsum("ijb,jkb->ikb", s)
+        }
+        .unwrap(),
         &[1.0; 256],
     );
     measure("batch_prepare/8", || {
@@ -193,18 +208,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     measure("batch_ordinary/8", || {
         observe(
-            backend
-                .with_backend_session(|s| black_box(batch).einsum("ijb,jkb->ikb", s))
-                .unwrap()
-                .unwrap(),
+            {
+                let s = &mut backend;
+                black_box(batch).einsum("ijb,jkb->ikb", s)
+            }
+            .unwrap(),
         )
     });
     let c = Tensor::from_vec_col_major([8, 8, 4], vec![0.5_f64; 256]).unwrap();
     let nary = [&a, &b, &c];
     check(
-        &backend
-            .with_backend_session(|s| nary.einsum("ijb,jkb,klb->ilb", s))?
-            .unwrap(),
+        &{
+            let s = &mut backend;
+            nary.einsum("ijb,jkb,klb->ilb", s)
+        }
+        .unwrap(),
         &[4.0; 256],
     );
     measure("nary_prepare/8", || {
@@ -212,10 +230,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     measure("nary_ordinary/8", || {
         observe(
-            backend
-                .with_backend_session(|s| black_box(nary).einsum("ijb,jkb,klb->ilb", s))
-                .unwrap()
-                .unwrap(),
+            {
+                let s = &mut backend;
+                black_box(nary).einsum("ijb,jkb,klb->ilb", s)
+            }
+            .unwrap(),
         )
     });
     Ok(())

@@ -1,10 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
-use tenferro_tensor::TensorBackend;
 use tenferro_tensor::{
-    Engine, DotGeneralAccumulation, DotGeneralConfig, Error, Result, Tensor, TensorRank,
+    DotGeneralAccumulation, DotGeneralConfig, Engine, Error, Result, Tensor, TensorRank,
     TensorRead, TensorView, TensorWrite, TypedTensorView,
 };
 
@@ -1217,13 +1215,13 @@ pub(crate) fn eager_einsum_exec_read_into_accum(
 ///
 #[cfg(test)]
 pub(crate) fn eager_einsum(
-    ctx: &mut impl TensorBackend,
+    engine: &mut dyn Engine,
     inputs: &[&Tensor],
     subscripts: &str,
 ) -> Result<Tensor> {
     let subscripts =
         Subscripts::parse(subscripts).map_err(|error| error.into_tensor_error(EAGER_EINSUM_OP))?;
-    eager_einsum_subscripts(ctx, inputs, &subscripts)
+    eager_einsum_subscripts(engine, inputs, &subscripts)
 }
 
 /// Convert a prepared-plan error into the eager core's tensor error surface.
@@ -1234,13 +1232,11 @@ fn into_tensor_error(error: crate::Error) -> tenferro_tensor::Error {
 /// Eager N-ary einsum on concrete [`Tensor`] values using integer labels.
 #[cfg(test)]
 pub(crate) fn eager_einsum_subscripts(
-    ctx: &mut impl TensorBackend,
+    engine: &mut dyn Engine,
     inputs: &[&Tensor],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
-    ctx.with_backend_session(|session| {
-        eager_einsum_subscripts_on_session(session, inputs, subscripts)
-    })?
+    eager_einsum_subscripts_on_session(engine, inputs, subscripts)
 }
 
 /// Eager N-ary einsum on concrete [`Tensor`] values inside an existing
@@ -1259,7 +1255,7 @@ pub(crate) fn eager_einsum_subscripts_on_session(
             ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
         })
         .map_err(into_tensor_error)?;
-        let result = profile_eager_einsum_section("with_backend_session", || {
+        let result = profile_eager_einsum_section("execute_plan", || {
             plan.execute(inputs, session).map_err(into_tensor_error)
         });
         record_eager_einsum_profile("total", total_started.elapsed());
@@ -1305,13 +1301,11 @@ pub(crate) fn eager_einsum_subscripts_on_session(
 /// canonicalize them within the existing placement inside the execution session.
 #[cfg(test)]
 pub(crate) fn eager_einsum_read_subscripts(
-    ctx: &mut impl TensorBackend,
+    engine: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
-    ctx.with_backend_session(|session| {
-        eager_einsum_read_subscripts_on_session(session, inputs, subscripts)
-    })?
+    eager_einsum_read_subscripts_on_session(engine, inputs, subscripts)
 }
 
 /// Eager N-ary einsum on read-only tensor inputs inside an existing backend
@@ -1344,26 +1338,26 @@ pub(crate) fn eager_einsum_read_subscripts_on_session(
 ///
 #[cfg(test)]
 pub(crate) fn eager_einsum_owned(
-    ctx: &mut impl TensorBackend,
+    engine: &mut dyn Engine,
     inputs: Vec<Tensor>,
     subscripts: &str,
 ) -> Result<Tensor> {
     let subscripts =
         Subscripts::parse(subscripts).map_err(|error| error.into_tensor_error(EAGER_EINSUM_OP))?;
-    eager_einsum_owned_subscripts(ctx, inputs, &subscripts)
+    eager_einsum_owned_subscripts(engine, inputs, &subscripts)
 }
 
 /// Eager N-ary einsum that consumes concrete [`Tensor`] inputs using integer labels.
 #[cfg(test)]
 pub(crate) fn eager_einsum_owned_subscripts(
-    ctx: &mut impl TensorBackend,
+    engine: &mut dyn Engine,
     inputs: Vec<Tensor>,
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
     let tree = plan_subscripts(subscripts, &shapes)?;
     let values = inputs.into_iter().map(TensorValue::Owned).collect();
-    ctx.with_backend_session(|exec| eager_einsum_exec_values(exec, values, &tree))?
+    eager_einsum_exec_values(engine, values, &tree)
 }
 
 #[cfg(test)]

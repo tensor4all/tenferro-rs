@@ -61,15 +61,15 @@ fn typed_einsum_view_inputs_use_read_suffix_and_typed_outputs_accept_views() {
         ),
         "borrowed typed inputs must not implement the unsuffixed einsum_into surface"
     );
-    // The concrete einsum traits are backend-session explicit: no
-    // backend-taking `B: TensorBackend` surface remains on the public traits.
+    // The concrete einsum traits are engine-explicit: no generic engine type
+    // parameter remains on the public traits.
     assert!(
-        !source.contains("fn einsum_read<B: TensorBackend>"),
-        "concrete einsum traits must not take a generic TensorBackend"
+        !source.contains("fn einsum_read<B:"),
+        "concrete einsum traits must take &mut dyn Engine, not a generic engine"
     );
     assert!(
         !source.contains("fn einsum_read_into<'out, B, O>"),
-        "concrete einsum traits must not take a generic TensorBackend"
+        "concrete einsum traits must take &mut dyn Engine, not a generic engine"
     );
 }
 

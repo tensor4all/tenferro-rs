@@ -75,8 +75,8 @@ fn binary_public_execution_surfaces_bypass_general_optimizers() {
         TensorReadEinsumIntoExt, TypedTensorEinsumExt, TypedTensorEinsumIntoExt,
         TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt,
     };
-    use tenferro_cpu::CpuBackend;
-    use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorWrite, TypedTensor};
+    use tenferro_cpu::CpuEngine;
+    use tenferro_tensor::{Tensor, TensorRead, TensorWrite, TypedTensor};
 
     let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     let b = Tensor::from_vec_col_major(vec![3, 2], vec![2.0_f64; 6]).unwrap();
@@ -87,9 +87,15 @@ fn binary_public_execution_surfaces_bypass_general_optimizers() {
     let subs = parse_einsum_subscripts("ij,jk->ik").unwrap();
     let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![f64::NAN; 4]).unwrap();
     let mut tout = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![f64::NAN; 4]).unwrap();
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend
-        .with_backend_session(|session| {
+    let mut backend = CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(1)
+            .build()
+            .unwrap(),
+    );
+    {
+        let session = &mut backend;
+        {
             // Reset/read on the executing thread, so session scheduling cannot hide calls.
             OMECO_CALLS.with(|count| count.set(0));
             SELF_GREEDY_CALLS.with(|count| count.set(0));
@@ -140,15 +146,15 @@ fn binary_public_execution_surfaces_bypass_general_optimizers() {
             let result = [&a, &b, &a].einsum("ij,jk,kl->il", session).unwrap();
             assert_eq!(result.as_slice::<f64>().unwrap(), &[12.0; 6]);
             assert_eq!(SELF_GREEDY_CALLS.with(Cell::get), 1);
-        })
-        .unwrap();
+        }
+    };
 }
 
 #[test]
 fn binary_public_einsum_preserves_general_numerical_semantics() {
     use crate::TensorEinsumExt;
-    use tenferro_cpu::CpuBackend;
-    use tenferro_tensor::{BackendSessionHost, Tensor};
+    use tenferro_cpu::CpuEngine;
+    use tenferro_tensor::Tensor;
 
     // Explicit column-major expected values, independent of tree preparation.
     let cases = [
@@ -216,14 +222,20 @@ fn binary_public_einsum_preserves_general_numerical_semantics() {
             vec![],
         ),
     ];
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(1)
+            .build()
+            .unwrap(),
+    );
     for (notation, ashape, adata, bshape, bdata, shape, expected) in cases {
         let a = Tensor::from_vec_col_major(ashape, adata).unwrap();
         let b = Tensor::from_vec_col_major(bshape, bdata).unwrap();
-        let result = backend
-            .with_backend_session(|session| [&a, &b].einsum(notation, session))
-            .unwrap()
-            .unwrap();
+        let result = {
+            let session = &mut backend;
+            [&a, &b].einsum(notation, session)
+        }
+        .unwrap();
         assert_eq!(result.shape(), shape, "{notation}");
         assert_eq!(result.as_slice::<f64>().unwrap(), expected, "{notation}");
     }

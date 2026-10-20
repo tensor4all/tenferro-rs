@@ -1,7 +1,6 @@
 //! Forced batch-lane execution through the concrete CPU einsum route.
 
 use super::*;
-use tenferro_tensor::BackendSessionHost;
 
 fn nary_inputs() -> (Vec<Tensor>, ContractionTree) {
     let n = 32usize;
@@ -29,9 +28,15 @@ fn execute_nary_with_strategy(
 ) -> tenferro_tensor::Result<Tensor> {
     let (inputs, tree) = nary_inputs();
     let reads: Vec<TensorRead<'_>> = inputs.iter().map(TensorRead::from_tensor).collect();
-    let mut backend = tenferro_cpu::CpuBackend::with_threads(4).unwrap();
-    backend
-        .with_backend_session(|session| {
+    let mut backend = tenferro_cpu::CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(4)
+            .build()
+            .unwrap(),
+    );
+    {
+        let session = &mut backend;
+        {
             tenferro_cpu::with_batch_policy(
                 session,
                 tenferro_cpu::CpuBatchPolicy::new(strategy),
@@ -41,8 +46,8 @@ fn execute_nary_with_strategy(
                 },
             )
             .expect("the CPU session accepts the policy")
-        })
-        .unwrap()
+        }
+    }
 }
 
 /// A forced `Outer` N-ary einsum executes the same contraction as the forced

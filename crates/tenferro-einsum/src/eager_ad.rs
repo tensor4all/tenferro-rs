@@ -16,7 +16,7 @@ use tenferro_ad::extension::{
     EagerExtensionBackendKind, EagerExtensionTarget,
 };
 use tenferro_ad::{EagerSession, EagerTensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::CudaBackend;
 #[cfg(feature = "webgpu")]
@@ -60,7 +60,7 @@ use crate::{
 /// let ctx = EagerRuntime::new()?;
 /// let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])?, ctx.clone())?;
 /// let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12])?, ctx.clone())?;
-/// let product = ctx.with_eager_session(|session| {
+/// let product = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
 ///     let c = session.einsum(&[&a, &b], "ij,jk->ik")?;
 ///     session.einsum(&[&c], "ij->")
 /// })?;
@@ -79,7 +79,7 @@ pub trait EagerSessionEinsumExt {
     ///
     /// let ctx = EagerRuntime::new()?;
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?, ctx.clone())?;
-    /// let dot = ctx.with_eager_session(|session| session.einsum(&[&x, &x], "i,i->"))?;
+    /// let dot = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.einsum(&[&x, &x], "i,i->"))?;
     /// assert_eq!(dot.value()?.as_slice::<f64>()?, &[13.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -104,7 +104,7 @@ pub trait EagerSessionEinsumExt {
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?, ctx.clone())?;
     /// // `...->...` keeps every axis the ellipsis covers.
     /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[EinsumAxis::Ellipsis]);
-    /// let same = ctx.with_eager_session(|session| session.einsum_notation(&[&x], &notation))?;
+    /// let same = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.einsum_notation(&[&x], &notation))?;
     /// assert_eq!(same.value()?.as_slice::<f64>()?, &[2.0, 3.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -130,7 +130,7 @@ pub trait EagerSessionEinsumExt {
     /// let ctx = EagerRuntime::new()?;
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?, ctx.clone())?;
     /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
-    /// let dot = ctx.with_eager_session(|session| session.einsum_subscripts(&[&x, &x], &subscripts))?;
+    /// let dot = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.einsum_subscripts(&[&x, &x], &subscripts))?;
     /// assert_eq!(dot.value()?.as_slice::<f64>()?, &[13.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -158,7 +158,7 @@ pub trait EagerSessionEinsumExt {
     /// let ctx = EagerRuntime::new()?;
     /// let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])?, ctx.clone())?;
     /// let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12])?, ctx.clone())?;
-    /// let c = ctx.with_eager_session(|session| session.tensordot(&a, &b, TensorDotAxes::Count(1)))?;
+    /// let c = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.tensordot(&a, &b, TensorDotAxes::Count(1)))?;
     /// assert_eq!(c.shape(), &[2, 4]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -215,7 +215,7 @@ fn eager_extension_module(
     } = target;
     match backend_kind {
         EagerExtensionBackendKind::Cpu => {
-            crate::extension::extension_module::<CpuBackend>(engine_id)
+            crate::extension::extension_module::<CpuEngine>(engine_id)
                 .map_err(eager_runtime_config_error)
         }
         #[cfg(feature = "cuda")]
