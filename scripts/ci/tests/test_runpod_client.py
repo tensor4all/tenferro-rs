@@ -176,6 +176,64 @@ class RunPodClientTests(unittest.TestCase):
         self.assertEqual(result.gpu_tier, "premium")
         self.assertEqual(result.gpu_type_id, "NVIDIA L40S")
 
+    def test_capacity_failure_recognises_the_rest_v2_wording(self) -> None:
+        """#2217: the v2 exhausted-catalog 400 must not classify as permanent."""
+
+        body = (
+            b'{"detail": "There are no longer any instances available with the '
+            b'requested specifications. Please refresh and try again.", '
+            b'"status": 400, "title": "Bad Request"}'
+        )
+        self.assertTrue(is_capacity_failure(400, body))
+
+    def test_rest_v2_capacity_failure_moves_tier_without_sleep(self) -> None:
+        """#2217: the real v2 capacity answer must advance the ladder."""
+
+        requests = [
+            CreateRequest("cost-preferred", b"cheap"),
+            CreateRequest("premium", b"premium"),
+        ]
+        responses = iter(
+            [
+                (
+                    400,
+                    {},
+                    b'{"detail": "There are no longer any instances available '
+                    b'with the requested specifications. Please refresh and try '
+                    b'again.", "status": 400}',
+                ),
+                (
+                    201,
+                    {},
+                    b'{"id":"pod-1","gpu":' b'{"id":"NVIDIA L40S"}}',
+                ),
+            ]
+        )
+        seen: list[bytes] = []
+
+        def transport(
+            payload: bytes, _timeout: float
+        ) -> tuple[int, dict[str, str], bytes]:
+            seen.append(payload)
+            return next(responses)
+
+        result = create_pod(
+            CONFIG,
+            requests,
+            transport=transport,
+            sleep=lambda _delay: self.fail("capacity failover must not sleep"),
+        )
+
+        self.assertEqual(seen, [b"cheap", b"premium"])
+        self.assertEqual(result.gpu_tier, "premium")
+
+    def test_unrelated_bad_request_stays_permanent(self) -> None:
+        """#2217: recognising the capacity wording must not retry every 400."""
+
+        body = b'{"detail": "image is not allowed", "status": 400}'
+        self.assertFalse(is_capacity_failure(400, body))
+        self.assertIs(classify_http_status(400), RetryClass.PERMANENT)
+
     def test_retry_classification(self) -> None:
         for status in (408, 429, 500, 502, 503):
             with self.subTest(status=status):
