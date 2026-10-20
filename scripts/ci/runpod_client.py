@@ -77,6 +77,13 @@ _CAPACITY_MESSAGES = (
     "no capacity",
     "insufficient capacity",
     "could not be placed",
+    # REST v2 answers an exhausted catalog with a 400 whose detail reads
+    # "There are no longer any instances available with the requested
+    # specifications. Please refresh and try again." Without this marker the
+    # response classifies as permanent and the candidate ladder stops at the
+    # first tier instead of moving to the next one (#2217).
+    "no longer any instances available",
+    "no instances available",
 )
 
 
