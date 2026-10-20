@@ -24,10 +24,11 @@
   "Engine implementation": {
     "crates/tenferro-cpu/src/exec_session.rs::CpuEngine": "CPU engine implementation: the caller-held CPU operation surface over its own Rayon pool, buffer pool and workspace (#2206)",
     "crates/tenferro-gpu/src/cubecl/exec_session.rs::CudaEngine": "CUDA engine implementation: every operation runs on the caller-held engine and its logical stream (#2206)",
-    "crates/tenferro-gpu/src/webgpu/exec_session.rs::WebGpuExecSession": "WebGPU engine implementation pending the engine port (TODO #2206 webgpu); callers already use the same Engine trait as CPU/CUDA"
+    "crates/tenferro-gpu/src/webgpu/exec_session.rs::WebGpuBackend": "WebGPU engine implementation: the caller-held WebGPU backend now implements Engine on its own logical stream (#2206)"
   },
   "ExecutionEngine implementation": {
     "crates/tenferro-cpu/src/runtime_adapter.rs::CpuEngine": "CPU prepared-program target: one engine value is the runtime target for one supplied slot (#2206)",
-    "crates/tenferro-gpu/src/cubecl/engine.rs::CudaEngine": "CUDA prepared-program target: one engine value is the runtime target for one supplied slot; retirement stays engine-owned (#2206)"
+    "crates/tenferro-gpu/src/cubecl/engine.rs::CudaEngine": "CUDA prepared-program target: one engine value is the runtime target for one supplied slot; retirement stays engine-owned (#2206)",
+    "crates/tenferro-gpu/src/webgpu/mod.rs::WebGpuBackend": "WebGPU prepared-program target: one engine value is the runtime target for one supplied slot (#2206)"
   }
 }
