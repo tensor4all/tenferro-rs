@@ -1,6 +1,6 @@
 //! Overridable batch execution strategy for batched CPU operations (#2142).
 //!
-//! A batched CPU operation (a grouped GEMM, a strided batched contraction or a
+//! A batched CPU operation (a strided batched contraction or a
 //! packed-LU batch) splits its independent items over the thread budget the
 //! lower library receives on `tcontract_exec::Exec`. The vocabulary for that
 //! split lives in `tcontract_exec` and is re-exported here so callers keep a
@@ -21,14 +21,14 @@
 //! # Precedence
 //!
 //! A batched operation resolves its policy as the innermost scoped override,
-//! then the [`crate::CpuBackend`] default:
+//! then the [`crate::CpuEngine`] default:
 //!
 //! 1. the policy of an enclosing [`with_batch_policy`] scope, if any;
-//! 2. otherwise [`crate::CpuBackend::batch_policy`], whose default is
+//! 2. otherwise [`crate::CpuEngine::batch_policy`], whose default is
 //!    [`CpuBatchStrategy::Auto`].
 //!
 //! Wrapping one call in [`with_batch_policy`] therefore expresses a
-//! per-operation choice. A non-CPU session is rejected with a typed
+//! per-operation choice. A non-CPU engine is rejected with a typed
 //! [`tenferro_tensor::ErrorKind::Unsupported`] error; there is no process-global
 //! or thread-local policy outside the scope callback, and each scope restores
 //! the previous policy on return, error and unwind.
@@ -95,72 +95,67 @@ pub use cpueinsum::BatchPolicy as CpuBatchPolicy;
 /// ```
 pub use cpueinsum::WorkModel as CpuBatchThresholds;
 
-/// Run `f` on `session` with `policy` as the effective CPU batch policy.
+/// Run `f` on `engine` with `policy` as the effective CPU batch policy.
 ///
 /// This is the scoped override of the precedence described in the [module
 /// docs](self): wrapping a single call expresses a per-operation choice. The
 /// previous policy is restored when `f` returns, returns an error or unwinds,
 /// and scopes nest with the innermost winning. `f` runs on the caller's own
-/// session, so a forwarding session keeps its own overrides inside the scope.
+/// engine, so a forwarding engine keeps its own overrides inside the scope.
 /// Nothing here mutates process-global state.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::{
-///     with_batch_policy, with_cpu_exec_session, CpuBackend, CpuBatchPolicy, CpuBatchStrategy,
-/// };
-/// use tenferro_tensor::BackendSessionHost;
+/// use tenferro_cpu::{with_batch_policy, with_cpu_engine, CpuBatchPolicy, CpuBatchStrategy, CpuEngine};
 ///
-/// let mut backend = CpuBackend::with_threads(1)?;
-/// let observed = backend.with_backend_session(|session| {
-///     with_batch_policy(
-///         session,
-///         CpuBatchPolicy::new(CpuBatchStrategy::Outer),
-///         |session| {
-///             with_cpu_exec_session(session, |cpu| {
-///                 cpu.with_linalg_pool(|context, _| Ok(context.batch_policy().strategy))
-///             })
-///             .expect("CpuBackend exposes its CpuExecSession")
-///         },
-///     )
-/// })???;
+/// let mut engine = CpuEngine::serial();
+/// let observed = with_batch_policy(
+///     &mut engine,
+///     CpuBatchPolicy::new(CpuBatchStrategy::Outer),
+///     |engine| {
+///         with_cpu_engine(engine, |cpu| {
+///             cpu.with_linalg_pool(|context, _| Ok(context.batch_policy().strategy))
+///         })
+///         .expect("a CPU engine")
+///     },
+/// )??;
 /// assert_eq!(observed, CpuBatchStrategy::Outer);
+/// assert_eq!(engine.batch_policy().strategy, CpuBatchStrategy::Auto);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
 /// # Errors
 ///
 /// Returns [`tenferro_tensor::Error::Unsupported`] without running `f` when
-/// `session` is neither a CPU execution session nor a session that forwards one
-/// through [`tenferro_tensor::BackendSession::native_session`] (a CUDA or other
-/// custom session). `f`'s own result is returned unchanged inside `Ok`.
+/// `engine` is neither a [`crate::CpuEngine`] nor an engine that forwards one
+/// through [`tenferro_tensor::Engine::native_engine`] (a CUDA or other
+/// custom engine). `f`'s own result is returned unchanged inside `Ok`.
 ///
 /// # Panics
 ///
 /// A panic in `f` propagates after the previous policy is restored.
 pub fn with_batch_policy<R>(
-    session: &mut dyn tenferro_tensor::BackendSession,
+    engine: &mut dyn tenferro_tensor::Engine,
     policy: CpuBatchPolicy,
-    f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R,
+    f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
 ) -> tenferro_tensor::Result<R> {
-    let Some(previous) =
-        crate::with_cpu_exec_session(session, |cpu| cpu.replace_batch_policy(policy))
+    let Some(previous) = crate::with_cpu_engine(engine, |cpu| cpu.replace_batch_policy(policy))
     else {
         return Err(tenferro_tensor::Error::unsupported(
             "tenferro_cpu::with_batch_policy",
-            "the session is not a CPU execution session and does not forward one; CPU batch \
-             policies apply only to CpuBackend sessions",
+            "the engine is not a CPU engine and does not forward one; CPU batch policies apply \
+             only to CpuEngine",
         ));
     };
-    // `f` runs on the caller's own session, so a wrapping session keeps its
+    // `f` runs on the caller's own engine, so a wrapping engine keeps its
     // overrides inside the scope. The policy is restored before an unwind
-    // continues; nothing observes the session between the panic and the
+    // continues; nothing observes the engine between the panic and the
     // restore, so asserting unwind safety is sound.
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut *session)));
-    // INVARIANT: the same session yielded a CPU execution session above and
-    // native tokens are stable for a session's lifetime, so this visit runs.
-    let _ = crate::with_cpu_exec_session(session, |cpu| cpu.replace_batch_policy(previous));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut *engine)));
+    // INVARIANT: the same engine yielded a CPU engine above and native tokens
+    // are stable for an engine's lifetime, so this visit runs.
+    let _ = crate::with_cpu_engine(engine, |cpu| cpu.replace_batch_policy(previous));
     match outcome {
         Ok(value) => Ok(value),
         Err(payload) => std::panic::resume_unwind(payload),

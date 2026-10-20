@@ -2,7 +2,7 @@ use super::common::*;
 use super::support;
 use num_complex::{Complex32, Complex64};
 use std::error::Error as StdError;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::FftNorm;
 use tenferro_gpu::cuda::gpu_available;
 
@@ -16,13 +16,13 @@ fn cuda_traced_execution_uses_explicit_engine_and_fft_module_registration() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let backend = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut engine = support::cuda_engine();
     let host = complex_f64(&[4], 0.5);
     let expected = Operation::Fft
         .execute_cpu(&mut cpu, &host, None, -1, FftNorm::Backward)
         .unwrap();
-    let gpu_input = support::upload_cuda(backend.runtime(), &host);
+    let gpu_input = support::upload_cuda(&engine, &host);
     let domain = TensorRead::from_tensor(&gpu_input)
         .allocation_domain()
         .unwrap();
@@ -34,11 +34,11 @@ fn cuda_traced_execution_uses_explicit_engine_and_fft_module_registration() {
         -1,
         FftNorm::Backward,
     );
-    let runtime = cuda_runtime_with_fft(&backend, true);
-    let outputs = runtime.run_compiled(&program, &[&gpu_input]).unwrap();
+    let runtime = cuda_runtime_with_fft(&engine, true);
+    let outputs = run_on_cuda(&runtime, &mut engine, &program, &[&gpu_input]).unwrap();
     assert_eq!(outputs.len(), 1);
     support::assert_cuda_resident(&outputs[0], domain);
-    let output = support::download_cuda(backend.runtime(), &outputs[0]).unwrap();
+    let output = support::download_cuda(&engine, &outputs[0]).unwrap();
     assert_host_close(&output, &expected, 1.0e-11);
 }
 
@@ -49,9 +49,9 @@ fn cuda_traced_missing_extension_module_is_an_explicit_error() {
         return;
     }
 
-    let backend = support::cuda_backend();
+    let mut engine = support::cuda_engine();
     let host = complex_f64(&[4], 0.5);
-    let gpu_input = support::upload_cuda(backend.runtime(), &host);
+    let gpu_input = support::upload_cuda(&engine, &host);
     let (program, _) = compiled_cuda_fft(
         DType::C64,
         &[4],
@@ -60,14 +60,12 @@ fn cuda_traced_missing_extension_module_is_an_explicit_error() {
         -1,
         FftNorm::Backward,
     );
-    let runtime = cuda_runtime_with_fft(&backend, false);
-    let error = runtime
-        .run_compiled(&program, &[&gpu_input])
+    let runtime = cuda_runtime_with_fft(&engine, false);
+    let error = run_on_cuda(&runtime, &mut engine, &program, &[&gpu_input])
         .expect_err("missing FFT extension registration must fail");
-    let Error::RuntimeStateSource { op, phase, source } = error else {
+    let Error::RuntimeStateSource { phase, source, .. } = error else {
         panic!("missing FFT registration returned the wrong structured error");
     };
-    assert_eq!(op, "Runtime::run_compiled");
     assert_eq!(phase, ErrorPhase::Execution);
 
     let mut cause: &(dyn StdError + 'static) = source.as_ref();
@@ -97,10 +95,10 @@ fn cuda_traced_runtime_mismatch_is_rejected_without_host_fallback() {
         return;
     }
 
-    let first = support::cuda_backend();
-    let second = support::cuda_backend();
+    let mut first = support::cuda_engine();
+    let second = support::cuda_engine();
     let host = complex_f64(&[4], 0.5);
-    let foreign_input = support::upload_cuda(second.runtime(), &host);
+    let foreign_input = support::upload_cuda(&second, &host);
     let (program, _) = compiled_cuda_fft(
         DType::C64,
         &[4],
@@ -110,8 +108,7 @@ fn cuda_traced_runtime_mismatch_is_rejected_without_host_fallback() {
         FftNorm::Backward,
     );
     let runtime = cuda_runtime_with_fft(&first, true);
-    let error = runtime
-        .run_compiled(&program, &[&foreign_input])
+    let error = run_on_cuda(&runtime, &mut first, &program, &[&foreign_input])
         .expect_err("foreign CUDA runtime input must be rejected");
     let message = error.to_string();
     assert!(
@@ -122,18 +119,18 @@ fn cuda_traced_runtime_mismatch_is_rejected_without_host_fallback() {
 
 #[test]
 #[ignore = "requires CUDA cuFFT hardware and library"]
-fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
+fn cuda_runs_keep_cufft_plans_in_the_engine() {
     if !gpu_available() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let backend = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut engine = support::cuda_engine();
     let host = complex_f64(&[32, 4096], 0.5);
     let expected = Operation::Fft
         .execute_cpu(&mut cpu, &host, None, -1, FftNorm::Backward)
         .unwrap();
-    let gpu_input = support::upload_cuda(backend.runtime(), &host);
+    let gpu_input = support::upload_cuda(&engine, &host);
     let domain = TensorRead::from_tensor(&gpu_input)
         .allocation_domain()
         .unwrap();
@@ -145,8 +142,8 @@ fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
         -1,
         FftNorm::Backward,
     );
-    let runtime = cuda_runtime_with_fft(&backend, true);
-    let initial = runtime.cache_stats().unwrap().extensions;
+    let runtime = cuda_runtime_with_fft(&engine, true);
+    let initial = support::engine_cache_stats(&mut engine);
     assert_eq!(initial.entries, 0);
     assert_eq!(initial.retained_bytes, 0);
     assert_eq!(initial.hits, 0);
@@ -154,11 +151,10 @@ fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
     assert_eq!(initial.evictions, 0);
     assert_eq!(initial.clears, 0);
 
-    let first = runtime
-        .run_compiled(&program, &[&gpu_input])
+    let first = run_on_cuda(&runtime, &mut engine, &program, &[&gpu_input])
         .unwrap()
         .remove(0);
-    let first_stats = runtime.cache_stats().unwrap().extensions;
+    let first_stats = support::engine_cache_stats(&mut engine);
     assert_eq!(first_stats.entries, 1);
     assert!(first_stats.retained_bytes > 0);
     assert_eq!(first_stats.hits, 0);
@@ -166,11 +162,10 @@ fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
     assert_eq!(first_stats.evictions, 0);
     assert_eq!(first_stats.clears, 0);
 
-    let second = runtime
-        .run_compiled(&program, &[&gpu_input])
+    let second = run_on_cuda(&runtime, &mut engine, &program, &[&gpu_input])
         .unwrap()
         .remove(0);
-    let second_stats = runtime.cache_stats().unwrap().extensions;
+    let second_stats = support::engine_cache_stats(&mut engine);
     assert_eq!(second_stats.entries, 1);
     assert!(second_stats.retained_bytes > 0);
     assert_eq!(second_stats.hits, 1);
@@ -186,11 +181,10 @@ fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
         -1,
         FftNorm::Backward,
     );
-    let third = runtime
-        .run_compiled(&short_program, &[&gpu_input])
+    let third = run_on_cuda(&runtime, &mut engine, &short_program, &[&gpu_input])
         .unwrap()
         .remove(0);
-    let third_stats = runtime.cache_stats().unwrap().extensions;
+    let third_stats = support::engine_cache_stats(&mut engine);
     assert_eq!(third_stats.entries, 2);
     assert!(third_stats.retained_bytes > 0);
     assert_eq!(third_stats.hits, 1);
@@ -198,8 +192,8 @@ fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
     assert_eq!(third_stats.evictions, 0);
     assert_eq!(third_stats.clears, 0);
 
-    runtime.clear_caches().unwrap();
-    let cleared = runtime.cache_stats().unwrap().extensions;
+    support::with_engine_caches(&mut engine, |caches| caches.clear());
+    let cleared = support::engine_cache_stats(&mut engine);
     assert_eq!(cleared.entries, 0);
     assert_eq!(cleared.retained_bytes, 0);
     assert_eq!(cleared.hits, 1);
@@ -210,9 +204,9 @@ fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
     support::assert_cuda_resident(&first, domain);
     support::assert_cuda_resident(&second, domain);
     support::assert_cuda_resident(&third, domain);
-    let first = support::download_cuda(backend.runtime(), &first).unwrap();
-    let second = support::download_cuda(backend.runtime(), &second).unwrap();
-    let third = support::download_cuda(backend.runtime(), &third).unwrap();
+    let first = support::download_cuda(&engine, &first).unwrap();
+    let second = support::download_cuda(&engine, &second).unwrap();
+    let third = support::download_cuda(&engine, &third).unwrap();
     assert_host_close(&first, &expected, 1.0e-11);
     assert_host_close(&second, &expected, 1.0e-11);
     let expected_short = Operation::Fft
@@ -223,12 +217,12 @@ fn cuda_runtime_owned_cache_reuses_stats_clears_and_retires_after_launch() {
 
 #[test]
 #[ignore = "requires CUDA cuFFT hardware and library"]
-fn cuda_traced_zero_batch_returns_empty_outputs_without_runtime_cache() {
+fn cuda_traced_zero_batch_returns_empty_outputs_without_engine_cache() {
     if !gpu_available() {
         return;
     }
 
-    let backend = support::cuda_backend();
+    let mut engine = support::cuda_engine();
     for (host, dtype, shape, expected_shape, axis) in [
         (
             Tensor::from_vec_col_major(vec![0, 8], Vec::<Complex64>::new()).unwrap(),
@@ -245,7 +239,7 @@ fn cuda_traced_zero_batch_returns_empty_outputs_without_runtime_cache() {
             2isize,
         ),
     ] {
-        let gpu_input = support::upload_cuda(backend.runtime(), &host);
+        let gpu_input = support::upload_cuda(&engine, &host);
         let domain = TensorRead::from_tensor(&gpu_input)
             .allocation_domain()
             .unwrap();
@@ -256,9 +250,8 @@ fn cuda_traced_zero_batch_returns_empty_outputs_without_runtime_cache() {
         };
         let (program, _) =
             compiled_cuda_fft(dtype, &shape, operation, None, axis, FftNorm::Backward);
-        let runtime = cuda_runtime_with_fft(&backend, true);
-        let output = runtime
-            .run_compiled(&program, &[&gpu_input])
+        let runtime = cuda_runtime_with_fft(&engine, true);
+        let output = run_on_cuda(&runtime, &mut engine, &program, &[&gpu_input])
             .unwrap()
             .remove(0);
         support::assert_cuda_resident(&output, domain);
@@ -269,14 +262,14 @@ fn cuda_traced_zero_batch_returns_empty_outputs_without_runtime_cache() {
             DType::C32
         };
         assert_eq!(output.dtype(), expected_dtype);
-        let stats = runtime.cache_stats().unwrap().extensions;
+        let stats = support::engine_cache_stats(&mut engine);
         assert_eq!(stats.entries, 0, "zero-batch cache stats: {stats:?}");
         assert_eq!(stats.retained_bytes, 0, "zero-batch cache stats: {stats:?}");
         assert_eq!(stats.hits, 0, "zero-batch cache stats: {stats:?}");
         assert_eq!(stats.misses, 0, "zero-batch cache stats: {stats:?}");
         assert_eq!(stats.evictions, 0, "zero-batch cache stats: {stats:?}");
         assert_eq!(stats.clears, 0, "zero-batch cache stats: {stats:?}");
-        let output = support::download_cuda(backend.runtime(), &output).unwrap();
+        let output = support::download_cuda(&engine, &output).unwrap();
         assert_eq!(output.shape(), expected_shape.as_slice());
         assert_eq!(output.dtype(), expected_dtype);
         assert_eq!(element_count(output.shape()), 0);

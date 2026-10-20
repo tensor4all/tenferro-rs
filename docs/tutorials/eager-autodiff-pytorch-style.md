@@ -10,6 +10,7 @@ that the gradient is `2 * x`.
 <!-- snippet-source: docs/tutorial-code/src/bin/eager_autodiff_pytorch_style.rs -->
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
+use tenferro_cpu::CpuEngine;
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -24,12 +25,13 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = EagerRuntime::new()?;
+    let mut engine = CpuEngine::serial();
     let x = runtime.variable_from(Tensor::from_vec_col_major(
         vec![3],
         vec![1.0_f64, 2.0, 3.0],
     )?)?;
 
-    let loss = runtime.with_eager_session(|s| {
+    let loss = runtime.with_eager_session(&mut engine, |s| {
         let prediction = s.mul(&x, &x)?;
         s.reduce_sum(&prediction, Some(&[0]))
     })?;
@@ -37,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(loss.shape().is_empty());
     assert_close(loss.value()?.as_slice::<f64>().unwrap(), &[14.0]);
 
-    loss.backward()?;
+    loss.backward(&mut engine)?;
 
     let grad = x
         .grad()?

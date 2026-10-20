@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
-use tenferro_tensor::{BackendSession, Tensor, TensorValue};
+use tenferro_tensor::TensorRead;
 
 use crate::graph::CompiledGraph;
 use crate::program::FrozenProgram;
@@ -12,7 +12,6 @@ use crate::program::FrozenProgram;
 use super::cache::{PreparedPlanCacheLimits, RuntimeCacheSet};
 use super::cache_owner::{FrozenCacheOwner, FrozenCacheOwnerKind};
 use super::engine_registration::{CandidateRegistrationToken, EngineRegistrationState};
-use super::execution;
 #[cfg(test)]
 use super::extension::ExtensionSlotFullForTest;
 use super::extension::{
@@ -23,13 +22,13 @@ use super::extension::{
 use super::preparation::{PreparedEntryKey, PreparedProgram, PreparedProgramResult};
 use super::schedule::EventDomainId;
 use super::{
-    CacheOwnerId, CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
-    ExecutionPolicy, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
-    FrozenTransferRegistry, HardwareClassId, InputSignature, PrepareCapability, PrepareOptions,
-    ProviderDeviceIdentity, RegistrationIdentity, RegistrationKey, ResolvedTransferEndpoint,
-    ResolvedTransferRoute, RuntimeCacheError, RuntimeCacheStats, RuntimeConfigError, RuntimeEpoch,
-    RuntimeId, RuntimeReconfigureError, RuntimeStateError, StorageClass, TransferEndpoint,
-    TransferProvider, TransferRoute,
+    CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity, ExecutionPolicy,
+    ExtensionModule, ExtensionModuleError, ExtensionModuleId, FrozenTransferRegistry,
+    HardwareClassId, InputSignature, PrepareCapability, PrepareOptions, ProviderDeviceIdentity,
+    RegistrationIdentity, RegistrationKey, ResolvedTransferEndpoint, ResolvedTransferRoute,
+    RuntimeCacheError, RuntimeCacheStats, RuntimeConfigError, RuntimeEpoch, RuntimeId,
+    RuntimeReconfigureError, RuntimeStateError, StorageClass, TransferEndpoint, TransferProvider,
+    TransferRoute,
 };
 use crate::{Error, ErrorPhase};
 
@@ -262,24 +261,6 @@ impl ExecutableEngineSnapshot {
             .and_then(|elementwise| elementwise.max_fused_region_inputs())
     }
 
-    pub(super) fn executor(&self) -> &Arc<dyn super::execution::ErasedTensorBackendExecutor> {
-        self.binding.contract().executor()
-    }
-
-    pub(super) fn event_domain_driver(&self) -> &Arc<dyn super::EventDomainDriver> {
-        self.binding.contract().event_domain_driver()
-    }
-
-    #[cfg(test)]
-    pub(super) fn has_executor(&self) -> bool {
-        true
-    }
-
-    #[cfg(test)]
-    pub(super) fn has_event_domain_driver(&self) -> bool {
-        true
-    }
-
     pub(super) fn accepts_input_placement(
         &self,
         placement: &tenferro_tensor::Placement,
@@ -335,36 +316,18 @@ impl ExecutableEngineSnapshot {
         event_domain_id: EventDomainId,
         storage_class: StorageClass,
     ) -> Arc<Self> {
-        Self::for_test_with_driver(
-            engine_id,
-            provider_device_identity,
-            event_domain_id,
-            storage_class,
-            Arc::new(super::ImmediateEventDomainDriver::new()),
-        )
-    }
-
-    #[cfg(test)]
-    pub(super) fn for_test_with_driver(
-        engine_id: EngineId,
-        provider_device_identity: ProviderDeviceIdentity,
-        event_domain_id: EventDomainId,
-        storage_class: StorageClass,
-        event_domain_driver: Arc<dyn super::EventDomainDriver>,
-    ) -> Arc<Self> {
+        struct TestEngine;
         let ingress = super::InputIngressContract::new(
             super::InputPlacementContract::new(|_, _| true),
             super::InputSignatureContract::new(|_, _, _, _| true),
             super::RuntimeInputContract::new(|_, _| true),
             super::ResidentOutputContract::new(|_, _| true),
         );
-        let contract = super::ExecutableEngineContract::new(
+        let contract = super::engine_registration::ExecutableEngineContract::new(
             provider_device_identity,
+            ExecutionContextIdentity::of::<TestEngine>(),
             CoreCapabilityBundle::default(),
-            tenferro_cpu::CpuBackend::new(),
-            event_domain_driver,
             ingress,
-            None,
         );
         let binding = super::ProviderExecutableBinding::new(
             engine_id,
@@ -869,7 +832,7 @@ impl Runtime {
     /// use std::hash::Hasher;
     /// use std::sync::Arc;
     ///
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_ops::ExtensionShapeContext;
     /// use tenferro_runtime::extension::ExtensionOp;
     /// use tenferro_runtime::{
@@ -928,15 +891,15 @@ impl Runtime {
     /// impl ExtensionEngine for NoopEngine {
     ///     fn family_id(&self) -> &'static str { Probe.family_id() }
     ///     fn engine_id(&self) -> &tenferro_runtime::EngineId { &self.engine_id }
-    ///     fn context_identity(&self) -> tenferro_runtime::ExecutionContextIdentity { tenferro_runtime::ExecutionContextIdentity::of::<CpuBackend>() }
+    ///     fn context_identity(&self) -> tenferro_runtime::ExecutionContextIdentity { tenferro_runtime::ExecutionContextIdentity::of::<CpuEngine>() }
     ///     fn prepare(&self, _request: tenferro_runtime::ExtensionPrepareRequest<'_>) -> Result<PrepareCapability, PrepareError> {
     ///         Ok(PrepareCapability::Unsupported(UnsupportedReason::Operation { operation: Probe.family_id() }))
     ///     }
     /// }
     ///
-    /// let backend = CpuBackend::new();
+    /// let engine = CpuEngine::serial();
     /// let mut builder = Runtime::builder();
-    /// builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    /// builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
     /// builder.install_extension_module(Arc::new(Module(ExtensionModuleId::new("tenferro-tests.immediate-probe.module")?)))?;
     /// let runtime = builder.build()?;
     /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
@@ -970,329 +933,87 @@ impl Runtime {
         )
     }
 
-    /// Run a compiled graph synchronously with borrowed tensor inputs.
+    /// Prepare `program` to run on engines described by `targets`.
     ///
-    /// The borrows remain valid until this call returns; this surface never
-    /// detaches work. Asynchronous [`Self::submit`] accepts only the owning
-    /// [`super::execution::ExecutionInputs`] package.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// use tenferro_runtime::{Runtime, TracedTensor, GraphCompiler};
-    ///
-    /// let runtime = Runtime::builder().build()?;
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
-    /// let program = GraphCompiler::new().compile(&x)?;
-    /// let error = runtime.run_compiled(&program, &[]).unwrap_err();
-    /// assert!(error.to_string().contains("no eligible engine"));
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::UnboundPlaceholder`] when no explicit inputs are
-    /// supplied and a semantic input has no bound default tensor.
-    /// Returns [`crate::Error::GraphInputCountMismatch`],
-    /// [`crate::Error::PlaceholderDtypeMismatch`],
-    /// [`crate::Error::PlaceholderRankMismatch`],
-    /// [`crate::Error::PlaceholderShapeMismatch`], or
-    /// [`crate::Error::PlaceholderShapeBoundExceeded`] when ordered runtime
-    /// inputs do not match the compiled graph metadata.
-    /// Returns [`crate::Error::RuntimeState`] when runtime preparation, schedule
-    /// validation, snapshot access, stale epoch checks, or execution-bridge
-    /// resolution fails, including [`crate::PrepareError::NoInputIngress`]
-    /// when no engine accepts an input's physical backend/allocation domain,
-    /// [`crate::PrepareError::MissingTransferProvider`] when ingress cannot
-    /// reach its first scheduled consumer, a runtime with no eligible engine,
-    /// or no execution bridge for the prepared engine. Backend execution may
-    /// also return concrete backend variants such as
-    /// [`crate::Error::Unsupported`], [`crate::Error::Validation`], or
-    /// [`crate::Error::Extension`].
-    pub fn run_compiled(
-        &self,
-        program: &CompiledGraph,
-        inputs: &[&Tensor],
-    ) -> crate::Result<Vec<Tensor>> {
-        super::execution::run_compiled(self, program, inputs)
-    }
-
-    /// Execute borrowed read-only inputs synchronously through retirement.
-    ///
-    /// Host/CPU providers may complete this call. Asynchronous device
-    /// providers reject before admission and return the unchanged borrowed
-    /// package through [`crate::ScopedSubmitRejected`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Unsupported`] when the selected asynchronous
-    /// provider cannot execute borrowed inputs synchronously, or
-    /// [`crate::ScopedSubmitRejected`] when pre-admission validation fails.
-    /// Provider execution failures are reported as
-    /// [`crate::runtime::execution::ScopedExecutionOutcome::RetiredFailed`].
-    pub fn execute_scoped_read_only<'env>(
-        &self,
-        program: &CompiledGraph,
-        inputs: super::execution::ScopedReadInputs<'env>,
-    ) -> std::result::Result<
-        super::execution::ScopedExecutionOutcome<'env>,
-        super::execution::ScopedSubmitRejected<'env>,
-    > {
-        super::execution::execute_scoped_read_only(self, program, inputs)
-    }
-
-    /// Prepare a compiled graph for repeated execution with the same runtime.
-    ///
-    /// Preparation validates the supplied input metadata, selects a runtime
-    /// engine, and caches the staged execution plan. Use [`Self::run_prepared`]
-    /// for steady-state execution when the same compiled graph is run many
-    /// times.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::UnboundPlaceholder`] when no explicit inputs are
-    /// supplied and a semantic input has no bound default tensor.
-    /// Returns [`crate::Error::GraphInputCountMismatch`],
-    /// [`crate::Error::PlaceholderDtypeMismatch`],
-    /// [`crate::Error::PlaceholderRankMismatch`],
-    /// [`crate::Error::PlaceholderShapeMismatch`], or
-    /// [`crate::Error::PlaceholderShapeBoundExceeded`] when ordered runtime
-    /// inputs do not match the compiled graph metadata.
-    /// Returns [`crate::Error::RuntimeState`] when runtime preparation, schedule
-    /// validation, snapshot access, stale epoch checks, or execution-bridge
-    /// resolution fails, including [`crate::PrepareError::NoInputIngress`]
-    /// when no engine accepts an input's physical backend/allocation domain,
-    /// [`crate::PrepareError::MissingTransferProvider`] when ingress cannot
-    /// reach its first scheduled consumer, a runtime with no eligible engine,
-    /// or no execution bridge for the prepared engine.
-    pub fn prepare_compiled(
-        &self,
-        program: &CompiledGraph,
-        inputs: &[&Tensor],
-    ) -> crate::Result<super::execution::PreparedCompiledGraph> {
-        super::execution::prepare_compiled(self, program, inputs)
-    }
-
-    /// Run a graph previously prepared by [`Self::prepare_compiled`].
-    ///
-    /// An eligible graph runs every scheduled node inside one backend session,
-    /// so repeated runs pay one session entry for the graph instead of one per
-    /// instruction. Eligibility requires a single-engine schedule whose prepared
-    /// operations all support a scheduler-owned session and which contains no
-    /// transfer node; every other graph keeps the per-instruction route, which is
-    /// also the route an owner-only extension (a prepared operation without
-    /// session support) needs. The GPU event domains are retired before this
-    /// returns on both routes.
-    ///
-    /// # Errors
-    ///
-    /// Returns metadata validation errors for incompatible inputs, a runtime
-    /// state error with [`crate::InputIngressContractError`] as its typed source
-    /// when an input's physical residency does not match the prepared ingress,
-    /// or a runtime state error if the prepared handle belongs to a different
-    /// runtime or a stale runtime epoch.
-    pub fn run_prepared(
-        &self,
-        prepared: &super::execution::PreparedCompiledGraph,
-        inputs: &[&Tensor],
-    ) -> crate::Result<Vec<Tensor>> {
-        super::execution::run_prepared(self, prepared, inputs)
-    }
-
-    /// Run a graph previously prepared by [`Self::prepare_compiled`] on a
-    /// backend session the caller has already entered.
-    ///
-    /// Every node of the graph executes on `session`; no scoped
-    /// `with_backend_session`, cached session entry, or owner-extension fallback
-    /// runs on this path. Preflight rejects, before any launch, a graph that
-    /// spans more than one engine, a prepared operation without session support,
-    /// and a session that belongs to a different backend state than the graph's
-    /// engine; the executor state is leased exactly once without waiting. The
-    /// call still retires its device work before returning.
-    ///
-    /// Use this to keep one caller-held session (such as a
-    /// `CudaHeldSession`) across many prepared runs instead of paying a fresh
-    /// scoped entry per run. For a graph that is not a single engine, or when no
-    /// session is held, use [`Self::run_prepared`].
+    /// Preparation does the expensive checks and decisions once: it places
+    /// each part of the program on one of the targets, plans fusion for those
+    /// targets, and records what each target slot requires. The prepared
+    /// program holds no engine; [`Self::run`] binds slot `i` to the `i`-th
+    /// engine it receives. Pass the inputs (or none, to use the graph's bound
+    /// tensors) whose shapes, types, layouts and memory the program will run on.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::{runtime_engine_registration, CpuBackend};
-    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
-    /// use tenferro_tensor::BackendSessionHost;
+    /// use tenferro_runtime::{EngineTarget, Prepared, Runtime, TracedTensor, GraphCompiler};
     ///
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut backend = CpuBackend::new();
-    /// let mut builder = Runtime::builder();
-    /// builder.register_engine(runtime_engine_registration(&backend)?)?;
-    /// let runtime = builder.build()?;
-    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    /// let graph = GraphCompiler::new().compile(&x)?;
-    /// let prepared = runtime.prepare_compiled(&graph, &[])?;
-    /// let outputs = backend.with_backend_session(|session| {
-    ///     runtime.run_prepared_in(session, &prepared, &[])
-    /// })??;
-    /// assert_eq!(outputs[0].as_slice::<f64>()?, &[1.0, 2.0]);
-    /// # Ok(())
-    /// # }
+    /// fn prepare_for(
+    ///     runtime: &Runtime,
+    ///     x: &TracedTensor,
+    ///     target: EngineTarget,
+    /// ) -> tenferro_runtime::Result<Prepared> {
+    ///     let program = GraphCompiler::new().compile(x)?;
+    ///     runtime.prepare(&program, &[], &[target])
+    /// }
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Unsupported`] when the prepared graph spans more
-    /// than one engine, when a prepared operation does not support a
-    /// caller-borrowed session, or when `session` belongs to a different backend
-    /// state than the graph's engine; the message names the remedy (use
-    /// [`Self::run_prepared`] outside a session, or pass a session of the
-    /// prepared engine). Returns [`crate::Error::RuntimeState`] when the
-    /// executor state is busy on another thread or reentered on this thread,
-    /// when runtime preparation, snapshot access, or the stale epoch check
-    /// fails, and for the same prepared-handle and input-metadata failures as
-    /// [`Self::run_prepared`]. Backend execution may also return concrete
-    /// variants such as [`crate::Error::Validation`] or
-    /// [`crate::Error::Extension`].
-    pub fn run_prepared_in(
+    /// Returns [`crate::Error::InvalidArgument`] when `targets` is empty or names
+    /// an engine twice, [`crate::Error::RuntimeState`] when a target names an
+    /// engine this runtime has not registered or reports a different context
+    /// identity than its registration, metadata validation errors for inputs
+    /// that do not match the graph, and preparation failures (no eligible
+    /// engine, missing ingress or transfer route) with the typed
+    /// [`crate::PrepareError`] source retained.
+    pub fn prepare(
         &self,
-        session: &mut dyn BackendSession,
-        prepared: &super::execution::PreparedCompiledGraph,
-        inputs: &[&Tensor],
-    ) -> crate::Result<Vec<Tensor>> {
-        super::execution::run_prepared_in(self, session, prepared, inputs)
+        program: &CompiledGraph,
+        inputs: &[TensorRead<'_>],
+        targets: &[super::EngineTarget],
+    ) -> crate::Result<super::Prepared> {
+        super::execution::prepare(self, program, inputs, targets)
     }
 
-    /// Open a deferred prepared-execution guard on a caller-held session.
+    /// Run a prepared program on the engines passed in.
     ///
-    /// The guard borrows `session` and `prepared` for its lifetime, leases the
-    /// prepared engine's executor state once without waiting, and enforces the
-    /// same single-engine and session-compatibility preflight as
-    /// [`Self::run_prepared_in`]. Calls to
-    /// [`super::execution::PreparedDeferred::run_prepared_deferred`] enqueue
-    /// runs without the event-domain retirement barrier; one
-    /// [`super::execution::PreparedDeferred::finish_prepared`] retires all work
-    /// enqueued since the previous finish. The deferred outputs are valid only
-    /// after that finish.
-    ///
-    /// Use this for a batch of prepared runs whose device completion is only
-    /// needed once, such as a benchmark sampling loop or batched inference.
-    /// Keep using [`Self::run_prepared_in`] when each call must return
-    /// retired outputs.
+    /// Slot `i` of `prepared` runs on `engines[i]`; every engine must report
+    /// the target the program was prepared for. On a CPU engine the call returns
+    /// when the work is done. On a GPU engine it returns once the work is queued
+    /// and no longer reads caller memory that could change; later work on the
+    /// same engine runs after it in stream order. An output that is one of the
+    /// inputs, or a view of one, is returned borrowed; every other output is a
+    /// new compact tensor.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::{runtime_engine_registration, CpuBackend};
-    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
-    /// use tenferro_tensor::BackendSessionHost;
+    /// use tenferro_runtime::{ExecutionEngine, Output, Prepared, Runtime};
+    /// use tenferro_tensor::TensorRead;
     ///
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut backend = CpuBackend::new();
-    /// let mut builder = Runtime::builder();
-    /// builder.register_engine(runtime_engine_registration(&backend)?)?;
-    /// let runtime = builder.build()?;
-    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    /// let graph = GraphCompiler::new().compile(&x)?;
-    /// let prepared = runtime.prepare_compiled(&graph, &[])?;
-    /// let inputs: [&tenferro_tensor::Tensor; 0] = [];
-    /// let batches = backend.with_backend_session(|session| {
-    ///     let mut deferred = runtime.begin_prepared_deferred(session, &prepared)?;
-    ///     deferred.run_prepared_deferred(&inputs)?;
-    ///     deferred.run_prepared_deferred(&inputs)?;
-    ///     deferred.finish_prepared()
-    /// })??;
-    /// assert_eq!(batches.len(), 2);
-    /// assert_eq!(batches[1][0].as_slice::<f64>()?, &[1.0, 2.0]);
-    /// # Ok(())
-    /// # }
+    /// fn run_on<'a>(
+    ///     runtime: &Runtime,
+    ///     engine: &mut dyn ExecutionEngine,
+    ///     prepared: &'a Prepared,
+    ///     inputs: &[TensorRead<'a>],
+    /// ) -> tenferro_runtime::Result<Vec<Output<'a>>> {
+    ///     runtime.run(&mut [engine], prepared, inputs)
+    /// }
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns `ValidationError::InvalidArgument` when the prepared handle does
-    /// not match the runtime, and `Error::Extension` when the engine, session,
-    /// or instruction support rejects the prepared graph. Nothing is enqueued
-    /// on either failure.
-    pub fn begin_prepared_deferred<'a>(
-        &'a self,
-        session: &'a mut dyn BackendSession,
-        prepared: &'a super::execution::PreparedCompiledGraph,
-    ) -> crate::Result<super::execution::PreparedDeferred<'a>> {
-        super::execution::begin_prepared_deferred(
-            self,
-            session,
-            prepared,
-            "Runtime::begin_prepared_deferred",
-        )
-    }
-
-    /// Submit a compiled graph for asynchronous runtime-owned execution.
-    ///
-    /// Dropping the returned handle detaches the observer without blocking.
-    /// Use [`super::execution::ExecutionHandle::wait`] to observe completion.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same [`crate::PrepareError::InputSignature`],
-    /// [`crate::PrepareError::Specialization`],
-    /// [`crate::PrepareError::NoEligibleEngine`],
-    /// [`crate::PrepareError::NoInputIngress`], and
-    /// [`crate::PrepareError::MissingTransferProvider`] failures as
-    /// [`Self::run_compiled`] before the worker is submitted. Returns a runtime
-    /// state error with [`crate::SubmissionError`] as its typed source if the
-    /// operating system rejects worker creation after admission.
-    pub fn submit(
+    /// Returns [`crate::Error::RuntimeState`] when `prepared` belongs to another
+    /// runtime or a stale epoch, [`crate::Error::InvalidArgument`] when the
+    /// engines do not match the prepared targets, metadata validation errors for
+    /// mismatched inputs, and the engines' own execution errors.
+    pub fn run<'a>(
         &self,
-        program: &CompiledGraph,
-        inputs: super::execution::ExecutionInputs,
-    ) -> std::result::Result<super::execution::ExecutionHandle, super::execution::SubmitError> {
-        super::execution::submit(self, program, inputs)
-    }
-
-    /// Run a compiled graph and preserve lazy owned output views.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// use tenferro_runtime::{Runtime, TracedTensor, GraphCompiler};
-    ///
-    /// let runtime = Runtime::builder().build()?;
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
-    /// let program = GraphCompiler::new().compile(&x)?;
-    /// let error = runtime.run_compiled_values(&program, &[]).unwrap_err();
-    /// assert!(error.to_string().contains("no eligible engine"));
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::UnboundPlaceholder`] when no explicit inputs are
-    /// supplied and a semantic input has no bound default tensor.
-    /// Returns [`crate::Error::GraphInputCountMismatch`],
-    /// [`crate::Error::PlaceholderDtypeMismatch`],
-    /// [`crate::Error::PlaceholderRankMismatch`],
-    /// [`crate::Error::PlaceholderShapeMismatch`], or
-    /// [`crate::Error::PlaceholderShapeBoundExceeded`] when ordered runtime
-    /// inputs do not match the compiled graph metadata.
-    /// Returns [`crate::Error::RuntimeState`] when runtime preparation, schedule
-    /// validation, snapshot access, stale epoch checks, or execution-bridge
-    /// resolution fails, including [`crate::PrepareError::NoInputIngress`]
-    /// when no engine accepts an input's physical backend/allocation domain,
-    /// [`crate::PrepareError::MissingTransferProvider`] when ingress cannot
-    /// reach its first scheduled consumer, a runtime with no eligible engine,
-    /// or no execution bridge for the prepared engine. Backend execution may
-    /// also return concrete backend variants such as
-    /// [`crate::Error::Unsupported`], [`crate::Error::Validation`], or
-    /// [`crate::Error::Extension`].
-    pub fn run_compiled_values(
-        &self,
-        program: &CompiledGraph,
-        inputs: &[&Tensor],
-    ) -> crate::Result<Vec<TensorValue>> {
-        super::execution::run_compiled_values(self, program, inputs)
+        engines: &mut [&mut dyn super::ExecutionEngine],
+        prepared: &'a super::Prepared,
+        inputs: &[TensorRead<'a>],
+    ) -> crate::Result<Vec<super::Output<'a>>> {
+        super::execution::run(self, engines, prepared, inputs)
     }
 
     /// Transactionally edit and publish runtime configuration.
@@ -2185,9 +1906,9 @@ impl<'a> EngineSnapshotView<'a> {
     /// ```rust
     /// use tenferro_runtime::{InputSignature, Runtime, Tensor, TensorRead};
     ///
-    /// let backend = tenferro_cpu::CpuBackend::new();
+    /// let engine = tenferro_cpu::CpuEngine::serial();
     /// let mut builder = Runtime::builder();
-    /// builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    /// builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
     /// let runtime = builder.build()?;
     /// let engine_id = tenferro_cpu::runtime_engine_id()?;
     /// let snapshot = runtime.snapshot()?;
@@ -2631,18 +2352,6 @@ fn freeze_candidate(
                 }))
             }
             EngineRegistrationState::Executable(binding) => {
-                if let Some(owner) = binding.contract().cache_owner().cloned() {
-                    cache_owners.push(FrozenCacheOwner {
-                        id: engine_cache_owner_id(&engine_id),
-                        kind: FrozenCacheOwnerKind::Engine,
-                        owner,
-                    });
-                }
-                cache_owners.push(FrozenCacheOwner {
-                    id: engine_extension_cache_owner_id(&engine_id),
-                    kind: FrozenCacheOwnerKind::Extension,
-                    owner: execution::extension_cache_owner(binding.contract().executor().clone()),
-                });
                 FrozenEngineSlot::Executable(Arc::new(ExecutableEngineSnapshot {
                     metadata,
                     binding,
@@ -2709,19 +2418,6 @@ fn bound_engine_location<'a>(
         .ok_or_else(|| RuntimeConfigError::BoundCandidateInvariant {
             endpoint: endpoint.clone(),
         })
-}
-
-fn engine_cache_owner_id(engine_id: &EngineId) -> CacheOwnerId {
-    let id = engine_id.as_str();
-    CacheOwnerId::from_canonical_owner_id(Arc::<str>::from(format!("engine[{}]:{id}", id.len())))
-}
-
-fn engine_extension_cache_owner_id(engine_id: &EngineId) -> CacheOwnerId {
-    let id = engine_id.as_str();
-    CacheOwnerId::from_canonical_owner_id(Arc::<str>::from(format!(
-        "extension-executor[{}]:{id}",
-        id.len()
-    )))
 }
 
 fn allocate_nonzero(counter: &AtomicU64) -> Result<NonZeroU64, RuntimeConfigError> {

@@ -3,31 +3,34 @@
 use tenferro_gpu::webgpu::{
     download_webgpu_tensor, upload_webgpu_tensor, WebGpuBackend, WebGpuRuntime,
 };
+use tenferro_runtime::ExecutionEngine;
 use tenferro_tensor::{
-    DotGeneralConfig, DynRank, Result, Tensor, TensorBackend, TensorDeviceTransfer, TensorDot,
-    TensorRead, TensorViewCanonicalization,
+    DotGeneralConfig, DynRank, Engine, Result, Tensor, TensorDeviceTransfer, TensorDot, TensorRead,
+    TensorViewCanonicalization,
 };
 
-fn assert_tensor_backend<B: TensorBackend>() {}
+fn assert_engine<B: Engine>() {}
+fn assert_execution_engine<B: ExecutionEngine>() {}
 fn assert_f32_view_canonicalization<B: TensorViewCanonicalization<f32, DynRank>>() {}
 
 #[test]
-fn webgpu_backend_implements_tensor_backend_contract() {
-    assert_tensor_backend::<WebGpuBackend>();
-    // Typed canonicalization lives on the session, not the owner (#1946 F6).
-    assert_f32_view_canonicalization::<tenferro_gpu::webgpu::WebGpuExecSession<'static>>();
+fn webgpu_engine_implements_the_tensor_and_runtime_contracts() {
+    assert_engine::<WebGpuBackend>();
+    assert_execution_engine::<WebGpuBackend>();
+    // Typed canonicalization and transfers live on the engine that owns the
+    // device stream (#1946 F6).
+    assert_f32_view_canonicalization::<WebGpuBackend>();
 
-    let _upload: fn(&mut tenferro_gpu::webgpu::WebGpuExecSession<'static>, TensorRead<'_>) -> Result<Tensor> =
-        <tenferro_gpu::webgpu::WebGpuExecSession<'static> as TensorDeviceTransfer>::upload_host_tensor;
-    let _download: fn(&mut tenferro_gpu::webgpu::WebGpuExecSession<'static>, TensorRead<'_>) -> Result<Tensor> =
-        <tenferro_gpu::webgpu::WebGpuExecSession<'static> as TensorDeviceTransfer>::download_to_host;
+    let _upload: fn(&mut WebGpuBackend, TensorRead<'_>) -> Result<Tensor> =
+        <WebGpuBackend as TensorDeviceTransfer>::upload_host_tensor;
+    let _download: fn(&mut WebGpuBackend, TensorRead<'_>) -> Result<Tensor> =
+        <WebGpuBackend as TensorDeviceTransfer>::download_to_host;
     let _dot: fn(
-        &mut tenferro_gpu::webgpu::WebGpuExecSession<'static>,
+        &mut WebGpuBackend,
         TensorRead<'_>,
         TensorRead<'_>,
         &DotGeneralConfig,
-    ) -> Result<Tensor> =
-        <tenferro_gpu::webgpu::WebGpuExecSession<'static> as TensorDot>::dot_general_read;
+    ) -> Result<Tensor> = <WebGpuBackend as TensorDot>::dot_general_read;
 }
 
 #[test]

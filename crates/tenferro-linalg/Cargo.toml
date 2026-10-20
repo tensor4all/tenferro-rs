@@ -77,6 +77,7 @@ cuda = [
     "dep:libloading",
     "dep:tenferro-gpu",
     "tenferro-gpu/cuda",
+    "tenferro-gpu/cubecl-interop",
 ]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
 webgpu = ["tenferro-ad?/webgpu", "dep:tenferro-gpu", "tenferro-gpu/webgpu"]
@@ -103,8 +104,8 @@ faer = { workspace = true, optional = true }
 # and one faer identity; tlinalg 0.3.1 takes a `tcontract_exec::Exec` parallelism token and pins
 # `t4a-faer =0.24.6`, and adds the borrowed-workspace `*_workspace` / `*_into` entries the host
 # routes every faer family through. Keep the two requirements identical.
-tlinalg = { version = "=0.3.1", optional = true }
-tlinalg-blas = { version = "=0.3.1", optional = true }
+tlinalg = { version = "=0.3.2", optional = true }
+tlinalg-blas = { version = "=0.3.2", optional = true }
 tcontract-exec.workspace = true
 rayon.workspace = true
 lapack = { workspace = true, optional = true }

@@ -25,7 +25,7 @@ A traced extension operation needs both sides of the runtime boundary:
 
 1. register `tenferro_cpu::runtime_engine_registration(&backend)`;
 2. install the matching operation module, for example
-   `tenferro_einsum::extension_module::<CpuBackend>(runtime_engine_id()?)`.
+   `tenferro_einsum::extension_module::<CpuEngine>(runtime_engine_id()?)`.
 
 A missing module is a runtime error, not a signal to silently construct another
 backend or fall back to a concrete implementation. The complete checked setup
@@ -36,7 +36,7 @@ is in the [traced API example](api-cheatsheet.md#traced-tensors-and-extensions).
 - A scratch crate inside the checkout needs an empty `[workspace]` table.
 - `native` (default) and `blas` are the two CPU backend features; exactly one is
   needed and enabling both is a build error.
-- Use `CpuBackend::with_threads(n)` for native CPU work; configure BLAS provider
+- Use `CpuEngine::new(thread_pool_builder().num_threads(n).build()?)` for native CPU work; configure BLAS provider
   threads with the provider's environment variables.
 - Choose exactly one BLAS provider feature (`blas-openblas`, `blas-mkl`, or
   `blas-accelerate`) when using `blas`.
@@ -56,7 +56,7 @@ Same traps, keyed by the priors you arrived with.
 - `cargo add tenferro` fails: there is no facade crate. Add
   `tenferro-runtime` + `tenferro-cpu` (plus operation crates).
 - `Array2::dot` is a free-standing habit; tenferro direct ops run inside an
-  explicit session: `backend.with_backend_session(|s| a.matmul(&b, s))??`.
+  explicit engine: `a.matmul(&b, &mut engine)?`.
 - Your priors do not include a dtype-erased tensor; `Tensor` (runtime dtype)
   has no ndarray counterpart — use `TypedTensor<T>`.
 

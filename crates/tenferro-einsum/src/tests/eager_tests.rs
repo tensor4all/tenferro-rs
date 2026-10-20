@@ -1,5 +1,5 @@
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorView};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
 use crate::eager::{eager_einsum, eager_einsum_owned, eager_einsum_read_subscripts};
 use crate::Subscripts;
@@ -11,10 +11,7 @@ fn assert_f64_tensor(tensor: &Tensor, shape: &[usize], expected: &[f64]) {
 
 #[test]
 fn eager_einsum_executes_binary_and_ternary_contractions() {
-    let mut ctx = CpuBackend::new();
-    fn needs_backend(_ctx: &mut impl TensorBackend) {}
-    needs_backend(&mut ctx);
-
+    let mut ctx = CpuEngine::serial();
     let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let matmul = eager_einsum(&mut ctx, &[&a, &b], "ij,jk->ik").unwrap();
@@ -32,7 +29,7 @@ fn eager_einsum_executes_binary_and_ternary_contractions() {
 
 #[test]
 fn eager_einsum_handles_outer_products_and_diagonal_patterns() {
-    let mut ctx = CpuBackend::new();
+    let mut ctx = CpuEngine::serial();
 
     let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0]).unwrap();
@@ -61,7 +58,7 @@ fn eager_einsum_handles_outer_products_and_diagonal_patterns() {
 
 #[test]
 fn eager_einsum_handles_higher_rank_repeated_labels() {
-    let mut ctx = CpuBackend::new();
+    let mut ctx = CpuEngine::serial();
     let tensor = Tensor::from_vec_col_major(
         vec![2, 2, 3],
         vec![
@@ -81,7 +78,7 @@ fn eager_einsum_handles_higher_rank_repeated_labels() {
 
 #[test]
 fn eager_einsum_handles_three_or_more_repeated_labels() {
-    let mut ctx = CpuBackend::new();
+    let mut ctx = CpuEngine::serial();
     let cube = Tensor::from_vec_col_major(
         vec![2, 2, 2],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
@@ -113,7 +110,7 @@ fn eager_einsum_read_views_match_owned_inputs() {
     let a_owned = Tensor::from_vec_col_major(a_shape.to_vec(), a_data.to_vec()).unwrap();
     let b_owned = Tensor::from_vec_col_major(b_shape.to_vec(), b_data.to_vec()).unwrap();
 
-    let mut owned_ctx = CpuBackend::new();
+    let mut owned_ctx = CpuEngine::serial();
     let owned = eager_einsum(&mut owned_ctx, &[&a_owned, &b_owned], "ij,jk->ik").unwrap();
 
     let inputs = [
@@ -121,7 +118,7 @@ fn eager_einsum_read_views_match_owned_inputs() {
         TensorRead::from_view(TensorView::f64(&b_shape, &b_data).unwrap()),
     ];
     let subscripts = Subscripts::parse("ij,jk->ik").unwrap();
-    let mut read_ctx = CpuBackend::new();
+    let mut read_ctx = CpuEngine::serial();
     let read = eager_einsum_read_subscripts(&mut read_ctx, &inputs, &subscripts).unwrap();
 
     assert_eq!(read.shape(), owned.shape());
@@ -133,7 +130,7 @@ fn eager_einsum_read_views_match_owned_inputs() {
 
 #[test]
 fn eager_einsum_binary_contract_reorders_fast_path_output() {
-    let mut ctx = CpuBackend::new();
+    let mut ctx = CpuEngine::serial();
     let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
 
@@ -170,7 +167,7 @@ fn eager_einsum_read_fast_path_handles_batched_contracts() {
         TensorRead::from_view(TensorView::f64(&rhs_shape, &rhs_data).unwrap()),
     ];
     let subscripts = Subscripts::parse("bij,bjk->bik").unwrap();
-    let mut read_ctx = CpuBackend::new();
+    let mut read_ctx = CpuEngine::serial();
     let read = eager_einsum_read_subscripts(&mut read_ctx, &inputs, &subscripts).unwrap();
 
     assert_eq!(read.shape(), &[2, 2, 2]);
@@ -179,7 +176,7 @@ fn eager_einsum_read_fast_path_handles_batched_contracts() {
 
 #[test]
 fn eager_einsum_rejects_empty_inputs_and_operand_count_mismatch() {
-    let mut ctx = CpuBackend::new();
+    let mut ctx = CpuEngine::serial();
     let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 
     let empty = eager_einsum(&mut ctx, &[], "->").unwrap_err();
@@ -263,11 +260,11 @@ fn eager_einsum_owned_matches_borrowed_for_representative_cases() {
     ];
 
     for (subscripts, inputs) in cases {
-        let mut borrowed_ctx = CpuBackend::new();
+        let mut borrowed_ctx = CpuEngine::serial();
         let borrowed_refs: Vec<&Tensor> = inputs.iter().collect();
         let borrowed = eager_einsum(&mut borrowed_ctx, &borrowed_refs, subscripts).unwrap();
 
-        let mut owned_ctx = CpuBackend::new();
+        let mut owned_ctx = CpuEngine::serial();
         let owned = eager_einsum_owned(&mut owned_ctx, inputs, subscripts).unwrap();
 
         assert_eq!(
@@ -285,7 +282,7 @@ fn eager_einsum_owned_matches_borrowed_for_representative_cases() {
 
 #[test]
 fn eager_einsum_owned_reclaims_consumed_input_buffers() {
-    let mut ctx = CpuBackend::new();
+    let mut ctx = CpuEngine::serial();
     let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
 
@@ -293,7 +290,7 @@ fn eager_einsum_owned_reclaims_consumed_input_buffers() {
 
     assert_f64_tensor(&result, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
     assert!(
-        ctx.buffer_pool_len().unwrap() >= 2,
+        ctx.buffer_pool_len() >= 2,
         "owned input buffers should be reclaimed after their last use"
     );
 }

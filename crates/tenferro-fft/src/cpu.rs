@@ -35,14 +35,14 @@ use num_traits::{Float, FromPrimitive};
 #[cfg(feature = "autodiff")]
 use std::mem::MaybeUninit;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar, PooledUninitOutput};
-use tenferro_cpu::CpuExecSession;
+use tenferro_cpu::CpuEngine;
 use tenferro_tensor::{
     AllocationDomainId, DeviceKind, HostAccessError, MemoryKind, Placement,
     SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorStructural, TensorView,
     TypedTensor,
 };
 
-impl FftBackend for CpuExecSession<'_> {
+impl FftBackend for CpuEngine {
     fn validate_fft_read_input(
         &self,
         op: &'static str,
@@ -72,47 +72,45 @@ impl FftBackend for CpuExecSession<'_> {
         }
         let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
         self.with_linalg_pool(|context, buffers| {
-            in_selected_pool(context, || {
-                macro_rules! transform {
-                    ($input:expr, $kind:ident, $variant:ident, $project:expr) => {
-                        pooled_transform(
-                            lanes::Input::$kind($input.as_slice()?),
-                            $input.shape(),
-                            spec,
-                            &mut plans,
-                            buffers,
-                            context.native_thread_count(),
-                            $project,
-                        )
-                        .map(Tensor::from_typed::<preset_scalar!($variant)>)
-                    };
+            macro_rules! transform {
+                ($input:expr, $kind:ident, $variant:ident, $project:expr) => {
+                    pooled_transform(
+                        lanes::Input::$kind($input.as_slice()?),
+                        $input.shape(),
+                        spec,
+                        &mut plans,
+                        buffers,
+                        lanes::LaneThreads::from_context(context),
+                        $project,
+                    )
+                    .map(Tensor::from_typed::<preset_scalar!($variant)>)
+                };
+            }
+            match (spec.operation(), view) {
+                (FftOperation::C2cForward | FftOperation::C2cInverse, TensorView::C64(x)) => {
+                    transform!(x, Complex, C64, |v| v)
                 }
-                match (spec.operation(), view) {
-                    (FftOperation::C2cForward | FftOperation::C2cInverse, TensorView::C64(x)) => {
-                        transform!(x, Complex, C64, |v| v)
-                    }
-                    (FftOperation::C2cForward | FftOperation::C2cInverse, TensorView::C32(x)) => {
-                        transform!(x, Complex, C32, |v| v)
-                    }
-                    (FftOperation::R2cFull | FftOperation::R2cOnesided, TensorView::F64(x)) => {
-                        transform!(x, Real, C64, |v| v)
-                    }
-                    (FftOperation::R2cFull | FftOperation::R2cOnesided, TensorView::F32(x)) => {
-                        transform!(x, Real, C32, |v| v)
-                    }
-                    (FftOperation::C2r, TensorView::C64(x)) => {
-                        transform!(x, Complex, F64, |v: Complex<f64>| v.re)
-                    }
-                    (FftOperation::C2r, TensorView::C32(x)) => {
-                        transform!(x, Complex, F32, |v: Complex<f32>| v.re)
-                    }
-                    (operation, other) => Err(crate::tensor_unsupported_dtype(
-                        fft_op_name(operation),
-                        other.dtype(),
-                        expected_dtype_description(operation),
-                    )),
+                (FftOperation::C2cForward | FftOperation::C2cInverse, TensorView::C32(x)) => {
+                    transform!(x, Complex, C32, |v| v)
                 }
-            })
+                (FftOperation::R2cFull | FftOperation::R2cOnesided, TensorView::F64(x)) => {
+                    transform!(x, Real, C64, |v| v)
+                }
+                (FftOperation::R2cFull | FftOperation::R2cOnesided, TensorView::F32(x)) => {
+                    transform!(x, Real, C32, |v| v)
+                }
+                (FftOperation::C2r, TensorView::C64(x)) => {
+                    transform!(x, Complex, F64, |v: Complex<f64>| v.re)
+                }
+                (FftOperation::C2r, TensorView::C32(x)) => {
+                    transform!(x, Complex, F32, |v: Complex<f32>| v.re)
+                }
+                (operation, other) => Err(crate::tensor_unsupported_dtype(
+                    fft_op_name(operation),
+                    other.dtype(),
+                    expected_dtype_description(operation),
+                )),
+            }
         })
     }
 
@@ -124,7 +122,7 @@ impl FftBackend for CpuExecSession<'_> {
     ) -> tenferro_tensor::Result<Tensor> {
         validate_spec_input(input, spec)?;
         let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
-        let domain = self.shared_allocation_domain();
+        let domain = self.shared_allocation_domain().cloned();
         let managed = if input.is_backend_buffer() {
             domain.as_deref()
         } else {
@@ -134,33 +132,17 @@ impl FftBackend for CpuExecSession<'_> {
             validate_host_fft_input(fft_op_name(spec.operation()), input)?;
         }
         self.with_linalg_pool(|context, buffers| {
-            in_selected_pool(context, || {
+            {
                 execute_fft_with_plans(
                     input,
                     spec,
                     &mut plans,
                     buffers,
                     managed,
-                    context.native_thread_count(),
+                    lanes::LaneThreads::from_context(context),
                 )
-            })
+            }
         })
-    }
-}
-
-/// Run one host-owned FFT fan-out in the engine's selected pool.
-///
-/// The FFT lane path is host-owned parallel numerical work, so it installs the
-/// engine's pool for the duration of the call only: the same bounded,
-/// operation-local exception the strided adapters use. The caller's
-/// continuation is never installed.
-fn in_selected_pool<R: Send>(
-    context: &tenferro_cpu::CpuExecutionContext<'_>,
-    run: impl FnOnce() -> tenferro_tensor::Result<R> + Send,
-) -> tenferro_tensor::Result<R> {
-    match context.rayon_pool() {
-        Some(pool) => pool.install(run),
-        None => run(),
     }
 }
 
@@ -179,7 +161,7 @@ fn fft_operand<'a, T: tenferro_tensor::TensorScalar>(
 
 #[cfg(feature = "autodiff")]
 pub(crate) fn execute_in_place(
-    session: &mut CpuExecSession<'_>,
+    session: &mut CpuEngine,
     input: &mut Tensor,
     spec: &FftPlanSpec,
     mut cache: FftExecutionCache<'_>,
@@ -205,14 +187,14 @@ pub(crate) fn execute_in_place(
             spec,
             &mut plans,
             buffers,
-            context.native_thread_count(),
+            lanes::LaneThreads::from_context(context),
         ),
         tenferro_tensor::DType::C32 => in_place_typed(
             in_place_operand::<f32>(&mut *input)?,
             spec,
             &mut plans,
             buffers,
-            context.native_thread_count(),
+            lanes::LaneThreads::from_context(context),
         ),
         other => Err(crate::tensor_unsupported_dtype(
             "fft_in_place",
@@ -245,7 +227,7 @@ fn in_place_typed<T: CachedFftPlanScalar + TensorScalar>(
     spec: &FftPlanSpec,
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
-    threads: usize,
+    threads: lanes::LaneThreads<'_>,
 ) -> tenferro_tensor::Result<()>
 where
     Complex<T>: TensorScalar + PoolScalar,
@@ -324,7 +306,7 @@ fn execute_fft_with_plans(
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
     domain: Option<&dyn SharedTensorAllocationDomain>,
-    threads: usize,
+    threads: lanes::LaneThreads<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     macro_rules! transform {
         ($input:expr, $kind:ident, $variant:ident, $project:expr) => {
@@ -395,7 +377,7 @@ fn transform<I: TensorScalar, T: CachedFftPlanScalar, O: PoolScalar>(
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
     domain: Option<&dyn SharedTensorAllocationDomain>,
-    threads: usize,
+    threads: lanes::LaneThreads<'_>,
     wrap: for<'a> fn(&'a [I]) -> lanes::Input<'a, T>,
     project: impl Fn(Complex<T>) -> O + Sync,
 ) -> tenferro_tensor::Result<TypedTensor<O>>
@@ -471,7 +453,7 @@ fn pooled_transform<T: CachedFftPlanScalar, O: PoolScalar>(
     spec: &FftPlanSpec,
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
-    threads: usize,
+    threads: lanes::LaneThreads<'_>,
     project: impl Fn(Complex<T>) -> O + Sync,
 ) -> tenferro_tensor::Result<TypedTensor<O>>
 where

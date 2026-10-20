@@ -4,20 +4,20 @@ use std::error::Error as StdError;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::extension::{
     apply, define_extension_runtime, ExtensionAliasDeclaration, ExtensionCacheStore,
     ExtensionEffectDeclaration, ExtensionExecutionContext, ExtensionOp, ExtensionShapeContext,
     SymDim,
 };
 use tenferro_runtime::{
-    CoreCapabilityKind, DType, ErasedExecutionContext, Error, ExecutionContextIdentity,
-    ExecutionContextMismatch, GraphCompiler, PrepareError, ProviderContractError, Runtime,
-    RuntimeFailureReasonRef, Tensor, TracedTensor,
+    CompiledGraph, CoreCapabilityKind, DType, ErasedExecutionContext, Error,
+    ExecutionContextIdentity, ExecutionContextMismatch, ExecutionEngine, GraphCompiler,
+    PrepareError, ProviderContractError, Runtime, RuntimeFailureReasonRef, Tensor, TracedTensor,
 };
 use tenferro_tensor::{
-    BackendSession, BackendSessionHost, BackendStorageHandle, Placement, StorageBuffer, TensorRead,
-    TensorView, TypedTensor, TypedTensorView,
+    BackendStorageHandle, Engine, Placement, StorageBuffer, TensorRead, TensorView, TypedTensor,
+    TypedTensorView,
 };
 
 const IDENTITY_FAMILY: &str = "fixture.identity.v1";
@@ -114,7 +114,7 @@ identity_op!(BorrowedOp, BORROWED_FAMILY, 4);
 // reaches the family's engine and returns its typed WrongOperationFamily error.
 identity_op!(WrongFamilyOp, IDENTITY_FAMILY, 1);
 
-fn execute_identity<B: BackendSession + ?Sized>(
+fn execute_identity<B: Engine + ?Sized>(
     _op: &IdentityOp,
     inputs: &[TensorRead<'_>],
     context: &mut ExtensionExecutionContext<'_, B>,
@@ -124,7 +124,7 @@ fn execute_identity<B: BackendSession + ?Sized>(
         .to_contiguous_read(inputs[0].clone())?])
 }
 
-fn execute_second<B: BackendSession + ?Sized>(
+fn execute_second<B: Engine + ?Sized>(
     _op: &SecondOp,
     inputs: &[TensorRead<'_>],
     context: &mut ExtensionExecutionContext<'_, B>,
@@ -144,7 +144,7 @@ fn sum_four(slices: [&[f64]; 4], shape: &[usize]) -> tenferro_tensor::Result<Ten
     Tensor::from_vec_col_major(shape.to_vec(), data)
 }
 
-fn execute_borrowed<B: BackendSession + ?Sized>(
+fn execute_borrowed<B: Engine + ?Sized>(
     _op: &BorrowedOp,
     inputs: &[TensorRead<'_>],
     _context: &mut ExtensionExecutionContext<'_, B>,
@@ -162,7 +162,7 @@ fn execute_borrowed<B: BackendSession + ?Sized>(
     Ok(vec![sum_four(slices, inputs[0].shape())?])
 }
 
-fn execute_host_only<B: BackendSession + ?Sized>(
+fn execute_host_only<B: Engine + ?Sized>(
     _op: &IdentityOp,
     inputs: &[TensorRead<'_>],
     _context: &mut ExtensionExecutionContext<'_, B>,
@@ -276,24 +276,43 @@ fn has_wrong_family(error: &(dyn StdError + 'static)) -> bool {
     false
 }
 
+fn run_on_engine(
+    runtime: &Runtime,
+    engine: &mut CpuEngine,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let reads: Vec<TensorRead<'_>> = inputs
+        .iter()
+        .map(|tensor| TensorRead::from_tensor(*tensor))
+        .collect();
+    let target = engine.target();
+    let prepared = runtime.prepare(program, &reads, std::slice::from_ref(&target))?;
+    let outputs = runtime.run(&mut [engine], &prepared, &reads)?;
+    outputs
+        .into_iter()
+        .map(|output| output.into_tensor(engine).map_err(tenferro_runtime::Error::from))
+        .collect()
+}
+
 fn main() -> Result<(), Box<dyn StdError>> {
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
     let engine_id = tenferro_cpu::runtime_engine_id()?;
     let mut builder = Runtime::builder();
     builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
-    builder.install_extension_module(identity_runtime::extension_module::<CpuBackend>(
+    builder.install_extension_module(identity_runtime::extension_module::<CpuEngine>(
         engine_id.clone(),
     )?)?;
-    builder.install_extension_module(second_runtime::extension_module::<CpuBackend>(
+    builder.install_extension_module(second_runtime::extension_module::<CpuEngine>(
         engine_id.clone(),
     )?)?;
     builder
-        .install_extension_module(borrowed_runtime::extension_module::<CpuBackend>(engine_id)?)?;
+        .install_extension_module(borrowed_runtime::extension_module::<CpuEngine>(engine_id)?)?;
     let runtime = builder.build()?;
 
     let program = compile_op(Arc::new(IdentityOp))?;
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    let output = runtime.run_compiled(&program, &[&input])?.remove(0);
+    let output = run_on_engine(&runtime, &mut backend, &program, &[&input])?.remove(0);
     assert_eq!(output.as_slice::<f64>()?, &[1.0, 2.0]);
 
     let borrowed_program = compile_borrowed_op()?;
@@ -308,12 +327,12 @@ fn main() -> Result<(), Box<dyn StdError>> {
         })
         .collect::<tenferro_tensor::Result<Vec<_>>>()?;
     let borrowed_refs = borrowed_inputs.iter().collect::<Vec<_>>();
-    runtime.run_compiled(&borrowed_program, &borrowed_refs)?;
+    run_on_engine(&runtime, &mut backend, &borrowed_program, &borrowed_refs)?;
     let caller_pointers = borrowed_inputs
         .iter()
         .map(|input| input.as_slice::<f64>().unwrap().as_ptr() as usize)
         .collect::<Vec<_>>();
-    let mut borrowed_backend = CpuBackend::new();
+    let mut borrowed_backend = CpuEngine::serial();
     let mut borrowed_caches = ExtensionCacheStore::new();
     let borrowed_reads = borrowed_inputs
         .iter()
@@ -325,25 +344,22 @@ fn main() -> Result<(), Box<dyn StdError>> {
         borrowed_inputs[2].as_slice::<f64>()?,
         borrowed_inputs[3].as_slice::<f64>()?,
     ];
-    // The extension context borrows a backend session, never the owner.
-    let (output_baseline_bytes, borrowed_bytes) = borrowed_backend.with_backend_session(
-        |session| -> tenferro_tensor::Result<(usize, usize)> {
-            let mut borrowed_context =
-                ExtensionExecutionContext::new(session, &mut borrowed_caches);
-            execute_borrowed(&BorrowedOp, &borrowed_reads, &mut borrowed_context)?;
-            let output_baseline_bytes = measure_allocated_bytes(|| {
-                let output =
-                    sum_four(direct_slices, &[1024]).expect("baseline output should build");
-                assert_eq!(output.as_slice::<f64>().unwrap()[0], 6.0);
-            });
-            let borrowed_bytes = measure_allocated_bytes(|| {
-                let output = execute_borrowed(&BorrowedOp, &borrowed_reads, &mut borrowed_context)
-                    .expect("borrowed extension should execute");
-                assert_eq!(output[0].as_slice::<f64>().unwrap()[0], 6.0);
-            });
-            Ok((output_baseline_bytes, borrowed_bytes))
-        },
-    )??;
+    // The extension context borrows the caller-held engine, never a session owner.
+    let (output_baseline_bytes, borrowed_bytes) = {
+        let mut borrowed_context =
+            ExtensionExecutionContext::new(&mut borrowed_backend, &mut borrowed_caches);
+        execute_borrowed(&BorrowedOp, &borrowed_reads, &mut borrowed_context)?;
+        let output_baseline_bytes = measure_allocated_bytes(|| {
+            let output = sum_four(direct_slices, &[1024]).expect("baseline output should build");
+            assert_eq!(output.as_slice::<f64>().unwrap()[0], 6.0);
+        });
+        let borrowed_bytes = measure_allocated_bytes(|| {
+            let output = execute_borrowed(&BorrowedOp, &borrowed_reads, &mut borrowed_context)
+                .expect("borrowed extension should execute");
+            assert_eq!(output[0].as_slice::<f64>().unwrap()[0], 6.0);
+        });
+        (output_baseline_bytes, borrowed_bytes)
+    };
     assert_eq!(BORROWED_CALLBACKS.load(Ordering::SeqCst), 3);
     assert_eq!(MATERIALIZATION_CALLBACKS.load(Ordering::SeqCst), 0);
     for (slot, pointer) in caller_pointers.iter().copied().enumerate() {
@@ -355,7 +371,7 @@ fn main() -> Result<(), Box<dyn StdError>> {
         "borrowed path allocated {borrowed_bytes} bytes versus {output_baseline_bytes} output-baseline bytes for {input_bytes}-byte inputs"
     );
 
-    let mut materialize_backend = CpuBackend::new();
+    let mut materialize_backend = CpuEngine::serial();
     let mut materialize_caches = ExtensionCacheStore::new();
     let noncompact_data = vec![1.0_f64; 2048];
     let noncompact_view = TensorView::F64(TypedTensorView::from_slice(
@@ -366,9 +382,9 @@ fn main() -> Result<(), Box<dyn StdError>> {
     )?);
     let noncompact_read = TensorRead::from_view(noncompact_view);
     MATERIALIZATION_CALLBACKS.store(0, Ordering::SeqCst);
-    let materialized_bytes = materialize_backend.with_backend_session(|session| {
+    let materialized_bytes = {
         let mut materialize_context =
-            ExtensionExecutionContext::new(session, &mut materialize_caches);
+            ExtensionExecutionContext::new(&mut materialize_backend, &mut materialize_caches);
         measure_allocated_bytes(|| {
             execute_second(
                 &SecondOp,
@@ -377,7 +393,7 @@ fn main() -> Result<(), Box<dyn StdError>> {
             )
             .expect("explicit materialization should execute");
         })
-    })?;
+    };
     assert_eq!(MATERIALIZATION_CALLBACKS.load(Ordering::SeqCst), 1);
     assert!(
         materialized_bytes >= input_bytes,
@@ -390,15 +406,15 @@ fn main() -> Result<(), Box<dyn StdError>> {
         Placement::default(),
     )?);
     let mut host_caches = ExtensionCacheStore::new();
-    let host_error = backend.with_backend_session(|session| {
-        let mut host_context = ExtensionExecutionContext::new(session, &mut host_caches);
+    let host_error = {
+        let mut host_context = ExtensionExecutionContext::new(&mut backend, &mut host_caches);
         execute_host_only(
             &IdentityOp,
             &[TensorRead::from_tensor(&backend_tensor)],
             &mut host_context,
         )
         .expect_err("host-only typed access must reject backend-owned input")
-    })?;
+    };
     assert!(matches!(
         host_error,
         tenferro_tensor::Error::RuntimeState { .. }
@@ -407,9 +423,8 @@ fn main() -> Result<(), Box<dyn StdError>> {
 
     let mut missing_builder = Runtime::builder();
     missing_builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
-    let missing = missing_builder
-        .build()?
-        .run_compiled(&program, &[&input])
+    let mut missing_runtime = missing_builder.build()?;
+    let missing = run_on_engine(&mut missing_runtime, &mut backend, &program, &[&input])
         .expect_err("an unregistered extension family must fail");
     assert!(matches!(
         missing,
@@ -424,8 +439,7 @@ fn main() -> Result<(), Box<dyn StdError>> {
     );
 
     let wrong_family_program = compile_op(Arc::new(WrongFamilyOp))?;
-    let wrong_family = runtime
-        .run_compiled(&wrong_family_program, &[&input])
+    let wrong_family = run_on_engine(&runtime, &mut backend, &wrong_family_program, &[&input])
         .expect_err("an engine receiving the wrong concrete family must fail");
     assert!(has_wrong_family(&wrong_family), "{wrong_family:?}");
 

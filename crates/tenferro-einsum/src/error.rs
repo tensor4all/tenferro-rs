@@ -113,10 +113,6 @@ pub enum Error {
     #[error(transparent)]
     Tensor(#[from] tenferro_tensor::Error),
 
-    /// A backend refused to open an execution session; no contraction ran.
-    #[error("backend session entry failed: {0}")]
-    SessionEntry(#[from] tenferro_tensor::SessionEntryError),
-
     /// Graph construction or extension execution failed in the runtime.
     #[error(transparent)]
     Runtime(#[from] tenferro_runtime::Error),
@@ -322,7 +318,6 @@ impl Error {
             },
             Self::Numerical { .. } => ErrorKind::NumericalFailure,
             Self::Tensor(error) => error.kind(),
-            Self::SessionEntry(error) => error.kind(),
             Self::Runtime(error) => error.kind(),
         }
     }
@@ -354,7 +349,6 @@ impl Error {
         match self {
             Self::Validation { op, source } => tenferro_tensor::Error::validation(op, source),
             Self::Tensor(error) => error,
-            Self::SessionEntry(error) => tenferro_tensor::Error::from(error),
             error => {
                 let kind = error.kind();
                 tenferro_tensor::Error::extension(op, EINSUM_EXTENSION_FAMILY_ID, kind, error)

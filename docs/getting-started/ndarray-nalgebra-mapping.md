@@ -63,24 +63,24 @@ for full dependency blocks and feature rules.
 
 In `ndarray`/`nalgebra`/`ndarray-linalg` the execution context is ambient: the
 BLAS that was linked at build time is whatever your ops run through. tenferro
-reifies it as a value — `CpuBackend` (or an `EagerRuntime`, or a `Runtime` for
-traced graphs) — because the backend owns device placement, provider
-selection, and buffer pools.
+reifies it as a value you hold — `CpuEngine` (or an `EagerRuntime` for eager AD,
+or a `Runtime` for traced graphs) — because the engine owns the device, the
+provider dispatch, the plan cache and the buffer pool.
 
-The companion idiom is **construct once, reuse**. A backend is owned state:
+The companion idiom is **construct once, reuse**. An engine is owned state:
 
 ```rust
-let mut backend = CpuBackend::new();
-// ... many operations through the same `backend` ...
+let mut engine = tenferro_cpu::CpuEngine::serial();
+// ... many operations through the same `engine` ...
 ```
 
-Constructing `CpuBackend::new()` per call discards the buffer pool and cache
-each time, and defeats reuse of compiled programs. The same rule applies
-across the tiers — see the [performance idioms reference](https://tensor4all.org/tenferro-rs/skill-references/performance-idioms.md).
+Constructing an engine per call discards the buffer pool and cache each time,
+and defeats reuse of compiled programs. The same rule applies across the tiers —
+see the [performance idioms reference](https://tensor4all.org/tenferro-rs/skill-references/performance-idioms.md).
 
 ## faer vs BLAS providers
 
-tenferro's CPU backend has two provider families controlled by additive
+tenferro's CPU crates have two provider families controlled by additive
 features: the `native` provider and the `blas` provider. `ndarray-linalg`
 users know feature-based BLAS selection; tenferro's knobs live in the
 `tenferro-cpu` (and `tenferro-runtime`) features.
@@ -90,10 +90,9 @@ users know feature-based BLAS selection; tenferro's knobs live in the
 | faer (default) | `native` | Portable, pure Rust, no system dependencies; the right default for most workloads |
 | BLAS / LAPACK | `blas` plus exactly one explicit provider feature | Large GEMM-dominated workloads, or to reuse an already-tuned system BLAS |
 
-`native` and `blas` are additive, and `CpuBackend::new()` selects the
-compiled default — BLAS when `blas` is compiled, otherwise faer — with
-`CpuBackend::with_kind` for explicit selection when both are compiled. Within
-the BLAS family the three explicit provider features (`blas-openblas`,
+`native` and `blas` are additive, and the compiled default is what every
+`CpuEngine` in the process uses — BLAS when `blas` is compiled, otherwise faer.
+Within the BLAS family the three explicit provider features (`blas-openblas`,
 `blas-mkl`, `blas-accelerate`) are mutually exclusive, and tenferro rejects a
 build that enables more than one.
 
@@ -105,17 +104,16 @@ backends are pushed into method signatures. Compare with `ndarray`'s
 
 | Tier | Tenferro | Notes |
 | --- | --- | --- |
-| Direct | `backend.with_backend_session(\|s\| a.matmul(&b, s))??` | explicit backend session argument |
-| Eager | `runtime.with_eager_session(\|s\| s.matmul(&a, &b))?` | `EagerRuntime` owns the borrowed backend session |
+| Direct | `a.matmul(&b, &mut engine)?` | explicit engine argument |
+| Eager | `runtime.with_eager_session(&mut engine, \|s\| s.matmul(&a, &b))?` | the session borrows the caller's engine |
 | Traced | `a.matmul(&b)?` | builds a graph; returns `Result` |
 
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#concrete-operation -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 // The leftmost dimension varies fastest: this is a 2 x 3 column-major tensor.
 let x = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
@@ -125,7 +123,7 @@ let weights = TypedTensor::<f64>::from_vec_col_major(
     vec![3, 2],
     vec![0.5, -1.0, 1.5, 1.0, 2.0, -0.5],
 )?;
-let projected = backend.with_backend_session(|session| x.matmul(&weights, session))??;
+let projected = x.matmul(&weights, &mut engine)?;
 assert_eq!(projected.shape(), &[2, 2]);
 assert_eq!(projected.host_data()?, &[3.0, 6.0, 3.5, 11.0]);
 ```

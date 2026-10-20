@@ -4,8 +4,32 @@
 #![cfg(feature = "native")]
 
 use tenferro_cpu::faer::{linalg::matmul::matmul, Accum, Mat, MatRef, Par};
-use tenferro_cpu::{CpuBackend, FaerParallelismExt};
-use tenferro_tensor::{BackendSessionHost, TypedTensor};
+use tenferro_cpu::FaerParallelismExt;
+use tenferro_tensor::TypedTensor;
+
+/// An engine with `threads` workers (serial for one).
+#[allow(dead_code)]
+fn engine(threads: usize) -> tenferro_cpu::CpuEngine {
+    if threads <= 1 {
+        tenferro_cpu::CpuEngine::serial()
+    } else {
+        tenferro_cpu::CpuEngine::new(
+            tenferro_cpu::thread_pool_builder()
+                .num_threads(threads)
+                .build()
+                .expect("test pool"),
+        )
+    }
+}
+
+/// Run `f` on `engine` viewed as `&mut dyn Engine`.
+#[allow(dead_code)]
+fn run<R>(
+    engine: &mut tenferro_cpu::CpuEngine,
+    f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
+) -> tenferro_tensor::Result<R> {
+    Ok(f(engine))
+}
 
 #[test]
 fn the_reexported_faer_is_the_session_identity() -> tenferro_tensor::Result<()> {
@@ -13,8 +37,8 @@ fn the_reexported_faer_is_the_session_identity() -> tenferro_tensor::Result<()> 
     let identity = [1.0_f64, 0.0, 0.0, 1.0];
     let mut product = Mat::<f64>::zeros(2, 2);
 
-    let mut backend = CpuBackend::with_threads(1)?;
-    backend.with_backend_session(|session| {
+    let mut backend = engine(1);
+    run(&mut backend, |session| {
         // The callback parameter is spelled with the re-export: this compiles
         // only while the re-export and the session's `faer::Par` are one type.
         session.with_faer_parallelism(|parallel: Par| {

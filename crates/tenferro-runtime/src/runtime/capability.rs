@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::program::SemanticOperationView;
 use crate::ExtensionCacheStore;
-use tenferro_tensor::{BackendSession, Tensor, TensorRead};
+use tenferro_tensor::{Engine, Tensor, TensorRead};
 
 use super::{
     ExecutionContextIdentity, ExecutionContextMismatch, HardwareClassId, InputSignature,
@@ -323,7 +323,7 @@ pub trait PreparedOperationExecutor: fmt::Debug + Send + Sync + 'static {
     /// typed execution error from the operation itself.
     fn execute_in_session(
         &self,
-        _session: &mut dyn BackendSession,
+        _session: &mut dyn Engine,
         _extension_caches: &mut ExtensionCacheStore,
         _inputs: &[TensorRead<'_>],
     ) -> crate::Result<Vec<Tensor>> {
@@ -605,6 +605,22 @@ impl<'a> ErasedExecutionContext<'a> {
     /// let erased = ErasedExecutionContext::new(&mut value);
     /// assert_eq!(erased.identity(), ExecutionContextIdentity::of::<u64>());
     /// ```
+    /// Wrap an engine already erased to `dyn Any`, with the identity of its
+    /// concrete type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{ErasedExecutionContext, ExecutionContextIdentity};
+    ///
+    /// let mut value = 7_u32;
+    /// let context = ErasedExecutionContext::from_dyn(ExecutionContextIdentity::of::<u32>(), &mut value);
+    /// assert_eq!(context.identity(), ExecutionContextIdentity::of::<u32>());
+    /// ```
+    pub fn from_dyn(identity: ExecutionContextIdentity, value: &'a mut dyn Any) -> Self {
+        Self { identity, value }
+    }
+
     pub fn identity(&self) -> ExecutionContextIdentity {
         self.identity
     }
@@ -816,12 +832,13 @@ pub trait ElementwiseRuntime: fmt::Debug + Send + Sync + 'static {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::ElementwiseRuntime;
+    /// use tenferro_cpu::CpuEngine;
     ///
-    /// // The CPU engine's fused kernel reads at most four region inputs.
-    /// let cpu = CpuBackend::new();
-    /// assert_eq!(cpu.max_fused_region_inputs(), Some(4));
+    /// // The CPU engine registration exposes its own fused-region limit.
+    /// let registration = tenferro_cpu::runtime_engine_registration(&CpuEngine::serial())?;
+    /// let elementwise = registration.capabilities().elementwise().unwrap();
+    /// assert_eq!(elementwise.max_fused_region_inputs(), Some(4));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn max_fused_region_inputs(&self) -> Option<usize> {
         None

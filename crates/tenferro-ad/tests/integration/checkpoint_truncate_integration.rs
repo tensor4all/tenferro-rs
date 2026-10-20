@@ -39,7 +39,12 @@ fn checkpoint_truncate_loop_grad() {
     for _ in 0..steps {
         x = (&a * &x).unwrap();
         x = x.dynamic_truncate(&size, 0).unwrap();
-        x.checkpoint(&mut compiler, &executor).unwrap();
+        x.checkpoint(
+            &mut compiler,
+            &executor,
+            &mut tenferro_cpu::CpuEngine::serial(),
+        )
+        .unwrap();
     }
 
     let loss = x.reduce_sum(Some(&[0])).unwrap();

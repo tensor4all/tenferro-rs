@@ -21,7 +21,7 @@ Actual source boundaries:
 - concrete.rs::ConcreteEinsumPlan::prepare(inputs, subscripts) parses notation;
   prepare_subscripts_internal captures input specs and calls plan_subscripts.
 - execute(inputs, session) validates specs then calls eager_einsum_exec; its
-  BackendSession is supplied by its caller, not opened by ExtensionEngine here.
+  Engine is supplied by its caller, not opened by ExtensionEngine here.
 - eager_ad.rs::einsum_subscripts_with_broadcast dispatches first to direct binary
   dot_general, then untracked whole-program / expanded standard operations, with
   EinsumExtensionOp only as fallback. Rank2 matrix multiplication therefore does

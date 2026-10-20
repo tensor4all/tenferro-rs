@@ -7,7 +7,7 @@ original design record.
 Phase 2) and the `_in` names became the plain names: the concrete surface is
 `TensorSessionOpsExt` / `TypedTensorSessionOpsExt` (plus
 `TypedTensorMaskSessionOpsExt` for bool-mask selection), every method takes
-`session: &mut dyn BackendSession` last, and the methods are entered with
+`session: &mut dyn Engine` last, and the methods are entered with
 `BackendSessionHost::with_backend_session`. Where this document says the
 one-shot API stays and wraps the session implementation, or prefers `_in`
 names, it describes the pre-#1680 plan, not the code. #1858 brought the
@@ -20,7 +20,7 @@ hooks take owned erased tensors are on `Tensor` only (see
 
 Add a session-explicit execution surface for concrete `Tensor`/`TypedTensor`
 operations (including extension-crate operations) so a caller can reuse one
-borrowed `BackendSession` across a sequence of operations instead of paying a
+borrowed `Engine` across a sequence of operations instead of paying a
 session entry per operation. The tensor value types remain context-free and
 are never owned by or lifetime-bound to a session.
 
@@ -61,7 +61,7 @@ synchronously on the calling thread and therefore proposed dropping the
 - `CpuBackend::with_backend_session` → `run_backend_session_cached` →
   `enter_managed_session`/`enter` → `install_scoped`
   (`crates/tenferro-cpu/src/provider.rs`) → `CpuContext::install`
-  (`docs/design/exec-session.md`, "Backend Mapping / CPU") →
+  (`docs/design/execution-engine-ownership.md`, engine model) →
   `rayon::ThreadPool::install` — a **real thread handoff to a Rayon worker**,
   even for 1-thread pools (verified empirically: caller thread id differs
   from the closure thread id).
@@ -86,11 +86,11 @@ as a prerequisite.
 ## Evaluation-wide scope
 
 A2 (one execution scope around a whole evaluation) remains deferred; see
-[`exec-session.md`](./exec-session.md#evaluation-wide-scope-a2-is-deferred).
+[`execution-engine-ownership.md`](./execution-engine-ownership.md).
 
 ## Nested-entry prohibition: mechanism, not convention
 
-Operations receiving a `BackendSession` must never call `with_backend_session`
+Operations receiving a `Engine` must never call `with_backend_session`
 internally. Enforcement by backend family:
 
 Every rejection below is a typed `SessionEntryError` returned before the
@@ -109,9 +109,9 @@ closure runs (#1938 D6); none of them panics.
 ## Generic spelling
 
 Already settled by the current signatures: entries hand out
-`&mut dyn BackendSession` (no `S: BackendSession + ?Sized` generic on the
+`&mut dyn Engine` (no `S: Engine + ?Sized` generic on the
 trait methods). The `_in`-surface methods take `session: &mut dyn
-BackendSession` directly.
+Engine` directly.
 
 ## Cache access parity
 
@@ -129,7 +129,7 @@ Layering (same vocabulary, no duplicate validation):
 
 ```
 one-shot API: &mut TensorBackend ──enter one session──▶ session implementation
-session API:  &mut dyn BackendSession ─────────────────▶ session implementation
+session API:  &mut dyn Engine ─────────────────▶ session implementation
 ```
 
 1. `TensorSessionOpsExt` / `TypedTensorSessionOpsExt` with `*_in` methods
@@ -144,7 +144,7 @@ session API:  &mut dyn BackendSession ──────────────
    tier.
 4. Runtime-integrated extensions keep the semantic `ExtensionOp` + AD rules;
    runtime preparation produces an executor that runs on the borrowed
-   `BackendSession` like the concrete path.
+   `Engine` like the concrete path.
 
 ## Non-goals
 
@@ -209,10 +209,10 @@ op still pays 2 entries inside one session.
 
 ```rust
 pub trait TensorSessionOpsExt {
-    fn add_in(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor>;
-    fn mul_in(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor>;
-    fn exp_in(&self, session: &mut dyn BackendSession) -> Result<Tensor>;
-    fn reduce_sum_in(&self, axes: &[usize], session: &mut dyn BackendSession) -> Result<Tensor>;
+    fn add_in(&self, rhs: &Tensor, session: &mut dyn Engine) -> Result<Tensor>;
+    fn mul_in(&self, rhs: &Tensor, session: &mut dyn Engine) -> Result<Tensor>;
+    fn exp_in(&self, session: &mut dyn Engine) -> Result<Tensor>;
+    fn reduce_sum_in(&self, axes: &[usize], session: &mut dyn Engine) -> Result<Tensor>;
 }
 ```
 
@@ -320,7 +320,7 @@ public plan type is **`ConcreteEinsumPlan`**) already do
 `backend.with_backend_session(|exec| eager_einsum_exec(exec, inputs,
 &self.tree))`; the eager core functions
 (`crates/tenferro-einsum/src/eager.rs::eager_einsum_exec*`) all take
-`&mut dyn BackendSession` already. `execute_*_in_session` is a thin
+`&mut dyn Engine` already. `execute_*_in_session` is a thin
 addition: plan validation (pure — `validate_input_metadata`/`input_specs` need no
 backend) + the same core call on the caller's borrowed session — **no new
 session entry**. One-shot methods delegate to the `_in_session` variants.
@@ -330,41 +330,41 @@ session entry**. One-shot methods delegate to the `_in_session` variants.
 `ConcreteEinsumPlan` gains a `_in_session` mirror of every one-shot execute
 method (all mechanical: validate + call the eager core on the borrowed
 session). Signatures mirror the one-shot forms with `backend: &mut B` →
-`session: &mut dyn BackendSession`:
+`session: &mut dyn Engine`:
 
 ```rust
 pub fn execute_in_session<'a, I>(
-    &self, inputs: I, session: &mut dyn BackendSession,
+    &self, inputs: I, session: &mut dyn Engine,
 ) -> Result<Tensor>
 where I: AsRef<[&'a Tensor]>;
 
 pub fn execute_typed_in_session<'a, T: TensorScalar, I>(
-    &self, inputs: I, session: &mut dyn BackendSession,
+    &self, inputs: I, session: &mut dyn Engine,
 ) -> Result<TypedTensor<T>>
 where I: AsRef<[&'a TypedTensor<T>]>;
 
 pub fn execute_read_in_session<'a, I>(
-    &self, inputs: I, session: &mut dyn BackendSession,
+    &self, inputs: I, session: &mut dyn Engine,
 ) -> Result<Tensor>
 where I: AsRef<[TensorRead<'a>]>;
 
 pub fn execute_into_in_session<'a, I>(
-    &self, inputs: I, session: &mut dyn BackendSession, out: TensorWrite<'_>,
+    &self, inputs: I, session: &mut dyn Engine, out: TensorWrite<'_>,
 ) -> Result<()>
 where I: AsRef<[&'a Tensor]>;
 
 pub fn execute_typed_into_in_session<'a, 'out, T: TensorScalar, I, O>(
-    &self, inputs: I, session: &mut dyn BackendSession, out: O,
+    &self, inputs: I, session: &mut dyn Engine, out: O,
 ) -> Result<()>
 where I: AsRef<[&'a TypedTensor<T>]>, O: Into<TypedTensorWrite<'out, T>>;
 
 pub fn execute_read_into_in_session<'a, I>(
-    &self, inputs: I, session: &mut dyn BackendSession, out: TensorWrite<'_>,
+    &self, inputs: I, session: &mut dyn Engine, out: TensorWrite<'_>,
 ) -> Result<()>
 where I: AsRef<[TensorRead<'a>]>;
 
 pub fn execute_read_into_accum_in_session<'a, I>(
-    &self, inputs: I, session: &mut dyn BackendSession,
+    &self, inputs: I, session: &mut dyn Engine,
     accumulation: DotGeneralAccumulation, out: TensorWrite<'_>,
 ) -> Result<()>
 where I: AsRef<[TensorRead<'a>]>;
@@ -577,7 +577,7 @@ Mechanical rule, behavior-preserving:
    extension calls that still need `&mut backend` (avoid nested entry /
    borrow conflicts).
 3. Reusable helpers that take `&mut TensorBackend` migrate to take
-   `&mut dyn BackendSession` where they are pure op sequences.
+   `&mut dyn Engine` where they are pure op sequences.
 4. Sites already inside a session call the ops directly.
 Diagnostics, README, docs/spec, tutorials, and shipped skills that reference
 the one-shot API migrate in the same PR. The Phase-1 one-shot-vs-`_in`
@@ -617,7 +617,7 @@ surfaces and wires the GPU nested-entry guard. All five areas in ONE
 designed-and-gated PR.
 
 **Capability decision (option b — built-in session dispatch)**: the concrete
-op methods take `&mut dyn BackendSession` and dispatch **internally** to the
+op methods take `&mut dyn Engine` and dispatch **internally** to the
 built-in exec sessions (the existing `execute_linalg_extension_reads_on_session`
 / `execute_fft_extension_reads_session` downcast patterns). This removes the
 caller's manual `with_cpu_exec_session`/`with_cuda_exec_session` wrappers
@@ -633,7 +633,7 @@ claims in their docs are updated to the SPI-only scope.
 
 ### 1. einsum top-level traits (10 traits) + tensordot
 
-Methods take `&mut dyn BackendSession`. Einsum-family internals already route
+Methods take `&mut dyn Engine`. Einsum-family internals already route
 through `ConcreteEinsumPlan::execute*` (Phase-2 finding-3 fix); **tensordot**
 is not a plan path — `TensorTensordotExt`/`TypedTensorTensordotExt` call
 `session.dot_general`/`dot_general_read` directly (concrete.rs:47-57, 79-91),
@@ -642,7 +642,7 @@ files) migrate per the Phase-2 rule.
 
 ### 2. FFT (TensorFftExt / TensorReadFftExt)
 
-Methods take `&mut dyn BackendSession`; internal dispatch to the built-in
+Methods take `&mut dyn Engine`; internal dispatch to the built-in
 FFT exec sessions (CPU/CUDA/WebGPU — all implement FftBackend); typed
 capability error otherwise. Inventory: 4 executor methods (fft/ifft/rfft/
 irfft, lib.rs:236-333) + the 8 trait methods. The executor calls
@@ -653,7 +653,7 @@ sites: 5 files + the test/bench downcast sites.
 
 ### 3. linalg concrete traits (TensorLinalgExt / TensorReadLinalgExt / TypedTensorLinalgExt — 64 methods)
 
-Methods take `&mut dyn BackendSession`; internal dispatch downcasts once to
+Methods take `&mut dyn Engine`; internal dispatch downcasts once to
 the concrete exec session and runs the EXISTING generic composite bodies on
 it (they already operate on the borrowed LinalgBackend — tensor_ext.rs
 1702-1817; base session ops via reshape_read/transpose_read/dot_general_read
@@ -666,7 +666,7 @@ error payloads unchanged. Call sites: 5 files.
 
 ### 4. shape_packing (Tensor::index_select / Tensor::stack)
 
-Methods take `&mut dyn BackendSession`. Both already run inside a session
+Methods take `&mut dyn Engine`. Both already run inside a session
 closure (shape_packing.rs:138-145, 167-193) — replace the host parameter and
 remove the closure. Migration gate: scoped grep for `.index_select(`/
 `.stack(` on the concrete surface; traced/eager APIs and historical

@@ -13,7 +13,7 @@ transform workflows plus compile/run reuse.
 | --- | --- | --- |
 | Data layer | The value you pass around | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
 | Execution model | When operations run | Direct, eager, traced compile/run |
-| Backend/device | Where operations run | `CpuBackend` or `tenferro_gpu::cuda::CudaBackend` |
+| Engine | Where operations run, and who owns the device | `tenferro_cpu::CpuEngine` or `tenferro_gpu::cuda::CudaEngine` |
 
 CUDA is not a separate tensor type. The same concrete, eager, and traced APIs
 can run supported operations on CUDA tensors when data is explicitly uploaded
@@ -68,22 +68,21 @@ mismatch, not `Option`.
 
 ## Direct Tensor Execution
 
-`Tensor` operations run immediately through an explicit backend. Use this for
+`Tensor` operations run immediately through an explicit engine. Use this for
 ordinary tensor computation without autodiff when runtime dtype is useful.
 
 <!-- snippet-source: crates/tenferro-runtime/examples/direct_tensor_execution.rs -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
 
     let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
     let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
 
-    let c = backend.with_backend_session(|session| a.matmul(&b, session))??;
+    let c = a.matmul(&b, &mut engine)?;
     assert_eq!(c.shape(), &[2, 2]);
 
     Ok(())
@@ -121,13 +120,13 @@ use tenferro_ad::{EagerRuntime, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = EagerRuntime::new()?;
-    let (x, loss) = ctx.with_eager_session(|session| {
+    let (x, loss) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
         let x = session.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
         let squared = session.mul(&x, &x)?;
         let loss = session.reduce_sum(&squared, Some(&[0]))?;
         Ok::<_, tenferro_ad::Error>((x, loss))
     })?;
-    loss.backward()?;
+    loss.backward(&mut tenferro_cpu::CpuEngine::serial())?;
 
     assert_eq!(x.grad()?.unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 
@@ -143,19 +142,17 @@ between the eager and direct APIs without conversion.
 ## Traced Graph Execution
 
 `TracedTensor` operations are lazy. They build a graph. A `GraphCompiler`
-lowers that graph into a reusable program, and `Runtime::run_compiled` runs the
+lowers that graph into a reusable program, and `Runtime::prepare` / `Runtime::run` run the
 program on registered runtime engines.
 
 <!-- snippet-source: crates/tenferro-runtime/examples/traced_graph_execution.rs -->
 ```rust
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
-fn cpu_runtime() -> Result<Runtime, Box<dyn std::error::Error>> {
+fn cpu_runtime(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>> {
     let mut builder = Runtime::builder();
-    builder.register_engine(tenferro_cpu::runtime_engine_registration(
-        &CpuBackend::new(),
-    )?)?;
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(engine)?)?;
     Ok(builder.build()?)
 }
 
@@ -166,10 +163,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&sum)?;
-    let runtime = cpu_runtime()?;
-    let mut outputs = runtime.run_compiled(&program, &[])?;
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine)?;
+    let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+    let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
     assert_eq!(outputs.len(), 1);
-    let result = outputs.pop().unwrap();
+    let result = outputs.pop().unwrap().into_tensor(&mut engine)?;
 
     assert_eq!(result.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 

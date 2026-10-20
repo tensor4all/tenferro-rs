@@ -10,7 +10,7 @@ The current backend protocol is:
 
 - `TensorBackend`: standalone dense tensor operations plus long-lived backend
   state,
-- `BackendSession`: execution-session surface used by compiled-program evaluation,
+- `Engine`: execution-session surface used by compiled-program evaluation,
 - `ElementwiseFusionPlan`: optional fused elementwise execution plan shared by
   segmentation and GPU fusion.
 
@@ -28,7 +28,7 @@ tenferro-einsum
         │
         ▼
 tenferro-tensor
-    Tensor, TypedTensor<T, R>, TypedTensorView, TensorBackend, BackendSession
+    Tensor, TypedTensor<T, R>, TypedTensorView, TensorBackend, Engine
         │
         ├── tenferro_cpu::CpuBackend
         └── tenferro_gpu::cuda::CudaBackend (feature = "cuda")
@@ -40,14 +40,14 @@ tenferro-tensor-core
 
 There is exactly one dense runtime tensor type family (`Tensor` /
 `TypedTensor<T, R>`) and one backend trait surface. Higher layers should depend
-on `TensorBackend`/`BackendSession`, not on a backend-specific context or
+on `TensorBackend`/`Engine`, not on a backend-specific context or
 deleted primitive-family traits. `tenferro-tensor-core` owns rank/layout
 metadata and host-only adapters; backend-capable `TypedTensor<T, R>` lives in
 `tenferro-tensor`.
 
 ## Backend Operation Surface
 
-`TensorBackend` and `BackendSession` expose the operations needed by the compiled
+`TensorBackend` and `Engine` expose the operations needed by the compiled
 execution pipeline:
 
 | Category | Examples |

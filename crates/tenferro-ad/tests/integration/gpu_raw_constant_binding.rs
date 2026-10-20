@@ -12,7 +12,7 @@
 
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_gpu::cuda::raw::{KernelArg, LaunchConfig, NvrtcOptions};
-use tenferro_gpu::cuda::{gpu_available, with_cuda_exec_session, CudaBackend, CudaDeviceId};
+use tenferro_gpu::cuda::{gpu_available, with_cuda_engine, CudaDeviceId, CudaEngine};
 
 const COPY_F64_KERNEL_SRC: &str = r#"
 extern "C" __global__ void copy_f64(double* out, const double* src, int n) {
@@ -31,14 +31,13 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 #[ignore = "requires CUDA"]
 fn raw_kernel_reads_a_constant_from_host_in_place() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let runtime = EagerRuntime::with_cuda_backend(
-        CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend should initialize"),
-    )
-    .expect("eager CUDA runtime");
+    let runtime = EagerRuntime::new().expect("eager runtime");
+    let mut engine =
+        CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("CUDA engine should initialize");
 
     let host_values: Vec<f64> = (1..=8).map(f64::from).collect();
     runtime
-        .with_eager_session(|session| -> tenferro_ad::Result<()> {
+        .with_eager_session(&mut engine, |session| -> tenferro_ad::Result<()> {
             let weight = session.constant_from_host(f64_tensor(vec![8], host_values.clone()))?;
             let read = weight.tensor_read();
             assert!(
@@ -50,7 +49,7 @@ fn raw_kernel_reads_a_constant_from_host_in_place() {
                 "the eager constant's view must stay compact for the raw binding"
             );
 
-            let copied = with_cuda_exec_session(session.backend_session(), |cuda| {
+            let copied = with_cuda_engine(session.engine(), |cuda| {
                 cuda.with_raw(
                     "test.raw_constant_in_place",
                     |raw| -> tenferro_tensor::Result<(Vec<usize>, Vec<f64>)> {

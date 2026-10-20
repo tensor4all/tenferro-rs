@@ -20,11 +20,14 @@ const EVENT_OP: &str = "cuda_event_domain";
 #[derive(Clone, Debug)]
 pub(super) struct CudaEventDomainDriver {
     runtime: CudaRuntime,
+    /// The stream of the engine this driver was taken from; every run of the
+    /// driver records and waits on it.
+    stream_id: StreamId,
 }
 
 impl CudaEventDomainDriver {
-    pub(super) fn new(runtime: CudaRuntime) -> Self {
-        Self { runtime }
+    pub(super) fn new(runtime: CudaRuntime, stream_id: StreamId) -> Self {
+        Self { runtime, stream_id }
     }
 }
 
@@ -44,7 +47,7 @@ impl EventDomainDriver for CudaEventDomainDriver {
         Ok(Box::new(CudaEventDomainRun {
             runtime: self.runtime.clone(),
             domain,
-            stream_id: StreamId::current(),
+            stream_id: self.stream_id,
             state: EventDomainRunState::Pending,
             coalesced: false,
         }))

@@ -29,11 +29,6 @@ fn recycled_output_returns_only_after_final_group_owner_drops() {
     assert_eq!(pool.len(), 1);
     let tensor = recycled(&mut pool);
     assert_eq!(tensor.as_slice().unwrap().as_ptr(), pointer);
-    pool.replenish_in_flight_retained();
-    assert!(
-        pool.is_empty(),
-        "live recycled outputs must not allocate replacements"
-    );
     drop(tensor);
     assert_eq!(pool.len(), 1);
 }
@@ -70,7 +65,6 @@ fn output_and_scratch_checkouts_coexist_without_borrowing_the_pool() {
     drop(result);
     drop(temporary);
     assert_eq!(pool.len(), 2);
-    assert!(pool.in_flight_is_empty());
 }
 
 #[test]
@@ -85,7 +79,6 @@ fn ranked_recycled_handoff_returns_once_and_rank_error_cancels_checkout() {
     assert!(unsafe { wrong.assume_init_as_recycled::<Rank<2>>() }.is_err());
     // A handoff that fails on its rank leaves the storage the pool's, so it comes straight back.
     assert_eq!(pool.len(), 1);
-    assert!(pool.in_flight_is_empty());
 
     let mut output = PooledUninitOutput::<f64>::new(&pool, vec![2]).unwrap();
     output.as_uninit_slice_mut()[0].write(3.0);
@@ -96,7 +89,6 @@ fn ranked_recycled_handoff_returns_once_and_rank_error_cancels_checkout() {
     assert!(pool.is_empty());
     drop(owner);
     assert_eq!(pool.len(), 1);
-    assert!(pool.in_flight_is_empty());
 }
 
 #[test]
@@ -145,7 +137,6 @@ fn partial_output_returns_to_the_pool_on_error_and_unwind() {
             pool.retained_capacity_bytes(),
             4 * std::mem::size_of::<f64>()
         );
-        assert!(pool.in_flight_is_empty());
         let tensor = recycled(&mut pool);
         assert_eq!(tensor.as_slice().unwrap(), &[0., 1., 2., 3.]);
         drop(tensor);

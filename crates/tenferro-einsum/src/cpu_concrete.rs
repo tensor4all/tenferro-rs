@@ -86,10 +86,10 @@ fn map_lower_einsum_error(op: &'static str, error: cpueinsum::Error) -> tenferro
     }
     tenferro_tensor::Error::backend_source(op, error)
 }
-use tenferro_cpu::with_cpu_exec_session;
+use tenferro_cpu::with_cpu_engine;
 use tenferro_tensor::{
-    BackendSession, DType, Tensor, TensorRead, TensorScalar, TensorView, TensorViewMut,
-    TensorWrite, TypedTensorView,
+    DType, Engine, Tensor, TensorRead, TensorScalar, TensorView, TensorViewMut, TensorWrite,
+    TypedTensorView,
 };
 
 #[cfg(feature = "native")]
@@ -102,7 +102,7 @@ trait Scalar: TensorScalar + cpueinsum_blas::BlasScalar {}
 impl<T: TensorScalar + cpueinsum_blas::BlasScalar> Scalar for T {}
 
 pub(crate) fn execute(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
 ) -> Option<tenferro_tensor::Result<Tensor>> {
@@ -111,7 +111,7 @@ pub(crate) fn execute(
 
 #[cfg(any(feature = "native", feature = "blas"))]
 pub(crate) fn execute_cached(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
     cache: Option<&Cache>,
@@ -128,8 +128,7 @@ pub(crate) fn execute_cached(
     for input in inputs {
         tenferro_cpu::validate_cpu_host_read("CPU einsum", "input", input).ok()?;
     }
-    with_cpu_exec_session(session, |cpu| {
-        let domain = cpu.domain_id();
+    with_cpu_engine(session, |cpu| {
         cpu.with_contraction_exec(|exec, buffers, workspaces| {
             macro_rules! dispatch {
                 ($($variant:ident),*) => { match inputs[0].dtype() {
@@ -138,7 +137,7 @@ pub(crate) fn execute_cached(
                             TensorView::$variant(view) => Ok(view),
                             _ => Err(tenferro_tensor::Error::dtype_mismatch("CPU einsum", inputs[0].dtype(), input.dtype())),
                         }).collect::<tenferro_tensor::Result<Vec<_>>>()?;
-                        run(&Execution { exec, workspaces, max_retained_bytes: buffers.max_retained_capacity_bytes() }, tree, cache, domain, |shape| {
+                        run(&Execution { exec, workspaces, max_retained_bytes: buffers.max_retained_capacity_bytes() }, tree, cache, |shape| {
                             let mut output = tenferro_cpu_basic::PooledUninitOutput::new(buffers, shape)?;
                             output.as_uninit_slice_mut().fill(std::mem::MaybeUninit::new(Default::default()));
                             // SAFETY: every physical element of the compact output
@@ -155,7 +154,7 @@ pub(crate) fn execute_cached(
 }
 #[cfg(not(any(feature = "native", feature = "blas")))]
 pub(crate) fn execute_cached(
-    _session: &mut dyn BackendSession,
+    _session: &mut dyn Engine,
     _inputs: &[TensorRead<'_>],
     _tree: &ContractionTree,
     _cache: Option<&Cache>,
@@ -176,7 +175,6 @@ fn run<T: Scalar>(
     execution: &Execution<'_, '_>,
     tree: &ContractionTree,
     cache: Option<&Cache>,
-    domain: tenferro_tensor::CpuDomainId,
     allocate: impl FnOnce(Vec<usize>) -> tenferro_tensor::Result<tenferro_tensor::TypedTensor<T>>,
     inputs: &[TypedTensorView<'_, T>],
     shape: Vec<usize>,
@@ -192,7 +190,6 @@ fn run<T: Scalar>(
     )
     .map_err(|error| tenferro_tensor::Error::backend_source("CPU einsum view", error))?;
     run_into(execution, tree, cache, inputs, &mut out)?;
-    output.set_cpu_affinity(Some(domain));
     Ok(Tensor::from_typed(output))
 }
 
@@ -311,7 +308,7 @@ fn run_into<T: Scalar>(
     )
 }
 
-pub(crate) fn supports(session: &mut dyn BackendSession, inputs: &[TensorRead<'_>]) -> bool {
+pub(crate) fn supports(session: &mut dyn Engine, inputs: &[TensorRead<'_>]) -> bool {
     inputs.len() >= 3
         && inputs.first().is_some_and(|input| {
             matches!(
@@ -319,12 +316,12 @@ pub(crate) fn supports(session: &mut dyn BackendSession, inputs: &[TensorRead<'_
                 DType::F32 | DType::F64 | DType::C32 | DType::C64
             )
         })
-        && with_cpu_exec_session(session, |_| ()).is_some()
+        && with_cpu_engine(session, |_| ()).is_some()
 }
 
 #[cfg(any(feature = "native", feature = "blas"))]
 pub(crate) fn execute_into(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
     cache: Option<&Cache>,
@@ -349,7 +346,7 @@ pub(crate) fn execute_into(
             out.shape().to_vec(),
         ));
     }
-    with_cpu_exec_session(session, |cpu| cpu.with_contraction_exec(|exec, buffers, workspaces| {
+    with_cpu_engine(session, |cpu| cpu.with_contraction_exec(|exec, buffers, workspaces| {
         macro_rules! dispatch {
             ($($variant:ident => $ty:ty),*) => {
                 match dtype {
@@ -377,11 +374,11 @@ pub(crate) fn execute_into(
             }
         }
         dispatch!(F32 => f32, F64 => f64, C32 => tenferro_tensor::Complex<f32>, C64 => tenferro_tensor::Complex<f64>)
-    })).ok_or_else(|| tenferro_tensor::Error::runtime_state("CPU einsum", "CPU session required"))?
+    })).ok_or_else(|| tenferro_tensor::Error::runtime_state("CPU einsum", "CPU engine required"))?
 }
 #[cfg(not(any(feature = "native", feature = "blas")))]
 pub(crate) fn execute_into(
-    _session: &mut dyn BackendSession,
+    _session: &mut dyn Engine,
     _inputs: &[TensorRead<'_>],
     _tree: &ContractionTree,
     _cache: Option<&Cache>,
@@ -396,7 +393,6 @@ pub(crate) fn execute_into(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tenferro_tensor::BackendSessionHost;
     #[test]
     fn nary_delegation_covers_four_scalar_types() {
         macro_rules! check {
@@ -416,10 +412,16 @@ mod tests {
                 let subs = crate::Subscripts::parse("ij,jk,kl->il").unwrap();
                 let tree =
                     ContractionTree::optimize(&subs, &[a.shape(), id.shape(), id.shape()]).unwrap();
-                let mut backend = tenferro_cpu::CpuBackend::with_threads(1).unwrap();
+                let mut backend = tenferro_cpu::CpuEngine::new(
+                    tenferro_cpu::thread_pool_builder()
+                        .num_threads(1)
+                        .build()
+                        .unwrap(),
+                );
                 let mut cache = Cache::default();
-                let out = backend
-                    .with_backend_session(|session| {
+                let out = {
+                    let session = &mut backend;
+                    {
                         execute_cached(
                             session,
                             &[
@@ -431,19 +433,14 @@ mod tests {
                             Some(&cache),
                         )
                         .expect("concrete CPU route must be selected")
-                    })
-                    .unwrap()
-                    .unwrap();
+                    }
+                }
+                .unwrap();
                 assert_eq!(out.as_slice::<$ty>().unwrap(), values);
-                assert!(out
-                    .as_typed::<$ty>()
-                    .unwrap()
-                    .placement()
-                    .cpu_affinity
-                    .is_some());
                 let first = Arc::clone(&cache.0.lock().unwrap().entry.as_ref().unwrap().plan);
-                backend
-                    .with_backend_session(|session| {
+                {
+                    let session = &mut backend;
+                    {
                         execute_cached(
                             session,
                             &[
@@ -455,9 +452,9 @@ mod tests {
                             Some(&cache),
                         )
                         .unwrap()
-                    })
-                    .unwrap()
-                    .unwrap();
+                    }
+                }
+                .unwrap();
                 let second = Arc::clone(&cache.0.lock().unwrap().entry.as_ref().unwrap().plan);
                 assert!(
                     Arc::ptr_eq(&first, &second),

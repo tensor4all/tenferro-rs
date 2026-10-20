@@ -8,7 +8,7 @@
 //! requires a CUDA device.
 
 use tenferro_gpu::cuda::{
-    download_tensor, gpu_available, upload_pending, upload_tensor, CudaBackend, CudaDeviceId,
+    download_tensor, gpu_available, upload_pending, upload_tensor, CudaDeviceId, CudaEngine,
     CudaRuntime, PinnedHostBuffer, TransferSubmitError,
 };
 use tenferro_tensor::Tensor;
@@ -16,12 +16,12 @@ use tenferro_tensor::Tensor;
 /// Big enough that a copy of it cannot complete before an immediate poll observes the queue.
 const DELAYED_ELEMENTS: usize = 4 * 1024 * 1024;
 
-fn backend() -> CudaBackend {
+fn backend() -> CudaEngine {
     assert!(gpu_available(), "CUDA test requires an available device");
-    CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
+    CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
 }
 
-fn runtime_of(backend: &CudaBackend) -> CudaRuntime {
+fn runtime_of(backend: &CudaEngine) -> CudaRuntime {
     backend.runtime().clone()
 }
 

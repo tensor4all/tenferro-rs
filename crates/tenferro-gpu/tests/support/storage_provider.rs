@@ -6,9 +6,10 @@
 
 #[cfg(feature = "cuda")]
 mod cuda {
-    use tenferro_gpu::{cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId};
+    use super::engine_run::EngineRun;
+    use tenferro_gpu::{cuda::gpu_available, cuda::upload_tensor, cuda::CudaEngine, cuda::CudaDeviceId};
     use tenferro_tensor::{
-        AllocationDomainId, AllocationId, BackendSessionHost, DType, Tensor, TensorRead,
+        AllocationDomainId, AllocationId, DType, Tensor, TensorRead,
     };
 
     fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
@@ -22,13 +23,13 @@ mod cuda {
     #[ignore = "requires CUDA"]
     fn explicit_duplicate_has_new_identity_in_the_same_cuda_domain() {
         assert!(gpu_available(), "CUDA test requires an available device");
-        let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+        let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
         let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
         let input = upload_tensor(backend.runtime(), &host).unwrap();
         let (domain, allocation) = identity(&input);
 
         let duplicate = backend
-            .with_backend_session(|session| session.cast(&input, DType::F32)).unwrap()
+            .run(|session| session.cast(&input, DType::F32)).unwrap()
             .unwrap();
 
         let (duplicate_domain, duplicate_allocation) = identity(&duplicate);
@@ -40,13 +41,13 @@ mod cuda {
     #[ignore = "requires CUDA"]
     fn cuda_runtime_rejects_a_foreign_allocation_domain_before_binding() {
         assert!(gpu_available(), "CUDA test requires an available device");
-        let first = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
-        let mut second = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+        let first = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
+        let mut second = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
         let host = Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap();
         let input = upload_tensor(first.runtime(), &host).unwrap();
 
         let error = second
-            .with_backend_session(|session| {
+            .run(|session| {
                 session.to_contiguous_read(TensorRead::from_tensor(&input))
             }).unwrap()
             .unwrap_err();
@@ -56,8 +57,9 @@ mod cuda {
 
 #[cfg(feature = "webgpu")]
 mod webgpu {
+    use super::engine_run::EngineRun;
     use tenferro_gpu::{webgpu::upload_webgpu_tensor, webgpu::WebGpuBackend};
-    use tenferro_tensor::{AllocationDomainId, AllocationId, BackendSessionHost, Tensor, TensorRead};
+    use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor, TensorRead};
 
     fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
         let Some(tensor) = tensor.as_typed::<f32>() else {
@@ -76,7 +78,7 @@ mod webgpu {
         let (domain, allocation) = identity(&input);
 
         let duplicate = backend
-            .with_backend_session(|session| {
+            .run(|session| {
                 session.to_contiguous_read(TensorRead::from_tensor(&input))
             }).unwrap()
             .unwrap();
@@ -98,7 +100,7 @@ mod webgpu {
         let input = upload_webgpu_tensor(first.runtime(), &host).unwrap();
 
         let error = second
-            .with_backend_session(|session| {
+            .run(|session| {
                 session.to_contiguous_read(TensorRead::from_tensor(&input))
             }).unwrap()
             .unwrap_err();

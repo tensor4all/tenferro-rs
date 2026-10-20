@@ -63,8 +63,8 @@ pub(crate) fn axpby_read_into_accum(
     beta: ContractionScalar,
     y: TensorWrite<'_>,
 ) -> crate::Result<()> {
-    validate_cpu_read("BackendSession::axpby_read_into_accum", &x)?;
-    validate_cpu_read("BackendSession::axpby_read_into_accum", &y.as_read())?;
+    validate_cpu_read("Engine::axpby_read_into_accum", &x)?;
+    validate_cpu_read("Engine::axpby_read_into_accum", &y.as_read())?;
     if !y.as_read().is_col_major_contiguous()? {
         // The dense `strided_kernel::axpby_accum` entry addresses a compact
         // destination span, so a strided or offset destination view runs the
@@ -96,7 +96,7 @@ pub(crate) fn axpby_read_into_accum(
         MATERIALIZATIONS.fetch_add(1, Ordering::SeqCst);
         materialized_x = Some(crate::materialize_tensor_read(
             buffers,
-            "BackendSession::axpby_read_into_accum",
+            "Engine::axpby_read_into_accum",
             x.clone(),
         )?);
     }

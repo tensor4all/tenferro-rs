@@ -122,10 +122,10 @@ impl Tensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{BackendSession, Tensor};
+    /// use tenferro_tensor::{Engine, Tensor};
     ///
     /// fn select_last_axis(
-    ///     session: &mut dyn BackendSession,
+    ///     session: &mut dyn Engine,
     ///     x: &Tensor,
     /// ) -> tenferro_tensor::Result<Tensor> {
     ///     x.index_select(-1, &[2, 0], session)
@@ -139,7 +139,7 @@ impl Tensor {
         &self,
         axis: isize,
         positions: &[usize],
-        session: &mut dyn crate::BackendSession,
+        session: &mut dyn crate::Engine,
     ) -> crate::Result<Self> {
         let (indices, config) = index_select_parts(self.shape(), axis, positions)?;
         session.gather(self, &indices, &config)
@@ -150,10 +150,10 @@ impl Tensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{BackendSession, Tensor};
+    /// use tenferro_tensor::{Engine, Tensor};
     ///
     /// fn stack_scalars(
-    ///     session: &mut dyn BackendSession,
+    ///     session: &mut dyn Engine,
     ///     a: &Tensor,
     ///     b: &Tensor,
     /// ) -> tenferro_tensor::Result<Tensor> {
@@ -167,7 +167,7 @@ impl Tensor {
     pub fn stack(
         tensors: &[&Self],
         dim: isize,
-        session: &mut dyn crate::BackendSession,
+        session: &mut dyn crate::Engine,
     ) -> crate::Result<Self> {
         let first = tensors.first().copied().ok_or_else(|| {
             crate::Error::invalid_argument("stack", "tensors", "requires at least one input")

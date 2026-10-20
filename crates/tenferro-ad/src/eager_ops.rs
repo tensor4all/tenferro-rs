@@ -109,7 +109,7 @@ impl EagerTensor {
     pub(crate) fn reduce_sum_in_session(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
     ) -> Result<Self> {
         let axes = axes.map_or_else(|| (0..self.shape().len()).collect(), <[usize]>::to_vec);
         validate_eager_axes("EagerTensor::reduce_sum", self.shape().len(), &axes)?;
@@ -119,7 +119,7 @@ impl EagerTensor {
     pub(crate) fn transpose_in_session(
         &self,
         perm: &[usize],
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
     ) -> Result<Self> {
         let base = self.duplicate_value_in_session(session)?;
         let value = TensorValue::from_tensor(base)
@@ -138,7 +138,7 @@ impl EagerTensor {
     pub(crate) fn reshape_in_session(
         &self,
         shape: &[usize],
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
     ) -> Result<Self> {
         let op = StdTensorOp::Reshape {
             to_shape: DimExpr::from_concrete(shape),
@@ -153,7 +153,7 @@ impl EagerTensor {
     pub(crate) fn slice_in_session(
         &self,
         config: SliceConfig,
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
     ) -> Result<Self> {
         let base = self.duplicate_value_in_session(session)?;
         let value = TensorValue::from_tensor(base)
@@ -166,7 +166,7 @@ impl EagerTensor {
         &self,
         shape: &[usize],
         dims: &[usize],
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
     ) -> Result<Self> {
         if let Some(error) = broadcast_in_dim_extent_error(self.shape(), shape, dims) {
             return Err(broadcast_error("EagerTensor::broadcast_in_dim", error));
@@ -188,7 +188,7 @@ impl EagerTensor {
         tensors: &[&Self],
         op: StdTensorOp,
         value: TensorValue,
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
     ) -> Result<Self> {
         let Some(first) = tensors.first() else {
             return Err(empty_nary_input_error(&op));
@@ -233,7 +233,7 @@ impl EagerTensor {
     pub(crate) fn nary_op_in_session(
         tensors: &[&Self],
         op: StdTensorOp,
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
     ) -> Result<Self> {
         let total_started = eager_op_profile_start();
         let Some(first) = tensors.first() else {

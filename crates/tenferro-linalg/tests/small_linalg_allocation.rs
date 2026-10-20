@@ -15,9 +15,9 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+use tenferro_cpu::{with_cpu_engine, CpuEngine};
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{BackendSession, BackendSessionHost, Tensor, TypedTensor};
+use tenferro_tensor::{Engine, Tensor, TypedTensor};
 
 struct CountingAllocator;
 
@@ -80,34 +80,32 @@ fn batched_matrix(n: usize, batch: usize) -> Tensor {
 }
 
 fn with_cpu<T>(
-    session: &mut dyn BackendSession,
-    operation: impl FnOnce(&mut tenferro_cpu::CpuExecSession<'_>) -> T,
+    session: &mut dyn Engine,
+    operation: impl FnOnce(&mut tenferro_cpu::CpuEngine) -> T,
 ) -> T {
-    with_cpu_exec_session(session, operation).expect("host exposes a CPU exec session")
+    with_cpu_engine(session, operation).expect("host exposes a CPU exec session")
 }
 
 /// Steady-state count for one operation, pooling warmed by four rounds.
 fn steady_state(
-    backend: &mut CpuBackend,
-    operation: impl Fn(&mut dyn BackendSession) + Send + Sync,
+    backend: &mut CpuEngine,
+    operation: impl Fn(&mut dyn Engine) + Send + Sync,
 ) -> usize {
     let mut best = usize::MAX;
     for _ in 0..8 {
-        let count = backend
-            .with_backend_session(|session| measure(|| operation(session)))
-            .unwrap();
+        let count = measure(|| operation(&mut *backend));
         best = best.min(count);
     }
     best
 }
 
 fn check_family(
-    backend: &mut CpuBackend,
+    backend: &mut CpuEngine,
     name: &str,
     single_ceiling: usize,
     batch_ceiling: usize,
     allowed_batch_growth: usize,
-    operation: impl Fn(&mut dyn BackendSession, &Tensor) + Send + Sync,
+    operation: impl Fn(&mut dyn Engine, &Tensor) + Send + Sync,
 ) {
     let single = batched_matrix(4, 1);
     let batch = batched_matrix(4, 64);
@@ -188,9 +186,10 @@ const QR_CEILING_2T: (usize, usize) = (9, 9);
 const SVD_CEILING_1T: (usize, usize) = (13, 13);
 #[cfg(feature = "blas")]
 const SVD_CEILING_2T: (usize, usize) = (13, 13);
-// Measured: batch 1 = 7, batch 64 = 8. The packed-LU route keeps one
-// batch-sized scratch vector outside the hoisted workspace; recorded as a
-// finding rather than hidden.
+// Measured on the pooled-lease route: batch 1 = 3, batch 64 = 3. The earlier
+// measurement (batch 1 = 7, batch 64 = 8) recorded a packed-LU output that never
+// returned its pooled storage, so the ceiling keeps the slack that finding left
+// while the growth budget below is back to zero.
 #[cfg(feature = "blas")]
 const PACKED_LU_CEILING_1T: (usize, usize) = (7, 8);
 #[cfg(feature = "blas")]
@@ -203,10 +202,13 @@ const QR_BATCH_GROWTH_2T: usize = 0;
 const SVD_BATCH_GROWTH_1T: usize = 0;
 #[cfg(feature = "blas")]
 const SVD_BATCH_GROWTH_2T: usize = 0;
+// Measured: batch 1 = 3, batch 64 = 3.
 #[cfg(feature = "blas")]
-const PACKED_LU_BATCH_GROWTH_1T: usize = 1;
+const PACKED_LU_BATCH_GROWTH_1T: usize = 0;
+// Measured: batch 1 = 3, batch 64 = 3; the BLAS lane runs its batch loop on the
+// coordinator thread, so it has no second-lane spawn to pay for.
 #[cfg(feature = "blas")]
-const PACKED_LU_BATCH_GROWTH_2T: usize = 1;
+const PACKED_LU_BATCH_GROWTH_2T: usize = 0;
 
 fn check_lane(
     threads: usize,
@@ -217,7 +219,12 @@ fn check_lane(
     svd_growth: usize,
     packed_lu_growth: usize,
 ) {
-    let mut backend = CpuBackend::with_threads(threads).expect("CPU backend");
+    let mut backend = tenferro_cpu::CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(threads)
+            .build()
+            .unwrap(),
+    );
     let suffix = format!("{threads}T");
     check_family(
         &mut backend,

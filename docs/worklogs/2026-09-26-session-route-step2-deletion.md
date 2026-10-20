@@ -87,7 +87,7 @@ runtime-materialization section, `backend_capability_contracts` function list,
 
 ## Residual risks and open work
 
-- **B3 has not landed.** `TensorBackend` still inherits `BackendSession`,
+- **B3 has not landed.** `TensorBackend` still inherits `Engine`,
   `TensorBackendOps` and `BackendCachedDot`, so an owner can still be used as a
   session. Removing them was attempted and reverted; the design document records
   the measured work list (the `SessionCachedDot` blanket bound and the

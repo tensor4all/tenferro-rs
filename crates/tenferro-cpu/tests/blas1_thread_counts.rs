@@ -8,9 +8,31 @@
 
 use num_complex::Complex64;
 
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::backend::BackendSessionHost;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
+
+/// An engine with `threads` workers (serial for one).
+#[allow(dead_code)]
+fn engine(threads: usize) -> tenferro_cpu::CpuEngine {
+    if threads <= 1 {
+        tenferro_cpu::CpuEngine::serial()
+    } else {
+        tenferro_cpu::CpuEngine::new(
+            tenferro_cpu::thread_pool_builder()
+                .num_threads(threads)
+                .build()
+                .expect("test pool"),
+        )
+    }
+}
+
+/// Run `f` on `engine` viewed as `&mut dyn Engine`.
+#[allow(dead_code)]
+fn run<R>(
+    engine: &mut tenferro_cpu::CpuEngine,
+    f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
+) -> tenferro_tensor::Result<R> {
+    Ok(f(engine))
+}
 
 fn sample(len: usize) -> Vec<Complex64> {
     (0..len)
@@ -47,7 +69,7 @@ fn vdot_and_norm_squared_hold_across_thread_counts_and_lengths() {
     // Lengths that straddle the worker count, which is where a chunking bug
     // lives: fewer elements than workers, exactly as many, and many more.
     for threads in [1_usize, 2, 4, 16, 64, 128] {
-        let mut backend = CpuBackend::with_threads(threads).expect("backend builds");
+        let mut backend = engine(threads);
         for len in [1_usize, 3, 16, 17, 64, 128, 129, 4096] {
             let lhs_host = sample(len);
             let rhs_host: Vec<Complex64> = sample(len).iter().map(|z| z.conj() * 0.5).collect();
@@ -59,24 +81,22 @@ fn vdot_and_norm_squared_hold_across_thread_counts_and_lengths() {
             let tolerance = 1e-9 * (1.0 + expected_norm);
 
             // Owned operands.
-            let dot = backend
-                .with_backend_session(|session| {
-                    session.vdot_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-                })
-                .unwrap()
-                .unwrap();
+            let dot = run(&mut backend, |session| {
+                session.vdot_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+            })
+            .unwrap()
+            .unwrap();
             let dot = dot.as_slice::<Complex64>().unwrap()[0];
             assert!(
                 (dot - expected_dot).norm() <= tolerance,
                 "vdot(owned) threads={threads} len={len}: {dot} vs {expected_dot}"
             );
 
-            let norm = backend
-                .with_backend_session(|session| {
-                    session.norm_squared_read(TensorRead::from_tensor(&lhs))
-                })
-                .unwrap()
-                .unwrap();
+            let norm = run(&mut backend, |session| {
+                session.norm_squared_read(TensorRead::from_tensor(&lhs))
+            })
+            .unwrap()
+            .unwrap();
             let norm = norm.as_slice::<f64>().unwrap()[0];
             assert!(
                 (norm - expected_norm).abs() <= tolerance,
@@ -85,22 +105,22 @@ fn vdot_and_norm_squared_hold_across_thread_counts_and_lengths() {
 
             // The same operands as views, which is the path a backend adapter
             // takes when the buffer it holds is larger than the operand.
-            let dot = backend
-                .with_backend_session(|session| {
-                    session.vdot_read(flat_view(&lhs, len), flat_view(&rhs, len))
-                })
-                .unwrap()
-                .unwrap();
+            let dot = run(&mut backend, |session| {
+                session.vdot_read(flat_view(&lhs, len), flat_view(&rhs, len))
+            })
+            .unwrap()
+            .unwrap();
             let dot = dot.as_slice::<Complex64>().unwrap()[0];
             assert!(
                 (dot - expected_dot).norm() <= tolerance,
                 "vdot(view) threads={threads} len={len}: {dot} vs {expected_dot}"
             );
 
-            let norm = backend
-                .with_backend_session(|session| session.norm_squared_read(flat_view(&lhs, len)))
-                .unwrap()
-                .unwrap();
+            let norm = run(&mut backend, |session| {
+                session.norm_squared_read(flat_view(&lhs, len))
+            })
+            .unwrap()
+            .unwrap();
             let norm = norm.as_slice::<f64>().unwrap()[0];
             assert!(
                 (norm - expected_norm).abs() <= tolerance,

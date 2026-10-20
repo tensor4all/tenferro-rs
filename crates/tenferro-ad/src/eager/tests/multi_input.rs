@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
 use crate::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
 
 #[test]
 fn backward_shares_one_vjp_across_leaves_and_separates_active_masks() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let leaf = |values| {
         EagerTensor::requires_grad_in(
             Tensor::from_vec_col_major(vec![2], values).unwrap(),
@@ -17,12 +16,14 @@ fn backward_shares_one_vjp_across_leaves_and_separates_active_masks() {
     let y = leaf(vec![5.0_f64, 7.0]);
     let unused = leaf(vec![11.0_f64, 13.0]);
     let loss = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let product = s.mul(&x, &y)?;
             s.reduce_sum(&product, Some(&[0]))
         })
         .unwrap();
-    let first = loss.backward().unwrap();
+    let first = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert_eq!(first.len(), 2);
     assert_eq!(
         x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
@@ -38,11 +39,15 @@ fn backward_shares_one_vjp_across_leaves_and_separates_active_masks() {
     assert_eq!(stats.misses, 1);
 
     // A single-input VJP must not reuse the two-input derivative's output map.
-    let gx = ctx.grad(&loss, &x).unwrap();
+    let gx = ctx
+        .grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &x)
+        .unwrap();
     assert_eq!(gx.value().unwrap().as_slice::<f64>().unwrap(), &[5.0, 7.0]);
     assert_eq!(ctx.cache_stats().unwrap().prepared_derivatives.entries, 2);
     let before = ctx.cache_stats().unwrap().prepared_derivatives;
-    let second = loss.backward().unwrap();
+    let second = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert_eq!(second.len(), 2);
     let after = ctx.cache_stats().unwrap().prepared_derivatives;
     assert_eq!(after.hits, before.hits + 1);

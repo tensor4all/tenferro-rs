@@ -4,9 +4,10 @@ The `tenferro-xla` crate is an experimental peer executor for static-shaped
 traced programs. It lowers tenferro programs to StableHLO and can load PJRT
 plugins when the optional `pjrt` feature is enabled.
 
-It is not a `TensorBackend` implementation and it does not replace native CPU,
+It is not an `Engine` implementation and it does not replace native CPU,
 CUDA, or WebGPU execution. Dynamic-shape graphs, extension runtimes, and the
-full tensor backend contract still run through `Runtime::run_compiled`.
+full engine contract still run through the tenferro `Runtime` (`prepare` then
+`run`).
 
 ## Supported Boundary
 
@@ -83,10 +84,10 @@ unset, empty, points to a missing file, or the library does not export
 
 ## Threading And Synchronization
 
-PJRT owns the plugin client, device streams, and intra-op thread pool. A
-`CpuBackend::with_threads(n)` setting does not change the number of workers
-used inside a PJRT CPU plugin, and tenferro does not infer a PJRT affinity or
-NUMA guarantee from that setting. Configure intra-op parallelism through the
+PJRT owns the plugin client, device streams, and intra-op thread pool. The width
+of a `CpuEngine`'s pool does not change the number of workers used inside a PJRT
+CPU plugin, and tenferro does not infer a PJRT affinity guarantee from that
+setting. Configure intra-op parallelism through the
 selected PJRT/XLA deployment, such as the plugin's documented environment or
 XLA flags, and treat those controls as plugin-owned and generally
 process-scoped.

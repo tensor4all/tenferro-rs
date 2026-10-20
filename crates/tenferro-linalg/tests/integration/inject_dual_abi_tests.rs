@@ -8,7 +8,7 @@ use tenferro_cpu::inject::{
     register_blas_gemm_provider_ptrs, register_lapack_provider_ptrs, BlasGemmProviderPtrSet,
     LapackProviderPtrSet, ProviderAbi, ProviderRegistrationError,
 };
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
 
@@ -212,7 +212,7 @@ fn ilp64_gemm_provider_reaches_lp64_consumer() {
         TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let c = backend.dot_general(
         &a,
         &b,
@@ -265,7 +265,7 @@ fn ilp64_lapack_full_piv_lu_bridges_integer_arrays() {
         TypedTensor::from_vec_col_major(vec![2, 1], vec![4.0, 8.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = backend.full_piv_lu_solve(&a, &b, false);
 
     assert_eq!(DGETC2_ILP64_CALLS.load(Ordering::SeqCst), 1);
@@ -309,7 +309,7 @@ fn ilp64_lapack_qr_workspace_query() {
         TypedTensor::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let result = backend.qr(&a);
 
     assert!(result.is_ok(), "qr should succeed, got {:?}", result.err());

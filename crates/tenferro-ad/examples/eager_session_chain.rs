@@ -3,9 +3,8 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use tenferro_ad::EagerRuntime;
-use tenferro_cpu::CpuBackend;
 use tenferro_tensor::TensorRead;
-use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor};
+use tenferro_tensor::{DotGeneralConfig, Tensor};
 
 fn sample(f: &mut impl FnMut(), duration: Duration) -> (usize, Duration) {
     let start = Instant::now();
@@ -20,8 +19,8 @@ fn sample(f: &mut impl FnMut(), duration: Duration) -> (usize, Duration) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut backend = CpuBackend::with_threads(1)?;
-    let eager_backend = CpuBackend::with_threads(1)?;
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    let eager_backend = tenferro_cpu::CpuEngine::serial();
     assert_eq!(backend.num_threads(), 1);
     assert_eq!(eager_backend.num_threads(), 1);
     eprintln!(
@@ -29,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         backend.num_threads(),
         eager_backend.num_threads()
     );
-    let runtime = EagerRuntime::with_cpu_backend(eager_backend)?;
+    let runtime = EagerRuntime::new()?;
     let lhs = Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
     let rhs = Tensor::from_vec_col_major([2, 2], vec![0.75_f64, 0.125, -0.25, 0.5])?;
     let a = runtime.constant_from(Tensor::from_vec_col_major(
@@ -76,41 +75,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for case in cases {
         let mut run = || -> Option<Tensor> {
             match case {
-                "shared" => backend
-                    .with_backend_session(|session| {
-                        let mut out = None;
-                        for _ in 0..10 {
-                            out = Some(
-                                session
-                                    .dot_general_read(
-                                        TensorRead::from_tensor(
-                                            out.as_ref().unwrap_or(black_box(&lhs)),
-                                        ),
-                                        TensorRead::from_tensor(black_box(&rhs)),
-                                        black_box(&config),
-                                    )
-                                    .unwrap(),
-                            );
-                        }
-                        out
-                    })
-                    .unwrap(),
+                "shared" => {
+                    let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+                    let mut out = None;
+                    for _ in 0..10 {
+                        out = Some(
+                            session
+                                .dot_general_read(
+                                    TensorRead::from_tensor(
+                                        out.as_ref().unwrap_or(black_box(&lhs)),
+                                    ),
+                                    TensorRead::from_tensor(black_box(&rhs)),
+                                    black_box(&config),
+                                )
+                                .unwrap(),
+                        );
+                    }
+                    out
+                }
                 "per_op" => {
                     let mut out = None;
                     for _ in 0..10 {
                         out = Some(
-                            backend
-                                .with_backend_session(|session| {
-                                    session.dot_general_read(
-                                        TensorRead::from_tensor(
-                                            out.as_ref().unwrap_or(black_box(&lhs)),
-                                        ),
-                                        TensorRead::from_tensor(black_box(&rhs)),
-                                        black_box(&config),
-                                    )
-                                })
-                                .unwrap()
-                                .unwrap(),
+                            {
+                                let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+                                session.dot_general_read(
+                                    TensorRead::from_tensor(
+                                        out.as_ref().unwrap_or(black_box(&lhs)),
+                                    ),
+                                    TensorRead::from_tensor(black_box(&rhs)),
+                                    black_box(&config),
+                                )
+                            }
+                            .unwrap(),
                         );
                     }
                     out
@@ -120,20 +117,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     for _ in 0..10 {
                         out = out
                             .runtime()
-                            .with_eager_session(|session| {
+                            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
                                 session.dot_general(&out, black_box(&b), black_box(config.clone()))
                             })
                             .unwrap();
                     }
-                    Some(out.to_tensor().unwrap())
+                    Some(
+                        out.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                            .unwrap(),
+                    )
                 }
                 "empty_x10" => {
                     for _ in 0..10 {
-                        backend
-                            .with_backend_session(|session| {
-                                black_box(session);
-                            })
-                            .unwrap();
+                        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+                        black_box(session);
                     }
                     None
                 }
@@ -148,7 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .unwrap(),
                         )
                         .unwrap()
-                        .to_tensor()
+                        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
                         .unwrap(),
                 ),
                 _ => unreachable!(),

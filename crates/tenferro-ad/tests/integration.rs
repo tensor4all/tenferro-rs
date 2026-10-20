@@ -21,8 +21,6 @@ mod checkpoint_truncate_integration;
 mod convenience_api;
 #[path = "integration/cpu_backend.rs"]
 mod cpu_backend;
-#[path = "integration/cpu_execution_scope.rs"]
-mod cpu_execution_scope;
 #[path = "integration/dot_general_validation.rs"]
 mod dot_general_validation;
 #[path = "integration/dtype_propagation.rs"]
@@ -69,8 +67,6 @@ mod numpy_api;
 mod primitive_ops;
 #[path = "integration/runtime_execution.rs"]
 mod runtime_execution;
-#[path = "integration/runtime_snapshot_bridge.rs"]
-mod runtime_snapshot_bridge;
 #[path = "integration/semantic_extension.rs"]
 mod semantic_extension;
 #[path = "integration/semantic_transform.rs"]

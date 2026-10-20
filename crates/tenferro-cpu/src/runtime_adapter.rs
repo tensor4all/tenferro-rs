@@ -3,24 +3,26 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef, SemanticOperationView};
-use tenferro_runtime::runtime::ImmediateEventDomainDriver;
 use tenferro_runtime::{
-    assemble_executable_engine_registration, CacheOwnerError, CoreCapabilityBundle,
-    CoreCapabilityKind, CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest,
-    ElementwisePrepareRequest, ElementwiseRuntime, EngineId, EngineRegistration,
-    EngineRegistrationMetadata, ExecutableEngineRegistrationConfig, ExecutionContextIdentity,
-    HardwareClassId, IndexingPrepareRequest, IndexingRuntime, InputIngressContract,
-    InputPlacementContract, InputSignature, InputSignatureContract, InputSpecializationProjection,
+    assemble_executable_engine_registration, CoreCapabilityBundle, CoreCapabilityKind,
+    CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest,
+    ElementwiseRuntime, EngineId, EngineRegistration, EngineRegistrationMetadata,
+    ExecutableEngineRegistrationConfig, ExecutionContextIdentity, HardwareClassId,
+    IndexingPrepareRequest, IndexingRuntime, InputIngressContract, InputPlacementContract,
+    InputSignature, InputSignatureContract, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
     LayoutSpecialization, MemoryKind, PrepareCapability, PrepareError, PreparedOperation,
     PreparedOperationBinding, PreparedOperationPlan, ProviderContractError, ProviderDeviceIdentity,
     ProviderId, ReductionPrepareRequest, ReductionRuntime, ResidentOutputContract,
-    RuntimeCacheOwner, RuntimeConfigError, RuntimeInputContract, SpecializationError,
-    SpecializationProjection, SpecializationRequirements, StorageClass, TensorRead,
-    UnsupportedReason,
+    RuntimeConfigError, RuntimeInputContract, SpecializationError, SpecializationProjection,
+    SpecializationRequirements, StorageClass, TensorRead, UnsupportedReason,
 };
 
-use crate::CpuBackend;
+use crate::CpuEngine;
+
+/// Stateless CPU preparation witness: CPU preparation reads no engine state.
+#[derive(Debug, Clone, Copy, Default)]
+struct CpuPreparer;
 
 const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
 const CPU_HARDWARE_CLASS_ID: &str = "tenferro-cpu.host.v1";
@@ -37,6 +39,14 @@ pub fn runtime_engine_id() -> Result<EngineId, RuntimeConfigError> {
     EngineId::new(CPU_ENGINE_ID).map_err(RuntimeConfigError::from)
 }
 
+/// The built-in CPU engine id, which is a valid identifier by construction.
+pub(crate) fn default_runtime_engine_id() -> EngineId {
+    match EngineId::new(CPU_ENGINE_ID) {
+        Ok(id) => id,
+        Err(_) => unreachable!("the built-in CPU engine id is a valid identifier"),
+    }
+}
+
 /// Return the canonical CPU runtime hardware class.
 ///
 /// # Errors
@@ -47,59 +57,37 @@ pub fn runtime_hardware_class() -> Result<HardwareClassId, RuntimeConfigError> {
     HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)
 }
 
-/// Build a runtime engine registration for a [`CpuBackend`].
+/// Build a runtime engine registration for a [`CpuEngine`].
 ///
-/// The registration exposes CPU direct core preparation capabilities, CPU cache
-/// ownership hooks, and the runtime-owned tensor backend execution bridge.
+/// The registration exposes the stateless CPU core preparation capabilities
+/// and the engine's input contract.
 ///
 /// # Errors
 ///
 /// Returns [`RuntimeConfigError`] if one of the built-in CPU runtime identifiers
 /// violates runtime validation or if the registration is internally invalid.
 pub fn runtime_engine_registration(
-    backend: &CpuBackend,
+    engine: &CpuEngine,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
-    runtime_engine_registration_with_id(backend, runtime_engine_id()?)
+    runtime_engine_registration_with_id(engine, runtime_engine_id()?)
 }
 
-/// Build a runtime engine registration for a [`CpuBackend`] with a
-/// caller-selected engine identifier.
-///
-/// Use this when one process registers more than one CPU backend, for example
-/// when separate CPU resource domains or provider bundles need distinct
-/// placement identities. The hardware and storage classes remain the
-/// canonical host CPU classes; only the engine identity is caller-selected.
+/// Build a runtime engine registration for a [`CpuEngine`] under `engine_id`.
 ///
 /// # Errors
 ///
-/// Returns [`RuntimeConfigError`] if the supplied engine identifier or one of
-/// the built-in CPU runtime identifiers fails runtime validation, or if the
-/// registration is internally invalid.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::{runtime_engine_registration_with_id, CpuBackend};
-/// use tenferro_runtime::EngineId;
-///
-/// let backend = CpuBackend::new();
-/// let engine_id = EngineId::new("example.cpu.primary.v1")?;
-/// let registration = runtime_engine_registration_with_id(&backend, engine_id)?;
-/// assert_eq!(registration.engine_id().as_str(), "example.cpu.primary.v1");
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// ```
+/// Returns [`RuntimeConfigError`] if `engine_id` or a built-in CPU runtime
+/// identifier violates runtime validation, or if the registration is invalid.
 pub fn runtime_engine_registration_with_id(
-    backend: &CpuBackend,
+    engine: &CpuEngine,
     engine_id: EngineId,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
-    let backend = Arc::new(backend.clone());
-    let elementwise: Arc<dyn ElementwiseRuntime> = backend.clone();
-    let reduction: Arc<dyn ReductionRuntime> = backend.clone();
-    let indexing: Arc<dyn IndexingRuntime> = backend.clone();
-    let dot_general: Arc<dyn DotGeneralPreparation> = backend.clone();
-    let layout: Arc<dyn LayoutRuntime> = backend.clone();
-    let cache_owner: Arc<dyn RuntimeCacheOwner> = backend.clone();
-    let execution_backend = backend.as_ref().clone();
+    let preparer = Arc::new(CpuPreparer);
+    let elementwise: Arc<dyn ElementwiseRuntime> = preparer.clone();
+    let reduction: Arc<dyn ReductionRuntime> = preparer.clone();
+    let indexing: Arc<dyn IndexingRuntime> = preparer.clone();
+    let dot_general: Arc<dyn DotGeneralPreparation> = preparer.clone();
+    let layout: Arc<dyn LayoutRuntime> = preparer;
 
     let mut capabilities = CoreCapabilityBundle::builder();
     capabilities
@@ -115,12 +103,10 @@ pub fn runtime_engine_registration_with_id(
     let signature_storage = storage.clone();
     let runtime_storage = storage.clone();
     let resident_storage = storage.clone();
-    let allocation_domain = backend.allocation_domain();
+    let allocation_domain = engine.allocation_domain();
     let provider_id = crate::cpu_provider_id();
-    let provider_device_identity = ProviderDeviceIdentity::new(
-        ProviderId::new(provider_id)?,
-        format!("domain:{}", backend.engine.domain().id().as_u64()),
-    )?;
+    let provider_device_identity =
+        ProviderDeviceIdentity::new(ProviderId::new(provider_id)?, "host".to_owned())?;
     let ingress = InputIngressContract::new(
         InputPlacementContract::new(move |placement, candidate| {
             candidate == &placement_storage
@@ -149,10 +135,8 @@ pub fn runtime_engine_registration_with_id(
     );
     assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
         metadata,
-        execution_backend,
-        Arc::new(ImmediateEventDomainDriver::new()),
+        ExecutionContextIdentity::of::<CpuEngine>(),
         ingress,
-        Some(cache_owner),
     ))
 }
 
@@ -228,7 +212,7 @@ impl PreparedOperation for CpuPreparedOperation {
     }
 }
 
-impl ElementwiseRuntime for CpuBackend {
+impl ElementwiseRuntime for CpuPreparer {
     fn prepare(
         &self,
         request: ElementwisePrepareRequest<'_>,
@@ -245,7 +229,7 @@ impl ElementwiseRuntime for CpuBackend {
     }
 }
 
-impl ReductionRuntime for CpuBackend {
+impl ReductionRuntime for CpuPreparer {
     fn prepare(
         &self,
         request: ReductionPrepareRequest<'_>,
@@ -258,7 +242,7 @@ impl ReductionRuntime for CpuBackend {
     }
 }
 
-impl IndexingRuntime for CpuBackend {
+impl IndexingRuntime for CpuPreparer {
     fn prepare(
         &self,
         request: IndexingPrepareRequest<'_>,
@@ -271,7 +255,7 @@ impl IndexingRuntime for CpuBackend {
     }
 }
 
-impl DotGeneralPreparation for CpuBackend {
+impl DotGeneralPreparation for CpuPreparer {
     fn prepare(
         &self,
         request: DotGeneralPrepareRequest<'_>,
@@ -284,7 +268,7 @@ impl DotGeneralPreparation for CpuBackend {
     }
 }
 
-impl LayoutRuntime for CpuBackend {
+impl LayoutRuntime for CpuPreparer {
     fn prepare(
         &self,
         request: LayoutPrepareRequest<'_>,
@@ -297,13 +281,29 @@ impl LayoutRuntime for CpuBackend {
     }
 }
 
-impl RuntimeCacheOwner for CpuBackend {
-    fn cache_stats(&self) -> Result<tenferro_runtime::runtime::CacheStats, CacheOwnerError> {
-        self.runtime_cache_stats().map_err(cache_owner_error)
+impl tenferro_runtime::ExecutionEngine for CpuEngine {
+    fn target(&self) -> tenferro_runtime::EngineTarget {
+        tenferro_runtime::EngineTarget::new(
+            self.runtime_engine_id.clone(),
+            ExecutionContextIdentity::of::<CpuEngine>(),
+            self.allocation_domain(),
+        )
     }
 
-    fn clear_caches(&self) -> Result<(), CacheOwnerError> {
-        self.clear_runtime_caches().map_err(cache_owner_error)
+    fn take_extension_caches(&mut self) -> tenferro_runtime::ExtensionCacheStore {
+        std::mem::take(&mut self.extension_caches)
+    }
+
+    fn restore_extension_caches(&mut self, caches: tenferro_runtime::ExtensionCacheStore) {
+        self.extension_caches = caches;
+    }
+
+    fn mark_broken(&mut self) {
+        self.broken = true;
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
@@ -344,7 +344,7 @@ fn prepare_cpu(
 }
 
 fn validate_cpu_runtime_context(context: &CorePrepareContext<'_>) -> Result<(), PrepareError> {
-    let expected_context = ExecutionContextIdentity::of::<CpuBackend>();
+    let expected_context = ExecutionContextIdentity::of::<CpuEngine>();
     if context.binding().context_identity() != expected_context {
         return Err(PrepareError::ProviderContract {
             source: ProviderContractError::WrongOperationFamily {
@@ -642,10 +642,6 @@ fn checked_sum_options(values: impl IntoIterator<Item = Option<usize>>) -> Optio
     values
         .into_iter()
         .try_fold(0usize, |sum, value| sum.checked_add(value?))
-}
-
-fn cache_owner_error(source: crate::Error) -> CacheOwnerError {
-    CacheOwnerError::new(Arc::new(source))
 }
 
 impl fmt::Display for CpuPreparedKind {

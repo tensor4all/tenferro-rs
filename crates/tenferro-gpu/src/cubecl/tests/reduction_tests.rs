@@ -1,3 +1,4 @@
+use crate::cubecl::tests::EngineRun;
 // Run with: cargo test --features cuda -- --ignored
 use tenferro_tensor::{DType, TensorRead, TensorView};
 
@@ -5,7 +6,6 @@ use super::{
     assert_cuda_unsupported_dtype, assert_tensor_close, cpu_backend, download, gpu_backend,
     tensor_bool, tensor_c32, tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
 };
-use tenferro_tensor::BackendSessionHost;
 
 #[test]
 #[ignore]
@@ -41,28 +41,20 @@ fn test_cubecl_full_axis_reductions_preserve_scalar_shape_and_values() {
         let gpu_input = upload(&gpu, input);
         for (expected, gpu_out) in [
             (
-                cpu.with_backend_session(|__s| {
-                    __s.reduce_sum_read(TensorRead::from_tensor(input), &[0, 1])
-                })
-                .unwrap()
-                .unwrap(),
-                gpu.with_backend_session(|__s| {
-                    __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0, 1])
-                })
-                .unwrap()
-                .unwrap(),
+                cpu.run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(input), &[0, 1]))
+                    .unwrap()
+                    .unwrap(),
+                gpu.run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0, 1]))
+                    .unwrap()
+                    .unwrap(),
             ),
             (
-                cpu.with_backend_session(|__s| {
-                    __s.reduce_prod_read(TensorRead::from_tensor(input), &[0, 1])
-                })
-                .unwrap()
-                .unwrap(),
-                gpu.with_backend_session(|__s| {
-                    __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[0, 1])
-                })
-                .unwrap()
-                .unwrap(),
+                cpu.run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(input), &[0, 1]))
+                    .unwrap()
+                    .unwrap(),
+                gpu.run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[0, 1]))
+                    .unwrap()
+                    .unwrap(),
             ),
         ] {
             assert!(expected.shape().is_empty());
@@ -74,24 +66,20 @@ fn test_cubecl_full_axis_reductions_preserve_scalar_shape_and_values() {
         if !matches!(input.dtype(), crate::DType::C32 | crate::DType::C64) {
             for (expected, gpu_out) in [
                 (
-                    cpu.with_backend_session(|__s| {
-                        __s.reduce_min_read(TensorRead::from_tensor(input), &[0, 1])
-                    })
-                    .unwrap()
-                    .unwrap(),
-                    gpu.with_backend_session(|__s| {
+                    cpu.run(|__s| __s.reduce_min_read(TensorRead::from_tensor(input), &[0, 1]))
+                        .unwrap()
+                        .unwrap(),
+                    gpu.run(|__s| {
                         __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[0, 1])
                     })
                     .unwrap()
                     .unwrap(),
                 ),
                 (
-                    cpu.with_backend_session(|__s| {
-                        __s.reduce_max_read(TensorRead::from_tensor(input), &[0, 1])
-                    })
-                    .unwrap()
-                    .unwrap(),
-                    gpu.with_backend_session(|__s| {
+                    cpu.run(|__s| __s.reduce_max_read(TensorRead::from_tensor(input), &[0, 1]))
+                        .unwrap()
+                        .unwrap(),
+                    gpu.run(|__s| {
                         __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), &[0, 1])
                     })
                     .unwrap()
@@ -117,44 +105,44 @@ fn test_cubecl_float_reductions_match_cpu() {
     let gpu_input = upload(&gpu, &input);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[1]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[1]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[1]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[1]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&input), &[0]))
+        .run(|__s| __s.reduce_max_read(TensorRead::from_tensor(&input), &[0]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), &[1]))
+        .run(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), &[1]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[1]))
+        .run(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[1]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
@@ -175,15 +163,11 @@ fn test_cubecl_sum_squares_matches_cpu_for_multi_axis_and_empty_axes() {
         let gpu_input = upload(&gpu, input);
         for axes in [&[0, 1][..], &[][..]] {
             let expected = cpu
-                .with_backend_session(|__s| {
-                    __s.reduce_sum_squares_read(TensorRead::from_tensor(input), axes)
-                })
+                .run(|__s| __s.reduce_sum_squares_read(TensorRead::from_tensor(input), axes))
                 .unwrap()
                 .unwrap();
             let gpu_output = gpu
-                .with_backend_session(|__s| {
-                    __s.reduce_sum_squares_read(TensorRead::from_tensor(&gpu_input), axes)
-                })
+                .run(|__s| __s.reduce_sum_squares_read(TensorRead::from_tensor(&gpu_input), axes))
                 .unwrap()
                 .unwrap();
             assert_tensor_close(&download(&gpu, &gpu_output), &expected, 1e-5);
@@ -193,7 +177,7 @@ fn test_cubecl_sum_squares_matches_cpu_for_multi_axis_and_empty_axes() {
                 _ => unreachable!("sum-of-squares test uses float inputs"),
             };
             let view_output = gpu
-                .with_backend_session(|session| {
+                .run(|session| {
                     session.reduce_sum_squares_read(TensorRead::from_view(gpu_view), axes)
                 })
                 .unwrap()
@@ -204,9 +188,7 @@ fn test_cubecl_sum_squares_matches_cpu_for_multi_axis_and_empty_axes() {
 
     let integer = upload(&gpu, &tensor_i32(vec![2], vec![1, 2]));
     let error = gpu
-        .with_backend_session(|__s| {
-            __s.reduce_sum_squares_read(TensorRead::from_tensor(&integer), &[0])
-        })
+        .run(|__s| __s.reduce_sum_squares_read(TensorRead::from_tensor(&integer), &[0]))
         .unwrap()
         .unwrap_err();
     assert_cuda_unsupported_dtype(&error, "reduce_sum_squares", DType::I32);
@@ -226,9 +208,7 @@ fn test_cubecl_sum_squares_does_not_contract_multiply_and_add() {
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
     let gpu_output = gpu
-        .with_backend_session(|__s| {
-            __s.reduce_sum_squares_read(TensorRead::from_tensor(&gpu_input), &[0])
-        })
+        .run(|__s| __s.reduce_sum_squares_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_output);
@@ -292,28 +272,20 @@ fn test_cubecl_float_max_min_reductions_propagate_nan_for_unit_and_plane() {
         let gpu_input = upload(&gpu, &input);
         for (expected, actual) in [
             (
-                cpu.with_backend_session(|__s| {
-                    __s.reduce_max_read(TensorRead::from_tensor(&input), &[0])
-                })
-                .unwrap()
-                .unwrap(),
-                gpu.with_backend_session(|__s| {
-                    __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), &[0])
-                })
-                .unwrap()
-                .unwrap(),
+                cpu.run(|__s| __s.reduce_max_read(TensorRead::from_tensor(&input), &[0]))
+                    .unwrap()
+                    .unwrap(),
+                gpu.run(|__s| __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), &[0]))
+                    .unwrap()
+                    .unwrap(),
             ),
             (
-                cpu.with_backend_session(|__s| {
-                    __s.reduce_min_read(TensorRead::from_tensor(&input), &[0])
-                })
-                .unwrap()
-                .unwrap(),
-                gpu.with_backend_session(|__s| {
-                    __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[0])
-                })
-                .unwrap()
-                .unwrap(),
+                cpu.run(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), &[0]))
+                    .unwrap()
+                    .unwrap(),
+                gpu.run(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[0]))
+                    .unwrap()
+                    .unwrap(),
             ),
         ] {
             assert_all_nan(&expected);
@@ -340,35 +312,35 @@ fn test_cubecl_complex_sum_and_prod_match_cpu() {
     let gpu_input = upload(&gpu, &input);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[1]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[1]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[1]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[1]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let err = gpu
-        .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "reduce_max", DType::C64);
 
     let err = gpu
-        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "reduce_min", DType::C64);
@@ -398,28 +370,20 @@ fn test_cubecl_complex_sum_and_prod_match_cpu_on_plane_path() {
             let gpu_input = upload(&gpu, &input);
             for (expected, actual) in [
                 (
-                    cpu.with_backend_session(|__s| {
-                        __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0])
-                    })
-                    .unwrap()
-                    .unwrap(),
-                    gpu.with_backend_session(|__s| {
-                        __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0])
-                    })
-                    .unwrap()
-                    .unwrap(),
+                    cpu.run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
+                        .unwrap()
+                        .unwrap(),
+                    gpu.run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
+                        .unwrap()
+                        .unwrap(),
                 ),
                 (
-                    cpu.with_backend_session(|__s| {
-                        __s.reduce_prod_read(TensorRead::from_tensor(&input), &[0])
-                    })
-                    .unwrap()
-                    .unwrap(),
-                    gpu.with_backend_session(|__s| {
-                        __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[0])
-                    })
-                    .unwrap()
-                    .unwrap(),
+                    cpu.run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[0]))
+                        .unwrap()
+                        .unwrap(),
+                    gpu.run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[0]))
+                        .unwrap()
+                        .unwrap(),
                 ),
             ] {
                 assert_tensor_close(&download(&gpu, &actual), &expected, 1e-5);
@@ -438,22 +402,22 @@ fn test_cubecl_i64_sum_and_prod_match_cpu() {
     let gpu_input = upload(&gpu, &input);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[2]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[2]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[2]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[2]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
@@ -470,22 +434,22 @@ fn test_cubecl_i32_sum_and_prod_match_cpu() {
     let gpu_input = upload(&gpu, &input);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[2]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[2]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[2]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[2]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
@@ -501,11 +465,11 @@ fn test_cubecl_integer_reductions_wrap_on_overflow() {
     let input = tensor_i32(vec![2, 2], vec![i32::MAX, 1, i32::MAX, 2]);
     let gpu_input = upload(&gpu, &input);
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
@@ -514,11 +478,11 @@ fn test_cubecl_integer_reductions_wrap_on_overflow() {
     let input = tensor_i32(vec![2, 2], vec![i32::MIN, -1, i32::MAX, 2]);
     let gpu_input = upload(&gpu, &input);
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[0]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[0]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
@@ -527,22 +491,22 @@ fn test_cubecl_integer_reductions_wrap_on_overflow() {
     let input = tensor_i64(vec![2, 1], vec![i64::MAX, 2]);
     let gpu_input = upload(&gpu, &input);
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[0]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[0]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
@@ -551,22 +515,22 @@ fn test_cubecl_integer_reductions_wrap_on_overflow() {
     let input = tensor_i32(vec![2, 2], vec![i32::MIN, 1, i32::MAX, -5]);
     let gpu_input = upload(&gpu, &input);
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&input), &[0]))
+        .run(|__s| __s.reduce_max_read(TensorRead::from_tensor(&input), &[0]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), &[1]))
+        .run(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), &[1]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[1]))
+        .run(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[1]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
@@ -575,22 +539,22 @@ fn test_cubecl_integer_reductions_wrap_on_overflow() {
     let input = tensor_i64(vec![2, 2], vec![i64::MIN, 7, i64::MAX, -9]);
     let gpu_input = upload(&gpu, &input);
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&input), &[0]))
+        .run(|__s| __s.reduce_max_read(TensorRead::from_tensor(&input), &[0]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 0.0);
 
     let expected = cpu
-        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), &[1]))
+        .run(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), &[1]))
         .unwrap()
         .unwrap();
     let gpu_out = gpu
-        .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[1]))
+        .run(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), &[1]))
         .unwrap()
         .unwrap();
     let actual = download(&gpu, &gpu_out);
@@ -600,28 +564,20 @@ fn test_cubecl_integer_reductions_wrap_on_overflow() {
     let gpu_input = upload(&gpu, &input);
     for (expected, gpu_out) in [
         (
-            cpu.with_backend_session(|__s| {
-                __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0])
-            })
-            .unwrap()
-            .unwrap(),
-            gpu.with_backend_session(|__s| {
-                __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0])
-            })
-            .unwrap()
-            .unwrap(),
+            cpu.run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
+                .unwrap()
+                .unwrap(),
+            gpu.run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
+                .unwrap()
+                .unwrap(),
         ),
         (
-            cpu.with_backend_session(|__s| {
-                __s.reduce_prod_read(TensorRead::from_tensor(&input), &[0])
-            })
-            .unwrap()
-            .unwrap(),
-            gpu.with_backend_session(|__s| {
-                __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[0])
-            })
-            .unwrap()
-            .unwrap(),
+            cpu.run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), &[0]))
+                .unwrap()
+                .unwrap(),
+            gpu.run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[0]))
+                .unwrap()
+                .unwrap(),
         ),
     ] {
         let actual = download(&gpu, &gpu_out);
@@ -638,13 +594,13 @@ fn test_cubecl_bool_reductions_are_unsupported() {
     let gpu_input = upload(&gpu, &input);
 
     let err = gpu
-        .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
+        .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
         .unwrap()
         .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "reduce_sum", DType::Bool);
 
     let err = gpu
-        .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[1]))
+        .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), &[1]))
         .unwrap()
         .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "reduce_prod", DType::Bool);
@@ -664,13 +620,11 @@ fn test_cubecl_reductions_column_major_3d_axes_match_cpu() {
 
     for axes in [&[0][..], &[1][..], &[2][..], &[0, 2][..]] {
         let expected = cpu
-            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), axes))
+            .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&input), axes))
             .unwrap()
             .unwrap();
         let gpu_out = gpu
-            .with_backend_session(|__s| {
-                __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), axes)
-            })
+            .run(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&gpu_input), axes))
             .unwrap()
             .unwrap();
         let actual = download(&gpu, &gpu_out);
@@ -678,13 +632,11 @@ fn test_cubecl_reductions_column_major_3d_axes_match_cpu() {
         assert_tensor_close(&actual, &expected, 1e-12);
 
         let expected = cpu
-            .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), axes))
+            .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&input), axes))
             .unwrap()
             .unwrap();
         let gpu_out = gpu
-            .with_backend_session(|__s| {
-                __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), axes)
-            })
+            .run(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&gpu_input), axes))
             .unwrap()
             .unwrap();
         let actual = download(&gpu, &gpu_out);
@@ -692,13 +644,11 @@ fn test_cubecl_reductions_column_major_3d_axes_match_cpu() {
         assert_tensor_close(&actual, &expected, 1e-12);
 
         let expected = cpu
-            .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&input), axes))
+            .run(|__s| __s.reduce_max_read(TensorRead::from_tensor(&input), axes))
             .unwrap()
             .unwrap();
         let gpu_out = gpu
-            .with_backend_session(|__s| {
-                __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), axes)
-            })
+            .run(|__s| __s.reduce_max_read(TensorRead::from_tensor(&gpu_input), axes))
             .unwrap()
             .unwrap();
         let actual = download(&gpu, &gpu_out);
@@ -706,13 +656,11 @@ fn test_cubecl_reductions_column_major_3d_axes_match_cpu() {
         assert_tensor_close(&actual, &expected, 1e-12);
 
         let expected = cpu
-            .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), axes))
+            .run(|__s| __s.reduce_min_read(TensorRead::from_tensor(&input), axes))
             .unwrap()
             .unwrap();
         let gpu_out = gpu
-            .with_backend_session(|__s| {
-                __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), axes)
-            })
+            .run(|__s| __s.reduce_min_read(TensorRead::from_tensor(&gpu_input), axes))
             .unwrap()
             .unwrap();
         let actual = download(&gpu, &gpu_out);
@@ -759,15 +707,11 @@ fn test_cubecl_complex_full_reduction_compiles_and_matches_cpu() {
             let gpu_input = upload(&gpu, &input);
 
             let expected = cpu
-                .with_backend_session(|session| {
-                    session.reduce_sum_read(TensorRead::from_tensor(&input), &[0])
-                })
+                .run(|session| session.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
                 .unwrap()
                 .unwrap();
             let actual = gpu
-                .with_backend_session(|session| {
-                    session.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0])
-                })
+                .run(|session| session.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0]))
                 .unwrap()
                 .unwrap();
             let actual = download(&gpu, &actual);
@@ -780,7 +724,7 @@ fn test_cubecl_complex_full_reduction_compiles_and_matches_cpu() {
 
             // The reported sequence: `reduce_sum(sub(x, x))` is exactly zero.
             let difference = gpu
-                .with_backend_session(|session| {
+                .run(|session| {
                     session.sub_read(
                         TensorRead::from_tensor(&gpu_input),
                         TensorRead::from_tensor(&gpu_input),
@@ -789,9 +733,7 @@ fn test_cubecl_complex_full_reduction_compiles_and_matches_cpu() {
                 .unwrap()
                 .unwrap();
             let reduced = gpu
-                .with_backend_session(|session| {
-                    session.reduce_sum_read(TensorRead::from_tensor(&difference), &[0])
-                })
+                .run(|session| session.reduce_sum_read(TensorRead::from_tensor(&difference), &[0]))
                 .unwrap()
                 .unwrap();
             let reduced = download(&gpu, &reduced);
@@ -859,9 +801,7 @@ fn test_cubecl_split_reduction_large_axis_matches_cpu() {
         // The expected value also comes from the CPU backend, so a wrong host
         // sum cannot make a wrong device result look right.
         let reference = cpu
-            .with_backend_session(|session| {
-                session.reduce_sum_read(TensorRead::from_tensor(&input), &[0])
-            })
+            .run(|session| session.reduce_sum_read(TensorRead::from_tensor(&input), &[0]))
             .unwrap()
             .unwrap();
         assert!(
@@ -875,7 +815,7 @@ fn test_cubecl_split_reduction_large_axis_matches_cpu() {
         for _ in 0..3 {
             let started = std::time::Instant::now();
             actual = Some(
-                gpu.with_backend_session(|session| {
+                gpu.run(|session| {
                     session.reduce_sum_read(TensorRead::from_tensor(&gpu_input), &[0])
                 })
                 .unwrap()
@@ -896,7 +836,7 @@ fn test_cubecl_split_reduction_large_axis_matches_cpu() {
         // The reported exactness case survives the split: every chunk sums to
         // exactly zero, so the combine pass does too.
         let difference = gpu
-            .with_backend_session(|session| {
+            .run(|session| {
                 session.sub_read(
                     TensorRead::from_tensor(&gpu_input),
                     TensorRead::from_tensor(&gpu_input),
@@ -905,9 +845,7 @@ fn test_cubecl_split_reduction_large_axis_matches_cpu() {
             .unwrap()
             .unwrap();
         let reduced = gpu
-            .with_backend_session(|session| {
-                session.reduce_sum_read(TensorRead::from_tensor(&difference), &[0])
-            })
+            .run(|session| session.reduce_sum_read(TensorRead::from_tensor(&difference), &[0]))
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -926,13 +864,11 @@ fn test_cubecl_split_reduction_large_axis_matches_cpu() {
         ($cpu:expr, $gpu:expr, $label:expr, $input:expr, $op:ident) => {{
             let gpu_input = upload(&$gpu, &$input);
             let expected = $cpu
-                .with_backend_session(|session| session.$op(TensorRead::from_tensor(&$input), &[0]))
+                .run(|session| session.$op(TensorRead::from_tensor(&$input), &[0]))
                 .unwrap()
                 .unwrap();
             let actual = $gpu
-                .with_backend_session(|session| {
-                    session.$op(TensorRead::from_tensor(&gpu_input), &[0])
-                })
+                .run(|session| session.$op(TensorRead::from_tensor(&gpu_input), &[0]))
                 .unwrap()
                 .unwrap();
             assert_tensor_close(&download(&$gpu, &actual), &expected, 0.0);

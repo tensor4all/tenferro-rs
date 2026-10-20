@@ -897,7 +897,7 @@ impl TracedTensor {
 
     /// Build a data-less placeholder leaf with a fixed (concrete) shape.
     ///
-    /// Must be passed as an input to [`crate::Runtime::run_compiled`] before evaluation.
+    /// Must be passed as an input to [`crate::Runtime::prepare`] before evaluation.
     /// Use this when you know the exact shape of the input but want to build
     /// the graph once and feed different concrete tensors at execution time.
     ///
@@ -997,7 +997,7 @@ impl TracedTensor {
     /// Build a data-less placeholder leaf with the given rank but fully
     /// symbolic shape (every dim is a distinct `SymDim::TensorAxis`).
     ///
-    /// Must be passed as an input to [`crate::Runtime::run_compiled`] before
+    /// Must be passed as an input to [`crate::Runtime::prepare`] before
     /// evaluation. Use this to build shape-agnostic graphs.
     ///
     /// # Examples
@@ -2871,21 +2871,26 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     /// let cols = x.shape_of(1)?;
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&cols).unwrap();
-    /// let backend = CpuBackend::new();
+    /// let mut engine = CpuEngine::serial();
     /// let mut builder = Runtime::builder();
     /// builder
-    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
     ///     .unwrap();
     /// let runtime = builder.build().unwrap();
-    /// let outputs = runtime.run_compiled(&program, &[]).unwrap();
-    /// let out = &outputs[0];
+    /// let prepared = runtime
+    ///     .prepare(&program, &[], &[engine.target()])
+    ///     .unwrap();
+    /// let mut outputs = runtime
+    ///     .run(&mut [&mut engine], &prepared, &[])
+    ///     .unwrap();
+    /// let out = outputs.remove(0).into_tensor(&mut engine).unwrap();
     /// assert_eq!(out.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
@@ -2915,22 +2920,27 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     /// let size = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
     /// let y = x.dynamic_truncate(&size, 0)?;
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
-    /// let backend = CpuBackend::new();
+    /// let mut engine = CpuEngine::serial();
     /// let mut builder = Runtime::builder();
     /// builder
-    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
     ///     .unwrap();
     /// let runtime = builder.build().unwrap();
-    /// let outputs = runtime.run_compiled(&program, &[]).unwrap();
-    /// let out = &outputs[0];
+    /// let prepared = runtime
+    ///     .prepare(&program, &[], &[engine.target()])
+    ///     .unwrap();
+    /// let mut outputs = runtime
+    ///     .run(&mut [&mut engine], &prepared, &[])
+    ///     .unwrap();
+    /// let out = outputs.remove(0).into_tensor(&mut engine).unwrap();
     /// assert_eq!(out.shape(), &[2]);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
@@ -2974,22 +2984,27 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let reference = TracedTensor::from_vec_col_major(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]).unwrap();
     /// let y = x.pad_to_match(&reference, 0)?;
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
-    /// let backend = CpuBackend::new();
+    /// let mut engine = CpuEngine::serial();
     /// let mut builder = Runtime::builder();
     /// builder
-    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
     ///     .unwrap();
     /// let runtime = builder.build().unwrap();
-    /// let outputs = runtime.run_compiled(&program, &[]).unwrap();
-    /// let out = &outputs[0];
+    /// let prepared = runtime
+    ///     .prepare(&program, &[], &[engine.target()])
+    ///     .unwrap();
+    /// let mut outputs = runtime
+    ///     .run(&mut [&mut engine], &prepared, &[])
+    ///     .unwrap();
+    /// let out = outputs.remove(0).into_tensor(&mut engine).unwrap();
     /// assert_eq!(out.shape(), &[4]);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```

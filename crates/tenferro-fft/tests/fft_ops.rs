@@ -4,12 +4,13 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 mod support;
 #[cfg(feature = "autodiff")]
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 #[cfg(feature = "autodiff")]
 use tenferro_fft::EagerSessionFftExt;
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
 use tenferro_runtime::{
-    DType, Error as RuntimeError, ErrorPhase, GraphCompiler, PrepareError, Tensor, TracedTensor,
+    DType, Error as RuntimeError, ErrorPhase, ExecutionEngine, ExtensionCacheSelector,
+    GraphCompiler, PrepareError, Tensor, TracedTensor,
 };
 use tenferro_tensor::{
     BackendStorageHandle, DeviceId, DeviceKind, ErrorKind, GpuBackendKind, MemoryKind, Placement,
@@ -84,9 +85,10 @@ fn fft_ad_context() -> tenferro_ad::AdContext {
 #[cfg(feature = "autodiff")]
 #[test]
 fn eager_fft_family_installs_and_executes_on_the_borrowed_session() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+    let mut engine = CpuEngine::serial();
+    let ctx = EagerRuntime::new().unwrap();
     let (output, inverse, half, real_back) = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut engine, |session| {
             let input = session
                 .constant_from(Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0]).unwrap())?;
             let output = session.fft(&input, None, -1, FftNorm::Backward)?;
@@ -112,12 +114,15 @@ fn eager_fft_family_installs_and_executes_on_the_borrowed_session() {
         real_back.value().unwrap().as_slice::<f64>().unwrap(),
         &[1.0, 2.0],
     );
-    let other = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+    let mut engine = CpuEngine::serial();
+    let other = EagerRuntime::new().unwrap();
     let foreign = other
         .constant_from(Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0]).unwrap())
         .unwrap();
     let error = ctx
-        .with_eager_session(|session| session.fft(&foreign, None, -1, FftNorm::Backward))
+        .with_eager_session(&mut engine, |session| {
+            session.fft(&foreign, None, -1, FftNorm::Backward)
+        })
         .unwrap_err();
     assert!(matches!(error, RuntimeError::ContextMismatch { .. }));
 }
@@ -203,11 +208,11 @@ fn registered_runtime_rejects_gpu_input_without_ingress() {
         .compile_with_input_specs(&y, &[(&x, DType::C64, &[2])])
         .unwrap();
     let gpu_input = cuda_c64_tensor(vec![2]);
-    let backend = CpuBackend::new();
-    let runtime = support::cpu_runtime_with_fft(&backend).unwrap();
+    let mut engine = CpuEngine::serial();
+    let runtime = support::cpu_runtime_with_fft(&engine).unwrap();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        runtime.run_compiled(&program, &[&gpu_input])
+        support::run_on_engine(&runtime, &mut engine, &program, &[&gpu_input])
     }));
     assert!(
         result.is_ok(),
@@ -296,7 +301,7 @@ fn fft_source_has_no_process_global_plan_cache() {
 }
 
 #[test]
-fn graph_runtime_owns_fft_plan_cache() {
+fn graph_runs_keep_fft_plans_in_the_engine() {
     let x = TracedTensor::from_vec_col_major(
         vec![4],
         vec![
@@ -310,17 +315,24 @@ fn graph_runtime_owns_fft_plan_cache() {
     let y = x.fft(None, -1, FftNorm::Backward).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
-    let backend = CpuBackend::new();
-    let runtime = support::cpu_runtime_with_fft(&backend).unwrap();
+    let mut engine = CpuEngine::serial();
+    let runtime = support::cpu_runtime_with_fft(&engine).unwrap();
 
-    runtime.run_compiled(&program, &[]).unwrap();
-    runtime.run_compiled(&program, &[]).unwrap();
-    let stats = runtime.cache_stats().unwrap().extensions;
+    support::run_on_engine(&runtime, &mut engine, &program, &[]).unwrap();
+    support::run_on_engine(&runtime, &mut engine, &program, &[]).unwrap();
+    // The runtime lends the engine's extension caches to each run and returns
+    // them, so the plan stays with the engine across runs (#2206).
+    let mut caches = engine.take_extension_caches();
+    let stats = caches.stats(ExtensionCacheSelector::All);
     assert_eq!(stats.entries, 1);
     assert!(stats.retained_bytes > 0);
-
-    runtime.clear_caches().unwrap();
-    assert_eq!(runtime.cache_stats().unwrap().extensions.entries, 0);
+    assert!(
+        stats.hits >= 1,
+        "the second run must reuse the first run's plan"
+    );
+    caches.clear();
+    assert_eq!(caches.stats(ExtensionCacheSelector::All).entries, 0);
+    engine.restore_extension_caches(caches);
 }
 
 #[test]
@@ -561,13 +573,18 @@ fn eager_fft_matches_traced_fft() {
         .fft(Some(3), -1, FftNorm::Ortho)
         .unwrap();
     let input = eager(input);
+    let mut engine = CpuEngine::serial();
     let eager = input
         .runtime()
-        .with_eager_session(|s| s.fft(&input, Some(3), -1, FftNorm::Ortho))
+        .with_eager_session(&mut engine, |s| s.fft(&input, Some(3), -1, FftNorm::Ortho))
         .unwrap();
 
     assert_c64_close(
-        eager.to_tensor().unwrap().as_slice::<Complex64>().unwrap(),
+        eager
+            .to_tensor(&mut engine)
+            .unwrap()
+            .as_slice::<Complex64>()
+            .unwrap(),
         run(&traced).as_slice::<Complex64>().unwrap(),
     );
 }
@@ -590,13 +607,18 @@ fn eager_ifft_matches_traced_ifft() {
         .ifft(None, 0, FftNorm::Forward)
         .unwrap();
     let input = eager(input);
+    let mut engine = CpuEngine::serial();
     let eager = input
         .runtime()
-        .with_eager_session(|s| s.ifft(&input, None, 0, FftNorm::Forward))
+        .with_eager_session(&mut engine, |s| s.ifft(&input, None, 0, FftNorm::Forward))
         .unwrap();
 
     assert_c64_close(
-        eager.to_tensor().unwrap().as_slice::<Complex64>().unwrap(),
+        eager
+            .to_tensor(&mut engine)
+            .unwrap()
+            .as_slice::<Complex64>()
+            .unwrap(),
         run(&traced).as_slice::<Complex64>().unwrap(),
     );
 }
@@ -610,13 +632,18 @@ fn eager_rfft_matches_traced_rfft() {
         .rfft(None, -1, FftNorm::Backward)
         .unwrap();
     let input = eager(input);
+    let mut engine = CpuEngine::serial();
     let eager = input
         .runtime()
-        .with_eager_session(|s| s.rfft(&input, None, -1, FftNorm::Backward))
+        .with_eager_session(&mut engine, |s| s.rfft(&input, None, -1, FftNorm::Backward))
         .unwrap();
 
     assert_c64_close(
-        eager.to_tensor().unwrap().as_slice::<Complex64>().unwrap(),
+        eager
+            .to_tensor(&mut engine)
+            .unwrap()
+            .as_slice::<Complex64>()
+            .unwrap(),
         run(&traced).as_slice::<Complex64>().unwrap(),
     );
 }
@@ -638,9 +665,12 @@ fn eager_irfft_matches_traced_irfft() {
         .irfft(Some(4), -1, FftNorm::Backward)
         .unwrap();
     let input = eager(input);
+    let mut engine = CpuEngine::serial();
     let eager = input
         .runtime()
-        .with_eager_session(|s| s.irfft(&input, Some(4), -1, FftNorm::Backward))
+        .with_eager_session(&mut engine, |s| {
+            s.irfft(&input, Some(4), -1, FftNorm::Backward)
+        })
         .unwrap();
 
     assert_f64_close(
@@ -653,7 +683,8 @@ fn eager_irfft_matches_traced_irfft() {
 #[cfg(feature = "autodiff")]
 fn eager_fft_reuses_c2c_vjp_rule() {
     let ad = fft_ad_context();
-    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad).unwrap();
+    let mut engine = CpuEngine::serial();
+    let ctx = EagerRuntime::with_ad_context(&ad).unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(
             vec![4],
@@ -684,9 +715,11 @@ fn eager_fft_reuses_c2c_vjp_rule() {
     .unwrap();
 
     let y = ctx
-        .with_eager_session(|session| session.fft(&x, None, -1, FftNorm::Backward))
+        .with_eager_session(&mut engine, |session| {
+            session.fft(&x, None, -1, FftNorm::Backward)
+        })
         .unwrap();
-    let dx = ctx.vjp(&y, &x, &cotangent).unwrap();
+    let dx = ctx.vjp(&mut engine, &y, &x, &cotangent).unwrap();
 
     assert_c64_close(
         dx.value().unwrap().as_slice::<Complex64>().unwrap(),

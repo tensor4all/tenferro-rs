@@ -1,10 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
-use tenferro_tensor::TensorBackend;
 use tenferro_tensor::{
-    BackendSession, DotGeneralAccumulation, DotGeneralConfig, Error, Result, Tensor, TensorRank,
+    DotGeneralAccumulation, DotGeneralConfig, Engine, Error, Result, Tensor, TensorRank,
     TensorRead, TensorView, TensorWrite, TypedTensorView,
 };
 
@@ -42,7 +40,7 @@ impl<'a> TensorValue<'a> {
         }
     }
 
-    fn into_tensor(self, exec: &mut dyn BackendSession) -> Result<Tensor> {
+    fn into_tensor(self, exec: &mut dyn Engine) -> Result<Tensor> {
         match self {
             Self::Borrowed(tensor) => tensor.duplicate(),
             Self::View(view) => exec.to_contiguous_read(TensorRead::from_view(view)),
@@ -74,7 +72,7 @@ impl<'a> TensorValue<'a> {
         }
     }
 
-    fn reclaim_if_owned(self, exec: &mut dyn BackendSession) {
+    fn reclaim_if_owned(self, exec: &mut dyn Engine) {
         if let Self::Owned(tensor) = self {
             exec.reclaim_buffer(tensor);
         }
@@ -260,7 +258,7 @@ impl LabeledTensor<'_> {
         self.tensor.tensor_read()
     }
 
-    fn tensor_owned(&self, exec: &mut dyn BackendSession) -> Result<Tensor> {
+    fn tensor_owned(&self, exec: &mut dyn Engine) -> Result<Tensor> {
         match self.tensor() {
             Some(tensor) => tensor.duplicate(),
             None => exec.to_contiguous_read(self.tensor_read()),
@@ -275,13 +273,13 @@ impl LabeledTensor<'_> {
         }
     }
 
-    fn reclaim_if_owned(self, exec: &mut dyn BackendSession) {
+    fn reclaim_if_owned(self, exec: &mut dyn Engine) {
         self.tensor.reclaim_if_owned(exec);
     }
 }
 
 fn execute_binary_dot_fast_plan<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     lhs: LabeledTensor<'a>,
     rhs: LabeledTensor<'a>,
     plan: BinaryDotPlan,
@@ -373,7 +371,7 @@ fn label_size(label: u32, operands: &[&LabeledTensor<'_>]) -> Result<usize> {
 }
 
 fn broadcast_to_tree_sizes<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     operand: LabeledTensor<'a>,
     tree: &ContractionTree,
 ) -> Result<LabeledTensor<'a>> {
@@ -408,7 +406,7 @@ fn broadcast_to_tree_sizes<'a>(
 }
 
 fn reduce_tensor<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     operand: LabeledTensor<'a>,
     reduce_labels: &HashSet<u32>,
 ) -> Result<LabeledTensor<'a>> {
@@ -445,7 +443,7 @@ fn reduce_tensor<'a>(
 }
 
 fn diagonalize_repeated<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     mut operand: LabeledTensor<'a>,
 ) -> Result<LabeledTensor<'a>> {
     loop {
@@ -475,7 +473,7 @@ fn diagonalize_repeated<'a>(
 }
 
 fn embed_repeated<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     mut operand: LabeledTensor<'a>,
     output_labels: &[u32],
 ) -> Result<LabeledTensor<'a>> {
@@ -515,7 +513,7 @@ fn embed_repeated<'a>(
 }
 
 fn transpose_to_labels<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     operand: LabeledTensor<'a>,
     target_labels: &[u32],
 ) -> Result<LabeledTensor<'a>> {
@@ -542,7 +540,7 @@ fn transpose_to_labels<'a>(
 }
 
 fn outer_product<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     lhs: LabeledTensor<'a>,
     rhs: LabeledTensor<'a>,
     batch_labels: &[u32],
@@ -622,7 +620,7 @@ fn outer_product<'a>(
 }
 
 fn binary_contract<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     lhs: LabeledTensor<'a>,
     rhs: LabeledTensor<'a>,
     survive_labels: &[u32],
@@ -770,7 +768,7 @@ fn binary_contract<'a>(
 }
 
 fn eager_einsum_exec_values<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     inputs: Vec<TensorValue<'a>>,
     tree: &ContractionTree,
 ) -> Result<Tensor> {
@@ -797,7 +795,7 @@ enum EinsumExecOutput<'o> {
 /// dot-general whose result axes are exactly `out`'s labels; otherwise hand
 /// `out` back.
 fn final_step_into<'o>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     lhs: &LabeledTensor<'_>,
     rhs: &LabeledTensor<'_>,
     output_labels: &[u32],
@@ -827,7 +825,7 @@ fn final_step_into<'o>(
 }
 
 fn eager_einsum_exec_values_with_output<'a, 'o>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     inputs: Vec<TensorValue<'a>>,
     tree: &ContractionTree,
     mut out: Option<TensorWrite<'o>>,
@@ -943,7 +941,7 @@ fn eager_einsum_exec_values_with_output<'a, 'o>(
 }
 
 pub(crate) fn eager_einsum_exec(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     inputs: &[&Tensor],
     tree: &ContractionTree,
 ) -> Result<Tensor> {
@@ -965,7 +963,7 @@ pub(crate) fn eager_einsum_exec(
 }
 
 pub(crate) fn eager_einsum_exec_read(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
 ) -> Result<Tensor> {
@@ -1101,7 +1099,7 @@ pub(crate) fn binary_dot_plan_for_read_into(
 }
 
 pub(crate) fn execute_binary_dot_read_into(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     plan: &BinaryDotPlan,
     out: TensorWrite<'_>,
@@ -1116,7 +1114,7 @@ pub(crate) fn execute_binary_dot_read_into(
 /// Accumulate a prepared exact-output binary dot into `out`. The conjugation
 /// flags name the einsum inputs, so a swapped operand order swaps them too.
 pub(crate) fn execute_binary_dot_read_into_accum(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     plan: &BinaryDotPlan,
     mut accumulation: DotGeneralAccumulation,
@@ -1133,7 +1131,7 @@ pub(crate) fn execute_binary_dot_read_into_accum(
 }
 
 pub(crate) fn eager_einsum_exec_read_into(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
     out: TensorWrite<'_>,
@@ -1168,7 +1166,7 @@ pub(crate) fn eager_einsum_exec_read_into(
 }
 
 pub(crate) fn eager_einsum_exec_read_into_accum(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
     accumulation: DotGeneralAccumulation,
@@ -1217,13 +1215,13 @@ pub(crate) fn eager_einsum_exec_read_into_accum(
 ///
 #[cfg(test)]
 pub(crate) fn eager_einsum(
-    ctx: &mut impl TensorBackend,
+    engine: &mut dyn Engine,
     inputs: &[&Tensor],
     subscripts: &str,
 ) -> Result<Tensor> {
     let subscripts =
         Subscripts::parse(subscripts).map_err(|error| error.into_tensor_error(EAGER_EINSUM_OP))?;
-    eager_einsum_subscripts(ctx, inputs, &subscripts)
+    eager_einsum_subscripts(engine, inputs, &subscripts)
 }
 
 /// Convert a prepared-plan error into the eager core's tensor error surface.
@@ -1234,13 +1232,11 @@ fn into_tensor_error(error: crate::Error) -> tenferro_tensor::Error {
 /// Eager N-ary einsum on concrete [`Tensor`] values using integer labels.
 #[cfg(test)]
 pub(crate) fn eager_einsum_subscripts(
-    ctx: &mut impl TensorBackend,
+    engine: &mut dyn Engine,
     inputs: &[&Tensor],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
-    ctx.with_backend_session(|session| {
-        eager_einsum_subscripts_on_session(session, inputs, subscripts)
-    })?
+    eager_einsum_subscripts_on_session(engine, inputs, subscripts)
 }
 
 /// Eager N-ary einsum on concrete [`Tensor`] values inside an existing
@@ -1249,7 +1245,7 @@ pub(crate) fn eager_einsum_subscripts(
 /// The session-taking variant used by the concrete einsum traits: the caller
 /// already holds a session, so no nested session entry happens here.
 pub(crate) fn eager_einsum_subscripts_on_session(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     inputs: &[&Tensor],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
@@ -1259,7 +1255,7 @@ pub(crate) fn eager_einsum_subscripts_on_session(
             ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
         })
         .map_err(into_tensor_error)?;
-        let result = profile_eager_einsum_section("with_backend_session", || {
+        let result = profile_eager_einsum_section("execute_plan", || {
             plan.execute(inputs, session).map_err(into_tensor_error)
         });
         record_eager_einsum_profile("total", total_started.elapsed());
@@ -1305,13 +1301,11 @@ pub(crate) fn eager_einsum_subscripts_on_session(
 /// canonicalize them within the existing placement inside the execution session.
 #[cfg(test)]
 pub(crate) fn eager_einsum_read_subscripts(
-    ctx: &mut impl TensorBackend,
+    engine: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
-    ctx.with_backend_session(|session| {
-        eager_einsum_read_subscripts_on_session(session, inputs, subscripts)
-    })?
+    eager_einsum_read_subscripts_on_session(engine, inputs, subscripts)
 }
 
 /// Eager N-ary einsum on read-only tensor inputs inside an existing backend
@@ -1321,7 +1315,7 @@ pub(crate) fn eager_einsum_read_subscripts(
 /// consume views directly when their execution model supports it, or
 /// canonicalize them within the existing placement inside the execution session.
 pub(crate) fn eager_einsum_read_subscripts_on_session(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
@@ -1344,26 +1338,26 @@ pub(crate) fn eager_einsum_read_subscripts_on_session(
 ///
 #[cfg(test)]
 pub(crate) fn eager_einsum_owned(
-    ctx: &mut impl TensorBackend,
+    engine: &mut dyn Engine,
     inputs: Vec<Tensor>,
     subscripts: &str,
 ) -> Result<Tensor> {
     let subscripts =
         Subscripts::parse(subscripts).map_err(|error| error.into_tensor_error(EAGER_EINSUM_OP))?;
-    eager_einsum_owned_subscripts(ctx, inputs, &subscripts)
+    eager_einsum_owned_subscripts(engine, inputs, &subscripts)
 }
 
 /// Eager N-ary einsum that consumes concrete [`Tensor`] inputs using integer labels.
 #[cfg(test)]
 pub(crate) fn eager_einsum_owned_subscripts(
-    ctx: &mut impl TensorBackend,
+    engine: &mut dyn Engine,
     inputs: Vec<Tensor>,
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
     let tree = plan_subscripts(subscripts, &shapes)?;
     let values = inputs.into_iter().map(TensorValue::Owned).collect();
-    ctx.with_backend_session(|exec| eager_einsum_exec_values(exec, values, &tree))?
+    eager_einsum_exec_values(engine, values, &tree)
 }
 
 #[cfg(test)]

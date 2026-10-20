@@ -1,31 +1,29 @@
 use crate::buffer_pool::{BufferPool, PoolScalar};
-use crate::{CpuBackend, Tensor, TensorRead, TensorValue, TensorWrite};
+use crate::engine::guard_unwind;
+use crate::{CpuEngine, CpuPlanCache, Tensor, TensorRead, TensorValue, TensorWrite};
 use num_complex::{Complex32, Complex64};
-use std::sync::Arc;
-use tenferro_tensor::backend::{BackendSession, ElementwiseFusionPlan, GroupedGemmConfig};
+use tenferro_tensor::backend::{ElementwiseFusionPlan, Engine};
 use tenferro_tensor::{
     ActivationOp, CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp,
-    GatherConfig, PadConfig, ScatterConfig, SharedTensorAllocationDomain, SliceConfig, TensorView,
-    TypedTensor,
+    GatherConfig, PadConfig, ScatterConfig, SliceConfig, TensorView, TypedTensor,
 };
 use tenferro_tensor::{
     DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
     TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
 };
 
-use super::backend::{elementwise_read_into_fallback_with_pool, tag_fresh_output, FreshCpuOutput};
-use super::indexed_plan_cache::IndexedPlanCache;
-use super::provider::{CpuExecutionContext, CpuOperationEntry, ParallelMode};
+use super::backend::elementwise_read_into_fallback_with_pool;
+use super::provider::CpuExecutionContext;
 use super::{
-    activation, analytic, copy_tensor_read_into, elementwise, gemm, indexing,
+    activation, analytic, copy_tensor_read_into, elementwise, indexing,
     materialize_tensor_read_in_domain, reduction, structural,
 };
 
-/// Native-session marker for [`CpuExecSession`]; private to this crate so no
-/// other crate can create a token that claims to be a CPU session.
-pub(super) struct CpuExecSessionMarker;
+/// Native-engine marker for [`CpuEngine`]; private to this crate so no other
+/// crate can create a token that claims to be a CPU engine.
+pub(super) struct CpuEngineMarker;
 
-/// Route an eager `dot_general` request to a slot of the session's plan cache.
+/// Route an eager `dot_general` request to a slot of the engine's plan cache.
 ///
 /// A prepared program keys a contraction plan by its instruction index, because
 /// a compiled program has exactly one such index per operation. An eager call
@@ -63,134 +61,6 @@ fn eager_dot_cache_slot(
     lhs_conj.hash(&mut hasher);
     rhs_conj.hash(&mut hasher);
     Some(hasher.finish() as usize % capacity)
-}
-
-/// Borrowed CPU execution session used by scheduler-owned extension regions.
-#[doc(hidden)]
-pub struct CpuExecSession<'a> {
-    pub(crate) entry: CpuOperationEntry<'a>,
-    pub(crate) context: Option<&'a crate::CpuContext>,
-    pub(crate) entered: Option<CpuExecutionContext<'a>>,
-    pub(crate) buffers: &'a mut BufferPool,
-    pub(crate) gemm_analysis_cache: &'a mut gemm::GemmAnalysisCache,
-    pub(crate) indexed_plan_cache: &'a mut IndexedPlanCache,
-    /// N-ary contraction scratch for this session: the engine's shared store, or
-    /// this child execution's private store.
-    pub(crate) nary: &'a crate::ContractionWorkspaces,
-    pub(crate) allocation_domain: Option<&'a Arc<dyn SharedTensorAllocationDomain>>,
-    /// Backend handle whose sessions are admitted under this session's owner.
-    pub(crate) child_backend: CpuBackend,
-}
-
-/// Borrowed handle for running child executions of one CPU session.
-///
-/// The handle borrows the session it was derived from, so it cannot outlive the
-/// callback that received that session: a child therefore never outlives its
-/// issuing execution. A worker that the issuing execution joins before returning
-/// may hold it and enter its own sessions; those are admitted reentrant under the
-/// issuing execution's owner and never wait for its reservation. An execution
-/// with an unrelated owner still conflicts exactly as before, and a handle whose
-/// issuing execution has already finished is rejected instead of being admitted
-/// as a fresh independent owner.
-///
-/// # Examples
-///
-/// ```
-/// use std::thread;
-/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
-/// use tenferro_tensor::BackendSessionHost;
-///
-/// let mut backend = CpuBackend::with_threads(2)?;
-/// let value = backend
-///     .with_backend_session(|session| {
-///         with_cpu_exec_session(session, |cpu| {
-///             let child = cpu.child_execution();
-///             thread::scope(|scope| {
-///                 let worker = scope.spawn(|| {
-///                     child.backend().with_backend_session(|_| 7usize)
-///                 });
-///                 worker.join().expect("child worker must not panic")
-///             })
-///         })
-///         .expect("CpuBackend exposes its CpuExecSession")
-///     })??;
-/// assert_eq!(value, 7);
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// ```
-#[derive(Clone)]
-pub struct CpuChildExecution<'a> {
-    backend: CpuBackend,
-    session: std::marker::PhantomData<&'a CpuExecSession<'a>>,
-}
-
-impl std::fmt::Debug for CpuChildExecution<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // A summary only: the wrapped backend's own `Debug` queries live resource
-        // statistics, which is not what this handle is about.
-        f.debug_struct("CpuChildExecution")
-            .field("num_threads", &self.backend.num_threads())
-            .finish_non_exhaustive()
-    }
-}
-
-impl CpuChildExecution<'_> {
-    /// A backend handle whose sessions are admitted under the issuing
-    /// execution's owner.
-    ///
-    /// The handle shares the issuing execution's engine, arbiter and witness, so
-    /// descendant sessions are admitted reentrant. A backend taken from a handle
-    /// whose execution has finished is rejected when it next enters a session.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
-    /// use tenferro_tensor::BackendSessionHost;
-    ///
-    /// let mut backend = CpuBackend::with_threads(1)?;
-    /// backend.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |cpu| {
-    ///         let child: CpuBackend = cpu.child_execution().backend();
-    ///         assert_eq!(child.num_threads(), 1);
-    ///     })
-    ///     .expect("CpuBackend exposes its CpuExecSession");
-    /// })?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn backend(&self) -> CpuBackend {
-        self.backend.clone()
-    }
-}
-
-impl<'a> CpuExecSession<'a> {
-    /// Derive the child-execution handle for this session.
-    ///
-    /// The handle is only valid while this session is active: a session entered
-    /// from it is admitted under this execution's owner, and a handle used after
-    /// this execution finished is rejected with the typed entry error.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
-    /// use tenferro_tensor::BackendSessionHost;
-    ///
-    /// let mut backend = CpuBackend::with_threads(1)?;
-    /// backend.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |cpu| {
-    ///         let child = cpu.child_execution();
-    ///         assert_eq!(child.backend().num_threads(), 1);
-    ///     })
-    ///     .expect("CpuBackend exposes its CpuExecSession");
-    /// })?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn child_execution(&self) -> CpuChildExecution<'a> {
-        CpuChildExecution {
-            backend: self.child_backend.clone(),
-            session: std::marker::PhantomData,
-        }
-    }
 }
 
 fn pooled_zero_tensor<T>(
@@ -311,139 +181,23 @@ fn flatten_compact_read(
     }
 }
 
-impl<'a> CpuExecSession<'a> {
-    /// Return the resource-domain identity selected for this session.
-    #[doc(hidden)]
-    pub fn domain_id(&self) -> super::CpuDomainId {
-        self.entry.domain_id()
-    }
-
-    /// Return the shared allocator selected for this execution session.
-    #[doc(hidden)]
-    pub fn shared_allocation_domain(&self) -> Option<Arc<dyn SharedTensorAllocationDomain>> {
-        self.allocation_domain.cloned()
-    }
-
-    /// Replace this session's effective batch policy, returning the previous one.
+impl CpuEngine {
+    /// Replace this engine's effective batch policy, returning the previous one.
     pub(crate) fn replace_batch_policy(
         &mut self,
         policy: crate::CpuBatchPolicy,
     ) -> crate::CpuBatchPolicy {
-        let previous = self.entry.batch_policy();
-        self.set_batch_policy(policy);
-        previous
-    }
-
-    fn set_batch_policy(&mut self, policy: crate::CpuBatchPolicy) {
-        self.entry = self.entry.with_batch_policy(policy);
-        self.entered = self
-            .entered
-            .map(|context| context.with_batch_policy(policy));
-    }
-
-    /// Build the retained contraction token carrying this session's resolved
-    /// batch policy.
-    ///
-    /// A live session is always entered, so the token comes from the entered
-    /// context; the fresh-entry fallback preserves the pre-policy behavior for
-    /// a session constructed without one.
-    fn resolved_contraction_exec(&mut self) -> crate::Result<cpueinsum::Exec<'a>> {
-        match self.entered {
-            Some(context) => context.contraction_exec(),
-            None => {
-                let context = self.entry.enter_owned(|context| context);
-                context.contraction_exec()
-            }
-        }
-    }
-
-    /// Borrow CPU-owned linalg resources on the caller thread.
-    ///
-    /// The numerical kernel chooses its own execution through the borrowed
-    /// context; this resource callback itself is never submitted to a pool.
-    #[doc(hidden)]
-    pub fn with_linalg_pool<R>(
-        &mut self,
-        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R>,
-    ) -> crate::Result<R> {
-        let buffers = &mut *self.buffers;
-        if let Some(context) = self.entered {
-            return op(&context, buffers);
-        }
-        let mode = self.entry.preferred_engine_mode();
-        self.entry.enter(mode, |context| op(context, buffers))
-    }
-
-    /// Borrow retained contraction execution resources on the caller thread.
-    /// Numerical scheduling is performed by the lower-library operation.
-    ///
-    /// # Examples
-    /// ```
-    /// use tenferro_cpu::{CpuBackend, with_cpu_exec_session};
-    /// use tenferro_tensor::BackendSessionHost;
-    /// let mut backend = CpuBackend::with_threads(1)?;
-    /// let len = backend.with_backend_session(|session| {
-    ///     with_cpu_exec_session(session, |cpu| cpu.with_contraction_exec(|_, buffers, workspaces| {
-    ///         workspaces.with_scratch::<f64, _>(4, buffers.max_retained_capacity_bytes(), |scratch| Ok(scratch.len()))
-    ///     })).unwrap()
-    /// })??;
-    /// assert_eq!(len, 4);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    #[doc(hidden)]
-    pub fn with_contraction_exec<R>(
-        &mut self,
-        op: impl FnOnce(
-            &cpueinsum::Exec<'_>,
-            &mut BufferPool,
-            &crate::ContractionWorkspaces,
-        ) -> crate::Result<R>,
-    ) -> crate::Result<R> {
-        let context = self.context.ok_or_else(|| {
-            crate::Error::unsupported(
-                "CPU contraction resources",
-                "owned execution resources are required",
-            )
-        })?;
-        let _retention =
-            context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
-        let exec = self.resolved_contraction_exec()?;
-        op(&exec, self.buffers, self.nary)
+        self.set_batch_policy(policy)
     }
 
     fn run_native<R: Send>(
         &mut self,
         op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
     ) -> crate::Result<R> {
-        let buffers = &mut *self.buffers;
-        if let Some(context) = self.entered {
-            return context.with_native_parallelism(|| op(buffers));
-        }
-        let mode = self.entry.preferred_engine_mode();
-        self.entry.enter(mode, |context| {
+        self.check_entry("CpuEngine")?;
+        let (context, buffers, _, broken) = self.parts();
+        guard_unwind(buffers, broken, |buffers| {
             context.with_native_parallelism(|| op(buffers))
-        })
-    }
-
-    fn run_native_fresh<R: FreshCpuOutput + Send>(
-        &mut self,
-        op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let buffers = &mut *self.buffers;
-        if let Some(context) = self.entered {
-            return context.with_native_parallelism(|| {
-                let mut output = op(buffers)?;
-                output.tag_fresh(context.domain_id());
-                Ok(output)
-            });
-        }
-        let mode = self.entry.preferred_engine_mode();
-        self.entry.enter(mode, |context| {
-            context.with_native_parallelism(|| {
-                let mut output = op(buffers)?;
-                output.tag_fresh(context.domain_id());
-                Ok(output)
-            })
         })
     }
 
@@ -452,79 +206,59 @@ impl<'a> CpuExecSession<'a> {
         &mut self,
         callback: impl FnOnce(faer::Par) -> crate::Result<()> + Send,
     ) -> crate::Result<()> {
-        self.run_native_with_context(|context, _| callback(context.faer_parallelism()))
+        self.check_entry("CpuEngine")?;
+        let (context, buffers, _, broken) = self.parts();
+        guard_unwind(buffers, broken, |_| context.with_faer_pool(callback))
     }
 
     fn run_native_with_context<R: Send>(
         &mut self,
         op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
     ) -> crate::Result<R> {
-        let buffers = &mut *self.buffers;
-        if let Some(context) = self.entered {
-            return context.with_native_parallelism(|| op(&context, buffers));
-        }
-        let mode = self.entry.preferred_engine_mode();
-        self.entry.enter(mode, |context| {
-            context.with_native_parallelism(|| op(context, buffers))
+        self.check_entry("CpuEngine")?;
+        let (context, buffers, _, broken) = self.parts();
+        guard_unwind(buffers, broken, |buffers| {
+            context.with_native_parallelism(|| op(&context, buffers))
         })
     }
 
-    fn run_native_fresh_with_context<R: FreshCpuOutput + Send>(
+    fn run_native_with_plans<R: Send>(
         &mut self,
-        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let buffers = &mut *self.buffers;
-        if let Some(context) = self.entered {
-            return context.with_native_parallelism(|| {
-                let mut output = op(&context, buffers)?;
-                output.tag_fresh(context.domain_id());
-                Ok(output)
-            });
-        }
-        let mode = self.entry.preferred_engine_mode();
-        self.entry.enter(mode, |context| {
-            context.with_native_parallelism(|| {
-                let mut output = op(context, buffers)?;
-                output.tag_fresh(context.domain_id());
-                Ok(output)
-            })
-        })
-    }
-
-    fn run_native_fresh_with_indexed_context<R: FreshCpuOutput + Send>(
-        &mut self,
-        op: impl FnOnce(
-                &CpuExecutionContext<'_>,
-                &mut BufferPool,
-                &mut IndexedPlanCache,
-            ) -> crate::Result<R>
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool, &CpuPlanCache) -> crate::Result<R>
             + Send,
     ) -> crate::Result<R> {
-        let buffers = &mut *self.buffers;
-        let indexed_plan_cache = &mut *self.indexed_plan_cache;
-        if let Some(context) = self.entered {
-            return context.with_native_parallelism(|| {
-                let mut output = op(&context, buffers, indexed_plan_cache)?;
-                output.tag_fresh(context.domain_id());
-                Ok(output)
-            });
-        }
-        let mode = self.entry.preferred_engine_mode();
-        self.entry.enter(mode, |context| {
-            context.with_native_parallelism(|| {
-                let mut output = op(context, buffers, indexed_plan_cache)?;
-                output.tag_fresh(context.domain_id());
-                Ok(output)
-            })
+        self.check_entry("CpuEngine")?;
+        let (context, buffers, plans, broken) = self.parts();
+        guard_unwind(buffers, broken, |buffers| {
+            context.with_native_parallelism(|| op(&context, buffers, plans))
+        })
+    }
+
+    /// Run a contraction-provider call with the engine's token, buffers and
+    /// plans; the provider decides its own parallelism from the token.
+    fn run_contraction<R>(
+        &mut self,
+        op: impl FnOnce(&cpueinsum::Exec<'_>, &mut BufferPool, &CpuPlanCache) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        self.check_entry("dot_general")?;
+        let context = CpuExecutionContext::new(&self.resources, self.batch_policy);
+        let _retention = self
+            .resources
+            .retention_guard(self.buffers.max_retained_capacity_bytes());
+        let exec = context.contraction_exec()?;
+        let plans = &self.plans;
+        guard_unwind(&mut self.buffers, &mut self.broken, |buffers| {
+            op(&exec, buffers, plans)
         })
     }
 }
 
-impl TensorDeviceTransfer for CpuExecSession<'_> {
+impl TensorDeviceTransfer for CpuEngine {
     fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.check_entry("CpuEngine::download_to_host")?;
         if tensor.backend_family().is_some() {
             return Err(crate::Error::runtime_state(
-                "CpuBackend::download_to_host",
+                "CpuEngine::download_to_host",
                 "CPU backend received a backend buffer; download the tensor to host with its owning backend before CPU execution",
             ));
         }
@@ -532,9 +266,10 @@ impl TensorDeviceTransfer for CpuExecSession<'_> {
     }
 
     fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.check_entry("CpuEngine::upload_host_tensor")?;
         if tensor.backend_family().is_some() {
             return Err(crate::Error::runtime_state(
-                "CpuBackend::upload_host_tensor",
+                "CpuEngine::upload_host_tensor",
                 "CPU backend upload_host_tensor expects a host tensor; download backend buffers to host before CPU execution",
             ));
         }
@@ -546,7 +281,7 @@ impl TensorDeviceTransfer for CpuExecSession<'_> {
 macro_rules! delegate_with_pool {
     ($name:ident($($arg:ident : $ty:ty),*) => $callee:path) => {
         fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
-            self.run_native_fresh(|buffers| $callee(buffers, $($arg),*))
+            self.run_native(|buffers| $callee(buffers, $($arg),*))
         }
     };
 }
@@ -556,14 +291,14 @@ macro_rules! delegate_with_pool {
 macro_rules! delegate_with_pool_context {
     ($name:ident($($arg:ident : $ty:ty),*) => $callee:path) => {
         fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
-            self.run_native_fresh_with_context(|context, buffers| {
+            self.run_native_with_context(|context, buffers| {
                 $callee(buffers, &context.strided_exec_context(), $($arg),*)
             })
         }
     };
 }
 
-impl TensorElementwise for CpuExecSession<'_> {
+impl TensorElementwise for CpuEngine {
     // Elementwise — direct delegation within the current session scope.
     fn elementwise_read_into(
         &mut self,
@@ -592,7 +327,7 @@ impl TensorElementwise for CpuExecSession<'_> {
     }
 
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_with_context(|context, buffers| {
             elementwise::add_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
         })
     }
@@ -613,7 +348,7 @@ impl TensorElementwise for CpuExecSession<'_> {
     delegate_with_pool_context!(clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) => elementwise::clamp_read_with_pool);
 }
 
-impl TensorAnalytic for CpuExecSession<'_> {
+impl TensorAnalytic for CpuEngine {
     // Analytic
     delegate_with_pool!(exp_read(input: TensorRead<'_>) => analytic::exp_read_with_pool);
     delegate_with_pool!(log_read(input: TensorRead<'_>) => analytic::log_read_with_pool);
@@ -628,25 +363,26 @@ impl TensorAnalytic for CpuExecSession<'_> {
     delegate_with_pool!(erf_read(input: TensorRead<'_>) => analytic::erf_read_with_pool);
 }
 
-impl TensorStructural for CpuExecSession<'_> {
+impl TensorStructural for CpuEngine {
     // Structural
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         // Preserve the host-compact entry policy. Managed copies must enter
         // the configured execution scope for provider mapping and allocation,
         // just as views enter it for strided materialization.
-        let domain = self.shared_allocation_domain();
+        let domain = self.shared_allocation_domain().cloned();
         if matches!(input, TensorRead::Tensor(_)) && input.backend_family().is_none() {
+            self.check_entry("CpuEngine::to_contiguous_read")?;
             return materialize_tensor_read_in_domain(
-                self.buffers,
-                "CpuBackend::to_contiguous_read",
+                &mut self.buffers,
+                "CpuEngine::to_contiguous_read",
                 input,
                 domain.as_deref(),
             );
         }
-        self.run_native_fresh(|buffers| {
+        self.run_native(|buffers| {
             materialize_tensor_read_in_domain(
                 buffers,
-                "CpuBackend::to_contiguous_read",
+                "CpuEngine::to_contiguous_read",
                 input,
                 domain.as_deref(),
             )
@@ -654,14 +390,15 @@ impl TensorStructural for CpuExecSession<'_> {
     }
 
     fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
-        self.run_native(|_| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
+        self.run_native(|_| copy_tensor_read_into("CpuEngine::copy_read_into", src, dst))
     }
 
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
+        self.run_native(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
+        self.check_entry("CpuEngine::reshape_read")?;
         if let TensorRead::Tensor(tensor) = &input {
             // INVARIANT: a compact input keeps the serial host copy and its typed
             // refusal for an external payload, without the engine entry or a
@@ -670,17 +407,14 @@ impl TensorStructural for CpuExecSession<'_> {
             // materializes on the pool; `run_native` (not `run_native_fresh`)
             // keeps the input placement that the copy puts on the output, as the
             // reshape contract requires.
-            let parallel = match self.entered {
-                Some(context) => context.uses_inner_parallelism(),
-                None => self.entry.preferred_engine_mode() == ParallelMode::Inner,
-            };
+            let parallel = self.thread_budget().get() > 1;
             if !structural::reshape_uses_pool(tensor, parallel)? {
                 return structural::reshape(tensor, shape);
             }
             return self
                 .run_native(|buffers| structural::reshape_read_with_pool(buffers, input, shape));
         }
-        self.run_native_fresh(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
+        self.run_native(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
     }
 
     fn broadcast_in_dim_read(
@@ -689,7 +423,7 @@ impl TensorStructural for CpuExecSession<'_> {
         shape: &[usize],
         dims: &[usize],
     ) -> crate::Result<Tensor> {
-        self.run_native_fresh(|buffers| {
+        self.run_native(|buffers| {
             structural::broadcast_in_dim_read_with_pool(buffers, input, shape, dims)
         })
     }
@@ -701,11 +435,11 @@ impl TensorStructural for CpuExecSession<'_> {
     delegate_with_pool!(triu(input: &Tensor, k: i64) => structural::triu_with_pool);
 }
 
-impl TensorReduction for CpuExecSession<'_> {
+impl TensorReduction for CpuEngine {
     // Reduction
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             reduction::reduce_sum_read(buffers, input, axes, &exec_context)
         })
@@ -716,35 +450,35 @@ impl TensorReduction for CpuExecSession<'_> {
         input: TensorRead<'_>,
         axes: &[usize],
     ) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             reduction::reduce_sum_squares_read(buffers, input, axes, &exec_context)
         })
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             reduction::reduce_prod_read(buffers, input, axes, &exec_context)
         })
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             reduction::reduce_max_read(buffers, input, axes, &exec_context)
         })
     }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             reduction::reduce_min_read(buffers, input, axes, &exec_context)
         })
     }
 }
 
-impl CpuExecSession<'_> {
+impl CpuEngine {
     fn execute_dot_allocated(
         &mut self,
         cache_slot: Option<usize>,
@@ -775,30 +509,21 @@ impl CpuExecSession<'_> {
             beta: ContractionScalar::zero(dtype)?,
         };
         if matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
-            let context = self.context.ok_or_else(|| {
-                crate::Error::unsupported(
-                    "dot_general",
-                    "CPU contraction requires owned execution resources",
+            return self.run_contraction(|exec, buffers, plans| {
+                crate::contraction::dot_fresh(
+                    exec,
+                    buffers,
+                    plans,
+                    cache_slot,
+                    lhs,
+                    rhs,
+                    config,
+                    accumulation,
+                    output_shape,
                 )
-            })?;
-            let _retention =
-                context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
-            let exec = self.resolved_contraction_exec()?;
-            let mut output = crate::contraction::dot_fresh(
-                &exec,
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                lhs,
-                rhs,
-                config,
-                accumulation,
-                output_shape,
-            )?;
-            tag_fresh_output(&mut output, self.entry.domain_id());
-            return Ok(output);
+            });
         }
-        let mut output = allocate_dot_output(self.buffers, dtype, output_shape)?;
+        let mut output = allocate_dot_output(&mut self.buffers, dtype, output_shape)?;
         self.dot_general_read_into_accum_cached(
             cache_slot,
             lhs,
@@ -807,12 +532,11 @@ impl CpuExecSession<'_> {
             accumulation,
             TensorWrite::from_tensor(&mut output),
         )?;
-        tag_fresh_output(&mut output, self.entry.domain_id());
         Ok(output)
     }
 }
 
-impl TensorDot for CpuExecSession<'_> {
+impl TensorDot for CpuEngine {
     fn dot_general_read(
         &mut self,
         lhs: TensorRead<'_>,
@@ -820,7 +544,7 @@ impl TensorDot for CpuExecSession<'_> {
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
         let slot = eager_dot_cache_slot(
-            self.gemm_analysis_cache.capacity(),
+            self.plans.contraction_capacity(),
             &lhs,
             &rhs,
             config,
@@ -850,7 +574,7 @@ impl TensorDot for CpuExecSession<'_> {
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         let slot = eager_dot_cache_slot(
-            self.gemm_analysis_cache.capacity(),
+            self.plans.contraction_capacity(),
             &lhs,
             &rhs,
             config,
@@ -871,7 +595,7 @@ impl TensorDot for CpuExecSession<'_> {
         let lhs = TensorRead::from_tensor(lhs);
         let rhs = TensorRead::from_tensor(rhs);
         let slot = eager_dot_cache_slot(
-            self.gemm_analysis_cache.capacity(),
+            self.plans.contraction_capacity(),
             &lhs,
             &rhs,
             config,
@@ -882,7 +606,7 @@ impl TensorDot for CpuExecSession<'_> {
     }
 }
 
-impl SessionCachedDot for CpuExecSession<'_> {
+impl SessionCachedDot for CpuEngine {
     fn dot_general_cached(
         &mut self,
         cache_slot: Option<usize>,
@@ -932,26 +656,19 @@ impl SessionCachedDot for CpuExecSession<'_> {
             lhs.dtype(),
             DType::F32 | DType::F64 | DType::C32 | DType::C64
         ) {
-            let context = self.context.ok_or_else(|| {
-                crate::Error::unsupported(
-                    "dot_general",
-                    "CPU contraction requires owned execution resources",
+            return self.run_contraction(|exec, buffers, plans| {
+                crate::contraction::dot_into(
+                    exec,
+                    buffers,
+                    plans,
+                    cache_slot,
+                    lhs,
+                    rhs,
+                    config,
+                    accumulation,
+                    out,
                 )
-            })?;
-            let _retention =
-                context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
-            let exec = self.resolved_contraction_exec()?;
-            return crate::contraction::dot_into(
-                &exec,
-                self.buffers,
-                self.gemm_analysis_cache,
-                cache_slot,
-                lhs,
-                rhs,
-                config,
-                accumulation,
-                out,
-            );
+            });
         }
         // Only floating and complex contractions have a CPU numerical route;
         // integer and Bool operands are rejected before the output is touched.
@@ -961,38 +678,9 @@ impl SessionCachedDot for CpuExecSession<'_> {
             crate::cpu_contraction_unsupported_dtype_message(lhs.dtype()),
         ))
     }
-
-    fn grouped_gemm_cached(
-        &mut self,
-        cache_slot: Option<usize>,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &GroupedGemmConfig<'_>,
-        out: TensorWrite<'_>,
-    ) -> crate::Result<()> {
-        let context = self.context.ok_or_else(|| {
-            crate::Error::unsupported(
-                "grouped_gemm",
-                "CPU contraction requires owned execution resources",
-            )
-        })?;
-        let _retention =
-            context.contraction_retention_guard(self.buffers.max_retained_capacity_bytes());
-        let exec = self.resolved_contraction_exec()?;
-        crate::contraction::grouped::execute(
-            &exec,
-            self.buffers,
-            self.gemm_analysis_cache,
-            cache_slot,
-            lhs,
-            rhs,
-            config,
-            out,
-        )
-    }
 }
 
-impl TensorIndexing for CpuExecSession<'_> {
+impl TensorIndexing for CpuEngine {
     // Indexing
     fn gather(
         &mut self,
@@ -1000,7 +688,7 @@ impl TensorIndexing for CpuExecSession<'_> {
         start_indices: &Tensor,
         config: &GatherConfig,
     ) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_indexed_context(|context, buffers, cache| {
+        self.run_native_with_plans(|context, buffers, cache| {
             let exec_context = context.strided_exec_context();
             indexing::gather_with_pool(
                 buffers,
@@ -1019,7 +707,7 @@ impl TensorIndexing for CpuExecSession<'_> {
         updates: &Tensor,
         config: &ScatterConfig,
     ) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_indexed_context(|context, buffers, cache| {
+        self.run_native_with_plans(|context, buffers, cache| {
             let exec_context = context.strided_exec_context();
             indexing::scatter_with_pool(
                 buffers,
@@ -1033,7 +721,7 @@ impl TensorIndexing for CpuExecSession<'_> {
         })
     }
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             indexing::try_slice_with_pool(buffers, &exec_context, input, config)
         })
@@ -1044,7 +732,7 @@ impl TensorIndexing for CpuExecSession<'_> {
         starts: &Tensor,
         slice_sizes: &[usize],
     ) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_indexed_context(|context, buffers, cache| {
+        self.run_native_with_plans(|context, buffers, cache| {
             let exec_context = context.strided_exec_context();
             indexing::dynamic_slice_with_pool(
                 buffers,
@@ -1062,7 +750,7 @@ impl TensorIndexing for CpuExecSession<'_> {
         update: &Tensor,
         starts: &Tensor,
     ) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_indexed_context(|context, buffers, cache| {
+        self.run_native_with_plans(|context, buffers, cache| {
             let exec_context = context.strided_exec_context();
             indexing::dynamic_update_slice_with_pool(
                 buffers,
@@ -1075,28 +763,27 @@ impl TensorIndexing for CpuExecSession<'_> {
         })
     }
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             indexing::try_pad_with_pool(buffers, &exec_context, input, config)
         })
     }
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             indexing::try_concatenate_with_pool(buffers, &exec_context, inputs, axis)
         })
     }
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             indexing::reverse_with_pool(buffers, &exec_context, input, axes)
         })
     }
 }
 
-/// Typed view canonicalization runs on the session, never on the backend
-/// owner: the owner is not an execution surface (#1946 F6).
-impl<T, R> tenferro_tensor::TensorViewCanonicalization<T, R> for CpuExecSession<'_>
+/// Typed view canonicalization runs on the engine.
+impl<T, R> tenferro_tensor::TensorViewCanonicalization<T, R> for CpuEngine
 where
     T: tenferro_tensor::TensorScalar + PoolScalar,
     R: tenferro_tensor::TensorRank,
@@ -1107,11 +794,11 @@ where
         &mut self,
         view: &tenferro_tensor::TypedTensorView<'_, T, R>,
     ) -> crate::Result<TypedTensor<T, R>> {
-        self.run_native_fresh(|buffers| {
+        self.run_native(|buffers| {
             crate::structural::typed_materialize_view_with_pool(
                 buffers,
                 view,
-                "CpuExecSession::to_contiguous",
+                "CpuEngine::to_contiguous",
             )
         })
     }
@@ -1122,24 +809,24 @@ where
         dst: &mut tenferro_tensor::TypedTensorViewMut<'_, T, R>,
     ) -> crate::Result<()> {
         self.run_native(|_| {
-            crate::structural::typed_copy_view_into(src, dst, "CpuExecSession::copy_into")
+            crate::structural::typed_copy_view_into(src, dst, "CpuEngine::copy_into")
         })
     }
 }
 
-impl TensorBuffer for CpuExecSession<'_> {
+impl TensorBuffer for CpuEngine {
     fn reclaim_buffer(&mut self, tensor: Tensor) {
-        crate::backend::reclaim_tensor(self.buffers, tensor);
+        crate::backend::reclaim_tensor(&mut self.buffers, tensor);
     }
 }
 
-impl TensorFusion for CpuExecSession<'_> {
+impl TensorFusion for CpuEngine {
     fn execute_elementwise_fusion(
         &mut self,
         inputs: &[&Tensor],
         plan: &ElementwiseFusionPlan,
     ) -> crate::Result<Option<Vec<Tensor>>> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             tenferro_cpu_fused::elementwise_fusion_with_pool(buffers, &exec_context, inputs, plan)
         })
@@ -1154,7 +841,7 @@ impl TensorFusion for CpuExecSession<'_> {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<Tensor>> {
-        self.run_native_fresh_with_context(|context, buffers| {
+        self.run_native_with_context(|context, buffers| {
             elementwise::broadcast_multiply_read_with_pool(
                 buffers,
                 &context.strided_exec_context(),
@@ -1177,7 +864,6 @@ impl TensorFusion for CpuExecSession<'_> {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<TensorValue>> {
-        let domain = self.entry.domain_id();
         self.run_native_with_context(|context, buffers| {
             elementwise::broadcast_multiply_value_with_pool_and_tag(
                 buffers,
@@ -1188,19 +874,19 @@ impl TensorFusion for CpuExecSession<'_> {
                 rhs,
                 rhs_shape,
                 rhs_dims,
-                |tensor| tag_fresh_output(tensor, domain),
+                |_| {},
             )
         })
     }
 }
 
-impl BackendSession for CpuExecSession<'_> {
+impl Engine for CpuEngine {
     fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         tenferro_tensor::backend::validate_vdot_read(&lhs, &rhs)?;
-        crate::blas1::validate_cpu_read("BackendSession::vdot_read", &lhs)?;
-        crate::blas1::validate_cpu_read("BackendSession::vdot_read", &rhs)?;
+        crate::blas1::validate_cpu_read("Engine::vdot_read", &lhs)?;
+        crate::blas1::validate_cpu_read("Engine::vdot_read", &rhs)?;
         let element_count = tenferro_tensor::validate::checked_shape_product(
-            "BackendSession::vdot_read",
+            "Engine::vdot_read",
             "shape",
             lhs.shape(),
         )?;
@@ -1229,8 +915,8 @@ impl BackendSession for CpuExecSession<'_> {
 
     fn norm_squared_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         tenferro_tensor::backend::validate_norm_squared_read(&input)?;
-        crate::blas1::validate_cpu_read("BackendSession::norm_squared_read", &input)?;
-        self.run_native_fresh(|buffers| reduction::norm_squared_read(buffers, input))
+        crate::blas1::validate_cpu_read("Engine::norm_squared_read", &input)?;
+        self.run_native(|buffers| reduction::norm_squared_read(buffers, input))
     }
 
     fn fused_activation_read(
@@ -1239,9 +925,7 @@ impl BackendSession for CpuExecSession<'_> {
         input: TensorRead<'_>,
     ) -> crate::Result<Option<Tensor>> {
         crate::blas1::validate_cpu_read(op.label(), &input)?;
-        self.run_native_fresh(|buffers| {
-            activation::fused_activation_read_with_pool(buffers, op, input)
-        })
+        self.run_native(|buffers| activation::fused_activation_read_with_pool(buffers, op, input))
     }
 
     fn axpby_read_into_accum(
@@ -1257,11 +941,11 @@ impl BackendSession for CpuExecSession<'_> {
         })
     }
 
-    fn native_session(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
-        // SAFETY: `CpuExecSessionMarker` is private to this crate, and this is
-        // the only place a token carrying it is created; it always points to a
-        // `CpuExecSession`, exclusively borrowed for the token lifetime.
-        Some(unsafe { tenferro_tensor::NativeSessionRef::new::<CpuExecSessionMarker, _>(self) })
+    fn native_engine(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
+        // SAFETY: `CpuEngineMarker` is private to this crate, and this is the
+        // only place a token carrying it is created; it always points to a
+        // `CpuEngine`, exclusively borrowed for the token lifetime.
+        Some(unsafe { tenferro_tensor::NativeSessionRef::new::<CpuEngineMarker, _>(self) })
     }
 }
 

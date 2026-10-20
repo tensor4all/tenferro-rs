@@ -1,14 +1,13 @@
-//! Whole-arm timing tool for the prepared, caller-held-session path (#2087).
+//! Whole-arm timing tool for the prepared path on a caller-held engine (#2087).
 //!
 //! This measures the host-visible cost of the call shape behind
 //! `dense_batched_matmul_f64_b16_32`: a zero-input prepared graph (two bound GPU
-//! constants, one `dot_general`) run through `Runtime::run_prepared_in` inside
-//! one caller-held CUDA session. Every arm below runs in one process, so a
-//! reader compares arms under the same host conditions instead of across
-//! sessions:
+//! constants, one `dot_general`) run through `Runtime::run` on one CUDA engine. Every arm below runs in one process, so a reader
+//! compares arms under the same host conditions instead of across
+//! processes:
 //!
 //! * the prepared call;
-//! * the same contraction through the session with no graph machinery, for owned
+//! * the same contraction on the engine with no graph machinery, for owned
 //!   operands (cuBLAS strided-batched) and for view operands (cuTENSOR, which is
 //!   what a prepared graph's bound constants reach);
 //! * the enqueue arm the batched-GEMM fast path uses
@@ -29,21 +28,21 @@
 //! It stays in the tree as the reproducible instrument for that case. Run with
 //! `cargo test -p tenferro-gpu --features cuda --lib -- --ignored host_path_phases
 //! --nocapture`.
+use crate::cubecl::tests::EngineRun;
 
 use std::time::{Duration, Instant};
 
-use tenferro_runtime::{EngineId, GraphCompiler, Runtime, TracedTensor};
-use tenferro_tensor::backend::BackendSessionHost as _;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorRead, TensorWrite};
+use tenferro_runtime::{EngineId, ExecutionEngine, GraphCompiler, Output, Runtime, TracedTensor};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TensorRead, TensorWrite};
 
 use super::super::interop::fill_zero_write;
-use super::super::{batched_gemm, dispatch, CudaBackend, CudaDeviceId};
+use super::super::{batched_gemm, dispatch, CudaDeviceId, CudaEngine};
 use super::{cpu_backend, tensor_f64};
 
 const CALLS: usize = 400;
-/// Calls in one deferred batch. One finish retires the whole batch, so the
-/// per-call figure amortizes one barrier over this many prepared calls.
-const DEFERRED_CALLS: usize = 64;
+/// Calls in one pending batch. One synchronize retires the whole batch, so the
+/// per-call figure amortizes the barrier over this many prepared calls.
+const PENDING_CALLS: usize = 64;
 const WARMUPS: usize = 3;
 const BATCH: usize = 16;
 const EXTENT: usize = 32;
@@ -72,7 +71,7 @@ fn normal_data(len: usize, seed: f64) -> Vec<f64> {
 
 fn cpu_dot_general(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> Tensor {
     let mut cpu = cpu_backend();
-    cpu.with_backend_session(|session| {
+    cpu.run(|session| {
         session.dot_general_read(
             TensorRead::from_tensor(lhs),
             TensorRead::from_tensor(rhs),
@@ -138,16 +137,15 @@ fn measure(mut call: impl FnMut()) -> Vec<Duration> {
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn host_path_phases() {
-    let mut backend: CudaBackend =
-        CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let mut backend: CudaEngine = CudaEngine::open(CudaDeviceId::from_ordinal(0))
+        .expect("CUDA engine")
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-cuda.host-path-phases.v1").expect("engine id"),
+        );
     let mut builder = Runtime::builder();
     builder
         .register_engine(
-            crate::cuda::cuda_runtime_engine_registration(
-                &backend,
-                EngineId::new("tenferro-cuda.host-path-phases.v1").expect("engine id"),
-            )
-            .expect("cuda registration"),
+            crate::cuda::cuda_runtime_engine_registration(&backend).expect("cuda registration"),
         )
         .expect("register engine");
     let runtime = builder.build().expect("runtime");
@@ -178,49 +176,43 @@ fn host_path_phases() {
     let program = GraphCompiler::new()
         .compile_many(&[&out_traced])
         .expect("compile");
-    let prepared = runtime.prepare_compiled(&program, &[]).expect("prepare");
+    let prepared = runtime
+        .prepare(&program, &[], &[backend.target()])
+        .expect("prepare");
     println!(
         "prepared: regions {:?} submissions {}",
         prepared.elementwise_region_summary(),
         prepared.execution_submission_count()
     );
 
-    let mut session = backend.open_session().expect("held session");
-    let full = session
-        .with_session(|view| runtime.run_prepared_in(view, &prepared, &[]))
-        .expect("held callback")
+    let full = runtime
+        .run(&mut [&mut backend], &prepared, &[])
         .expect("prepared run");
-    let prepared_out = super::super::download_tensor(&rt, &full[0]).expect("download");
+    let prepared_out = super::super::download_tensor(&rt, owned(&full[0])).expect("download");
     drop(full);
     assert_matches_reference("prepared run", &prepared_out, &reference);
 
-    let owned_out = session
-        .with_session(|view| {
-            view.dot_general_read(
-                TensorRead::from_tensor(&lhs),
-                TensorRead::from_tensor(&rhs),
-                &config,
-            )
-        })
-        .expect("held callback")
-        .expect("session dot_general");
+    let owned_out = backend
+        .dot_general_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+        )
+        .expect("engine dot_general");
     let owned_out = super::super::download_tensor(&rt, &owned_out).expect("download");
-    assert_matches_reference("session dot_general (owned)", &owned_out, &reference);
+    assert_matches_reference("engine dot_general (owned)", &owned_out, &reference);
 
     let lhs_view = TensorRead::from_tensor(&lhs).tensor_view();
     let rhs_view = TensorRead::from_tensor(&rhs).tensor_view();
-    let view_out = session
-        .with_session(|view| {
-            view.dot_general_read(
-                TensorRead::from_view(lhs_view.clone()),
-                TensorRead::from_view(rhs_view.clone()),
-                &config,
-            )
-        })
-        .expect("held callback")
-        .expect("session dot_general");
+    let view_out = backend
+        .dot_general_read(
+            TensorRead::from_view(lhs_view.clone()),
+            TensorRead::from_view(rhs_view.clone()),
+            &config,
+        )
+        .expect("engine dot_general");
     let view_out = super::super::download_tensor(&rt, &view_out).expect("download");
-    assert_matches_reference("session dot_general (view)", &view_out, &reference);
+    assert_matches_reference("engine dot_general (view)", &view_out, &reference);
 
     // The cuBLAS enqueue arm: exactly what the batched-GEMM fast path issues for
     // the same algebra, with a preallocated destination and no scheduler.
@@ -268,70 +260,55 @@ fn host_path_phases() {
             rt.scheduler_retirements(),
         );
     };
-    print_census("prepared run_prepared_in", &mut || {
-        let outputs = session
-            .with_session(|view| runtime.run_prepared_in(view, &prepared, &[]))
-            .expect("held callback")
+    print_census("prepared run", &mut || {
+        let outputs = runtime
+            .run(&mut [&mut backend], &prepared, &[])
             .expect("prepared run");
         std::hint::black_box(outputs);
+        backend.synchronize().expect("synchronize");
     });
-    print_census("session dot_general (owned)", &mut || {
-        let out = session
-            .with_session(|view| {
-                view.dot_general_read(
-                    TensorRead::from_tensor(&lhs),
-                    TensorRead::from_tensor(&rhs),
-                    &config,
-                )
-            })
-            .expect("held callback")
-            .expect("session dot_general");
+    print_census("engine dot_general (owned)", &mut || {
+        let out = backend
+            .dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+            .expect("engine dot_general");
         std::hint::black_box(out);
     });
 
-    // Deferred arm: one held-session callback and one finish per 64 prepared
-    // calls, reported per call so it is comparable with the synchronous arm
-    // above. The harness owns the outputs inside the guard until finish, so
-    // this arm does not download or inspect them inside the timed region.
-    let (line_deferred, t_deferred) = {
+    // Pending arm: 64 prepared calls stay pending on the engine and one
+    // synchronize retires them, reported per call so it is comparable with the
+    // synchronous arm below.
+    let (line_pending, t_pending) = {
         let samples = measure(|| {
-            let outputs = session
-                .with_session(|view| {
-                    let inputs: [&Tensor; 0] = [];
-                    let mut deferred = runtime.begin_prepared_deferred(view, &prepared)?;
-                    for _ in 0..DEFERRED_CALLS {
-                        deferred.run_prepared_deferred(&inputs)?;
-                    }
-                    deferred.finish_prepared()
-                })
-                .expect("held callback")
-                .expect("deferred prepared runs");
-            std::hint::black_box(outputs);
+            for _ in 0..PENDING_CALLS {
+                let outputs = runtime
+                    .run(&mut [&mut backend], &prepared, &[])
+                    .expect("prepared run");
+                std::hint::black_box(outputs);
+            }
+            backend.synchronize().expect("synchronize");
         });
         summarize(
-            "prepared deferred x64 + finish (per call)",
+            "prepared x64 + synchronize (per call)",
             samples
                 .into_iter()
-                .map(|sample| sample / DEFERRED_CALLS as u32)
+                .map(|sample| sample / PENDING_CALLS as u32)
                 .collect(),
         )
     };
 
     // Timed arms.
     let (line_full, t_full) = summarize(
-        "prepared run_prepared_in (harness)",
+        "prepared run + synchronize (harness)",
         measure(|| {
-            let outputs = session
-                .with_session(|view| runtime.run_prepared_in(view, &prepared, &[]))
-                .expect("held callback")
+            let outputs = runtime
+                .run(&mut [&mut backend], &prepared, &[])
                 .expect("prepared run");
             std::hint::black_box(outputs);
-        }),
-    );
-    let (line_entry, t_entry) = summarize(
-        "held-session entry only",
-        measure(|| {
-            session.with_session(|_| ()).expect("held callback");
+            backend.synchronize().expect("synchronize");
         }),
     );
     let (line_sync, t_sync) = summarize(
@@ -339,51 +316,42 @@ fn host_path_phases() {
         measure(|| rt.synchronize().expect("sync")),
     );
     let (line_owned, t_owned) = summarize(
-        "session dot_general (no graph)",
+        "engine dot_general (no graph)",
         measure(|| {
-            let out = session
-                .with_session(|view| {
-                    view.dot_general_read(
-                        TensorRead::from_tensor(&lhs),
-                        TensorRead::from_tensor(&rhs),
-                        &config,
-                    )
-                })
-                .expect("held callback")
-                .expect("session dot_general");
+            let out = backend
+                .dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                )
+                .expect("engine dot_general");
             std::hint::black_box(out);
         }),
     );
     let (line_owned_sync, t_owned_sync) = summarize(
-        "session dot_general + synchronize",
+        "engine dot_general + synchronize",
         measure(|| {
-            let out = session
-                .with_session(|view| {
-                    view.dot_general_read(
-                        TensorRead::from_tensor(&lhs),
-                        TensorRead::from_tensor(&rhs),
-                        &config,
-                    )
-                })
-                .expect("held callback")
-                .expect("session dot_general");
+            let out = backend
+                .dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                )
+                .expect("engine dot_general");
             std::hint::black_box(out);
             rt.synchronize().expect("sync");
         }),
     );
     let (line_views, t_views) = summarize(
-        "session dot_general, view operands",
+        "engine dot_general, view operands",
         measure(|| {
-            let out = session
-                .with_session(|view| {
-                    view.dot_general_read(
-                        TensorRead::from_view(lhs_view.clone()),
-                        TensorRead::from_view(rhs_view.clone()),
-                        &config,
-                    )
-                })
-                .expect("held callback")
-                .expect("session dot_general");
+            let out = backend
+                .dot_general_read(
+                    TensorRead::from_view(lhs_view.clone()),
+                    TensorRead::from_view(rhs_view.clone()),
+                    &config,
+                )
+                .expect("engine dot_general");
             std::hint::black_box(out);
         }),
     );
@@ -425,13 +393,10 @@ fn host_path_phases() {
         }),
     );
 
-    session.close().expect("close session");
-
     println!("\n=== whole-arm timings, 16 x 32x32 f64 batched matmul, {CALLS} calls ===");
     for line in [
         line_full,
-        line_deferred,
-        line_entry,
+        line_pending,
         line_sync,
         line_owned,
         line_owned_sync,
@@ -446,33 +411,32 @@ fn host_path_phases() {
         println!("{line}");
     }
     // Whole-arm deltas only. Each arm differs from its neighbour in more than
-    // one respect (session entry, allocation, operand resolution, handle lookup,
+    // one respect (allocation, operand resolution, handle lookup,
     // retirement), so none of these is a phase attribution.
     println!("\nwhole-arm deltas (not phase attribution):");
-    println!("  held-session entry arm: {t_entry:.3} us");
     println!(
-        "  deferred per call - synchronous prepared call: {:.3} us",
-        t_deferred - t_full
+        "  pending per call - synchronous prepared call: {:.3} us",
+        t_pending - t_full
     );
     println!(
         "  prepared call - (cuBLAS enqueue arm + synchronize): {:.3} us",
         t_full - t_enqueue_sync
     );
     println!(
-        "  prepared call - (session contraction arm + synchronize): {:.3} us",
+        "  prepared call - (engine contraction arm + synchronize): {:.3} us",
         t_full - t_owned_sync
     );
     println!(
-        "  session contraction arm - cuBLAS enqueue arm: {:.3} us",
+        "  engine contraction arm - cuBLAS enqueue arm: {:.3} us",
         t_owned - t_enqueue
     );
     println!(
-        "  synchronizing each repetition vs not: {:.3} us (session arm), {:.3} us (cuBLAS arm)",
+        "  synchronizing each repetition vs not: {:.3} us (engine arm), {:.3} us (cuBLAS arm)",
         t_owned_sync - t_owned,
         t_enqueue_sync - t_enqueue
     );
     println!(
-        "  view-operand (cuTENSOR) - owned-operand (cuBLAS) session arm: {:.3} us",
+        "  view-operand (cuTENSOR) - owned-operand (cuBLAS) engine arm: {:.3} us",
         t_views - t_owned
     );
     println!(
@@ -483,4 +447,12 @@ fn host_path_phases() {
         "  empty-kernel arm - bare synchronize arm: {:.3} us",
         t_empty - t_sync
     );
+}
+
+/// The owned tensor behind a prepared-run output.
+fn owned<'a>(output: &'a Output<'_>) -> &'a Tensor {
+    match output {
+        Output::Owned(tensor) => tensor,
+        Output::Borrowed(read) => read.as_tensor().expect("a whole input tensor"),
+    }
 }

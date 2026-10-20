@@ -6,10 +6,10 @@
 //! executing entry point rejects the conversion with a typed error instead of
 //! applying one operand's kernel to the other's payload.
 
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::Df64;
 use tenferro_tensor::validate::{can_convert_dtype, promote_dtype};
-use tenferro_tensor::{BackendSessionHost, DType, Tensor, TensorRead};
+use tenferro_tensor::{DType, Tensor, TensorElementwise, TensorRead, TensorStructural};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 fn external_df64(values: &[Df64]) -> Tensor {
@@ -56,7 +56,7 @@ fn the_lattice_cannot_relate_two_distinct_external_tags() {
 
 #[test]
 fn a_conversion_between_distinct_external_tags_is_rejected() {
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
 
     let source = external_df64(&[Df64::from_f64(1.0)]);
 
@@ -64,61 +64,46 @@ fn a_conversion_between_distinct_external_tags_is_rejected() {
     // table for either direction and says so instead of reinterpreting bytes.
     assert!(!can_convert_dtype(df64_dtype(), i64_dtype()));
     assert!(!can_convert_dtype(i64_dtype(), df64_dtype()));
-    assert!(backend
-        .with_backend_session(|__s| __s.convert(&source, i64_dtype()))
-        .unwrap()
-        .is_err());
-    assert!(backend
-        .with_backend_session(|__s| __s.convert(&external_i64(&[1]), df64_dtype()))
-        .unwrap()
-        .is_err());
+    assert!(backend.convert(&source, i64_dtype()).is_err());
+    assert!(backend.convert(&external_i64(&[1]), df64_dtype()).is_err());
 }
 
 #[test]
 fn a_conversion_between_a_preset_and_an_external_tag_is_rejected() {
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
 
     // An external destination has no conversion table here, and neither has an
     // external source, so neither direction guesses a representation.
     let ordinary = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).expect("shape matches data");
+    assert!(backend.convert(&ordinary, df64_dtype()).is_err());
     assert!(backend
-        .with_backend_session(|__s| __s.convert(&ordinary, df64_dtype()))
-        .unwrap()
+        .convert(&external_df64(&[Df64::from_f64(1.0)]), DType::F64)
         .is_err());
     assert!(backend
-        .with_backend_session(|__s| __s.convert(&external_df64(&[Df64::from_f64(1.0)]), DType::F64))
-        .unwrap()
-        .is_err());
-    assert!(backend
-        .with_backend_session(
-            |__s| __s.convert(&ordinary, DType::External(std::any::TypeId::of::<f64>()))
-        )
-        .unwrap()
+        .convert(&ordinary, DType::External(std::any::TypeId::of::<f64>()))
         .is_err());
 }
 
 #[test]
 fn a_binary_operation_does_not_apply_one_payload_to_the_other() {
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
     let external = external_df64(&[Df64::from_f64(1.0)]);
     let other = external_i64(&[1]);
 
-    backend
-        .with_backend_session(|session| {
-            // A preset-only kernel is never instantiated for an external payload, and
-            // nothing here converts one payload into the other's element type.
-            assert!(session
-                .add_read(
-                    TensorRead::from_tensor(&external),
-                    TensorRead::from_tensor(&other)
-                )
-                .is_err());
-            assert!(session
-                .add_read(
-                    TensorRead::from_tensor(&external),
-                    TensorRead::from_tensor(&external)
-                )
-                .is_err());
-        })
-        .unwrap();
+    {
+        // A preset-only kernel is never instantiated for an external payload, and
+        // nothing here converts one payload into the other's element type.
+        assert!(backend
+            .add_read(
+                TensorRead::from_tensor(&external),
+                TensorRead::from_tensor(&other)
+            )
+            .is_err());
+        assert!(backend
+            .add_read(
+                TensorRead::from_tensor(&external),
+                TensorRead::from_tensor(&external)
+            )
+            .is_err());
+    };
 }

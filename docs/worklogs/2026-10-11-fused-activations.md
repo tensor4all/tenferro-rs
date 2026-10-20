@@ -8,7 +8,7 @@ materialized elementwise ops. A single eager op already costs about 0.15 ms for
 ## Decisions
 
 - **A backend opts into a fused activation through one optional trait method.**
-  `BackendSession::fused_activation_read(ActivationOp, TensorRead)` returns
+  `Engine::fused_activation_read(ActivationOp, TensorRead)` returns
   `Ok(None)` by default, so every existing backend keeps the shared composite
   formulation unchanged. The CPU backend returns `Some` and evaluates the whole
   expression in one `map`. The five variants live in the new public

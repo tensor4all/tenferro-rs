@@ -3,63 +3,55 @@
 // Run with: cargo test --features cuda -- --ignored
 use super::full_svd_host_checks::assert_isometric;
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
+use tenferro_cpu::CpuEngine;
 use tenferro_gpu::{
-    cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor, cuda::with_cuda_exec_session,
-    cuda::CudaBackend, cuda::CudaDeviceId, cuda::CudaExecSession,
+    cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor, cuda::CudaDeviceId,
+    cuda::CudaEngine,
 };
 use tenferro_linalg::{
     EighDriver, EighOptions, HouseholderQr, LinalgBackend, QrGauge, QrOptions,
     RankRevealingQrOptions, SvdDriver, SvdOptions, TensorLinalgExt,
 };
-use tenferro_tensor::{BackendSessionHost, DType, Error, Tensor, TensorRead, TypedTensor};
+use tenferro_tensor::{DType, Error, Tensor, TensorRead, TypedTensor};
 
 #[path = "gpu_linalg/svd_auto.rs"]
 mod svd_auto;
 #[path = "gpu_linalg/xgesvdp.rs"]
 mod xgesvdp;
 
-fn cpu_backend() -> CpuBackend {
-    CpuBackend::new()
+fn cpu_backend() -> CpuEngine {
+    tenferro_cpu::CpuEngine::serial()
 }
 
-fn gpu_backend() -> CudaBackend {
-    CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap()
+fn gpu_backend() -> CudaEngine {
+    CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap()
 }
 
 fn with_cpu_linalg_session<R>(
-    backend: &mut CpuBackend,
-    f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R + Send,
+    backend: &mut CpuEngine,
+    f: impl for<'a> FnOnce(&'a mut CpuEngine) -> R + Send,
 ) -> R
 where
     R: Send,
 {
-    backend
-        .with_backend_session(|session| {
-            with_cpu_exec_session(session, f).expect("CPU backend session should be available")
-        })
-        .unwrap()
+    f(backend)
 }
 
 fn with_cuda_linalg_session<R>(
-    backend: &mut CudaBackend,
-    f: impl for<'a> FnOnce(&'a mut CudaExecSession<'a>) -> R + Send,
+    backend: &mut CudaEngine,
+    f: impl for<'a> FnOnce(&'a mut CudaEngine) -> R + Send,
 ) -> R
 where
     R: Send,
 {
-    backend
-        .with_backend_session(|session| {
-            with_cuda_exec_session(session, f).expect("CUDA backend session should be available")
-        })
-        .unwrap()
+    f(backend)
 }
 
-fn upload(backend: &CudaBackend, tensor: &Tensor) -> Tensor {
+fn upload(backend: &CudaEngine, tensor: &Tensor) -> Tensor {
     upload_tensor(backend.runtime(), tensor).unwrap()
 }
 
-fn download(backend: &CudaBackend, tensor: &Tensor) -> Tensor {
+fn download(backend: &CudaEngine, tensor: &Tensor) -> Tensor {
     download_tensor(backend.runtime(), tensor).unwrap()
 }
 

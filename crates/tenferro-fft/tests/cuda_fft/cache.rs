@@ -4,34 +4,40 @@ use std::num::NonZeroUsize;
 
 use super::common::*;
 use super::support;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftExecutor, FftNorm, FftPlanCache};
 use tenferro_gpu::cuda::{gpu_available, CudaRuntimeIdentity};
 use tenferro_runtime::ExtensionCacheLimits;
 use tenferro_tensor::TensorRead;
 
+/// A caller-held `FftExecutor` cache must stay empty on CUDA: cuFFT plans are
+/// device-bound and therefore live in the engine that owns the device/stream.
+fn assert_executor_cache_empty(executor: &FftExecutor) {
+    let stats = executor.cache_stats();
+    assert_eq!(stats.entries, 0, "caller-owned cache stats: {stats:?}");
+    assert_eq!(
+        stats.retained_bytes, 0,
+        "caller-owned cache stats: {stats:?}"
+    );
+}
+
 #[test]
 #[ignore = "requires CUDA cuFFT hardware and library"]
-fn cuda_caller_owned_cache_reuses_and_separates_structural_plans() {
+fn cuda_plans_live_in_the_engine_not_the_caller_owned_cache() {
     if !gpu_available() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     let mut executor = FftExecutor::default();
     let c32 = complex_f32(&[4], 0.5);
     let c64 = complex_f64(&[4], 0.5);
     let batched = complex_f32(&[2, 4], -0.25);
     let real = real_f32(&[4], 0.5);
 
-    let initial = executor.cache_stats();
-    assert_eq!(initial.entries, 0);
-    assert_eq!(initial.retained_bytes, 0);
-    assert_eq!(initial.hits, 0);
-    assert_eq!(initial.misses, 0);
-    assert_eq!(initial.evictions, 0);
-    assert_eq!(initial.clears, 0);
+    assert_eq!(support::engine_cache_stats(&mut cuda).entries, 0);
+    assert_executor_cache_empty(&executor);
 
     run_executor_case(
         &mut executor,
@@ -44,13 +50,14 @@ fn cuda_caller_owned_cache_reuses_and_separates_structural_plans() {
         FftNorm::Backward,
         1.0e-5,
     );
-    let first = executor.cache_stats();
+    let first = support::engine_cache_stats(&mut cuda);
     assert_eq!(first.entries, 1);
-    assert!(first.retained_bytes > 0, "cache stats: {first:?}");
+    assert!(first.retained_bytes > 0, "engine cache stats: {first:?}");
     assert_eq!(first.hits, 0);
     assert_eq!(first.misses, 1);
     assert_eq!(first.evictions, 0);
     assert_eq!(first.clears, 0);
+    assert_executor_cache_empty(&executor);
 
     run_executor_case(
         &mut executor,
@@ -63,13 +70,36 @@ fn cuda_caller_owned_cache_reuses_and_separates_structural_plans() {
         FftNorm::Backward,
         1.0e-5,
     );
-    let repeated = executor.cache_stats();
+    let repeated = support::engine_cache_stats(&mut cuda);
     assert_eq!(repeated.entries, 1);
-    assert!(repeated.retained_bytes > 0, "cache stats: {repeated:?}");
+    assert!(
+        repeated.retained_bytes > 0,
+        "engine cache stats: {repeated:?}"
+    );
     assert_eq!(repeated.hits, 1);
     assert_eq!(repeated.misses, 1);
     assert_eq!(repeated.evictions, 0);
     assert_eq!(repeated.clears, 0);
+
+    // A plan belongs to the engine, not to the executor handle: a fresh
+    // caller-owned cache on the same engine reuses the same plan.
+    let mut fresh = FftExecutor::default();
+    run_executor_case(
+        &mut fresh,
+        &mut cpu,
+        &mut cuda,
+        &c32,
+        Operation::Fft,
+        None,
+        -1,
+        FftNorm::Backward,
+        1.0e-5,
+    );
+    let reused_across_executors = support::engine_cache_stats(&mut cuda);
+    assert_eq!(reused_across_executors.entries, 1);
+    assert_eq!(reused_across_executors.hits, 2);
+    assert_eq!(reused_across_executors.misses, 1);
+    assert_executor_cache_empty(&fresh);
 
     run_executor_case(
         &mut executor,
@@ -82,9 +112,9 @@ fn cuda_caller_owned_cache_reuses_and_separates_structural_plans() {
         FftNorm::Backward,
         1.0e-5,
     );
-    assert_eq!(executor.cache_stats().entries, 2);
-    assert_eq!(executor.cache_stats().hits, 1);
-    assert_eq!(executor.cache_stats().misses, 2);
+    assert_eq!(support::engine_cache_stats(&mut cuda).entries, 2);
+    assert_eq!(support::engine_cache_stats(&mut cuda).hits, 2);
+    assert_eq!(support::engine_cache_stats(&mut cuda).misses, 2);
 
     run_executor_case(
         &mut executor,
@@ -97,8 +127,8 @@ fn cuda_caller_owned_cache_reuses_and_separates_structural_plans() {
         FftNorm::Backward,
         1.0e-11,
     );
-    assert_eq!(executor.cache_stats().entries, 3);
-    assert_eq!(executor.cache_stats().misses, 3);
+    assert_eq!(support::engine_cache_stats(&mut cuda).entries, 3);
+    assert_eq!(support::engine_cache_stats(&mut cuda).misses, 3);
 
     run_executor_case(
         &mut executor,
@@ -111,8 +141,8 @@ fn cuda_caller_owned_cache_reuses_and_separates_structural_plans() {
         FftNorm::Backward,
         1.0e-5,
     );
-    assert_eq!(executor.cache_stats().entries, 4);
-    assert_eq!(executor.cache_stats().misses, 4);
+    assert_eq!(support::engine_cache_stats(&mut cuda).entries, 4);
+    assert_eq!(support::engine_cache_stats(&mut cuda).misses, 4);
 
     run_executor_case(
         &mut executor,
@@ -125,8 +155,8 @@ fn cuda_caller_owned_cache_reuses_and_separates_structural_plans() {
         FftNorm::Backward,
         1.0e-5,
     );
-    assert_eq!(executor.cache_stats().entries, 5);
-    assert_eq!(executor.cache_stats().misses, 5);
+    assert_eq!(support::engine_cache_stats(&mut cuda).entries, 5);
+    assert_eq!(support::engine_cache_stats(&mut cuda).misses, 5);
 
     run_executor_case(
         &mut executor,
@@ -139,19 +169,23 @@ fn cuda_caller_owned_cache_reuses_and_separates_structural_plans() {
         FftNorm::Backward,
         1.0e-5,
     );
-    let separated = executor.cache_stats();
+    let separated = support::engine_cache_stats(&mut cuda);
     assert_eq!(separated.entries, 6);
-    assert!(separated.retained_bytes > 0, "cache stats: {separated:?}");
-    assert_eq!(separated.hits, 1);
+    assert!(
+        separated.retained_bytes > 0,
+        "engine cache stats: {separated:?}"
+    );
+    assert_eq!(separated.hits, 2);
     assert_eq!(separated.misses, 6);
     assert_eq!(separated.evictions, 0);
     assert_eq!(separated.clears, 0);
+    assert_executor_cache_empty(&executor);
 
-    executor.clear_cache();
-    let cleared = executor.cache_stats();
+    support::with_engine_caches(&mut cuda, |caches| caches.clear());
+    let cleared = support::engine_cache_stats(&mut cuda);
     assert_eq!(cleared.entries, 0);
     assert_eq!(cleared.retained_bytes, 0);
-    assert_eq!(cleared.hits, 1);
+    assert_eq!(cleared.hits, 2);
     assert_eq!(cleared.misses, 6);
     assert_eq!(cleared.evictions, 0);
     assert_eq!(cleared.clears, 1);
@@ -159,41 +193,41 @@ fn cuda_caller_owned_cache_reuses_and_separates_structural_plans() {
 
 #[test]
 #[ignore = "requires CUDA cuFFT hardware and library"]
-fn cuda_caller_owned_cache_keys_include_runtime_identity() {
+fn cuda_engines_own_separate_plan_stores_keyed_by_runtime_identity() {
     if !gpu_available() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut first = support::cuda_backend();
-    let mut second = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut first = support::cuda_engine();
+    let mut second = support::cuda_engine();
     let host = complex_f64(&[4], 0.5);
-    let first_input = support::upload_cuda(first.runtime(), &host);
-    let second_input = support::upload_cuda(second.runtime(), &host);
+    let first_input = support::upload_cuda(&first, &host);
+    let second_input = support::upload_cuda(&second, &host);
     let mut executor = FftExecutor::default();
 
     let expected = Operation::Fft
         .execute_cpu(&mut cpu, &host, None, -1, FftNorm::Backward)
         .unwrap();
-    assert_eq!(executor.cache_stats().entries, 0);
-    for (index, (backend, input)) in [(&mut first, &first_input), (&mut second, &second_input)]
-        .into_iter()
-        .enumerate()
-    {
+    assert_eq!(support::engine_cache_stats(&mut first).entries, 0);
+    assert_eq!(support::engine_cache_stats(&mut second).entries, 0);
+
+    for (engine, input) in [(&mut first, &first_input), (&mut second, &second_input)] {
         let domain = TensorRead::from_tensor(input).allocation_domain().unwrap();
         let output = Operation::Fft
-            .execute_executor(&mut executor, backend, input, None, -1, FftNorm::Backward)
+            .execute_executor(&mut executor, engine, input, None, -1, FftNorm::Backward)
             .unwrap();
         support::assert_cuda_resident(&output, domain);
-        let output = support::download_cuda(backend.runtime(), &output).unwrap();
+        let output = support::download_cuda(engine, &output).unwrap();
         assert_host_close(&output, &expected, 1.0e-11);
-        assert_eq!(executor.cache_stats().entries, index + 1);
+        // Each engine keeps its own device-bound plan, so neither one observes
+        // a hit from the other engine's execution.
+        let stats = support::engine_cache_stats(engine);
+        assert_eq!(stats.entries, 1, "engine cache stats: {stats:?}");
+        assert_eq!(stats.hits, 0, "engine cache stats: {stats:?}");
+        assert_eq!(stats.misses, 1, "engine cache stats: {stats:?}");
     }
-
-    let stats = executor.cache_stats();
-    assert_eq!(stats.entries, 2);
-    assert_eq!(stats.hits, 0);
-    assert_eq!(stats.misses, 2);
+    assert_executor_cache_empty(&executor);
 }
 
 fn identity_hash(identity: &CudaRuntimeIdentity) -> u64 {
@@ -204,21 +238,21 @@ fn identity_hash(identity: &CudaRuntimeIdentity) -> u64 {
 
 #[test]
 #[ignore = "requires CUDA cuFFT hardware and library"]
-fn cuda_caller_owned_cache_reuses_after_runtime_move() {
+fn cuda_engine_plans_reuse_after_the_engine_is_moved() {
     if !gpu_available() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
+    let mut cpu = CpuEngine::serial();
     let host = complex_f64(&[4], 0.5);
-    let mut backend = support::cuda_backend();
-    let first_key = identity_hash(&backend.runtime_identity());
+    let mut engine = support::cuda_engine();
+    let first_key = identity_hash(&engine.runtime_identity());
     let mut executor = FftExecutor::default();
 
     run_executor_case(
         &mut executor,
         &mut cpu,
-        &mut backend,
+        &mut engine,
         &host,
         Operation::Fft,
         None,
@@ -226,16 +260,16 @@ fn cuda_caller_owned_cache_reuses_after_runtime_move() {
         FftNorm::Backward,
         1.0e-11,
     );
-    assert_eq!(executor.cache_stats().entries, 1);
-    assert_eq!(executor.cache_stats().hits, 0);
+    assert_eq!(support::engine_cache_stats(&mut engine).entries, 1);
+    assert_eq!(support::engine_cache_stats(&mut engine).hits, 0);
 
-    let backend = Box::new(backend);
-    let mut backend = *backend;
-    assert_eq!(identity_hash(&backend.runtime_identity()), first_key);
+    let engine = Box::new(engine);
+    let mut engine = *engine;
+    assert_eq!(identity_hash(&engine.runtime_identity()), first_key);
     run_executor_case(
         &mut executor,
         &mut cpu,
-        &mut backend,
+        &mut engine,
         &host,
         Operation::Fft,
         None,
@@ -243,12 +277,12 @@ fn cuda_caller_owned_cache_reuses_after_runtime_move() {
         FftNorm::Backward,
         1.0e-11,
     );
-    let moved_stats = executor.cache_stats();
+    let moved_stats = support::engine_cache_stats(&mut engine);
     assert_eq!(moved_stats.entries, 1);
     assert_eq!(moved_stats.hits, 1);
     assert_eq!(moved_stats.misses, 1);
 
-    let mut independent = support::cuda_backend();
+    let mut independent = support::cuda_engine();
     run_executor_case(
         &mut executor,
         &mut cpu,
@@ -260,23 +294,23 @@ fn cuda_caller_owned_cache_reuses_after_runtime_move() {
         FftNorm::Backward,
         1.0e-11,
     );
-    let separated_stats = executor.cache_stats();
-    assert_eq!(separated_stats.entries, 2);
-    assert_eq!(separated_stats.hits, 1);
-    assert_eq!(separated_stats.misses, 2);
+    let independent_stats = support::engine_cache_stats(&mut independent);
+    assert_eq!(independent_stats.entries, 1);
+    assert_eq!(independent_stats.hits, 0);
+    assert_eq!(independent_stats.misses, 1);
 }
 
 #[test]
 #[ignore = "requires CUDA cuFFT hardware and library"]
-fn cuda_caller_owned_cache_limit_reduction_evicts_and_preserves_results() {
+fn cuda_engine_cache_limit_reduction_evicts_and_preserves_results() {
     if !gpu_available() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     let input = complex_f64(&[4], 0.5);
-    let gpu_input = support::upload_cuda(cuda.runtime(), &input);
+    let gpu_input = support::upload_cuda(&cuda, &input);
     let mut executor = FftExecutor::default();
     let first = Operation::Fft
         .execute_executor(
@@ -299,9 +333,12 @@ fn cuda_caller_owned_cache_limit_reduction_evicts_and_preserves_results() {
         )
         .unwrap();
 
-    let populated = executor.cache_stats();
+    let populated = support::engine_cache_stats(&mut cuda);
     assert_eq!(populated.entries, 2);
-    assert!(populated.retained_bytes > 0, "cache stats: {populated:?}");
+    assert!(
+        populated.retained_bytes > 0,
+        "engine cache stats: {populated:?}"
+    );
     assert_eq!(populated.hits, 0);
     assert_eq!(populated.misses, 2);
     assert_eq!(populated.evictions, 0);
@@ -309,9 +346,8 @@ fn cuda_caller_owned_cache_limit_reduction_evicts_and_preserves_results() {
 
     let entry_limit = ExtensionCacheLimits::new(NonZeroUsize::new(1).unwrap())
         .with_max_retained_bytes(NonZeroUsize::new(populated.retained_bytes).unwrap());
-    executor.plan_cache_mut().set_limits(entry_limit);
-    let entry_reduced = executor.cache_stats();
-    assert_eq!(executor.plan_cache().limits(), entry_limit);
+    support::with_engine_caches(&mut cuda, |caches| caches.set_limits(entry_limit));
+    let entry_reduced = support::engine_cache_stats(&mut cuda);
     assert_eq!(entry_reduced.entries, 1);
     assert!(entry_reduced.retained_bytes > 0);
     assert!(entry_reduced.retained_bytes <= populated.retained_bytes);
@@ -322,38 +358,38 @@ fn cuda_caller_owned_cache_limit_reduction_evicts_and_preserves_results() {
 
     let byte_limit = ExtensionCacheLimits::new(NonZeroUsize::new(1).unwrap())
         .with_max_retained_bytes(NonZeroUsize::new(1).unwrap());
-    executor.plan_cache_mut().set_limits(byte_limit);
-    let bytes_reduced = executor.cache_stats();
-    assert_eq!(executor.plan_cache().limits(), byte_limit);
+    support::with_engine_caches(&mut cuda, |caches| caches.set_limits(byte_limit));
+    let bytes_reduced = support::engine_cache_stats(&mut cuda);
     assert_eq!(bytes_reduced.entries, 0);
     assert_eq!(bytes_reduced.retained_bytes, 0);
     assert_eq!(bytes_reduced.hits, 0);
     assert_eq!(bytes_reduced.misses, 2);
     assert_eq!(bytes_reduced.evictions, 2);
     assert_eq!(bytes_reduced.clears, 0);
+    assert_executor_cache_empty(&executor);
 
     let expected = Operation::Fft
         .execute_cpu(&mut cpu, &input, None, -1, FftNorm::Backward)
         .unwrap();
-    let first_host = support::download_cuda(cuda.runtime(), &first).unwrap();
+    let first_host = support::download_cuda(&cuda, &first).unwrap();
     assert_host_close(&first_host, &expected, 1.0e-11);
     drop(second);
 }
 
 #[test]
 #[ignore = "requires CUDA cuFFT hardware and library"]
-fn cuda_caller_owned_cache_clear_and_eviction_are_safe_after_launch() {
+fn cuda_engine_cache_clear_and_eviction_are_safe_after_launch() {
     if !gpu_available() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     let input = complex_f64(&[32, 4096], 0.5);
     let expected = Operation::Fft
         .execute_cpu(&mut cpu, &input, None, -1, FftNorm::Backward)
         .unwrap();
-    let gpu_input = support::upload_cuda(cuda.runtime(), &input);
+    let gpu_input = support::upload_cuda(&cuda, &input);
     let domain = TensorRead::from_tensor(&gpu_input)
         .allocation_domain()
         .unwrap();
@@ -369,7 +405,7 @@ fn cuda_caller_owned_cache_clear_and_eviction_are_safe_after_launch() {
         )
         .unwrap();
     support::assert_cuda_resident(&output, domain);
-    let launched = executor.cache_stats();
+    let launched = support::engine_cache_stats(&mut cuda);
     assert_eq!(launched.entries, 1);
     assert!(launched.retained_bytes > 0);
     assert_eq!(launched.hits, 0);
@@ -377,18 +413,24 @@ fn cuda_caller_owned_cache_clear_and_eviction_are_safe_after_launch() {
     assert_eq!(launched.evictions, 0);
     assert_eq!(launched.clears, 0);
 
-    executor.clear_cache();
-    let cleared = executor.cache_stats();
+    support::with_engine_caches(&mut cuda, |caches| caches.clear());
+    let cleared = support::engine_cache_stats(&mut cuda);
     assert_eq!(cleared.entries, 0);
     assert_eq!(cleared.retained_bytes, 0);
     assert_eq!(cleared.hits, 0);
     assert_eq!(cleared.misses, 1);
     assert_eq!(cleared.evictions, 0);
     assert_eq!(cleared.clears, 1);
-    let output_host = support::download_cuda(cuda.runtime(), &output).unwrap();
+    let output_host = support::download_cuda(&cuda, &output).unwrap();
     assert_host_close(&output_host, &expected, 1.0e-11);
 
     let mut limited = FftExecutor::new(FftPlanCache::with_capacity(NonZeroUsize::new(1).unwrap()));
+    support::with_engine_caches(&mut cuda, |caches| {
+        caches.set_limits(ExtensionCacheLimits::new(NonZeroUsize::new(1).unwrap()))
+    });
+    // The engine's counters are cumulative across this test, so compare the
+    // bounded-cache execution against the snapshot taken here.
+    let before = support::engine_cache_stats(&mut cuda);
     let first = Operation::Fft
         .execute_executor(
             &mut limited,
@@ -409,16 +451,16 @@ fn cuda_caller_owned_cache_clear_and_eviction_are_safe_after_launch() {
             FftNorm::Backward,
         )
         .unwrap();
-    let limited_stats = limited.cache_stats();
-    assert_eq!(limited.plan_cache().capacity().get(), 1);
+    let limited_stats = support::engine_cache_stats(&mut cuda);
     assert_eq!(limited_stats.entries, 1);
     assert!(limited_stats.retained_bytes > 0);
-    assert_eq!(limited_stats.hits, 0);
-    assert_eq!(limited_stats.misses, 2);
-    assert_eq!(limited_stats.evictions, 1);
-    assert_eq!(limited_stats.clears, 0);
-    let first_host = support::download_cuda(cuda.runtime(), &first).unwrap();
-    let second_host = support::download_cuda(cuda.runtime(), &second).unwrap();
+    assert_eq!(limited_stats.hits, before.hits);
+    assert_eq!(limited_stats.misses, before.misses + 2);
+    assert_eq!(limited_stats.evictions, before.evictions + 1);
+    assert_eq!(limited_stats.clears, before.clears);
+    assert_executor_cache_empty(&limited);
+    let first_host = support::download_cuda(&cuda, &first).unwrap();
+    let second_host = support::download_cuda(&cuda, &second).unwrap();
     assert_host_close(&first_host, &expected, 1.0e-11);
     let expected_second = Operation::Fft
         .execute_cpu(&mut cpu, &input, Some(2048), -1, FftNorm::Backward)
@@ -433,13 +475,13 @@ fn cuda_cufft_drop_and_reallocate_after_vendor_barrier_is_safe() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     let input = complex_f32(&[4, 64], 0.5);
     let expected = Operation::Fft
         .execute_cpu(&mut cpu, &input, None, -1, FftNorm::Backward)
         .unwrap();
-    let gpu_input = support::upload_cuda(cuda.runtime(), &input);
+    let gpu_input = support::upload_cuda(&cuda, &input);
     let mut executor = FftExecutor::default();
     let first = Operation::Fft
         .execute_executor(
@@ -452,12 +494,12 @@ fn cuda_cufft_drop_and_reallocate_after_vendor_barrier_is_safe() {
         )
         .unwrap();
     drop(first);
-    executor.clear_cache();
+    support::with_engine_caches(&mut cuda, |caches| caches.clear());
 
     // The next upload is intentionally allowed to reuse the released output
     // allocation. The preceding cuFFT call has synchronized at its FFI
     // boundary, so no vendor work can access that allocation after `drop`.
-    let replacement_input = support::upload_cuda(cuda.runtime(), &input);
+    let replacement_input = support::upload_cuda(&cuda, &input);
     let replacement = Operation::Fft
         .execute_executor(
             &mut executor,
@@ -468,6 +510,6 @@ fn cuda_cufft_drop_and_reallocate_after_vendor_barrier_is_safe() {
             FftNorm::Backward,
         )
         .unwrap();
-    let replacement_host = support::download_cuda(cuda.runtime(), &replacement).unwrap();
+    let replacement_host = support::download_cuda(&cuda, &replacement).unwrap();
     assert_host_close(&replacement_host, &expected, 1.0e-5);
 }

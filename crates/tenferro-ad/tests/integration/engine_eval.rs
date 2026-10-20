@@ -1,4 +1,3 @@
-use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{DType, GraphCompiler, Tensor, TracedTensor, TypedTensor};
 
 use crate::support::{run_compiled_one, runtime_from_cpu_backend};
@@ -20,7 +19,7 @@ fn graph_execution_with_borrowed_inputs_preserves_caller_tensors() {
     let rhs =
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![3.0]).unwrap());
 
-    let runtime = runtime_from_cpu_backend(&CpuBackend::with_threads(1).unwrap());
+    let runtime = runtime_from_cpu_backend(&tenferro_cpu::CpuEngine::serial());
     let output = run_compiled_one(&runtime, &program, &[&lhs, &rhs])
         .expect("borrowed graph execution should succeed");
 

@@ -26,7 +26,7 @@ not when changing tenferro itself.
 | --- | --- |
 | Crates, features, CPU providers, scratch crates | [crate selection](references/crate-selection.md) |
 | Tier arities and extension-trait imports | [API cheatsheet](references/api-cheatsheet.md) |
-| Session entry cost, batching, backend/executor reuse and compile-once/run-many | [performance idioms](references/performance-idioms.md) |
+| Per-call dispatch cost, batching, engine reuse and compile-once/run-many | [performance idioms](references/performance-idioms.md) |
 | Column-major data, einsum syntax, registration, and setup traps | [pitfalls](references/pitfalls.md) |
 
 ## Non-negotiable defaults
@@ -37,14 +37,14 @@ not when changing tenferro itself.
   rejected. Import row-major (C-order) buffers with `from_vec_row_major`.
 - **No facade crate.** `cargo add tenferro` fails by design; depend on the
   crates you need (`tenferro-runtime`, `tenferro-cpu`, and operation crates).
-- **Explicit execution owner.** Concrete operations take a borrowed session
-  inside `backend.with_backend_session(...)` (`BackendSessionHost` import).
-  Entry is fallible: it returns `Result<R, SessionEntryError>` around the
-  callback's own result, so an operation returning `Result` needs `??`. A
-  session opened from inside another session fails with `Reentered` instead of
-  running; pass the borrowed session to nested work.
-  Construct the backend/runtime once and reuse it — per-call construction
-  discards the buffer pool. Eager tensors retain their runtime instead.
+- **Explicit execution owner.** Every operation takes the engine the caller
+  holds, as `&mut dyn Engine`: `let mut engine = CpuEngine::serial();` then
+  `a.matmul(&b, &mut engine)?`. An eager session borrows the same value
+  (`ctx.with_eager_session(&mut engine, |s| ...)`), and `grad` / `vjp` / `jvp` /
+  `backward` / `to_tensor` take `&mut engine` too. There is no entry call and no
+  reentry error: the borrow is the exclusion contract. Construct the engine and
+  runtime once and reuse them — per-call construction discards the pool, the
+  plan cache and the buffer pool.
 - **Representation is not reuse.** Integer einsum labels still plan. For a
   repeated compatible equation/input count/dtype/shape, prepare a
   `ConcreteEinsumPlan` once, even from a string; see

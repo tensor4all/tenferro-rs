@@ -1,14 +1,13 @@
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
 
     let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
     let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0])?;
 
-    let c = backend.with_backend_session(|session| a.matmul(&b, session))??;
+    let c = a.matmul(&b, &mut engine)?;
 
     assert_eq!(c.shape(), &[2, 2]);
     assert_eq!(c.as_slice::<f64>().unwrap(), &[19.0, 43.0, 22.0, 50.0]);

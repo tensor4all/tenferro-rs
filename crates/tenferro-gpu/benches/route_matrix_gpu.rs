@@ -2,12 +2,9 @@
 //! logical contraction, reported separately for enqueue and synchronized
 //! completion.
 //!
-//! Issue #1926 / umbrella #1929. `CudaBackend` used to implement the `Tensor*`
-//! operation traits by calling the same functions as its `BackendSession` impl
-//! — the backend was effectively its own session — so a one-shot call did not
-//! open a session, it ran *unbatched*. That owner spelling is deleted, so the
-//! only route measured here is `with_backend_session` plus `dot_general_read` on
-//! the borrowed session; the before-only `oneshot` numbers stay in
+//! Issue #1926 / umbrella #1929, reshaped by #2206: the engine owns its stream,
+//! so the operation route is `dot_general_read` called on the `&mut CudaEngine`
+//! itself; the before-only `oneshot` numbers stay in
 //! `docs/testing/session-route-baseline.json`.
 //!
 //! Timing modes. The umbrella requires GPU enqueue cost and synchronized
@@ -28,13 +25,11 @@
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use tenferro_gpu::cuda::{
-    download_tensor, gpu_available, upload_tensor, CudaBackend, CudaDeviceId,
+use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
+use tenferro_runtime::{
+    DType, ExecutionEngine, GraphCompiler, Output, Prepared, Runtime, TracedTensor,
 };
-use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, TracedTensor};
-use tenferro_tensor::{
-    BackendSessionHost, DotGeneralConfig, Tensor, TensorRead, TensorScalar, TensorWrite,
-};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TensorRead, TensorScalar, TensorWrite};
 
 const SIZES: &[usize] = &[8, 64, 256];
 const BATCH: usize = 16;
@@ -59,18 +54,15 @@ where
     Tensor::from_vec_col_major(vec![rows, cols], data).expect("benchmark matrix")
 }
 
-/// Session route: the kernel through a borrowed session.
-fn session(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) {
+/// Engine route: the kernel issued on the engine's stream.
+fn session(backend: &mut CudaEngine, lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) {
     backend
-        .with_backend_session(|exec| {
-            exec.dot_general_read(
-                TensorRead::from_tensor(lhs),
-                TensorRead::from_tensor(rhs),
-                config,
-            )
-        })
-        .unwrap()
-        .expect("session dot_general should succeed");
+        .dot_general_read(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            config,
+        )
+        .expect("engine dot_general should succeed");
 }
 
 /// Owned-destination session route: the same contraction written into a
@@ -81,49 +73,43 @@ fn session(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor, config: &DotGe
 /// above; the two also differ in whether the destination allocation is reused
 /// across iterations and how the result is validated.
 fn session_into(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: &Tensor,
     rhs: &Tensor,
     config: &DotGeneralConfig,
     out: &mut Tensor,
 ) {
     backend
-        .with_backend_session(|exec| {
-            exec.dot_general_read_into(
-                TensorRead::from_tensor(lhs),
-                TensorRead::from_tensor(rhs),
-                config,
-                TensorWrite::from_tensor(out),
-            )
-        })
-        .unwrap()
-        .expect("session dot_general_read_into should succeed");
+        .dot_general_read_into(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            config,
+            TensorWrite::from_tensor(out),
+        )
+        .expect("engine dot_general_read_into should succeed");
 }
 
 fn bench_size<T>(c: &mut Criterion, label: &str, size: usize)
 where
     T: TensorScalar + From<f32> + PartialEq + std::fmt::Debug + 'static,
 {
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let lhs = upload_tensor(backend.runtime(), &matrix::<T>(size, size)).expect("upload lhs");
     let rhs = upload_tensor(backend.runtime(), &matrix::<T>(size, size)).expect("upload rhs");
     let config = matmul_config();
 
     // Validation outside the timed region, on both routes.
     let device_out = backend
-        .with_backend_session(|__s| {
-            __s.dot_general_read(
-                TensorRead::from_tensor(&lhs),
-                TensorRead::from_tensor(&rhs),
-                &config,
-            )
-        })
-        .unwrap()
+        .dot_general_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+        )
         .expect("validation dot_general");
-    backend.runtime().synchronize().expect("validation sync");
+    backend.synchronize().expect("validation sync");
     assert_eq!(device_out.shape(), &[size, size], "{label}: output shape");
     session(&mut backend, &lhs, &rhs, &config);
-    backend.runtime().synchronize().expect("validation sync");
+    backend.synchronize().expect("validation sync");
 
     let mut group = c.benchmark_group(format!("route_matrix_gpu/dot_general_{label}"));
     group.bench_with_input(
@@ -132,7 +118,7 @@ where
         |bench, _| {
             bench.iter(|| {
                 session(&mut backend, black_box(&lhs), black_box(&rhs), &config);
-                backend.runtime().synchronize().expect("sync");
+                backend.synchronize().expect("sync");
             });
         },
     );
@@ -144,7 +130,7 @@ where
                 for _ in 0..BATCH {
                     session(&mut backend, black_box(&lhs), black_box(&rhs), &config);
                 }
-                backend.runtime().synchronize().expect("sync");
+                backend.synchronize().expect("sync");
             });
         },
     );
@@ -155,7 +141,7 @@ where
     let expected = download_tensor(backend.runtime(), &device_out).expect("download reference");
     let mut out = device_out;
     session_into(&mut backend, &lhs, &rhs, &config, &mut out);
-    backend.runtime().synchronize().expect("validation sync");
+    backend.synchronize().expect("validation sync");
     let actual = download_tensor(backend.runtime(), &out).expect("download owned output");
     assert_eq!(
         actual.shape(),
@@ -180,7 +166,7 @@ where
                     &config,
                     black_box(&mut out),
                 );
-                backend.runtime().synchronize().expect("sync");
+                backend.synchronize().expect("sync");
             });
         },
     );
@@ -198,7 +184,7 @@ where
                         black_box(&mut out),
                     );
                 }
-                backend.runtime().synchronize().expect("sync");
+                backend.synchronize().expect("sync");
             });
         },
     );
@@ -206,37 +192,81 @@ where
 }
 
 fn bench_sync_empty(c: &mut Criterion) {
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let mut group = c.benchmark_group("route_matrix_gpu/sync_empty");
     group.bench_function("synchronize", |bench| {
         bench.iter(|| {
-            backend.runtime().synchronize().expect("sync");
+            backend.synchronize().expect("sync");
         });
     });
     group.finish();
 }
 
-/// Prepared compiled-graph execution: one standalone `run_prepared` per call
-/// against many `run_prepared_in` calls inside one caller-held session (#2182).
+/// Prepared compiled-graph execution on one engine (#2182, #2206).
 ///
-/// The graph is a small elementwise chain, so the measured cost is the
-/// per-call admission and session boundary rather than kernel work. Retirement
-/// still happens before each `run_prepared`/`run_prepared_in` returns, so both
-/// arms pay the same end-of-call drain; the difference is the scoped session
-/// entry the standalone arm opens per call.
-fn prepared_routes(c: &mut Criterion) {
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+/// `prepared_enqueue` measures one `Runtime::run` per iteration: the engine keeps
+/// the run pending until its bound (or a synchronize) retires it, so this is the
+/// per-call admission and launch cost. `prepared_synchronized` adds the engine
+/// synchronize per call, the completed round trip.
+fn bench_prepared(
+    c: &mut Criterion,
+    group_name: &str,
+    backend: &mut CudaEngine,
+    runtime: &Runtime,
+    prepared: &Prepared,
+    input: &Tensor,
+) {
+    let mut group = c.benchmark_group(group_name);
+    group.bench_function("prepared_enqueue", |bench| {
+        bench.iter(|| {
+            let outputs = runtime
+                .run(
+                    &mut [&mut *backend],
+                    black_box(prepared),
+                    &[TensorRead::from_tensor(black_box(input))],
+                )
+                .expect("prepared run");
+            black_box(outputs);
+        });
+    });
+    group.bench_function("prepared_synchronized", |bench| {
+        bench.iter(|| {
+            let outputs = runtime
+                .run(
+                    &mut [&mut *backend],
+                    black_box(prepared),
+                    &[TensorRead::from_tensor(black_box(input))],
+                )
+                .expect("prepared run");
+            black_box(outputs);
+            backend.synchronize().expect("sync");
+        });
+    });
+    group.finish();
+}
+
+fn first_output<'o>(outputs: &'o [Output<'_>]) -> &'o Tensor {
+    match outputs.first().expect("one output") {
+        Output::Owned(tensor) => tensor,
+        Output::Borrowed(read) => read.as_tensor().expect("dense output"),
+    }
+}
+
+fn engine_runtime(backend: &CudaEngine) -> Runtime {
     let mut builder = Runtime::builder();
     builder
         .register_engine(
-            tenferro_gpu::cuda::cuda_runtime_engine_registration(
-                &backend,
-                EngineId::new("tenferro-cuda.bench.prepared.v1").expect("engine id"),
-            )
-            .expect("cuda registration"),
+            tenferro_gpu::cuda::cuda_runtime_engine_registration(backend)
+                .expect("cuda registration"),
         )
         .expect("register engine");
-    let runtime = builder.build().expect("runtime");
+    builder.build().expect("runtime")
+}
+
+/// A small fused elementwise chain: the cost is admission and launch, not kernel work.
+fn prepared_routes(c: &mut Criterion) {
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let runtime = engine_runtime(&backend);
 
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("input");
     let squared = (&x * &x).expect("square");
@@ -251,51 +281,51 @@ fn prepared_routes(c: &mut Criterion) {
     .expect("host input");
     let input = upload_tensor(backend.runtime(), &host).expect("upload");
     let prepared = runtime
-        .prepare_compiled(&program, &[&input])
+        .prepare(
+            &program,
+            &[TensorRead::from_tensor(&input)],
+            &[backend.target()],
+        )
         .expect("prepare");
-    let inputs: [&Tensor; 1] = [&input];
 
-    // Validate both arms produce the same result outside the timed region.
-    let standalone = runtime
-        .run_prepared(&prepared, black_box(&inputs))
-        .expect("standalone run");
-    let standalone_values = download_tensor(backend.runtime(), &standalone[0]).expect("download");
-    let mut session = backend.open_session().expect("held session");
-    let held = session
-        .with_session(|view| runtime.run_prepared_in(view, &prepared, &inputs))
-        .expect("held callback")
-        .expect("held run");
-    session.close().expect("close");
-    let held_values = download_tensor(backend.runtime(), &held[0]).expect("download");
-    assert_eq!(
-        held_values.as_slice::<f64>().expect("host values"),
-        standalone_values.as_slice::<f64>().expect("host values"),
-        "held and standalone prepared runs must agree"
+    // Validate outside the timed region.
+    let outputs = runtime
+        .run(
+            &mut [&mut backend],
+            &prepared,
+            &[TensorRead::from_tensor(&input)],
+        )
+        .expect("validation run");
+    let output = first_output(&outputs);
+    let values = download_tensor(backend.runtime(), output).expect("download");
+    drop(outputs);
+    let expected: Vec<f64> = host
+        .as_slice::<f64>()
+        .expect("host values")
+        .iter()
+        .map(|value| value * value + value)
+        .collect();
+    // The fused kernel may contract to an FMA, so compare within rounding.
+    for (actual, expected) in values
+        .as_slice::<f64>()
+        .expect("host values")
+        .iter()
+        .zip(&expected)
+    {
+        assert!(
+            (actual - expected).abs() <= 1e-12,
+            "prepared run: {actual} vs {expected}"
+        );
+    }
+
+    bench_prepared(
+        c,
+        "route_matrix_gpu/prepared_fused",
+        &mut backend,
+        &runtime,
+        &prepared,
+        &input,
     );
-
-    let mut group = c.benchmark_group("route_matrix_gpu/prepared_fused");
-    group.bench_function("prepared_standalone", |bench| {
-        bench.iter(|| {
-            let outputs = runtime
-                .run_prepared(black_box(&prepared), black_box(&inputs))
-                .expect("prepared run");
-            black_box(outputs);
-        });
-    });
-    group.bench_function("prepared_in_held", |bench| {
-        let mut session = backend.open_session().expect("held session");
-        bench.iter(|| {
-            let outputs = session
-                .with_session(|view| {
-                    runtime.run_prepared_in(view, black_box(&prepared), black_box(&inputs))
-                })
-                .expect("held callback")
-                .expect("prepared run");
-            black_box(outputs);
-        });
-        session.close().expect("close");
-    });
-    group.finish();
 
     prepared_matmul_chain(c);
 }
@@ -304,24 +334,13 @@ fn prepared_routes(c: &mut Criterion) {
 ///
 /// The fused elementwise row above runs a whole region as one scheduled node, so
 /// it cannot show a per-node cost. This chain schedules eight `dot_general`
-/// nodes, which is the shape that pays one CUDA event-domain dispatch fence per
-/// node (#2182 B3); the same pair of arms reports it.
+/// nodes (#2182 B3).
 fn prepared_matmul_chain(c: &mut Criterion) {
     const SIZE: usize = 16;
     const MATMULS: usize = 8;
 
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
-    let mut builder = Runtime::builder();
-    builder
-        .register_engine(
-            tenferro_gpu::cuda::cuda_runtime_engine_registration(
-                &backend,
-                EngineId::new("tenferro-cuda.bench.prepared-matmul.v1").expect("engine id"),
-            )
-            .expect("cuda registration"),
-        )
-        .expect("register engine");
-    let runtime = builder.build().expect("runtime");
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let runtime = engine_runtime(&backend);
 
     let x = TracedTensor::input_symbolic_shape(DType::F64, 2).expect("input");
     let mut y = x.matmul(&x).expect("first matmul");
@@ -340,50 +359,32 @@ fn prepared_matmul_chain(c: &mut Criterion) {
     .expect("host input");
     let input = upload_tensor(backend.runtime(), &host).expect("upload");
     let prepared = runtime
-        .prepare_compiled(&program, &[&input])
+        .prepare(
+            &program,
+            &[TensorRead::from_tensor(&input)],
+            &[backend.target()],
+        )
         .expect("prepare");
-    let inputs: [&Tensor; 1] = [&input];
 
-    let standalone = runtime
-        .run_prepared(&prepared, black_box(&inputs))
-        .expect("standalone run");
-    let standalone_values = download_tensor(backend.runtime(), &standalone[0]).expect("download");
-    let mut session = backend.open_session().expect("held session");
-    let held = session
-        .with_session(|view| runtime.run_prepared_in(view, &prepared, &inputs))
-        .expect("held callback")
-        .expect("held run");
-    session.close().expect("close");
-    let held_values = download_tensor(backend.runtime(), &held[0]).expect("download");
-    assert_eq!(
-        held_values.as_slice::<f64>().expect("host values"),
-        standalone_values.as_slice::<f64>().expect("host values"),
-        "held and standalone matmul chains must agree"
+    let outputs = runtime
+        .run(
+            &mut [&mut backend],
+            &prepared,
+            &[TensorRead::from_tensor(&input)],
+        )
+        .expect("validation run");
+    let output = first_output(&outputs);
+    assert_eq!(output.shape(), &[SIZE, SIZE]);
+    drop(outputs);
+
+    bench_prepared(
+        c,
+        "route_matrix_gpu/prepared_matmul_chain",
+        &mut backend,
+        &runtime,
+        &prepared,
+        &input,
     );
-
-    let mut group = c.benchmark_group("route_matrix_gpu/prepared_matmul_chain");
-    group.bench_function("prepared_standalone", |bench| {
-        bench.iter(|| {
-            let outputs = runtime
-                .run_prepared(black_box(&prepared), black_box(&inputs))
-                .expect("prepared run");
-            black_box(outputs);
-        });
-    });
-    group.bench_function("prepared_in_held", |bench| {
-        let mut session = backend.open_session().expect("held session");
-        bench.iter(|| {
-            let outputs = session
-                .with_session(|view| {
-                    runtime.run_prepared_in(view, black_box(&prepared), black_box(&inputs))
-                })
-                .expect("held callback")
-                .expect("prepared run");
-            black_box(outputs);
-        });
-        session.close().expect("close");
-    });
-    group.finish();
 }
 
 fn route_matrix_gpu(c: &mut Criterion) {

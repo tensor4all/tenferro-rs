@@ -1,6 +1,7 @@
 mod cache;
 mod cache_owner;
 mod capability;
+mod engine;
 mod engine_registration;
 mod error;
 mod event_domain;
@@ -31,8 +32,7 @@ pub use capability::{
     PreparedOperationHandle, PreparedOperationPlan, ReductionPrepareRequest, ReductionRuntime,
     UnsupportedReason,
 };
-#[cfg(test)]
-pub(crate) use engine_registration::ExecutableEngineContract;
+pub use engine::{EngineTarget, ExecutionEngine, Output};
 pub use engine_registration::{
     assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
     EngineRegistration, EngineRegistrationMetadata, ExecutableEngineRegistrationConfig,
@@ -45,18 +45,13 @@ pub use error::{
     ExtensionModuleError, IdentityError, IdentityKind, InputIngressContractError,
     InputSignatureError, InputSpecializationRequirementsError, PlacementConstraintError,
     PrepareError, ProviderContractError, RankRequirement, RegistrationKey, RuntimeConfigError,
-    RuntimeReconfigureError, SpecializationError, SubmissionError,
+    RuntimeReconfigureError, SpecializationError,
 };
 pub use event_domain::{
     EventDomainDriver, EventDomainError, EventDomainOperation, EventDomainRun, EventToken,
     ImmediateEventDomainDriver,
 };
-pub use execution::{
-    ExecutionBundle, ExecutionHandle, ExecutionInputs, ExecutionOutcome, OutputAccessError,
-    OutputExtractError, OutputMetadata, OutputRef, PreparedCompiledGraph, PreparedDeferred,
-    ScopedExecutionBundle, ScopedExecutionOutcome, ScopedOutput, ScopedOutputExtractError,
-    ScopedReadBinding, ScopedReadInputs, ScopedSubmitRejected, SubmitError,
-};
+pub use execution::Prepared;
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
 pub use extension_provider::{ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest};
 pub use identity::{

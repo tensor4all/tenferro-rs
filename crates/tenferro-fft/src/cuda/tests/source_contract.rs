@@ -117,6 +117,48 @@ fn plan_execution_stays_on_the_public_raw_session_and_forgets_workspace_on_faile
 }
 
 #[test]
+fn plan_retirement_never_waits_on_the_stream() {
+    // #2206: every execution synchronizes its stream inside the raw session
+    // before releasing its work area, so a cached plan has no queued work that
+    // references it. Retirement therefore must not wait on the stream: it may
+    // only activate the retained context and destroy the handle.
+    let source = include_str!("../plan.rs");
+    for (section, name) in [
+        ("fn destroy_handle", "destroy_handle"),
+        ("fn destroy_entry_resources", "destroy_entry_resources"),
+        ("fn defer_entry_resources", "defer_entry_resources"),
+    ] {
+        let body = source
+            .split_once(section)
+            .map(|(_, rest)| rest)
+            .unwrap_or_else(|| unreachable!("{name} source section should exist"));
+        let end = body.find("\n}\n").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            !body.contains("synchronize()"),
+            "{name} must not wait on the stream"
+        );
+    }
+    let trait_section = source
+        .split_once("pub(crate) trait CufftCleanup")
+        .and_then(|(_, rest)| rest.split_once("impl CufftCleanup for CudaRuntime"))
+        .map(|(section, _)| section)
+        .unwrap_or_else(|| unreachable!("CufftCleanup trait section should exist"));
+    assert!(
+        !trait_section.contains("fn synchronize"),
+        "the cleanup hook must not offer a stream wait"
+    );
+
+    let drop_section = source
+        .split_once("impl Drop for CufftPlanEntry")
+        .map(|(_, rest)| rest)
+        .unwrap_or_else(|| unreachable!("plan-entry drop section should exist"));
+    assert!(drop_section.contains("retirement_unproven.load("));
+    assert!(drop_section.contains("defer_entry_resources("));
+    assert!(drop_section.contains("destroy_entry_resources("));
+}
+
+#[test]
 fn plan_entry_and_session_reject_foreign_runtime_inputs_before_cache_work() {
     // The FFT placement guard must run before plan creation and cache writes,
     // so foreign-runtime tensors cannot allocate a cache entry.

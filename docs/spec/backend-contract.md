@@ -20,16 +20,16 @@ TraceContext -> TracedGraph -> GraphCompiler
   ▼
 CompiledGraph
   │
-  │ Runtime::prepare_compiled() / Runtime::run_compiled()
+  │ Runtime::prepare(program, inputs, targets)
   │   - validate ordered input metadata
-  │   - select engines and resolve execution endpoints
+  │   - bind one caller-held engine per target slot
   │   - lower semantic operations to private ExecProgram staging
   │   - build the private ScheduledGraph
   ▼
 private runtime preparation and staging
   │
-  │ Runtime::run_prepared() / Runtime::submit()
-  │   - retain the prepared schedule for the runtime epoch
+  │ Runtime::run(engines, prepared, inputs)
+  │   - bind slot i to the i-th engine the caller passes
   │   - enqueue operations, transfers, and barriers through event domains
   │   - drain submitted work before returning execution failure
   ▼
@@ -49,7 +49,7 @@ providers, and event-domain dependencies for one runtime snapshot.
 The optional XLA path is a peer executor over a compiled `CompiledGraph`
 lowering view, not a native backend. `tenferro-xla` may inspect immutable
 lowering metadata, emit StableHLO, and load PJRT plugins at runtime, but it does
-not implement `TensorBackend` and does not bypass `Runtime::run_compiled`
+not implement `Engine` and does not bypass `Runtime::prepare` / `Runtime::run`
 dispatch.
 
 ---
@@ -111,7 +111,7 @@ input-count error therefore takes precedence over a guard expression's
 `MissingInput` evaluation error.
 
 The guarantee covers owned tensor and owned value-output execution, borrowed
-and non-consuming reads, `Runtime::run_compiled*` entry points,
+and non-consuming reads, the `Runtime::prepare` / `Runtime::run` entry points,
 segmented execution, extension-owned core-program execution through the
 nonsegmented path, and programs with no instructions. Programs with no guards
 retain their previous behavior. Compiler-cache hits reuse semantic plans while
@@ -191,11 +191,11 @@ For pass algorithms and rationale, see
 
 Execution is divided into three instruction categories.
 
-### Backend-session instructions
+### Engine instructions
 
-These run through `BackendSession` inside `TensorBackend::with_backend_session()`.
+These run through `Engine` on the caller-held engine the runtime was given.
 They are the operations eligible for grouped segmented execution and, when
-supported by the backend, elementwise fusion planning.
+supported by the engine, elementwise fusion planning.
 
 Examples:
 
@@ -220,7 +220,7 @@ These are handled without calling backend kernels:
 runtime tensor shapes in the execution layer, then calls the backend through the
 normal concrete `Gather` path.
 
-`Constant` uses `TensorBackend::upload_host_tensor()` so device-specific
+`Constant` uses the engine's `upload_host_tensor()` so device-specific
 execution still receives correctly placed tensors without implicit transfer of
 user-supplied inputs.
 
@@ -231,7 +231,7 @@ These stay as single-instruction boundaries in segmented execution:
 - `DotGeneral`
 - `Extension`
 
-`DotGeneral` dispatches through `TensorBackend`. `Extension` dispatch routes
+`DotGeneral` dispatches through the engine. `Extension` dispatch routes
 through the installed `ExtensionModule` for the operation family; linalg,
 einsum, and FFT provide those modules from their owning crates.
 
@@ -239,8 +239,8 @@ einsum, and FFT provide those modules from their owning crates.
 
 ## V. Segmented vs. Unsegmented Execution
 
-`Runtime::run_compiled` and `Runtime::submit` are the public execution entry
-points for a `CompiledGraph`. Runtime preparation owns backend selection,
+`Runtime::prepare` and `Runtime::run` are the public execution entry points for
+a `CompiledGraph`. Runtime preparation owns engine binding,
 registered extension modules, cache ownership, and the private
 `CompiledGraph -> ExecProgram staging -> ScheduledGraph` transition required to
 preserve dispatch invariants. The runtime executes the prepared schedule one
@@ -279,46 +279,55 @@ Extension instructions must run through a registered `ExtensionModule`; missing
 module registration is an error, not a fallback to a host/reference path.
 
 The engine uses `last_use` metadata to reclaim buffers via
-`BackendSession::reclaim_buffer()` or `TensorBackend::reclaim_buffer()`.
+`Engine::reclaim_buffer()`.
 
 ---
 
 ## VI. Backend Traits
 
-### TensorBackend
+### Engine
 
-`TensorBackend` is the full standard-algebra backend surface in
-`crates/tenferro-tensor/src/backend.rs`.
-
-It includes:
+`Engine` is the only execution trait, declared in
+`crates/tenferro-tensor/src/backend.rs`. It includes:
 
 - elementwise arithmetic and analytic ops
 - structural ops
 - reductions
 - `dot_general`
 - indexing ops
-- `with_backend_session`
-- `download_to_host`
-- `upload_host_tensor`
+- `to_contiguous_read` and the caller-output `_into` forms
+- `download_to_host` / `upload_host_tensor`
 - `reclaim_buffer`
 
-`BackendSession` is the session-local companion trait used by grouped backend
-execution. Backends may override `with_backend_session()` to install one shared
-execution scope, for example a CPU thread-pool context.
+Every method takes `&mut self`, so one computation uses one engine at a time and
+the borrow is the exclusion contract. There is no session entry, no admission
+permit, no nested-entry error and no shared execution scope: the caller owns the
+engine and decides which operations share it.
 
-Session entry is fallible: `with_backend_session()` returns
-`Result<R, SessionEntryError>`, and every admission failure (same-thread
-reentry, a busy caller-managed domain, a mismatched execution scope, poisoned
-admission state, executor-entry failure) is reported before the callback runs.
-The callback's own result is returned unchanged inside `Ok`. A backend leaf that
-exposes native services returns an opaque `NativeSessionRef` from
-`BackendSession::native_session()`, recovered only by that leaf's visitor; the
-default is `None`.
+`EngineRegistration` (tenferro-runtime) describes an engine *kind* to a
+`Runtime`: its stable `EngineId`, its hardware and storage classes, its
+preparation capabilities and its transfer endpoints. The registration holds no
+engine; `Runtime::prepare` records which target slot needs which kind, and
+`Runtime::run` binds each slot to the engine the caller passes. A CPU engine
+registers through `tenferro_cpu::runtime_engine_registration`, and
+`runtime_engine_registration_with_id` allows several CPU engines in one process.
 
-Custom operation families do not add a second backend trait. They lower to
+`ExecutionEngine` (tenferro-runtime) extends `Engine` with what the runtime
+needs from a concrete engine value: `target()` reports the `EngineTarget` the
+engine runs as, and `take_extension_caches` / `restore_extension_caches` lend
+the engine's extension caches to extension executors for the duration of a run.
+`tenferro_cpu::CpuEngine` and `tenferro_gpu::cuda::CudaEngine` implement it.
+
+A backend leaf that exposes native services returns an opaque
+`NativeSessionRef` from `Engine::native_engine()`, recovered only by that leaf's
+visitor; the default is `None`. The raw CUDA seam
+(`CudaEngine::with_raw` / `with_cubecl`) is the sanctioned way to reach vendor
+and CubeCL APIs on tenferro buffers.
+
+Custom operation families do not add a second execution trait. They lower to
 `ExecOp::Extension` and dispatch through their installed `ExtensionModule`.
 The owning extension crate is responsible for deciding whether that runtime
-uses the active `TensorBackend`, a provider-specific library, or an internal
+uses the active engine, a provider-specific library, or an internal
 implementation.
 
 ---

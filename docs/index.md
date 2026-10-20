@@ -24,7 +24,7 @@ compilation, CUDA, or experimental WebGPU only when the workflow needs them.
 | Understanding direct, eager, and traced execution | [Execution Models](guides/execution-models.md) |
 | Column-major storage and row-major import/export | [Memory Order](guides/memory-order.md) |
 | CPU, CUDA, and experimental WebGPU behavior; NVIDIA library compatibility | [Devices and GPU](guides/devices-and-gpu.md#cuda-and-nvidia-library-compatibility) |
-| CPU affinity, NUMA placement, faer, and external BLAS behavior | [CPU Execution and NUMA Placement](guides/cpu-execution.md) |
+| CPU thread pools, affinity, faer, and external BLAS behavior | [CPU Execution and Thread Pools](guides/cpu-execution.md) |
 | Static-shaped StableHLO and PJRT plugin loading | [XLA and PJRT](guides/xla.md) |
 | Runtime-dependent dimensions in traced graphs | [Dynamic and symbolic shapes](design/dynamic-symbolic-shapes.md) |
 | API documentation for every crate | [API Reference](api/index.md) |
@@ -33,7 +33,7 @@ compilation, CUDA, or experimental WebGPU only when the workflow needs them.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/direct_linalg_quickstart.rs -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::prelude::*;
 use tenferro_runtime::prelude::*;
 
@@ -49,18 +49,17 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
 
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 1.0])?;
     let identity = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0])?;
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![6.0, 2.0])?;
 
-    let (product, solution, singular_values) = backend.with_backend_session(|session| {
-        let product = a.matmul(&identity, session)?;
-        let solution = product.solve(&rhs, session)?;
-        let singular_values = product.svdvals(session)?;
-        Ok::<_, tenferro_runtime::Error>((product, solution, singular_values))
-    })??;
+    // One borrowed engine carries every operation, the plan cache and the
+    // buffer pool.
+    let product = a.matmul(&identity, &mut engine)?;
+    let solution = product.solve(&rhs, &mut engine)?;
+    let singular_values = product.svdvals(&mut engine)?;
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(product.host_data()?, &[3.0, 0.0, 0.0, 1.0]);
     assert_close(solution.as_slice()?, &[2.0, 2.0]);
@@ -98,8 +97,8 @@ traced graphs are not competing APIs; they answer different questions.
 | Choice | Question | Options |
 | --- | --- | --- |
 | Tensor API | What kind of value do I pass around? | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
-| Execution timing | When does computation run? | Direct backend call, immediate eager execution, traced compile/run |
-| Backend/device | Where does computation run? | CPU, CUDA, or experimental WebGPU backend, with explicit transfer |
+| Execution timing | When does computation run? | Direct engine call, immediate eager execution, traced compile/run |
+| Engine/device | Where does computation run, and who owns it? | Caller-held CPU, CUDA, or experimental WebGPU engine, with explicit transfer |
 
 Most code without autodiff starts with `TypedTensor<T>` when the scalar type is
 known at compile time, or `Tensor` when dtype must be selected at runtime.

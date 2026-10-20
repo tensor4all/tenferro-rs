@@ -8,7 +8,7 @@
 //! releasing anything. They are ignored by default; explicitly running them requires a CUDA device.
 
 use tenferro_gpu::cuda::{
-    download_pending, gpu_available, upload_tensor, CudaBackend, CudaDeviceId, CudaRuntime,
+    download_pending, gpu_available, upload_tensor, CudaDeviceId, CudaEngine, CudaRuntime,
     PinnedHostBuffer, TransferSubmitError,
 };
 use tenferro_tensor::Tensor;
@@ -16,9 +16,9 @@ use tenferro_tensor::Tensor;
 /// Big enough that a copy of it cannot complete before an immediate poll observes the queue.
 const DELAYED_ELEMENTS: usize = 8 * 1024 * 1024;
 
-fn backend() -> CudaBackend {
+fn backend() -> CudaEngine {
     assert!(gpu_available(), "CUDA test requires an available device");
-    CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
+    CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("CUDA backend")
 }
 
 fn values(len: usize) -> Vec<f64> {
@@ -45,7 +45,7 @@ fn from_bytes(bytes: &[u8]) -> Vec<f64> {
         .collect()
 }
 
-fn runtime_of(backend: &CudaBackend) -> CudaRuntime {
+fn runtime_of(backend: &CudaEngine) -> CudaRuntime {
     backend.runtime().clone()
 }
 
@@ -86,31 +86,29 @@ fn pending_download_reports_not_ready_then_returns_the_bytes_and_the_value() {
 
 #[test]
 #[ignore = "requires a CUDA device"]
-fn pending_download_completes_after_its_producing_session_closes() {
+fn pending_download_completes_after_its_producing_engine_drops() {
+    use tenferro_tensor::TensorElementwise;
+
     let mut backend = backend();
     let runtime = runtime_of(&backend);
     let data = values(4096);
     let device = upload_tensor(&runtime, &vector(&data)).expect("upload");
 
-    let mut session = backend.open_session().expect("open");
-    let produced = session
-        .with_session(|view| {
-            view.add_read(
-                tenferro_tensor::TensorRead::from_tensor(&device),
-                tenferro_tensor::TensorRead::from_tensor(&device),
-            )
-        })
-        .expect("held callback")
-        .expect("held add");
+    let produced = backend
+        .add_read(
+            tenferro_tensor::TensorRead::from_tensor(&device),
+            tenferro_tensor::TensorRead::from_tensor(&device),
+        )
+        .expect("engine add");
 
     let buffer = PinnedHostBuffer::new(&runtime, 4096 * 8).expect("pinned buffer");
     let pending = download_pending(&runtime, produced, buffer).expect("pending download");
-    session.close().expect("close the producing session");
+    drop(backend);
 
     let (_, filled) = pending.wait().expect("wait");
     let doubled = from_bytes(filled.as_slice());
     let expected: Vec<f64> = data.iter().map(|value| value * 2.0).collect();
-    assert_eq!(doubled, expected, "the copy outlives its producing session");
+    assert_eq!(doubled, expected, "the copy outlives its producing engine");
 }
 
 #[test]

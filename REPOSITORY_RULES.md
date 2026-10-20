@@ -155,66 +155,54 @@ diff-scoped review bot must be listed in that script's `ALWAYS_SECTIONS` or
   indexing before config validation, and allocation helpers bypassing shared
   checked shape-product functions.
 
-## Backend Session Entry
+## Execution Engine Entry
 
-Session entry — creating backend execution state — is owned by backend entry
-mechanisms, not by exported names. The audited set lives in
-[`scripts/audit-session-entry.py`](scripts/audit-session-entry.py): CPU
-execution admission, CPU/CUDA/WebGPU session construction, the held CPU session
-entry and construction (`open_session`, `adopt_held_permit`, `CpuHeldSession`),
-`run_backend_session_cached`, `with_execution_scope`, the portable
-`with_session_entry_guard`, and every library call of
-`with_backend_session[_cached]`, `with_eager_session`,
-`with_execution_session` and the eager extension-context entries
-(`with_extension_*_context`, `erased_context`). `default_backend_session`,
-`with_evaluation_scope` and the deleted CPU owner install helpers
-(`try_install`, `install_with_pool*`) are retired: any library use fails.
+Execution entry is a caller-held engine. `Engine` is the only operation
+surface and `ExecutionEngine` is the prepared-program target: a caller builds a
+Rayon pool and hands it to `CpuEngine::new` (or uses `CpuEngine::serial()`), or
+opens a device as a `CudaEngine`, then passes `&mut` to every operation or
+`&mut [&mut dyn ExecutionEngine]` to `Runtime::run`. Rust's `&mut` borrow is the
+exclusivity mechanism. There is no session, admission permit, execution scope,
+held session or resource arbiter to enter, and tenferro neither subdivides a
+pool nor keeps a process-wide registry of engines.
 
-- Every occurrence in library code must sit inside a function listed in
-  [`scripts/session-entry-allowlist.json`](scripts/session-entry-allowlist.json),
-  which is keyed by mechanism and maps each function-level source location to
-  the reason it is a legitimate boundary (a session host, a named top-level
-  entry point, a documented exception or a native-context region). An entry
-  without a reason fails, and so does a `PENDING` reason: a known-illegitimate
-  entry may be tracked on a branch but not merged. The allowlist may only shrink
-  except where a reviewed design authorizes a new boundary: a change that
-  introduces a new entry mechanism — as the held CPU session entry of #1945 does —
-  or a reviewed new caller under an already-listed mechanism — as that design's
-  phase lease does for the per-lane child entry — records the mechanism or site,
-  the reason the boundary is legitimate, and the growth itself in the same change
-  and in the pull request. `--bless` is for recording a removal. Every tracked mechanism must
-  still match a library definition or site, so a rename cannot silently shrink
-  coverage.
-- An execution scope creates execution state too: it holds an execution permit and
-  the resource set that permit keys, and sessions opened inside it reuse them. Scope
-  entry points therefore belong to the audited set. `with_evaluation_scope` (an
-  evaluation-wide scope hook, A2) is not implemented and stays retired.
-- A thread that holds a session or a CPU permit never waits on an owner lock such
-  as an eager runtime's backend owner: nested entry is rejected before the wait,
-  and inside a shared execution scope a busy owner is reported as contended
-  (#1946 F1).
-- Backend owner types (`CpuBackend`, `CudaBackend`, `WebGpuBackend`) are session
-  hosts, not execution surfaces: they implement no operation, canonicalization,
-  fusion or buffer trait. Those capabilities live on the session types. The
-  owner keeps `BackendSessionHost`, runtime-cache ownership and the explicit
-  `TensorDeviceTransfer` boundary (#1946 F6).
-- Operation implementations reach a session through `with_backend_session` and
-  must not create execution state themselves. Entry is fallible: admission
-  failures (reentry, a busy caller-managed domain, a scope mismatch, poisoned
-  admission state, executor failure) are typed `SessionEntryError`s reported
-  before the callback runs, never panics. The one exception is restoration rather
-  than admission: when the CPU backend cannot restore the caller's CPU affinity
-  after the callback, it reports `SessionEntryError::Executor` after the callback
-  has run and that error replaces the callback's value.
-- Backend-leaf native services are reached only through the leaf's visitor on
-  `BackendSession::native_session()`; `NativeSessionRef` has one `unsafe`
-  constructor, used only by the leaf that owns the marker.
-- A renamed import is not an exemption: the audit resolves `use ... as alias`
-  and fails on an aliased entry, and its own negative tests run on every check.
+The audited entry mechanisms live in
+[`scripts/audit-engine-entry.py`](scripts/audit-engine-entry.py):
+`impl Engine for T` (a new operation surface), `impl ExecutionEngine for T` (a
+new prepared-program target), `CudaEngine::open` (device, stream and memory
+domain creation) and `with_raw` (the raw CubeCL/CUDA scope on the engine's
+stream). Session mechanisms are deleted, including `BackendSession`,
+`BackendSessionHost`, `with_backend_session*`, `SessionEntryError`, held
+sessions, execution scopes, admission guards and owner install helpers; do not
+reintroduce them.
+
+- Every occurrence in library code must sit inside a function or impl listed in
+  [`scripts/engine-entry-allowlist.json`](scripts/engine-entry-allowlist.json),
+  which is keyed by mechanism and maps each source location to the reason it is
+  a legitimate boundary (an engine surface, a provider raw scope, or a device
+  open). An entry without a reason fails, and so does a `PENDING` reason: a
+  known-illegitimate entry may be tracked on a branch but not merged.
+  `--bless` is for recording a removal. Every tracked mechanism must still match
+  a library definition or site, so a rename cannot silently shrink coverage.
+- The allowlist may grow only for a reviewed new engine surface or raw scope: a
+  change that adds one records the mechanism or site, the reason the boundary is
+  legitimate, and the growth itself in the same change and in the pull request.
+- A raw scope is an execution boundary, not a session replacement. Library code
+  enters it only to issue the provider call on the engine's stream, and the
+  scope restores the caller's device context on return, error and unwind.
+  `CudaEngine::open` is likewise a construction boundary: engine code opens the
+  device it was asked for, but an operation must not open a second engine or
+  build an extra pool to run work.
+- Backend-native services are reached only through the leaf's visitor on
+  `Engine::native_engine()`; `NativeSessionRef` has one `unsafe` constructor,
+  used only by the leaf that owns the marker.
+- A renamed trait import is not an exemption: the audit resolves
+  `use ... as alias` for `Engine` and `ExecutionEngine`, and its own negative
+  tests run on every check.
 - Test, benchmark and example code is out of scope (`tests/`, `benches/`,
   `examples/`, `tests.rs`, `*_tests.rs` and `#[cfg(test)]` items); moving that
   code into the library brings it back into scope.
-- `python3 scripts/audit-session-entry.py --check` runs in hosted CI (the
+- `python3 scripts/audit-engine-entry.py --check` runs in hosted CI (the
   `ci-config` profile) and in `scripts/check-pr-fast.sh`.
 
 ## Invariant Markers
@@ -637,8 +625,8 @@ Tests follow implementation ownership.
   affine-kernel-owner = strided-rs
   affine-kernels = copy,permutation,broadcast,map,zip-map,fused-elementwise,sum-product-reduction,gather,additive-scatter,dynamic-slice,dynamic-update-slice
   einsum-owner = tenferro:benchmark-backed-exception
-  execution-entry = CpuBackend
-  execution-resources = persistent-BufferPool,uninitialized-full-overwrite,CpuContext-Rayon,nested-execution,serial-parallel-threshold
+  execution-entry = CpuEngine
+  execution-resources = persistent-BufferPool,uninitialized-full-overwrite,engine-owned-Rayon,nested-execution,serial-parallel-threshold
   noncompliant = context-free-strided-call,throwaway-pool,ambient-global-Rayon
   resource-classification = memory-reuse-and-thread-policy:execution-not-metadata
   ```
@@ -654,14 +642,15 @@ Tests follow implementation ownership.
   exceptions require an accepted issue, comparative benchmark evidence, and a
   recorded ownership rationale.
 - Calling a `strided-rs` primitive is necessary but not sufficient. Public
-  tensor-sized CPU work enters through `CpuBackend` and its configured
-  execution scope: persistent `BufferPool`, fully-overwritten uninitialized
-  output allocation, configured `CpuContext` Rayon pool, nested-execution
-  safety, and serial/parallel threshold policy. A context-free `strided-rs`
-  call, a throwaway pool, or Rayon's ambient global pool is non-compliant.
-  Memory reuse and thread policy are execution resources, not tensor metadata;
-  backend-neutral tensor/view types expose metadata-only layout transforms and
-  do not own data-moving convenience methods.
+  tensor-sized CPU work enters through a caller-held `CpuEngine`: the caller
+  builds the Rayon pool with `thread_pool_builder` and hands it over, and the
+  engine owns the pool, the persistent `BufferPool`, fully-overwritten
+  uninitialized output allocation, the provider token and the serial/parallel
+  threshold policy. A context-free `strided-rs` call, a throwaway pool, an extra
+  pool built inside an operation, or Rayon's ambient global pool is
+  non-compliant. Memory reuse and thread policy are execution resources, not
+  tensor metadata; backend-neutral tensor/view types expose metadata-only
+  layout transforms and do not own data-moving convenience methods.
 - Exceptions with dedicated implementations: `reshape` (metadata-only) and
   indexing ops without a matching strided plan. Max/min reductions and static
   slice, pad, concatenate, and reverse delegate to strided plans since #1877;
@@ -683,8 +672,8 @@ Tests follow implementation ownership.
   `strided-kernel` is compiled with its `parallel` feature for elementwise,
   reduction, and structural materialization kernels. CPU contraction and
   linalg call the lower numerical libraries (cpueinsum/tcontract, tlinalg,
-  tlinalg-blas) with one parallelism token from the owning
-  `CpuExecutionContext`: `Sequential`, or the selected pool with a thread
+  tlinalg-blas) with one parallelism token from the engine's
+  `CpuExecutionContext`: `Sequential`, or the engine-owned pool with a thread
   budget. The lower library owns lane selection within that budget.
 - A tensor-sized CPU operation that remains a dedicated sequential loop
   because no strided-kernel/backend-native parallel primitive fits keeps a
@@ -729,8 +718,8 @@ Tests follow implementation ownership.
   implementations for operations or dtypes not covered by the accepted
   vendor-library path, not fallback tiers for missing CUDA libraries.
 - CUDA `eig` (non-symmetric eigenvalue decomposition, LAPACK `dgeev`) is not
-  provided by cuSOLVER. `CudaBackend::eig` returns `Unsupported`; users
-  download to CPU and use `CpuBackend::eig`.
+  provided by cuSOLVER. `CudaEngine::eig` returns `Unsupported`; users
+  download to CPU and use `CpuEngine::eig`.
 
 ## Structured Error Classification
 
@@ -885,26 +874,25 @@ Tests follow implementation ownership.
   overloads where they read naturally (`&a + &b`), and associated functions
   without a natural receiver (`TracedTensor::concatenate(...)`). Eager
   operations instead use a runtime-bound, explicitly borrowed `EagerSession`
-  (`ctx.with_eager_session(|s| s.exp(&x))`, `s.where_select(&cond, &x, &y)`);
-  `EagerTensor` remains the value/trace handle, not an implicit per-operation
-  backend entry point. This holds for every eager operation surface, including
-  extension crates (einsum, linalg, FFT, ...): a tensor-, slice- or
-  typed-owned eager operation must not open a session internally; it is
-  offered on the borrowed session instead. Do not add operator overloads that
-  hide eager entry. The only exceptions are the tensor-owned linalg `solve`,
-  which preserves calling-thread `no_grad` behavior, and consuming in-place
-  FFT, which preserves exclusive ownership; neither is a precedent for new
-  implicit eager operation methods. The session-entry audit enforces this.
+  over a caller-supplied engine (`ctx.with_eager_session(engine, |s| s.exp(&x))`,
+  `s.where_select(&cond, &x, &y)`); `EagerTensor` remains the value/trace
+  handle, not an implicit per-operation backend entry point. This holds for
+  every eager operation surface, including extension crates (einsum, linalg,
+  FFT, ...): a tensor-, slice- or typed-owned eager operation must not open a
+  session, engine or hidden pool internally; it runs on the engine the caller
+  passed in. Do not add operator overloads that hide eager entry. The only
+  exceptions are the tensor-owned linalg `solve`, which preserves
+  calling-thread `no_grad` behavior, and consuming in-place FFT, which preserves
+  exclusive ownership; neither is a precedent for new implicit eager operation
+  methods.
 - **Non-AD concrete ops**: `Tensor` and dynamic-rank `TypedTensor<T>` use
-  crate-root session extension traits (`TensorSessionOpsExt`,
+  crate-root extension traits (`TensorSessionOpsExt`,
   `TypedTensorSessionOpsExt`, and `TypedTensorMaskSessionOpsExt`) whose
-  methods run inside a caller-provided `BackendSession` (entered via
-  `BackendSessionHost::with_backend_session`, which returns
-  `Result<R, SessionEntryError>`, so a fallible operation is written `??`).
-  The facade targets the `Dynamic` representation; a `Host` owner reaches it
-  through the zero-copy `into_dynamic()`. Private helper modules are fine, but
-  public `tensor` / `typed_tensor` module free functions are not part of the
-  release API.
+  methods run on a caller-provided `&mut dyn Engine` (the engine is the first
+  argument and a fallible operation is written `?`). The facade targets the
+  `Dynamic` representation; a `Host` owner reaches it through the zero-copy
+  `into_dynamic()`. Private helper modules are fine, but public `tensor` /
+  `typed_tensor` module free functions are not part of the release API.
 - **Extension families**: extension crates cannot add inherent methods to
   external tensor types, so their canonical tensor-facing surface is extension
   traits (`TracedTensorLinalgExt`, `EagerSessionEinsumExt`, `EagerSessionLinalgExt`,

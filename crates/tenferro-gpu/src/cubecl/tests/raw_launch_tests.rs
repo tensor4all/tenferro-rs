@@ -8,12 +8,12 @@ use std::sync::Arc;
 use super::*;
 use crate::cubecl::tests::with_cuda_exec;
 use crate::cuda::raw::{KernelArg, LaunchConfig, NvrtcOptions};
-use crate::cuda::{gpu_available, CudaBackend};
+use crate::cuda::{gpu_available, CudaEngine};
 
-fn first_cuda_backend() -> Option<CudaBackend> {
+fn first_cuda_backend() -> Option<CudaEngine> {
     let devices = crate::cuda::cuda_devices().ok()?;
     let device = devices.first()?;
-    CudaBackend::new(device.id()).ok()
+    CudaEngine::open(device.id()).ok()
 }
 
 /// A one-dimensional add kernel compiled from CUDA source by NVRTC.
@@ -423,10 +423,11 @@ fn raw_dynamic_shared_memory_opt_in_is_serialized_across_threads() {
     });
 
     let module = Arc::new(module);
-    let mut worker_backend = backend.clone();
+    // The engine moves to the worker thread and comes back with its result.
+    let mut worker_backend = backend;
     let worker_module = Arc::clone(&module);
     let worker = std::thread::spawn(move || {
-        with_cuda_exec(&mut worker_backend, |session| {
+        let samples = with_cuda_exec(&mut worker_backend, |session| {
             let runtime = session.runtime().clone();
             session
                 .with_raw("test.dynamic_shared_threads_small", |sess| {
@@ -437,9 +438,11 @@ fn raw_dynamic_shared_memory_opt_in_is_serialized_across_threads() {
                         .expect("the worker's smaller launch must succeed"))
                 })
                 .expect("raw session should run")
-        })
+        });
+        (samples, worker_backend)
     });
-    let small_samples = worker.join().expect("worker thread");
+    let (small_samples, returned) = worker.join().expect("worker thread");
+    backend = returned;
     assert_eq!(small_samples, expected_smem_samples(SMALL_BYTES));
 
     with_cuda_exec(&mut backend, |session| {
@@ -469,6 +472,7 @@ fn raw_dynamic_shared_memory_opt_in_is_serialized_across_threads() {
     });
 }
 
+#[cfg(feature = "cubecl-interop")]
 #[test]
 #[ignore = "requires CUDA"]
 fn raw_launch_rejects_dynamic_shared_memory_above_device_opt_in() {

@@ -990,9 +990,9 @@ fn semantic_core_dot_general_jvp_and_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let cotangents = cpu_runtime()
-        .run_compiled(&compiled, &[&lhs, &rhs, &output_cotangent])
-        .unwrap();
+    let cotangents =
+        crate::support::run_on_cpu(&cpu_runtime(), &compiled, &[&lhs, &rhs, &output_cotangent])
+            .unwrap();
     assert_eq!(
         cotangents[0].as_slice::<f64>().unwrap(),
         &[15.0, 15.0, 19.0, 19.0, 23.0, 23.0]
@@ -1067,9 +1067,9 @@ fn semantic_core_maximum_jvp_and_vjp_execute_with_balanced_ties() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let cotangents = cpu_runtime()
-        .run_compiled(&compiled, &[&lhs, &rhs, &output_cotangent])
-        .unwrap();
+    let cotangents =
+        crate::support::run_on_cpu(&cpu_runtime(), &compiled, &[&lhs, &rhs, &output_cotangent])
+            .unwrap();
     assert_eq!(cotangents[0].as_slice::<f64>().unwrap(), &[0.0, 2.0, 6.0]);
     assert_eq!(cotangents[1].as_slice::<f64>().unwrap(), &[2.0, 2.0, 0.0]);
 }
@@ -1108,9 +1108,9 @@ fn semantic_core_extrema_vjp_zeroes_masked_gradient_for_non_finite_cotangent() {
         let compiled = GraphCompiler::new()
             .compile_frozen_program(vjp.frozen())
             .unwrap();
-        let cotangents = cpu_runtime()
-            .run_compiled(&compiled, &[&lhs, &rhs, &output_cotangent])
-            .unwrap();
+        let cotangents =
+            crate::support::run_on_cpu(&cpu_runtime(), &compiled, &[&lhs, &rhs, &output_cotangent])
+                .unwrap();
         assert_eq!(cotangents[0].as_slice::<f64>().unwrap(), &expected_lhs);
         assert_eq!(cotangents[1].as_slice::<f64>().unwrap(), &expected_rhs);
     }
@@ -1144,12 +1144,12 @@ fn semantic_core_clamp_vjp_zeroes_clamped_gradient_for_non_finite_cotangent() {
     let lower_data = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
     let upper_data = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap();
     let output_cotangent = Tensor::from_vec_col_major(vec![2], vec![f64::INFINITY, 1.0]).unwrap();
-    let cotangents = cpu_runtime()
-        .run_compiled(
-            &compiled,
-            &[&input_data, &lower_data, &upper_data, &output_cotangent],
-        )
-        .unwrap();
+    let cotangents = crate::support::run_on_cpu(
+        &cpu_runtime(),
+        &compiled,
+        &[&input_data, &lower_data, &upper_data, &output_cotangent],
+    )
+    .unwrap();
 
     assert_eq!(cotangents[0].as_slice::<f64>().unwrap(), &[0.0, 1.0]);
     assert_eq!(
@@ -1432,9 +1432,9 @@ fn semantic_core_concatenate_jvp_zero_fills_and_vjp_splits_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = cpu_runtime()
-        .run_compiled(&compiled, &[&lhs, &rhs, &output_cotangent])
-        .unwrap();
+    let result =
+        crate::support::run_on_cpu(&cpu_runtime(), &compiled, &[&lhs, &rhs, &output_cotangent])
+            .unwrap();
     assert_eq!(result[0].as_slice::<f64>().unwrap(), &[4.0, 5.0]);
     assert_eq!(result[1].as_slice::<f64>().unwrap(), &[6.0]);
 }
@@ -1602,17 +1602,17 @@ fn semantic_core_gather_and_scatter_jvp_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = cpu_runtime()
-        .run_compiled(
-            &compiled,
-            &[
-                &operand_value,
-                &indices_value,
-                &updates_value,
-                &scatter_cotangent,
-            ],
-        )
-        .unwrap();
+    let result = crate::support::run_on_cpu(
+        &cpu_runtime(),
+        &compiled,
+        &[
+            &operand_value,
+            &indices_value,
+            &updates_value,
+            &scatter_cotangent,
+        ],
+    )
+    .unwrap();
     assert_eq!(
         result[0].as_slice::<f64>().unwrap(),
         &[1.0, 2.0, 3.0, 4.0, 5.0]
@@ -1726,17 +1726,17 @@ fn semantic_core_dynamic_slice_and_update_jvp_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = cpu_runtime()
-        .run_compiled(
-            &compiled,
-            &[
-                &operand_value,
-                &update_value,
-                &starts_value,
-                &update_cotangent,
-            ],
-        )
-        .unwrap();
+    let result = crate::support::run_on_cpu(
+        &cpu_runtime(),
+        &compiled,
+        &[
+            &operand_value,
+            &update_value,
+            &starts_value,
+            &update_cotangent,
+        ],
+    )
+    .unwrap();
     assert_eq!(
         result[0].as_slice::<f64>().unwrap(),
         &[1.0, 2.0, 0.0, 0.0, 5.0]

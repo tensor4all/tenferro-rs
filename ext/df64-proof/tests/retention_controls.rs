@@ -2,21 +2,26 @@
 //!
 //! #1789 requires retention, clear, and statistics controls for custom storage, and states
 //! that clearing free buffers must not recycle live values. The contribution's reuse path is
-//! the runtime's accounted extension cache rather than a private one, so the runtime reports
+//! the engine's accounted extension cache rather than a private one, so the engine reports
 //! it. This test fills it with two executions, keeps the second output live, clears the
-//! runtime's caches, and checks three things: the statistics show the retained bytes were
+//! engine's caches, and checks three things: the statistics show the retained bytes were
 //! actually released, the value that was live across the clear is byte for byte unchanged,
 //! and a later execution still produces the same result.
 
 use std::sync::Arc;
 
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::extension::{module, Df64QrVjp, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{
+    ExecutionEngine, ExtensionCacheSelector, GraphCompiler, Runtime, TracedTensor,
+};
 use tenferro_tensor::Tensor;
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
+
+mod support;
+use support::run_on_engine;
 
 fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
@@ -25,8 +30,13 @@ fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     ))
 }
 
-fn runtime() -> Runtime {
-    let backend = CpuBackend::with_threads(1).expect("single-threaded CPU backend");
+fn runtime() -> (Runtime, CpuEngine) {
+    let backend = CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(1)
+            .build()
+            .expect("single-threaded CPU thread pool"),
+    );
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
@@ -34,7 +44,7 @@ fn runtime() -> Runtime {
     builder
         .install_extension_module(module().expect("module"))
         .expect("install the Df64 module");
-    builder.build().expect("runtime with the module")
+    (builder.build().expect("runtime with the module"), backend)
 }
 
 fn leaf(values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
@@ -75,39 +85,49 @@ fn clearing_the_accounted_cache_leaves_a_live_value_unchanged() {
     let r_value = external(vec![Df64::from_f64(2.0); elements], vec![order, order]);
     let cotangent_value = external(vec![Df64::from_f64(1.0); elements], vec![order, order]);
 
-    let runtime = runtime();
+    let (runtime, mut engine) = runtime();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&adjoint[0]).expect("compiled the adjoint");
 
     // The first execution leaves scratch behind; the second reuses it.
     drop(
-        runtime
-            .run_compiled(&program, &[&q_value, &r_value, &cotangent_value])
-            .expect("first adjoint"),
+        run_on_engine(
+            &runtime,
+            &mut engine,
+            &program,
+            &[&q_value, &r_value, &cotangent_value],
+        )
+        .expect("first adjoint"),
     );
-    let live = runtime
-        .run_compiled(&program, &[&q_value, &r_value, &cotangent_value])
-        .expect("second adjoint");
+    let live = run_on_engine(
+        &runtime,
+        &mut engine,
+        &program,
+        &[&q_value, &r_value, &cotangent_value],
+    )
+    .expect("second adjoint");
     let live_payload = payload(&live[0]);
     assert!(!live_payload.is_empty(), "the adjoint produced no output");
 
-    let retained = runtime.cache_stats().expect("cache statistics");
+    let caches = engine.take_extension_caches();
+    let retained = caches.stats(ExtensionCacheSelector::All);
+    engine.restore_extension_caches(caches);
     assert!(
-        retained.extensions.entries > 0 && retained.extensions.retained_bytes > 0,
+        retained.entries > 0 && retained.retained_bytes > 0,
         "the reuse path retained nothing, so there is nothing to clear: {retained:?}"
     );
 
     // Clearing free buffers must not recycle live values.
-    runtime.clear_caches().expect("clear the runtime caches");
-    let cleared = runtime
-        .cache_stats()
-        .expect("cache statistics after the clear");
+    let mut caches = engine.take_extension_caches();
+    caches.clear();
+    let cleared = caches.stats(ExtensionCacheSelector::All);
+    engine.restore_extension_caches(caches);
     assert_eq!(
-        cleared.extensions.entries, 0,
+        cleared.entries, 0,
         "the clear left extension cache entries behind"
     );
     assert_eq!(
-        cleared.extensions.retained_bytes, 0,
+        cleared.retained_bytes, 0,
         "the clear left retained bytes behind"
     );
 
@@ -117,9 +137,13 @@ fn clearing_the_accounted_cache_leaves_a_live_value_unchanged() {
         live_payload,
         "clearing the cache changed a value that was live across it"
     );
-    let after = runtime
-        .run_compiled(&program, &[&q_value, &r_value, &cotangent_value])
-        .expect("adjoint after the clear");
+    let after = run_on_engine(
+        &runtime,
+        &mut engine,
+        &program,
+        &[&q_value, &r_value, &cotangent_value],
+    )
+    .expect("adjoint after the clear");
     assert_eq!(
         payload(&after[0]),
         live_payload,

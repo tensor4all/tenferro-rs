@@ -14,7 +14,7 @@ The benchmark contracts a length-32 complex MPS inner product using two
 |---------|------------------|
 | `fresh_backend_cache` | Calls `backend.dot_general_with_conj` for every local contraction. |
 | `persistent_backend_cache` | Reuses the backend runtime cache but still calls the backend method for every contraction. |
-| `single_exec_session` | Opens one `backend.with_backend_session_cached` around the whole MPS contraction and calls `BackendSession` methods inside it. |
+| `single_exec_session` | Opens one `backend.with_backend_session_cached` around the whole MPS contraction and calls `Engine` methods inside it. |
 
 Representative one-thread timings from the May 2026 investigation:
 
@@ -55,7 +55,7 @@ between `fresh_backend_cache` and `single_exec_session` naturally shrinks.
 
 ## Design Consequences
 
-- Prefer executing many small contractions inside one `BackendSession` when
+- Prefer executing many small contractions inside one `Engine` when
   the caller naturally owns a loop or compiled program.
 - Do not add ad hoc MPS-specific fast paths to bypass the public backend API.
   The general abstraction to improve is an execution-session surface that can be

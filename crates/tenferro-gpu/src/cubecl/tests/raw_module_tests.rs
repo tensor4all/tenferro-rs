@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::cuda::raw;
-use crate::cuda::{gpu_available, CudaBackend};
+use crate::cuda::{gpu_available, CudaEngine};
 
 /// Kernel copying `n` f64 values, used to prove a sub-span points where the
 /// caller asked and nowhere else.
@@ -223,7 +223,7 @@ fn raw_function_compiles_once_and_launches_from_another_thread() {
 
     // The clone shares the exact runtime state; the second thread enters a raw
     // session on that same runtime.
-    let mut worker_backend = backend.clone();
+    let mut worker_backend = backend;
     let output = std::thread::spawn(move || {
         with_cuda_exec(&mut worker_backend, move |session| {
             session
@@ -311,9 +311,9 @@ fn raw_module_caches_in_session_resource_across_threads() {
     );
     let output = upload(&backend, &tensor_f64(vec![N], vec![0.0; N]));
 
-    let mut worker_backend = backend.clone();
-    let output = std::thread::spawn(move || {
-        with_cuda_exec(&mut worker_backend, move |session| {
+    let mut worker_backend = backend;
+    let (output, returned) = std::thread::spawn(move || {
+        let output = with_cuda_exec(&mut worker_backend, move |session| {
             session
                 .with_raw("test.raw_module_cache_hit", move |raw| {
                     // The initializer only runs on a miss; returning an error
@@ -351,10 +351,12 @@ fn raw_module_caches_in_session_resource_across_threads() {
                     Ok(output)
                 })
                 .unwrap()
-        })
+        });
+        (output, worker_backend)
     })
     .join()
     .expect("worker thread");
+    let backend = returned;
 
     let stats = backend.cuda_extension_cache_stats().expect("cache stats");
     assert_eq!(compiles.load(Ordering::SeqCst), 1, "still one compile");
@@ -444,7 +446,7 @@ fn raw_function_survives_its_module_and_backend_and_restores_no_context_on_drop(
     const N: usize = 4;
 
     let function = {
-        let mut loader_backend = CudaBackend::new(device).expect("CUDA backend should initialize");
+        let mut loader_backend = CudaEngine::open(device).expect("CUDA backend should initialize");
         let function = with_cuda_exec(&mut loader_backend, |session| {
             session
                 .with_raw("test.raw_function_lifetime", |raw| {
@@ -463,7 +465,7 @@ fn raw_function_survives_its_module_and_backend_and_restores_no_context_on_drop(
 
     // A fresh runtime on the same device uses the surviving function; both
     // runtimes retain the same per-device primary context.
-    let mut backend = CudaBackend::new(device).expect("CUDA backend should initialize");
+    let mut backend = CudaEngine::open(device).expect("CUDA backend should initialize");
     let runtime = backend.runtime().clone();
     let input = upload(&backend, &tensor_f64(vec![N], vec![5.0, 6.0, 7.0, 8.0]));
     let mut output = upload(&backend, &tensor_f64(vec![N], vec![0.0; N]));
@@ -537,7 +539,7 @@ fn raw_function_drop_restores_a_previous_non_null_context() {
         .expect("a CUDA device")
         .id();
     let function = {
-        let mut loader_backend = CudaBackend::new(device).expect("CUDA backend should initialize");
+        let mut loader_backend = CudaEngine::open(device).expect("CUDA backend should initialize");
         with_cuda_exec(&mut loader_backend, |session| {
             session
                 .with_raw("test.raw_function_nonnull_context", |raw| {

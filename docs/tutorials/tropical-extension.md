@@ -56,9 +56,9 @@ tropical extension modules:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/extension_snippets.rs#tropical_extension_6 -->
 ```rust
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_ext_tropical::{extension_modules, traced::tropical_dot_general_fused};
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 4.0, 0.0])?;
 let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, -1.0, 5.0])?;
@@ -66,15 +66,16 @@ let out = tropical_dot_general_fused(&a, &b)?;
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&out)?;
-let backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
-builder.register_engine(runtime_engine_registration(&backend)?)?;
-for module in extension_modules::<CpuBackend>(runtime_engine_id()?)? {
+builder.register_engine(runtime_engine_registration(&engine)?)?;
+for module in extension_modules::<CpuEngine>(runtime_engine_id()?)? {
     builder.install_extension_module(module)?;
 }
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[])?;
-let value = outputs.remove(0);
+let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+let value = outputs.remove(0).into_tensor(&mut engine)?;
 ```
 <!-- end-snippet-source -->
 

@@ -2,7 +2,6 @@ use std::sync::{Arc, OnceLock};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 
 use num_complex::Complex64;
-use tenferro_cpu::{CpuBackend, CpuPlacement};
 use tenferro_runtime::{
     DType, DotGeneralConfig, Error as RuntimeError, ErrorPhase, GatherConfig, PadConfig,
     SliceConfig, Tensor, TensorRead, TensorView,
@@ -45,27 +44,6 @@ fn c64_data(tensor: &Tensor) -> &[Complex64] {
 }
 
 fn assert_send_sync<T: Send + Sync>() {}
-
-#[test]
-fn placement_bound_session_reuses_runtime_identity_and_requested_placement() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
-    let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
-
-    assert_eq!(cpu.runtime_id(), runtime.id());
-    assert_eq!(cpu.placement(), CpuPlacement::Auto);
-
-    let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
-    let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    let output = cpu
-        .with_eager_session(|session| {
-            session
-                .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-                .map_err(RuntimeError::from)
-        })
-        .unwrap();
-
-    assert_eq!(output.as_slice::<f64>().unwrap(), &[3.0]);
-}
 
 fn finite_diff_scalar(f: impl Fn(&[f64]) -> f64, x: &[f64], index: usize) -> f64 {
     let mut plus = x.to_vec();
@@ -123,18 +101,21 @@ fn eager_matmul_sum(lhs: &[f64], rhs: &[f64]) -> f64 {
     .unwrap();
     let loss = a
         .runtime()
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let product = s.dot_general(&a, &b, matmul_config())?;
             s.reduce_sum(&product, Some(&[0, 1]))
         })
         .unwrap();
-    f64_data(&loss.to_tensor().unwrap())[0]
+    f64_data(
+        &loss
+            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+            .unwrap(),
+    )[0]
 }
 
 fn test_ctx() -> Arc<EagerRuntime> {
     static CTX: OnceLock<Arc<EagerRuntime>> = OnceLock::new();
-    CTX.get_or_init(|| EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap())
-        .clone()
+    CTX.get_or_init(|| EagerRuntime::new().unwrap()).clone()
 }
 
 #[test]
@@ -152,7 +133,7 @@ fn eager_tensor_exposes_metadata_read_and_materialization_without_data_accessor(
     assert_eq!(read.shape(), &[2, 3]);
     assert_eq!(read.dtype(), DType::F64);
 
-    let materialized = x.to_tensor().unwrap();
+    let materialized = x.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
     assert_eq!(materialized.shape(), &[2, 3]);
     assert_eq!(f64_data(&materialized), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
 }
@@ -167,7 +148,9 @@ fn untracked_eager_transpose_is_exposed_as_borrowed_view_until_materialized() {
 
     let transposed = x
         .runtime()
-        .with_eager_session(|s| s.transpose(&x, &[1, 0]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.transpose(&x, &[1, 0])
+        })
         .unwrap();
     assert_eq!(transposed.shape(), &[3, 2]);
 
@@ -178,7 +161,9 @@ fn untracked_eager_transpose_is_exposed_as_borrowed_view_until_materialized() {
         TensorRead::Tensor(_) => panic!("untracked transpose should stay as a borrowed view"),
     }
 
-    let materialized = transposed.to_tensor().unwrap();
+    let materialized = transposed
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert_eq!(materialized.shape(), &[3, 2]);
     assert_eq!(f64_data(&materialized), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 }
@@ -190,11 +175,14 @@ fn matrix_eager_input_uses_column_major_values() {
         test_ctx(),
     )
     .unwrap();
-    let y = x.runtime().with_eager_session(|s| s.add(&x, &x)).unwrap();
+    let y = x
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.add(&x, &x))
+        .unwrap();
 
     assert_eq!(y.shape(), &[2, 3]);
     assert_eq!(
-        f64_data(&y.to_tensor().unwrap()),
+        f64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
         &[2.0, 8.0, 4.0, 10.0, 6.0, 12.0]
     );
 }
@@ -214,16 +202,22 @@ fn eager_slice_axis_and_builder_preserve_column_major_values() {
     .unwrap();
 
     let rows = test_ctx()
-        .with_eager_session(|session| session.slice_axis(&x, 0, 1..3))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.slice_axis(&x, 0, 1..3)
+        })
         .unwrap();
     assert_eq!(rows.shape(), &[2, 4]);
     assert_eq!(
-        f64_data(&rows.to_tensor().unwrap()),
+        f64_data(
+            &rows
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap()
+        ),
         &[2.0, 3.0, 5.0, 6.0, 8.0, 9.0, 11.0, 12.0]
     );
 
     let strided = test_ctx()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             x.slice_builder()
                 .axis(0, 1..3)
                 .axis_step(1, 0..4, 2)
@@ -232,12 +226,16 @@ fn eager_slice_axis_and_builder_preserve_column_major_values() {
         .unwrap();
     assert_eq!(strided.shape(), &[2, 2]);
     assert_eq!(
-        f64_data(&strided.to_tensor().unwrap()),
+        f64_data(
+            &strided
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap()
+        ),
         &[2.0, 3.0, 8.0, 9.0]
     );
 
     let mixed = test_ctx()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             x.slice_builder()
                 .axis(0, 0..2)
                 .take_axis(1, &[3, 1, 3])
@@ -246,7 +244,11 @@ fn eager_slice_axis_and_builder_preserve_column_major_values() {
         .unwrap();
     assert_eq!(mixed.shape(), &[2, 3]);
     assert_eq!(
-        f64_data(&mixed.to_tensor().unwrap()),
+        f64_data(
+            &mixed
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap()
+        ),
         &[10.0, 11.0, 4.0, 5.0, 10.0, 11.0]
     );
 }
@@ -254,7 +256,9 @@ fn eager_slice_axis_and_builder_preserve_column_major_values() {
 #[test]
 fn eager_concatenate_empty_reports_typed_validation_error() {
     let err = test_ctx()
-        .with_eager_session(|session| session.concatenate(&[], 0))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.concatenate(&[], 0)
+        })
         .unwrap_err();
 
     assert!(matches!(
@@ -276,7 +280,9 @@ fn eager_reductions_and_reverse_validate_axes_before_ad_recording() {
     .unwrap();
 
     let out_of_bounds = ctx
-        .with_eager_session(|s| s.reduce_sum(&x, Some(&[2])))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.reduce_sum(&x, Some(&[2]))
+        })
         .unwrap_err();
     assert!(matches!(
         out_of_bounds,
@@ -287,16 +293,26 @@ fn eager_reductions_and_reverse_validate_axes_before_ad_recording() {
     ));
 
     for err in [
-        ctx.with_eager_session(|s| s.reduce_sum(&x, Some(&[0, 0])))
-            .unwrap_err(),
-        ctx.with_eager_session(|session| session.reduce_prod(&x, Some(&[0, 0])))
-            .unwrap_err(),
-        ctx.with_eager_session(|session| session.reduce_max(&x, Some(&[0, 0])))
-            .unwrap_err(),
-        ctx.with_eager_session(|session| session.reduce_min(&x, Some(&[0, 0])))
-            .unwrap_err(),
-        ctx.with_eager_session(|session| session.reverse(&x, &[0, 0]))
-            .unwrap_err(),
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.reduce_sum(&x, Some(&[0, 0]))
+        })
+        .unwrap_err(),
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.reduce_prod(&x, Some(&[0, 0]))
+        })
+        .unwrap_err(),
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.reduce_max(&x, Some(&[0, 0]))
+        })
+        .unwrap_err(),
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.reduce_min(&x, Some(&[0, 0]))
+        })
+        .unwrap_err(),
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.reverse(&x, &[0, 0])
+        })
+        .unwrap_err(),
     ] {
         assert!(
             matches!(
@@ -323,7 +339,7 @@ fn eager_backward_seed_for_integer_scalar_does_not_call_float_analytic_ops() {
     )
     .unwrap();
 
-    let cotangents = x.backward().unwrap();
+    let cotangents = x.backward(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
 
     assert_eq!(cotangents.len(), 1);
     let grad = x.grad().unwrap().unwrap();
@@ -338,7 +354,11 @@ fn untracked_eager_intermediate_can_later_feed_tracked_ad() {
         ctx.clone(),
     )
     .unwrap();
-    let scale = ctx.with_eager_session(|s| s.add(&plain, &plain)).unwrap();
+    let scale = ctx
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.add(&plain, &plain)
+        })
+        .unwrap();
     assert!(!scale.tracks_grad());
 
     let x = EagerTensor::requires_grad_in(
@@ -348,15 +368,23 @@ fn untracked_eager_intermediate_can_later_feed_tracked_ad() {
     .unwrap();
     let loss = x
         .runtime()
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let weighted = s.mul(&x, &scale)?;
             s.reduce_sum(&weighted, Some(&[0]))
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     assert_close_slice(
-        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &x.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[2.0, 4.0, 6.0],
         TOL,
     );
@@ -380,18 +408,37 @@ fn untracked_leaf_functional_vjp_requires_explicit_capture() {
     // Under active-edge semantics (issue #1665 Def 1), an all-untracked chain
     // drops its semantic trace, so functional VJP w.r.t. the untracked leaf is
     // inactive unless the region is wrapped in an explicit capture.
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
-    assert!(ctx.vjp_optional(&y, &x, &seed).unwrap().is_none());
+    let y = ctx
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &x))
+        .unwrap();
+    assert!(ctx
+        .vjp_optional(&mut tenferro_cpu::CpuEngine::serial(), &y, &x, &seed)
+        .unwrap()
+        .is_none());
 
     let y_captured = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let _capture = ctx.capture_trace();
             s.mul(&x, &x)
         })
         .unwrap();
     let x_captured = x;
-    let dx = ctx.vjp(&y_captured, &x_captured, &seed).unwrap();
-    assert_close_slice(f64_data(&dx.to_tensor().unwrap()), &[2.0, 4.0], TOL);
+    let dx = ctx
+        .vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &y_captured,
+            &x_captured,
+            &seed,
+        )
+        .unwrap();
+    assert_close_slice(
+        f64_data(
+            &dx.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[2.0, 4.0],
+        TOL,
+    );
 }
 
 #[test]
@@ -428,7 +475,7 @@ fn eager_dot_general_with_conj_uses_untracked_fast_path() {
     let config = matmul_config();
 
     let (fused, explicit) = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let fused = session.dot_general_with_conj(&lhs, &rhs, config.clone(), true, false)?;
             let conjugated = session.conj(&lhs)?;
             let explicit = session.dot_general(&conjugated, &rhs, config)?;
@@ -439,8 +486,16 @@ fn eager_dot_general_with_conj_uses_untracked_fast_path() {
     assert!(!fused.tracks_grad());
     assert_eq!(fused.shape(), explicit.shape());
     assert_close_c64_slice(
-        c64_data(&fused.to_tensor().unwrap()),
-        c64_data(&explicit.to_tensor().unwrap()),
+        c64_data(
+            &fused
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        c64_data(
+            &explicit
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         TOL,
     );
 }
@@ -467,7 +522,7 @@ fn eager_dot_general_with_conj_validates_config_before_untracked_backend_dispatc
 
     let err = lhs
         .runtime()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             session.dot_general_with_conj(&lhs, &rhs, config, true, false)
         })
         .unwrap_err();
@@ -492,11 +547,21 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
     )
     .unwrap();
     let scaled = ctx
-        .with_eager_session(|session| session.scale_real(&real, 2.5))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.scale_real(&real, 2.5)
+        })
         .unwrap();
-    assert_eq!(f64_data(&scaled.to_tensor().unwrap()), &[2.5, -5.0]);
+    assert_eq!(
+        f64_data(
+            &scaled
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap()
+        ),
+        &[2.5, -5.0]
+    );
     assert!(ctx
-        .with_eager_session(|session| session.scale_complex(&real, Complex64::new(0.0, 1.0)))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session
+            .scale_complex(&real, Complex64::new(0.0, 1.0)))
         .is_err());
 
     let integer = EagerTensor::from_tensor_in(
@@ -505,16 +570,18 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
     )
     .unwrap();
     assert_eq!(
-        ctx.with_eager_session(|session| session.scale_real(&integer, 2.5))
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session
+            .scale_real(&integer, 2.5))
             .unwrap()
-            .to_tensor()
+            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
             .unwrap()
             .as_slice::<i64>()
             .unwrap(),
         &[9]
     );
     assert!(ctx
-        .with_eager_session(|session| session.scale_real(&integer, f64::NAN))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session
+            .scale_real(&integer, f64::NAN))
         .is_err());
 
     let complex = EagerTensor::from_tensor_in(
@@ -524,12 +591,11 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
     .unwrap();
     assert_eq!(
         c64_data(
-            &ctx.with_eager_session(
-                |session| session.scale_complex(&complex, Complex64::new(0.0, 1.0))
-            )
-            .unwrap()
-            .to_tensor()
-            .unwrap()
+            &ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session
+                .scale_complex(&complex, Complex64::new(0.0, 1.0)))
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap()
         ),
         &[Complex64::new(-2.0, 1.0)]
     );
@@ -541,14 +607,22 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
     )
     .unwrap();
     let loss = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let scaled = session.scale_real(&tracked, 2.5)?;
             session.reduce_sum(&scaled, Some(&[0]))
         })
         .unwrap();
-    loss.backward().unwrap();
+    loss.backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert_eq!(
-        f64_data(&tracked.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &tracked
+                .grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap()
+        ),
         &[2.5, 2.5]
     );
 }
@@ -588,7 +662,7 @@ fn eager_gather_keeps_indices_integer_for_complex_operand() {
     .unwrap();
 
     let y = test_ctx()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             session.gather(
                 &x,
                 &indices,
@@ -605,7 +679,7 @@ fn eager_gather_keeps_indices_integer_for_complex_operand() {
 
     assert_eq!(y.shape(), &[2]);
     assert_eq!(
-        c64_data(&y.to_tensor().unwrap()),
+        c64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
         &[Complex64::new(3.0, 0.5), Complex64::new(1.0, 1.0)]
     );
 }
@@ -627,12 +701,14 @@ fn eager_index_select_keeps_indices_integer_for_complex_operand() {
     .unwrap();
 
     let y = test_ctx()
-        .with_eager_session(|session| session.index_select(&x, -1, &[2, 0]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.index_select(&x, -1, &[2, 0])
+        })
         .unwrap();
 
     assert_eq!(y.shape(), &[2]);
     assert_eq!(
-        c64_data(&y.to_tensor().unwrap()),
+        c64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
         &[Complex64::new(3.0, 0.5), Complex64::new(1.0, 1.0)]
     );
 }
@@ -651,15 +727,23 @@ fn eager_stack_trailing_axis_and_index_select_primal() {
     .unwrap();
 
     let stacked = test_ctx()
-        .with_eager_session(|session| session.stack(&[&x0, &x1], -1))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.stack(&[&x0, &x1], -1)
+        })
         .unwrap();
     let selected = test_ctx()
-        .with_eager_session(|session| session.index_select(&stacked, -1, &[1, 0, 1]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.index_select(&stacked, -1, &[1, 0, 1])
+        })
         .unwrap();
 
     assert_eq!(selected.shape(), &[2, 3]);
     assert_close_slice(
-        f64_data(&selected.to_tensor().unwrap()),
+        f64_data(
+            &selected
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[3.0, 4.0, 1.0, 2.0, 3.0, 4.0],
         TOL,
     );
@@ -674,14 +758,18 @@ fn eager_index_select_rejects_invalid_axis_and_position() {
     .unwrap();
 
     let axis_err = test_ctx()
-        .with_eager_session(|session| session.index_select(&x, 1, &[0]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.index_select(&x, 1, &[0])
+        })
         .unwrap_err()
         .to_string();
     assert!(axis_err.contains("index_select"), "got: {axis_err}");
     assert!(axis_err.contains("axis"), "got: {axis_err}");
 
     let position_err = test_ctx()
-        .with_eager_session(|session| session.index_select(&x, 0, &[2]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.index_select(&x, 0, &[2])
+        })
         .unwrap_err()
         .to_string();
     assert!(position_err.contains("index_select"), "got: {position_err}");
@@ -695,7 +783,9 @@ fn eager_index_select_rejects_invalid_axis_and_position() {
 fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
     let empty: [&EagerTensor; 0] = [];
     let empty_err = test_ctx()
-        .with_eager_session(|session| session.stack(&empty, 0))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.stack(&empty, 0)
+        })
         .unwrap_err();
     assert_eq!(
         empty_err.kind(),
@@ -723,7 +813,9 @@ fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
     )
     .unwrap();
     let shape_err = test_ctx()
-        .with_eager_session(|session| session.stack(&[&a, &b], -1))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.stack(&[&a, &b], -1)
+        })
         .unwrap_err();
     assert_eq!(
         shape_err.kind(),
@@ -738,7 +830,9 @@ fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
     ));
 
     let axis_err = test_ctx()
-        .with_eager_session(|session| session.stack(&[&a], 2))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.stack(&[&a], 2)
+        })
         .unwrap_err();
     assert_eq!(
         axis_err.kind(),
@@ -758,11 +852,16 @@ fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
     )
     .unwrap();
     let out = test_ctx()
-        .with_eager_session(|session| session.stack(&[&a, &c], 0))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.stack(&[&a, &c], 0)
+        })
         .unwrap();
     assert_eq!(out.shape(), &[2, 2]);
     assert_close_slice(
-        f64_data(&out.to_tensor().unwrap()),
+        f64_data(
+            &out.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[1.0, 3.0, 2.0, 4.0],
         TOL,
     );
@@ -783,19 +882,29 @@ fn eager_index_select_repeated_positions_accumulates_grad() {
     .unwrap();
 
     let selected = test_ctx()
-        .with_eager_session(|session| session.index_select(&x, 0, &[1, 1, 2]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.index_select(&x, 0, &[1, 1, 2])
+        })
         .unwrap();
     let loss = selected
         .runtime()
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let weighted = s.mul(&selected, &weights)?;
             s.reduce_sum(&weighted, Some(&[0]))
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     assert_close_slice(
-        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &x.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[0.0, 30.0, 30.0],
         TOL,
     );
@@ -811,15 +920,19 @@ fn eager_x_squared_gradient_matches_finite_difference() {
     .unwrap();
     let loss = x
         .runtime()
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let squared = s.mul(&x, &x)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
         .unwrap();
-    let _cotangents = loss.backward().unwrap();
+    let _cotangents = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     let grad = x.grad().unwrap().unwrap();
 
-    let grad_tensor = grad.to_tensor().unwrap();
+    let grad_tensor = grad
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     let grad_data = f64_data(&grad_tensor);
     let expected: Vec<f64> = (0..x_data.len())
         .map(|index| {
@@ -843,9 +956,13 @@ fn eager_reduce_sum_squares_gradient_matches_finite_difference() {
     .unwrap();
     let loss = x
         .runtime()
-        .with_eager_session(|session| session.reduce_sum_squares(&x, Some(&[0])))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.reduce_sum_squares(&x, Some(&[0]))
+        })
         .unwrap();
-    let _cotangents = loss.backward().unwrap();
+    let _cotangents = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     let grad = x.grad().unwrap().unwrap();
 
     let expected: Vec<f64> = (0..x_data.len())
@@ -857,7 +974,15 @@ fn eager_reduce_sum_squares_gradient_matches_finite_difference() {
             )
         })
         .collect();
-    assert_close_slice(f64_data(&grad.to_tensor().unwrap()), &expected, FD_TOL);
+    assert_close_slice(
+        f64_data(
+            &grad
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &expected,
+        FD_TOL,
+    );
 }
 
 /// #1985: `None` reduces every axis, as for the rest of the reduction family,
@@ -865,7 +990,6 @@ fn eager_reduce_sum_squares_gradient_matches_finite_difference() {
 #[test]
 fn reduce_sum_squares_none_reduces_all_axes_on_every_surface() {
     use tenferro_runtime::{GraphCompiler, TensorSessionOpsExt, TracedTensor};
-    use tenferro_tensor::BackendSessionHost;
 
     let data = vec![1.0_f64, -2.0, 3.0, 0.5];
     let x = EagerTensor::from_tensor_in(
@@ -875,7 +999,7 @@ fn reduce_sum_squares_none_reduces_all_axes_on_every_surface() {
     .unwrap();
     let (all, explicit) = x
         .runtime()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             Ok::<_, tenferro_ad::Error>((
                 session.reduce_sum_squares(&x, None)?,
                 session.reduce_sum_squares(&x, Some(&[0, 1]))?,
@@ -883,28 +1007,42 @@ fn reduce_sum_squares_none_reduces_all_axes_on_every_surface() {
         })
         .unwrap();
     assert_eq!(all.shape(), &[] as &[usize]);
-    assert_eq!(f64_data(&all.to_tensor().unwrap()), &[14.25]);
-    assert_eq!(f64_data(&explicit.to_tensor().unwrap()), &[14.25]);
+    assert_eq!(
+        f64_data(
+            &all.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap()
+        ),
+        &[14.25]
+    );
+    assert_eq!(
+        f64_data(
+            &explicit
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap()
+        ),
+        &[14.25]
+    );
 
     let traced = TracedTensor::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
     let total = traced.reduce_sum_squares(None).unwrap();
     assert_eq!(total.rank, 0);
     let program = GraphCompiler::new().compile_many(&[&total]).unwrap();
-    let cpu = tenferro_cpu::CpuBackend::new();
+    let cpu = tenferro_cpu::CpuEngine::serial();
     let mut builder = tenferro_runtime::Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&cpu).unwrap())
         .unwrap();
     let runtime = builder.build().unwrap();
-    let out = runtime.run_compiled(&program, &[]).unwrap();
+    let out = crate::support::run_on_cpu(&runtime, &program, &[]).unwrap();
     assert_eq!(f64_data(&out[0]), &[14.25]);
 
     let host = Tensor::from_vec_col_major(vec![2, 2], data).unwrap();
-    let mut backend = tenferro_cpu::CpuBackend::new();
-    let sum = backend
-        .with_backend_session(|session| host.reduce_sum(None, session))
-        .unwrap()
-        .unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    let sum = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        host.reduce_sum(None, session)
+    }
+    .unwrap();
     assert_eq!(f64_data(&sum), &[2.5]);
 }
 
@@ -918,24 +1056,40 @@ fn eager_repeated_backward_accumulates_across_calls() {
 
     let make_loss = || {
         x.runtime()
-            .with_eager_session(|s| {
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                 let squared = s.mul(&x, &x)?;
                 s.reduce_sum(&squared, Some(&[0]))
             })
             .unwrap()
     };
     let loss = make_loss();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert_close_slice(
-        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &x.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[2.0, 4.0, 6.0],
         TOL,
     );
 
     let loss = make_loss();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert_close_slice(
-        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &x.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[4.0, 8.0, 12.0],
         TOL,
     );
@@ -958,17 +1112,23 @@ fn eager_matmul_gradients_match_finite_difference() {
     .unwrap();
     let loss = a
         .runtime()
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let product = s.dot_general(&a, &b, matmul_config())?;
             s.reduce_sum(&product, Some(&[0, 1]))
         })
         .unwrap();
-    let _cotangents = loss.backward().unwrap();
+    let _cotangents = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     let grad_a = a.grad().unwrap().unwrap();
     let grad_b = b.grad().unwrap().unwrap();
-    let grad_a_tensor = grad_a.to_tensor().unwrap();
-    let grad_b_tensor = grad_b.to_tensor().unwrap();
+    let grad_a_tensor = grad_a
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
+    let grad_b_tensor = grad_b
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     let grad_a_data = f64_data(&grad_a_tensor);
     let grad_b_data = f64_data(&grad_b_tensor);
 
@@ -991,16 +1151,26 @@ fn eager_exp_gradient_matches_primal() {
     )
     .unwrap();
     let loss = test_ctx()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let y = session.exp(&x)?;
             session.reduce_sum(&y, Some(&[0]))
         })
         .unwrap();
-    let _cotangents = loss.backward().unwrap();
+    let _cotangents = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     let grad = x.grad().unwrap().unwrap();
     let expected = vec![1.0, 1.0_f64.exp(), 2.0_f64.exp()];
-    assert_close_slice(f64_data(&grad.to_tensor().unwrap()), &expected, TOL);
+    assert_close_slice(
+        f64_data(
+            &grad
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &expected,
+        TOL,
+    );
 }
 
 #[test]
@@ -1012,20 +1182,30 @@ fn eager_fan_out_accumulates_gradient() {
     .unwrap();
     let loss = x
         .runtime()
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let doubled = s.add(&x, &x)?;
             s.reduce_sum(&doubled, Some(&[0]))
         })
         .unwrap();
-    let _cotangents = loss.backward().unwrap();
+    let _cotangents = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     let grad = x.grad().unwrap().unwrap();
-    assert_close_slice(f64_data(&grad.to_tensor().unwrap()), &[2.0, 2.0, 2.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &grad
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[2.0, 2.0, 2.0],
+        TOL,
+    );
 }
 
 #[test]
 fn eager_clear_grad_resets_only_one_leaf() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx.clone(),
@@ -1038,37 +1218,59 @@ fn eager_clear_grad_resets_only_one_leaf() {
     .unwrap();
 
     let loss = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let product = s.mul(&x, &y)?;
             s.reduce_sum(&product, Some(&[0]))
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     x.clear_grad().unwrap();
 
     assert!(x.grad().unwrap().is_none());
     assert_close_slice(
-        f64_data(&y.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &y.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[1.0, 2.0, 3.0],
         TOL,
     );
 
     let loss = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let squared = s.mul(&x, &x)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     assert_close_slice(
-        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &x.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[2.0, 4.0, 6.0],
         TOL,
     );
     assert_close_slice(
-        f64_data(&y.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &y.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[1.0, 2.0, 3.0],
         TOL,
     );
@@ -1076,7 +1278,7 @@ fn eager_clear_grad_resets_only_one_leaf() {
 
 #[test]
 fn eager_context_clear_grads_resets_all_live_leaves() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx.clone(),
@@ -1089,14 +1291,16 @@ fn eager_context_clear_grads_resets_all_live_leaves() {
     .unwrap();
 
     let make_loss = || {
-        ctx.with_eager_session(|s| {
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let product = s.mul(&x, &y)?;
             s.reduce_sum(&product, Some(&[0]))
         })
         .unwrap()
     };
     let loss = make_loss();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     ctx.clear_grads().unwrap();
 
@@ -1104,15 +1308,29 @@ fn eager_context_clear_grads_resets_all_live_leaves() {
     assert!(y.grad().unwrap().is_none());
 
     let loss = make_loss();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     assert_close_slice(
-        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &x.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[4.0, 5.0, 6.0],
         TOL,
     );
     assert_close_slice(
-        f64_data(&y.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &y.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[1.0, 2.0, 3.0],
         TOL,
     );
@@ -1120,7 +1338,7 @@ fn eager_context_clear_grads_resets_all_live_leaves() {
 
 #[test]
 fn eager_unrelated_backward_keeps_existing_leaf_grad() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx.clone(),
@@ -1133,33 +1351,55 @@ fn eager_unrelated_backward_keeps_existing_leaf_grad() {
     .unwrap();
 
     let loss_x = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let squared = s.mul(&x, &x)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
         .unwrap();
-    let _ = loss_x.backward().unwrap();
+    let _ = loss_x
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert_close_slice(
-        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &x.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[2.0, 4.0, 6.0],
         TOL,
     );
 
     let loss_y = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let squared = s.mul(&y, &y)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
         .unwrap();
-    let _ = loss_y.backward().unwrap();
+    let _ = loss_y
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     assert_close_slice(
-        f64_data(&x.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &x.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[2.0, 4.0, 6.0],
         TOL,
     );
     assert_close_slice(
-        f64_data(&y.grad().unwrap().unwrap().to_tensor().unwrap()),
+        f64_data(
+            &y.grad()
+                .unwrap()
+                .unwrap()
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[8.0, 10.0, 12.0],
         TOL,
     );
@@ -1167,7 +1407,7 @@ fn eager_unrelated_backward_keeps_existing_leaf_grad() {
 
 #[test]
 fn eager_tracks_grad_reports_leaf_state() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let plain = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
         ctx.clone(),
@@ -1181,7 +1421,10 @@ fn eager_tracks_grad_reports_leaf_state() {
 
     assert!(!plain.tracks_grad());
     assert!(leaf.tracks_grad());
-    assert!(!leaf.detach().tracks_grad());
+    assert!(!leaf
+        .detach(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap()
+        .tracks_grad());
 }
 
 #[test]
@@ -1195,18 +1438,18 @@ fn eager_context_and_tensor_are_backend_erased_public_types() {
     assert_send_sync::<EagerTensor>();
     assert_send_sync::<EagerRuntime>();
 
-    let ctx: Arc<EagerRuntime> =
-        EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+    let ctx: Arc<EagerRuntime> = EagerRuntime::new().unwrap();
     let x = ctx
         .variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())
         .unwrap();
     let loss = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let squared = s.mul(&x, &x)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
         .unwrap();
-    loss.backward().unwrap();
+    loss.backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     assert_eq!(
         x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
@@ -1221,18 +1464,28 @@ fn eager_detach_cuts_one_gradient_path() {
         test_ctx(),
     )
     .unwrap();
-    let detached = x.detach();
+    let detached = x.detach(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
     let loss = x
         .runtime()
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let product = s.mul(&detached, &x)?;
             s.reduce_sum(&product, Some(&[0]))
         })
         .unwrap();
-    let _cotangents = loss.backward().unwrap();
+    let _cotangents = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
 
     let grad = x.grad().unwrap().unwrap();
-    assert_close_slice(f64_data(&grad.to_tensor().unwrap()), &[1.0, 2.0, 3.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &grad
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[1.0, 2.0, 3.0],
+        TOL,
+    );
     assert!(detached.grad().unwrap().is_none());
 }
 
@@ -1248,9 +1501,16 @@ fn eager_untracked_tensor_behaves_like_plain_tensor() {
         test_ctx(),
     )
     .unwrap();
-    let z = x.runtime().with_eager_session(|s| s.mul(&x, &y)).unwrap();
+    let z = x
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &y))
+        .unwrap();
 
-    assert_close_slice(f64_data(&z.to_tensor().unwrap()), &[4.0, 10.0, 18.0], TOL);
+    assert_close_slice(
+        f64_data(&z.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
+        &[4.0, 10.0, 18.0],
+        TOL,
+    );
     assert!(x.grad().unwrap().is_none());
     assert!(y.grad().unwrap().is_none());
     assert!(z.grad().unwrap().is_none());
@@ -1266,22 +1526,34 @@ fn eager_structural_primal_ops_transpose_and_reshape() {
 
     let transposed = x
         .runtime()
-        .with_eager_session(|s| s.transpose(&x, &[1, 0]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.transpose(&x, &[1, 0])
+        })
         .unwrap();
     assert_eq!(transposed.shape(), &[3, 2]);
     assert_close_slice(
-        f64_data(&transposed.to_tensor().unwrap()),
+        f64_data(
+            &transposed
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0],
         TOL,
     );
 
     let reshaped = x
         .runtime()
-        .with_eager_session(|s| s.reshape(&x, [6]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.reshape(&x, [6])
+        })
         .unwrap();
     assert_eq!(reshaped.shape(), &[6]);
     assert_close_slice(
-        f64_data(&reshaped.to_tensor().unwrap()),
+        f64_data(
+            &reshaped
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         TOL,
     );
@@ -1297,7 +1569,9 @@ fn eager_untracked_structural_ops_return_lazy_views() {
 
     let transposed = x
         .runtime()
-        .with_eager_session(|s| s.transpose(&x, &[1, 0]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.transpose(&x, &[1, 0])
+        })
         .unwrap();
     match transposed.tensor_read() {
         TensorRead::View(TensorView::F64(view)) => {
@@ -1309,7 +1583,9 @@ fn eager_untracked_structural_ops_return_lazy_views() {
 
     let reshaped = x
         .runtime()
-        .with_eager_session(|s| s.reshape(&x, [6]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.reshape(&x, [6])
+        })
         .unwrap();
     match reshaped.tensor_read() {
         TensorRead::View(TensorView::F64(view)) => {
@@ -1330,7 +1606,9 @@ fn eager_tracked_structural_ops_return_lazy_views_and_backprop() {
 
     let transposed = x
         .runtime()
-        .with_eager_session(|s| s.transpose(&x, &[1, 0]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.transpose(&x, &[1, 0])
+        })
         .unwrap();
     match transposed.tensor_read() {
         TensorRead::View(TensorView::F64(view)) => {
@@ -1342,11 +1620,23 @@ fn eager_tracked_structural_ops_return_lazy_views_and_backprop() {
 
     let loss = transposed
         .runtime()
-        .with_eager_session(|s| s.reduce_sum(&transposed, Some(&[0, 1])))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.reduce_sum(&transposed, Some(&[0, 1]))
+        })
         .unwrap();
-    let _cotangents = loss.backward().unwrap();
+    let _cotangents = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     let grad = x.grad().unwrap().unwrap();
-    assert_close_slice(f64_data(&grad.to_tensor().unwrap()), &[1.0; 6], TOL);
+    assert_close_slice(
+        f64_data(
+            &grad
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[1.0; 6],
+        TOL,
+    );
 }
 
 #[test]
@@ -1362,11 +1652,31 @@ fn eager_elementwise_primal_ops_div_abs_and_sin() {
     )
     .unwrap();
 
-    let div = x.runtime().with_eager_session(|s| s.div(&x, &y)).unwrap();
-    assert_close_slice(f64_data(&div.to_tensor().unwrap()), &[4.0, -2.0, 3.0], TOL);
+    let div = x
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.div(&x, &y))
+        .unwrap();
+    assert_close_slice(
+        f64_data(
+            &div.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[4.0, -2.0, 3.0],
+        TOL,
+    );
 
-    let abs = x.runtime().with_eager_session(|s| s.abs(&x)).unwrap();
-    assert_close_slice(f64_data(&abs.to_tensor().unwrap()), &[8.0, 6.0, 9.0], TOL);
+    let abs = x
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.abs(&x))
+        .unwrap();
+    assert_close_slice(
+        f64_data(
+            &abs.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[8.0, 6.0, 9.0],
+        TOL,
+    );
 
     let ctx = test_ctx();
     let angles = EagerTensor::from_tensor_in(
@@ -1375,9 +1685,18 @@ fn eager_elementwise_primal_ops_div_abs_and_sin() {
     )
     .unwrap();
     let sin = ctx
-        .with_eager_session(|session| session.sin(&angles))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.sin(&angles)
+        })
         .unwrap();
-    assert_close_slice(f64_data(&sin.to_tensor().unwrap()), &[0.0, 1.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &sin.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[0.0, 1.0],
+        TOL,
+    );
 }
 
 #[test]
@@ -1392,9 +1711,19 @@ fn eager_diagonal_primal_ops_extract_diag_and_tril() {
     )
     .unwrap();
     let diag = test_ctx()
-        .with_eager_session(|session| session.extract_diag(&matrix, 0, 1))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.extract_diag(&matrix, 0, 1)
+        })
         .unwrap();
-    assert_close_slice(f64_data(&diag.to_tensor().unwrap()), &[1.0, 5.0, 9.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &diag
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[1.0, 5.0, 9.0],
+        TOL,
+    );
 
     let lower_ctx = test_ctx();
     let lower_input = EagerTensor::from_tensor_in(
@@ -1403,10 +1732,16 @@ fn eager_diagonal_primal_ops_extract_diag_and_tril() {
     )
     .unwrap();
     let lower = lower_ctx
-        .with_eager_session(|session| session.tril(&lower_input, 0))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.tril(&lower_input, 0)
+        })
         .unwrap();
     assert_close_slice(
-        f64_data(&lower.to_tensor().unwrap()),
+        f64_data(
+            &lower
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[1.0, 2.0, 0.0, 4.0],
         TOL,
     );
@@ -1421,7 +1756,7 @@ fn eager_reduction_primal_ops_reduce_prod() {
     .unwrap();
 
     let (prod, max, min) = test_ctx()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             Ok::<_, tenferro_ad::Error>((
                 session.reduce_prod(&x, Some(&[0, 1]))?,
                 session.reduce_max(&x, Some(&[0, 1]))?,
@@ -1429,10 +1764,32 @@ fn eager_reduction_primal_ops_reduce_prod() {
             ))
         })
         .unwrap();
-    assert_close_slice(f64_data(&prod.to_tensor().unwrap()), &[24.0], TOL);
-    assert_close_slice(f64_data(&max.to_tensor().unwrap()), &[4.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &prod
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[24.0],
+        TOL,
+    );
+    assert_close_slice(
+        f64_data(
+            &max.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[4.0],
+        TOL,
+    );
 
-    assert_close_slice(f64_data(&min.to_tensor().unwrap()), &[1.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &min.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[1.0],
+        TOL,
+    );
 }
 
 #[test]
@@ -1444,7 +1801,7 @@ fn eager_reductions_distinguish_all_axes_from_empty_axes() {
     .unwrap();
 
     let (sum, product, identity, column_maxima, row_minima) = test_ctx()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             Ok::<_, tenferro_ad::Error>((
                 session.reduce_sum(&x, None)?,
                 session.reduce_prod(&x, None)?,
@@ -1454,23 +1811,54 @@ fn eager_reductions_distinguish_all_axes_from_empty_axes() {
             ))
         })
         .unwrap();
-    assert_close_slice(f64_data(&sum.to_tensor().unwrap()), &[10.0], TOL);
-    assert_close_slice(f64_data(&product.to_tensor().unwrap()), &[24.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &sum.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[10.0],
+        TOL,
+    );
+    assert_close_slice(
+        f64_data(
+            &product
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[24.0],
+        TOL,
+    );
 
     assert_eq!(identity.shape(), &[2, 2]);
     assert_close_slice(
-        f64_data(&identity.to_tensor().unwrap()),
+        f64_data(
+            &identity
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[1.0, 2.0, 3.0, 4.0],
         TOL,
     );
 
     assert_close_slice(
-        f64_data(&column_maxima.to_tensor().unwrap()),
+        f64_data(
+            &column_maxima
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[2.0, 4.0],
         TOL,
     );
 
-    assert_close_slice(f64_data(&row_minima.to_tensor().unwrap()), &[1.0, 2.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &row_minima
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[1.0, 2.0],
+        TOL,
+    );
 
     let scalar = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
@@ -1479,10 +1867,20 @@ fn eager_reductions_distinguish_all_axes_from_empty_axes() {
     .unwrap();
     let scalar_sum = scalar
         .runtime()
-        .with_eager_session(|s| s.reduce_sum(&scalar, None))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.reduce_sum(&scalar, None)
+        })
         .unwrap();
     assert_eq!(scalar_sum.shape(), &[] as &[usize]);
-    assert_close_slice(f64_data(&scalar_sum.to_tensor().unwrap()), &[3.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &scalar_sum
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[3.0],
+        TOL,
+    );
 }
 
 #[test]
@@ -1500,7 +1898,7 @@ fn eager_slice_primal() {
     .unwrap();
 
     let y = test_ctx()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             session.slice(
                 &x,
                 SliceConfig {
@@ -1514,7 +1912,7 @@ fn eager_slice_primal() {
 
     assert_eq!(y.shape(), &[2, 2]);
     assert_close_slice(
-        f64_data(&y.to_tensor().unwrap()),
+        f64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
         &[1.0, 3.0, 9.0, 11.0],
         TOL,
     );
@@ -1535,7 +1933,7 @@ fn eager_untracked_slice_returns_lazy_view() {
     .unwrap();
 
     let y = test_ctx()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             session.slice(
                 &x,
                 SliceConfig {
@@ -1555,7 +1953,7 @@ fn eager_untracked_slice_returns_lazy_view() {
         other => panic!("expected slice to remain a lazy f64 view, got {other:?}"),
     }
     assert_close_slice(
-        f64_data(&y.to_tensor().unwrap()),
+        f64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
         &[1.0, 3.0, 9.0, 11.0],
         TOL,
     );
@@ -1570,12 +1968,14 @@ fn eager_broadcast_in_dim_primal() {
     .unwrap();
     let y = x
         .runtime()
-        .with_eager_session(|s| s.broadcast_in_dim(&x, &[3, 2], &[0]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.broadcast_in_dim(&x, &[3, 2], &[0])
+        })
         .unwrap();
 
     assert_eq!(y.shape(), &[3, 2]);
     assert_close_slice(
-        f64_data(&y.to_tensor().unwrap()),
+        f64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
         &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0],
         TOL,
     );
@@ -1590,7 +1990,9 @@ fn eager_untracked_broadcast_in_dim_returns_lazy_view() {
     .unwrap();
     let y = x
         .runtime()
-        .with_eager_session(|s| s.broadcast_in_dim(&x, &[3, 2], &[0]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.broadcast_in_dim(&x, &[3, 2], &[0])
+        })
         .unwrap();
 
     match y.tensor_read() {
@@ -1601,7 +2003,7 @@ fn eager_untracked_broadcast_in_dim_returns_lazy_view() {
         other => panic!("expected broadcast_in_dim to remain a lazy f64 view, got {other:?}"),
     }
     assert_close_slice(
-        f64_data(&y.to_tensor().unwrap()),
+        f64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
         &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0],
         TOL,
     );
@@ -1616,7 +2018,7 @@ fn eager_pad_primal() {
     )
     .unwrap();
     let y = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             session.pad(
                 &x,
                 PadConfig {
@@ -1630,7 +2032,7 @@ fn eager_pad_primal() {
 
     assert_eq!(y.shape(), &[5]);
     assert_close_slice(
-        f64_data(&y.to_tensor().unwrap()),
+        f64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
         &[0.0, 1.0, 0.0, 2.0, 0.0],
         TOL,
     );
@@ -1645,11 +2047,13 @@ fn eager_reverse_primal() {
     )
     .unwrap();
     let y = ctx
-        .with_eager_session(|session| session.reverse(&x, &[0]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.reverse(&x, &[0])
+        })
         .unwrap();
 
     assert_close_slice(
-        f64_data(&y.to_tensor().unwrap()),
+        f64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
         &[4.0, 3.0, 2.0, 1.0],
         TOL,
     );
@@ -1668,12 +2072,14 @@ fn eager_concatenate_primal() {
     )
     .unwrap();
     let z = test_ctx()
-        .with_eager_session(|session| session.concatenate(&[&x, &y], 0))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.concatenate(&[&x, &y], 0)
+        })
         .unwrap();
 
     assert_eq!(z.shape(), &[4]);
     assert_close_slice(
-        f64_data(&z.to_tensor().unwrap()),
+        f64_data(&z.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
         &[1.0, 2.0, 3.0, 4.0],
         TOL,
     );
@@ -1692,7 +2098,7 @@ fn eager_gather_primal() {
     )
     .unwrap();
     let y = test_ctx()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             session.gather(
                 &x,
                 &indices,
@@ -1708,7 +2114,11 @@ fn eager_gather_primal() {
         .unwrap();
 
     assert_eq!(y.shape(), &[3]);
-    assert_close_slice(f64_data(&y.to_tensor().unwrap()), &[50.0, 20.0, 10.0], TOL);
+    assert_close_slice(
+        f64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
+        &[50.0, 20.0, 10.0],
+        TOL,
+    );
 }
 
 #[test]
@@ -1732,12 +2142,14 @@ fn eager_dynamic_slice_primal() {
     )
     .unwrap();
     let y = ctx
-        .with_eager_session(|session| session.dynamic_slice(&x, &starts, &[2, 2]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.dynamic_slice(&x, &starts, &[2, 2])
+        })
         .unwrap();
 
     assert_eq!(y.shape(), &[2, 2]);
     assert_close_slice(
-        f64_data(&y.to_tensor().unwrap()),
+        f64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
         &[11.0, 12.0, 15.0, 16.0],
         TOL,
     );
@@ -1754,10 +2166,13 @@ fn eager_conj_primal() {
         test_ctx(),
     )
     .unwrap();
-    let y = x.runtime().with_eager_session(|s| s.conj(&x)).unwrap();
+    let y = x
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.conj(&x))
+        .unwrap();
 
     assert_eq!(
-        c64_data(&y.to_tensor().unwrap()),
+        c64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
         &[Complex64::new(1.0, -2.0), Complex64::new(-3.0, -0.5)]
     );
 }
@@ -1770,9 +2185,19 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     )
     .unwrap();
     let sign = test_ctx()
-        .with_eager_session(|session| session.sign(&sign_input))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.sign(&sign_input)
+        })
         .unwrap();
-    assert_close_slice(f64_data(&sign.to_tensor().unwrap()), &[-1.0, 0.0, 1.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &sign
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[-1.0, 0.0, 1.0],
+        TOL,
+    );
 
     let log_input = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, std::f64::consts::E]).unwrap(),
@@ -1780,9 +2205,18 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     )
     .unwrap();
     let log = test_ctx()
-        .with_eager_session(|session| session.log(&log_input))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.log(&log_input)
+        })
         .unwrap();
-    assert_close_slice(f64_data(&log.to_tensor().unwrap()), &[0.0, 1.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &log.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[0.0, 1.0],
+        TOL,
+    );
 
     let sqrt_ctx = test_ctx();
     let sqrt_input = EagerTensor::from_tensor_in(
@@ -1791,13 +2225,33 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     )
     .unwrap();
     let sqrt = sqrt_ctx
-        .with_eager_session(|session| session.sqrt(&sqrt_input))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.sqrt(&sqrt_input)
+        })
         .unwrap();
     let rsqrt = sqrt_ctx
-        .with_eager_session(|session| session.rsqrt(&sqrt_input))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.rsqrt(&sqrt_input)
+        })
         .unwrap();
-    assert_close_slice(f64_data(&sqrt.to_tensor().unwrap()), &[1.0, 2.0], TOL);
-    assert_close_slice(f64_data(&rsqrt.to_tensor().unwrap()), &[1.0, 0.5], TOL);
+    assert_close_slice(
+        f64_data(
+            &sqrt
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[1.0, 2.0],
+        TOL,
+    );
+    assert_close_slice(
+        f64_data(
+            &rsqrt
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[1.0, 0.5],
+        TOL,
+    );
 
     let cos_ctx = test_ctx();
     let angles = EagerTensor::from_tensor_in(
@@ -1806,9 +2260,18 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     )
     .unwrap();
     let cos = cos_ctx
-        .with_eager_session(|session| session.cos(&angles))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.cos(&angles)
+        })
         .unwrap();
-    assert_close_slice(f64_data(&cos.to_tensor().unwrap()), &[1.0, -1.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &cos.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[1.0, -1.0],
+        TOL,
+    );
 
     let tanh_ctx = test_ctx();
     let tanh_input = EagerTensor::from_tensor_in(
@@ -1817,10 +2280,16 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     )
     .unwrap();
     let tanh = tanh_ctx
-        .with_eager_session(|session| session.tanh(&tanh_input))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.tanh(&tanh_input)
+        })
         .unwrap();
     assert_close_slice(
-        f64_data(&tanh.to_tensor().unwrap()),
+        f64_data(
+            &tanh
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[0.0, 1.0_f64.tanh()],
         TOL,
     );
@@ -1832,10 +2301,16 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     )
     .unwrap();
     let expm1 = expm1_ctx
-        .with_eager_session(|session| session.expm1(&expm1_input))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.expm1(&expm1_input)
+        })
         .unwrap();
     assert_close_slice(
-        f64_data(&expm1.to_tensor().unwrap()),
+        f64_data(
+            &expm1
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[0.0, 1.0_f64.exp_m1()],
         TOL,
     );
@@ -1847,10 +2322,16 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     )
     .unwrap();
     let log1p = log1p_ctx
-        .with_eager_session(|session| session.log1p(&log1p_input))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.log1p(&log1p_input)
+        })
         .unwrap();
     assert_close_slice(
-        f64_data(&log1p.to_tensor().unwrap()),
+        f64_data(
+            &log1p
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[2.0_f64.ln(), 5.0_f64.ln()],
         TOL,
     );
@@ -1870,9 +2351,18 @@ fn eager_pow_maximum_and_minimum_primal() {
     .unwrap();
     let pow = base
         .runtime()
-        .with_eager_session(|s| s.pow(&base, &exp))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.pow(&base, &exp)
+        })
         .unwrap();
-    assert_close_slice(f64_data(&pow.to_tensor().unwrap()), &[8.0, 3.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &pow.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[8.0, 3.0],
+        TOL,
+    );
 
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3], vec![8.0_f64, -2.0, 9.0]).unwrap(),
@@ -1885,17 +2375,25 @@ fn eager_pow_maximum_and_minimum_primal() {
     )
     .unwrap();
     let (maximum, minimum) = test_ctx()
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             Ok::<_, tenferro_ad::Error>((session.maximum(&x, &y)?, session.minimum(&x, &y)?))
         })
         .unwrap();
     assert_close_slice(
-        f64_data(&maximum.to_tensor().unwrap()),
+        f64_data(
+            &maximum
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[8.0, 5.0, 9.0],
         TOL,
     );
     assert_close_slice(
-        f64_data(&minimum.to_tensor().unwrap()),
+        f64_data(
+            &minimum
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[2.0, -2.0, 3.0],
         TOL,
     );
@@ -1919,10 +2417,16 @@ fn eager_select_primal() {
     )
     .unwrap();
     let y = test_ctx()
-        .with_eager_session(|session| session.select(&condition, &on_true, &on_false))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.select(&condition, &on_true, &on_false)
+        })
         .unwrap();
 
-    assert_close_slice(f64_data(&y.to_tensor().unwrap()), &[1.0, 20.0, 30.0], TOL);
+    assert_close_slice(
+        f64_data(&y.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
+        &[1.0, 20.0, 30.0],
+        TOL,
+    );
 }
 
 #[test]
@@ -1933,11 +2437,17 @@ fn eager_embed_diag_and_triu_primal() {
     )
     .unwrap();
     let embedded = test_ctx()
-        .with_eager_session(|session| session.embed_diag(&diagonal, 0, 1))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.embed_diag(&diagonal, 0, 1)
+        })
         .unwrap();
     assert_eq!(embedded.shape(), &[3, 3]);
     assert_close_slice(
-        f64_data(&embedded.to_tensor().unwrap()),
+        f64_data(
+            &embedded
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0],
         TOL,
     );
@@ -1953,10 +2463,16 @@ fn eager_embed_diag_and_triu_primal() {
     )
     .unwrap();
     let upper = ctx
-        .with_eager_session(|session| session.triu(&matrix, 0))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.triu(&matrix, 0)
+        })
         .unwrap();
     assert_close_slice(
-        f64_data(&upper.to_tensor().unwrap()),
+        f64_data(
+            &upper
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
         &[1.0, 0.0, 0.0, 4.0, 5.0, 0.0, 7.0, 8.0, 9.0],
         TOL,
     );
@@ -1980,10 +2496,20 @@ fn eager_dynamic_slice_and_gather_clamp_out_of_range_starts_and_indices() {
     )
     .unwrap();
     let sliced = ctx
-        .with_eager_session(|s| s.dynamic_slice(&x, &starts, &[2]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.dynamic_slice(&x, &starts, &[2])
+        })
         .unwrap();
     // max_start = dim - window = 2, so the clamped window is [2, 4).
-    assert_close_slice(f64_data(&sliced.to_tensor().unwrap()), &[30.0, 40.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &sliced
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[30.0, 40.0],
+        TOL,
+    );
 
     let index = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![1], vec![10_i64]).unwrap(),
@@ -1991,7 +2517,7 @@ fn eager_dynamic_slice_and_gather_clamp_out_of_range_starts_and_indices() {
     )
     .unwrap();
     let gathered = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             s.gather(
                 &x,
                 &index,
@@ -2006,5 +2532,13 @@ fn eager_dynamic_slice_and_gather_clamp_out_of_range_starts_and_indices() {
         })
         .unwrap();
     // max_start = dim - window = 3, so the clamped index reads the last element.
-    assert_close_slice(f64_data(&gathered.to_tensor().unwrap()), &[40.0], TOL);
+    assert_close_slice(
+        f64_data(
+            &gathered
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap(),
+        ),
+        &[40.0],
+        TOL,
+    );
 }

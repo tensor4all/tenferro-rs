@@ -2,11 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendRuntimeCache, BackendSession, BackendSessionHost, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorReduction, TensorStructural,
+    Engine, TensorAnalytic, TensorBuffer, TensorDot, TensorElementwise, TensorFusion,
+    TensorIndexing, TensorReduction, TensorStructural,
 };
 
 fn rust_function_body<'a>(source: &'a str, function: &str) -> Option<&'a str> {
@@ -266,12 +264,6 @@ fn contains_include_macro(tokens: &[String]) -> bool {
         .any(|window| window[0] == "include" && window[1] == "!")
 }
 
-fn accepts_owner_capabilities<B>()
-where
-    B: BackendRuntimeCache + TensorDeviceTransfer + BackendSessionHost + TensorBackend,
-{
-}
-
 fn accepts_session_capabilities<S>(_: &mut S)
 where
     S: TensorElementwise
@@ -282,26 +274,18 @@ where
         + TensorDot
         + TensorFusion
         + TensorBuffer
-        + BackendSession
+        + Engine
         + ?Sized,
 {
 }
 
 #[test]
-fn cpu_backend_exposes_only_owner_capabilities() {
-    // The operation capabilities live on the execution session; the owner keeps
-    // the runtime cache, device transfer and session-host capabilities.
-    accepts_owner_capabilities::<CpuBackend>();
-}
-
-#[test]
 fn backend_session_exposes_narrow_capability_bounds() {
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|session| {
-            accepts_session_capabilities(session);
-        })
-        .unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    crate::run(&mut backend, |session| {
+        accepts_session_capabilities(session);
+    })
+    .unwrap();
 }
 
 #[test]
@@ -332,7 +316,7 @@ fn cpu_session_overrides_elementwise_read_into_with_pooled_context() {
     let session_source = include_str!("../../src/exec_session.rs");
 
     {
-        let surface = "CpuExecSession";
+        let surface = "CpuEngine";
         let source = session_source;
         let elementwise_impl = source
             .split_once(&format!("impl TensorElementwise for {surface}"))
@@ -353,7 +337,7 @@ fn structural_read_paths_dispatch_directly_to_typed_view_helpers() {
     let structural_source = include_str!("../../src/structural.rs");
 
     {
-        let surface = "CpuExecSession";
+        let surface = "CpuEngine";
         let source = session_source;
         let structural_impl = source
             .split_once(&format!("impl TensorStructural for {surface}"))
@@ -496,7 +480,7 @@ fn strided_kernel_ownership_requires_backend_execution_resources() {
         contract.get("einsum-owner"),
         Some(&"tenferro:benchmark-backed-exception")
     );
-    assert_eq!(contract.get("execution-entry"), Some(&"CpuBackend"));
+    assert_eq!(contract.get("execution-entry"), Some(&"CpuEngine"));
     assert_eq!(
         contract_set(&contract, "affine-kernels"),
         BTreeSet::from([
@@ -516,7 +500,7 @@ fn strided_kernel_ownership_requires_backend_execution_resources() {
     assert_eq!(
         contract_set(&contract, "execution-resources"),
         BTreeSet::from([
-            "CpuContext-Rayon",
+            "engine-owned-Rayon",
             "nested-execution",
             "persistent-BufferPool",
             "serial-parallel-threshold",
@@ -580,7 +564,7 @@ fn tensor_public_surface_has_no_context_free_materialization_api() {
     // also required to contain no backend/device vocabulary: the identifiers a
     // context-free materialization could hide behind, including under a new name.
     const SESSION_IDENTIFIERS: [&str; 7] = [
-        "BackendSession",
+        "Engine",
         "BackendSessionHost",
         "TensorStructural",
         "BackendAllocation",
@@ -694,7 +678,6 @@ fn install_pool_has_no_placeholder_construction_or_gemm_descriptor_clones() {
     let exec_session_source = include_str!("../../src/exec_session.rs");
 
     assert!(!backend_source.contains("std::mem::take(target)"));
-    assert!(backend_source.contains("buffers: &'a mut BufferPool"));
     assert!(buffer_pool_source.contains("OnceLock"));
     assert!(buffer_pool_source.contains("parse_default_max_retained_capacity_bytes"));
     // The contraction plan cache is metadata-only: it names no tensor operand.
@@ -734,12 +717,15 @@ fn cpu_provider_dispatch_has_no_runtime_registry_lookup_or_legacy_staging() {
         assert_direct_dispatch(module, source);
     }
 
-    // exec_session.rs also owns the concrete BackendSession type identity;
+    // exec_session.rs also owns the CPU engine's native-token marker;
     // scan only its contraction entry points so that this unrelated TypeId is
     // not mistaken for a dispatch registry.
     let exec_session = include_str!("../../src/exec_session.rs");
+    let engine = include_str!("../../src/engine.rs");
+    let body = rust_function_body(engine, "with_linalg_pool")
+        .unwrap_or_else(|| panic!("engine function `with_linalg_pool` must exist"));
+    assert_direct_dispatch("engine::with_linalg_pool", body);
     for function in [
-        "with_linalg_pool",
         "dot_general_read",
         "dot_general_read_into",
         "dot_general_read_into_accum",
@@ -747,24 +733,9 @@ fn cpu_provider_dispatch_has_no_runtime_registry_lookup_or_legacy_staging() {
         "dot_general_cached",
         "dot_general_with_conj_cached",
         "dot_general_read_into_accum_cached",
-        "grouped_gemm_cached",
     ] {
         let body = rust_function_body(exec_session, function)
             .unwrap_or_else(|| panic!("exec-session dispatch function `{function}` must exist"));
         assert_direct_dispatch(&format!("exec_session::{function}"), body);
-    }
-
-    // The contraction bodies live on the execution session (scanned above);
-    // backend.rs keeps the session-entry plumbing, which also owns opt-in
-    // profiling state.
-    let backend = include_str!("../../src/backend.rs");
-    for function in [
-        "run_backend_session_cached",
-        "with_backend_session",
-        "with_backend_session_cached",
-    ] {
-        let body = rust_function_body(backend, function)
-            .unwrap_or_else(|| panic!("backend dispatch function `{function}` must exist"));
-        assert_direct_dispatch(&format!("backend::{function}"), body);
     }
 }

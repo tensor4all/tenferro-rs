@@ -7,14 +7,14 @@ use super::*;
 
 #[test]
 fn context_id_is_unique() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_a = EagerRuntime::new().unwrap();
+    let ctx_b = EagerRuntime::new().unwrap();
     assert_ne!(ctx_a.id(), ctx_b.id());
 }
 
 #[test]
 fn same_context_true_for_shared_ctx() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
         ctx.clone(),
@@ -31,8 +31,8 @@ fn same_context_true_for_shared_ctx() {
 
 #[test]
 fn same_context_false_for_different_ctx() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_a = EagerRuntime::new().unwrap();
+    let ctx_b = EagerRuntime::new().unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
         ctx_a,
@@ -49,18 +49,21 @@ fn same_context_false_for_different_ctx() {
 
 #[test]
 fn constant_from_creates_untracked_leaf() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let c = ctx
         .constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())
         .unwrap();
     assert_eq!(c.ctx_id(), ctx.id());
     assert!(!c.tracks_grad());
-    assert_eq!(f64_data(&c.to_tensor().unwrap()), &[1.0, 2.0]);
+    assert_eq!(
+        f64_data(&c.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
+        &[1.0, 2.0]
+    );
 }
 
 #[test]
 fn variable_from_creates_tracked_leaf() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let p = ctx
         .variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())
         .unwrap();
@@ -68,19 +71,21 @@ fn variable_from_creates_tracked_leaf() {
     assert!(p.tracks_grad());
     // backward should work on a tracked variable
     let loss = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let y = session.exp(&p)?;
             session.reduce_sum(&y, Some(&[0]))
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert!(p.grad().unwrap().is_some());
 }
 
 #[test]
 fn cross_context_add_rejected() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_a = EagerRuntime::new().unwrap();
+    let ctx_b = EagerRuntime::new().unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx_a,
@@ -91,7 +96,10 @@ fn cross_context_add_rejected() {
         ctx_b,
     )
     .unwrap();
-    let msg = match x.runtime().with_eager_session(|s| s.add(&x, &y)) {
+    let msg = match x
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.add(&x, &y))
+    {
         Err(e) => e.to_string(),
         Ok(_) => panic!("expected error"),
     };
@@ -100,8 +108,8 @@ fn cross_context_add_rejected() {
 
 #[test]
 fn cross_context_mul_rejected() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_a = EagerRuntime::new().unwrap();
+    let ctx_b = EagerRuntime::new().unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx_a,
@@ -112,7 +120,10 @@ fn cross_context_mul_rejected() {
         ctx_b,
     )
     .unwrap();
-    let msg = match x.runtime().with_eager_session(|s| s.mul(&x, &y)) {
+    let msg = match x
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &y))
+    {
         Err(e) => e.to_string(),
         Ok(_) => panic!("expected error"),
     };
@@ -121,8 +132,8 @@ fn cross_context_mul_rejected() {
 
 #[test]
 fn cross_context_tracked_tensors_rejected() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_a = EagerRuntime::new().unwrap();
+    let ctx_b = EagerRuntime::new().unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx_a,
@@ -133,7 +144,10 @@ fn cross_context_tracked_tensors_rejected() {
         ctx_b,
     )
     .unwrap();
-    let msg = match x.runtime().with_eager_session(|s| s.add(&x, &y)) {
+    let msg = match x
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.add(&x, &y))
+    {
         Err(e) => e.to_string(),
         Ok(_) => panic!("expected error"),
     };
@@ -142,7 +156,7 @@ fn cross_context_tracked_tensors_rejected() {
 
 #[test]
 fn constant_from_can_cross_context() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
@@ -152,51 +166,71 @@ fn constant_from_can_cross_context() {
     let c = ctx
         .constant_from(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap())
         .unwrap();
-    let z = ctx.with_eager_session(|s| s.add(&x, &c)).unwrap();
-    assert_eq!(f64_data(&z.to_tensor().unwrap()), &[4.0, 6.0]);
+    let z = ctx
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.add(&x, &c))
+        .unwrap();
+    assert_eq!(
+        f64_data(&z.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
+        &[4.0, 6.0]
+    );
 }
 
 #[test]
 fn detach_into_different_context() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_a = EagerRuntime::new().unwrap();
+    let ctx_b = EagerRuntime::new().unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx_a,
     )
     .unwrap();
-    let d = x.detach_into(&ctx_b).unwrap();
+    let d = x
+        .detach_into(&mut tenferro_cpu::CpuEngine::serial(), &ctx_b)
+        .unwrap();
     assert_eq!(d.ctx_id(), ctx_b.id());
     assert!(!d.tracks_grad());
-    assert_eq!(f64_data(&d.to_tensor().unwrap()), &[1.0, 2.0]);
+    assert_eq!(
+        f64_data(&d.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
+        &[1.0, 2.0]
+    );
     // Can operate with tensors from ctx_b now
     let y = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),
         ctx_b,
     )
     .unwrap();
-    let z = d.runtime().with_eager_session(|s| s.add(&d, &y)).unwrap();
-    assert_eq!(f64_data(&z.to_tensor().unwrap()), &[4.0, 6.0]);
+    let z = d
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.add(&d, &y))
+        .unwrap();
+    assert_eq!(
+        f64_data(&z.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap()),
+        &[4.0, 6.0]
+    );
 }
 
 #[test]
 fn detach_into_still_accessible_in_original_context() {
-    let ctx_a = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    let ctx_b = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx_a = EagerRuntime::new().unwrap();
+    let ctx_b = EagerRuntime::new().unwrap();
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx_a.clone(),
     )
     .unwrap();
-    let d = x.detach_into(&ctx_b).unwrap();
+    let d = x
+        .detach_into(&mut tenferro_cpu::CpuEngine::serial(), &ctx_b)
+        .unwrap();
     // Original tensor still in ctx_a, should work fine
     let loss = ctx_a
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let y = session.exp(&x)?;
             session.reduce_sum(&y, Some(&[0]))
         })
         .unwrap();
-    let _ = loss.backward().unwrap();
+    let _ = loss
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     assert!(x.grad().unwrap().is_some());
     // d is in ctx_b, x is in ctx_a
     assert_ne!(d.ctx_id(), x.ctx_id());
@@ -216,7 +250,9 @@ fn promote_i64_add_f64_eager() {
     )
     .unwrap();
     // I64 + F64 should promote to F64
-    let z = ctx.with_eager_session(|s| s.add(&a, &b)).unwrap();
+    let z = ctx
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.add(&a, &b))
+        .unwrap();
     assert_eq!(z.dtype(), DType::F64);
     assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[1.5, 3.0]);
 }
@@ -235,7 +271,10 @@ fn promote_i64_mul_c64_eager() {
     )
     .unwrap();
     // I64 * C64 should promote to C64
-    let z = a.runtime().with_eager_session(|s| s.mul(&a, &b)).unwrap();
+    let z = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&a, &b))
+        .unwrap();
     assert_eq!(z.dtype(), DType::C64);
     assert_eq!(
         z.value().unwrap().as_slice::<Complex64>().unwrap(),
@@ -263,7 +302,9 @@ fn clamp_promotes_all_three_operands_to_common_dtype() {
     .unwrap();
 
     let out = ctx
-        .with_eager_session(|session| session.clamp(&input, &lower, &upper))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.clamp(&input, &lower, &upper)
+        })
         .unwrap();
 
     assert_eq!(out.dtype(), DType::F64);
@@ -284,7 +325,10 @@ fn promote_f32_add_f64_eager() {
     )
     .unwrap();
     // F32 + F64 should promote to F64
-    let z = a.runtime().with_eager_session(|s| s.add(&a, &b)).unwrap();
+    let z = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.add(&a, &b))
+        .unwrap();
     assert_eq!(z.dtype(), DType::F64);
     assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[1.5, 3.0]);
 }
@@ -303,7 +347,10 @@ fn promote_same_dtype_no_conversion_penalty() {
         ctx,
     )
     .unwrap();
-    let z = a.runtime().with_eager_session(|s| s.add(&a, &b)).unwrap();
+    let z = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.add(&a, &b))
+        .unwrap();
     assert_eq!(z.dtype(), DType::F64);
     assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 }
@@ -313,7 +360,11 @@ where
     T: TensorScalar + Debug + PartialEq,
 {
     assert_eq!(
-        tensor.to_tensor().unwrap().as_slice::<T>().unwrap(),
+        tensor
+            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+            .unwrap()
+            .as_slice::<T>()
+            .unwrap(),
         expected
     );
 }
@@ -325,8 +376,10 @@ fn eager_input<T: TensorScalar>(ctx: &Arc<EagerRuntime>, data: &[T], tracked: bo
     } else {
         // Keep inactive operands on the active-edge path as lazy constants.
         let input = EagerTensor::from_tensor_in(tensor, Arc::clone(ctx)).unwrap();
-        ctx.with_eager_session(|s| s.reshape(&input, [data.len()]))
-            .unwrap()
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.reshape(&input, [data.len()])
+        })
+        .unwrap()
     }
 }
 
@@ -354,7 +407,7 @@ fn run_mixed_add_case<R, C>(
             let real = eager_input(&ctx, real_data, active_real);
             let complex = eager_input(&ctx, complex_data, !active_real);
             let output = ctx
-                .with_eager_session(|s| {
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                     if real_first {
                         s.add(&real, &complex)
                     } else {
@@ -369,39 +422,83 @@ fn run_mixed_add_case<R, C>(
             if active_real {
                 let real_tangent = eager_input(&ctx, real_tangent, false);
                 assert_exact_values(
-                    &ctx.vjp(&output, &real, &cotangent).unwrap(),
+                    &ctx.vjp(
+                        &mut tenferro_cpu::CpuEngine::serial(),
+                        &output,
+                        &real,
+                        &cotangent,
+                    )
+                    .unwrap(),
                     expected_real_vjp,
                 );
                 assert!(ctx
-                    .vjp_optional(&output, &complex, &cotangent)
+                    .vjp_optional(
+                        &mut tenferro_cpu::CpuEngine::serial(),
+                        &output,
+                        &complex,
+                        &cotangent
+                    )
                     .unwrap()
                     .is_none());
                 assert_exact_values(
-                    &ctx.jvp(&output, &real, &real_tangent).unwrap(),
+                    &ctx.jvp(
+                        &mut tenferro_cpu::CpuEngine::serial(),
+                        &output,
+                        &real,
+                        &real_tangent,
+                    )
+                    .unwrap(),
                     expected_real_jvp,
                 );
                 let complex_tangent = eager_input(&ctx, complex_tangent, false);
                 assert!(ctx
-                    .jvp_optional(&output, &complex, &complex_tangent)
+                    .jvp_optional(
+                        &mut tenferro_cpu::CpuEngine::serial(),
+                        &output,
+                        &complex,
+                        &complex_tangent
+                    )
                     .unwrap()
                     .is_none());
             } else {
                 let complex_tangent = eager_input(&ctx, complex_tangent, false);
                 assert_exact_values(
-                    &ctx.vjp(&output, &complex, &cotangent).unwrap(),
+                    &ctx.vjp(
+                        &mut tenferro_cpu::CpuEngine::serial(),
+                        &output,
+                        &complex,
+                        &cotangent,
+                    )
+                    .unwrap(),
                     expected_complex_vjp,
                 );
                 assert!(ctx
-                    .vjp_optional(&output, &real, &cotangent)
+                    .vjp_optional(
+                        &mut tenferro_cpu::CpuEngine::serial(),
+                        &output,
+                        &real,
+                        &cotangent
+                    )
                     .unwrap()
                     .is_none());
                 assert_exact_values(
-                    &ctx.jvp(&output, &complex, &complex_tangent).unwrap(),
+                    &ctx.jvp(
+                        &mut tenferro_cpu::CpuEngine::serial(),
+                        &output,
+                        &complex,
+                        &complex_tangent,
+                    )
+                    .unwrap(),
                     expected_complex_jvp,
                 );
                 let real_tangent = eager_input(&ctx, real_tangent, false);
                 assert!(ctx
-                    .jvp_optional(&output, &real, &real_tangent)
+                    .jvp_optional(
+                        &mut tenferro_cpu::CpuEngine::serial(),
+                        &output,
+                        &real,
+                        &real_tangent
+                    )
                     .unwrap()
                     .is_none());
             }
@@ -445,15 +542,21 @@ fn mixed_add_semantic_jvp_vjp_promotes_f64_c64_and_f32_c32_in_both_orders() {
 fn temporary_mixed_promotion_graph(ctx: &Arc<EagerRuntime>) -> (EagerTensor, EagerTensor) {
     let x = eager_input(ctx, &[-4.0_f64], true);
     let output = {
-        let magnitude_input = ctx.with_eager_session(|s| s.neg(&x)).unwrap();
+        let magnitude_input = ctx
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.neg(&x))
+            .unwrap();
         let magnitude = {
             let exponent = eager_input(ctx, &[0.5_f64], false);
-            ctx.with_eager_session(|s| s.pow(&magnitude_input, &exponent))
-                .unwrap()
+            ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                s.pow(&magnitude_input, &exponent)
+            })
+            .unwrap()
         };
         let factor = eager_input(ctx, &[Complex64::new(0.0, 1.0)], false);
-        ctx.with_eager_session(|s| s.mul(&magnitude, &factor))
-            .unwrap()
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.mul(&magnitude, &factor)
+        })
+        .unwrap()
     };
     (x, output)
 }
@@ -464,9 +567,11 @@ fn temporary_constants_before_mixed_promotion_retain_metadata_for_derivatives() 
     let (x, output) = temporary_mixed_promotion_graph(&ctx);
     output
         .runtime()
-        .with_eager_session(|s| s.reduce_sum(&output, Some(&[0])))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.reduce_sum(&output, Some(&[0]))
+        })
         .unwrap()
-        .backward()
+        .backward(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap();
     assert_eq!(
         x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
@@ -476,13 +581,28 @@ fn temporary_constants_before_mixed_promotion_retain_metadata_for_derivatives() 
     let ctx = test_ctx();
     let (x, output) = temporary_mixed_promotion_graph(&ctx);
     let cotangent = eager_input(&ctx, &[Complex64::new(0.0, 1.0)], false);
-    assert_exact_values(&ctx.vjp(&output, &x, &cotangent).unwrap(), &[-0.25_f64]);
+    assert_exact_values(
+        &ctx.vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &x,
+            &cotangent,
+        )
+        .unwrap(),
+        &[-0.25_f64],
+    );
 
     let ctx = test_ctx();
     let (x, output) = temporary_mixed_promotion_graph(&ctx);
     let tangent = eager_input(&ctx, &[1.0_f64], false);
     assert_exact_values(
-        &ctx.jvp(&output, &x, &tangent).unwrap(),
+        &ctx.jvp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &x,
+            &tangent,
+        )
+        .unwrap(),
         &[Complex64::new(0.0, -0.25)],
     );
 }
@@ -492,7 +612,7 @@ fn concatenate_with_temporary_exactified_input(
     tracked: &EagerTensor,
 ) -> EagerTensor {
     let input = eager_input(ctx, &[3.0_f64, 4.0], false);
-    ctx.with_eager_session(|session| {
+    ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
         let temporary = session.neg(&input)?;
         let joined = session.concatenate(&[tracked, &temporary], 0)?;
         session.neg(&joined)
@@ -508,7 +628,13 @@ fn temporary_exactified_concatenate_input_retains_metadata_for_vjp() {
     let cotangent = eager_input(&ctx, &[1.0_f64, 2.0, 3.0, 4.0], false);
 
     assert_exact_values(
-        &ctx.vjp(&output, &x, &cotangent).unwrap(),
+        &ctx.vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &x,
+            &cotangent,
+        )
+        .unwrap(),
         &[-1.0_f64, -2.0],
     );
 }
@@ -523,7 +649,9 @@ fn mixed_concatenate_semantic_replay_promotes_inputs() {
         true,
     );
     let output = ctx
-        .with_eager_session(|session| session.concatenate(&[&real, &complex], 0))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.concatenate(&[&real, &complex], 0)
+        })
         .unwrap();
     assert_eq!(output.dtype(), DType::C64);
     assert_exact_values(
@@ -547,11 +675,22 @@ fn mixed_concatenate_semantic_replay_promotes_inputs() {
         false,
     );
     assert_exact_values(
-        &ctx.vjp(&output, &complex, &cotangent).unwrap(),
+        &ctx.vjp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &complex,
+            &cotangent,
+        )
+        .unwrap(),
         &[Complex64::new(2.0, 1.0), Complex64::new(-3.0, 0.5)],
     );
     assert!(ctx
-        .vjp_optional(&output, &real, &cotangent)
+        .vjp_optional(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &real,
+            &cotangent
+        )
         .unwrap()
         .is_none());
 
@@ -561,7 +700,13 @@ fn mixed_concatenate_semantic_replay_promotes_inputs() {
         false,
     );
     assert_exact_values(
-        &ctx.jvp(&output, &complex, &tangent).unwrap(),
+        &ctx.jvp(
+            &mut tenferro_cpu::CpuEngine::serial(),
+            &output,
+            &complex,
+            &tangent,
+        )
+        .unwrap(),
         &[
             Complex64::new(0.0, 0.0),
             Complex64::new(0.0, 0.0),

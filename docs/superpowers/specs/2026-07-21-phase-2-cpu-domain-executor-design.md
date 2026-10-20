@@ -313,7 +313,7 @@ context is used mutably, so it needs no second backend mutex. It has a
 hand-written summary `Debug` implementation and is intentionally not `Clone` in
 phase 2.
 `with_eager_session` enters exactly one selected backend session and passes a
-borrowed `&mut dyn BackendSession` adapter to the closure. The bridge operates
+borrowed `&mut dyn Engine` adapter to the closure. The bridge operates
 on concrete `Tensor` values through the existing public backend-session traits;
 it does not ask ordinary `EagerTensor` methods to recursively lock the runtime.
 Nested operation-family calls through a Tenferro-managed borrowed session
@@ -321,7 +321,7 @@ delegate below that entered executor boundary and do not call
 `CpuBackend::install` again.
 
 The phase-2 adapter exposes only the core operations already implemented by
-`BackendSession`. It does not enter the eager runtime's extension registry and
+`Engine`. It does not enter the eager runtime's extension registry and
 does not add linalg, FFT, einsum, or other operation-family methods. Those
 families remain phase-4/phase-6 work. “One session entry” means one managed
 executor entry for each `with_eager_session` scope; each compatible core
@@ -459,7 +459,7 @@ The phase updates:
 The phase may make clean pre-1.0 breaking changes. It does not leave aliases for
 `CpuKernelParallelism` or `CpuProviderContext`, and it does not expose mutable
 resource pools, permits, or `CpuEngine` internals. Its placement bridge reuses
-the existing public `BackendSession` contract. Temporary internal staging is
+the existing public `Engine` contract. Temporary internal staging is
 removed before the phase is called complete.
 
 ## Excluded Work

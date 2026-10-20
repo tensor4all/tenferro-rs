@@ -14,13 +14,18 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::extension::{module, Df64Qr, Df64QrVjp, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{
+    ExecutionEngine, ExtensionCacheSelector, GraphCompiler, Runtime, TracedTensor,
+};
 use tenferro_tensor::Tensor;
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
+
+mod support;
+use support::run_on_engine;
 
 /// Counts every allocation the test process makes.
 struct Counting;
@@ -62,10 +67,15 @@ fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     ))
 }
 
-fn runtime() -> (Runtime, usize) {
+fn runtime() -> (Runtime, CpuEngine, usize) {
     // One worker thread, so the numbers are a reproducible baseline rather than a function of
     // this machine's core count.
-    let backend = CpuBackend::with_threads(1).expect("single-threaded CPU backend");
+    let backend = CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(1)
+            .build()
+            .expect("single-threaded CPU thread pool"),
+    );
     let threads = backend.num_threads();
     let mut builder = Runtime::builder();
     builder
@@ -74,7 +84,11 @@ fn runtime() -> (Runtime, usize) {
     builder
         .install_extension_module(module().expect("module"))
         .expect("install the Df64 module");
-    (builder.build().expect("runtime with the module"), threads)
+    (
+        builder.build().expect("runtime with the module"),
+        backend,
+        threads,
+    )
 }
 
 fn leaf(values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
@@ -111,7 +125,7 @@ fn report_scratch_allocation_per_execution() {
     let r_value = external(vec![Df64::from_f64(2.0); order * order], vec![order, order]);
     let cotangent_value = external(vec![Df64::from_f64(1.0); order * order], vec![order, order]);
 
-    let (runtime, threads) = runtime();
+    let (runtime, mut engine, threads) = runtime();
     let mut compiler = GraphCompiler::new();
     let qr_program = compiler
         .compile_many(&[&outputs[0], &outputs[1]])
@@ -120,33 +134,33 @@ fn report_scratch_allocation_per_execution() {
 
     // The first execution pays for the runtime's own setup as well as the body's scratch.
     let (first_qr_allocations, first_qr_bytes) = measure(|| {
-        drop(
-            runtime
-                .run_compiled(&qr_program, &[&runtime_value])
-                .expect("QR"),
-        )
+        drop(run_on_engine(&runtime, &mut engine, &qr_program, &[&runtime_value]).expect("QR"))
     });
     let (next_qr_allocations, next_qr_bytes) = measure(|| {
-        drop(
-            runtime
-                .run_compiled(&qr_program, &[&runtime_value])
-                .expect("QR"),
-        )
+        drop(run_on_engine(&runtime, &mut engine, &qr_program, &[&runtime_value]).expect("QR"))
     });
     let (adjoint_allocations, adjoint_bytes) = measure(|| {
         drop(
-            runtime
-                .run_compiled(&adjoint_program, &[&q_value, &r_value, &cotangent_value])
-                .expect("adjoint"),
+            run_on_engine(
+                &runtime,
+                &mut engine,
+                &adjoint_program,
+                &[&q_value, &r_value, &cotangent_value],
+            )
+            .expect("adjoint"),
         );
     });
     // The second execution can reuse the scratch the first one left in the runtime's
     // accounted extension cache.
     let (steady_adjoint_allocations, steady_adjoint_bytes) = measure(|| {
         drop(
-            runtime
-                .run_compiled(&adjoint_program, &[&q_value, &r_value, &cotangent_value])
-                .expect("adjoint"),
+            run_on_engine(
+                &runtime,
+                &mut engine,
+                &adjoint_program,
+                &[&q_value, &r_value, &cotangent_value],
+            )
+            .expect("adjoint"),
         );
     });
 
@@ -181,18 +195,17 @@ fn report_scratch_allocation_per_execution() {
         "the adjoint's scratch is not reused: {adjoint_bytes} then {steady_adjoint_bytes}"
     );
 
-    // The runtime reports the scratch as an accounted extension cache entry, which is what
+    // The engine reports the scratch as an accounted extension cache entry, which is what
     // makes this a declared reuse path rather than a private cache.
-    let stats = runtime.cache_stats().expect("runtime cache statistics");
+    let caches = engine.take_extension_caches();
+    let stats = caches.stats(ExtensionCacheSelector::All);
+    engine.restore_extension_caches(caches);
     println!(
         "extension cache: {} entries, {} retained bytes, {} hits, {} misses",
-        stats.extensions.entries,
-        stats.extensions.retained_bytes,
-        stats.extensions.hits,
-        stats.extensions.misses
+        stats.entries, stats.retained_bytes, stats.hits, stats.misses
     );
     assert!(
-        stats.extensions.entries > 0 && stats.extensions.retained_bytes > 0,
+        stats.entries > 0 && stats.retained_bytes > 0,
         "the reuse path is not accounted for: {stats:?}"
     );
 }

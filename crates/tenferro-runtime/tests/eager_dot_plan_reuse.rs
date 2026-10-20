@@ -7,9 +7,8 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -55,25 +54,22 @@ fn allocations<T>(call: impl FnOnce() -> T) -> (T, usize) {
 fn repeated_eager_matmul_does_not_rebuild_its_plan() {
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![64, 64], vec![1.0; 64 * 64]).unwrap();
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![64, 64], vec![2.0; 64 * 64]).unwrap();
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    assert_eq!(backend.num_threads(), 1);
-    backend
-        .with_backend_session(|session| {
-            let (out, first) = allocations(|| lhs.matmul(&rhs, session).unwrap());
-            drop(out);
-            // Warm the pooled output so only the plan build itself is measured.
-            let (warm, _) = allocations(|| lhs.matmul(&rhs, session).unwrap());
-            drop(warm);
-            let (again, repeat) = allocations(|| lhs.matmul(&rhs, session).unwrap());
-            drop(again);
-            eprintln!("eager 64x64 matmul: first {first}, repeat {repeat} allocations");
-            // Without a cache slot the eager path rebuilt the whole numerical
-            // plan on every call: 84 allocations on this fixture, against 415 for
-            // the cold call that also warms the provider.
-            assert!(
-                repeat == 0,
-                "the repeated eager matmul still allocates: {first} then {repeat}"
-            );
-        })
-        .unwrap();
+    let mut engine = CpuEngine::serial();
+    assert_eq!(engine.num_threads(), 1);
+    let (out, first) = allocations(|| lhs.matmul(&rhs, &mut engine).unwrap());
+    drop(out);
+    // Warm the pooled output so only the plan build itself is measured.
+    let (warm, _) = allocations(|| lhs.matmul(&rhs, &mut engine).unwrap());
+    drop(warm);
+    let (again, repeat) = allocations(|| lhs.matmul(&rhs, &mut engine).unwrap());
+    drop(again);
+    eprintln!("eager 64x64 matmul: first {first}, repeat {repeat} allocations");
+    // Without a cache slot the eager path rebuilt the whole numerical plan on
+    // every call: 84 allocations on this fixture, against 415 for the cold call
+    // that also warms the provider. The repeat allocates nothing: the plan is
+    // not rebuilt and the buffer pool keeps no per-operation bookkeeping.
+    assert!(
+        repeat == 0,
+        "the repeated eager matmul still allocates: {first} then {repeat}"
+    );
 }

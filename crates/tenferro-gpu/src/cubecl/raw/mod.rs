@@ -1,7 +1,7 @@
 //! Type-safe raw CUDA extension session (issue #1597).
 //!
 //! [`Session`] is the typed context capability exposed by
-//! [`CudaExecSession::with_raw`](super::exec_session::CudaExecSession::with_raw):
+//! [`CudaEngine::with_raw`](super::exec_session::CudaEngine::with_raw):
 //! while a raw session is alive the tenferro primary context is activated on
 //! the current thread with a single captured execution stream bound.
 //!
@@ -399,6 +399,14 @@ pub struct Session<'s> {
     runtime: CudaRuntime,
     cache: &'s CudaExtensionCache,
     stream: u64,
+    /// Bindings of every allocation whose address this scope handed out; they
+    /// keep those addresses valid until the scope ends (#2207).
+    pins: std::cell::RefCell<
+        Vec<cubecl_runtime::storage::ManagedResource<cubecl_cuda::ffi_interop::GpuResource>>,
+    >,
+    /// Set after a CubeCL kernel was queued through [`Session::cubecl`]; the
+    /// next raw CUDA entry dispatches it first so raw work cannot overtake it.
+    cubecl_pending: std::cell::Cell<bool>,
     _not_send_sync: PhantomData<Rc<()>>,
     _scope: PhantomData<&'s ()>,
 }
@@ -428,6 +436,8 @@ impl<'s> Session<'s> {
             runtime,
             cache,
             stream,
+            pins: std::cell::RefCell::new(Vec::new()),
+            cubecl_pending: std::cell::Cell::new(false),
             _not_send_sync: PhantomData,
             _scope: PhantomData,
         }
@@ -477,14 +487,7 @@ impl<'s> Session<'s> {
     /// CUDA host runs the fence inside a real raw session.
     ///
     /// ```
-    /// use tenferro_gpu::cuda::{
-    ///     cuda_devices, gpu_available, with_cuda_exec_session, CudaBackend, CudaExecSession,
-    /// };
-    /// use tenferro_tensor::backend::BackendSessionHost;
-    ///
-    /// fn flush(session: &mut CudaExecSession<'_>) -> tenferro_tensor::Result<()> {
-    ///     session.with_raw("docs.flush_cubecl", |raw| raw.flush_cubecl())
-    /// }
+    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaEngine};
     ///
     /// // `gpu_available` never panics without a CUDA driver.
     /// if !gpu_available() {
@@ -496,12 +499,8 @@ impl<'s> Session<'s> {
     ///     .ok_or_else(|| {
     ///         tenferro_tensor::Error::runtime_state("docs.flush_cubecl", "no CUDA device")
     ///     })?;
-    /// let mut backend = CudaBackend::new(device)?;
-    /// backend
-    ///     .with_backend_session(|session| with_cuda_exec_session(session, flush))?
-    ///     .ok_or_else(|| {
-    ///         tenferro_tensor::Error::runtime_state("docs.flush_cubecl", "not a CUDA backend")
-    ///     })??;
+    /// let mut engine = CudaEngine::open(device)?;
+    /// engine.with_raw("docs.flush_cubecl", |raw| raw.flush_cubecl())?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
@@ -512,7 +511,54 @@ impl<'s> Session<'s> {
     /// itself is not reported here; it surfaces on the buffer the work left
     /// unwritten.
     pub fn flush_cubecl(&self) -> crate::Result<()> {
+        self.cubecl_pending.set(false);
         self.runtime.flush_cubecl("raw::Session::flush_cubecl")
+    }
+
+    /// Dispatch CubeCL work queued through [`Self::cubecl`] before raw CUDA
+    /// work, so a raw consumer always observes earlier CubeCL producers.
+    fn fence_cubecl(&self, op: &'static str) -> crate::Result<()> {
+        if self.cubecl_pending.replace(false) {
+            self.runtime.flush_cubecl(op)?;
+        }
+        Ok(())
+    }
+
+    /// Run caller-written CubeCL kernels on this scope's stream.
+    ///
+    /// The next raw CUDA entry of this scope (a launch, a copy, a cuBLAS
+    /// enqueue, a device address) first hands the queued CubeCL work to the
+    /// GPU, so CUDA work issued after this call is ordered after these
+    /// kernels. A caller that issues its own CUDA calls on [`Self::stream`]
+    /// after this call must call [`Self::flush_cubecl`] first.
+    ///
+    /// # Errors
+    ///
+    /// Returns the callback's error unchanged; this method adds no failure of
+    /// its own, so the variant is whatever the callback's operations report
+    /// (for example [`crate::Error::BackendFailure`]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::raw::Session;
+    ///
+    /// fn check(raw: &Session<'_>) -> tenferro_tensor::Result<()> {
+    ///     raw.cubecl(|_cubecl| Ok(()))
+    /// }
+    /// let _ = check;
+    /// ```
+    #[cfg(feature = "cubecl-interop")]
+    pub fn cubecl<R>(
+        &self,
+        f: impl for<'c> FnOnce(&super::session_cubecl::Session<'c>) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        // SAFETY: the raw scope keeps the runtime's primary context current and
+        // this thread on the engine's stream for the whole call.
+        let session = unsafe { super::session_cubecl::Session::new(self.runtime.clone()) };
+        let result = f(&session);
+        self.cubecl_pending.set(true);
+        result
     }
 
     /// Borrow the captured execution stream.
@@ -550,10 +596,10 @@ impl<'s> Session<'s> {
     ///
     /// ```
     /// use tenferro_gpu::cuda::cudarc::cublas::sys as cublas_sys;
-    /// use tenferro_gpu::cuda::CudaExecSession;
+    /// use tenferro_gpu::cuda::CudaEngine;
     ///
-    /// // Method-call check only: `CudaExecSession` is not user-constructible.
-    /// fn check(session: &mut CudaExecSession<'_>) -> tenferro_tensor::Result<()> {
+    /// // Method-call check only: opening a `CudaEngine` needs a device.
+    /// fn check(session: &mut CudaEngine) -> tenferro_tensor::Result<()> {
     ///     session.with_raw("test.raw_cublas", |raw| {
     ///         raw.with_cublas_handle(
     ///             "test.raw_cublas",
@@ -571,6 +617,7 @@ impl<'s> Session<'s> {
         pointer_mode: cublas_sys::cublasPointerMode_t,
         execute: impl FnOnce(cublas_sys::cublasHandle_t) -> crate::Result<R>,
     ) -> crate::Result<R> {
+        self.fence_cubecl(op)?;
         self.runtime
             .with_cublas_handle(op, pointer_mode, Vec::new(), execute)
     }
@@ -680,7 +727,7 @@ impl<'s> Session<'s> {
     ///   read it under [`Session::launch`]'s aliasing contract.
     /// - **Caller-owned lifetime through completion**: the allocation must stay
     ///   alive and unmoved until all work that touches it has completed.
-    ///   [`CudaExecSession::with_raw`](super::exec_session::CudaExecSession::with_raw)
+    ///   `CudaEngine::with_raw`
     ///   does not synchronize on return, including on its error paths, so
     ///   dropping or freeing the external allocation immediately after the
     ///   callback is a use-after-free unless the caller has observed completion
@@ -983,6 +1030,7 @@ impl<'s> Session<'s> {
         if nbytes == 0 {
             return Ok(());
         }
+        self.fence_cubecl(op)?;
         let stream = self.stream as *mut cudarc::runtime::sys::CUstream_st;
         cudarc::runtime::result::memcpy_dtod_async(dst, src, nbytes, stream)
             .map_err(|err| crate::Error::backend_source(op, err))
@@ -1123,7 +1171,7 @@ impl<'s> Session<'s> {
     /// `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`, readable as
     /// `CubeCL`'s `client().properties().hardware.max_shared_memory_size`
     /// through
-    /// [`CudaExecSession::with_cubecl`](super::exec_session::CudaExecSession::with_cubecl).
+    /// `CudaEngine::with_cubecl` (feature `cubecl-interop`).
     /// A request above it is rejected by the driver and returned as
     /// [`crate::Error::BackendSource`]; the value is never clamped.
     ///
@@ -1139,6 +1187,7 @@ impl<'s> Session<'s> {
         config: LaunchConfig,
         args: &[KernelArg<'_>],
     ) -> crate::Result<()> {
+        self.fence_cubecl("raw.launch")?;
         // A `Function` is `Send + Sync` and may have been compiled by another
         // runtime. The driver allows the handle from any thread, but only under
         // the primary context that loaded it; a session on a different device
@@ -1230,11 +1279,11 @@ impl<'s> Session<'s> {
 impl Session<'_> {
     /// Resolve a CubeCL allocation handle to its base CUDA device address.
     ///
-    /// A retained handle keeps its storage offset and is never deallocated
-    /// while one of its slices is live (see the `CubeclBuffer::device_addr`
-    /// invariant), so the address is stable for the borrowing tensor or view.
-    /// Resolving through `get_resource` is also what aligns this access with
-    /// CubeCL's stream (issue #1868).
+    /// The allocation's binding is kept until this scope ends, so the address
+    /// stays valid for every use inside the scope: CubeCL may otherwise move a
+    /// live allocation to compact its pools (#2207). Resolving through
+    /// `get_resource` is also what aligns this access with CubeCL's stream
+    /// (issue #1868).
     fn device_ptr(
         &self,
         handle: cubecl_runtime::server::Handle,
@@ -1245,7 +1294,10 @@ impl Session<'_> {
             .client()
             .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
             .map_err(|err| crate::Error::backend_source(op, err))?;
-        super::interop::cuda_device_ptr_from_addr(resource.resource().ptr, op)
+        self.fence_cubecl(op)?;
+        let addr = resource.resource().ptr;
+        self.pins.borrow_mut().push(resource);
+        super::interop::cuda_device_ptr_from_addr(addr, op)
     }
 
     /// Resolve a view read's compact device span through its concrete scalar.

@@ -1,12 +1,14 @@
 #![cfg(feature = "autodiff")]
 
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_ext_sparse::{
     extension_modules, sparse_matmul, sparse_matmul_eager, sparse_semantic_ad_rules,
     SparseCooTensor, SparseCooTracedTensor,
 };
-use tenferro_runtime::{Error, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{
+    Error, ErrorPhase, ExecutionEngine, GraphCompiler, Runtime, TensorRead, TracedTensor,
+};
 use tenferro_tensor::Tensor;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -88,14 +90,13 @@ fn symbolic_values(len: usize) -> TracedTensor {
     .unwrap()
 }
 
-fn cpu_runtime_with_sparse() -> Runtime {
-    let backend = CpuBackend::new();
+fn cpu_runtime_with_sparse(engine: &CpuEngine) -> Runtime {
     let mut builder = Runtime::builder();
     builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .register_engine(tenferro_cpu::runtime_engine_registration(engine).unwrap())
         .unwrap();
     for module in
-        extension_modules::<CpuBackend>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap()
+        extension_modules::<CpuEngine>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap()
     {
         builder.install_extension_module(module).unwrap();
     }
@@ -105,12 +106,22 @@ fn cpu_runtime_with_sparse() -> Runtime {
 fn run_values(values: &TracedTensor) -> Tensor {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(values).expect("compile sparse graph");
-    let runtime = cpu_runtime_with_sparse();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime_with_sparse(&engine);
+    let reads: Vec<TensorRead<'_>> = Vec::new();
+    let target = engine.target();
+    let prepared = runtime
+        .prepare(&program, &reads, std::slice::from_ref(&target))
+        .expect("prepare sparse graph");
     let mut outputs = runtime
-        .run_compiled(&program, &[])
+        .run(&mut [&mut engine], &prepared, &reads)
         .expect("run sparse graph");
     assert_eq!(outputs.len(), 1);
-    outputs.remove(0)
+    outputs
+        .pop()
+        .expect("one output was asserted above")
+        .into_tensor(&mut engine)
+        .expect("materialize sparse output")
 }
 
 fn sparse_ad() -> AdContext {

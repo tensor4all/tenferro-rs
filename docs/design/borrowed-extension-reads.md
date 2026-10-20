@@ -29,7 +29,7 @@ It delegates to the existing `TensorView::as_slice<T>` contract without allocati
 - backend-owned storage returns the existing typed host-access/runtime-state error and is never downloaded;
 - dtype mismatch remains typed.
 
-An executor that requires canonical compact storage calls `BackendSession::to_contiguous_read` explicitly. It calls it once per selected noncompact input and reuses the returned owner. No runtime layer silently materializes, transfers, or retries on CPU.
+An executor that requires canonical compact storage calls `Engine::to_contiguous_read` explicitly. It calls it once per selected noncompact input and reuses the returned owner. No runtime layer silently materializes, transfers, or retries on CPU.
 
 ## Extension fixture and instrumentation
 

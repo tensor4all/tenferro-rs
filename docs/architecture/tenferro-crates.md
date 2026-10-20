@@ -28,8 +28,8 @@ The design goal is to keep these concerns separate:
 ![tenferro-rs architecture overview](../assets/tenferro-architecture.svg)
 
 The overview diagram focuses on the native CPU/GPU runtime and extension
-stack. `tenferro-xla` is a peer executor over compiled static programs, not a
-`TensorBackend` inside that stack.
+stack. `tenferro-xla` is a peer executor over compiled static programs, not an
+`Engine` inside that stack.
 
 ## II. Current Workspace Crates
 
@@ -37,7 +37,7 @@ stack. `tenferro-xla` is a peer executor over compiled static programs, not a
 |---|---|
 | `tenferro-tensor-core` | Rank/layout metadata, dtype tags, scalar promotion facts, and layout validation; no tensor-storage family |
 | `tenferro-tensor` | Runtime `TypedTensor<T, R, D>` (`Host`/`Gpu`/`Dynamic`) and `Tensor` values, typed views, the host container (`HostTensor`, `DefaultScalars`, `ScalarSet`, `ErasedHostTensor`), backend traits, and backend-independent contracts |
-| `tenferro-cpu` | Public CPU backend, CPU execution sessions, CPU execution context, provider selection, thread policy, public resource-pool controls, and the CPU runtime-registration preparation/execution adapter |
+| `tenferro-cpu` | `CpuEngine` (the caller-held CPU engine and its thread pool), CPU provider selection, thread policy, public resource-pool controls, and the CPU runtime-registration preparation/execution adapter |
 | `tenferro-cpu-basic` | Shared CPU buffer pool, full-overwrite destination guard, and host strided-storage adapters used by CPU kernel families |
 | `tenferro-cpu-fused` | Internal CPU runtime-DAG fused elementwise adapter; delegates traversal to the fused strided kernel |
 | `tenferro-gpu` | CubeCL/CUDA backend and GPU transfer helpers |
@@ -98,7 +98,7 @@ Layer 2: tenferro-tensor
          backend traits, backend-independent contracts
 
          tenferro-cpu
-         public CPU backend and execution sessions
+         caller-held CPU engine and its pool
 
          tenferro-cpu-basic
          shared CPU pool, overwrite guard and host strided adapters
@@ -214,10 +214,9 @@ Rules:
   views, backend traits, and backend-independent contracts. Its
   `TensorElementwise::elementwise_read_into` hook is required at backend
   implementations; tensor itself does not instantiate a CPU strided kernel.
-- `tenferro-cpu` owns `CpuBackend`, `CpuContext`, CPU execution sessions,
-  CPU provider selection, thread policy, public resource-pool controls, and
-  its narrow runtime-registration adapters for preparation metadata and
-  runtime-owned execution.
+- `tenferro-cpu` owns `CpuEngine`, CPU provider selection, thread policy,
+  public resource-pool controls, and its narrow runtime-registration adapters
+  for preparation metadata and runtime-owned execution.
 - `tenferro-cpu-basic` owns the shared CPU buffer pool, full-overwrite guard,
   and host strided-storage adapters. It has no dependency on ordinary or fused
   CPU kernel families.

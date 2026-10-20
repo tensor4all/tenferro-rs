@@ -1,98 +1,23 @@
-//! CPU backend, kernels, provider selection, and CPU resource pools.
+//! CPU execution engine, kernels and provider selection.
 //!
-//! # Examples
+//! A [`CpuEngine`] owns one Rayon pool built by the caller (or none) and the
+//! workspace its operations write. Every operation takes the engine as `&mut`:
 //!
 //! ```rust
-//! use tenferro_cpu::CpuBackend;
-//! use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+//! use tenferro_cpu::{thread_pool_builder, CpuEngine};
+//! use tenferro_tensor::{Tensor, TensorElementwise, TensorRead};
 //!
-//! let mut backend = CpuBackend::new();
 //! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 //! let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
-//! let c = backend
-//!     .with_backend_session(|session| {
-//!         session.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-//!     })??;
-//! assert_eq!(c.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-//! # Ok::<(), tenferro_tensor::Error>(())
-//! ```
 //!
-//! The deleted one-shot spellings do not compile on the owner or on a session.
-//! Each fixture below fails for that reason and nothing else.
+//! let mut serial = CpuEngine::serial();
+//! let c = serial.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))?;
+//! assert_eq!(c.as_slice::<f64>()?, &[4.0, 6.0]);
 //!
-//! ```compile_fail
-//! use tenferro_cpu::CpuBackend;
-//! use tenferro_tensor::Tensor;
-//!
-//! let mut backend = CpuBackend::new();
-//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-//! let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-//! let _ = backend.add(&a, &b);
-//! ```
-//!
-//! ```compile_fail
-//! use tenferro_cpu::CpuBackend;
-//! use tenferro_tensor::Tensor;
-//!
-//! let mut backend = CpuBackend::new();
-//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-//! let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-//! let _ = backend.mul(&a, &b);
-//! ```
-//!
-//! ```compile_fail
-//! use tenferro_cpu::CpuBackend;
-//! use tenferro_tensor::Tensor;
-//!
-//! let mut backend = CpuBackend::new();
-//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-//! let _ = backend.exp(&a);
-//! ```
-//!
-//! ```compile_fail
-//! use tenferro_cpu::CpuBackend;
-//! use tenferro_tensor::Tensor;
-//!
-//! let mut backend = CpuBackend::new();
-//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-//! let _ = backend.reduce_sum(&a, &[0]);
-//! ```
-//!
-//! ```compile_fail
-//! use tenferro_cpu::CpuBackend;
-//! use tenferro_tensor::Tensor;
-//!
-//! let mut backend = CpuBackend::new();
-//! let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-//! let _ = backend.transpose(&a, &[1, 0]);
-//! ```
-//!
-//! ```compile_fail
-//! use tenferro_cpu::CpuBackend;
-//! use tenferro_tensor::{DotGeneralConfig, Tensor};
-//!
-//! let mut backend = CpuBackend::new();
-//! let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-//! let config = DotGeneralConfig {
-//!     lhs_contracting_dims: [1].as_slice().into(),
-//!     rhs_contracting_dims: [0].as_slice().into(),
-//!     lhs_batch_dims: [].as_slice().into(),
-//!     rhs_batch_dims: [].as_slice().into(),
-//! };
-//! let _ = backend.dot_general(&a, &a, &config);
-//! ```
-//!
-//! The owner no longer implements the cache-aware contraction entry, so an
-//! owner-level `BackendCachedDot` bound does not hold either:
-//!
-//! ```compile_fail
-//! use tenferro_cpu::CpuBackend;
-//! use tenferro_tensor::BackendCachedDot;
-//!
-//! fn requires_cached_dot<B: BackendCachedDot>(_backend: &mut B) {}
-//!
-//! let mut backend = CpuBackend::new();
-//! requires_cached_dot(&mut backend);
+//! let mut parallel = CpuEngine::new(thread_pool_builder().num_threads(2).build()?);
+//! let d = parallel.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))?;
+//! assert_eq!(d.as_slice::<f64>()?, &[4.0, 6.0]);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // With neither backend the numerical routes are unreachable by design, so the
@@ -165,9 +90,7 @@ compile_error!(
 compile_error!("provider-inject cannot be combined with explicit BLAS provider features");
 
 mod activation;
-pub mod affinity;
 mod analytic;
-mod arbiter;
 pub mod backend;
 mod batch_policy;
 mod blas1;
@@ -175,7 +98,6 @@ pub(crate) mod buffer_pool {
     pub use tenferro_cpu_basic::buffer_pool::*;
 }
 mod capability;
-mod context;
 mod dot_runtime;
 pub(crate) use tenferro_cpu_basic::PooledUninitOutput;
 pub(crate) use tenferro_cpu_basic::{erased_raw_strided_ref, erased_raw_strided_uninit_mut};
@@ -183,6 +105,7 @@ pub(crate) use tenferro_internal_cpu_kernels::elementwise;
 mod contraction;
 mod engine;
 mod exec_session;
+mod plan_cache;
 #[doc(hidden)]
 pub use contraction::ContractionWorkspaces;
 mod gemm;
@@ -190,14 +113,13 @@ mod indexed_plan_cache;
 mod indexing;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
-mod placement;
 pub mod provider;
 mod reduction;
-mod resource_domain;
 mod runtime_adapter;
 mod simd_math;
 mod structural;
-mod topology;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use num_complex::{Complex32, Complex64};
 #[cfg(test)]
@@ -243,34 +165,20 @@ extern crate lapack_inject as _;
 #[cfg(feature = "provider-src")]
 extern crate lapack_src as _;
 
-pub use affinity::{
-    available_parallelism, process_cpu_affinity, process_cpu_affinity_count, CpuAffinityError,
-};
-pub use backend::execution_scope::{current_cpu_execution, CpuThreadExecution};
-pub use backend::held_session::{
-    CpuHeldSession, CpuHeldSessionError, CpuPhase, CpuPhaseError, PhaseControl, PhaseLane,
-    PhaseRunError,
-};
-pub use backend::{CpuBackend, CpuBackendError, CpuRuntimeIdentity};
 pub use batch_policy::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy, CpuBatchThresholds};
 
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
-pub use context::DEFAULT_WORKER_STACK_BYTES;
-// `CpuContext` is the engine's own resource holder. It stays reachable for the
-// crate's benchmarks, but it is not part of the supported CPU API: placement
-// goes through `CpuBackend::builder()`, and lower libraries see
-// `CpuExecutionContext`.
-#[doc(hidden)]
-pub use context::{CpuContext, CpuContextError};
 #[doc(hidden)]
 pub use dot_runtime::{validate_cpu_host_read, validate_cpu_host_write};
-#[doc(hidden)]
-pub use exec_session::{CpuChildExecution, CpuExecSession};
-pub use indexed_plan_cache::IndexedPlanCacheLimits;
-pub use placement::{
-    CpuEngineConstructionError, CpuPlacement, CpuPlacementError, ResolvedCpuPlacement,
+pub use engine::{
+    thread_pool_builder, CpuEngine, CpuEngineError, CpuPoolStats, DEFAULT_WORKER_STACK_BYTES,
+    MIN_WORKER_STACK_BYTES,
 };
+#[doc(hidden)]
+pub use gemm::GemmAnalysisCache;
+pub use indexed_plan_cache::IndexedPlanCacheLimits;
+pub use plan_cache::CpuPlanCache;
 pub use provider::{CpuExecutionContext, ParallelMode};
 pub use runtime_adapter::{
     runtime_engine_id, runtime_engine_registration, runtime_engine_registration_with_id,
@@ -282,35 +190,39 @@ pub use tenferro_internal_cpu_kernels::scalar_ops::{
     scalar_binary_into, scalar_fold, AddOp, BinaryScalarOp, MulOp, SubOp,
 };
 pub use tenferro_internal_cpu_kernels::{same_variant_pair, same_variant_unary};
-pub use topology::{
-    discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
-    NumaNodeId,
-};
 
-/// Visit a CPU execution session carried by a type-erased backend session.
+/// Visit the [`CpuEngine`] behind a type-erased engine, if it is one.
 ///
-/// This is a backend-leaf capability bridge. The exact session marker is checked
+/// This is a backend-leaf capability bridge. The exact engine marker is checked
 /// before the erased pointer is reconstructed, and the callback cannot return a
-/// borrow of the session, so the borrowed resource lease remains scoped to the
-/// caller's session closure.
+/// borrow of the engine, so the reconstructed reference stays within the
+/// caller's borrow of `engine`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::{with_cpu_engine, CpuEngine};
+/// use tenferro_tensor::Engine;
+///
+/// let mut engine = CpuEngine::serial();
+/// let erased: &mut dyn Engine = &mut engine;
+/// assert_eq!(with_cpu_engine(erased, |cpu| cpu.num_threads()), Some(1));
+/// ```
 #[doc(hidden)]
-pub fn with_cpu_exec_session<B, R>(
-    session: &mut B,
-    f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R,
-) -> Option<R>
+pub fn with_cpu_engine<B, R>(engine: &mut B, f: impl FnOnce(&mut CpuEngine) -> R) -> Option<R>
 where
-    B: tenferro_tensor::BackendSession + ?Sized,
+    B: tenferro_tensor::Engine + ?Sized,
 {
-    let data = session
-        .native_session()?
-        .into_marked_ptr::<exec_session::CpuExecSessionMarker>()?;
-    // SAFETY: only `CpuExecSession::native_session` creates a token with the
-    // crate-private `CpuExecSessionMarker`, and it points that token at a live
-    // `CpuExecSession`. The token borrowed `*session` exclusively, and this
-    // function keeps holding `session: &mut B` for the whole visit. The
-    // callback is higher-ranked and returns no session borrow, so the
-    // reconstructed reference cannot escape the original session borrow.
-    Some(unsafe { f(data.cast::<CpuExecSession<'static>>().as_mut()) })
+    let data = engine
+        .native_engine()?
+        .into_marked_ptr::<exec_session::CpuEngineMarker>()?;
+    // SAFETY: only `CpuEngine::native_engine` creates a token with the
+    // crate-private `CpuEngineMarker`, and it points that token at a live
+    // `CpuEngine`. The token borrowed `*engine` exclusively, and this function
+    // keeps holding `engine: &mut B` for the whole visit. `R` is chosen by the
+    // caller before the callback's borrow exists, so the reconstructed
+    // reference cannot escape the original borrow.
+    Some(unsafe { f(data.cast::<CpuEngine>().as_mut()) })
 }
 
 /// The faer build this crate links, re-exported so a direct call cannot
@@ -348,28 +260,24 @@ where
 #[cfg_attr(docsrs, doc(cfg(feature = "native")))]
 pub use faer;
 
-/// Invoke a direct faer operation with the parallelism selected by a CPU session.
+/// Invoke a direct faer operation with the parallelism of a CPU engine.
 ///
 /// The `faer::Par` value is scoped to the callback and is derived from the
-/// session's managed thread budget and nesting policy. A non-CPU session, or a
-/// CPU session built without `native`, returns a typed unsupported error.
-/// `Par::Seq` remains the portable choice for direct calls outside a session.
+/// engine's pool. A non-CPU engine returns a typed unsupported error.
+/// `Par::Seq` remains the portable choice for direct calls outside an engine.
 ///
 /// # Examples
 ///
 /// ```rust
 /// # #[cfg(feature = "native")]
 /// # fn example() -> tenferro_tensor::Result<()> {
-/// use tenferro_cpu::{CpuBackend, FaerParallelismExt};
-/// use tenferro_tensor::BackendSessionHost;
+/// use tenferro_cpu::{CpuEngine, FaerParallelismExt};
 ///
-/// let mut backend = CpuBackend::with_threads(2)?;
-/// backend.with_backend_session(|session| {
-///     session.with_faer_parallelism(|parallel| {
-///         let _ = parallel;
-///         Ok(())
-///     })
-/// })??;
+/// let mut engine = CpuEngine::serial();
+/// engine.with_faer_parallelism(|parallel| {
+///     let _ = parallel;
+///     Ok(())
+/// })?;
 /// # Ok(())
 /// # }
 /// # fn main() {}
@@ -377,20 +285,20 @@ pub use faer;
 #[cfg(feature = "native")]
 #[cfg_attr(docsrs, doc(cfg(feature = "native")))]
 pub trait FaerParallelismExt {
-    /// Run a scoped callback with this session's faer parallelism policy.
+    /// Run a scoped callback with this engine's faer parallelism policy.
     ///
     /// # Errors
     ///
-    /// Returns [`tenferro_tensor::Error::Unsupported`] when the session is not
-    /// a CPU/faer execution session, or the callback's own typed error.
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the engine is not
+    /// a CPU/faer engine, or the callback's own typed error.
     ///
     /// # Examples
     ///
     /// ```rust
     /// # #[cfg(feature = "native")]
-    /// # fn example(session: &mut dyn tenferro_tensor::BackendSession) -> tenferro_tensor::Result<()> {
+    /// # fn example(engine: &mut dyn tenferro_tensor::Engine) -> tenferro_tensor::Result<()> {
     /// use tenferro_cpu::FaerParallelismExt;
-    /// session.with_faer_parallelism(|parallel| {
+    /// engine.with_faer_parallelism(|parallel| {
     ///     let _ = parallel;
     ///     Ok::<_, tenferro_tensor::Error>(())
     /// })?;
@@ -406,19 +314,20 @@ pub trait FaerParallelismExt {
 #[cfg(feature = "native")]
 impl<S> FaerParallelismExt for S
 where
-    S: tenferro_tensor::BackendSession + ?Sized,
+    S: tenferro_tensor::Engine + ?Sized,
 {
     fn with_faer_parallelism(
         &mut self,
         callback: impl FnOnce(faer::Par) -> tenferro_tensor::Result<()> + Send,
     ) -> tenferro_tensor::Result<()> {
-        with_cpu_exec_session(self, |session| session.with_faer_parallelism(callback))
-            .unwrap_or_else(|| {
+        with_cpu_engine(self, |engine| engine.with_faer_parallelism(callback)).unwrap_or_else(
+            || {
                 Err(tenferro_tensor::Error::unsupported(
                     "with_faer_parallelism",
-                    "selected session is not a CPU/faer execution session",
+                    "selected engine is not a CPU/faer engine",
                 ))
-            })
+            },
+        )
     }
 }
 
@@ -472,10 +381,10 @@ pub(crate) use structural::{
     broadcast_in_dim, embed_diagonal, extract_diagonal, reshape, transpose, tril, triu,
 };
 
-/// Owner-scoped CPU scratch-pool API for operation-family crates.
+/// Engine-scoped CPU scratch-pool API for operation-family crates.
 ///
 /// This module is not an application-facing tensor API. It exists so
-/// operation crates that implement CPU kernels can share `CpuBackend`'s
+/// operation crates that implement CPU kernels can share a `CpuEngine`'s
 /// allocation pool without exposing the pool as a general public contract.
 #[doc(hidden)]
 pub mod linalg_interop {

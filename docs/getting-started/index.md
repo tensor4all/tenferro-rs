@@ -1,8 +1,8 @@
 # Getting Started
 
 For multi-socket hosts, containers, or schedulers with restricted cpusets, read
-[CPU Execution and NUMA Placement](../guides/cpu-execution.md) before choosing
-between managed faer placement and an external BLAS provider.
+[CPU Execution and Thread Pools](../guides/cpu-execution.md) before choosing the
+pool you hand to `CpuEngine` and before choosing an external BLAS provider.
 
 tenferro supports tensor computation without autodiff, immediate execution with
 optional `backward()` on scalar losses, functional eager `grad`, `vjp`, and
@@ -25,11 +25,11 @@ compiled traced program, then choose a CPU or CUDA backend explicitly.
 | --- | --- | --- |
 | Tensor layer | What kind of value do I pass around? | `TypedTensor<T>` for typed CPU values, `Tensor` for runtime dtype |
 | Execution model | When does computation run? | Direct/eager for ordinary code and eager AD; traced for compiled graph reuse |
-| Backend/device | Where does computation run? | `CpuBackend`; upload/download explicitly for CUDA |
+| Engine | Where does computation run, and who owns it? | `CpuEngine`; `CudaEngine::open` and explicit upload/download for CUDA |
 
 CUDA, eager execution, and traced graphs are not competing APIs. They compose
 when a workflow needs them, but the first CPU program below only needs the
-runtime crate and CPU backend.
+runtime crate and the CPU crate.
 
 ## Setup
 
@@ -76,8 +76,8 @@ packages even when the tenferro crates themselves are local path dependencies.
 The default `native` provider may take several minutes to compile the first
 time on a fresh machine; later incremental builds are much faster.
 
-With default features, this compiles the `native` provider, so
-`CpuBackend::new()` uses faer. To use the LAPACK/BLAS CPU provider, enable
+With default features, this compiles the `native` provider, so a `CpuEngine`
+uses faer. To use the LAPACK/BLAS CPU provider, enable
 `blas` and link a BLAS/LAPACK provider from the build environment:
 
 ```toml
@@ -87,11 +87,10 @@ tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-feat
 tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg", default-features = false, features = ["blas"] }
 ```
 
-CPU backend features are additive. At least one of `native` or `blas`
-must be enabled, and builds may enable both. `CpuBackend::new()` selects the
-compiled default provider: BLAS when `blas` is compiled, otherwise faer.
-Use `CpuBackend::with_kind` when a program needs explicit provider selection
-within a build that has multiple providers. External CPU providers may replace
+CPU provider features are additive. At least one of `native` or `blas`
+must be enabled, and builds may enable both. The compiled provider is what every
+`CpuEngine` in the process uses: BLAS when `blas` is compiled, otherwise faer.
+External CPU providers may replace
 only a provider bundle slot, such as `dot_general`; they do not replace
 `native` or `blas`, so one complete CPU provider is still required for
 fallback and linalg coverage. The `blas` backend needs a BLAS/LAPACK
@@ -139,7 +138,7 @@ tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg", featur
 
 <!-- snippet-source: docs/tutorial-code/src/bin/direct_linalg_quickstart.rs -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::prelude::*;
 use tenferro_runtime::prelude::*;
 
@@ -155,18 +154,17 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
 
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 1.0])?;
     let identity = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0])?;
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![6.0, 2.0])?;
 
-    let (product, solution, singular_values) = backend.with_backend_session(|session| {
-        let product = a.matmul(&identity, session)?;
-        let solution = product.solve(&rhs, session)?;
-        let singular_values = product.svdvals(session)?;
-        Ok::<_, tenferro_runtime::Error>((product, solution, singular_values))
-    })??;
+    // One borrowed engine carries every operation, the plan cache and the
+    // buffer pool.
+    let product = a.matmul(&identity, &mut engine)?;
+    let solution = product.solve(&rhs, &mut engine)?;
+    let singular_values = product.svdvals(&mut engine)?;
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(product.host_data()?, &[3.0, 0.0, 0.0, 1.0]);
     assert_close(solution.as_slice()?, &[2.0, 2.0]);
@@ -178,7 +176,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 <!-- end-snippet-source -->
 
 Expected output: the program exits silently because the shape and value
-assertions pass. The same explicit `CpuBackend` session owns matmul, solve, and
+assertions pass. The same caller-held `CpuEngine` carries matmul, solve, and
 values-only SVD. The `from_vec_col_major` buffer is column-major: the leftmost
 axis varies fastest in memory.
 
@@ -196,8 +194,8 @@ tenferro-ad = "0.7"
 <!-- snippet-source: docs/tutorial-code/src/bin/traced_autodiff_jax_style.rs -->
 ```rust
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -213,13 +211,14 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 fn run(tensor: &TracedTensor) -> Result<tenferro_runtime::Tensor, Box<dyn std::error::Error>> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(tensor)?;
-    let backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let mut builder = Runtime::builder();
-    builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
     let runtime = builder.build()?;
-    let mut outputs = runtime.run_compiled(&program, &[])?;
+    let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+    let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
     assert_eq!(outputs.len(), 1);
-    Ok(outputs.remove(0))
+    Ok(outputs.remove(0).into_tensor(&mut engine)?)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -8,41 +8,10 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::error::Error;
 use tenferro_runtime::{
     ad_support::{tensor_from_parts, ConstraintScopeTransfer, RetainedValue, TracedTensorParts},
-    DType, GraphCompiler, ScopedExecutionOutcome, ScopedReadInputs, SymDim, Tensor, TensorView,
-    TracedTensor,
+    DType, GraphCompiler, SymDim, Tensor, TracedTensor,
 };
 
 use crate::support::{cpu_runtime, run_compiled_one};
-
-#[test]
-fn cpu_scoped_execution_returns_borrowed_identity_without_copy() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let mut compiler = GraphCompiler::new();
-    let program = compiler
-        .compile_with_input_specs(&x, &[(&x, DType::F64, &[2])])
-        .unwrap();
-    let runtime = cpu_runtime();
-    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let view = TensorView::F64(
-        input
-            .as_typed::<f64>()
-            .expect("unexpected input dtype")
-            .as_view(),
-    );
-    let outcome = runtime
-        .execute_scoped_read_only(&program, ScopedReadInputs::new(vec![view]))
-        .unwrap();
-    let ScopedExecutionOutcome::Completed(bundle) = outcome else {
-        panic!("CPU scoped execution did not complete")
-    };
-    match bundle.output(0).unwrap() {
-        tenferro_runtime::OutputRef::Tensor(TensorView::F64(view)) => {
-            assert_eq!(view.as_slice().unwrap(), &[1.0, 2.0]);
-        }
-        tenferro_runtime::OutputRef::Metadata(_) => panic!("unexpected metadata output"),
-        _ => panic!("unexpected output dtype"),
-    }
-}
 
 #[test]
 fn runtime_runs_compiled_single_output_program() {
@@ -68,7 +37,7 @@ fn runtime_runs_compiled_multi_output_program() {
     let program = compiler.compile_many(&[&sum, &product]).unwrap();
     let executor = cpu_runtime();
 
-    let outputs = executor.run_compiled(&program, &[]).unwrap();
+    let outputs = crate::support::run_on_cpu(&executor, &program, &[]).unwrap();
 
     assert_eq!(outputs.len(), 2);
     assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[2.0, 4.0]);
@@ -82,7 +51,12 @@ fn checkpoint_uses_explicit_compiler_and_runtime() {
 
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
-    y.checkpoint(&mut compiler, &executor).unwrap();
+    y.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
 
     let program = compiler.compile(&y).unwrap();
     let out = run_compiled_one(&executor, &program, &[]).unwrap();
@@ -96,9 +70,19 @@ fn checkpoint_reuses_existing_cached_data_without_recompiling() {
 
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
-    y.checkpoint(&mut compiler, &executor).unwrap();
+    y.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
 
-    y.checkpoint(&mut compiler, &executor).unwrap();
+    y.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
 
     let program = compiler.compile(&y).unwrap();
     let out = run_compiled_one(&executor, &program, &[]).unwrap();
@@ -112,7 +96,12 @@ fn checkpoint_gradient_runs_through_runtime() {
 
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
-    y.checkpoint(&mut compiler, &executor).unwrap();
+    y.checkpoint(
+        &mut compiler,
+        &executor,
+        &mut tenferro_cpu::CpuEngine::serial(),
+    )
+    .unwrap();
 
     let z = (&y * &y).unwrap();
     let grad = z.grad(&x).unwrap();
@@ -210,13 +199,11 @@ fn runtime_cache_controls_are_available() {
 
     let stats = executor.cache_stats().unwrap();
     assert_eq!(stats.extensions.entries, 0);
-    assert_eq!(stats.engines.entries, 0);
 
     executor.clear_caches().unwrap();
 
     let stats = executor.cache_stats().unwrap();
     assert_eq!(stats.extensions.entries, 0);
-    assert_eq!(stats.engines.entries, 0);
     assert_eq!(stats.prepared_plans.entries, 0);
 }
 

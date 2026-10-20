@@ -40,7 +40,7 @@ canonical session path.
 - `TypedTensorMaskSessionOpsExt` (bool receiver, generic `U` branch scalars,
   `broadcast_ternary_in_read` + `select_read` + `into_typed_result`).
 - Call-site rule: single-op wrap; group consecutive session-capable ops in
-  one session; helpers take `&mut dyn BackendSession`; already-in-session
+  one session; helpers take `&mut dyn Engine`; already-in-session
   sites call ops directly; closure `?`-chains get explicit result types.
 - Benches dropped the one-shot arms (API gone); single-session arms are the
   benches.

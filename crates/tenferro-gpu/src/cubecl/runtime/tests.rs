@@ -2,10 +2,11 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use super::{gpu_available, is_invalid_device_lookup, CudaRuntime, CudaRuntimeIdentity};
-use crate::cuda::CudaBackend;
+use crate::cuda::CudaEngine;
 use cudarc::driver::{result::DriverError, sys::CUresult};
 
 #[test]
+#[cfg(feature = "cuda")]
 fn selected_device_lookup_classifies_only_cuda_invalid_device() {
     assert!(is_invalid_device_lookup(DriverError(
         CUresult::CUDA_ERROR_INVALID_DEVICE
@@ -45,18 +46,15 @@ fn cuda_backend_identity_tracks_the_exact_runtime_when_hardware_is_available() {
         .next()
         .expect("CUDA device should be available")
         .id();
-    let first = CudaBackend::new(device).expect("CUDA backend should initialize");
-    let clone = first.clone();
-    let independent = CudaBackend::new(device).expect("second CUDA backend should initialize");
+    let first = CudaEngine::open(device).expect("CUDA engine should initialize");
+    let independent = CudaEngine::open(device).expect("second CUDA engine should initialize");
 
+    // Every opened engine is its own runtime instance; its identity is stable.
     let first_identity = first.runtime_identity();
-    let clone_identity = clone.runtime_identity();
+    let again = first.runtime_identity();
     let independent_identity = independent.runtime_identity();
-    assert_eq!(first_identity, clone_identity);
-    assert_eq!(
-        identity_hash(&first_identity),
-        identity_hash(&clone_identity)
-    );
+    assert_eq!(first_identity, again);
+    assert_eq!(identity_hash(&first_identity), identity_hash(&again));
     assert_ne!(first_identity, independent_identity);
 
     let runtime_clone = first.runtime().clone();

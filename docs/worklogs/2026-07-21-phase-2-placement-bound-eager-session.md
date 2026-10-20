@@ -5,7 +5,7 @@
 Implemented the phase-2 `EagerRuntime::on_cpu` bridge as a placement-selected
 CPU snapshot that retains the original eager runtime identity and enters one
 existing backend session for a borrowed closure. The bridge is limited to core
-`BackendSession` operations on concrete tensors; operation-family registries
+`Engine` operations on concrete tensors; operation-family registries
 remain outside this phase.
 
 ## Context reviewed

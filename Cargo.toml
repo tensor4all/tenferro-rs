@@ -77,7 +77,10 @@ syn = "2"
 # `tcontract` that pins an older strided exactly and would not resolve beside
 # the 0.6.0 requirement. `strided-fused 0.6.0` propagates NaN through the fused
 # DAG so ordered reductions can use it (TF5), and `strided-view` owns its view
-# metadata inline. `tcontract-exec` is named directly because tenferro now
+# metadata inline. strided-basic 0.6.2 adds `with_execution_pool`, through which a
+# CPU engine's strided operations enter the engine's pool only when they fan out
+# (#2206); tcontract 0.3.2 / tcontract-exec 0.3.1 / cpueinsum 0.3.2 / tlinalg 0.3.2
+# move their exact strided-basic pin to it. `tcontract-exec` is named directly because tenferro now
 # passes its `Exec` to tlinalg and cpueinsum. `tlinalg` and `tlinalg-blas` are
 # pinned exactly at 0.3.1 in `crates/tenferro-linalg`; that release's additive
 # `*_workspace` / `*_into` entries are what the faer lane routes every family
@@ -85,10 +88,10 @@ syn = "2"
 strided-view = "=0.6.0"
 strided-traits = "=0.6.0"
 strided-perm = { version = "=0.6.0", features = ["parallel"] }
-cpueinsum = "=0.3.1"
-cpueinsum-blas = "=0.3.1"
-tcontract-exec = "=0.3.0"
-strided-basic = { version = "=0.6.0", default-features = false }
+cpueinsum = "=0.3.2"
+cpueinsum-blas = "=0.3.2"
+tcontract-exec = "=0.3.1"
+strided-basic = { version = "=0.6.2", default-features = false }
 strided-fused = { version = "=0.6.0", default-features = false, features = ["parallel"] }
 strided-kernel = { version = "=0.6.0", features = ["parallel"] }
 libloading = "0.8"

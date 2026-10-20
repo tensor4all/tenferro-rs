@@ -3,7 +3,6 @@
 use num_complex::Complex64;
 use std::sync::Arc;
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
 use tenferro_linalg::EagerTensorLinalgExt;
 
 fn context() -> Arc<EagerRuntime> {
@@ -12,8 +11,7 @@ fn context() -> Arc<EagerRuntime> {
         .unwrap()
         .build()
         .unwrap();
-    EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::with_threads(1).unwrap(), &ad)
-        .unwrap()
+    EagerRuntime::with_ad_context(&ad).unwrap()
 }
 
 fn values(tensor: &EagerTensor, complex: bool) -> Vec<Complex64> {
@@ -75,17 +73,29 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
             };
             let a = input(av.clone());
             let b = input(bv.clone());
-            let direction = input(dv.clone()).detach();
+            let direction = input(dv.clone())
+                .detach(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap();
             let axes: Vec<_> = (0..shape.len()).collect();
-            let solution = a.solve(&b).unwrap();
+            let solution = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
             let loss = ctx
-                .with_eager_session(|s| s.reduce_sum(&solution, Some(&axes)))
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.reduce_sum(&solution, Some(&axes))
+                })
                 .unwrap();
             drop(solution); // LU/pivots and X must survive without user handles.
-            let ga = ctx.grad(&loss, &a).unwrap();
-            let gb = ctx.grad(&loss, &b).unwrap();
-            let haa = ctx.jvp(&ga, &a, &direction).unwrap();
-            let hba = ctx.jvp(&gb, &a, &direction).unwrap();
+            let ga = ctx
+                .grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &a)
+                .unwrap();
+            let gb = ctx
+                .grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &b)
+                .unwrap();
+            let haa = ctx
+                .jvp(&mut tenferro_cpu::CpuEngine::serial(), &ga, &a, &direction)
+                .unwrap();
+            let hba = ctx
+                .jvp(&mut tenferro_cpu::CpuEngine::serial(), &gb, &a, &direction)
+                .unwrap();
             let first_at = |sign: f64| {
                 let a = input(
                     av.iter()
@@ -94,13 +104,23 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
                         .collect(),
                 );
                 let b = input(bv.clone());
-                let solution = a.solve(&b).unwrap();
+                let solution = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
                 let loss = ctx
-                    .with_eager_session(|s| s.reduce_sum(&solution, Some(&axes)))
+                    .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                        s.reduce_sum(&solution, Some(&axes))
+                    })
                     .unwrap();
                 (
-                    values(&ctx.grad(&loss, &a).unwrap(), complex),
-                    values(&ctx.grad(&loss, &b).unwrap(), complex),
+                    values(
+                        &ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &a)
+                            .unwrap(),
+                        complex,
+                    ),
+                    values(
+                        &ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &b)
+                            .unwrap(),
+                        complex,
+                    ),
                 )
             };
             let plus = first_at(1.0);
@@ -116,19 +136,27 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
             // Real Hessian symmetry: reverse-over-reverse must match the JVP,
             // including conjugation for a real loss on complex inputs.
             let directional = ctx
-                .with_eager_session(|s| {
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                     let conjugated = s.conj(&direction)?;
                     let product = s.mul(&ga, &conjugated)?;
                     s.reduce_sum(&product, Some(&axes))
                 })
                 .unwrap();
             close(
-                &values(&ctx.grad(&directional, &a).unwrap(), complex),
+                &values(
+                    &ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &directional, &a)
+                        .unwrap(),
+                    complex,
+                ),
                 &values(&haa, complex),
                 2e-10,
             );
             close(
-                &values(&ctx.grad(&directional, &b).unwrap(), complex),
+                &values(
+                    &ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &directional, &b)
+                        .unwrap(),
+                    complex,
+                ),
                 &values(&hba, complex),
                 2e-10,
             );
@@ -150,14 +178,18 @@ fn solve_handles_single_and_multiple_tracked_inputs_and_no_grad() {
         };
         let a = make(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0], track_a);
         let b = make(vec![2, 1], vec![4.0_f64, 9.0], track_b);
-        let solution = a.solve(&b).unwrap();
+        let solution = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
         close(&values(&solution, false), &[2.0.into(), 3.0.into()], 1e-12);
         if track_a || track_b {
             let loss = ctx
-                .with_eager_session(|s| s.reduce_sum(&solution, Some(&[0, 1])))
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.reduce_sum(&solution, Some(&[0, 1]))
+                })
                 .unwrap();
             drop(solution);
-            let gradients = loss.backward().unwrap();
+            let gradients = loss
+                .backward(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap();
             assert_eq!(gradients.len(), usize::from(track_a) + usize::from(track_b));
             if track_a {
                 assert_eq!(
@@ -173,7 +205,10 @@ fn solve_handles_single_and_multiple_tracked_inputs_and_no_grad() {
             }
         }
         let _guard = ctx.no_grad();
-        assert!(!a.solve(&b).unwrap().tracks_grad());
+        assert!(!a
+            .solve(&mut tenferro_cpu::CpuEngine::serial(), &b)
+            .unwrap()
+            .tracks_grad());
     }
 }
 
@@ -191,7 +226,7 @@ fn solve_validates_both_operands_before_factorization() {
     )
     .unwrap();
     assert!(matches!(
-        a.solve(&bad_b),
+        a.solve(&mut tenferro_cpu::CpuEngine::serial(), &bad_b),
         Err(tenferro_ad::Error::TensorRuntime(
             tenferro_tensor::Error::Validation { .. }
         ))
@@ -203,7 +238,7 @@ fn solve_validates_both_operands_before_factorization() {
     ] {
         let invalid = EagerTensor::from_tensor_in(invalid, Arc::clone(&ctx)).unwrap();
         assert!(matches!(
-            a.solve(&invalid),
+            a.solve(&mut tenferro_cpu::CpuEngine::serial(), &invalid),
             Err(tenferro_ad::Error::TensorRuntime(
                 tenferro_tensor::Error::Validation { .. }
             ))
@@ -214,14 +249,19 @@ fn solve_validates_both_operands_before_factorization() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    assert_eq!(a.solve(&empty).unwrap().shape(), &[2, 0]);
+    assert_eq!(
+        a.solve(&mut tenferro_cpu::CpuEngine::serial(), &empty)
+            .unwrap()
+            .shape(),
+        &[2, 0]
+    );
     let b = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64; 2]).unwrap(),
         Arc::clone(&ctx),
     )
     .unwrap();
     assert!(
-        a.solve(&b).is_err(),
+        a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).is_err(),
         "singular valid-shape system must still fail"
     );
     let other = EagerTensor::from_tensor_in(
@@ -230,7 +270,7 @@ fn solve_validates_both_operands_before_factorization() {
     )
     .unwrap();
     assert!(matches!(
-        a.solve(&other),
+        a.solve(&mut tenferro_cpu::CpuEngine::serial(), &other),
         Err(tenferro_ad::Error::ContextMismatch { .. })
     ));
 }

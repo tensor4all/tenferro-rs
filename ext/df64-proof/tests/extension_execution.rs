@@ -5,11 +5,14 @@
 //! `ExtensionModule`, and the result comes back as another external payload.
 
 use tenferro_ad::EagerRuntime;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::extension::{apply_total, Df64Total};
 use tenferro_df64_proof::Df64;
-use tenferro_tensor::{AllocationGroup, BackendSessionHost, GroupError, Tensor, TensorRead};
+use tenferro_tensor::{AllocationGroup, GroupError, Tensor, TensorElementwise, TensorRead};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
+
+mod support;
+use support::run_on_fresh_engine;
 
 fn external(values: Vec<Df64>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
@@ -32,17 +35,18 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
 #[test]
 fn the_extension_operation_runs_through_the_registered_module() {
     let low = 2f64.powi(-80);
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).expect("cpu runtime");
-    let input = tenferro_ad::EagerTensor::from_tensor_in(
-        external(vec![Df64::from_f64(1.0), Df64::from_f64(low)]),
-        std::sync::Arc::clone(&runtime),
-    )
-    .expect("eager tensor");
+    let runtime = EagerRuntime::new().expect("cpu runtime");
+    let mut engine = CpuEngine::serial();
+    let input = runtime
+        .with_eager_session(&mut engine, |session| {
+            session.constant_from(external(vec![Df64::from_f64(1.0), Df64::from_f64(low)]))
+        })
+        .expect("eager tensor");
 
-    let outputs = apply_total(&input).expect("extension execution");
+    let outputs = apply_total(&mut engine, &input).expect("extension execution");
     assert_eq!(outputs.len(), 1);
 
-    let value = outputs[0].to_tensor().expect("output tensor");
+    let value = outputs[0].to_tensor(&mut engine).expect("output tensor");
     let total = payload(&value);
     assert_eq!(total.len(), 1);
     assert_eq!(total[0], Df64 { hi: 1.0, lo: low });
@@ -50,30 +54,28 @@ fn the_extension_operation_runs_through_the_registered_module() {
 
 #[test]
 fn the_registered_operation_rejects_a_preset_input() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).expect("cpu runtime");
+    let runtime = EagerRuntime::new().expect("cpu runtime");
+    let mut engine = CpuEngine::serial();
     let ordinary = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("shape matches");
-    let input = tenferro_ad::EagerTensor::from_tensor_in(ordinary, std::sync::Arc::clone(&runtime))
+    let input = runtime
+        .with_eager_session(&mut engine, |session| session.constant_from(ordinary))
         .expect("eager tensor");
 
     // The extension declares only the external scalar, so a preset input fails
     // explicitly instead of being coerced.
-    assert!(apply_total(&input).is_err());
+    assert!(apply_total(&mut engine, &input).is_err());
 }
 
 #[test]
-fn ordinary_work_shares_the_session_with_the_extension() {
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).expect("cpu runtime");
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|session| {
-            let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("shape matches");
-            let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).expect("shape matches");
-            let sum = session
-                .add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-                .expect("ordinary addition");
-            assert_eq!(sum.as_slice::<f64>().expect("f64 slice"), &[4.0, 6.0]);
-        })
-        .unwrap();
+fn ordinary_work_shares_the_engine_with_the_extension() {
+    let runtime = EagerRuntime::new().expect("cpu runtime");
+    let mut backend = CpuEngine::serial();
+    let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("shape matches");
+    let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).expect("shape matches");
+    let sum = backend
+        .add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        .expect("ordinary addition");
+    assert_eq!(sum.as_slice::<f64>().expect("f64 slice"), &[4.0, 6.0]);
     assert_eq!(
         <Df64Total as tenferro_ad::extension::ExtensionOp>::input_count(&Df64Total),
         1
@@ -84,17 +86,18 @@ fn ordinary_work_shares_the_session_with_the_extension() {
 #[test]
 fn the_runtime_retains_and_returns_a_caller_owned_payload() {
     let low = 2f64.powi(-80);
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).expect("cpu runtime");
+    let runtime = EagerRuntime::new().expect("cpu runtime");
+    let mut engine = CpuEngine::serial();
     let original = Df64::from_f64(1.0) + Df64::from_f64(low);
-    let leaf = tenferro_ad::EagerTensor::from_tensor_in(
-        external(vec![original, Df64::from_f64(3.0)]),
-        std::sync::Arc::clone(&runtime),
-    )
-    .expect("eager tensor");
+    let leaf = runtime
+        .with_eager_session(&mut engine, |session| {
+            session.constant_from(external(vec![original, Df64::from_f64(3.0)]))
+        })
+        .expect("eager tensor");
 
     // A caller-owned payload keeps every bit while the runtime retains it, so the
     // low-order component survives the round trip unchanged.
-    let value = leaf.to_tensor().expect("round trip");
+    let value = leaf.to_tensor(&mut engine).expect("round trip");
     assert_eq!(payload(&value), vec![original, Df64::from_f64(3.0)]);
     assert!(value.external_payload().is_some());
 }
@@ -116,7 +119,7 @@ fn the_module_installs_and_plans_the_declared_scalar() {
     use tenferro_runtime::{GraphCompiler, Runtime, TraceContext};
     use tenferro_tensor::DType;
 
-    let backend = CpuBackend::new();
+    let backend = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
@@ -159,9 +162,7 @@ fn the_module_installs_and_plans_the_declared_scalar() {
         .compile_traced_graph(&graph)
         .expect("compiled program");
     let values = external(vec![Df64::from_f64(1.0), Df64::from_f64(2.0)]);
-    let results = runtime
-        .run_compiled(&program, &[&values])
-        .expect("prepared execution");
+    let results = run_on_fresh_engine(&runtime, &program, &[&values]).expect("prepared execution");
     assert_eq!(results.len(), 1);
     assert_eq!(payload(&results[0]), vec![Df64::from_f64(3.0)]);
 }

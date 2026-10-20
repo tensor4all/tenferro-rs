@@ -31,7 +31,7 @@ CPU execution, and backend-parametric concrete tensor kernels.
 
 ### Backend Surface
 
-`TensorBackend` / `BackendSession` currently cover:
+`TensorBackend` / `Engine` currently cover:
 
 - Elementwise: add, multiply, negate, conjugate, divide, abs, sign, maximum,
   minimum, compare, select, clamp.

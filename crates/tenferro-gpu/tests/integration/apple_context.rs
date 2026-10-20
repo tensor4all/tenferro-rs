@@ -1,7 +1,7 @@
 #![cfg(all(feature = "webgpu", target_os = "macos"))]
 
 use tenferro_gpu::{apple::AppleContext, apple::AppleTransferStats};
-use tenferro_tensor::{BackendSessionHost, HostAccessError, Tensor, TensorRead, TypedTensor};
+use tenferro_tensor::{HostAccessError, Tensor, TensorDot, TensorRead, TypedTensor};
 
 fn apple_context() -> Option<AppleContext> {
     match AppleContext::new() {
@@ -94,7 +94,7 @@ fn cpu_domain_allocator_produces_write_only_managed_outputs_without_transfers() 
 
 #[test]
 fn metal_output_stays_in_the_context_domain_without_host_transfers() {
-    let Some(context) = apple_context() else {
+    let Some(mut context) = apple_context() else {
         return;
     };
     let lhs = Tensor::from_typed::<f32>(
@@ -112,10 +112,10 @@ fn metal_output_stays_in_the_context_domain_without_host_transfers() {
         [2.0]
     );
     let before = context.transfer_stats();
-    let mut metal = context.metal_backend().clone();
-    let output = metal
-        .with_backend_session(|session| {
-            session.dot_general_read(
+    let output = {
+        let (_cpu, metal) = context.parts();
+        let output = metal
+            .dot_general_read(
                 TensorRead::from_tensor(&lhs),
                 TensorRead::from_tensor(&rhs),
                 &tenferro_tensor::DotGeneralConfig {
@@ -125,10 +125,10 @@ fn metal_output_stays_in_the_context_domain_without_host_transfers() {
                     rhs_batch_dims: [].as_slice().into(),
                 },
             )
-        })
-        .unwrap()
-        .unwrap();
-    metal.synchronize().unwrap();
+            .unwrap();
+        metal.synchronize().unwrap();
+        output
+    };
     assert_eq!(
         lhs_typed.with_host_read(|data| data.to_vec()).unwrap(),
         [2.0]

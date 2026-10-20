@@ -69,14 +69,14 @@ website:
           - guides/autodiff.md
           - guides/complex-ad.md
           - guides/devices-and-gpu.md
-          - guides/cuda-sessions-and-transfers.md
+          - guides/engines-and-transfers.md
           - guides/xla.md
           - guides/memory-order.md
           - text: "CPU Execution and NUMA"
             href: guides/cpu-execution.md
           - text: "Parallelism and Caching"
             href: guides/parallelism-and-caching.md
-          - guides/session-entry-cost.md
+          - guides/dispatch-and-engine-cost.md
           - guides/troubleshooting.md
       - section: "API"
         contents:
@@ -109,7 +109,7 @@ website:
               - design/contraction-pipeline.md
               - design/dot-general-overhead.md
               - design/dynamic-symbolic-shapes.md
-              - design/exec-session.md
+              - design/execution-engine-ownership.md
               - design/gpu-backend-design.md
               - design/xla-backend.md
               - design/inplace-indexing.md

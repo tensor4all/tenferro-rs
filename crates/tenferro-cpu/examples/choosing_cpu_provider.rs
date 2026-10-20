@@ -1,14 +1,15 @@
-use tenferro_cpu::{CpuBackend, CpuId, CpuSet};
+use tenferro_cpu::{thread_pool_builder, CpuEngine};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // The CPU backend is chosen at compile time: `native` (the default) or
-    // `blas`. Both expose the same tenferro-owned placement API.
-    let default_backend = CpuBackend::new();
-    let pinned = CpuBackend::builder()
-        .cpus(CpuSet::new([CpuId::new(0)])?)
-        .threads(1)?
-        .build()?;
-    assert!(default_backend.num_threads() >= 1);
-    assert_eq!(pinned.num_threads(), 1);
+    // The caller builds the pool (and pins its workers if it wants to); the
+    // engine computes on it. A serial engine has no pool at all.
+    let serial = CpuEngine::serial();
+    let pooled = CpuEngine::new(thread_pool_builder().num_threads(2).build()?);
+    println!(
+        "provider={} serial_threads={} pooled_threads={}",
+        tenferro_cpu::cpu_provider_id(),
+        serial.num_threads(),
+        pooled.num_threads()
+    );
     Ok(())
 }

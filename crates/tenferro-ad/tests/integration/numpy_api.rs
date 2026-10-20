@@ -3,14 +3,13 @@ use std::sync::Arc;
 
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
 use tenferro_ops::{ext_op::ExtensionOp, std_tensor_op::StdTensorOp, SymDim};
 use tenferro_runtime::{
     CompareDir, DType, Error as RuntimeError, ErrorPhase, GraphCompiler, Tensor,
     TensorSessionOpsExt, TracedTensor, TypedTensor, TypedTensorMaskSessionOpsExt,
     TypedTensorSessionOpsExt,
 };
-use tenferro_tensor::{BackendSessionHost, ValidationError};
+use tenferro_tensor::ValidationError;
 
 use crate::support::{cpu_runtime, run_compiled_one};
 
@@ -219,12 +218,14 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 
     let out = lhs
         .runtime()
-        .with_eager_session(|s| s.add(&lhs, &rhs))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.add(&lhs, &rhs)
+        })
         .unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
-        out.to_tensor()
+        out.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
             .unwrap()
             .into_vec_col_major::<f64>()
             .unwrap()
@@ -246,7 +247,7 @@ fn eager_session_methods_cover_core_elementwise_surface() {
         ctx.clone(),
     )
     .unwrap();
-    ctx.with_eager_session(|session| {
+    ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
         let cond = session.compare(&x, &y, CompareDir::Gt)?;
         let _ = session.sub(&x, &y)?;
         let _ = session.mul(&x, &y)?;
@@ -276,7 +277,7 @@ fn eager_session_methods_cover_core_elementwise_surface() {
 
 #[test]
 fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         ctx.clone(),
@@ -284,12 +285,14 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
     .unwrap();
 
     let converted = ctx
-        .with_eager_session(|s| s.convert(&x, DType::C64))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.convert(&x, DType::C64)
+        })
         .unwrap();
     assert_eq!(converted.dtype(), DType::C64);
     assert_eq!(
         converted
-            .to_tensor()
+            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
             .unwrap()
             .as_slice::<Complex64>()
             .unwrap(),
@@ -297,17 +300,25 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
     );
 
     let convert_err = ctx
-        .with_eager_session(|s| s.convert(&x, DType::I32))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.convert(&x, DType::I32)
+        })
         .unwrap_err();
     assert!(convert_err
         .to_string()
         .contains("unsupported dtype conversion"));
 
-    let casted = ctx.with_eager_session(|s| s.cast(&x, DType::I32)).unwrap();
+    let casted = ctx
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.cast(&x, DType::I32)
+        })
+        .unwrap();
     assert_eq!(casted.value().unwrap().as_slice::<i32>().unwrap(), &[1, 2]);
 
     let negated = ctx
-        .with_eager_session(|s| s.apply_standard_op(StdTensorOp::Neg, &[&x]))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.apply_standard_op(StdTensorOp::Neg, &[&x])
+        })
         .unwrap();
     assert_eq!(
         negated.value().unwrap().as_slice::<f64>().unwrap(),
@@ -315,7 +326,7 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
     );
 
     let extension_err = ctx
-        .with_eager_session(|s| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             s.apply_standard_op(StdTensorOp::Extension(Arc::new(TestExtensionOp)), &[&x])
         })
         .err()
@@ -340,7 +351,9 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
     )
     .unwrap();
     let product = ctx
-        .with_eager_session(|session| session.matmul(&a, &b))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.matmul(&a, &b)
+        })
         .unwrap();
     assert_eq!(product.shape(), &[2, 2]);
     assert_eq!(
@@ -348,13 +361,17 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
         &[22.0, 28.0, 49.0, 64.0]
     );
 
-    let other_ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let other_ctx = EagerRuntime::new().unwrap();
     let other = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
         other_ctx,
     )
     .unwrap();
-    let err = ctx.with_eager_session(|s| s.add(&x, &other)).unwrap_err();
+    let err = ctx
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.add(&x, &other)
+        })
+        .unwrap_err();
     assert!(matches!(err, tenferro_ad::Error::ContextMismatch { .. }));
 }
 
@@ -373,7 +390,7 @@ fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
     .unwrap();
 
     let (cond, selected) = ctx
-        .with_eager_session(|session| {
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let cond = session.compare(&x, &y, CompareDir::Gt)?;
             let selected = session.where_select(&cond, &x, &y)?;
             Ok::<_, tenferro_ad::Error>((cond, selected))
@@ -387,7 +404,7 @@ fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
     );
     assert_eq!(
         selected
-            .to_tensor()
+            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
             .unwrap()
             .into_vec_col_major::<f64>()
             .unwrap()
@@ -398,14 +415,15 @@ fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
 
 #[test]
 fn tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let lhs = Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
 
-    let out = backend
-        .with_backend_session(|session| lhs.add(&rhs, session))
-        .unwrap()
-        .unwrap();
+    let out = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        lhs.add(&rhs, session)
+    }
+    .unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
@@ -416,54 +434,51 @@ fn tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
 
 #[test]
 fn tensor_extension_trait_exposes_initial_elementwise_methods() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
     let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
 
     // The whole elementwise surface runs in one backend session.
-    backend
-        .with_backend_session(|session| -> tenferro_tensor::Result<Tensor> {
-            let cond = x.compare(&y, CompareDir::Gt, session)?;
-            let _ = x.sub(&y, session)?;
-            let _ = x.mul(&y, session)?;
-            let _ = x.div(&y, session)?;
-            let _ = x.pow(&y, session)?;
-            let _ = x.maximum(&y, session)?;
-            let _ = x.minimum(&y, session)?;
-            let _ = cond.where_select(&x, &y, session)?;
-            let _ = x.clamp(&y, &x, session)?;
-            let _ = x.neg(session)?;
-            let _ = x.abs(session)?;
-            let _ = x.sign(session)?;
-            let _ = x.conj(session)?;
-            let _ = x.exp(session)?;
-            let _ = x.log(session)?;
-            let _ = x.sin(session)?;
-            let _ = x.cos(session)?;
-            let _ = x.tanh(session)?;
-            let _ = x.sqrt(session)?;
-            let _ = x.rsqrt(session)?;
-            let _ = x.expm1(session)?;
-            let _ = x.log1p(session)?;
-            Ok(cond)
-        })
-        .unwrap()
-        .unwrap();
+    (|session: &mut dyn tenferro_tensor::Engine| -> tenferro_tensor::Result<Tensor> {
+        let cond = x.compare(&y, CompareDir::Gt, session)?;
+        let _ = x.sub(&y, session)?;
+        let _ = x.mul(&y, session)?;
+        let _ = x.div(&y, session)?;
+        let _ = x.pow(&y, session)?;
+        let _ = x.maximum(&y, session)?;
+        let _ = x.minimum(&y, session)?;
+        let _ = cond.where_select(&x, &y, session)?;
+        let _ = x.clamp(&y, &x, session)?;
+        let _ = x.neg(session)?;
+        let _ = x.abs(session)?;
+        let _ = x.sign(session)?;
+        let _ = x.conj(session)?;
+        let _ = x.exp(session)?;
+        let _ = x.log(session)?;
+        let _ = x.sin(session)?;
+        let _ = x.cos(session)?;
+        let _ = x.tanh(session)?;
+        let _ = x.sqrt(session)?;
+        let _ = x.rsqrt(session)?;
+        let _ = x.expm1(session)?;
+        let _ = x.log1p(session)?;
+        Ok(cond)
+    })(&mut backend)
+    .unwrap();
 }
 
 #[test]
 fn tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
     let y = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
 
-    let (cond, selected) = backend
-        .with_backend_session(|session| -> tenferro_tensor::Result<(Tensor, Tensor)> {
+    let (cond, selected) =
+        (|session: &mut dyn tenferro_tensor::Engine| -> tenferro_tensor::Result<(Tensor, Tensor)> {
             let cond = x.compare(&y, CompareDir::Gt, session)?;
             let selected = cond.where_select(&x, &y, session)?;
             Ok((cond, selected))
-        })
-        .unwrap()
+        })(&mut backend)
         .unwrap();
 
     assert_eq!(cond.dtype(), DType::Bool);
@@ -476,15 +491,16 @@ fn tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
 
 #[test]
 fn typed_tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 1], vec![1.0, 2.0, 3.0]).unwrap();
     let rhs =
         TypedTensor::<f64>::from_vec_col_major(vec![1, 4], vec![10.0, 20.0, 30.0, 40.0]).unwrap();
 
-    let out = backend
-        .with_backend_session(|session| lhs.add(&rhs, session))
-        .unwrap()
-        .unwrap();
+    let out = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        lhs.add(&rhs, session)
+    }
+    .unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
@@ -495,55 +511,51 @@ fn typed_tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
 
 #[test]
 fn typed_tensor_extension_trait_exposes_initial_elementwise_methods() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
     let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
 
     // The whole elementwise surface runs in one backend session.
-    backend
-        .with_backend_session(|session| -> tenferro_tensor::Result<TypedTensor<bool>> {
-            let cond = x.compare(&y, CompareDir::Gt, session)?;
-            let _ = x.sub(&y, session)?;
-            let _ = x.mul(&y, session)?;
-            let _ = x.div(&y, session)?;
-            let _ = x.pow(&y, session)?;
-            let _ = x.maximum(&y, session)?;
-            let _ = x.minimum(&y, session)?;
-            let _ = cond.where_select(&x, &y, session)?;
-            let _ = x.clamp(&y, &x, session)?;
-            let _ = x.neg(session)?;
-            let _ = x.abs(session)?;
-            let _ = x.sign(session)?;
-            let _ = x.conj(session)?;
-            let _ = x.exp(session)?;
-            let _ = x.log(session)?;
-            let _ = x.sin(session)?;
-            let _ = x.cos(session)?;
-            let _ = x.tanh(session)?;
-            let _ = x.sqrt(session)?;
-            let _ = x.rsqrt(session)?;
-            let _ = x.expm1(session)?;
-            let _ = x.log1p(session)?;
-            Ok(cond)
-        })
-        .unwrap()
-        .unwrap();
+    (|session: &mut dyn tenferro_tensor::Engine| -> tenferro_tensor::Result<TypedTensor<bool>> {
+        let cond = x.compare(&y, CompareDir::Gt, session)?;
+        let _ = x.sub(&y, session)?;
+        let _ = x.mul(&y, session)?;
+        let _ = x.div(&y, session)?;
+        let _ = x.pow(&y, session)?;
+        let _ = x.maximum(&y, session)?;
+        let _ = x.minimum(&y, session)?;
+        let _ = cond.where_select(&x, &y, session)?;
+        let _ = x.clamp(&y, &x, session)?;
+        let _ = x.neg(session)?;
+        let _ = x.abs(session)?;
+        let _ = x.sign(session)?;
+        let _ = x.conj(session)?;
+        let _ = x.exp(session)?;
+        let _ = x.log(session)?;
+        let _ = x.sin(session)?;
+        let _ = x.cos(session)?;
+        let _ = x.tanh(session)?;
+        let _ = x.sqrt(session)?;
+        let _ = x.rsqrt(session)?;
+        let _ = x.expm1(session)?;
+        let _ = x.log1p(session)?;
+        Ok(cond)
+    })(&mut backend)
+    .unwrap();
 }
 
 #[test]
 fn typed_tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
     let y = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
 
-    let (cond, selected) = backend
-        .with_backend_session(|session| {
-            let cond: TypedTensor<bool> = x.compare(&y, CompareDir::Gt, session)?;
-            let selected = cond.where_select(&x, &y, session)?;
-            Ok::<_, tenferro_tensor::Error>((cond, selected))
-        })
-        .unwrap()
-        .unwrap();
+    let (cond, selected) = (|session: &mut dyn tenferro_tensor::Engine| {
+        let cond: TypedTensor<bool> = x.compare(&y, CompareDir::Gt, session)?;
+        let selected = cond.where_select(&x, &y, session)?;
+        Ok::<_, tenferro_tensor::Error>((cond, selected))
+    })(&mut backend)
+    .unwrap();
 
     assert_eq!(cond.host_data().unwrap(), &[true, false]);
     assert_eq!(selected.into_vec_col_major().unwrap().1, vec![2.0, 8.0]);

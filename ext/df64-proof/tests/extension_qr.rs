@@ -3,10 +3,13 @@
 //! The factorization runs in the external scalar, so its reconstruction and
 //! orthogonality are limited by that precision rather than by `f64`.
 
+mod support;
+
 use std::sync::Arc;
 
+use support::run_on_fresh_engine;
 use tenferro_ad::extension::ExtensionOp;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::extension::{Df64Qr, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
@@ -35,7 +38,7 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
 /// Factor one column-major matrix through the traced, compiled, and executed path,
 /// which is the path a consumer uses.
 fn factor(values: Vec<Df64>, rows: usize, columns: usize) -> (Vec<Df64>, Vec<Df64>) {
-    let backend = CpuBackend::new();
+    let backend = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
@@ -66,9 +69,7 @@ fn factor(values: Vec<Df64>, rows: usize, columns: usize) -> (Vec<Df64>, Vec<Df6
         .compile_many(&[&outputs[0], &outputs[1]])
         .expect("compiled QR");
     let input = external(values, vec![rows, columns]);
-    let results = runtime
-        .run_compiled(&program, &[&input])
-        .expect("executed QR");
+    let results = run_on_fresh_engine(&runtime, &program, &[&input]).expect("executed QR");
     assert_eq!(results.len(), 2);
     let q = payload(&results[0]);
     let r = payload(&results[1]);
@@ -198,7 +199,7 @@ fn the_adjoint_of_the_factorization_matches_the_analytic_gradient() {
     let r = vec![Df64::from_f64(5.0)];
     let r_bar = vec![Df64::from_f64(10.0)];
 
-    let backend = CpuBackend::new();
+    let backend = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
@@ -234,9 +235,7 @@ fn the_adjoint_of_the_factorization_matches_the_analytic_gradient() {
     .expect("traced adjoint");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&adjoint[0]).expect("compiled adjoint");
-    let results = runtime
-        .run_compiled(&program, &[])
-        .expect("executed adjoint");
+    let results = run_on_fresh_engine(&runtime, &program, &[]).expect("executed adjoint");
     let gradient = payload(&results[0]);
     assert_eq!(gradient.len(), 2);
     assert!(

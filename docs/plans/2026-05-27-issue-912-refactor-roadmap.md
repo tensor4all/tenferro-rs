@@ -677,7 +677,7 @@ git add tenferro-runtime
 git commit -m "refactor: key runtime dispatch by primitive op catalog"
 ```
 
-## Task 6: Rename `TensorExec` To `BackendSession`
+## Task 6: Rename `TensorExec` To `Engine`
 
 **Files:**
 - Modify: `tenferro-tensor/src/backend.rs`
@@ -707,7 +707,7 @@ in the repository.
 
 In `tenferro-tensor/src/backend.rs`:
 
-- Rename `TensorExec` to `BackendSession`.
+- Rename `TensorExec` to `Engine`.
 - Rename `BackendExecAdapter` to `BackendSessionAdapter`.
 - Rename `default_exec_session` to `default_backend_session`.
 - Rename `with_exec_session` to `with_backend_session`.
@@ -727,7 +727,7 @@ backend.with_backend_session(|session| session.add(&lhs, &rhs))
 
 ```rust
 type BackendDispatchFn =
-    fn(&mut dyn BackendSession, &[Option<Tensor>], &ExecInstruction) -> Result<Tensor>;
+    fn(&mut dyn Engine, &[Option<Tensor>], &ExecInstruction) -> Result<Tensor>;
 ```
 
 **Step 4: Run targeted checks**
@@ -835,7 +835,7 @@ fn execute_linalg<B: LinalgBackend>(...) -> tenferro_tensor::Result<Vec<Tensor>>
 
 **Step 4: Delete linalg methods from tensor backend/session traits**
 
-Remove linalg methods from `BackendSession` and `TensorBackend` in
+Remove linalg methods from `Engine` and `TensorBackend` in
 `tenferro-tensor/src/backend.rs`.
 
 Remove linalg delegations and macros from `tenferro-tensor/src/cpu/exec_session.rs`.

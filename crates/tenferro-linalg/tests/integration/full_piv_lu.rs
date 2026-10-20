@@ -1,10 +1,9 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TypedTensor};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorDot, TensorStructural, TypedTensor};
 
 use super::support;
-use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::TensorRead;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -27,21 +26,18 @@ fn c32_data(tensor: &Tensor) -> &[Complex32] {
     tensor.as_slice::<Complex32>().expect("expected c32 tensor")
 }
 
-fn matmul(backend: &mut CpuBackend, lhs: &Tensor, rhs: &Tensor) -> Tensor {
+fn matmul(backend: &mut CpuEngine, lhs: &Tensor, rhs: &Tensor) -> Tensor {
     backend
-        .with_backend_session(|__s| {
-            __s.dot_general_read(
-                TensorRead::from_tensor(lhs),
-                TensorRead::from_tensor(rhs),
-                &DotGeneralConfig {
-                    lhs_contracting_dims: [1].as_slice().into(),
-                    rhs_contracting_dims: [0].as_slice().into(),
-                    lhs_batch_dims: [].as_slice().into(),
-                    rhs_batch_dims: [].as_slice().into(),
-                },
-            )
-        })
-        .unwrap()
+        .dot_general_read(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            &DotGeneralConfig {
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
+            },
+        )
         .unwrap()
 }
 
@@ -58,15 +54,14 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 #[test]
 fn full_piv_lu_reconstructs_permuted_matrix() {
     let a = f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let outputs =
         support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap();
     let [p, l, u, q, parity]: [Tensor; 5] = outputs.try_into().unwrap();
     let pa = matmul(&mut backend, &p, &a);
     let qt = backend
-        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&q), &[1, 0]))
-        .unwrap()
+        .transpose_read(TensorRead::from_tensor(&q), &[1, 0])
         .unwrap();
     let paqt = matmul(&mut backend, &pa, &qt);
     let lu = matmul(&mut backend, &l, &u);
@@ -93,7 +88,7 @@ fn full_piv_lu_complex_parity_uses_real_counterpart_dtype() {
         )
         .unwrap(),
     );
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let outputs =
         support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap();
@@ -111,7 +106,7 @@ fn full_piv_lu_complex_parity_uses_real_counterpart_dtype() {
 #[test]
 fn full_piv_lu_uses_column_pivot_when_max_pivot_is_off_column() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 100.0, 3.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let outputs =
         support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap();
@@ -126,7 +121,7 @@ fn full_piv_lu_uses_column_pivot_when_max_pivot_is_off_column() {
 fn full_piv_lu_blas_rejects_singular_matrix() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
     // This test only compiles in a `blas` build, where the compiled provider is LAPACK.
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let err =
         support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap_err();
@@ -145,7 +140,7 @@ fn full_piv_lu_blas_rejects_singular_matrix() {
 fn full_piv_lu_solve_returns_expected_solution() {
     let a = f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]);
     let b = f64_tensor(vec![2, 1], vec![-1.0, 5.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let x = support::with_cpu_linalg(&mut backend, |backend| {
         backend.full_piv_lu_solve(&a, &b, false)
@@ -160,7 +155,7 @@ fn full_piv_lu_solve_returns_expected_solution() {
 fn full_piv_lu_solve_accepts_vector_rhs() {
     let a = f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]);
     let b = f64_tensor(vec![2], vec![-1.0, 5.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let x = support::with_cpu_linalg(&mut backend, |backend| {
         backend.full_piv_lu_solve(&a, &b, false)
@@ -175,7 +170,7 @@ fn full_piv_lu_solve_accepts_vector_rhs() {
 fn full_piv_lu_solve_accepts_small_and_large_scaled_f64_systems() {
     let base_a = [3.0, 0.0, 0.0, 2.0];
     let base_b = [6.0, 4.0];
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     for scale in [1.0e-20, 1.0e20] {
         let a = f64_tensor(
@@ -196,7 +191,7 @@ fn full_piv_lu_solve_accepts_small_and_large_scaled_f64_systems() {
 
 #[test]
 fn full_piv_lu_solve_accepts_small_and_large_scaled_f32_and_complex_systems() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     for scale in [1.0e-10_f32, 1.0e10_f32] {
         let a = f32_tensor(vec![2, 2], vec![3.0 * scale, 0.0, 0.0, 2.0 * scale]);
         let b = f32_tensor(vec![2, 1], vec![6.0 * scale, 4.0 * scale]);
@@ -278,7 +273,7 @@ fn full_piv_lu_solve_accepts_small_and_large_scaled_f32_and_complex_systems() {
 fn full_piv_lu_solve_rejects_exactly_singular_system() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
     let b = f64_tensor(vec![2, 1], vec![1.0, 2.0]);
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let error = support::with_cpu_linalg(&mut backend, |backend| {
         backend.full_piv_lu_solve(&a, &b, false)

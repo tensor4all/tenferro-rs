@@ -15,7 +15,8 @@ use tenferro_runtime::ad_support::{
 };
 use tenferro_runtime::program::{FrozenProgram, ProgramValue, ProgramValueMetadata, SemanticOpRef};
 use tenferro_runtime::{
-    CompiledGraph, Error, ErrorPhase, GraphCompiler, Result, Runtime, Tensor, TracedTensor,
+    CompiledGraph, Error, ErrorPhase, ExecutionEngine, GraphCompiler, Result, Runtime, Tensor,
+    TracedTensor,
 };
 
 use crate::semantic_extension::{SemanticAdError, SemanticExtensionRuleSet};
@@ -225,19 +226,21 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
     ///
     /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
     ///     let mut compiler = GraphCompiler::new();
     ///     let program = compiler.compile(tensor).unwrap();
-    ///     let backend = CpuBackend::new();
+    ///     let mut engine = tenferro_cpu::CpuEngine::serial();
     ///     let mut builder = Runtime::builder();
     ///     builder
-    ///         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///         .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
     ///         .unwrap();
     ///     let runtime = builder.build().unwrap();
-    ///     runtime.run_compiled(&program, &[]).unwrap().pop().unwrap()
+    ///     let target = tenferro_runtime::ExecutionEngine::target(&engine);
+    ///     let prepared = runtime.prepare(&program, &[], &[target]).unwrap();
+    ///     let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[]).unwrap();
+    ///     outputs.pop().unwrap().into_owned().unwrap()
     /// }
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
@@ -299,11 +302,10 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
     ///
     /// let mut compiler = GraphCompiler::new();
-    /// let backend = CpuBackend::new();
+    /// let backend = tenferro_cpu::CpuEngine::serial();
     /// let mut builder = Runtime::builder();
     /// builder
     ///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
@@ -312,7 +314,8 @@ pub trait TracedTensorAdExt {
     /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
     /// let mut y = (&x * &x).unwrap();
     ///
-    /// y.checkpoint(&mut compiler, &runtime).unwrap();
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// y.checkpoint(&mut compiler, &runtime, &mut engine).unwrap();
     ///
     /// let value = y.attached_value().unwrap();
     /// let materialized = value.tensor_read().unwrap().tensor_view().duplicate().unwrap();
@@ -324,7 +327,12 @@ pub trait TracedTensorAdExt {
     /// Returns [`tenferro_runtime::Error::Validation`] when checkpoint metadata
     /// is invalid, [`Error::RuntimeState`] when graph metadata or runtime
     /// state is unavailable, or a typed backend error from evaluation.
-    fn checkpoint(&mut self, compiler: &mut GraphCompiler, runtime: &Runtime) -> Result<()>;
+    fn checkpoint(
+        &mut self,
+        compiler: &mut GraphCompiler,
+        runtime: &Runtime,
+        engine: &mut dyn ExecutionEngine,
+    ) -> Result<()>;
 
     /// Forward-mode Jacobian-vector product.
     ///
@@ -332,19 +340,21 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
     ///
     /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
     ///     let mut compiler = GraphCompiler::new();
     ///     let program = compiler.compile(tensor).unwrap();
-    ///     let backend = CpuBackend::new();
+    ///     let mut engine = tenferro_cpu::CpuEngine::serial();
     ///     let mut builder = Runtime::builder();
     ///     builder
-    ///         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///         .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
     ///         .unwrap();
     ///     let runtime = builder.build().unwrap();
-    ///     runtime.run_compiled(&program, &[]).unwrap().pop().unwrap()
+    ///     let target = tenferro_runtime::ExecutionEngine::target(&engine);
+    ///     let prepared = runtime.prepare(&program, &[], &[target]).unwrap();
+    ///     let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[]).unwrap();
+    ///     outputs.pop().unwrap().into_owned().unwrap()
     /// }
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
@@ -416,19 +426,21 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
     ///
     /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
     ///     let mut compiler = GraphCompiler::new();
     ///     let program = compiler.compile(tensor).unwrap();
-    ///     let backend = CpuBackend::new();
+    ///     let mut engine = tenferro_cpu::CpuEngine::serial();
     ///     let mut builder = Runtime::builder();
     ///     builder
-    ///         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///         .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
     ///         .unwrap();
     ///     let runtime = builder.build().unwrap();
-    ///     runtime.run_compiled(&program, &[]).unwrap().pop().unwrap()
+    ///     let target = tenferro_runtime::ExecutionEngine::target(&engine);
+    ///     let prepared = runtime.prepare(&program, &[], &[target]).unwrap();
+    ///     let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[]).unwrap();
+    ///     outputs.pop().unwrap().into_owned().unwrap()
     /// }
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
@@ -510,13 +522,21 @@ impl TracedTensorAdExt for TracedTensor {
             .map(|mut results| results.pop().flatten())
     }
 
-    fn checkpoint(&mut self, compiler: &mut GraphCompiler, runtime: &Runtime) -> Result<()> {
+    fn checkpoint(
+        &mut self,
+        compiler: &mut GraphCompiler,
+        runtime: &Runtime,
+        engine: &mut dyn ExecutionEngine,
+    ) -> Result<()> {
         let data = if let Some(data) = self.attached_value() {
             Arc::clone(data)
         } else {
             let program = compiler.compile(self)?;
+            let target = engine.target();
+            let prepared = runtime.prepare(&program, &[], std::slice::from_ref(&target))?;
+            let outputs = crate::eager::run_prepared_on(runtime, engine, &prepared, &[])?;
             Arc::new(RetainedValue::from_tensor(single_runtime_output(
-                runtime.run_compiled(&program, &[])?,
+                outputs,
                 "TracedTensorAdExt::checkpoint",
             )?))
         };

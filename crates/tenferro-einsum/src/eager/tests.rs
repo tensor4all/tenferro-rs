@@ -1,9 +1,9 @@
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_tensor::{
-    BackendSession, BackendSessionHost, CompareDir, DotGeneralConfig, ElementwiseReadOp, Error,
-    GatherConfig, PadConfig, Result, ScatterConfig, SessionCachedDot, SliceConfig, Tensor,
-    TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
-    TensorIndexing, TensorRead, TensorReduction, TensorStructural, TensorView, TensorWrite,
+    CompareDir, DotGeneralConfig, ElementwiseReadOp, Engine, Error, GatherConfig, PadConfig,
+    Result, ScatterConfig, SessionCachedDot, SliceConfig, Tensor, TensorAnalytic, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
+    TensorReduction, TensorStructural, TensorView, TensorWrite,
 };
 
 use super::{
@@ -30,14 +30,15 @@ fn tensor_value_view_paths_materialize_and_read() {
     let view_value = TensorValue::View(view);
     assert!(view_value.as_tensor().is_none());
     assert_eq!(view_value.tensor_read().shape(), &[2]);
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
     assert_eq!(
-        backend
-            .with_backend_session(|exec| view_value.into_tensor(exec))
-            .unwrap()
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
+        {
+            let exec = &mut backend;
+            view_value.into_tensor(exec)
+        }
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap(),
         &[3.0, 4.0]
     );
 }
@@ -59,16 +60,18 @@ fn generic_outer_product_with_views_uses_broadcast_path() {
         labels: vec![1],
     };
 
-    let mut ctx = CpuBackend::new();
-    let result = ctx
-        .with_backend_session(|exec| binary_contract(exec, lhs, rhs, &[0, 1], true))
-        .unwrap()
-        .unwrap();
+    let mut ctx = CpuEngine::serial();
+    let result = {
+        let exec = &mut ctx;
+        binary_contract(exec, lhs, rhs, &[0, 1], true)
+    }
+    .unwrap();
     let labels = result.labels;
-    let tensor = ctx
-        .with_backend_session(|exec| result.tensor.into_tensor(exec))
-        .unwrap()
-        .unwrap();
+    let tensor = {
+        let exec = &mut ctx;
+        result.tensor.into_tensor(exec)
+    }
+    .unwrap();
 
     assert_eq!(labels, vec![0, 1]);
     assert_eq!(tensor.shape(), &[2, 3]);
@@ -149,16 +152,18 @@ fn generic_binary_contract_reduces_then_builds_dot_config() {
         labels: vec![1, 2],
     };
 
-    let mut ctx = CpuBackend::new();
-    let result = ctx
-        .with_backend_session(|exec| binary_contract(exec, lhs, rhs, &[0, 2], false))
-        .unwrap()
-        .unwrap();
+    let mut ctx = CpuEngine::serial();
+    let result = {
+        let exec = &mut ctx;
+        binary_contract(exec, lhs, rhs, &[0, 2], false)
+    }
+    .unwrap();
     let labels = result.labels;
-    let tensor = ctx
-        .with_backend_session(|exec| result.tensor.into_tensor(exec))
-        .unwrap()
-        .unwrap();
+    let tensor = {
+        let exec = &mut ctx;
+        result.tensor.into_tensor(exec)
+    }
+    .unwrap();
 
     assert_eq!(labels, vec![0, 2]);
     assert_eq!(tensor.shape(), &[2, 5]);
@@ -171,7 +176,7 @@ struct NoBroadcastMaterializationBackend {
     rhs_strides: &'static [isize],
 }
 
-impl BackendSession for NoBroadcastMaterializationBackend {}
+impl Engine for NoBroadcastMaterializationBackend {}
 
 fn unexpected(op: &'static str) -> Error {
     Error::backend_failure(op, "unexpected backend operation in outer-product test")
@@ -201,9 +206,10 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
             }
             _ => panic!("outer product should pass f64 broadcast views to mul_read"),
         }
-        CpuBackend::new()
-            .with_backend_session(|__s| __s.mul_read(lhs, rhs))
-            .unwrap()
+        {
+            let __s = &mut CpuEngine::serial();
+            __s.mul_read(lhs, rhs)
+        }
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -595,11 +601,12 @@ fn generic_read_exec_reduces_single_view_input() {
     let subscripts = Subscripts::parse("ij->i").unwrap();
     let tree = ContractionTree::optimize(&subscripts, &[&shape]).unwrap();
 
-    let mut ctx = CpuBackend::new();
-    let result = ctx
-        .with_backend_session(|exec| eager_einsum_exec_read(exec, &inputs, &tree))
-        .unwrap()
-        .unwrap();
+    let mut ctx = CpuEngine::serial();
+    let result = {
+        let exec = &mut ctx;
+        eager_einsum_exec_read(exec, &inputs, &tree)
+    }
+    .unwrap();
 
     assert_eq!(result.shape(), &[2]);
     assert_eq!(result.as_slice::<f64>().unwrap(), &[9.0, 12.0]);
@@ -610,7 +617,7 @@ fn read_subscripts_routes_non_fast_cases_through_plan() {
     let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let rhs =
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
-    let mut ctx = CpuBackend::new();
+    let mut ctx = CpuEngine::serial();
 
     // Single-input call against a two-input contract: clean plan validation error.
     let subscripts = Subscripts::parse("ij,jk->ik").unwrap();

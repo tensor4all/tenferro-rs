@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::ad::Df64VjpRule;
 use tenferro_df64_proof::extension::{module, Df64Qr, Df64ToF64, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
@@ -18,6 +18,9 @@ use tenferro_runtime::{Error, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
 use tenferro_scalar_consumer_algorithm::{factor_norm_gradient, ScalarSupport};
 use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
+
+mod support;
+use support::run_on_engine;
 
 /// Canonical standard support: the linalg factorization, with values already `f64`.
 struct Standard;
@@ -64,15 +67,15 @@ impl ScalarSupport for Extended {
 
 /// Build the runtime the application composes: the CPU engine, the canonical linalg
 /// support, and the external scalar contribution.
-fn runtime_with_support(contribution: bool) -> Runtime {
-    let backend = CpuBackend::new();
+fn runtime_with_support(contribution: bool) -> (Runtime, CpuEngine) {
+    let engine = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
+        .register_engine(tenferro_cpu::runtime_engine_registration(&engine).expect("engine"))
         .expect("register the CPU engine");
     builder
         .install_extension_module(
-            tenferro_linalg::extension_module::<CpuBackend>(
+            tenferro_linalg::extension_module::<CpuEngine>(
                 tenferro_cpu::runtime_engine_id().expect("engine id"),
             )
             .expect("linalg module"),
@@ -83,7 +86,7 @@ fn runtime_with_support(contribution: bool) -> Runtime {
             .install_extension_module(module().expect("module"))
             .expect("install the Df64 module");
     }
-    builder.build().expect("runtime with support")
+    (builder.build().expect("runtime with support"), engine)
 }
 
 fn run<S: ScalarSupport>(
@@ -98,12 +101,11 @@ fn run<S: ScalarSupport>(
     .expect("traced seed");
     let gradient = factor_norm_gradient(ad, &input, &seed, support).expect("the program runs");
 
-    let runtime = runtime_with_support(contribution);
+    let (runtime, mut engine) = runtime_with_support(contribution);
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&gradient).expect("compiled program");
-    let results = runtime
-        .run_compiled(&program, &[])
-        .expect("executed the program");
+    let results =
+        run_on_engine(&runtime, &mut engine, &program, &[]).expect("executed the program");
     assert_eq!(results.len(), 1);
     results.into_iter().next().expect("one result")
 }

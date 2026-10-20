@@ -2,17 +2,18 @@
 //!
 //! These tests require CUDA hardware and are therefore ignored by default,
 //! matching the regular CUDA test convention in this crate.
+use crate::cubecl::tests::EngineRun;
 
 use crate::cubecl::CudaRuntime;
 use crate::cuda::raw;
-use crate::cuda::{gpu_available, CudaBackend, GpuExtensionCapability};
+use crate::cuda::{gpu_available, CudaEngine, GpuExtensionCapability};
 
 use super::*;
 
-fn first_cuda_backend() -> Option<CudaBackend> {
+fn first_cuda_backend() -> Option<CudaEngine> {
     let devices = crate::cuda::cuda_devices().ok()?;
     let device = devices.first()?;
-    CudaBackend::new(device.id()).ok()
+    CudaEngine::open(device.id()).ok()
 }
 
 #[test]
@@ -36,8 +37,8 @@ fn raw_session_exposes_stream_and_runtime_identity() {
     assert!(session_after_raw_still_runs(&mut backend));
 }
 
-fn session_after_raw_still_runs(backend: &mut CudaBackend) -> bool {
-    backend.runtime().synchronize().is_ok()
+fn session_after_raw_still_runs(backend: &mut CudaEngine) -> bool {
+    backend.synchronize().is_ok()
 }
 
 #[test]
@@ -255,7 +256,7 @@ fn raw_session_entry_is_not_a_host_barrier() {
     let mut queued = Vec::new();
     for _ in 0..8 {
         let out = backend
-            .with_backend_session(|session| {
+            .run(|session| {
                 session.dot_general_read(
                     TensorRead::from_tensor(&lhs),
                     TensorRead::from_tensor(&rhs),
@@ -323,17 +324,21 @@ fn raw_session_reuses_the_runtime_cublas_handle() {
         "two raw scopes of one runtime must use the same cached cuBLAS handle"
     );
 
-    // The handle really is the runtime's own: a vendor enqueue that does not go
-    // through a raw session reaches the same cached handle.
+    // The handle really is the runtime's own for the engine's stream: a vendor
+    // enqueue on that stream that does not go through a raw session reaches the
+    // same cached handle.
     let runtime = backend.runtime().clone();
-    let runtime_handle = runtime
-        .with_current_context("test.raw_cublas_runtime", || {
-            runtime.with_cublas_handle(
-                "test.raw_cublas_runtime",
-                cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
-                Vec::new(),
-                |handle| Ok(handle as usize),
-            )
+    let runtime_handle = backend
+        .stream
+        .executes(|| {
+            runtime.with_current_context("test.raw_cublas_runtime", || {
+                runtime.with_cublas_handle(
+                    "test.raw_cublas_runtime",
+                    cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
+                    Vec::new(),
+                    |handle| Ok(handle as usize),
+                )
+            })
         })
         .expect("primary context")
         .expect("runtime cuBLAS handle");
@@ -576,4 +581,168 @@ fn raw_tensor_read_rejects_a_noncompact_view_and_a_dtype_mismatch() {
             })
             .unwrap()
     });
+}
+
+/// CUDA source for a tiny grouped GEMM: each launch computes one 2x2 job from
+/// disjoint spans of the batched operands.
+const GEMM_JOB_SRC: &str = r#"
+extern "C" __global__ void gemm_job(double* out, const double* lhs, const double* rhs, int n) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= n * n) {
+        return;
+    }
+    int row = index % n;
+    int col = index / n;
+    double sum = 0.0;
+    for (int k = 0; k < n; ++k) {
+        sum += lhs[row + n * k] * rhs[k + n * col];
+    }
+    out[row + n * col] = sum;
+}
+"#;
+
+/// A downstream grouped GEMM in one raw scope is ordered after the tenferro
+/// operations that produced its operands and before the tenferro operation
+/// that consumes its output. The addresses resolved once for the scope stay
+/// pinned while the jobs run.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_downstream_grouped_gemm_between_tenferro_operations_is_stream_ordered() {
+    use crate::cuda::raw::{KernelArg, LaunchConfig, NvrtcOptions};
+    use tenferro_tensor::{TensorElementwise, TensorRead};
+
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut engine = first_cuda_backend().expect("CUDA backend should initialize");
+    let runtime = engine.runtime().clone();
+    // Two 2x2 jobs in a batch. Each job is a full matrix, so the grouped work
+    // is two disjoint spans of one allocation.
+    let lhs_host = tensor_f64(vec![2, 2, 2], vec![1.0, 2.0, 3.0, 4.0, 2.0, 1.0, 0.0, 3.0]);
+    let rhs_host = tensor_f64(vec![2, 2, 2], vec![1.0, 0.0, 0.0, 1.0, 0.0, 2.0, 3.0, 0.0]);
+    let lhs_seed = upload_tensor(&runtime, &lhs_host).expect("upload lhs");
+    let rhs_seed = upload_tensor(&runtime, &rhs_host).expect("upload rhs");
+
+    // Tenferro producers: the raw jobs read these derived operands, not the
+    // uploads, so the scope has work to order after.
+    let lhs = engine
+        .add_read(
+            TensorRead::from_tensor(&lhs_seed),
+            TensorRead::from_tensor(&lhs_seed),
+        )
+        .expect("produce lhs");
+    let rhs = engine
+        .add_read(
+            TensorRead::from_tensor(&rhs_seed),
+            TensorRead::from_tensor(&rhs_seed),
+        )
+        .expect("produce rhs");
+    let lhs_typed = lhs.as_typed::<f64>().expect("f64 lhs");
+    let rhs_typed = rhs.as_typed::<f64>().expect("f64 rhs");
+
+    let output = engine
+        .with_raw("test.grouped_gemm", |raw| {
+            let module = raw.compile_nvrtc(GEMM_JOB_SRC, &NvrtcOptions::default())?;
+            let function = module.function("gemm_job")?;
+            let mut output = raw.alloc_output::<f64>(&[2, 2, 2])?;
+            {
+                let out_ref = raw.tensor_mut(&mut output)?;
+                let lhs_ref = raw.tensor(lhs_typed)?;
+                let rhs_ref = raw.tensor(rhs_typed)?;
+                let job_bytes = 4 * std::mem::size_of::<f64>();
+                // Resolving the same tensor twice inside one scope must return
+                // the same pinned address (#2207).
+                // SAFETY: the addresses are only compared, never dereferenced.
+                assert_eq!(
+                    unsafe { lhs_ref.raw_ptr() } as usize,
+                    unsafe { raw.tensor(lhs_typed)?.raw_ptr() } as usize,
+                    "an operand address must stay pinned for the raw scope"
+                );
+                for job in 0..2 {
+                    let offset = job * job_bytes;
+                    let out_job = out_ref.offset(offset, job_bytes)?;
+                    let lhs_job = lhs_ref.offset(offset, job_bytes)?;
+                    let rhs_job = rhs_ref.offset(offset, job_bytes)?;
+                    // SAFETY: each job spans a disjoint in-bounds region of the
+                    // three allocations, the kernel writes only `out_job`, and
+                    // module plus spans outlive the enqueue.
+                    unsafe {
+                        raw.launch(
+                            &function,
+                            LaunchConfig::flat(4, 4, 0)?,
+                            &[
+                                KernelArg::tensor_mut(&out_job),
+                                KernelArg::tensor(&lhs_job),
+                                KernelArg::tensor(&rhs_job),
+                                KernelArg::i32(2),
+                            ],
+                        )?;
+                    }
+                }
+            }
+            raw.synchronize()?;
+            Ok(output)
+        })
+        .expect("grouped gemm raw scope");
+    let output = tenferro_tensor::Tensor::from_typed::<f64>(output);
+
+    // Tenferro consumer: this operation must wait for the raw jobs above.
+    let doubled = engine
+        .add_read(
+            TensorRead::from_tensor(&output),
+            TensorRead::from_tensor(&output),
+        )
+        .expect("consume grouped gemm");
+    let host = download_tensor(&runtime, &doubled).expect("download result");
+
+    // lhs = 2 * lhs_host, rhs = 2 * rhs_host, grouped GEMM = lhs * rhs, and the
+    // final tenferro add doubles it again.
+    let lhs_values = lhs_host.as_slice::<f64>().expect("lhs host");
+    let rhs_values = rhs_host.as_slice::<f64>().expect("rhs host");
+    let mut expected = vec![0.0_f64; 8];
+    for job in 0..2 {
+        let base = job * 4;
+        for col in 0..2 {
+            for row in 0..2 {
+                let sum: f64 = (0..2)
+                    .map(|k| lhs_values[base + row + 2 * k] * rhs_values[base + k + 2 * col])
+                    .sum();
+                expected[base + row + 2 * col] = 8.0 * sum;
+            }
+        }
+    }
+    assert_eq!(host.as_slice::<f64>().expect("host values"), expected);
+}
+
+/// A panic inside a raw scope still restores the caller's previous CUDA
+/// context, outside any forgettable object.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_panic_inside_a_raw_scope_restores_the_context() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    std::thread::spawn(|| {
+        use std::panic::AssertUnwindSafe;
+
+        let mut engine = first_cuda_backend().expect("CUDA backend should initialize");
+        let primary = engine.runtime().primary_context();
+        let before = cudarc::driver::result::ctx::get_current().expect("query context");
+        let unwind = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _: tenferro_tensor::Result<()> = engine.with_raw("test.raw_panic", |_raw| {
+                assert_eq!(
+                    cudarc::driver::result::ctx::get_current().expect("query inside scope"),
+                    Some(primary),
+                    "the raw scope activates the engine's primary context"
+                );
+                panic!("injected panic inside the raw scope");
+            });
+        }));
+        assert!(unwind.is_err(), "the panic must propagate");
+        assert_eq!(
+            cudarc::driver::result::ctx::get_current().expect("query after panic"),
+            before,
+            "the raw scope must restore the caller's previous context on unwind"
+        );
+        // Cleanup still runs on the now-broken engine.
+        engine.synchronize().expect("cleanup on a broken engine");
+    })
+    .join()
+    .expect("panic test thread");
 }

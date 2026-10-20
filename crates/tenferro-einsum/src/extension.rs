@@ -28,7 +28,7 @@ use tenferro_runtime::extension::{ExtensionCacheKey, ExtensionExecutionContext};
 use tenferro_runtime::program::{
     CoreSemanticOp, ProgramValue, ProgramValueMetadata, SemanticProgramBuilder,
 };
-use tenferro_tensor::{BackendSession, DType, Error as TensorError, Tensor, TensorRead};
+use tenferro_tensor::{DType, Engine, Error as TensorError, Tensor, TensorRead};
 
 use crate::builder::build_einsum_graph;
 use crate::cache::{
@@ -1017,7 +1017,7 @@ define_extension_runtime! {
 pub(crate) fn execute_einsum_extension_session_reads(
     op: &EinsumExtensionOp,
     inputs: &[TensorRead<'_>],
-    ctx: &mut ExtensionExecutionContext<'_, dyn BackendSession + '_>,
+    ctx: &mut ExtensionExecutionContext<'_, dyn Engine + '_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     if inputs.is_empty() {
         return Err(tenferro_tensor::Error::invalid_argument(
@@ -1042,7 +1042,7 @@ pub(crate) fn execute_einsum_extension_session_reads(
 /// it here is explicitly out of scope for issue #1665.
 fn execute_einsum_extension_reads_in_session(
     op: &EinsumExtensionOp,
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     caches: &mut tenferro_runtime::ExtensionCacheStore,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -1050,17 +1050,15 @@ fn execute_einsum_extension_reads_in_session(
     execute_einsum_extension_session_reads(op, inputs, &mut ctx)
 }
 
-fn einsum_session_supported<B: tenferro_tensor::TensorBackend + 'static>(
-    _op: &EinsumExtensionOp,
-) -> bool {
+fn einsum_session_supported<B: tenferro_tensor::Engine + 'static>(_op: &EinsumExtensionOp) -> bool {
     // The session executor runs the same forward kernel on any backend session
     // below (the einsum execution only needs elementwise/dot session ops), so
     // CPU and CUDA sessions both qualify for `apply_eager`'s native path.
     let type_id = std::any::TypeId::of::<B>();
-    type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() || {
+    type_id == std::any::TypeId::of::<tenferro_cpu::CpuEngine>() || {
         #[cfg(feature = "cuda")]
         {
-            type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>()
+            type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaEngine>()
         }
         #[cfg(not(feature = "cuda"))]
         {
@@ -1114,7 +1112,7 @@ struct CachedRuntimeTree {
     tree: Arc<ContractionTree>,
 }
 
-fn cached_runtime_tree<B: BackendSession + ?Sized>(
+fn cached_runtime_tree<B: Engine + ?Sized>(
     ctx: &mut ExtensionExecutionContext<'_, B>,
     subscripts: &EinsumSubscripts,
     plan_spec: &EinsumPlanSpec,

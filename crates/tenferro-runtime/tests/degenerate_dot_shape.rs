@@ -10,17 +10,41 @@
 //! The eager and CUDA paths share the classifier; the compiler's degenerate
 //! rewrite does too, so this exercises the compiled path end to end and pins the
 //! Hadamard form as well, which must keep working.
-use tenferro_cpu::{runtime_engine_registration, CpuBackend};
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
-use tenferro_tensor::{DType, DotGeneralConfig, Tensor};
+use tenferro_cpu::{runtime_engine_registration, CpuEngine};
+use tenferro_runtime::{CompiledGraph, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorRead};
 
-fn runtime() -> Runtime {
-    let backend = CpuBackend::with_threads(1).expect("single-threaded CPU backend");
+fn cpu_engine() -> CpuEngine {
+    CpuEngine::serial()
+}
+
+fn runtime(engine: &CpuEngine) -> Runtime {
     let mut builder = Runtime::builder();
     builder
-        .register_engine(runtime_engine_registration(&backend).expect("engine"))
+        .register_engine(runtime_engine_registration(engine).expect("engine"))
         .expect("register the CPU engine");
     builder.build().expect("runtime")
+}
+
+fn run_compiled(
+    engine: &mut CpuEngine,
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+) -> Vec<Tensor> {
+    let reads: Vec<TensorRead<'_>> = inputs
+        .iter()
+        .map(|input| TensorRead::from_tensor(input))
+        .collect();
+    let prepared = runtime
+        .prepare(program, &reads, &[engine.target()])
+        .expect("prepare");
+    runtime
+        .run(&mut [engine], &prepared, &reads)
+        .expect("run")
+        .into_iter()
+        .map(|output| output.into_tensor(engine).expect("own output"))
+        .collect()
 }
 
 fn config(lhs_batch: &[usize], rhs_batch: &[usize]) -> DotGeneralConfig {
@@ -58,7 +82,9 @@ fn equal_shaped_operands_without_batch_dims_form_an_outer_product() {
         )
         .unwrap();
 
-    let mut out = runtime().run_compiled(&program, &[&a, &b]).unwrap();
+    let mut engine = cpu_engine();
+    let runtime = runtime(&engine);
+    let mut out = run_compiled(&mut engine, &runtime, &program, &[&a, &b]);
     let out = out.pop().unwrap();
     assert_eq!(out.shape(), &[N, N, N, N]);
     assert_eq!(
@@ -88,7 +114,9 @@ fn fully_batched_equal_shaped_operands_form_a_hadamard() {
         )
         .unwrap();
 
-    let mut out = runtime().run_compiled(&program, &[&a, &b]).unwrap();
+    let mut engine = cpu_engine();
+    let runtime = runtime(&engine);
+    let mut out = run_compiled(&mut engine, &runtime, &program, &[&a, &b]);
     let out = out.pop().unwrap();
     assert_eq!(out.shape(), &[N, N]);
     let a = a.as_slice::<f64>().unwrap();
@@ -118,7 +146,9 @@ fn permuted_batch_dims_are_not_an_elementwise_product() {
         )
         .unwrap();
 
-    let mut out = runtime().run_compiled(&program, &[&a, &b]).unwrap();
+    let mut engine = cpu_engine();
+    let runtime = runtime(&engine);
+    let mut out = run_compiled(&mut engine, &runtime, &program, &[&a, &b]);
     let out = out.pop().unwrap();
     let a = a.as_slice::<f64>().unwrap();
     let b = b.as_slice::<f64>().unwrap();

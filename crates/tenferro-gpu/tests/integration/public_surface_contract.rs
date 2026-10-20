@@ -65,14 +65,14 @@ fn cuda_prepared_access_has_one_provider_handle_and_no_dead_request_metadata() {
 #[test]
 fn cuda_public_api_requires_typed_device_and_caller_selected_engine() {
     use tenferro_gpu::{
-        cuda::cuda_runtime_engine_registration, cuda::CudaBackend, cuda::CudaDeviceError,
-        cuda::CudaDeviceId, cuda::CudaRuntime,
+        cuda::cuda_runtime_engine_registration, cuda::CudaDeviceError, cuda::CudaDeviceId,
+        cuda::CudaEngine, cuda::CudaRuntime,
     };
-    use tenferro_runtime::{EngineId, EngineRegistration, RuntimeConfigError};
+    use tenferro_runtime::{EngineRegistration, RuntimeConfigError};
 
     let _: fn(CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> = CudaRuntime::new;
-    let _: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
-    let _: fn(&CudaBackend, EngineId) -> Result<EngineRegistration, RuntimeConfigError> =
+    let _: fn(CudaDeviceId) -> Result<CudaEngine, CudaDeviceError> = CudaEngine::open;
+    let _: fn(&CudaEngine) -> Result<EngineRegistration, RuntimeConfigError> =
         cuda_runtime_engine_registration;
 }
 
@@ -233,8 +233,8 @@ fn public_backend_names_are_provider_specific() {
     let lib_rs = repo_file("crates/tenferro-gpu/src/lib.rs");
     let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
     assert!(
-        lib_rs.contains("CudaBackend"),
-        "CUDA backend should have an explicit public CudaBackend name"
+        lib_rs.contains("CudaEngine"),
+        "CUDA backend should have an explicit public CudaEngine name"
     );
     assert!(
         webgpu_mod.contains("pub struct WebGpuBackend"),
@@ -341,12 +341,14 @@ fn webgpu_provider_keeps_runtime_transfer_and_gemm_boundaries_split() {
 
 #[test]
 fn webgpu_materialization_does_not_inherit_host_defaults() {
-    // The operation implementations live on the execution session now.
+    // The operation implementations live on the engine (`exec_session.rs`); the
+    // engine *is* the device-native backend, so it hands itself to the
+    // structural module instead of projecting an owned `backend` field.
     let session = repo_file("crates/tenferro-gpu/src/webgpu/exec_session.rs");
     let structural = repo_file("crates/tenferro-gpu/src/webgpu/structural.rs");
     assert!(
         session.contains("fn to_contiguous_read")
-            && session.contains("structural::to_contiguous_read(self.backend, input)"),
+            && session.contains("structural::to_contiguous_read(self, input)"),
         "WebGPU materialization must delegate to its device-native structural module"
     );
     assert!(
@@ -559,12 +561,12 @@ fn cubecl_runtime_materialization_and_copy_stay_device_owned_and_typed() {
     }
     assert!(
         runtime_methods.contains("to_contiguous_view_typed")
-            && runtime_methods.contains("\"CudaBackend::to_contiguous_read\""),
+            && runtime_methods.contains("\"CudaEngine::to_contiguous_read\""),
         "CUDA erased materialization must reuse the typed path with its own operation name"
     );
     assert!(
         runtime_methods.contains("copy_view_to_view_typed")
-            && runtime_methods.contains("\"CudaBackend::copy_read_into\""),
+            && runtime_methods.contains("\"CudaEngine::copy_read_into\""),
         "CUDA erased copy must reuse the typed path with its own operation name"
     );
     assert!(

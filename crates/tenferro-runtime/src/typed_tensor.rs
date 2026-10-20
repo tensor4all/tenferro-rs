@@ -7,8 +7,8 @@ use num_complex::Complex64;
 use tenferro_ops::broadcast::{broadcast_shape, broadcast_shapes, BroadcastError};
 use tenferro_tensor::validate::matmul_config_for_shapes;
 use tenferro_tensor::{
-    ActivationOp, BackendSession, CompareDir, DType, DotGeneralConfig, Error, Result, Tensor,
-    TensorRead, TensorScalar, TensorValue, ValidationError,
+    ActivationOp, CompareDir, DType, DotGeneralConfig, Engine, Error, Result, Tensor, TensorRead,
+    TensorScalar, TensorValue, ValidationError,
 };
 use tinyvec::TinyVec;
 
@@ -18,11 +18,7 @@ use crate::{TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt};
 use tenferro_tensor::TypedTensor;
 
 impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
-    fn add(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn BackendSession,
-    ) -> Result<TypedTensor<T>> {
+    fn add(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.add_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("add", out)
@@ -32,23 +28,19 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         &self,
         rhs: &TypedTensor<T>,
         out: &mut TypedTensor<T>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<()> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         session.add_read_into(lhs.tensor_read(), rhs.tensor_read(), T::tensor_write(out))
     }
 
-    fn mul(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn BackendSession,
-    ) -> Result<TypedTensor<T>> {
+    fn mul(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.mul_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("mul", out)
     }
 
-    fn exp(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn exp(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.exp_read(T::tensor_read(self))?;
         into_typed_result("exp", out)
     }
@@ -56,134 +48,110 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     fn reduce_sum(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let axes = crate::tensor::all_axes_if_none(self.shape().len(), axes);
         let out = session.reduce_sum_read(T::tensor_read(self), &axes)?;
         into_typed_result("reduce_sum", out)
     }
 
-    fn sub(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn BackendSession,
-    ) -> Result<TypedTensor<T>> {
+    fn sub(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.sub_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("sub", out)
     }
 
-    fn div(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn BackendSession,
-    ) -> Result<TypedTensor<T>> {
+    fn div(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.div_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("div", out)
     }
 
-    fn rem(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn BackendSession,
-    ) -> Result<TypedTensor<T>> {
+    fn rem(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.rem_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("rem", out)
     }
 
-    fn pow(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn BackendSession,
-    ) -> Result<TypedTensor<T>> {
+    fn pow(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.pow_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("pow", out)
     }
 
-    fn maximum(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn BackendSession,
-    ) -> Result<TypedTensor<T>> {
+    fn maximum(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.maximum_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("maximum", out)
     }
 
-    fn minimum(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn BackendSession,
-    ) -> Result<TypedTensor<T>> {
+    fn minimum(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.minimum_read(lhs.tensor_read(), rhs.tensor_read())?;
         into_typed_result("minimum", out)
     }
 
-    fn neg(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn neg(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.neg_read(T::tensor_read(self))?;
         into_typed_result("neg", out)
     }
 
-    fn abs(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T::Real>> {
+    fn abs(&self, session: &mut dyn Engine) -> Result<TypedTensor<T::Real>> {
         let out = session.abs_read(T::tensor_read(self))?;
         into_typed_result::<T::Real>("abs", out)
     }
 
-    fn sign(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn sign(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.sign_read(T::tensor_read(self))?;
         into_typed_result("sign", out)
     }
 
-    fn conj(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn conj(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.conj_read(T::tensor_read(self))?;
         into_typed_result("conj", out)
     }
 
-    fn log(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn log(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.log_read(T::tensor_read(self))?;
         into_typed_result("log", out)
     }
 
-    fn expm1(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn expm1(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.expm1_read(T::tensor_read(self))?;
         into_typed_result("expm1", out)
     }
 
-    fn log1p(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn log1p(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.log1p_read(T::tensor_read(self))?;
         into_typed_result("log1p", out)
     }
 
-    fn erf(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn erf(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.erf_read(T::tensor_read(self))?;
         into_typed_result("erf", out)
     }
 
-    fn sin(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn sin(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.sin_read(T::tensor_read(self))?;
         into_typed_result("sin", out)
     }
 
-    fn cos(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn cos(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.cos_read(T::tensor_read(self))?;
         into_typed_result("cos", out)
     }
 
-    fn tanh(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn tanh(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.tanh_read(T::tensor_read(self))?;
         into_typed_result("tanh", out)
     }
 
-    fn sqrt(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn sqrt(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.sqrt_read(T::tensor_read(self))?;
         into_typed_result("sqrt", out)
     }
 
-    fn rsqrt(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn rsqrt(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.rsqrt_read(T::tensor_read(self))?;
         into_typed_result("rsqrt", out)
     }
@@ -192,7 +160,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         &self,
         rhs: &TypedTensor<T>,
         dir: CompareDir,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<bool>> {
         let (lhs, rhs) = broadcast_binary_in_read(self, rhs, session)?;
         let out = session.compare_read(lhs.tensor_read(), rhs.tensor_read(), &dir)?;
@@ -203,7 +171,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         &self,
         lower: &TypedTensor<T>,
         upper: &TypedTensor<T>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let (input, lower, upper) = broadcast_ternary_in_read(self, lower, upper, session)?;
         let out = session.clamp_read(
@@ -214,26 +182,18 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("clamp", out)
     }
 
-    fn matmul(
-        &self,
-        rhs: &TypedTensor<T>,
-        session: &mut dyn BackendSession,
-    ) -> Result<TypedTensor<T>> {
+    fn matmul(&self, rhs: &TypedTensor<T>, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let config = matmul_config_for_shapes("matmul", self.shape(), rhs.shape())?;
         let out = session.dot_general_read(T::tensor_read(self), T::tensor_read(rhs), &config)?;
         into_typed_result("matmul", out)
     }
 
-    fn reshape(&self, shape: &[usize], session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn reshape(&self, shape: &[usize], session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.reshape_read(T::tensor_read(self), shape)?;
         into_typed_result("reshape", out)
     }
 
-    fn transpose(
-        &self,
-        perm: &[usize],
-        session: &mut dyn BackendSession,
-    ) -> Result<TypedTensor<T>> {
+    fn transpose(&self, perm: &[usize], session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.transpose_read(T::tensor_read(self), perm)?;
         into_typed_result("transpose", out)
     }
@@ -242,7 +202,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         &self,
         shape: &[usize],
         dims: &[usize],
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let out = session.broadcast_in_dim_read(T::tensor_read(self), shape, dims)?;
         into_typed_result("broadcast_in_dim", out)
@@ -251,7 +211,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     fn reduce_max(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let axes = crate::tensor::all_axes_if_none(self.shape().len(), axes);
         let out = session.reduce_max_read(T::tensor_read(self), &axes)?;
@@ -261,7 +221,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     fn reduce_min(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let axes = crate::tensor::all_axes_if_none(self.shape().len(), axes);
         let out = session.reduce_min_read(T::tensor_read(self), &axes)?;
@@ -271,7 +231,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     fn reduce_prod(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let axes = crate::tensor::all_axes_if_none(self.shape().len(), axes);
         let out = session.reduce_prod_read(T::tensor_read(self), &axes)?;
@@ -281,7 +241,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     fn reduce_sum_squares(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let axes = crate::tensor::all_axes_if_none(self.shape().len(), axes);
         let out = session.reduce_sum_squares_read(T::tensor_read(self), &axes)?;
@@ -292,7 +252,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         &self,
         rhs: &TypedTensor<T>,
         config: DotGeneralConfig,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let out = session.dot_general_read(T::tensor_read(self), T::tensor_read(rhs), &config)?;
         into_typed_result("dot_general", out)
@@ -304,7 +264,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         config: DotGeneralConfig,
         lhs_conj: bool,
         rhs_conj: bool,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let out = session.dot_general_with_conj_read(
             T::tensor_read(self),
@@ -316,25 +276,21 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("dot_general_with_conj", out)
     }
 
-    fn scale_real(&self, factor: f64, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn scale_real(&self, factor: f64, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let scalar = crate::scale::real_scale_scalar(T::dtype(), factor)?;
         let scalar = session.upload_host_tensor(TensorRead::from_tensor(&scalar))?;
         let scalar = into_typed_result::<T>("scale_real", scalar)?;
         TypedTensorSessionOpsExt::mul(self, &scalar, session)
     }
 
-    fn scale_complex(
-        &self,
-        factor: Complex64,
-        session: &mut dyn BackendSession,
-    ) -> Result<TypedTensor<T>> {
+    fn scale_complex(&self, factor: Complex64, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let scalar = crate::scale::complex_scale_scalar(T::dtype(), factor)?;
         let scalar = session.upload_host_tensor(TensorRead::from_tensor(&scalar))?;
         let scalar = into_typed_result::<T>("scale_complex", scalar)?;
         TypedTensorSessionOpsExt::mul(self, &scalar, session)
     }
 
-    fn sigmoid(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn sigmoid(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         if let Some(out) =
             session.fused_activation_read(ActivationOp::Sigmoid, T::tensor_read(self))?
         {
@@ -346,7 +302,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("sigmoid", out)
     }
 
-    fn silu(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn silu(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         if let Some(out) =
             session.fused_activation_read(ActivationOp::Silu, T::tensor_read(self))?
         {
@@ -357,7 +313,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("silu", out)
     }
 
-    fn softplus(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn softplus(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         if let Some(out) =
             session.fused_activation_read(ActivationOp::Softplus, T::tensor_read(self))?
         {
@@ -369,7 +325,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("softplus", out)
     }
 
-    fn gelu(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn gelu(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         if let Some(out) =
             session.fused_activation_read(ActivationOp::Gelu, T::tensor_read(self))?
         {
@@ -380,7 +336,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("gelu", out)
     }
 
-    fn gelu_tanh(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn gelu_tanh(&self, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         if let Some(out) =
             session.fused_activation_read(ActivationOp::GeluTanh, T::tensor_read(self))?
         {
@@ -395,7 +351,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     fn reduce_mean(
         &self,
         axes: Option<&[usize]>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let out = run_session_composite(session, |ops| {
             composite::reduce_mean(ops, &typed_borrowed(self), axes)
@@ -403,14 +359,14 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("reduce_mean", out)
     }
 
-    fn softmax(&self, axis: usize, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn softmax(&self, axis: usize, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = run_session_composite(session, |ops| {
             composite::softmax(ops, &typed_borrowed(self), axis)
         })?;
         into_typed_result("softmax", out)
     }
 
-    fn log_softmax(&self, axis: usize, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn log_softmax(&self, axis: usize, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = run_session_composite(session, |ops| {
             composite::log_softmax(ops, &typed_borrowed(self), axis)
         })?;
@@ -421,7 +377,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         &self,
         mask: &TypedTensor<bool>,
         axis: usize,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let mask = typed_borrowed(mask);
         let out = run_session_composite(session, |ops| {
@@ -434,7 +390,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         &self,
         mask: &TypedTensor<bool>,
         axis: usize,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let mask = typed_borrowed(mask);
         let out = run_session_composite(session, |ops| {
@@ -449,7 +405,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         weight: Option<&TypedTensor<T>>,
         bias: Option<&TypedTensor<T>>,
         eps: f64,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let weight = weight.map(typed_borrowed);
         let bias = bias.map(typed_borrowed);
@@ -472,7 +428,7 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         weight: Option<&TypedTensor<T>>,
         bias: Option<&TypedTensor<T>>,
         eps: f64,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<T>> {
         let weight = weight.map(typed_borrowed);
         let bias = bias.map(typed_borrowed);
@@ -495,7 +451,7 @@ impl TypedTensorMaskSessionOpsExt for TypedTensor<bool> {
         &self,
         on_true: &TypedTensor<U>,
         on_false: &TypedTensor<U>,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> Result<TypedTensor<U>> {
         let (condition, on_true, on_false) =
             broadcast_ternary_in_read(self, on_true, on_false, session)?;
@@ -531,7 +487,7 @@ impl ReadInput<'_> {
 pub(crate) fn broadcast_to_in_read<'a>(
     input: TensorRead<'a>,
     target_shape: &[usize],
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
 ) -> Result<ReadInput<'a>> {
     if input.shape() == target_shape {
         return Ok(ReadInput::Borrowed(input));
@@ -584,7 +540,7 @@ fn broadcast_aligned_dims(
 fn broadcast_binary_in_read<'a, T: TensorScalar>(
     lhs: &'a TypedTensor<T>,
     rhs: &'a TypedTensor<T>,
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
 ) -> Result<(ReadInput<'a>, ReadInput<'a>)> {
     let shape = broadcast_shape(lhs.shape(), rhs.shape()).map_err(broadcast_error)?;
     Ok((
@@ -597,7 +553,7 @@ fn broadcast_ternary_in_read<'a, C: TensorScalar, T: TensorScalar>(
     first: &'a TypedTensor<C>,
     second: &'a TypedTensor<T>,
     third: &'a TypedTensor<T>,
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
 ) -> Result<(ReadInput<'a>, ReadInput<'a>, ReadInput<'a>)> {
     let shape = broadcast_shapes([first.shape(), second.shape(), third.shape()])
         .map_err(broadcast_error)?;

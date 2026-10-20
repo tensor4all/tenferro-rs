@@ -2,7 +2,7 @@ mod ffi;
 mod kernels;
 mod linalg;
 
-use tenferro_gpu::cuda::CudaExecSession;
+use tenferro_gpu::cuda::CudaEngine;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TensorViewCanonicalization};
 
 use crate::backend::{unsupported_dtype, LinalgBackend};
@@ -15,7 +15,7 @@ use crate::{QrOptions, RankRevealingQrOptions};
 /// cuSOLVER needs compact column-major device storage, so a borrowed view is
 /// made contiguous on the device and never crosses the host boundary.
 fn svd_read_with_driver(
-    session: &mut CudaExecSession<'_>,
+    session: &mut CudaEngine,
     input: TensorRead<'_>,
     driver: SvdDriver,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -48,7 +48,7 @@ fn svd_read_with_driver(
 }
 
 fn svd_values_read_with_driver(
-    session: &mut CudaExecSession<'_>,
+    session: &mut CudaEngine,
     input: TensorRead<'_>,
     driver: SvdDriver,
 ) -> tenferro_tensor::Result<Tensor> {
@@ -83,7 +83,7 @@ fn svd_values_read_with_driver(
 /// cuSOLVER needs compact column-major device storage, so a borrowed view is
 /// made contiguous on the device and never crosses the host boundary.
 fn eigh_read_with_driver(
-    session: &mut CudaExecSession<'_>,
+    session: &mut CudaEngine,
     input: TensorRead<'_>,
     driver: EighDriver,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -116,7 +116,7 @@ fn eigh_read_with_driver(
 }
 
 fn eigh_values_read_with_driver(
-    session: &mut CudaExecSession<'_>,
+    session: &mut CudaEngine,
     input: TensorRead<'_>,
     driver: EighDriver,
 ) -> tenferro_tensor::Result<Tensor> {
@@ -148,7 +148,7 @@ fn eigh_values_read_with_driver(
     }
 }
 
-impl LinalgBackend for CudaExecSession<'_> {
+impl LinalgBackend for CudaEngine {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         linalg::cholesky(self, input)
     }

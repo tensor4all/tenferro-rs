@@ -81,7 +81,7 @@ pub fn with_cuda_exec_session<B, R>(
     backend: &mut B,
     f: impl for<'s> FnOnce(&'s mut CudaExecSession<'s>) -> R,
 ) -> Option<R>
-where B: BackendSession + ?Sized;
+where B: Engine + ?Sized;
 
 impl CudaExecSession<'_> {
     pub fn supports(&self, capability: GpuExtensionCapability) -> bool;

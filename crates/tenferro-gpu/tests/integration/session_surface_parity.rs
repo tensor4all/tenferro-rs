@@ -13,7 +13,7 @@
 //! this one compares the three session types against one bound.
 
 use tenferro_tensor::backend::{
-    BackendSession, SessionCachedDot, TensorAnalytic, TensorDot, TensorElementwise, TensorIndexing,
+    Engine, SessionCachedDot, TensorAnalytic, TensorDot, TensorElementwise, TensorIndexing,
     TensorReduction, TensorStructural,
 };
 
@@ -23,7 +23,7 @@ use tenferro_tensor::backend::{
 /// same bound rather than a backend-specific extra.
 fn assert_common_session_surface<S>()
 where
-    S: BackendSession
+    S: Engine
         + SessionCachedDot
         + TensorElementwise
         + TensorAnalytic
@@ -35,14 +35,14 @@ where
 }
 
 #[test]
-fn cpu_session_exposes_the_common_surface() {
-    assert_common_session_surface::<tenferro_cpu::CpuExecSession<'static>>();
+fn cpu_engine_exposes_the_common_surface() {
+    assert_common_session_surface::<tenferro_cpu::CpuEngine>();
 }
 
 #[cfg(feature = "cuda")]
 #[test]
-fn cuda_session_exposes_the_common_surface() {
-    assert_common_session_surface::<tenferro_gpu::cuda::CudaExecSession<'static>>();
+fn cuda_engine_exposes_the_common_surface() {
+    assert_common_session_surface::<tenferro_gpu::cuda::CudaEngine>();
 }
 
 #[cfg(feature = "webgpu")]

@@ -25,7 +25,7 @@ The runtime crate may depend on the existing workspace proc-macro crate because 
 
 ## Generated runtime contract
 
-`define_extension_runtime!` remains the sole adapter. Its required execution callback is `execute_reads`, which receives borrowed `TensorRead` inputs. The legacy parsed `execute` argument is accepted when present for existing callers but is no longer required or documented because generated code does not use it.
+`define_extension_runtime!` remains the sole adapter. Its required execution callback is `execute_reads`, which receives borrowed `TensorRead` inputs. The legacy `execute` argument was parsed but never used by generated code; it is now rejected instead of silently ignored.
 
 Each extension family invokes the macro inside its own ordinary Rust module. This lets multiple families coexist in one crate while retaining the existing `extension_module` constructor name and avoiding new naming syntax or exposed generated implementation types.
 
@@ -42,7 +42,7 @@ A workspace-external fixture crate under `tests/fixtures/extension-authoring` is
 - No global extension registry or backend discovery.
 - No host-reference compatibility layer or second execution framework.
 - No public generated engine, planning, prepared-operation, or executor types.
-- No new extension DSL beyond making the unused legacy `execute` argument optional.
+- No new extension DSL; the unused legacy `execute` argument is removed.
 - No implicit device transfer or CPU fallback.
 
 ## Verification

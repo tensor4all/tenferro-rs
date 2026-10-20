@@ -1,20 +1,21 @@
 #![cfg(feature = "autodiff")]
 
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_ext_tropical::traced::tropical_dot_general_fused;
 use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 use tenferro_ext_tropical::{extension_modules, tropical_semantic_ad_rules};
-use tenferro_runtime::{Error, ErrorPhase, GraphCompiler, Runtime, Tensor, TracedTensor};
+use tenferro_runtime::{
+    Error, ErrorPhase, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TracedTensor,
+};
 
-fn cpu_runtime_with_tropical() -> Runtime {
-    let backend = CpuBackend::new();
+fn cpu_runtime_with_tropical(engine: &CpuEngine) -> Runtime {
     let mut builder = Runtime::builder();
     builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .register_engine(tenferro_cpu::runtime_engine_registration(engine).unwrap())
         .unwrap();
     for module in
-        extension_modules::<CpuBackend>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap()
+        extension_modules::<CpuEngine>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap()
     {
         builder.install_extension_module(module).unwrap();
     }
@@ -24,12 +25,22 @@ fn cpu_runtime_with_tropical() -> Runtime {
 fn run_traced(output: &TracedTensor) -> Tensor {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(output).expect("compile traced graph");
-    let runtime = cpu_runtime_with_tropical();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime_with_tropical(&engine);
+    let reads: Vec<TensorRead<'_>> = Vec::new();
+    let target = engine.target();
+    let prepared = runtime
+        .prepare(&program, &reads, std::slice::from_ref(&target))
+        .expect("prepare traced graph");
     let mut outputs = runtime
-        .run_compiled(&program, &[])
+        .run(&mut [&mut engine], &prepared, &reads)
         .expect("execute traced graph");
     assert_eq!(outputs.len(), 1);
-    outputs.remove(0)
+    outputs
+        .pop()
+        .expect("one output was asserted above")
+        .into_tensor(&mut engine)
+        .expect("materialize traced output")
 }
 
 fn tropical_ad() -> AdContext {

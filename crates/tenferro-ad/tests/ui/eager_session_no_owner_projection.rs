@@ -1,7 +1,6 @@
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::backend::BackendSession;
+use tenferro_tensor::backend::Engine;
 
-fn recover_cpu_owner(session: &mut dyn BackendSession) -> &mut CpuBackend {
+fn recover_cpu_owner(session: &mut dyn Engine) -> &mut tenferro_cpu::CpuEngine {
     session
 }
 

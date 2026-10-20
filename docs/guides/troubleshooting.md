@@ -39,17 +39,17 @@ backend operation received CPU data. Upload first:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#troubleshooting_9 -->
 ```rust
-use tenferro_gpu::cuda::{cuda_devices, gpu_available, upload_tensor, CudaBackend};
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro_gpu::cuda::{cuda_devices, gpu_available, upload_tensor, CudaEngine};
+use tenferro_tensor::Tensor;
 
 if !gpu_available() {
     return Ok(());
 }
 let devices = cuda_devices()?;
 let device = devices.first().ok_or("no CUDA device is visible")?;
-let backend = CudaBackend::new(device.id())?;
+let engine = CudaEngine::open(device.id())?;
 let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-let gpu_x = upload_tensor(backend.runtime(), &x)?;
+let gpu_x = upload_tensor(engine.runtime(), &x)?;
 assert_eq!(gpu_x.shape(), &[2]);
 ```
 <!-- end-snippet-source -->
@@ -61,18 +61,18 @@ it before inspecting values:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#troubleshooting_10 -->
 ```rust
-use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend};
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaEngine};
+use tenferro_tensor::Tensor;
 
 if !gpu_available() {
     return Ok(());
 }
 let devices = cuda_devices()?;
 let device = devices.first().ok_or("no CUDA device is visible")?;
-let backend = CudaBackend::new(device.id())?;
+let engine = CudaEngine::open(device.id())?;
 let x = Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
-let gpu_x = upload_tensor(backend.runtime(), &x)?;
-let cpu_x = download_tensor(backend.runtime(), &gpu_x)?;
+let gpu_x = upload_tensor(engine.runtime(), &x)?;
+let cpu_x = download_tensor(engine.runtime(), &gpu_x)?;
 assert_eq!(cpu_x.as_slice::<f64>()?, &[3.0]);
 ```
 <!-- end-snippet-source -->
@@ -95,8 +95,8 @@ requesting the slice:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#troubleshooting_11 -->
 ```rust
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSessionHost, TypedTensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{TensorStructural, TypedTensor};
 
 let source = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
@@ -108,9 +108,9 @@ assert!(error
     .to_string()
     .contains("view is not slice-contiguous"));
 
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let read = transposed.into_tensor_read()?;
-let compact = backend.with_backend_session(|session| session.to_contiguous_read(read))??;
+let compact = engine.to_contiguous_read(read)?;
 assert_eq!(compact.as_slice::<f64>()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 ```
 <!-- end-snippet-source -->

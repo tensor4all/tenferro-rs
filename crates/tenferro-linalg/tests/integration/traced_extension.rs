@@ -1,5 +1,4 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{
     EighDriver, EighGauge, EighOptions, LinalgBackend, QrGauge, QrOptions, RankRevealingQrOptions,
     SvdDriver, SvdGauge, SvdOptions, TracedTensorLinalgExt,
@@ -94,7 +93,7 @@ fn svd_executes_after_runtime_registration() {
 #[test]
 fn concrete_decomposition_options_execute_through_backend_defaults() {
     let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let (svd_outputs, eigh_outputs, qr_outputs) =
         support::with_cpu_linalg(&mut backend, |backend| {
@@ -181,7 +180,7 @@ fn check_cpu_ignores_svd_driver(driver: SvdDriver) {
     // bit-for-bit on the same host.
     let data = vec![3.0_f64, 1.0, 0.5, -2.0, 0.25, 1.5];
     let a = Tensor::from_vec_col_major(vec![3, 2], data.clone()).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let (default_outputs, forced_outputs, default_values, forced_values) =
         support::with_cpu_linalg(&mut backend, |backend| {
@@ -262,7 +261,7 @@ fn cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths() {
     // through different jobz modes, which differ in the last ULPs.
     let data = vec![2.0_f64, 0.5, -0.25, 0.5, 3.0, 0.75, -0.25, 0.75, 4.0];
     let a = Tensor::from_vec_col_major(vec![3, 3], data.clone()).unwrap();
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let (default_outputs, forced_outputs, default_values, forced_values) =
         support::with_cpu_linalg(&mut backend, |backend| {
@@ -427,13 +426,13 @@ fn missing_runtime_reports_linalg_family() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
-    let backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
         .unwrap();
     let runtime = builder.build().unwrap();
-    let err = runtime.run_compiled(&program, &[]).unwrap_err();
+    let err = support::run_program(&runtime, &mut backend, &program, &[]).unwrap_err();
 
     assert!(err
         .to_string()

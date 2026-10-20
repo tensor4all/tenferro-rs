@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use tenferro_cpu::{scalar_binary_into, scalar_fold, AddOp, CpuBackend};
+use tenferro_cpu::{scalar_binary_into, scalar_fold, AddOp, CpuEngine};
 use tenferro_df64_proof::extension::{module, Df64Total, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_runtime::extension::apply;
@@ -17,17 +17,25 @@ use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
+mod support;
+use support::run_on_engine;
+
 /// A runtime carrying the standard engine and the contribution's module together.
-fn mixed_runtime() -> Runtime {
-    let backend = CpuBackend::with_threads(1).expect("single-threaded CPU backend");
+fn mixed_runtime() -> (Runtime, CpuEngine) {
+    let engine = CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(1)
+            .build()
+            .expect("single-threaded CPU thread pool"),
+    );
     let mut builder = Runtime::builder();
     builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
+        .register_engine(tenferro_cpu::runtime_engine_registration(&engine).expect("engine"))
         .expect("register the canonical CPU engine");
     builder
         .install_extension_module(module().expect("module"))
         .expect("install the Df64 module");
-    builder.build().expect("runtime with both supports")
+    (builder.build().expect("runtime with both supports"), engine)
 }
 
 fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
@@ -51,7 +59,7 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
 #[test]
 fn the_core_operations_run_in_the_mixed_configuration() {
     let low = 2f64.powi(-80);
-    let runtime = mixed_runtime();
+    let (runtime, mut engine) = mixed_runtime();
 
     // A value the runtime itself produces, so the operations below act on a result of the mixed
     // configuration rather than on a hand-built tensor.
@@ -66,15 +74,16 @@ fn the_core_operations_run_in_the_mixed_configuration() {
     let total = apply(Arc::new(Df64Total), &[&input]).expect("traced total");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&total[0]).expect("compiled total");
-    let produced = runtime
-        .run_compiled(
-            &program,
-            &[&external(
-                vec![Df64::from_f64(1.0), Df64 { hi: low, lo: 0.0 }],
-                vec![2],
-            )],
-        )
-        .expect("execution in the mixed runtime");
+    let produced = run_on_engine(
+        &runtime,
+        &mut engine,
+        &program,
+        &[&external(
+            vec![Df64::from_f64(1.0), Df64 { hi: low, lo: 0.0 }],
+            vec![2],
+        )],
+    )
+    .expect("execution in the mixed runtime");
     let value = payload(&produced[0])[0];
     assert_eq!(
         value,

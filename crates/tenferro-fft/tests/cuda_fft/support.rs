@@ -1,24 +1,18 @@
-use tenferro_gpu::cuda::{download_tensor, upload_tensor, CudaBackend};
-use tenferro_runtime::Tensor;
-use tenferro_tensor::{BackendSession, BackendSessionHost, TensorRead};
+use tenferro_gpu::cuda::{download_tensor, upload_tensor, CudaDeviceId, CudaEngine};
+use tenferro_runtime::{ExecutionEngine, ExtensionCacheStore, Tensor};
+use tenferro_tensor::TensorRead;
 
-pub fn with_cuda_fft_session<R>(
-    backend: &mut CudaBackend,
-    f: impl for<'a> FnOnce(&'a mut (dyn BackendSession + 'a)) -> R + Send,
-) -> R
-where
-    R: Send,
-{
-    backend.with_backend_session(f).expect("CUDA session entry")
-}
-
-pub fn cuda_backend() -> CudaBackend {
-    CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0))
+/// Open the CUDA engine every ignored CUDA FFT test runs on.
+///
+/// The caller holds the engine for the whole test: cuFFT plans live in the
+/// engine's own extension caches and are released with it (#2206).
+pub fn cuda_engine() -> CudaEngine {
+    CudaEngine::open(CudaDeviceId::from_ordinal(0))
         .expect("CUDA device 0 should initialize for an ignored CUDA test")
 }
 
-pub fn upload_cuda(runtime: &tenferro_gpu::cuda::CudaRuntime, tensor: &Tensor) -> Tensor {
-    upload_tensor(runtime, tensor).expect("explicit CUDA upload")
+pub fn upload_cuda(engine: &CudaEngine, tensor: &Tensor) -> Tensor {
+    upload_tensor(engine.runtime(), tensor).expect("explicit CUDA upload")
 }
 
 /// Download a CUDA tensor; `download_tensor` performs the one required stream
@@ -30,11 +24,29 @@ pub fn upload_cuda(runtime: &tenferro_gpu::cuda::CudaRuntime, tensor: &Tensor) -
 /// tensors, [`tenferro_gpu::Error::BackendSource`] when synchronization or
 /// readback fails, or a typed validation error when device data cannot be
 /// decoded.
-pub fn download_cuda(
-    runtime: &tenferro_gpu::cuda::CudaRuntime,
-    tensor: &Tensor,
-) -> tenferro_tensor::Result<Tensor> {
-    download_tensor(runtime, tensor)
+pub fn download_cuda(engine: &CudaEngine, tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {
+    download_tensor(engine.runtime(), tensor)
+}
+
+/// Run `f` on the engine's extension-cache store and give the store back.
+///
+/// The engine owns its device-bound plans, so a caller-held `FftExecutor` cache
+/// stays empty for CUDA and these entries are the observable plan cache.
+pub fn with_engine_caches<R>(
+    engine: &mut CudaEngine,
+    f: impl FnOnce(&mut ExtensionCacheStore) -> R,
+) -> R {
+    let mut caches = engine.take_extension_caches();
+    let output = f(&mut caches);
+    engine.restore_extension_caches(caches);
+    output
+}
+
+/// Aggregate stats of every entry the engine retains.
+pub fn engine_cache_stats(engine: &mut CudaEngine) -> tenferro_tensor::CacheStats {
+    with_engine_caches(engine, |caches| {
+        caches.stats(tenferro_runtime::ExtensionCacheSelector::All)
+    })
 }
 
 pub fn assert_cuda_resident(tensor: &Tensor, runtime_domain: tenferro_tensor::AllocationDomainId) {

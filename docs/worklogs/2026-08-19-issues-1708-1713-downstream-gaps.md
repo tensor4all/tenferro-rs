@@ -163,7 +163,7 @@ Post-implementation reviewer: `reviewer-flash-opencode-go`; verdict **Correct-to
 
 ### Decisions
 
-- Add object-safe default-unsupported methods directly to `BackendSession`; unsupported backends cannot transfer or fall back.
+- Add object-safe default-unsupported methods directly to `Engine`; unsupported backends cannot transfer or fall back.
 - Reuse all-axis dot-general with lhs conjugation for VDOT and strided-kernel reduction for real norm-squared output.
 - Reuse `ContractionScalar` with exact dtype matching.
 - Implement fused compact-destination AXPBY as the accepted issue-specific RMW exception because strided-rs has no in-place read-modify-write primitive; validate shape/dtype/placement/compactness/overlap before mutation.

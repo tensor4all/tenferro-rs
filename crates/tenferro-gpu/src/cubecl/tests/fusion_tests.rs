@@ -1,6 +1,7 @@
+use crate::cubecl::tests::EngineRun;
 // Run with: cargo test --features cuda -- --ignored
 use crate::backend::{ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan};
-use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
+use tenferro_tensor::{TensorRead, TensorView};
 
 use super::{
     assert_tensor_close, assert_validation_kind, cpu_backend, download, gpu_backend, tensor_c32,
@@ -84,7 +85,7 @@ fn broadcast_multiply_consumes_compact_borrowed_views_and_rejects_strided_ones()
     let gpu_rhs = upload(&gpu, &rhs);
 
     let expected = cpu
-        .with_backend_session(|session| {
+        .run(|session| {
             session.execute_broadcast_multiply(
                 TensorRead::from_tensor(&lhs),
                 &target,
@@ -106,7 +107,7 @@ fn broadcast_multiply_consumes_compact_borrowed_views_and_rejects_strided_ones()
     };
 
     let fused = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.execute_broadcast_multiply(
                 TensorRead::from_view(TensorView::F32(lhs_typed.as_view())),
                 &target,
@@ -128,7 +129,7 @@ fn broadcast_multiply_consumes_compact_borrowed_views_and_rejects_strided_ones()
         .transpose_view([1, 0])
         .expect("transpose_view builds a strided rank-2 view");
     let fallback = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.execute_broadcast_multiply(
                 TensorRead::from_view(TensorView::F32(strided)),
                 &target,
@@ -172,15 +173,11 @@ fn test_fused_f32_max_min_propagate_nan_in_both_operand_orders() {
 
     let mut cpu = cpu_backend();
     let expected_maximum = cpu
-        .with_backend_session(|__s| {
-            __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
     let expected_minimum = cpu
-        .with_backend_session(|__s| {
-            __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
 
@@ -188,7 +185,7 @@ fn test_fused_f32_max_min_propagate_nan_in_both_operand_orders() {
     let gpu_lhs = upload(&gpu, &lhs);
     let gpu_rhs = upload(&gpu, &rhs);
     let outputs = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.execute_elementwise_fusion(&[&gpu_lhs, &gpu_rhs], &max_min_plan(crate::DType::F32))
         })
         .unwrap()
@@ -234,15 +231,11 @@ fn test_fused_f64_max_min_propagate_nan_in_both_operand_orders() {
 
     let mut cpu = cpu_backend();
     let expected_maximum = cpu
-        .with_backend_session(|__s| {
-            __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
     let expected_minimum = cpu
-        .with_backend_session(|__s| {
-            __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
+        .run(|__s| __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)))
         .unwrap()
         .unwrap();
 
@@ -250,7 +243,7 @@ fn test_fused_f64_max_min_propagate_nan_in_both_operand_orders() {
     let gpu_lhs = upload(&gpu, &lhs);
     let gpu_rhs = upload(&gpu, &rhs);
     let outputs = gpu
-        .with_backend_session(|__s| {
+        .run(|__s| {
             __s.execute_elementwise_fusion(&[&gpu_lhs, &gpu_rhs], &max_min_plan(crate::DType::F64))
         })
         .unwrap()
@@ -274,15 +267,11 @@ fn test_fused_add_mul_matches_cpu() {
 
     let mut cpu = cpu_backend();
     let sum = cpu
-        .with_backend_session(|__s| {
-            __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-        })
+        .run(|__s| __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b)))
         .unwrap()
         .unwrap();
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.mul_read(TensorRead::from_tensor(&sum), TensorRead::from_tensor(&a))
-        })
+        .run(|__s| __s.mul_read(TensorRead::from_tensor(&sum), TensorRead::from_tensor(&a)))
         .unwrap()
         .unwrap();
 
@@ -292,7 +281,7 @@ fn test_fused_add_mul_matches_cpu() {
 
     let plan = add_mul_plan();
     let result = gpu
-        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan))
+        .run(|__s| __s.execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan))
         .unwrap()
         .unwrap()
         .expect("fusion should succeed for f64 add+mul");
@@ -336,19 +325,15 @@ fn test_fused_complex_c64_add_conj_mul_matches_cpu() {
 
     let mut cpu = cpu_backend();
     let sum = cpu
-        .with_backend_session(|__s| {
-            __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-        })
+        .run(|__s| __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b)))
         .unwrap()
         .unwrap();
     let conj = cpu
-        .with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(&sum)))
+        .run(|__s| __s.conj_read(TensorRead::from_tensor(&sum)))
         .unwrap()
         .unwrap();
     let expected = cpu
-        .with_backend_session(|__s| {
-            __s.mul_read(TensorRead::from_tensor(&conj), TensorRead::from_tensor(&a))
-        })
+        .run(|__s| __s.mul_read(TensorRead::from_tensor(&conj), TensorRead::from_tensor(&a)))
         .unwrap()
         .unwrap();
 
@@ -358,7 +343,7 @@ fn test_fused_complex_c64_add_conj_mul_matches_cpu() {
 
     let plan = complex_add_conj_mul_plan(crate::DType::C64);
     let result = gpu
-        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan))
+        .run(|__s| __s.execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan))
         .unwrap()
         .unwrap()
         .expect("fusion should succeed for c64 add+conj+mul");
@@ -401,13 +386,11 @@ fn test_fused_complex_c32_div_neg_matches_cpu() {
 
     let mut cpu = cpu_backend();
     let div = cpu
-        .with_backend_session(|__s| {
-            __s.div_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-        })
+        .run(|__s| __s.div_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b)))
         .unwrap()
         .unwrap();
     let expected = cpu
-        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&div)))
+        .run(|__s| __s.neg_read(TensorRead::from_tensor(&div)))
         .unwrap()
         .unwrap();
 
@@ -417,7 +400,7 @@ fn test_fused_complex_c32_div_neg_matches_cpu() {
 
     let plan = complex_div_neg_plan(crate::DType::C32);
     let result = gpu
-        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan))
+        .run(|__s| __s.execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan))
         .unwrap()
         .unwrap()
         .expect("fusion should succeed for c32 div+neg");
@@ -447,13 +430,11 @@ fn test_fused_add_neg() {
 
     let mut cpu = cpu_backend();
     let sum = cpu
-        .with_backend_session(|__s| {
-            __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-        })
+        .run(|__s| __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b)))
         .unwrap()
         .unwrap();
     let expected = cpu
-        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&sum)))
+        .run(|__s| __s.neg_read(TensorRead::from_tensor(&sum)))
         .unwrap()
         .unwrap();
 
@@ -463,7 +444,7 @@ fn test_fused_add_neg() {
 
     let plan = add_neg_plan();
     let result = gpu
-        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan))
+        .run(|__s| __s.execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan))
         .unwrap()
         .unwrap()
         .expect("fusion should succeed");
@@ -492,13 +473,11 @@ fn test_fused_multi_output() {
 
     let mut cpu = cpu_backend();
     let sum_expected = cpu
-        .with_backend_session(|__s| {
-            __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-        })
+        .run(|__s| __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b)))
         .unwrap()
         .unwrap();
     let neg_expected = cpu
-        .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&sum_expected)))
+        .run(|__s| __s.neg_read(TensorRead::from_tensor(&sum_expected)))
         .unwrap()
         .unwrap();
 
@@ -508,7 +487,7 @@ fn test_fused_multi_output() {
 
     let plan = multi_output_plan();
     let result = gpu
-        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan))
+        .run(|__s| __s.execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan))
         .unwrap()
         .unwrap()
         .expect("fusion should succeed for multi-output");
@@ -538,15 +517,15 @@ fn test_fused_unary_chain() {
 
     let mut cpu = cpu_backend();
     let t1 = cpu
-        .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&a)))
+        .run(|__s| __s.abs_read(TensorRead::from_tensor(&a)))
         .unwrap()
         .unwrap();
     let t2 = cpu
-        .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&t1)))
+        .run(|__s| __s.sqrt_read(TensorRead::from_tensor(&t1)))
         .unwrap()
         .unwrap();
     let expected = cpu
-        .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&t2)))
+        .run(|__s| __s.exp_read(TensorRead::from_tensor(&t2)))
         .unwrap()
         .unwrap();
 
@@ -555,7 +534,7 @@ fn test_fused_unary_chain() {
 
     let plan = unary_chain_plan();
     let result = gpu
-        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&gpu_a], &plan))
+        .run(|__s| __s.execute_elementwise_fusion(&[&gpu_a], &plan))
         .unwrap()
         .unwrap()
         .expect("fusion should succeed for unary chain");
@@ -575,7 +554,7 @@ fn test_fused_empty_tensor() {
 
     let plan = add_mul_plan();
     let result = gpu
-        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan))
+        .run(|__s| __s.execute_elementwise_fusion(&[&gpu_a, &gpu_b], &plan))
         .unwrap()
         .unwrap()
         .expect("fusion should handle empty tensors");
@@ -594,9 +573,7 @@ fn fusion_shape_mismatch_defuses() {
     let gpu_scalar = upload(&gpu, &scalar);
 
     let result = gpu
-        .with_backend_session(|__s| {
-            __s.execute_elementwise_fusion(&[&gpu_vector, &gpu_scalar], &add_mul_plan())
-        })
+        .run(|__s| __s.execute_elementwise_fusion(&[&gpu_vector, &gpu_scalar], &add_mul_plan()))
         .unwrap()
         .expect("unsupported fusion shapes should not be a hard error");
     assert!(result.is_none());
@@ -613,9 +590,7 @@ fn fusion_plan_runtime_dtype_descriptor_mismatch_remains_a_hard_error() {
     let gpu_rhs = upload(&gpu, &rhs);
 
     let err = gpu
-        .with_backend_session(|__s| {
-            __s.execute_elementwise_fusion(&[&gpu_lhs, &gpu_rhs], &add_mul_plan())
-        })
+        .run(|__s| __s.execute_elementwise_fusion(&[&gpu_lhs, &gpu_rhs], &add_mul_plan()))
         .unwrap()
         .expect_err("a runtime dtype mismatch must remain a typed hard error");
     assert_validation_kind(

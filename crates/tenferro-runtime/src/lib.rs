@@ -22,18 +22,28 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
-//! use tenferro_cpu::CpuBackend;
+//! use tenferro_cpu::CpuEngine;
+//! use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 //!
 //! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 //! let y = (&x + &x).unwrap();
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
-//! let backend = CpuBackend::default();
+//! // One caller-held engine runs every slot of the prepared program.
+//! let mut engine = CpuEngine::serial();
 //! let mut builder = Runtime::builder();
-//! builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap()).unwrap();
+//! builder
+//!     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
+//!     .unwrap();
 //! let runtime = builder.build().unwrap();
-//! let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+//! let prepared = runtime.prepare(&program, &[], &[engine.target()]).unwrap();
+//! let out = runtime
+//!     .run(&mut [&mut engine], &prepared, &[])
+//!     .unwrap()
+//!     .pop()
+//!     .unwrap()
+//!     .into_tensor(&mut engine)
+//!     .unwrap();
 //! assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 //! ```
 
@@ -84,21 +94,20 @@ pub use runtime::{
     CoreCapabilityBundleBuilder, CoreCapabilityKind, CorePrepareContext, Determinism,
     DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime,
     EngineExecutionContractError, EngineId, EngineRegistration, EngineRegistrationMetadata,
-    EngineSnapshotView, ErasedExecutionContext, EventDomainDriver, EventDomainError, EventDomainId,
-    EventDomainOperation, EventDomainRun, EventToken, ExecutableEngineRegistrationConfig,
-    ExecutionBundle, ExecutionContextIdentity, ExecutionContextMismatch, ExecutionHandle,
-    ExecutionInputs, ExecutionOutcome, ExecutionPolicy, ExecutionPolicyError, ExtensionEngine,
-    ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
-    ExtensionPlanningConfig, ExtensionPrepareRequest, HardwareClassId, IdentityError, IdentityKind,
+    EngineSnapshotView, EngineTarget, ErasedExecutionContext, EventDomainDriver, EventDomainError,
+    EventDomainId, EventDomainOperation, EventDomainRun, EventToken,
+    ExecutableEngineRegistrationConfig, ExecutionContextIdentity, ExecutionContextMismatch,
+    ExecutionEngine, ExecutionPolicy, ExecutionPolicyError, ExtensionEngine, ExtensionModule,
+    ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
+    ExtensionPrepareRequest, HardwareClassId, IdentityError, IdentityKind,
     ImmediateEventDomainDriver, IndexingPrepareRequest, IndexingRuntime, InputIngressContract,
     InputIngressContractError, InputPlacementContract, InputSignature, InputSignatureContract,
     InputSignatureEntry, InputSignatureError, InputSpecializationProjection,
     InputSpecializationRequirements, InputSpecializationRequirementsBuilder,
     InputSpecializationRequirementsError, LayoutClass, LayoutPrepareRequest, LayoutProjection,
-    LayoutRuntime, LayoutSpecialization, OutputAccessError, OutputExtractError, OutputMetadata,
-    OutputRef, PlacementConstraintError, PlacementProjection, PlacementSpecialization,
-    PreparationKeySummary, PreparationOnlyEngineRegistrationConfig, PrepareCapability,
-    PrepareError, PrepareOptions, PrepareOptionsKey, PreparedCompiledGraph, PreparedDeferred,
+    LayoutRuntime, LayoutSpecialization, Output, PlacementConstraintError, PlacementProjection,
+    PlacementSpecialization, PreparationKeySummary, PreparationOnlyEngineRegistrationConfig,
+    PrepareCapability, PrepareError, PrepareOptions, PrepareOptionsKey, Prepared,
     PreparedOperation, PreparedOperationBinding, PreparedOperationExecutor,
     PreparedOperationExecutorHandle, PreparedOperationHandle, PreparedOperationPlan,
     PreparedPlanCacheLimits, PreparedPlanCacheStats, ProgramPlacementConstraint,
@@ -107,10 +116,8 @@ pub use runtime::{
     ResidentOutputContract, ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement,
     Runtime, RuntimeCacheError, RuntimeCacheOwner, RuntimeCacheStats, RuntimeConfigBuilder,
     RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, RuntimeId, RuntimeInputContract,
-    RuntimeReconfiguration, RuntimeReconfigureError, RuntimeStateError, ScopedExecutionBundle,
-    ScopedExecutionOutcome, ScopedOutput, ScopedOutputExtractError, ScopedReadBinding,
-    ScopedReadInputs, ScopedSubmitRejected, SpecializationError, SpecializationProjection,
-    SpecializationRequirements, StorageClass, SubmissionError, SubmitError, TransferEndpoint,
+    RuntimeReconfiguration, RuntimeReconfigureError, RuntimeStateError, SpecializationError,
+    SpecializationProjection, SpecializationRequirements, StorageClass, TransferEndpoint,
     TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
     UnsupportedReason,
 };
@@ -121,9 +128,9 @@ pub use shape_packing::TracedSliceBuilder;
 pub use sym_dim::SymDim;
 pub use tenferro_ops::ShapeRelation;
 pub use tenferro_tensor::{
-    BackendSession, BackendSessionHost, CacheStats, CompareDir, DType, DotGeneralConfig,
-    GatherConfig, MemoryKind, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorBackend,
-    TensorRead, TensorScalar, TensorValue, TensorView, TypedTensor, TypedTensorView,
+    CacheStats, CompareDir, DType, DotGeneralConfig, Engine, GatherConfig, MemoryKind, PadConfig,
+    ScatterConfig, SliceConfig, Tensor, TensorRead, TensorScalar, TensorValue, TensorView,
+    TypedTensor, TypedTensorView,
 };
 pub use trace::{TraceContext, TraceValue, TracedGraph};
 pub use typed_session_ext::{TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt};

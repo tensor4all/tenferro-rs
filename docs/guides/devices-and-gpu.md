@@ -17,9 +17,9 @@ The optional XLA/PJRT path is separate from these tensor backends. It lowers
 static-shaped traced programs to StableHLO in `tenferro-xla` and loads PJRT
 plugins at runtime. See [XLA and PJRT](xla.md).
 
-For the CUDA execution shapes — one entry per stage with a held session, and
-pinned host↔device transfers whose completion the caller decides when to wait
-for — see [CUDA sessions and pinned transfers](cuda-sessions-and-transfers.md).
+For the CUDA execution shapes — one caller-held engine per device, and pinned
+host↔device transfers whose completion the caller decides when to wait for —
+see [CUDA engines and pinned transfers](engines-and-transfers.md).
 
 ## Provider Matrix
 
@@ -91,39 +91,34 @@ For a time-axis diagram, see [Execution Models](execution-models.md).
 <!-- snippet-source: crates/tenferro-gpu/examples/cuda_quickstart.rs -->
 ```rust
 use tenferro_gpu::{
-    cuda::cuda_devices, cuda::download_tensor, cuda::upload_tensor, cuda::CudaBackend,
+    cuda::cuda_devices, cuda::download_tensor, cuda::upload_tensor, cuda::CudaEngine,
 };
-use tenferro_tensor::BackendSessionHost;
-use tenferro_tensor::{Tensor, TensorRead, TensorWrite};
+use tenferro_tensor::{Tensor, TensorElementwise, TensorRead, TensorStructural, TensorWrite};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let Some(device) = cuda_devices()?.into_iter().next() else {
         return Ok(());
     };
 
-    let mut backend = CudaBackend::new(device.id())?;
+    let mut backend = CudaEngine::open(device.id())?;
     let cpu_a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let cpu_b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
     let gpu_a = upload_tensor(backend.runtime(), &cpu_a)?;
     let gpu_b = upload_tensor(backend.runtime(), &cpu_b)?;
-    let gpu_c = backend.with_backend_session(|session| {
-        session.add_read(
-            TensorRead::from_tensor(&gpu_a),
-            TensorRead::from_tensor(&gpu_b),
-        )
-    })??;
+    let gpu_c = backend.add_read(
+        TensorRead::from_tensor(&gpu_a),
+        TensorRead::from_tensor(&gpu_b),
+    )?;
     let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
 
     assert_eq!(cpu_c.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 
     let mut gpu_reuse = upload_tensor(backend.runtime(), &cpu_c)?;
-    backend.with_backend_session(|session| {
-        session.copy_read_into(
-            TensorRead::from_tensor(&gpu_c),
-            TensorWrite::from_tensor(&mut gpu_reuse),
-        )
-    })??;
+    backend.copy_read_into(
+        TensorRead::from_tensor(&gpu_c),
+        TensorWrite::from_tensor(&mut gpu_reuse),
+    )?;
     let copied = download_tensor(backend.runtime(), &gpu_reuse)?;
     assert_eq!(copied.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     Ok(())
@@ -146,7 +141,7 @@ LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH \
 ```
 
 The runnable tutorial `cuda_tutorial` follows the same minimal workflow
-(upload -> one bounded session -> download) and asserts `[4.0, 6.0]`. It is
+(upload -> one engine call -> download) and asserts `[4.0, 6.0]`. It is
 compiled and archived on the non-GPU CUDA lane, then executed with
 `TENFERRO_REQUIRE_CUDA=1` on the trusted GPU lane and the supported legacy
 manual GPU lane. Ordinary CPU tutorial CI never requires a CUDA device; the
@@ -160,7 +155,8 @@ cargo build -p tenferro-tutorial-code --no-default-features \
 The example downloads the result back to CPU and asserts the expected values.
 For downstream PTX, CUBIN, NVRTC, or device-library kernels, see
 [Custom CUDA kernels](custom-cuda-kernels.md). That guide uses only the public
-`CudaExecSession` and `cuda::raw` extension boundary.
+`CudaEngine::with_raw` / `CudaEngine::with_cubecl` and `cuda::raw` extension
+boundary.
 
 `TensorStructural::copy_read_into` can reuse an already allocated CUDA
 destination. Both operands may be arbitrary-stride region views at a nonzero
@@ -181,12 +177,12 @@ the native copy, and a compact 2D/3D transpose into a row-major compact
 destination uses the tiled transpose kernel there. The source and destination
 must be distinct allocations.
 
-`BackendSession::axpby_read_into_accum` keeps the documented compact
+`Engine::axpby_read_into_accum` keeps the documented compact
 destination contract, and consumes an arbitrary-stride or offset `x` through
 one native strided-source pass rather than canonicalizing it; a compact `x`
 still runs the single cuBLAS `geam` call.
 
-The CUDA extension session exposes `Session::fill_zero_write`, the `beta = 0`
+The CUDA raw session exposes `Session::fill_zero_write`, the `beta = 0`
 reset for storage the caller owns. It never reads the previous contents, so a
 stale `NaN`/`Inf` cannot survive and `-0.0` is normalized to `+0.0`, which
 `0 * y` cannot promise. A compact destination (including an offset region
@@ -276,7 +272,7 @@ and add an empty `[workspace]` table as described in
 
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#devices_and_gpu_31 -->
 ```rust
-use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend};
+use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaEngine};
 use tenferro_tensor::Tensor;
 
 if !gpu_available() {
@@ -284,10 +280,10 @@ if !gpu_available() {
 }
 let devices = cuda_devices()?;
 let Some(device) = devices.first() else { return Ok(()); };
-let backend = CudaBackend::new(device.id())?;
+let engine = CudaEngine::open(device.id())?;
 let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-let gpu_x = upload_tensor(backend.runtime(), &x)?;
-let cpu_x = download_tensor(backend.runtime(), &gpu_x)?;
+let gpu_x = upload_tensor(engine.runtime(), &x)?;
+let cpu_x = download_tensor(engine.runtime(), &gpu_x)?;
 assert_eq!(cpu_x.as_slice::<f64>()?, &[1.0, 2.0]);
 ```
 <!-- end-snippet-source -->
@@ -309,12 +305,13 @@ use tenferro_gpu::apple::AppleContext;
 use tenferro_tensor::Tensor;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let context = AppleContext::new()?;
+    let mut context = AppleContext::new()?;
     let host = Tensor::from_vec_col_major([4], vec![1.0_f32, 2.0, 3.0, 4.0])?;
     let managed = context.upload_tensor(&host)?;
-    let mut cpu = context.cpu_backend().clone();
-    let mut metal = context.metal_backend().clone();
-    let _ = (&managed, &mut cpu, &mut metal);
+    // The context lends both paired engines together; each operation names the
+    // one that executes it and the managed tensor keeps its domain either way.
+    let (cpu, metal) = context.parts();
+    let _ = (&managed, cpu, metal);
     Ok(())
 }
 ```
@@ -355,7 +352,7 @@ transfer-counter, capability-error, and numerical-residual assertions.
 | --- | --- |
 | `TypedTensor<T, R>` | Fixed-dtype runtime tensor with optional compile-time rank; host access still requires explicit download for CUDA buffers. |
 | `Tensor` | Main concrete CUDA value for backend execution |
-| `EagerTensor` | Wraps CUDA-resident `Tensor` values when using an `EagerRuntime` with `CudaBackend` |
+| `EagerTensor` | Wraps CUDA-resident `Tensor` values when an `EagerRuntime` session borrows a `CudaEngine` |
 | `TracedTensor` | Graphs can be compiled with `GraphCompiler` and executed by a runtime with registered GPU engines for supported ops |
 
 CUDA coverage is about backend dispatch. It is not the same as AD coverage.

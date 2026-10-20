@@ -6,21 +6,29 @@
 //! # Examples
 //!
 //! ```
-//! use tenferro_cpu::CpuBackend;
+//! use tenferro_cpu::CpuEngine;
 //! use tenferro_ext_tropical::traced::tropical_reduce_sum;
-//! use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+//! use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 //!
 //! let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 5.0, 2.0]).unwrap();
 //! let y = tropical_reduce_sum(&x, &[0]).unwrap();
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
-//! let backend = CpuBackend::new();
+//! let mut engine = CpuEngine::serial();
 //! let mut builder = Runtime::builder();
 //! builder
-//!     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+//!     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 //!     .unwrap();
 //! let runtime = builder.build().unwrap();
-//! let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+//! let target = engine.target();
+//! let prepared = runtime.prepare(&program, &[], std::slice::from_ref(&target)).unwrap();
+//! let out = runtime
+//!     .run(&mut [&mut engine], &prepared, &[])
+//!     .unwrap()
+//!     .pop()
+//!     .unwrap()
+//!     .into_tensor(&mut engine)
+//!     .unwrap();
 //! assert_eq!(out.as_slice::<f64>().unwrap(), &[5.0]);
 //! ```
 
@@ -113,22 +121,30 @@ fn checked_tropical_dot_general_impl(
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_ext_tropical::traced::tropical_dot_general;
-/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+/// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 ///
 /// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 /// let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
 /// let c = tropical_dot_general(&a, &b).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&c).unwrap();
-/// let backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let mut builder = Runtime::builder();
 /// builder
-///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 ///     .unwrap();
 /// let runtime = builder.build().unwrap();
-/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+/// let target = engine.target();
+/// let prepared = runtime.prepare(&program, &[], std::slice::from_ref(&target)).unwrap();
+/// let out = runtime
+///     .run(&mut [&mut engine], &prepared, &[])
+///     .unwrap()
+///     .pop()
+///     .unwrap()
+///     .into_tensor(&mut engine)
+///     .unwrap();
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[23.0, 24.0, 43.0, 44.0]);
 /// ```
 pub fn tropical_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
@@ -161,22 +177,30 @@ pub fn tropical_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<Traced
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_ext_tropical::traced::min_plus_dot_general;
-/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+/// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 ///
 /// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 /// let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
 /// let c = min_plus_dot_general(&a, &b).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&c).unwrap();
-/// let backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let mut builder = Runtime::builder();
 /// builder
-///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 ///     .unwrap();
 /// let runtime = builder.build().unwrap();
-/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+/// let target = engine.target();
+/// let prepared = runtime.prepare(&program, &[], std::slice::from_ref(&target)).unwrap();
+/// let out = runtime
+///     .run(&mut [&mut engine], &prepared, &[])
+///     .unwrap()
+///     .pop()
+///     .unwrap()
+///     .into_tensor(&mut engine)
+///     .unwrap();
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[6.0, 7.0, 8.0, 9.0]);
 /// ```
 pub fn min_plus_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
@@ -208,9 +232,9 @@ pub fn min_plus_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<Traced
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_ext_tropical::{traced::tropical_einsum, TropicalKind};
-/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+/// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 ///
 /// let a = TracedTensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap();
 /// let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]).unwrap();
@@ -218,17 +242,25 @@ pub fn min_plus_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<Traced
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&out).unwrap();
-/// let backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
 /// let mut builder = Runtime::builder();
 /// builder
-///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 ///     .unwrap();
-/// for module in tenferro_ext_tropical::extension_modules::<CpuBackend>(engine_id).unwrap() {
+/// for module in tenferro_ext_tropical::extension_modules::<CpuEngine>(engine_id).unwrap() {
 ///     builder.install_extension_module(module).unwrap();
 /// }
 /// let runtime = builder.build().unwrap();
-/// let value = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+/// let target = engine.target();
+/// let prepared = runtime.prepare(&program, &[], std::slice::from_ref(&target)).unwrap();
+/// let value = runtime
+///     .run(&mut [&mut engine], &prepared, &[])
+///     .unwrap()
+///     .pop()
+///     .unwrap()
+///     .into_tensor(&mut engine)
+///     .unwrap();
 /// assert_eq!(value.as_slice::<f64>().unwrap(), &[3.0]);
 /// ```
 pub fn tropical_einsum(
@@ -261,10 +293,10 @@ pub fn tropical_einsum(
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_einsum::Subscripts;
 /// use tenferro_ext_tropical::{traced::tropical_einsum_subscripts, TropicalKind};
-/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+/// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 ///
 /// let a = TracedTensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap();
 /// let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![2.0_f64, 2.0]).unwrap();
@@ -273,17 +305,25 @@ pub fn tropical_einsum(
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&out).unwrap();
-/// let backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
 /// let mut builder = Runtime::builder();
 /// builder
-///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 ///     .unwrap();
-/// for module in tenferro_ext_tropical::extension_modules::<CpuBackend>(engine_id).unwrap() {
+/// for module in tenferro_ext_tropical::extension_modules::<CpuEngine>(engine_id).unwrap() {
 ///     builder.install_extension_module(module).unwrap();
 /// }
 /// let runtime = builder.build().unwrap();
-/// let value = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+/// let target = engine.target();
+/// let prepared = runtime.prepare(&program, &[], std::slice::from_ref(&target)).unwrap();
+/// let value = runtime
+///     .run(&mut [&mut engine], &prepared, &[])
+///     .unwrap()
+///     .pop()
+///     .unwrap()
+///     .into_tensor(&mut engine)
+///     .unwrap();
 /// assert_eq!(value.as_slice::<f64>().unwrap(), &[3.0]);
 /// ```
 pub fn tropical_einsum_subscripts(
@@ -323,9 +363,9 @@ pub fn tropical_einsum_subscripts(
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_ext_tropical::traced::tropical_dot_general_fused;
-/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+/// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 ///
 /// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 /// let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
@@ -333,17 +373,25 @@ pub fn tropical_einsum_subscripts(
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&out).unwrap();
-/// let backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
 /// let mut builder = Runtime::builder();
 /// builder
-///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 ///     .unwrap();
-/// for module in tenferro_ext_tropical::extension_modules::<CpuBackend>(engine_id).unwrap() {
+/// for module in tenferro_ext_tropical::extension_modules::<CpuEngine>(engine_id).unwrap() {
 ///     builder.install_extension_module(module).unwrap();
 /// }
 /// let runtime = builder.build().unwrap();
-/// let value = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+/// let target = engine.target();
+/// let prepared = runtime.prepare(&program, &[], std::slice::from_ref(&target)).unwrap();
+/// let value = runtime
+///     .run(&mut [&mut engine], &prepared, &[])
+///     .unwrap()
+///     .pop()
+///     .unwrap()
+///     .into_tensor(&mut engine)
+///     .unwrap();
 /// assert_eq!(value.as_slice::<f64>().unwrap(), &[23.0, 24.0, 43.0, 44.0]);
 /// ```
 pub fn tropical_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
@@ -371,9 +419,9 @@ pub fn tropical_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> Result<
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_ext_tropical::traced::min_plus_dot_general_fused;
-/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+/// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 ///
 /// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 /// let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
@@ -381,17 +429,25 @@ pub fn tropical_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> Result<
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&out).unwrap();
-/// let backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
 /// let mut builder = Runtime::builder();
 /// builder
-///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 ///     .unwrap();
-/// for module in tenferro_ext_tropical::extension_modules::<CpuBackend>(engine_id).unwrap() {
+/// for module in tenferro_ext_tropical::extension_modules::<CpuEngine>(engine_id).unwrap() {
 ///     builder.install_extension_module(module).unwrap();
 /// }
 /// let runtime = builder.build().unwrap();
-/// let value = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+/// let target = engine.target();
+/// let prepared = runtime.prepare(&program, &[], std::slice::from_ref(&target)).unwrap();
+/// let value = runtime
+///     .run(&mut [&mut engine], &prepared, &[])
+///     .unwrap()
+///     .pop()
+///     .unwrap()
+///     .into_tensor(&mut engine)
+///     .unwrap();
 /// assert_eq!(value.as_slice::<f64>().unwrap(), &[6.0, 7.0, 8.0, 9.0]);
 /// ```
 pub fn min_plus_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
@@ -551,21 +607,29 @@ fn validate_tropical_einsum_inputs(
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_ext_tropical::traced::tropical_reduce_sum;
-/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+/// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 5.0, 2.0]).unwrap();
 /// let y = tropical_reduce_sum(&x, &[0]).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let mut builder = Runtime::builder();
 /// builder
-///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 ///     .unwrap();
 /// let runtime = builder.build().unwrap();
-/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+/// let target = engine.target();
+/// let prepared = runtime.prepare(&program, &[], std::slice::from_ref(&target)).unwrap();
+/// let out = runtime
+///     .run(&mut [&mut engine], &prepared, &[])
+///     .unwrap()
+///     .pop()
+///     .unwrap()
+///     .into_tensor(&mut engine)
+///     .unwrap();
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[5.0]);
 /// ```
 ///

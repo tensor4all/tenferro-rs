@@ -10,7 +10,7 @@
 //! then run the owned kernel. The operation bodies live in the `cubecl::ops`
 //! module after #1929 moved them off the backend owner, so that module is what
 //! the entry-point scan reads; the erased session side is covered by a
-//! compile-time assertion that `CudaExecSession` implements every family.
+//! compile-time assertion that `CudaEngine` implements every family.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -90,7 +90,7 @@ fn cuda_backend_implements_every_required_read_entry_point() {
     // The session forwards through `delegate_ops!`, so what replaces the source
     // scan is the guarantee the compiler enforces: the erased session type
     // implements every operation family. `\'static` is the erased form
-    // `with_cuda_exec_session` hands out, so no concrete lifetime is assumed.
+    // `with_cuda_engine` hands out, so no concrete lifetime is assumed.
     fn assert_operation_families<S>()
     where
         S: TensorElementwise
@@ -101,5 +101,5 @@ fn cuda_backend_implements_every_required_read_entry_point() {
             + TensorDot,
     {
     }
-    assert_operation_families::<tenferro_gpu::cuda::CudaExecSession<'static>>();
+    assert_operation_families::<tenferro_gpu::cuda::CudaEngine>();
 }

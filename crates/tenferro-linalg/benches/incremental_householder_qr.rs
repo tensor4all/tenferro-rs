@@ -4,14 +4,11 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use serde::Serialize;
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
+use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::{
-    download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
-    CudaDeviceId, CudaExecSession,
-};
+use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_linalg::{HouseholderQr, LinalgBackend, QrGauge, QrOptions, TensorLinalgExt};
-use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorRead};
 
 const SOURCE_COMMIT: &str = "da0775a208006352f6e5eab18bc6bb09ca39a1f6";
 const SAMPLE_BATCH: usize = 4;
@@ -66,14 +63,14 @@ trait BenchSession: LinalgBackend {
     fn benchmark_synchronize(&mut self) -> tenferro_tensor::Result<()>;
 }
 
-impl BenchSession for CpuExecSession<'_> {
+impl BenchSession for CpuEngine {
     fn benchmark_synchronize(&mut self) -> tenferro_tensor::Result<()> {
         Ok(())
     }
 }
 
 #[cfg(feature = "cuda")]
-impl BenchSession for CudaExecSession<'_> {
+impl BenchSession for CudaEngine {
     fn benchmark_synchronize(&mut self) -> tenferro_tensor::Result<()> {
         self.runtime().synchronize()
     }
@@ -226,15 +223,8 @@ fn run_cpu(
     blocks: &[Tensor],
     accumulated: &Tensor,
 ) -> Result<Record, String> {
-    let mut backend = CpuBackend::with_threads(1).map_err(|error| error.to_string())?;
-    backend
-        .with_backend_session(|session| {
-            with_cpu_exec_session(session, |session| {
-                run_session(config, session, initial, blocks, accumulated)
-            })
-            .ok_or_else(|| "CPU execution session unavailable".to_string())?
-        })
-        .unwrap()
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+    run_session(config, &mut engine, initial, blocks, accumulated)
 }
 
 #[cfg(feature = "cuda")]
@@ -248,7 +238,7 @@ fn run_cuda(
         return Err("CUDA backend requested but no GPU is available".into());
     }
     let mut backend =
-        CudaBackend::new(CudaDeviceId::from_ordinal(0)).map_err(|error| error.to_string())?;
+        CudaEngine::open(CudaDeviceId::from_ordinal(0)).map_err(|error| error.to_string())?;
     let initial = upload_tensor(backend.runtime(), initial).map_err(|error| error.to_string())?;
     let blocks = blocks
         .iter()
@@ -256,14 +246,8 @@ fn run_cuda(
         .collect::<Result<Vec<_>, _>>()?;
     let accumulated_device =
         upload_tensor(backend.runtime(), accumulated).map_err(|error| error.to_string())?;
-    let (mut record, q, r, reference_r) = backend
-        .with_backend_session(|session| {
-            with_cuda_exec_session(session, |session| {
-                run_session_outputs(config, session, &initial, &blocks, &accumulated_device)
-            })
-            .ok_or_else(|| "CUDA execution session unavailable".to_string())?
-        })
-        .unwrap()?;
+    let (mut record, q, r, reference_r) =
+        run_session_outputs(config, &mut backend, &initial, &blocks, &accumulated_device)?;
     let q = download_tensor(backend.runtime(), &q).map_err(|error| error.to_string())?;
     let r = download_tensor(backend.runtime(), &r).map_err(|error| error.to_string())?;
     let reference_r =

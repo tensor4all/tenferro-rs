@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
-use tenferro_cpu::CpuBackend;
 use tenferro_runtime::error::Result;
 use tenferro_runtime::{
-    CompiledGraph, DType, Error, ErrorPhase, GraphCompiler, Runtime, Tensor, TracedTensor,
+    CompiledGraph, DType, Error, ErrorPhase, ExecutionEngine, GraphCompiler, Runtime, Tensor,
+    TensorRead, TracedTensor,
 };
 
-pub fn runtime_from_cpu_backend(backend: &CpuBackend) -> Runtime {
+pub fn runtime_from_cpu_backend(backend: &tenferro_cpu::CpuEngine) -> Runtime {
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(backend).unwrap())
@@ -15,7 +15,54 @@ pub fn runtime_from_cpu_backend(backend: &CpuBackend) -> Runtime {
 }
 
 pub fn cpu_runtime() -> Runtime {
-    runtime_from_cpu_backend(&CpuBackend::new())
+    runtime_from_cpu_backend(&tenferro_cpu::CpuEngine::serial())
+}
+
+/// Prepare and run a compiled graph on a fresh serial CPU engine.
+///
+/// # Errors
+///
+/// Returns [`Error::RuntimeState`] when the target is not registered or a
+/// prepared run belongs to another runtime, [`Error::Unsupported`] when no
+/// installed module or provider serves the program, [`Error::TensorRuntime`]
+/// when the engine fails or an output cannot be copied, and
+/// [`Error::Extension`] for an extension kernel's typed failure.
+pub fn run_on_cpu(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+) -> Result<Vec<Tensor>> {
+    run_on(
+        &mut tenferro_cpu::CpuEngine::serial(),
+        runtime,
+        program,
+        inputs,
+    )
+}
+
+/// Prepare and run a compiled graph on `engine`, returning owned outputs.
+///
+/// # Errors
+///
+/// Returns [`Error::RuntimeState`] when the target is not registered or a
+/// prepared run belongs to another runtime, [`Error::Unsupported`] when no
+/// installed module or provider serves the program, [`Error::TensorRuntime`]
+/// when the engine fails or an output cannot be copied, and
+/// [`Error::Extension`] for an extension kernel's typed failure.
+pub fn run_on(
+    engine: &mut dyn ExecutionEngine,
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+) -> Result<Vec<Tensor>> {
+    let reads: Vec<TensorRead<'_>> = inputs.iter().map(|t| TensorRead::from_tensor(t)).collect();
+    let target = engine.target();
+    let prepared = runtime.prepare(program, &reads, std::slice::from_ref(&target))?;
+    let outputs = runtime.run(&mut [&mut *engine], &prepared, &reads)?;
+    outputs
+        .into_iter()
+        .map(|output| output.into_tensor(&mut *engine).map_err(Error::from))
+        .collect()
 }
 
 /// Execute a compiled graph and return its single output.
@@ -25,13 +72,13 @@ pub fn cpu_runtime() -> Runtime {
 /// Propagates [`Error::Validation`] for input binding or shape mismatches,
 /// [`Error::RuntimeState`] when the graph returns any output count other than
 /// one, and typed backend/runtime execution errors from
-/// [`Runtime::run_compiled`].
+/// [`Runtime::run`].
 pub fn run_compiled_one(
     runtime: &Runtime,
     program: &CompiledGraph,
     inputs: &[&Tensor],
 ) -> Result<Tensor> {
-    let mut outputs = runtime.run_compiled(program, inputs)?;
+    let mut outputs = run_on_cpu(runtime, program, inputs)?;
     let actual = outputs.len();
     if actual != 1 {
         return Err(Error::runtime_state(
@@ -57,7 +104,7 @@ pub trait RunCompiledTestExt {
     /// Propagates [`Error::Validation`] for input binding or shape mismatches,
     /// [`Error::RuntimeState`] when the graph returns any output count other
     /// than one, and typed backend/runtime execution errors from
-    /// [`Runtime::run_compiled`].
+    /// [`Runtime::run`].
     fn run_compiled_one_output(
         &self,
         program: &CompiledGraph,
@@ -137,5 +184,5 @@ impl RunTraced for TracedTensor {
 pub fn run_many_traced_with(runtime: &Runtime, outputs: &[&TracedTensor]) -> Result<Vec<Tensor>> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(outputs)?;
-    runtime.run_compiled(&program, &[])
+    run_on_cpu(runtime, &program, &[])
 }

@@ -1,4 +1,4 @@
-//! Integration tests for the v2 CpuBackend.
+//! Integration tests for the v2 tenferro_cpu::CpuEngine.
 //!
 //! Verifies faer GEMM dispatch, batched GEMM, and stride-aware input handling.
 

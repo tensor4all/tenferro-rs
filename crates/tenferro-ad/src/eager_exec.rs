@@ -5,12 +5,9 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
-use tenferro_runtime::{ErrorPhase, GraphCompiler, Runtime};
+use tenferro_runtime::{ErrorPhase, ExecutionEngine, GraphCompiler, Runtime};
 use tenferro_tensor::DotGeneralConfig;
-use tenferro_tensor::{
-    BackendSession, BackendSessionHost, DType, PadConfig, SliceConfig, Tensor, TensorRead,
-    TypedTensor,
-};
+use tenferro_tensor::{DType, Engine, PadConfig, SliceConfig, Tensor, TensorRead, TypedTensor};
 
 use crate::error::{Error, Result};
 use crate::scalar_semantics::dynamic_truncate_size;
@@ -112,12 +109,12 @@ impl<'a> ConcreteTensorRead<'a> {
     }
 }
 
-fn materialize_tensor_read(exec: &mut dyn BackendSession, input: TensorRead<'_>) -> Result<Tensor> {
+fn materialize_tensor_read(exec: &mut dyn Engine, input: TensorRead<'_>) -> Result<Tensor> {
     exec.to_contiguous_read(input).map_err(Error::from)
 }
 
 fn concrete_tensor_read<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     input: TensorRead<'a>,
 ) -> Result<ConcreteTensorRead<'a>> {
     match input {
@@ -130,7 +127,7 @@ fn concrete_tensor_read<'a>(
 }
 
 fn concrete_tensor_reads<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     inputs: &[TensorRead<'a>],
 ) -> Result<Vec<ConcreteTensorRead<'a>>> {
     inputs
@@ -141,7 +138,7 @@ fn concrete_tensor_reads<'a>(
 }
 
 fn concrete_promoted_read_to_dtype<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     input: TensorRead<'a>,
     promoted: DType,
 ) -> Result<ConcreteTensorRead<'a>> {
@@ -157,7 +154,7 @@ fn concrete_promoted_read_to_dtype<'a>(
 }
 
 fn promote_read_to_dtype<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     input: TensorRead<'a>,
     promoted: DType,
 ) -> Result<PromotedTensorRead<'a>> {
@@ -173,7 +170,7 @@ fn promote_read_to_dtype<'a>(
 }
 
 fn promote_binary_reads_to_dtype<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     a: TensorRead<'a>,
     b: TensorRead<'a>,
     promoted: DType,
@@ -184,7 +181,7 @@ fn promote_binary_reads_to_dtype<'a>(
 }
 
 fn promote_binary_reads<'a>(
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
     a: TensorRead<'a>,
     b: TensorRead<'a>,
     op: &StdTensorOp,
@@ -200,7 +197,7 @@ pub(crate) fn exec_dot_general_with_conj_on_tensor_reads_in_session(
     config: &DotGeneralConfig,
     lhs_conj: bool,
     rhs_conj: bool,
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
 ) -> Result<Tensor> {
     let op = StdTensorOp::DotGeneral {
         config: config.clone(),
@@ -223,38 +220,35 @@ pub(crate) fn exec_dot_general_with_conj_on_tensor_reads_in_session(
 /// This core helper rejects extension ops because they require a runtime owner
 /// with an installed extension module.
 #[cfg(test)]
-pub(crate) fn exec_op_on_tensors<B: BackendSessionHost>(
+pub(crate) fn exec_op_on_tensors(
     op: &StdTensorOp,
     inputs: &[&Tensor],
-    backend: &mut B,
+    engine: &mut dyn Engine,
 ) -> Result<Vec<Tensor>> {
     if let StdTensorOp::Extension(ext) = op {
         return Err(missing_extension_module_error(ext.as_ref()));
     }
-
-    backend.with_backend_session(|session| {
-        exec_standard_op_on_tensors_with_session(op, inputs, session)
-    })?
+    exec_standard_op_on_tensors_with_session(op, inputs, engine)
 }
 
-/// Run the owner-context fallback for an extension op that has no prepared
-/// session executor: canonicalize the reads in one backend session, then run
-/// the extension as a one-op compiled program on the runtime.
-pub(crate) fn exec_extension_op_on_tensor_reads<B: BackendSessionHost>(
+/// Run an extension op that has no prepared session executor: canonicalize the
+/// reads on `engine`, then run the extension as a one-op compiled program on
+/// the same engine. The engine kind must already be registered with `runtime`.
+pub(crate) fn exec_extension_op_on_tensor_reads(
     op: &Arc<dyn ExtensionOp>,
     inputs: &[TensorRead<'_>],
-    backend: &mut B,
+    engine: &mut dyn ExecutionEngine,
     runtime: &Runtime,
 ) -> Result<Vec<Tensor>> {
-    let concrete_inputs =
-        backend.with_backend_session(|exec| concrete_tensor_reads(exec, inputs))??;
+    let concrete_inputs = concrete_tensor_reads(&mut *engine, inputs)?;
     let input_refs: Vec<&Tensor> = concrete_inputs.iter().map(|input| input.tensor()).collect();
-    execute_extension_op_via_runtime(Arc::clone(op), &input_refs, runtime)
+    execute_extension_op_via_runtime(Arc::clone(op), &input_refs, engine, runtime)
 }
 
 fn execute_extension_op_via_runtime(
     op: Arc<dyn ExtensionOp>,
     inputs: &[&Tensor],
+    engine: &mut dyn ExecutionEngine,
     runtime: &Runtime,
 ) -> Result<Vec<Tensor>> {
     ensure_extension_module_family(op.as_ref(), runtime)?;
@@ -281,7 +275,13 @@ fn execute_extension_op_via_runtime(
         Error::runtime_state_source("extension", tenferro_runtime::ErrorPhase::Execution, source)
     })?;
     let program = GraphCompiler::new().compile_frozen_program(&frozen)?;
-    runtime.run_compiled(&program, inputs)
+    let reads = inputs
+        .iter()
+        .map(|tensor| TensorRead::from_tensor(tensor))
+        .collect::<Vec<_>>();
+    let target = engine.target();
+    let prepared = runtime.prepare(&program, &reads, std::slice::from_ref(&target))?;
+    crate::eager::run_prepared_on(runtime, engine, &prepared, &reads)
 }
 
 fn ensure_extension_module_family(op: &dyn ExtensionOp, runtime: &Runtime) -> Result<()> {
@@ -358,7 +358,7 @@ fn generated_host_output(
 pub(crate) fn exec_standard_op_on_tensor_reads_with_session(
     op: &StdTensorOp,
     inputs: &[TensorRead<'_>],
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
 ) -> Result<Vec<Tensor>> {
     if let Some(host) = generated_host_output(op, inputs.first().map(TensorRead::shape))? {
         return exec
@@ -372,7 +372,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_with_session(
 pub(crate) fn exec_standard_op_on_tensors_with_session(
     op: &StdTensorOp,
     inputs: &[&Tensor],
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
 ) -> Result<Vec<Tensor>> {
     if let Some(host) = generated_host_output(op, inputs.first().map(|tensor| tensor.shape()))? {
         return exec
@@ -386,7 +386,7 @@ pub(crate) fn exec_standard_op_on_tensors_with_session(
 pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
     op: &StdTensorOp,
     inputs: &[TensorRead<'_>],
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
 ) -> Result<Vec<Tensor>> {
     // `_read` hooks own layout handling, including backend-specific fallback.
     // Materialize only for dtype conversion or the owned-only arms below.
@@ -665,7 +665,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
 pub(crate) fn exec_standard_op_on_tensors_in_session(
     op: &StdTensorOp,
     inputs: &[&Tensor],
-    exec: &mut dyn BackendSession,
+    exec: &mut dyn Engine,
 ) -> Result<Vec<Tensor>> {
     // One dispatch table: owned inputs are reads of their tensors, so the owned
     // and borrowed entry points cannot drift apart.

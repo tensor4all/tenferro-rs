@@ -3,7 +3,7 @@
 This page is the first stop when an older tenferro-rs example fails with
 `cannot find module`, `cannot find function`, or a changed-signature error.
 The current public API favors explicit extension traits, fallible constructors,
-and session-owned execution. Historical worklogs are not API documentation.
+and caller-held engines. Historical worklogs are not API documentation.
 
 ## Removed modules and free functions
 
@@ -19,23 +19,27 @@ and session-owned execution. Historical worklogs are not API documentation.
 | `tenferro_tensor::HostTensor<T>` / `HostTensorView<'a, T>` | `TypedTensor<T, DynRank, Host>` (`from_host_vec_col_major`, `as_slice`, `host_data_mut`) and `TypedTensorView<'a, T, DynRank, Host>` (`from_host_slice`, `as_host_slice`). Scalar-set members and `ErasedHostTensor` payloads use the same types. |
 | `tenferro_tensor::core::{DefaultScalars, HostTensor, ...}` | `tenferro_tensor::core` re-exports metadata only; import tensor types, including `DefaultScalars`, from the `tenferro_tensor` root. |
 | `TypedTensorView::try_slice`, `try_slice_axis`, `try_reshape` (and the `TypedTensorViewMut` forms) | `slice_view`, `slice_axis_view`, `reshape_view`. |
-| Owner-side execution on a backend: `CpuBackend::to_contiguous` / `copy_into` (`TensorViewCanonicalization`), `TensorFusion`, `reclaim_buffer`, `with_linalg_pool`, and the CUDA/WebGPU owner equivalents | Enter once and call the method on the session: `backend.with_backend_session(\|s\| s.to_contiguous_read(read))??`. |
+| Owner-side execution through a backend-owned copy/canonicalization (`to_contiguous` / `copy_into`, `TensorFusion`, `reclaim_buffer`, `with_linalg_pool`, and the CUDA/WebGPU equivalents) | Call the method on the engine you hold: `engine.to_contiguous_read(read)?`. The `CpuEngine` / `CudaEngine` value replaces the old backend handle, and engine construction is `CpuEngine::new(pool)` / `CpuEngine::serial()` / `CudaEngine::open(ordinal)`. |
+| The removed backend-session host and its entry wrappers, held sessions and phase leases | Delete the wrapper and pass `&mut engine` to the operation. There is no entry protocol, no nested-entry error and no held-session type to hold. |
+| The removed compiled-run entry points on `Runtime` (the compiled, prepared and deferred run calls) | `let prepared = runtime.prepare(&program, &reads, &[engine.target()])?;` then `runtime.run(&mut [&mut engine], &prepared, &reads)?`; turn each `Output` into a `Tensor` with `output.into_tensor(&mut engine)?`. |
+| An eager runtime that owned its backend (backend-owning constructor, CPU placement, a raw execution-session entry) | `EagerRuntime::new()` stores no engine: call `ctx.with_eager_session(&mut engine, \|s\| ...)`, and pass `&mut engine` to `grad` / `vjp` / `jvp` / `backward` / `backward_with` / `to_tensor`. |
+| Fixed thread-count backends and CPU placement values (auto/all-allowed/NUMA-node), CPU-set and CPU-id selectors | Build the pool yourself: `CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(n).build()?)`, or `CpuEngine::serial()` for no pool. tenferro no longer constructs pools, resolves placement or verifies affinity. |
+| Cloneable backend handles that shared internal state | The engine is a value, not a handle; hold one and borrow it with `&mut`. Sharing work across threads means one engine per thread or per pool. |
 
 The owning crate's `prelude` re-exports the public operation traits. For a
 first direct CPU program, the usual imports are:
 
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::prelude::*;
 use tenferro_runtime::prelude::*;
 ```
 
-Then keep execution inside one session:
+Then borrow one engine for every call:
 
 ```rust
-let mut backend = CpuBackend::new();
-// The outer `?` reports session admission; the inner one the operation.
-let values = backend.with_backend_session(|session| input.svdvals(session))??;
+let mut engine = CpuEngine::serial();
+let values = input.svdvals(&mut engine)?;
 ```
 
 ## Autodiff context changes
@@ -83,7 +87,9 @@ identity/no-axis behavior is what the program needs.
 
 | Older spelling | Current spelling |
 | --- | --- |
-| `ctx.with_eager_session(\|s\| s.neg(&x))??` (nested `Result`) | `ctx.with_eager_session(\|s\| s.neg(&x))?`: the callback returns `Result<T, E>` with `E: From<tenferro_ad::Error>`, and session-entry failures arrive as `E::from(..)`. Annotate `Ok::<_, tenferro_ad::Error>(..)` when the error type is not otherwise inferred; map tensor-level errors with `.map_err(tenferro_ad::Error::from)`. Same for `CpuPlacementBoundEager::with_eager_session`. |
+| `ctx.with_eager_session(\|s\| s.neg(&x))??` (nested `Result`) | `ctx.with_eager_session(&mut engine, \|s\| s.neg(&x))?`: the callback returns `Result<T, E>` with `E: From<tenferro_ad::Error>`, and an unregistered engine error arrives as `E::from(..)`. Annotate `Ok::<_, tenferro_ad::Error>(..)` when the error type is not otherwise inferred; map tensor-level errors with `.map_err(tenferro_ad::Error::from)`. |
+| `ctx.with_eager_session(\|s\| ...)` without an engine | `ctx.with_eager_session(&mut engine, \|s\| ...)`: `EagerRuntime` stores no engine, so the caller passes one. |
+| `loss.backward()`, `y.backward_with(&seed)`, `ctx.grad(&loss, &x)`, `ctx.vjp(&y, &x, &seed)`, `ctx.jvp(&y, &x, &tangent)`, `value.to_tensor()` | Each takes the engine first: `backward(&mut engine)`, `backward_with(&mut engine, &seed)`, `grad(&mut engine, &loss, &x)`, `vjp(&mut engine, ...)`, `jvp(&mut engine, ...)`, `to_tensor(&mut engine)`. |
 | `reduce_sum_squares(&x, &[0])` (eager), `x.reduce_sum_squares(&[0])` (traced) | `Some(&[0])`; `None` now reduces every axis, as for `reduce_sum`. |
 | `x.reduce_sum(&[1], session)` on `Tensor` / `TypedTensor` | `x.reduce_sum(Some(&[1]), session)`. |
 | `session.gather(&x, &idx, &cfg)` and other core ops only on the session | Also `x.gather(&idx, cfg, session)` via `TensorSessionOpsExt` (see the session-surface notes in the guides). |
@@ -95,7 +101,7 @@ identity/no-axis behavior is what the program needs.
 
 1. Choose the value tier: direct concrete tensor, eager tensor, or traced tensor.
 2. Import the `*Ext` trait owned by the operation crate.
-3. Check the method's receiver and session arity in the
+3. Check the method's receiver and engine arity in the
    [API cheatsheet](https://tensor4all.org/tenferro-rs/skill-references/api-cheatsheet.md).
 4. Use the [linear algebra guide](../guides/linear-algebra.md),
    [einsum guide](../guides/einsum.md), or

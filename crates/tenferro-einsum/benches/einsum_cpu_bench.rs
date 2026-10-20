@@ -4,7 +4,7 @@ use std::sync::Arc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::EagerSessionEinsumExt;
 use tenferro_runtime::Tensor;
 
@@ -19,8 +19,17 @@ fn bench_threads() -> usize {
         .unwrap_or(1)
 }
 
-fn cpu_ctx(threads: usize) -> Arc<EagerRuntime> {
-    EagerRuntime::with_cpu_backend(CpuBackend::with_threads(threads).unwrap()).unwrap()
+fn cpu_ctx(_threads: usize) -> Arc<EagerRuntime> {
+    EagerRuntime::new().unwrap()
+}
+
+fn cpu_engine(threads: usize) -> CpuEngine {
+    CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(threads)
+            .build()
+            .unwrap(),
+    )
 }
 
 fn f64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
@@ -47,15 +56,15 @@ fn eager(ctx: &Arc<EagerRuntime>, tensor: Tensor) -> EagerTensor {
     EagerTensor::from_tensor_in(tensor, Arc::clone(ctx)).unwrap()
 }
 
-fn consume_f64(tensor: &EagerTensor) {
-    let materialized = tensor.to_tensor().unwrap();
+fn consume_f64(tensor: &EagerTensor, engine: &mut CpuEngine) {
+    let materialized = tensor.to_tensor(engine).unwrap();
     let data = &materialized;
     black_box(data.shape());
     black_box(data.as_slice::<f64>().expect("f64 tensor")[0]);
 }
 
-fn consume_c64(tensor: &EagerTensor) {
-    let materialized = tensor.to_tensor().unwrap();
+fn consume_c64(tensor: &EagerTensor, engine: &mut CpuEngine) {
+    let materialized = tensor.to_tensor(engine).unwrap();
     let data = &materialized;
     black_box(data.shape());
     black_box(data.as_slice::<Complex64>().expect("c64 tensor")[0]);
@@ -64,6 +73,7 @@ fn consume_c64(tensor: &EagerTensor) {
 fn bench_batched_einsum(c: &mut Criterion) {
     let threads = bench_threads();
     let ctx = cpu_ctx(threads);
+    let mut engine = cpu_engine(threads);
     let mut group = c.benchmark_group(format!(
         "tenferro_einsum_cpu/batched_rightmost_batch/threads_{threads}"
     ));
@@ -76,11 +86,11 @@ fn bench_batched_einsum(c: &mut Criterion) {
             group.bench_function(BenchmarkId::new("f64_ikb_knb_to_inb", params), |bench| {
                 bench.iter(|| {
                     let out = ctx
-                        .with_eager_session(|s| {
+                        .with_eager_session(&mut engine, |s| {
                             s.einsum(&[black_box(&a), black_box(&b)], "ikb,knb->inb")
                         })
                         .expect("batched einsum should succeed");
-                    consume_f64(&out);
+                    consume_f64(&out, &mut engine);
                 });
             });
         }
@@ -92,6 +102,7 @@ fn bench_batched_einsum(c: &mut Criterion) {
 fn bench_einsum_patterns(c: &mut Criterion) {
     let threads = bench_threads();
     let ctx = cpu_ctx(threads);
+    let mut engine = cpu_engine(threads);
     let mut group = c.benchmark_group(format!("tenferro_einsum_cpu/patterns/threads_{threads}"));
 
     let a = eager(&ctx, f64_tensor(vec![64, 64], 1));
@@ -100,22 +111,24 @@ fn bench_einsum_patterns(c: &mut Criterion) {
     group.bench_function("f64_binary_ij_jk_to_ik", |bench| {
         bench.iter(|| {
             let out = ctx
-                .with_eager_session(|s| s.einsum(&[black_box(&a), black_box(&b)], "ij,jk->ik"))
+                .with_eager_session(&mut engine, |s| {
+                    s.einsum(&[black_box(&a), black_box(&b)], "ij,jk->ik")
+                })
                 .expect("binary einsum should succeed");
-            consume_f64(&out);
+            consume_f64(&out, &mut engine);
         });
     });
     group.bench_function("f64_chain_ij_jk_kl_to_il", |bench| {
         bench.iter(|| {
             let out = ctx
-                .with_eager_session(|s| {
+                .with_eager_session(&mut engine, |s| {
                     s.einsum(
                         &[black_box(&a), black_box(&b), black_box(&c_tensor)],
                         "ij,jk,kl->il",
                     )
                 })
                 .expect("chain einsum should succeed");
-            consume_f64(&out);
+            consume_f64(&out, &mut engine);
         });
     });
 
@@ -124,9 +137,11 @@ fn bench_einsum_patterns(c: &mut Criterion) {
     group.bench_function("f64_multiedge_ijk_jkl_to_il", |bench| {
         bench.iter(|| {
             let out = ctx
-                .with_eager_session(|s| s.einsum(&[black_box(&x), black_box(&y)], "ijk,jkl->il"))
+                .with_eager_session(&mut engine, |s| {
+                    s.einsum(&[black_box(&x), black_box(&y)], "ijk,jkl->il")
+                })
                 .expect("multi-edge einsum should succeed");
-            consume_f64(&out);
+            consume_f64(&out, &mut engine);
         });
     });
 
@@ -135,9 +150,11 @@ fn bench_einsum_patterns(c: &mut Criterion) {
     group.bench_function("c64_binary_ij_jk_to_ik", |bench| {
         bench.iter(|| {
             let out = ctx
-                .with_eager_session(|s| s.einsum(&[black_box(&a), black_box(&b)], "ij,jk->ik"))
+                .with_eager_session(&mut engine, |s| {
+                    s.einsum(&[black_box(&a), black_box(&b)], "ij,jk->ik")
+                })
                 .expect("c64 binary einsum should succeed");
-            consume_c64(&out);
+            consume_c64(&out, &mut engine);
         });
     });
 

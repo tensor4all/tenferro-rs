@@ -1,13 +1,12 @@
 //! Coverage for the structural cast matrix, exercised through the public backend path.
 
 use crate::tests::*;
-use tenferro_tensor::BackendSessionHost;
 
 /// Every preset dtype is cast to every other one, so each arm of the conversion matrix runs and
 /// the refusals for the pairs it does not cover are seen rather than assumed.
 #[test]
 fn cast_matrix_covers_every_preset_pair() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let dtypes = [
         DType::F32,
         DType::F64,
@@ -22,9 +21,7 @@ fn cast_matrix_covers_every_preset_pair() {
         for to in dtypes {
             // A pair the matrix covers returns a tensor of the requested dtype; one it does not
             // returns a typed error. Both are outcomes this table owns.
-            match backend
-                .with_backend_session(|__s| __s.cast(&input, to))
-                .unwrap()
+            match crate::test_support::on_engine(&mut backend, |__s| __s.cast(&input, to)).unwrap()
             {
                 Ok(out) => assert_eq!(out.dtype(), to),
                 Err(_) => continue,

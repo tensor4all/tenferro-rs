@@ -6,15 +6,13 @@
 // not be called" instead of computing a conjugate.
 use super::super::{svd_typed, SvdDriver};
 use num_complex::Complex64;
-use tenferro_gpu::cuda::{
-    download_tensor, upload_tensor, with_cuda_exec_session, CudaBackend, CudaDeviceId,
-};
-use tenferro_tensor::{BackendSessionHost, Tensor};
+use tenferro_gpu::cuda::{download_tensor, upload_tensor, CudaDeviceId, CudaEngine};
+use tenferro_tensor::Tensor;
 
 #[test]
 #[ignore = "requires CUDA; full factors have no public driver option"]
 fn test_cubecl_svd_xgesvdp_full_and_economy() {
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     for (m, n) in [(7, 3), (3, 7)] {
         let data: Vec<_> = (0..m * n)
             .map(|i| Complex64::new((i as f64 * 0.7).cos(), (i as f64 * 0.31 + 0.4).sin()))
@@ -22,20 +20,13 @@ fn test_cubecl_svd_xgesvdp_full_and_economy() {
         let host = Tensor::from_vec_col_major([m, n], data.clone()).unwrap();
         let device = upload_tensor(backend.runtime(), &host).unwrap();
         for full in [false, true] {
-            let (u, s, vt) = backend
-                .with_backend_session(|session| {
-                    with_cuda_exec_session(session, |session| {
-                        svd_typed(
-                            session,
-                            device.as_typed::<Complex64>().unwrap(),
-                            full,
-                            SvdDriver::Xgesvdp,
-                        )
-                    })
-                    .unwrap()
-                })
-                .unwrap()
-                .unwrap();
+            let (u, s, vt) = svd_typed(
+                &mut backend,
+                device.as_typed::<Complex64>().unwrap(),
+                full,
+                SvdDriver::Xgesvdp,
+            )
+            .unwrap();
             let (uc, vr, k) = (
                 if full { m } else { m.min(n) },
                 if full { n } else { m.min(n) },

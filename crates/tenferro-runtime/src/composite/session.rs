@@ -1,4 +1,4 @@
-//! [`CompositeOps`] over a concrete [`BackendSession`].
+//! [`CompositeOps`] over a concrete [`Engine`].
 //!
 //! Values stay borrowed (`TensorRead`) until an operation produces an owned
 //! result, so a composite never copies its caller's input.
@@ -7,8 +7,8 @@ use std::marker::PhantomData;
 
 use tenferro_ops::broadcast::{broadcast_shape, broadcast_shapes};
 use tenferro_tensor::{
-    BackendSession, CompareDir, DType, Error, GatherConfig, Result, Tensor, TensorRead,
-    TensorScalar, TensorValue, TypedTensor,
+    CompareDir, DType, Engine, Error, GatherConfig, Result, Tensor, TensorRead, TensorScalar,
+    TensorValue, TypedTensor,
 };
 
 use super::{
@@ -28,7 +28,7 @@ pub(crate) fn typed_borrowed<T: TensorScalar>(tensor: &TypedTensor<T>) -> ReadIn
 
 /// Run one composite in `session` and return its owned result.
 pub(crate) fn run_session_composite<'a>(
-    session: &mut dyn BackendSession,
+    session: &mut dyn Engine,
     composite: impl FnOnce(&mut SessionComposite<'_, 'a>) -> Result<ReadInput<'a>>,
 ) -> Result<Tensor> {
     let mut ops = SessionComposite::new(session);
@@ -40,7 +40,7 @@ pub(crate) fn run_session_composite<'a>(
 ///
 /// `'a` is the lifetime of the borrowed composite inputs.
 pub(crate) struct SessionComposite<'s, 'a> {
-    session: &'s mut dyn BackendSession,
+    session: &'s mut dyn Engine,
     inputs: PhantomData<ReadInput<'a>>,
 }
 
@@ -60,7 +60,7 @@ impl Operand<'_> {
 }
 
 impl<'s, 'a> SessionComposite<'s, 'a> {
-    fn new(session: &'s mut dyn BackendSession) -> Self {
+    fn new(session: &'s mut dyn Engine) -> Self {
         Self {
             session,
             inputs: PhantomData,

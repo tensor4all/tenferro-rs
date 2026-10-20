@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tenferro_ad::extension::{apply_eager_with_extension_session, ExtensionOp};
 use tenferro_ad::EagerTensor;
-use tenferro_cpu::{scalar_fold, CpuBackend};
+use tenferro_cpu::{scalar_fold, CpuEngine};
 use tenferro_ops::{ExtensionShapeContext, SymDim};
 use tenferro_runtime::{
     EngineId, ErasedExecutionContext, ExecutionContextIdentity, ExtensionCacheKey,
@@ -1165,7 +1165,7 @@ df64_operation!(
 /// Returns a typed error when the input is not a rank-2 externally defined matrix, or
 /// when a column is zero and the factorization has no unit vector for it.
 fn qr_of(
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let input = sole_input("df64_qr", session, inputs)?;
@@ -1249,7 +1249,7 @@ fn qr_of(
 
 /// Narrow the external scalar to `f64` through the contribution's own conversion.
 fn to_f64_of(
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let input = sole_input("df64_to_f64", session, inputs)?;
@@ -1261,7 +1261,7 @@ fn to_f64_of(
 
 /// Widen a preset `f64` tensor into the external scalar.
 fn from_f64_of(
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let input = match inputs.first() {
@@ -1460,7 +1460,7 @@ fn owned_f64_read(read: &TensorRead<'_>) -> tenferro_runtime::Result<Tensor> {
 /// have to outlive the resolved inputs.
 fn inputs_of<'a>(
     op: &'static str,
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     inputs: &'a [TensorRead<'a>],
 ) -> tenferro_runtime::Result<Vec<Input<'a>>> {
     let borrowed = inputs
@@ -1509,7 +1509,7 @@ fn inputs_of<'a>(
 /// Resolve one input to a borrow or to materialized storage.
 fn resolve_input<'a>(
     op: &'static str,
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     read: &TensorRead<'a>,
 ) -> tenferro_runtime::Result<Input<'a>> {
     match read {
@@ -1538,7 +1538,7 @@ fn resolve_input<'a>(
 /// is rejected explicitly rather than read through.
 fn sole_input<'a>(
     op: &'static str,
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     inputs: &'a [TensorRead<'a>],
 ) -> tenferro_runtime::Result<Input<'a>> {
     match inputs.first() {
@@ -1595,7 +1595,7 @@ fn tensor_of(
 /// external scalar, so the derivative keeps the factorization's precision.
 fn qr_vjp_of(
     mask: (bool, bool),
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     caches: &mut ExtensionCacheStore,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
@@ -1688,7 +1688,7 @@ fn qr_vjp_of(
 /// `R_dot = triu(Q^T A_dot) R` and `Q_dot = (A_dot - Q R_dot) R^{-1}`, so the forward
 /// rule emits both tangent outputs from the primal factors.
 fn qr_jvp_of(
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let op = "df64_qr_jvp";
@@ -1940,7 +1940,7 @@ fn fold_in_scalar(
 fn einsum_of(
     labels: &[Box<[u32]>],
     out_labels: &[u32],
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let op = "df64_einsum";
@@ -1972,7 +1972,7 @@ fn einsum_of(
 fn einsum_vjp_of(
     labels: &[Box<[u32]>],
     out_labels: &[u32],
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let op = "df64_einsum_vjp";
@@ -2021,7 +2021,7 @@ fn einsum_jvp_of(
     labels: &[Box<[u32]>],
     out_labels: &[u32],
     tangents: &[bool],
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let op = "df64_einsum_jvp";
@@ -2145,7 +2145,7 @@ fn payload_of<T: tenferro_tensor_core::Scalar>(
 /// Fill a tensor of `shape` with the scalar input's value.
 fn expand_of(
     shape: &[usize],
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let input = sole_input("df64_expand", session, inputs)?;
@@ -2169,7 +2169,7 @@ fn expand_of(
 }
 
 fn total_of(
-    session: Option<&mut dyn tenferro_tensor::BackendSession>,
+    session: Option<&mut dyn tenferro_tensor::Engine>,
     inputs: &[TensorRead<'_>],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let input = sole_input("df64_total", session, inputs)?;
@@ -2228,7 +2228,7 @@ enum Df64Body {
 impl Df64Body {
     fn execute(
         &self,
-        session: Option<&mut dyn tenferro_tensor::BackendSession>,
+        session: Option<&mut dyn tenferro_tensor::Engine>,
         caches: &mut ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {
@@ -2281,13 +2281,21 @@ impl PreparedOperation for Df64Prepared {
 impl PreparedOperationExecutor for Df64Prepared {
     fn execute(
         &self,
-        _context: &mut ErasedExecutionContext<'_>,
+        context: &mut ErasedExecutionContext<'_>,
         caches: &mut ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {
-        // The erased context does not expose a session, so a body that needs one relies
-        // on the session entry point and gathers what it can without one.
-        self.body.execute(None, caches, inputs)
+        // The runtime passes the caller's engine as the erased context.
+        let engine = context
+            .downcast_mut::<CpuEngine>(self.binding.context_identity())
+            .map_err(|source| {
+                tenferro_runtime::Error::runtime_state_source(
+                    "extension",
+                    tenferro_runtime::ErrorPhase::Execution,
+                    source,
+                )
+            })?;
+        self.body.execute(Some(engine), caches, inputs)
     }
 
     fn supports_session(&self) -> bool {
@@ -2296,7 +2304,7 @@ impl PreparedOperationExecutor for Df64Prepared {
 
     fn execute_in_session(
         &self,
-        session: &mut dyn tenferro_tensor::BackendSession,
+        session: &mut dyn tenferro_tensor::Engine,
         caches: &mut ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {
@@ -2320,7 +2328,7 @@ impl ExtensionEngine for Df64Engine {
     }
 
     fn context_identity(&self) -> ExecutionContextIdentity {
-        ExecutionContextIdentity::of::<CpuBackend>()
+        ExecutionContextIdentity::of::<CpuEngine>()
     }
 
     fn prepare(
@@ -2491,7 +2499,7 @@ pub fn module_for_engine(
     }))
 }
 
-/// Run [`Df64Total`] on an eagerly held external tensor.
+/// Run [`Df64Total`] on an eagerly held external tensor using `engine`.
 ///
 /// # Errors
 ///
@@ -2508,7 +2516,10 @@ pub fn module_for_engine(
 /// assert_eq!(<Df64Total as ExtensionOp>::input_count(&Df64Total), 1);
 /// assert!(module().is_ok());
 /// ```
-pub fn apply_total(input: &EagerTensor) -> tenferro_runtime::Result<Vec<EagerTensor>> {
+pub fn apply_total(
+    engine: &mut dyn tenferro_runtime::ExecutionEngine,
+    input: &EagerTensor,
+) -> tenferro_runtime::Result<Vec<EagerTensor>> {
     let module = module().map_err(|source| {
         tenferro_runtime::Error::runtime_state_source(
             "df64_total",
@@ -2516,5 +2527,5 @@ pub fn apply_total(input: &EagerTensor) -> tenferro_runtime::Result<Vec<EagerTen
             source,
         )
     })?;
-    apply_eager_with_extension_session(Arc::new(Df64Total), &[input], module)
+    apply_eager_with_extension_session(engine, Arc::new(Df64Total), &[input], module)
 }

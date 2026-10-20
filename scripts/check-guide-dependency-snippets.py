@@ -30,10 +30,10 @@ class GuideCase:
 
 EINSUM_SOURCE = r"""
 use tenferro_ad::{EagerRuntime, Tensor};
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_einsum::{EagerSessionEinsumExt, TraceContextEinsumExt};
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, Runtime, TraceContext};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = Tensor::from_vec_col_major(
@@ -51,19 +51,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let c = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
     let graph = trace.finish(&[c])?;
     let program = GraphCompiler::new().compile_traced_graph(&graph)?;
-    let backend = CpuBackend::new();
-    let engine_id = runtime_engine_id()?;
+    let mut engine = CpuEngine::serial();
     let mut runtime_builder = Runtime::builder();
-    runtime_builder.register_engine(runtime_engine_registration(&backend)?)?;
-    runtime_builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(engine_id)?)?;
+    runtime_builder.register_engine(runtime_engine_registration(&engine)?)?;
+    runtime_builder.install_extension_module(tenferro_einsum::extension_module::<CpuEngine>(
+        runtime_engine_id()?,
+    )?)?;
     let runtime = runtime_builder.build()?;
-    let mut outputs = runtime.run_compiled(&program, &[&a, &b])?;
-    assert_eq!(outputs.remove(0).shape(), &[2, 2]);
+    let reads = [
+        tenferro_runtime::TensorRead::from_tensor(&a),
+        tenferro_runtime::TensorRead::from_tensor(&b),
+    ];
+    let prepared = runtime.prepare(&program, &reads, &[engine.target()])?;
+    let mut outputs = runtime.run(&mut [&mut engine], &prepared, &reads)?;
+    assert_eq!(outputs.remove(0).into_tensor(&mut engine)?.shape(), &[2, 2]);
 
     let ctx = EagerRuntime::new()?;
     let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0])?)?;
-    let outer = ctx.with_eager_session(|s| s.einsum(&[&u, &v], "i,j->ij"))?;
+    let outer = ctx.with_eager_session(&mut engine, |s| s.einsum(&[&u, &v], "i,j->ij"))?;
     assert_eq!(outer.shape(), &[2, 3]);
 
     Ok(())
@@ -73,9 +79,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 LINALG_SOURCE = r"""
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TensorLinalgExt;
-use tenferro_runtime::{BackendSessionHost, Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
     lhs.as_slice::<f64>()
@@ -91,19 +97,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules()?)?
         .build()?;
 
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let a = Tensor::from_vec_col_major(
         vec![2, 2],
         vec![0.0_f64, 2.0, 1.0, 3.0],
     )?;
-    let (p, l, u, q, parity) = backend.with_backend_session(|session| a.full_piv_lu(session))??;
+    let (p, l, u, q, parity) = a.full_piv_lu(&mut engine)?;
 
-    let reconstructed = backend.with_backend_session(|session| {
-        let pt = p.transpose(&[1, 0], session)?;
-        let pt_l = pt.matmul(&l, session)?;
-        let pt_lu = pt_l.matmul(&u, session)?;
-        pt_lu.matmul(&q, session)
-    })??;
+    let pt = p.transpose(&[1, 0], &mut engine)?;
+    let pt_l = pt.matmul(&l, &mut engine)?;
+    let pt_lu = pt_l.matmul(&u, &mut engine)?;
+    let reconstructed = pt_lu.matmul(&q, &mut engine)?;
     assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
 
     assert_eq!(parity.shape(), &[] as &[usize]);
@@ -111,7 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(parity_value == 1.0 || parity_value == -1.0);
 
     let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0])?;
-    let x = backend.with_backend_session(|session| a.full_piv_lu_solve(&b, session))??;
+    let x = a.full_piv_lu_solve(&b, &mut engine)?;
     assert_eq!(x.shape(), &[2, 1]);
 
     Ok(())
@@ -121,9 +125,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 TENSOR_SOURCE = r"""
 use tenferro_ad::{EagerRuntime, Tensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{CompareDir, TypedTensorSessionOpsExt};
-use tenferro_tensor::{BackendSessionHost, Rank, TypedTensor};
+use tenferro_tensor::{Rank, TypedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut x = TypedTensor::<f64>::from_vec_col_major(
@@ -139,14 +143,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     assert_eq!(static_rank.rank(), 2);
 
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0])?;
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0])?;
-    let mask = backend.with_backend_session(|session| {
-        let sum = lhs.add(&rhs, session)?;
-        let product = lhs.mul(&rhs, session)?;
-        sum.compare(&product, CompareDir::Lt, session)
-    })??;
+    let sum = lhs.add(&rhs, &mut engine)?;
+    let product = lhs.mul(&rhs, &mut engine)?;
+    let mask = sum.compare(&product, CompareDir::Lt, &mut engine)?;
     assert_eq!(mask.as_slice()?, &[false, true, true]);
 
     let ctx = EagerRuntime::new()?;
@@ -161,9 +163,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 FFT_SOURCE = r"""
 use num_complex::Complex64;
 use tenferro_ad::AdContext;
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ad = AdContext::builder().build()?;
@@ -180,14 +182,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y)?;
-    let backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let engine_id = runtime_engine_id()?;
     let mut runtime_builder = Runtime::builder();
-    runtime_builder.register_engine(runtime_engine_registration(&backend)?)?;
-    runtime_builder.install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id)?)?;
+    runtime_builder.register_engine(runtime_engine_registration(&engine)?)?;
+    runtime_builder
+        .install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id)?)?;
     let runtime = runtime_builder.build()?;
-    let mut outputs = runtime.run_compiled(&program, &[])?;
-    assert_eq!(outputs.remove(0).shape(), &[4]);
+    let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+    let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+    assert_eq!(outputs.remove(0).into_tensor(&mut engine)?.shape(), &[4]);
 
     Ok(())
 }

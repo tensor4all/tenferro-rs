@@ -41,6 +41,10 @@ cuda = [
     "dep:cubecl-environment",
     "dep:cudarc",
 ]
+# Exposes CubeCL launch types (client, bindings) for running caller-written
+# `#[cube]` kernels on a CudaEngine's stream. The only feature under which
+# CubeCL types are public; it changes when tenferro replaces CubeCL's runtime.
+cubecl-interop = ["cuda"]
 webgpu = [
     "dep:cubecl",
     "cubecl/std",
@@ -107,11 +111,6 @@ required-features = ["webgpu"]
 [[test]]
 name = "blas1_cuda"
 path = "tests/blas1_cuda.rs"
-
-[[test]]
-name = "held_cuda_session"
-path = "tests/held_cuda_session.rs"
-required-features = ["cuda"]
 
 [[test]]
 name = "source_publication"

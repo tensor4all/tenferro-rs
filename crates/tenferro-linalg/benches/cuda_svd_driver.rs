@@ -4,7 +4,7 @@
 //! For each `(dtype, n, driver)` the harness measures one thin SVD
 //! (`full_matrices = false`, vectors computed — the only form
 //! [`SvdOptions`](tenferro_linalg::SvdOptions) exposes) followed by the
-//! backend-native device synchronize, on a held CUDA session. Inputs are
+//! backend-native device synchronize, on a caller-held CUDA engine. Inputs are
 //! uploaded to the device once, before timing; no iteration downloads, so the
 //! timed region is the cuSOLVER call, its workspace/output allocation, and its
 //! barrier and nothing else. The factors are dropped inside the timed region
@@ -43,11 +43,10 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use num_complex::{Complex32, Complex64};
 use rayon::prelude::*;
 use tenferro_gpu::cuda::{
-    download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend,
-    CudaDeviceId, CudaHeldSession, CudaRuntime,
+    download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine, CudaRuntime,
 };
 use tenferro_linalg::{LinalgBackend, SvdDriver, SvdOptions};
-use tenferro_tensor::{BackendSessionHost, DType, ErrorKind, Tensor};
+use tenferro_tensor::{DType, ErrorKind, Tensor};
 
 /// Square orders. 64 and 256 stay under the `Auto` `gesvdj` threshold; 1024 is
 /// the JAX-compatible boundary itself, where `Auto` still chooses `gesvdj`.
@@ -321,18 +320,13 @@ fn identity(p: usize, q: usize) -> Complex64 {
 /// Run one SVD through the scoped entry the CUDA linalg tests use, download the
 /// factors, and compute the residuals on the host. Untimed.
 fn accuracy_row(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     runtime: &CudaRuntime,
     host: &Tensor,
     device: &Tensor,
     options: SvdOptions,
 ) -> tenferro_tensor::Result<AccuracyRow> {
-    let outputs = backend
-        .with_backend_session(|session| {
-            with_cuda_exec_session(session, |exec| exec.svd_with_options(device, options))
-                .expect("scoped session is a CUDA execution session")
-        })
-        .expect("scoped CUDA admission")?;
+    let outputs = backend.svd_with_options(device, options)?;
     let u = download_tensor(runtime, &outputs[0]).expect("download U");
     let s = download_tensor(runtime, &outputs[1]).expect("download S");
     let vt = download_tensor(runtime, &outputs[2]).expect("download Vt");
@@ -351,18 +345,14 @@ fn accuracy_row(
     })
 }
 
-/// One timed iteration: the SVD on the held session's captured stream, then the
+/// One timed iteration: the SVD on the engine's captured stream, then the
 /// backend-native device synchronize. No host download.
-fn time_svd(session: &mut CudaHeldSession<'_>, device: &Tensor, options: SvdOptions) {
-    let outputs = session
-        .with_session(|view| {
-            with_cuda_exec_session(view, |exec| exec.svd_with_options(device, options))
-                .expect("held session is a CUDA execution session")
-        })
-        .expect("held session entry")
+fn time_svd(engine: &mut CudaEngine, device: &Tensor, options: SvdOptions) {
+    let outputs = engine
+        .svd_with_options(device, options)
         .expect("svd_with_options");
     black_box(outputs);
-    session.synchronize().expect("device synchronize");
+    engine.runtime().synchronize().expect("device synchronize");
 }
 
 fn bench_svd_driver(c: &mut Criterion) {
@@ -370,7 +360,7 @@ fn bench_svd_driver(c: &mut Criterion) {
         gpu_available(),
         "the CUDA SVD driver comparison requires a CUDA device"
     );
-    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let runtime = backend.runtime().clone();
 
     // Deterministic inputs, host and device, prepared once before any timing.
@@ -422,20 +412,18 @@ fn bench_svd_driver(c: &mut Criterion) {
         }
     }
 
-    // Timing at steady state: one held CUDA session for every arm, so the
+    // Timing at steady state: one caller-held CUDA engine for every arm, so the
     // cuSOLVER call and its barrier are not charged a per-operation admission.
-    let mut session = backend.open_session().expect("CUDA held session");
     let mut group = c.benchmark_group("cuda_svd_driver");
     for timing in &timings {
         let matrix = &matrices[timing.matrix];
         let options = SvdOptions::default().driver(timing.driver);
         let label = case_label(matrix.dtype, matrix.n, timing.driver);
         group.bench_function(&label, |bencher| {
-            bencher.iter(|| time_svd(&mut session, &matrix.device, options));
+            bencher.iter(|| time_svd(&mut backend, &matrix.device, options));
         });
     }
     group.finish();
-    session.close().expect("close CUDA held session");
 }
 
 fn criterion_config() -> Criterion {

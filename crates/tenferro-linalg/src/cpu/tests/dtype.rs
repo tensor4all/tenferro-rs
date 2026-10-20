@@ -124,7 +124,7 @@ fn assert_c32_slice_close(actual: &[Complex32], expected: &[Complex32], tol: f32
 
 #[test]
 fn cpu_linalg_accepts_f32_happy_paths() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let tol = 5.0e-4;
 
     with_cpu_linalg(&mut backend, |backend| {
@@ -247,7 +247,7 @@ fn cpu_linalg_accepts_f32_happy_paths() {
 
 #[test]
 fn cpu_linalg_accepts_c32_happy_paths() {
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let tol = 1.0e-3;
 
     with_cpu_linalg(&mut backend, |backend| {

@@ -1,69 +1,71 @@
-error[E0576]: cannot find method or associated constant `parts_mut` in trait `BackendSession`
-  --> tests/ui/eager_session_mutation_removed.rs:32:62
+error[E0576]: cannot find method or associated constant `parts_mut` in trait `Engine`
+  --> tests/ui/eager_session_mutation_removed.rs:31:46
    |
-32 |     let (owner, _) = <dyn BackendSession as BackendSession>::parts_mut(session);
-   |                                                              ^^^^^^^^^ not found in `BackendSession`
+31 |     let (owner, _) = <dyn Engine as Engine>::parts_mut(session);
+   |                                              ^^^^^^^^^ not found in `Engine`
 
 error[E0308]: mismatched types
- --> tests/ui/eager_session_mutation_removed.rs:8:16
+ --> tests/ui/eager_session_mutation_removed.rs:7:16
   |
-8 |     *session = CpuBackend::new();
-  |     --------   ^^^^^^^^^^^^^^^^^ expected `dyn BackendSession`, found `CpuBackend`
+7 |     *session = tenferro_cpu::CpuEngine::serial();
+  |     --------   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `dyn Engine`, found `CpuEngine`
   |     |
   |     expected due to the type of this binding
   |
-  = note: expected trait object `dyn BackendSession`
-                   found struct `CpuBackend`
+  = note: expected trait object `dyn Engine`
+                   found struct `CpuEngine`
+  = help: `CpuEngine` implements `Engine` so you could box the found value and coerce it to the trait object `Box<dyn Engine>`, you will have to change the expected type as well
 
-error[E0277]: the size for values of type `dyn BackendSession` cannot be known at compilation time
- --> tests/ui/eager_session_mutation_removed.rs:8:5
+error[E0277]: the size for values of type `dyn Engine` cannot be known at compilation time
+ --> tests/ui/eager_session_mutation_removed.rs:7:5
   |
-8 |     *session = CpuBackend::new();
+7 |     *session = tenferro_cpu::CpuEngine::serial();
   |     ^^^^^^^^ doesn't have a size known at compile-time
   |
-  = help: the trait `Sized` is not implemented for `dyn BackendSession`
+  = help: the trait `Sized` is not implemented for `dyn Engine`
   = note: the left-hand-side of an assignment must have a statically known size
 
-error[E0277]: the trait bound `dyn BackendSession: AsMut<_>` is not satisfied
-  --> tests/ui/eager_session_mutation_removed.rs:12:48
+error[E0277]: the trait bound `dyn Engine: AsMut<_>` is not satisfied
+  --> tests/ui/eager_session_mutation_removed.rs:11:61
    |
-12 |     let owner: &mut CpuBackend = AsMut::as_mut(session);
-   |                                  ------------- ^^^^^^^ the trait `AsMut<_>` is not implemented for `dyn BackendSession`
-   |                                  |
-   |                                  required by a bound introduced by this call
+11 |     let owner: &mut tenferro_cpu::CpuEngine = AsMut::as_mut(session);
+   |                                               ------------- ^^^^^^^ the trait `AsMut<_>` is not implemented for `dyn Engine`
+   |                                               |
+   |                                               required by a bound introduced by this call
 
 error[E0308]: mismatched types
-  --> tests/ui/eager_session_mutation_removed.rs:17:34
+  --> tests/ui/eager_session_mutation_removed.rs:16:47
    |
-17 |     let owner: &mut CpuBackend = BorrowMut::borrow_mut(session);
-   |                ---------------   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&mut CpuBackend`, found `&mut dyn BackendSession`
+16 |     let owner: &mut tenferro_cpu::CpuEngine = BorrowMut::borrow_mut(session);
+   |                ----------------------------   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&mut CpuEngine`, found `&mut dyn Engine`
    |                |
    |                expected due to this
    |
-   = note: expected mutable reference `&mut CpuBackend`
-              found mutable reference `&mut dyn BackendSession`
+   = note: expected mutable reference `&mut CpuEngine`
+              found mutable reference `&mut dyn Engine`
+   = help: `CpuEngine` implements `Engine` so you could change the expected type to `Box<dyn Engine>`
 
-error[E0277]: the trait bound `dyn BackendSession: DerefMut` is not satisfied
-  --> tests/ui/eager_session_mutation_removed.rs:22:54
+error[E0277]: the trait bound `dyn Engine: DerefMut` is not satisfied
+  --> tests/ui/eager_session_mutation_removed.rs:21:67
    |
-22 |     let owner: &mut CpuBackend = DerefMut::deref_mut(session);
-   |                                  ------------------- ^^^^^^^ the trait `DerefMut` is not implemented for `dyn BackendSession`
-   |                                  |
-   |                                  required by a bound introduced by this call
+21 |     let owner: &mut tenferro_cpu::CpuEngine = DerefMut::deref_mut(session);
+   |                                               ------------------- ^^^^^^^ the trait `DerefMut` is not implemented for `dyn Engine`
+   |                                               |
+   |                                               required by a bound introduced by this call
    |
 help: consider mutably borrowing here
    |
-22 |     let owner: &mut CpuBackend = DerefMut::deref_mut(&mut session);
-   |                                                      ++++
+21 |     let owner: &mut tenferro_cpu::CpuEngine = DerefMut::deref_mut(&mut session);
+   |                                                                   ++++
 
-error[E0277]: the trait bound `dyn BackendSession: Deref` is not satisfied
-  --> tests/ui/eager_session_mutation_removed.rs:22:34
+error[E0277]: the trait bound `dyn Engine: Deref` is not satisfied
+  --> tests/ui/eager_session_mutation_removed.rs:21:47
    |
-22 |     let owner: &mut CpuBackend = DerefMut::deref_mut(session);
-   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Deref` is not implemented for `dyn BackendSession`
+21 |     let owner: &mut tenferro_cpu::CpuEngine = DerefMut::deref_mut(session);
+   |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Deref` is not implemented for `dyn Engine`
 
-error[E0599]: no method named `backend_mut` found for mutable reference `&mut dyn BackendSession` in the current scope
-  --> tests/ui/eager_session_mutation_removed.rs:27:42
+error[E0599]: no method named `backend_mut` found for mutable reference `&mut dyn Engine` in the current scope
+  --> tests/ui/eager_session_mutation_removed.rs:26:55
    |
-27 |     let owner: &mut CpuBackend = session.backend_mut();
-   |                                          ^^^^^^^^^^^ method not found in `&mut dyn BackendSession`
+26 |     let owner: &mut tenferro_cpu::CpuEngine = session.backend_mut();
+   |                                                       ^^^^^^^^^^^ method not found in `&mut dyn Engine`

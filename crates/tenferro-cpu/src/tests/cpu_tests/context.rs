@@ -1,147 +1,25 @@
 use super::*;
 
-use tenferro_tensor::BackendSessionHost;
-use tenferro_tensor::TensorRead;
-use tenferro_tensor::{ErrorKind, ValidationKind};
-
 #[test]
-fn cpu_context_from_env_respects_rayon_num_threads() {
-    with_rayon_num_threads(Some("3"), || {
-        let ctx = CpuContext::from_env();
-        assert_eq!(ctx.num_threads(), 3);
-    });
-}
-
-#[test]
-fn cpu_context_from_env_falls_back_to_affinity_when_rayon_num_threads_is_absent() {
-    with_rayon_num_threads(None, || {
-        let ctx = CpuContext::from_env();
-        assert_eq!(ctx.num_threads(), crate::available_parallelism());
-    });
-}
-
-#[test]
-fn cpu_context_from_env_falls_back_to_single_threaded_when_rayon_num_threads_is_invalid() {
-    with_rayon_num_threads(Some("not-a-number"), || {
-        let ctx = CpuContext::from_env();
-        assert_eq!(ctx.num_threads(), 1);
-    });
-}
-
-#[test]
-fn cpu_context_try_from_env_rejects_invalid_rayon_num_threads() {
-    with_rayon_num_threads(Some("not-a-number"), || {
-        assert!(CpuContext::try_from_env().is_err());
-    });
-}
-
-#[cfg(unix)]
-#[test]
-fn cpu_context_try_from_env_rejects_non_unicode_rayon_num_threads() {
-    use std::os::unix::ffi::OsStringExt;
-
-    let _guard = EnvVarGuard::new("RAYON_NUM_THREADS", None);
-    std::env::set_var("RAYON_NUM_THREADS", OsString::from_vec(vec![0xff]));
-
-    let err = CpuContext::try_from_env().unwrap_err();
-
-    assert!(matches!(
-        &err,
-        Error::Extension {
-            op: "CpuContext::try_from_env",
-            family: "cpu",
-            kind: ErrorKind::Validation(ValidationKind::InvalidArgument),
-            ..
-        }
-    ));
-    assert!(std::error::Error::source(&err).is_some());
-}
-
-#[test]
-fn cpu_context_try_from_env_rejects_zero_rayon_num_threads() {
-    with_rayon_num_threads(Some("0"), || {
-        let err = match CpuContext::try_from_env() {
-            Ok(_) => panic!("expected zero RAYON_NUM_THREADS to be rejected"),
-            Err(err) => err,
-        };
-        assert!(format!("{err}").contains("CpuContext::try_from_env"));
-        assert!(format!("{err}").contains("thread count must be at least 1"));
-    });
-}
-
-#[test]
-fn cpu_context_with_threads_zero_returns_error() {
-    assert!(CpuContext::with_threads(0).is_err());
-}
-
-#[test]
-fn cpu_backend_new_matches_context_from_env() {
-    with_rayon_num_threads(Some("2"), || {
-        let backend = CpuBackend::new();
-        assert_eq!(backend.num_threads(), 2);
-    });
-}
-
-#[test]
-fn cpu_backend_new_falls_back_to_affinity_when_rayon_num_threads_is_absent() {
-    with_rayon_num_threads(None, || {
-        let backend = CpuBackend::new();
-        assert_eq!(backend.num_threads(), crate::available_parallelism());
-    });
-}
-
-#[test]
-fn cpu_backend_try_new_propagates_invalid_rayon_num_threads() {
-    with_rayon_num_threads(Some("not-a-number"), || {
-        assert!(CpuBackend::try_new().is_err());
-    });
-}
-
-#[test]
-fn test_with_backend_session_runs_compiled_ops() {
-    let mut backend = CpuBackend::with_threads(2).unwrap();
-    let result = backend
-        .with_backend_session(|session| {
-            session
-                .add_read(
-                    TensorRead::from_tensor(&Tensor::from_typed::<f64>(
-                        TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-                    )),
-                    TensorRead::from_tensor(&Tensor::from_typed::<f64>(
-                        TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
-                    )),
-                )
-                .unwrap()
-        })
+fn pooled_engine_runs_operations() {
+    let mut engine = crate::test_support::cpu_engine(2).unwrap();
+    let result = engine
+        .add_read(
+            TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+            )),
+            TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
+            )),
+        )
         .unwrap();
     assert_eq!(get_f64(&result, &[0]), 4.0);
     assert_eq!(get_f64(&result, &[1]), 6.0);
 }
 
 #[test]
-fn cpu_context_install_enters_owned_pool() {
-    let ctx = CpuContext::with_threads(2).unwrap();
-    let seen_threads = ctx.install(rayon::current_num_threads);
-    assert_eq!(seen_threads, 2);
-}
-
-#[test]
-fn cpu_install_accepts_send_state() {
-    let ctx = CpuContext::with_threads(2).unwrap();
-    let state = Arc::new(41usize);
-    let seen = ctx.install(|| *state + 1);
-    assert_eq!(seen, 42);
-
-    let backend = CpuBackend::with_threads(2).unwrap();
-    let state = Arc::new(20usize);
-    let seen = backend.install(|| *state + 2).unwrap();
-    assert_eq!(seen, 22);
-}
-
-#[test]
-fn cpu_backend_multi_operation_session_is_caller_inline() {
-    let context = Arc::new(CpuContext::with_threads(2).unwrap());
-    let mut backend = CpuBackend::from_context(Arc::clone(&context));
+fn operations_are_called_from_the_caller_thread() {
+    let mut engine = crate::test_support::cpu_engine(2).unwrap();
     let lhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
     );
@@ -149,158 +27,32 @@ fn cpu_backend_multi_operation_session_is_caller_inline() {
         TypedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),
     );
     let caller = std::thread::current().id();
-
-    backend
-        .with_backend_session(|session| {
-            assert_eq!(std::thread::current().id(), caller);
-            session
-                .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-                .unwrap();
-            session.neg_read(TensorRead::from_tensor(&lhs)).unwrap();
-            session
-                .mul_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-                .unwrap();
-            session
-                .dot_general_read(
-                    TensorRead::from_tensor(&lhs),
-                    TensorRead::from_tensor(&rhs),
-                    &DotGeneralConfig {
-                        lhs_contracting_dims: [0].as_slice().into(),
-                        rhs_contracting_dims: [0].as_slice().into(),
-                        lhs_batch_dims: [].as_slice().into(),
-                        rhs_batch_dims: [].as_slice().into(),
-                    },
-                )
-                .unwrap();
-        })
+    engine
+        .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         .unwrap();
-
-    backend
-        .with_backend_session(|__s| {
-            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
-        .unwrap()
+    engine.neg_read(TensorRead::from_tensor(&lhs)).unwrap();
+    engine
+        .mul_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         .unwrap();
+    engine
+        .dot_general_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &DotGeneralConfig {
+                lhs_contracting_dims: [0].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(std::thread::current().id(), caller);
 }
 
 #[test]
-fn cpu_backend_shared_context() {
-    let ctx = Arc::new(CpuContext::with_threads(3).unwrap());
-    let b1 = CpuBackend::from_context(ctx.clone());
-    let b2 = CpuBackend::from_context(ctx);
-    assert_eq!(b1.context_id_for_test(), b2.context_id_for_test());
-}
-
-#[test]
-fn cpu_affinity_available_parallelism_reports_positive_count() {
-    assert!(crate::available_parallelism() >= 1);
-}
-
-#[test]
-fn cpu_backend_from_context_shares_runtime_owner() {
-    let ctx = Arc::new(CpuContext::with_threads(3).unwrap());
-    let b1 = CpuBackend::from_context(ctx.clone());
-    let b2 = CpuBackend::from_context(ctx);
-    assert_eq!(b1.num_threads(), 3);
-    assert_eq!(b2.num_threads(), 3);
-}
-
-#[test]
-fn performance_notes_match_current_cpu_threading_contract() {
-    let notes = include_str!("../../../../../docs/performance/tt-inner-product-overhead.md");
-    let performance_tips = include_str!("../../../../../PERFORMANCE_TIPS.md");
-    assert!(
-        !notes.contains("The faer backend is therefore run without a tenferro-owned Rayon pool")
-            && notes.contains("maps multi-threaded execution to explicit `Par::rayon(n)`")
-            && !notes.contains("The global-Rayon columns became the production policy"),
-        "performance notes must describe the explicit CpuContext thread budget, not ambient global-Rayon policy"
-    );
-    assert!(
-        performance_tips.contains("explicit `Par::rayon(n)`")
-            && !performance_tips
-                .contains("Use `Par::Seq` for one-thread contexts and `Par::rayon(0)`"),
-        "performance tips must derive Faer parallelism from the configured CpuContext degree"
-    );
-}
-
-#[test]
-fn cpu_context_with_threads_reports_requested_size() {
-    let ctx = CpuContext::with_threads(2).unwrap();
-    assert_eq!(ctx.num_threads(), 2);
-}
-
-#[test]
-fn cpu_context_install_executes_closure() {
-    let ctx = CpuContext::with_threads(1).unwrap();
-    let seen = ctx.install(|| 1 + 1);
-    assert_eq!(seen, 2);
-}
-
-#[test]
-fn cpu_context_reads_the_worker_stack_from_env() {
-    with_env_var(WORKER_STACK_ENV, Some("8388608"), || {
-        let ctx = CpuContext::try_from_env().unwrap();
-        assert_eq!(ctx.worker_stack_bytes(), 8 << 20);
-    });
-}
-
-#[test]
-fn cpu_context_rejects_a_malformed_worker_stack_env_value() {
-    with_env_var(WORKER_STACK_ENV, Some("not-a-number"), || {
-        assert!(CpuContext::try_from_env().is_err());
-        // `from_env` keeps its documented lenient fallback.
-        assert_eq!(CpuContext::from_env().num_threads(), 1);
-    });
-}
-
-fn env_lock() -> MutexGuard<'static, ()> {
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    ENV_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-const WORKER_STACK_ENV: &str = "TENFERRO_CPU_WORKER_STACK_BYTES";
-
-struct EnvVarGuard {
-    _lock: MutexGuard<'static, ()>,
-    name: &'static str,
-    prev: Option<OsString>,
-}
-
-impl EnvVarGuard {
-    fn new(name: &'static str, value: Option<&str>) -> Self {
-        let lock = env_lock();
-        let prev = std::env::var_os(name);
-
-        match value {
-            Some(value) => std::env::set_var(name, value),
-            None => std::env::remove_var(name),
-        }
-
-        Self {
-            _lock: lock,
-            name,
-            prev,
-        }
-    }
-}
-
-fn with_env_var<T>(name: &'static str, value: Option<&str>, f: impl FnOnce() -> T) -> T {
-    let _guard = EnvVarGuard::new(name, value);
-    f()
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        match self.prev.take() {
-            Some(value) => std::env::set_var(self.name, value),
-            None => std::env::remove_var(self.name),
-        }
-    }
-}
-
-fn with_rayon_num_threads<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
-    with_env_var("RAYON_NUM_THREADS", value, f)
+fn thread_pool_builder_presets_the_provider_worker_stack() {
+    assert_eq!(crate::DEFAULT_WORKER_STACK_BYTES, 16 << 20);
+    let pool = crate::thread_pool_builder().num_threads(2).build().unwrap();
+    let engine = CpuEngine::new(pool);
+    assert_eq!(engine.num_threads(), 2);
 }

@@ -14,7 +14,6 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [tensor.md](./tensor.md) | Tensor representation, ownership model |
 | [tensor-session-redesign-1938.md](./tensor-session-redesign-1938.md) | Accepted #1938 target for compact tensor/storage/views and explicit session execution, with per-decision implemented mappings |
 | [large-transfer-staging-1945-u4.md](./large-transfer-staging-1945-u4.md) | Implemented design for bounded chunked staging on the blocking upload route (#1945 U4 item 4): measured 6.9x at 256 MiB, and why the download direction is deliberately not chunked |
-| [exec-session.md](./exec-session.md) | Backend execution sessions: fallible entry, native-session visitors, runtime use |
 | [session-oriented-concrete-apis.md](./session-oriented-concrete-apis.md) | Session-borrowing concrete operation surface and its migration record |
 | [storage-ownership-contracts.md](./storage-ownership-contracts.md) | Normative Phase 1 contracts for the storage ownership redesign (#1555): span access and retirement, allocation groups, submission, method distribution, raw handles and reclamation, documentation ownership, and AD value retention |
 | [tensor-prims.md](./tensor-prims.md) | Tensor backend protocol and execution surface |
@@ -45,10 +44,8 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [testing.md](./testing.md) | Testing and performance verification strategy |
 | [nested-cargo-debug-profile.md](./nested-cargo-debug-profile.md) | Repository-owned Cargo environment defaults for debug-free guide and trybuild fixture workspaces |
 | [execution-engine-provider-architecture.md](./execution-engine-provider-architecture.md) | Authoritative runtime-owned execution-engine, provider registration, preparation, and scheduled execution architecture |
-| [explicit-session-boundary.md](./explicit-session-boundary.md) | Delivered backend/eager explicit-session boundary (#1926/#1929), historical migration inventory, audit gate, and deferred A2 ownership/performance work (#1938/#1927/#1904); see the [reduced-contract handoff](../worklogs/2026-09-27-1929-reduced-contract-handoff.md) |
-| [held-cpu-session-1945-u1.md](./held-cpu-session-1945-u1.md) | Issue #1945 work package U1: held CPU session ownership/drop/lock graphs, access compatibility, close/error precedence, provider route inventory and session-entry audit proof |
-| [held-cpu-session-1945-u2-concrete.md](./held-cpu-session-1945-u2-concrete.md) | Issue #1945 work package U2-concrete: public held CPU session surface, paired dispatch/allocation measurements, and the access-compatibility and execution-routing evidence |
-| [held-cpu-session-1945-phase-lease.md](./held-cpu-session-1945-phase-lease.md) | Issue #1945 U2-concrete phase step: lane/child ownership, cancellation and join contract for lending the CPU pool to a downstream phase scheduler |
+| [execution-engine-ownership.md](./execution-engine-ownership.md) | Caller-held engines, prepare/run ownership, CPU pools and CUDA streams, and the entry surfaces that replaced the session model (#2206); links the cross-repository decision in tensor4all-meta |
+| [explicit-session-boundary.md](./explicit-session-boundary.md) | Historical backend/eager explicit-session boundary (#1926/#1929), superseded by [execution-engine-ownership.md](./execution-engine-ownership.md); its session mechanics are not current contracts |
 | [review-decision-records.md](./review-decision-records.md) | Relationship between historical plans, reviewer-facing work logs, and durable design records |
 | [change-aware-ci.md](./change-aware-ci.md) | Conservative pull-request classification, shared command profiles, stable required checks, and trusted RunPod recovery |
 | [ci-cache-trust.md](./ci-cache-trust.md) | CI cache namespace trust model, the single trusted default-branch cache writer, material-input cache keys, and immutable GPU archive artifact reuse across allocation retries |

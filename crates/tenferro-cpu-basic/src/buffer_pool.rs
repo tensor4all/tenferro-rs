@@ -95,13 +95,6 @@ struct PoolState {
     bool_pool: BTreeMap<usize, Vec<Vec<bool>>>,
     c64_pool: BTreeMap<usize, Vec<Vec<Complex64>>>,
     c32_pool: BTreeMap<usize, Vec<Vec<Complex32>>>,
-    f64_in_flight: BTreeMap<usize, usize>,
-    f32_in_flight: BTreeMap<usize, usize>,
-    i32_in_flight: BTreeMap<usize, usize>,
-    i64_in_flight: BTreeMap<usize, usize>,
-    bool_in_flight: BTreeMap<usize, usize>,
-    c64_in_flight: BTreeMap<usize, usize>,
-    c32_in_flight: BTreeMap<usize, usize>,
     retained_capacity_bytes: usize,
     max_retained_capacity_bytes: usize,
 }
@@ -295,54 +288,8 @@ fn smallest_pool_candidate<T>(
         .map(|(&capacity, _)| (capacity.saturating_mul(size_of::<T>()), kind))
 }
 
-fn increment_in_flight(in_flight: &mut BTreeMap<usize, usize>, cap: usize) {
-    if cap > 0 {
-        *in_flight.entry(cap).or_default() += 1;
-    }
-}
-
-fn decrement_in_flight(in_flight: &mut BTreeMap<usize, usize>, cap: usize) {
-    if cap == 0 {
-        return;
-    }
-    let Some(count) = in_flight.get_mut(&cap) else {
-        return;
-    };
-    // Keep the zero entry. Its cost is off the acquisition path: only
-    // `replenish_in_flight_for` walks the map, and it runs when the pool is
-    // replenished or cleared, not per operation. Dropping the entry instead was
-    // measured to cost a map insertion per tracked acquire/release cycle in a pool
-    // that has seen many capacities (`pool_in_flight_f64_bins10000`: 194 ns per
-    // cycle with the entries kept against 249 ns with them dropped, #2170), which
-    // buys nothing for a walk that is not on any hot path.
-    //
-    // The decrement saturates because a caller may release a buffer this pool
-    // never handed out; that stays a no-op instead of removing a live count.
-    *count = count.saturating_sub(1);
-}
-
-fn replenish_in_flight_for<T>(
-    pool: &mut BTreeMap<usize, Vec<Vec<T>>>,
-    in_flight: &mut BTreeMap<usize, usize>,
-    retained_capacity_bytes: &mut usize,
-) {
-    for (&cap, &count) in in_flight.iter() {
-        for _ in 0..count {
-            let mut replacement = Vec::new();
-            if replacement.try_reserve_exact(cap).is_err() {
-                continue;
-            }
-            let actual_cap = replacement.capacity();
-            *retained_capacity_bytes =
-                retained_capacity_bytes.saturating_add(actual_cap.saturating_mul(size_of::<T>()));
-            pool.entry(actual_cap).or_default().push(replacement);
-        }
-    }
-    in_flight.clear();
-}
-
 macro_rules! impl_pool_scalar {
-    ($ty:ty, $field:ident, $in_flight:ident, $zero:expr) => {
+    ($ty:ty, $field:ident, $zero:expr) => {
         // INVARIANT: this implementation is reachable only through the sealed
         // crate-private helper and cannot be named by sibling crates.
         #[allow(private_interfaces)]
@@ -364,7 +311,6 @@ macro_rules! impl_pool_scalar {
                             )
                         })?;
                         pool.retained_capacity_bytes -= bytes;
-                        increment_in_flight(&mut pool.$in_flight, cap);
                         let mut buf = ManuallyDrop::new(buf);
                         // SAFETY: MaybeUninit<Self> has the same layout as Self and len <= cap.
                         let buf = unsafe { Vec::from_raw_parts(buf.as_mut_ptr().cast(), len, cap) };
@@ -392,9 +338,7 @@ macro_rules! impl_pool_scalar {
                 pool: &mut BufferPool,
                 checkout: UninitCheckoutToken,
             ) -> Weak<dyn HostBufferRecycler<Self>> {
-                if let UninitCheckoutToken::Reused { actual_capacity } = checkout {
-                    decrement_in_flight(&mut lock_pool(&pool.state).$in_flight, actual_capacity);
-                }
+                let _ = checkout;
                 let owner: Arc<dyn HostBufferRecycler<Self>> = pool.state.clone();
                 Arc::downgrade(&owner)
             }
@@ -413,7 +357,6 @@ macro_rules! impl_pool_scalar {
                         pool.retained_capacity_bytes = pool
                             .retained_capacity_bytes
                             .saturating_sub(buf.capacity().saturating_mul(size_of::<Self>()));
-                        increment_in_flight(&mut pool.$in_flight, buf.capacity());
                         buf.resize(len, Self::pool_zero());
                         buf.fill(Self::pool_zero());
                         buf
@@ -423,7 +366,6 @@ macro_rules! impl_pool_scalar {
             }
 
             fn pool_release(pool: &mut BufferPool, buf: Vec<Self>) {
-                decrement_in_flight(&mut lock_pool(&pool.state).$in_flight, buf.capacity());
                 pool.state.recycle(buf);
             }
         }
@@ -445,37 +387,19 @@ macro_rules! impl_pool_scalar {
     };
 }
 
-impl_pool_scalar!(f64, f64_pool, f64_in_flight, 0.0);
-impl_pool_scalar!(f32, f32_pool, f32_in_flight, 0.0);
-impl_pool_scalar!(i32, i32_pool, i32_in_flight, 0);
-impl_pool_scalar!(i64, i64_pool, i64_in_flight, 0);
-impl_pool_scalar!(bool, bool_pool, bool_in_flight, false);
-impl_pool_scalar!(Complex64, c64_pool, c64_in_flight, Complex64::new(0.0, 0.0));
-impl_pool_scalar!(Complex32, c32_pool, c32_in_flight, Complex32::new(0.0, 0.0));
+impl_pool_scalar!(f64, f64_pool, 0.0);
+impl_pool_scalar!(f32, f32_pool, 0.0);
+impl_pool_scalar!(i32, i32_pool, 0);
+impl_pool_scalar!(i64, i64_pool, 0);
+impl_pool_scalar!(bool, bool_pool, false);
+impl_pool_scalar!(Complex64, c64_pool, Complex64::new(0.0, 0.0));
+impl_pool_scalar!(Complex32, c32_pool, Complex32::new(0.0, 0.0));
 
 impl BufferPool {
     pub(crate) fn checkout_handle(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn in_flight_is_empty(&self) -> bool {
-        // A capacity keeps its bookkeeping entry after its last checkout is
-        // returned (see `decrement_in_flight`), so "nothing is checked out"
-        // means every count is zero, not that the maps are empty.
-        fn none_in_flight(in_flight: &BTreeMap<usize, usize>) -> bool {
-            in_flight.values().all(|&count| count == 0)
-        }
-        let state = lock_pool(&self.state);
-        none_in_flight(&state.f64_in_flight)
-            && none_in_flight(&state.f32_in_flight)
-            && none_in_flight(&state.i32_in_flight)
-            && none_in_flight(&state.i64_in_flight)
-            && none_in_flight(&state.bool_in_flight)
-            && none_in_flight(&state.c64_in_flight)
-            && none_in_flight(&state.c32_in_flight)
     }
 
     /// Number of retained capacity bins, one per capacity the pool still holds.
@@ -504,18 +428,6 @@ impl BufferPool {
             + empty_bins(&state.c32_pool)
     }
 
-    /// Number of in-flight bookkeeping entries, idle ones included.
-    #[cfg(test)]
-    pub(crate) fn in_flight_entries(&self) -> usize {
-        let state = lock_pool(&self.state);
-        state.f64_in_flight.len()
-            + state.f32_in_flight.len()
-            + state.i32_in_flight.len()
-            + state.i64_in_flight.len()
-            + state.bool_in_flight.len()
-            + state.c64_in_flight.len()
-            + state.c32_in_flight.len()
-    }
     /// Create an empty typed buffer pool.
     ///
     /// # Examples
@@ -553,13 +465,6 @@ impl BufferPool {
                 bool_pool: BTreeMap::new(),
                 c64_pool: BTreeMap::new(),
                 c32_pool: BTreeMap::new(),
-                f64_in_flight: BTreeMap::new(),
-                f32_in_flight: BTreeMap::new(),
-                i32_in_flight: BTreeMap::new(),
-                i64_in_flight: BTreeMap::new(),
-                bool_in_flight: BTreeMap::new(),
-                c64_in_flight: BTreeMap::new(),
-                c32_in_flight: BTreeMap::new(),
                 retained_capacity_bytes: 0,
                 max_retained_capacity_bytes,
             }))),
@@ -793,16 +698,6 @@ impl BufferPool {
         let mut state = lock_pool(&self.state);
         state.clear();
     }
-
-    #[doc(hidden)]
-    pub fn clear_in_flight_retained(&mut self) {
-        lock_pool(&self.state).clear_in_flight_retained();
-    }
-
-    #[doc(hidden)]
-    pub fn replenish_in_flight_retained(&mut self) {
-        lock_pool(&self.state).replenish_in_flight_retained();
-    }
 }
 
 // INVARIANT: no user callback or tensor destructor runs under this lock; it
@@ -823,59 +718,7 @@ impl PoolState {
         self.bool_pool.clear();
         self.c64_pool.clear();
         self.c32_pool.clear();
-        self.clear_in_flight_retained();
         self.retained_capacity_bytes = 0;
-    }
-
-    #[doc(hidden)]
-    pub fn clear_in_flight_retained(&mut self) {
-        self.f64_in_flight.clear();
-        self.f32_in_flight.clear();
-        self.i32_in_flight.clear();
-        self.i64_in_flight.clear();
-        self.bool_in_flight.clear();
-        self.c64_in_flight.clear();
-        self.c32_in_flight.clear();
-    }
-
-    #[doc(hidden)]
-    pub fn replenish_in_flight_retained(&mut self) {
-        replenish_in_flight_for(
-            &mut self.f64_pool,
-            &mut self.f64_in_flight,
-            &mut self.retained_capacity_bytes,
-        );
-        replenish_in_flight_for(
-            &mut self.f32_pool,
-            &mut self.f32_in_flight,
-            &mut self.retained_capacity_bytes,
-        );
-        replenish_in_flight_for(
-            &mut self.i32_pool,
-            &mut self.i32_in_flight,
-            &mut self.retained_capacity_bytes,
-        );
-        replenish_in_flight_for(
-            &mut self.i64_pool,
-            &mut self.i64_in_flight,
-            &mut self.retained_capacity_bytes,
-        );
-        replenish_in_flight_for(
-            &mut self.bool_pool,
-            &mut self.bool_in_flight,
-            &mut self.retained_capacity_bytes,
-        );
-        replenish_in_flight_for(
-            &mut self.c64_pool,
-            &mut self.c64_in_flight,
-            &mut self.retained_capacity_bytes,
-        );
-        replenish_in_flight_for(
-            &mut self.c32_pool,
-            &mut self.c32_in_flight,
-            &mut self.retained_capacity_bytes,
-        );
-        self.enforce_retention_limit();
     }
 
     fn enforce_retention_limit(&mut self) {

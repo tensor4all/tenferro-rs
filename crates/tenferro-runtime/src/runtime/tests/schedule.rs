@@ -378,12 +378,13 @@ fn collective_node_is_rejected_by_production_preflight_before_begin_run() {
         begin_runs: Arc::clone(&begin_runs),
     });
     let graph = ScheduledGraph::for_test(vec![ScheduledNode::Collective(
-        ScheduledCollective::unsupported_for_test(driver),
+        ScheduledCollective::unsupported_for_test(),
     )]);
 
     assert!(graph.contains_collective());
     assert!(graph.validate().is_ok());
-    let error = ScheduledEventDomains::new(&graph)
+    let engine_id = EngineId::new("tenferro-test.schedule-engine").expect("test engine id");
+    let error = ScheduledEventDomains::new_for_test(&graph, &[(engine_id, driver)])
         .expect_err("unsupported collective must fail during production preflight");
     let crate::Error::RuntimeStateSource { source, .. } = error else {
         panic!("unsupported collective must be wrapped as RuntimeStateSource");
@@ -484,16 +485,24 @@ impl EventDomainRun for CoalescingProbeRun {
     }
 }
 
+fn coalescing_engine_id() -> EngineId {
+    EngineId::new("tenferro-test.coalescing-engine").expect("test engine id")
+}
+
 fn probe_operation(
     instruction_index: usize,
     domain: EventDomainId,
-    driver: Arc<dyn EventDomainDriver>,
     dependencies: impl Into<Box<[EventDependency]>>,
     slot: u32,
 ) -> ScheduledNode {
     ScheduledNode::Operation(ScheduledOperation::new(
         instruction_index,
-        ExecutionLocation::for_test_with_driver(domain, test_identity("coalescing-probe"), driver),
+        ExecutionLocation::new(
+            coalescing_engine_id(),
+            test_identity("coalescing-probe"),
+            domain,
+            StorageClass::new("tenferro-test.coalescing-storage").expect("test storage class"),
+        ),
         [],
         [],
         dependencies,
@@ -509,18 +518,18 @@ fn single_domain_schedule_requests_coalescing_once() {
     });
     let domain = qualified_domain(1, 1, 1, 1);
     let graph = ScheduledGraph::for_test(vec![
-        probe_operation(0, domain, Arc::clone(&driver), [], 0),
+        probe_operation(0, domain, [], 0),
         probe_operation(
             1,
             domain,
-            driver,
             [EventDependency::new(domain, EventSlotId::new(0), 0)],
             1,
         ),
     ]);
     assert!(graph.validate().is_ok());
 
-    let _domains = ScheduledEventDomains::new(&graph).expect("single-domain runs");
+    let _domains = ScheduledEventDomains::new_for_test(&graph, &[(coalescing_engine_id(), driver)])
+        .expect("single-domain runs");
     assert_eq!(
         enabled.load(Ordering::SeqCst),
         1,
@@ -537,12 +546,13 @@ fn multi_domain_schedule_never_requests_coalescing() {
     let first_domain = qualified_domain(1, 1, 1, 1);
     let second_domain = qualified_domain(1, 1, 1, 2);
     let graph = ScheduledGraph::for_test(vec![
-        probe_operation(0, first_domain, Arc::clone(&driver), [], 0),
-        probe_operation(1, second_domain, driver, [], 1),
+        probe_operation(0, first_domain, [], 0),
+        probe_operation(1, second_domain, [], 1),
     ]);
     assert!(graph.validate().is_ok());
 
-    let _domains = ScheduledEventDomains::new(&graph).expect("multi-domain runs");
+    let _domains = ScheduledEventDomains::new_for_test(&graph, &[(coalescing_engine_id(), driver)])
+        .expect("multi-domain runs");
     assert_eq!(
         enabled.load(Ordering::SeqCst),
         0,

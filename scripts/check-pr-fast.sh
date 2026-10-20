@@ -234,13 +234,13 @@ else
   log "docs snippets: skipped"
 fi
 
-# Session entry mechanisms are audited on every code change: the inherited
-# baseline is frozen in scripts/session-entry-allowlist.json and any new entry
-# (including a renamed import) fails the check.
+# Execution engine entry mechanisms are audited on every code change: the
+# inherited baseline is frozen in scripts/engine-entry-allowlist.json and any new
+# engine surface or raw scope (including a renamed trait import) fails the check.
 if [[ "${change_class}" == "code" ]]; then
-  run run_python scripts/audit-session-entry.py --check
+  run run_python scripts/audit-engine-entry.py --check
 else
-  log "session entry audit: skipped for ${change_class} changes"
+  log "engine entry audit: skipped for ${change_class} changes"
 fi
 
 if [[ "${change_class}" != "docs-only" && "$focused_test_count" -eq 0 && "$ci_profile_count" -eq 0 ]]; then

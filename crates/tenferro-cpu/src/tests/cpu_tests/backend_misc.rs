@@ -1,7 +1,7 @@
 use super::*;
 use tenferro_tensor::{
-    BackendSessionHost, BackendStorageHandle, ElementwiseReadOp, MemoryKind, Placement, Rank,
-    StorageBuffer, TensorRead, TensorViewCanonicalization, TypedTensorView, TypedTensorViewMut,
+    BackendStorageHandle, MemoryKind, Placement, Rank, StorageBuffer, TensorRead,
+    TensorViewCanonicalization, TypedTensorView, TypedTensorViewMut,
 };
 
 /// The Rust scalar type behind a preset variant name a macro received.
@@ -45,16 +45,17 @@ fn cpu_runtime_materialization_dispatches_all_dtypes_with_backend_session_parity
                 TypedTensorView::from_slice(vec![2], vec![-1], 1, &values).unwrap(),
             );
             let read = TensorRead::from_view(view);
-            let mut backend = CpuBackend::with_threads(2).unwrap();
+            let mut backend = crate::test_support::cpu_engine(2).unwrap();
 
-            let direct = backend
-                .with_backend_session(|__s| __s.to_contiguous_read(read.clone()))
-                .unwrap()
-                .unwrap();
-            let session = backend
-                .with_backend_session(|exec| exec.to_contiguous_read(read))
-                .unwrap()
-                .unwrap();
+            let direct = crate::test_support::on_engine(&mut backend, |__s| {
+                __s.to_contiguous_read(read.clone())
+            })
+            .unwrap()
+            .unwrap();
+            let session =
+                crate::test_support::on_engine(&mut backend, |exec| exec.to_contiguous_read(read))
+                    .unwrap()
+                    .unwrap();
 
             let expected = [values[1], values[0]];
             assert_eq!(direct.as_slice::<$ty>().unwrap(), &expected);
@@ -84,17 +85,18 @@ fn cpu_runtime_materialization_rejects_owned_host_buffer_with_device_placement()
     let mut input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     input.set_placement(opaque_backend_placement());
     let input = Tensor::from_typed::<f64>(input);
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
-    let err = backend
-        .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&input)))
-        .unwrap()
-        .unwrap_err();
+    let err = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.to_contiguous_read(TensorRead::from_tensor(&input))
+    })
+    .unwrap()
+    .unwrap_err();
 
     assert!(matches!(
         err,
         Error::RuntimeState {
-            op: "CpuBackend::to_contiguous_read",
+            op: "CpuEngine::to_contiguous_read",
             ref message,
         } if message.contains("source host placement") && message.contains("Device")
     ));
@@ -104,19 +106,18 @@ fn cpu_runtime_materialization_rejects_owned_host_buffer_with_device_placement()
 fn cpu_runtime_materialization_rejects_host_view_with_device_placement() {
     let mut input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     input.set_placement(opaque_backend_placement());
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
-    let err = backend
-        .with_backend_session(|__s| {
-            __s.to_contiguous_read(TensorRead::from_view(TensorView::F64(input.as_view())))
-        })
-        .unwrap()
-        .unwrap_err();
+    let err = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.to_contiguous_read(TensorRead::from_view(TensorView::F64(input.as_view())))
+    })
+    .unwrap()
+    .unwrap_err();
 
     assert!(matches!(
         err,
         Error::RuntimeState {
-            op: "CpuBackend::to_contiguous_read",
+            op: "CpuEngine::to_contiguous_read",
             ref message,
         } if message.contains("source host placement") && message.contains("Device")
     ));
@@ -136,26 +137,24 @@ fn cpu_runtime_copy_dispatches_all_dtypes_with_backend_session_parity() {
             let mut session_dst = Tensor::from_typed::<preset_scalar!($variant)>(
                 TypedTensor::from_vec_col_major(vec![2], $zeros).unwrap(),
             );
-            let mut backend = CpuBackend::with_threads(2).unwrap();
+            let mut backend = crate::test_support::cpu_engine(2).unwrap();
 
-            backend
-                .with_backend_session(|__s| {
-                    __s.copy_read_into(
-                        TensorRead::from_tensor(&src),
-                        TensorWrite::from_tensor(&mut direct_dst),
-                    )
-                })
-                .unwrap()
-                .unwrap();
-            backend
-                .with_backend_session(|exec| {
-                    exec.copy_read_into(
-                        TensorRead::from_tensor(&src),
-                        TensorWrite::from_tensor(&mut session_dst),
-                    )
-                })
-                .unwrap()
-                .unwrap();
+            crate::test_support::on_engine(&mut backend, |__s| {
+                __s.copy_read_into(
+                    TensorRead::from_tensor(&src),
+                    TensorWrite::from_tensor(&mut direct_dst),
+                )
+            })
+            .unwrap()
+            .unwrap();
+            crate::test_support::on_engine(&mut backend, |exec| {
+                exec.copy_read_into(
+                    TensorRead::from_tensor(&src),
+                    TensorWrite::from_tensor(&mut session_dst),
+                )
+            })
+            .unwrap()
+            .unwrap();
 
             assert_eq!(direct_dst.as_slice::<$ty>().unwrap(), values.as_slice());
             assert_eq!(session_dst.as_slice::<$ty>().unwrap(), values.as_slice());
@@ -191,9 +190,8 @@ fn cpu_session_copy_accepts_ranked_borrow_without_group_promotion() {
     let write = TensorWrite::from_view(TensorViewMut::F64(
         TypedTensorViewMut::from_slice([2, 2], [1, 2], 0, &mut destination).unwrap(),
     ));
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|session| session.copy_read_into(read, write))
+    let mut backend = crate::CpuEngine::serial();
+    crate::test_support::on_engine(&mut backend, |session| session.copy_read_into(read, write))
         .unwrap()
         .unwrap();
     assert_eq!(destination, source);
@@ -207,16 +205,15 @@ fn cpu_session_copy_reads_plain_owner_into_plain_owner() {
         TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![-1.0; 4]).unwrap(),
     );
     let destination_ptr = destination.as_slice::<f64>().unwrap().as_ptr();
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend
-        .with_backend_session(|session| {
-            session.copy_read_into(
-                source.as_view().into_tensor_read()?,
-                TensorWrite::from_tensor(&mut destination),
-            )
-        })
-        .unwrap()
-        .unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
+    crate::test_support::on_engine(&mut backend, |session| {
+        session.copy_read_into(
+            source.as_view().into_tensor_read()?,
+            TensorWrite::from_tensor(&mut destination),
+        )
+    })
+    .unwrap()
+    .unwrap();
     assert_eq!(
         destination.as_slice::<f64>().unwrap(),
         &[1.0, 2.0, 3.0, 4.0]
@@ -232,109 +229,105 @@ fn cpu_session_materializes_plain_borrow_into_recyclable_plain_output() {
     let source =
         TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     let source_ptr = source.as_slice().unwrap().as_ptr();
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    let retained_before = backend.buffer_pool_len().unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
+    let retained_before = backend.buffer_pool_len();
     let read = source.as_view().into_tensor_read().unwrap();
 
-    let copied = backend
-        .with_backend_session(|session| session.to_contiguous_read(read.clone()))
-        .unwrap()
-        .unwrap();
+    let copied = crate::test_support::on_engine(&mut backend, |session| {
+        session.to_contiguous_read(read.clone())
+    })
+    .unwrap()
+    .unwrap();
     let copied_ptr = copied.as_slice::<f64>().unwrap().as_ptr();
     assert_ne!(copied_ptr, source_ptr);
     assert_eq!(copied.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
     assert_eq!(source.as_slice().unwrap().as_ptr(), source_ptr);
-    assert_eq!(backend.buffer_pool_len().unwrap(), retained_before);
+    assert_eq!(backend.buffer_pool_len(), retained_before);
     drop(copied);
-    assert_eq!(backend.buffer_pool_len().unwrap(), retained_before + 1);
+    assert_eq!(backend.buffer_pool_len(), retained_before + 1);
 
-    let reused = backend
-        .with_backend_session(|session| session.to_contiguous_read(read))
-        .unwrap()
-        .unwrap();
+    let reused =
+        crate::test_support::on_engine(&mut backend, |session| session.to_contiguous_read(read))
+            .unwrap()
+            .unwrap();
     assert_eq!(reused.as_slice::<f64>().unwrap().as_ptr(), copied_ptr);
     drop(reused);
-    assert_eq!(backend.buffer_pool_len().unwrap(), retained_before + 1);
+    assert_eq!(backend.buffer_pool_len(), retained_before + 1);
 }
 
 #[test]
 fn cpu_session_materialization_rejects_bad_placement_without_pool_checkout() {
     let mut source = TypedTensor::<f64, Rank<1>>::from_vec_col_major([2], vec![1.0, 2.0]).unwrap();
     source.set_placement(opaque_backend_placement());
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    let retained_before = backend.buffer_pool_len().unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
+    let retained_before = backend.buffer_pool_len();
     let read = source.as_view().into_tensor_read().unwrap();
     assert!(matches!(
-        backend
-            .with_backend_session(|session| session.to_contiguous_read(read))
+        crate::test_support::on_engine(&mut backend, |session| session.to_contiguous_read(read))
             .unwrap(),
         Err(Error::RuntimeState {
-            op: "CpuBackend::to_contiguous_read",
+            op: "CpuEngine::to_contiguous_read",
             ..
         })
     ));
-    assert_eq!(backend.buffer_pool_len().unwrap(), retained_before);
+    assert_eq!(backend.buffer_pool_len(), retained_before);
 }
 
 #[test]
 fn cpu_runtime_copy_handles_strided_source_and_destination_without_allocation() {
-    let mut backend = CpuBackend::with_threads(2).unwrap();
-    backend
-        .with_backend_session(|__s| {
-            __s.reclaim_buffer(Tensor::from_typed::<i32>(
-                TypedTensor::from_vec_col_major(vec![4], vec![0_i32; 4]).unwrap(),
-            ))
-        })
-        .unwrap();
-    let retained_before = backend.buffer_pool_len().unwrap();
+    let mut backend = crate::test_support::cpu_engine(2).unwrap();
+    crate::test_support::on_engine(&mut backend, |__s| {
+        __s.reclaim_buffer(Tensor::from_typed::<i32>(
+            TypedTensor::from_vec_col_major(vec![4], vec![0_i32; 4]).unwrap(),
+        ))
+    })
+    .unwrap();
+    let retained_before = backend.buffer_pool_len();
     let src_data = [0_i32, 1, 2, 3, 4, 5, 6, 7];
     let src = TypedTensorView::from_slice(vec![2, 2], vec![2, 4], 1, &src_data).unwrap();
     let mut dst_data = [-1_i32; 8];
     let dst = TypedTensorViewMut::from_slice(vec![2, 2], vec![3, 1], 1, &mut dst_data).unwrap();
 
-    backend
-        .with_backend_session(|__s| {
-            __s.copy_read_into(
-                TensorRead::from_view(TensorView::I32(src)),
-                TensorWrite::from_view(TensorViewMut::I32(dst)),
-            )
-        })
-        .unwrap()
-        .unwrap();
+    crate::test_support::on_engine(&mut backend, |__s| {
+        __s.copy_read_into(
+            TensorRead::from_view(TensorView::I32(src)),
+            TensorWrite::from_view(TensorViewMut::I32(dst)),
+        )
+    })
+    .unwrap()
+    .unwrap();
 
     assert_eq!(dst_data, [-1, 1, 5, -1, 3, 7, -1, -1]);
-    assert_eq!(backend.buffer_pool_len().unwrap(), retained_before);
+    assert_eq!(backend.buffer_pool_len(), retained_before);
 }
 
 #[test]
 fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
     let src = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
     let mut wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![0_i64, 0]).unwrap();
     assert!(matches!(
-        backend
-            .with_backend_session(|__s| __s.copy_read_into(
-                TensorRead::from_tensor(&src),
-                TensorWrite::from_tensor(&mut wrong_dtype),
-            ))
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s.copy_read_into(
+            TensorRead::from_tensor(&src),
+            TensorWrite::from_tensor(&mut wrong_dtype),
+        ))
+        .unwrap(),
         Err(Error::Validation {
-            op: "CpuBackend::copy_read_into",
+            op: "CpuEngine::copy_read_into",
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         })
     ));
 
     let mut wrong_shape = Tensor::from_vec_col_major(vec![3], vec![0_i32; 3]).unwrap();
     assert!(matches!(
-        backend
-            .with_backend_session(|__s| __s.copy_read_into(
-                TensorRead::from_tensor(&src),
-                TensorWrite::from_tensor(&mut wrong_shape),
-            ))
-            .unwrap(),
+        crate::test_support::on_engine(&mut backend, |__s| __s.copy_read_into(
+            TensorRead::from_tensor(&src),
+            TensorWrite::from_tensor(&mut wrong_shape),
+        ))
+        .unwrap(),
         Err(Error::Validation {
-            op: "CpuBackend::copy_read_into",
+            op: "CpuEngine::copy_read_into",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         })
     ));
@@ -345,12 +338,12 @@ fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
         .expect("an i32 tensor")
         .set_placement(opaque_backend_placement());
     assert!(matches!(
-        backend.with_backend_session(|__s| __s.copy_read_into(
+        crate::test_support::on_engine(&mut backend, |__s| __s.copy_read_into(
             TensorRead::from_tensor(&src),
             TensorWrite::from_tensor(&mut misplaced),
         )).unwrap(),
         Err(Error::RuntimeState {
-            op: "CpuBackend::copy_read_into",
+            op: "CpuEngine::copy_read_into",
             ref message,
         }) if message.contains("destination") && message.contains("host placement")
     ));
@@ -358,7 +351,7 @@ fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
 
 #[test]
 fn cpu_copy_into_copies_exactly_between_strided_host_views() {
-    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let mut backend = crate::test_support::cpu_engine(2).unwrap();
     let src_data = [0_i32, 1, 2, 3, 4, 5, 6, 7];
     let src = TypedTensorView::from_slice(vec![2, 2], vec![2, 4], 1, &src_data).unwrap();
     let mut dst_data = [-1_i32; 8];
@@ -371,7 +364,7 @@ fn cpu_copy_into_copies_exactly_between_strided_host_views() {
 
 #[test]
 fn cpu_copy_into_reports_shape_mismatch_with_canonical_op_name() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let src = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]).unwrap();
     let mut dst = TypedTensor::<i32>::from_vec_col_major(vec![3], vec![0, 0, 0]).unwrap();
 
@@ -383,7 +376,7 @@ fn cpu_copy_into_reports_shape_mismatch_with_canonical_op_name() {
     assert!(matches!(
         err,
         Error::Validation {
-            op: "CpuExecSession::copy_into",
+            op: "CpuEngine::copy_into",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         }
     ));
@@ -391,7 +384,7 @@ fn cpu_copy_into_reports_shape_mismatch_with_canonical_op_name() {
 
 #[test]
 fn cpu_copy_into_rejects_backend_source_without_download() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let src = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
         StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(9, 2))),
@@ -408,7 +401,7 @@ fn cpu_copy_into_rejects_backend_source_without_download() {
     assert!(matches!(
         err,
         Error::RuntimeState {
-            op: "CpuExecSession::copy_into",
+            op: "CpuEngine::copy_into",
             ref message,
         } if message.contains("download")
     ));
@@ -416,7 +409,7 @@ fn cpu_copy_into_rejects_backend_source_without_download() {
 
 #[test]
 fn cpu_copy_into_rejects_backend_destination_without_download() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     let mut dst = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
@@ -433,7 +426,7 @@ fn cpu_copy_into_rejects_backend_destination_without_download() {
     assert!(matches!(
         err,
         Error::RuntimeState {
-            op: "CpuExecSession::copy_into",
+            op: "CpuEngine::copy_into",
             ref message,
         } if message.contains("download")
     ));
@@ -441,7 +434,7 @@ fn cpu_copy_into_rejects_backend_destination_without_download() {
 
 #[test]
 fn cpu_copy_into_rejects_host_source_with_device_placement() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let mut src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     src.set_placement(opaque_backend_placement());
     let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
@@ -454,7 +447,7 @@ fn cpu_copy_into_rejects_host_source_with_device_placement() {
     assert!(matches!(
         err,
         Error::RuntimeState {
-            op: "CpuExecSession::copy_into",
+            op: "CpuEngine::copy_into",
             ref message,
         } if message.contains("source") && message.contains("host placement")
     ));
@@ -462,7 +455,7 @@ fn cpu_copy_into_rejects_host_source_with_device_placement() {
 
 #[test]
 fn cpu_copy_into_rejects_host_destination_with_device_placement() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
     dst.set_placement(opaque_backend_placement());
@@ -475,7 +468,7 @@ fn cpu_copy_into_rejects_host_destination_with_device_placement() {
     assert!(matches!(
         err,
         Error::RuntimeState {
-            op: "CpuExecSession::copy_into",
+            op: "CpuEngine::copy_into",
             ref message,
         } if message.contains("destination") && message.contains("host placement")
     ));
@@ -483,38 +476,34 @@ fn cpu_copy_into_rejects_host_destination_with_device_placement() {
 
 #[test]
 fn test_reclaim_buffer_returns_host_buffer_to_pool() {
-    let mut backend = CpuBackend::new();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
-    let t = backend
-        .with_backend_session(|__s| {
-            __s.add_read(
-                TensorRead::from_tensor(&Tensor::from_typed::<f64>(
-                    TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-                )),
-                TensorRead::from_tensor(&Tensor::from_typed::<f64>(
-                    TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
-                )),
-            )
-        })
-        .unwrap()
-        .unwrap();
-    backend
-        .with_backend_session(|__s| __s.reclaim_buffer(t))
-        .unwrap();
-    assert!(backend.buffer_pool_len().unwrap() > 0);
+    let mut backend = crate::CpuEngine::serial();
+    assert_eq!(backend.buffer_pool_len(), 0);
+    let t = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.add_read(
+            TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+            )),
+            TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
+            )),
+        )
+    })
+    .unwrap()
+    .unwrap();
+    crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(t)).unwrap();
+    assert!(backend.buffer_pool_len() > 0);
 }
 
 #[test]
 fn test_elementwise_add_acquires_output_from_pool() {
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|__s| {
-            __s.reclaim_buffer(Tensor::from_typed::<f64>(
-                TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
-            ))
-        })
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    let mut backend = crate::CpuEngine::serial();
+    crate::test_support::on_engine(&mut backend, |__s| {
+        __s.reclaim_buffer(Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
+        ))
+    })
+    .unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 
     let lhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![4], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
@@ -522,25 +511,22 @@ fn test_elementwise_add_acquires_output_from_pool() {
     let rhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![4], vec![4.0, 3.0, 2.0, 1.0]).unwrap(),
     );
-    let out = backend
-        .with_backend_session(|__s| {
-            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-        })
-        .unwrap()
-        .unwrap();
+    let out = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+    })
+    .unwrap()
+    .unwrap();
 
-    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
+    assert_eq!(backend.buffer_pool_len(), 0);
     assert_eq!(get_f64(&out, &[0]), 5.0);
     assert_eq!(get_f64(&out, &[3]), 5.0);
-    backend
-        .with_backend_session(|__s| __s.reclaim_buffer(out))
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(out)).unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 }
 
 #[test]
 fn test_broadcast_multiply_fusion_computes_outer_product_without_materialized_inputs() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let lhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![3], vec![2.0, 3.0, 5.0]).unwrap(),
     );
@@ -548,20 +534,19 @@ fn test_broadcast_multiply_fusion_computes_outer_product_without_materialized_in
         TypedTensor::from_vec_col_major(vec![2], vec![7.0, 11.0]).unwrap(),
     );
 
-    let out = backend
-        .with_backend_session(|__s| {
-            __s.execute_broadcast_multiply(
-                TensorRead::from_tensor(&lhs),
-                &[3, 2],
-                &[0],
-                TensorRead::from_tensor(&rhs),
-                &[3, 2],
-                &[1],
-            )
-        })
-        .unwrap()
-        .unwrap()
-        .expect("CPU backend should execute broadcast multiply directly");
+    let out = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.execute_broadcast_multiply(
+            TensorRead::from_tensor(&lhs),
+            &[3, 2],
+            &[0],
+            TensorRead::from_tensor(&rhs),
+            &[3, 2],
+            &[1],
+        )
+    })
+    .unwrap()
+    .unwrap()
+    .expect("CPU backend should execute broadcast multiply directly");
 
     assert_eq!(out.shape(), &[3, 2]);
     assert_eq!(
@@ -841,14 +826,13 @@ fn reshape_read_external_payload_reports_unsupported_in_parallel_session() {
         .unwrap(),
     );
     let input = Tensor::external(payload);
-    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let mut backend = crate::test_support::cpu_engine(2).unwrap();
     assert_eq!(backend.num_threads(), 2);
-    let err = backend
-        .with_backend_session(|session| {
-            session.reshape_read(TensorRead::from_tensor(&input), &[512, 128])
-        })
-        .unwrap()
-        .unwrap_err();
+    let err = crate::test_support::on_engine(&mut backend, |session| {
+        session.reshape_read(TensorRead::from_tensor(&input), &[512, 128])
+    })
+    .unwrap()
+    .unwrap_err();
     assert!(matches!(
         err,
         tenferro_tensor::Error::UnsupportedDType { .. }
@@ -857,19 +841,18 @@ fn reshape_read_external_payload_reports_unsupported_in_parallel_session() {
 
 #[test]
 fn cpu_view_materialization_preserves_transposed_and_scattered_values() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
     let transposed_storage = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
     let transposed = tenferro_tensor::TypedTensorView::from_col_major(&[2, 3], &transposed_storage)
         .unwrap()
         .transpose_view([1, 0])
         .unwrap();
-    let transposed = backend
-        .with_backend_session(|__s| {
-            __s.reshape_read(TensorRead::from_view(TensorView::F64(transposed)), &[3, 2])
-        })
-        .unwrap()
-        .unwrap();
+    let transposed = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.reshape_read(TensorRead::from_view(TensorView::F64(transposed)), &[3, 2])
+    })
+    .unwrap()
+    .unwrap();
     assert_eq!(transposed.shape(), &[3, 2]);
     assert_eq!(
         transposed.as_slice::<f64>().unwrap(),
@@ -890,12 +873,11 @@ fn cpu_view_materialization_preserves_transposed_and_scattered_values() {
         &scattered_storage,
     )
     .unwrap();
-    let scattered = backend
-        .with_backend_session(|__s| {
-            __s.reshape_read(TensorRead::from_view(TensorView::F64(scattered)), &[4])
-        })
-        .unwrap()
-        .unwrap();
+    let scattered = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.reshape_read(TensorRead::from_view(TensorView::F64(scattered)), &[4])
+    })
+    .unwrap()
+    .unwrap();
     assert_eq!(scattered.shape(), &[4]);
     assert_eq!(
         scattered.as_slice::<f64>().unwrap(),
@@ -905,16 +887,15 @@ fn cpu_view_materialization_preserves_transposed_and_scattered_values() {
 
 #[test]
 fn cpu_structural_read_transpose_explicit_stride_exact_output() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let storage = (0..16).map(|value| value as f64 * 10.0).collect::<Vec<_>>();
     let view = tenferro_tensor::TypedTensorView::from_slice([2, 3], [2, 5], 1, &storage).unwrap();
 
-    let output = backend
-        .with_backend_session(|__s| {
-            __s.transpose_read(TensorRead::from_view(TensorView::F64(view)), &[1, 0])
-        })
-        .unwrap()
-        .unwrap();
+    let output = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.transpose_read(TensorRead::from_view(TensorView::F64(view)), &[1, 0])
+    })
+    .unwrap()
+    .unwrap();
 
     assert_eq!(output.shape(), &[3, 2]);
     assert_eq!(
@@ -925,16 +906,15 @@ fn cpu_structural_read_transpose_explicit_stride_exact_output() {
 
 #[test]
 fn cpu_structural_read_reshape_explicit_stride_exact_output() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let storage = (0..10).collect::<Vec<i32>>();
     let view = tenferro_tensor::TypedTensorView::from_slice([2, 2], [3, -1], 5, &storage).unwrap();
 
-    let output = backend
-        .with_backend_session(|__s| {
-            __s.reshape_read(TensorRead::from_view(TensorView::I32(view)), &[4])
-        })
-        .unwrap()
-        .unwrap();
+    let output = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.reshape_read(TensorRead::from_view(TensorView::I32(view)), &[4])
+    })
+    .unwrap()
+    .unwrap();
 
     assert_eq!(output.shape(), &[4]);
     assert_eq!(output.as_slice::<i32>().unwrap(), &[5, 8, 4, 7]);
@@ -942,20 +922,19 @@ fn cpu_structural_read_reshape_explicit_stride_exact_output() {
 
 #[test]
 fn cpu_structural_read_broadcast_in_dim_explicit_stride_exact_output() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let storage = [0_i64, 10, 20, 30, 40];
     let view = tenferro_tensor::TypedTensorView::from_slice([2, 1], [-2, 7], 4, &storage).unwrap();
 
-    let output = backend
-        .with_backend_session(|__s| {
-            __s.broadcast_in_dim_read(
-                TensorRead::from_view(TensorView::I64(view)),
-                &[2, 3],
-                &[0, 1],
-            )
-        })
-        .unwrap()
-        .unwrap();
+    let output = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.broadcast_in_dim_read(
+            TensorRead::from_view(TensorView::I64(view)),
+            &[2, 3],
+            &[0, 1],
+        )
+    })
+    .unwrap()
+    .unwrap();
 
     assert_eq!(output.shape(), &[2, 3]);
     assert_eq!(output.as_slice::<i64>().unwrap(), &[40, 20, 40, 20, 40, 20]);
@@ -1188,7 +1167,7 @@ fn cpu_structural_read_empty_pathological_layout_returns_typed_errors_without_pa
 #[test]
 fn cpu_structural_read_backend_and_exec_session_outputs_match() {
     let storage = [0.0_f64, 10.0, 20.0, 30.0, 40.0, 50.0];
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
 
     let backend_outputs = {
         let transpose_view =
@@ -1198,62 +1177,58 @@ fn cpu_structural_read_backend_and_exec_session_outputs_match() {
         let broadcast_view =
             tenferro_tensor::TypedTensorView::from_slice([2, 1], [2, 0], 1, &storage).unwrap();
         [
-            backend
-                .with_backend_session(|__s| {
-                    __s.transpose_read(
-                        TensorRead::from_view(TensorView::F64(transpose_view)),
-                        &[1, 0],
-                    )
-                })
-                .unwrap()
-                .unwrap(),
-            backend
-                .with_backend_session(|__s| {
-                    __s.reshape_read(TensorRead::from_view(TensorView::F64(reshape_view)), &[4])
-                })
-                .unwrap()
-                .unwrap(),
-            backend
-                .with_backend_session(|__s| {
-                    __s.broadcast_in_dim_read(
-                        TensorRead::from_view(TensorView::F64(broadcast_view)),
-                        &[2, 3],
-                        &[0, 1],
-                    )
-                })
-                .unwrap()
-                .unwrap(),
+            crate::test_support::on_engine(&mut backend, |__s| {
+                __s.transpose_read(
+                    TensorRead::from_view(TensorView::F64(transpose_view)),
+                    &[1, 0],
+                )
+            })
+            .unwrap()
+            .unwrap(),
+            crate::test_support::on_engine(&mut backend, |__s| {
+                __s.reshape_read(TensorRead::from_view(TensorView::F64(reshape_view)), &[4])
+            })
+            .unwrap()
+            .unwrap(),
+            crate::test_support::on_engine(&mut backend, |__s| {
+                __s.broadcast_in_dim_read(
+                    TensorRead::from_view(TensorView::F64(broadcast_view)),
+                    &[2, 3],
+                    &[0, 1],
+                )
+            })
+            .unwrap()
+            .unwrap(),
         ]
     };
 
-    let session_outputs = backend
-        .with_backend_session(|session| {
-            let transpose_view =
-                tenferro_tensor::TypedTensorView::from_slice([2, 2], [2, -1], 3, &storage).unwrap();
-            let reshape_view =
-                tenferro_tensor::TypedTensorView::from_slice([2, 2], [2, -1], 3, &storage).unwrap();
-            let broadcast_view =
-                tenferro_tensor::TypedTensorView::from_slice([2, 1], [2, 0], 1, &storage).unwrap();
-            [
-                session
-                    .transpose_read(
-                        TensorRead::from_view(TensorView::F64(transpose_view)),
-                        &[1, 0],
-                    )
-                    .unwrap(),
-                session
-                    .reshape_read(TensorRead::from_view(TensorView::F64(reshape_view)), &[4])
-                    .unwrap(),
-                session
-                    .broadcast_in_dim_read(
-                        TensorRead::from_view(TensorView::F64(broadcast_view)),
-                        &[2, 3],
-                        &[0, 1],
-                    )
-                    .unwrap(),
-            ]
-        })
-        .unwrap();
+    let session_outputs = crate::test_support::on_engine(&mut backend, |session| {
+        let transpose_view =
+            tenferro_tensor::TypedTensorView::from_slice([2, 2], [2, -1], 3, &storage).unwrap();
+        let reshape_view =
+            tenferro_tensor::TypedTensorView::from_slice([2, 2], [2, -1], 3, &storage).unwrap();
+        let broadcast_view =
+            tenferro_tensor::TypedTensorView::from_slice([2, 1], [2, 0], 1, &storage).unwrap();
+        [
+            session
+                .transpose_read(
+                    TensorRead::from_view(TensorView::F64(transpose_view)),
+                    &[1, 0],
+                )
+                .unwrap(),
+            session
+                .reshape_read(TensorRead::from_view(TensorView::F64(reshape_view)), &[4])
+                .unwrap(),
+            session
+                .broadcast_in_dim_read(
+                    TensorRead::from_view(TensorView::F64(broadcast_view)),
+                    &[2, 3],
+                    &[0, 1],
+                )
+                .unwrap(),
+        ]
+    })
+    .unwrap();
 
     for (backend_output, session_output) in backend_outputs.iter().zip(&session_outputs) {
         assert_eq!(backend_output.shape(), session_output.shape());
@@ -1400,75 +1375,68 @@ fn cpu_view_materialization_rejects_backend_buffer_with_caller_operation_name() 
 
 #[test]
 fn test_structural_transpose_acquires_output_from_pool() {
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|__s| {
-            __s.reclaim_buffer(Tensor::from_typed::<f64>(
-                TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
-            ))
-        })
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    let mut backend = crate::CpuEngine::serial();
+    crate::test_support::on_engine(&mut backend, |__s| {
+        __s.reclaim_buffer(Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
+        ))
+    })
+    .unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 
     let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
     );
-    let out = backend
-        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
-        .unwrap()
-        .unwrap();
+    let out = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0])
+    })
+    .unwrap()
+    .unwrap();
 
-    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
+    assert_eq!(backend.buffer_pool_len(), 0);
     assert_eq!(get_f64(&out, &[0, 0]), 1.0);
     assert_eq!(get_f64(&out, &[1, 0]), 3.0);
     assert_eq!(get_f64(&out, &[0, 1]), 2.0);
     assert_eq!(get_f64(&out, &[1, 1]), 4.0);
-    backend
-        .with_backend_session(|__s| __s.reclaim_buffer(out))
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(out)).unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 }
 
 #[test]
 fn test_cast_acquires_output_from_dtype_pool() {
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|__s| {
-            __s.reclaim_buffer(Tensor::from_typed::<f32>(
-                TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
-            ))
-        })
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    let mut backend = crate::CpuEngine::serial();
+    crate::test_support::on_engine(&mut backend, |__s| {
+        __s.reclaim_buffer(Tensor::from_typed::<f32>(
+            TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
+        ))
+    })
+    .unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 
     let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![4], vec![1.25, 2.5, 3.75, 4.0]).unwrap(),
     );
-    let out = backend
-        .with_backend_session(|__s| __s.cast(&input, DType::F32))
+    let out = crate::test_support::on_engine(&mut backend, |__s| __s.cast(&input, DType::F32))
         .unwrap()
         .unwrap();
 
-    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
+    assert_eq!(backend.buffer_pool_len(), 0);
     assert_eq!(get_f32(&out, &[0]), 1.25);
     assert_eq!(get_f32(&out, &[3]), 4.0);
-    backend
-        .with_backend_session(|__s| __s.reclaim_buffer(out))
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(out)).unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 }
 
 #[test]
 fn test_slice_acquires_output_from_pool() {
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|__s| {
-            __s.reclaim_buffer(Tensor::from_typed::<f64>(
-                TypedTensor::from_vec_col_major(vec![2], vec![0.0; 2]).unwrap(),
-            ))
-        })
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    let mut backend = crate::CpuEngine::serial();
+    crate::test_support::on_engine(&mut backend, |__s| {
+        __s.reclaim_buffer(Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![2], vec![0.0; 2]).unwrap(),
+        ))
+    })
+    .unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 
     let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![4], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
@@ -1478,31 +1446,27 @@ fn test_slice_acquires_output_from_pool() {
         limits: vec![3],
         strides: vec![1],
     };
-    let out = backend
-        .with_backend_session(|__s| __s.slice(&input, &config))
+    let out = crate::test_support::on_engine(&mut backend, |__s| __s.slice(&input, &config))
         .unwrap()
         .unwrap();
 
-    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
+    assert_eq!(backend.buffer_pool_len(), 0);
     assert_eq!(get_f64(&out, &[0]), 2.0);
     assert_eq!(get_f64(&out, &[1]), 3.0);
-    backend
-        .with_backend_session(|__s| __s.reclaim_buffer(out))
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(out)).unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 }
 
 #[test]
 fn test_pad_acquires_and_zeroes_output_from_pool() {
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|__s| {
-            __s.reclaim_buffer(Tensor::from_typed::<f64>(
-                TypedTensor::from_vec_col_major(vec![4], vec![9.0; 4]).unwrap(),
-            ))
-        })
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    let mut backend = crate::CpuEngine::serial();
+    crate::test_support::on_engine(&mut backend, |__s| {
+        __s.reclaim_buffer(Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![4], vec![9.0; 4]).unwrap(),
+        ))
+    })
+    .unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 
     let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
@@ -1512,33 +1476,29 @@ fn test_pad_acquires_and_zeroes_output_from_pool() {
         edge_padding_high: vec![1],
         interior_padding: vec![0],
     };
-    let out = backend
-        .with_backend_session(|__s| __s.pad(&input, &config))
+    let out = crate::test_support::on_engine(&mut backend, |__s| __s.pad(&input, &config))
         .unwrap()
         .unwrap();
 
-    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
+    assert_eq!(backend.buffer_pool_len(), 0);
     assert_eq!(get_f64(&out, &[0]), 0.0);
     assert_eq!(get_f64(&out, &[1]), 1.0);
     assert_eq!(get_f64(&out, &[2]), 2.0);
     assert_eq!(get_f64(&out, &[3]), 0.0);
-    backend
-        .with_backend_session(|__s| __s.reclaim_buffer(out))
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(out)).unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 }
 
 #[test]
 fn test_dynamic_update_slice_acquires_clone_from_pool() {
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|__s| {
-            __s.reclaim_buffer(Tensor::from_typed::<f64>(
-                TypedTensor::from_vec_col_major(vec![4], vec![9.0; 4]).unwrap(),
-            ))
-        })
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    let mut backend = crate::CpuEngine::serial();
+    crate::test_support::on_engine(&mut backend, |__s| {
+        __s.reclaim_buffer(Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![4], vec![9.0; 4]).unwrap(),
+        ))
+    })
+    .unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 
     let operand = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![4], vec![0.0, 1.0, 2.0, 3.0]).unwrap(),
@@ -1548,78 +1508,69 @@ fn test_dynamic_update_slice_acquires_clone_from_pool() {
     );
     let starts =
         Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(vec![1], vec![1]).unwrap());
-    let out = backend
-        .with_backend_session(|__s| __s.dynamic_update_slice(&operand, &update, &starts))
-        .unwrap()
-        .unwrap();
+    let out = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.dynamic_update_slice(&operand, &update, &starts)
+    })
+    .unwrap()
+    .unwrap();
 
-    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
+    assert_eq!(backend.buffer_pool_len(), 0);
     assert_eq!(get_f64(&out, &[0]), 0.0);
     assert_eq!(get_f64(&out, &[1]), 7.0);
     assert_eq!(get_f64(&out, &[2]), 8.0);
     assert_eq!(get_f64(&out, &[3]), 3.0);
-    backend
-        .with_backend_session(|__s| __s.reclaim_buffer(out))
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+    crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(out)).unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 }
 
 #[test]
 fn test_reclaim_buffer_covers_all_dtypes() {
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let f32_t = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap(),
     );
-    backend
-        .with_backend_session(|__s| __s.reclaim_buffer(f32_t))
-        .unwrap();
+    crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(f32_t)).unwrap();
     let c32_t = Tensor::from_typed::<tenferro_tensor::Complex32>(
         TypedTensor::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 0.0)]).unwrap(),
     );
-    backend
-        .with_backend_session(|__s| __s.reclaim_buffer(c32_t))
-        .unwrap();
+    crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(c32_t)).unwrap();
     let c64_t = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 0.0)]).unwrap(),
     );
-    backend
-        .with_backend_session(|__s| __s.reclaim_buffer(c64_t))
-        .unwrap();
-    assert!(backend.buffer_pool_len().unwrap() >= 3);
+    crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(c64_t)).unwrap();
+    assert!(backend.buffer_pool_len() >= 3);
 }
 
 #[test]
 fn test_session_linalg_pool_preserves_buffers() {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    let t = backend
-        .with_backend_session(|__s| {
-            __s.add_read(
-                TensorRead::from_tensor(&Tensor::from_typed::<f64>(
-                    TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-                )),
-                TensorRead::from_tensor(&Tensor::from_typed::<f64>(
-                    TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
-                )),
-            )
-        })
-        .unwrap()
-        .unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
+    let t = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.add_read(
+            TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+            )),
+            TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
+            )),
+        )
+    })
+    .unwrap()
+    .unwrap();
     assert_eq!(get_f64(&t, &[0]), 4.0);
     assert_eq!(get_f64(&t, &[1]), 6.0);
-    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
+    assert_eq!(backend.buffer_pool_len(), 0);
 }
 
 #[test]
-fn test_with_linalg_pool_returns_resources_after_panic() {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend
-        .with_backend_session(|__s| {
-            __s.reclaim_buffer(Tensor::from_typed::<f64>(
-                TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-            ))
-        })
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
+fn test_with_linalg_pool_keeps_buffers_and_breaks_engine_after_panic() {
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
+    crate::test_support::on_engine(&mut backend, |__s| {
+        __s.reclaim_buffer(Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+        ))
+    })
+    .unwrap();
+    assert_eq!(backend.buffer_pool_len(), 1);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = with_cpu_session(&mut backend, |cpu| {
@@ -1628,1477 +1579,87 @@ fn test_with_linalg_pool_returns_resources_after_panic() {
     }));
 
     assert!(result.is_err());
-    // A held session owns the engine resources for the callback instead of
-    // locking them, so unwinding returns them rather than poisoning the engine,
-    // and the next session reuses the same pool.
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
-
-    let value = backend
-        .with_backend_session(|session| {
-            session.add_read(
-                TensorRead::from_tensor(
-                    &Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
-                ),
-                TensorRead::from_tensor(
-                    &Tensor::from_vec_col_major(vec![1], vec![5.0_f64]).unwrap(),
-                ),
-            )
-        })
-        .unwrap()
-        .unwrap();
-    assert_eq!(value.as_slice::<f64>().unwrap(), &[7.0]);
-}
-
-#[test]
-fn test_backend_session_returns_resources_after_panic() {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend
-        .with_backend_session(|__s| {
-            __s.reclaim_buffer(Tensor::from_typed::<f64>(
-                TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-            ))
-        })
-        .unwrap();
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend
-            .with_backend_session::<()>(|_| panic!("forced session panic"))
-            .unwrap();
-    }));
-
-    assert!(result.is_err());
-    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
-
-    let value = backend
-        .with_backend_session(|session| {
-            session.add_read(
-                TensorRead::from_tensor(
-                    &Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
-                ),
-                TensorRead::from_tensor(
-                    &Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
-                ),
-            )
-        })
-        .unwrap()
-        .unwrap();
-    assert_eq!(value.as_slice::<f64>().unwrap(), &[3.0]);
+    // Unwinding keeps the pool's buffers and breaks the engine, which then
+    // refuses further work.
+    assert_eq!(backend.buffer_pool_len(), 1);
+    assert!(backend.is_broken());
+    let refused = backend.add_read(
+        TensorRead::from_tensor(&Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap()),
+        TensorRead::from_tensor(&Tensor::from_vec_col_major(vec![1], vec![5.0_f64]).unwrap()),
+    );
+    assert!(refused.is_err());
 }
 
 #[test]
 fn test_exec_session_read_reductions_and_reclaim_cover_typed_paths() {
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|exec| {
-            let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-            let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-            let added = exec
-                .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-                .unwrap();
-            assert_eq!(added.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    let mut backend = crate::CpuEngine::serial();
+    crate::test_support::on_engine(&mut backend, |exec| {
+        let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+        let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+        let added = exec
+            .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+            .unwrap();
+        assert_eq!(added.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 
-            let view_data = [2.0_f64, 3.0];
-            let view_shape = [2usize];
-            assert_eq!(
-                exec.reduce_sum_read(
-                    TensorRead::from_view(TensorView::f64(&view_shape, &view_data).unwrap()),
-                    &[0],
-                )
+        let view_data = [2.0_f64, 3.0];
+        let view_shape = [2usize];
+        assert_eq!(
+            exec.reduce_sum_read(
+                TensorRead::from_view(TensorView::f64(&view_shape, &view_data).unwrap()),
+                &[0],
+            )
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
+            &[5.0]
+        );
+        assert_eq!(
+            exec.reduce_prod_read(TensorRead::from_tensor(&lhs), &[0])
                 .unwrap()
                 .as_slice::<f64>()
                 .unwrap(),
-                &[5.0]
-            );
-            assert_eq!(
-                exec.reduce_prod_read(TensorRead::from_tensor(&lhs), &[0])
-                    .unwrap()
-                    .as_slice::<f64>()
-                    .unwrap(),
-                &[2.0]
-            );
-            assert_eq!(
-                exec.reduce_max_read(TensorRead::from_tensor(&rhs), &[0])
-                    .unwrap()
-                    .as_slice::<f64>()
-                    .unwrap(),
-                &[4.0]
-            );
-            assert_eq!(
-                exec.reduce_min_read(TensorRead::from_tensor(&rhs), &[0])
-                    .unwrap()
-                    .as_slice::<f64>()
-                    .unwrap(),
-                &[3.0]
-            );
-
-            exec.reclaim_buffer(Tensor::from_typed::<f32>(
-                TypedTensor::from_vec_col_major(vec![1], vec![0.0_f32]).unwrap(),
-            ));
-            exec.reclaim_buffer(Tensor::from_typed::<f64>(
-                TypedTensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap(),
-            ));
-            exec.reclaim_buffer(Tensor::from_typed::<i32>(
-                TypedTensor::from_vec_col_major(vec![1], vec![0_i32]).unwrap(),
-            ));
-            exec.reclaim_buffer(Tensor::from_typed::<i64>(
-                TypedTensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
-            ));
-            exec.reclaim_buffer(Tensor::from_typed::<bool>(
-                TypedTensor::from_vec_col_major(vec![1], vec![false]).unwrap(),
-            ));
-            exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex32>(
-                TypedTensor::from_vec_col_major(vec![1], vec![Complex32::new(0.0, 0.0)]).unwrap(),
-            ));
-            exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex64>(
-                TypedTensor::from_vec_col_major(vec![1], vec![Complex64::new(0.0, 0.0)]).unwrap(),
-            ));
-        })
-        .unwrap();
-
-    assert!(backend.buffer_pool_len().unwrap() >= 7);
-}
-
-#[test]
-fn test_default_backend_session_methods_cover_cache_fallbacks() {
-    #[doc(hidden)]
-    struct DefaultOnlyBackend;
-
-    macro_rules! panic_backend_methods {
-        ($($name:ident($($arg:ident : $argty:ty),*) -> $ret:ty;)+) => {
-            $(
-                fn $name(&mut self, $($arg: $argty),*) -> $ret {
-                    $(let _ = &$arg;)*
-                    panic!(concat!(stringify!($name), " should not be called by this test"))
-                }
-            )+
-        };
-    }
-
-    impl BackendRuntimeCache for DefaultOnlyBackend {
-        type RuntimeCache = ();
-    }
-
-    impl TensorElementwise for DefaultOnlyBackend {
-        fn elementwise_read_into(
-            &mut self,
-            op: ElementwiseReadOp,
-            inputs: &[TensorRead<'_>],
-            out: TensorWrite<'_>,
-        ) -> crate::Result<()> {
-            CpuBackend::new()
-                .with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))
+            &[2.0]
+        );
+        assert_eq!(
+            exec.reduce_max_read(TensorRead::from_tensor(&rhs), &[0])
                 .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("add", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("add", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("sub", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("sub", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("mul", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("mul", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("neg", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.neg_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.conj_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("div", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("div", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.abs_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("sign", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.sign_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn maximum_read(
-            &mut self,
-            lhs: TensorRead<'_>,
-            rhs: TensorRead<'_>,
-        ) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn minimum_read(
-            &mut self,
-            lhs: TensorRead<'_>,
-            rhs: TensorRead<'_>,
-        ) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn compare_read(
-            &mut self,
-            lhs: TensorRead<'_>,
-            rhs: TensorRead<'_>,
-            dir: &CompareDir,
-        ) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.compare_read(
-                    TensorRead::from_tensor(lhs),
-                    TensorRead::from_tensor(rhs),
-                    dir,
-                )
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn select_read(
-            &mut self,
-            pred: TensorRead<'_>,
-            on_true: TensorRead<'_>,
-            on_false: TensorRead<'_>,
-        ) -> crate::Result<Tensor> {
-            let pred = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
-            let on_true = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
-            let on_false = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.select_read(
-                    TensorRead::from_tensor(pred),
-                    TensorRead::from_tensor(on_true),
-                    TensorRead::from_tensor(on_false),
-                )
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn clamp_read(
-            &mut self,
-            input: TensorRead<'_>,
-            lower: TensorRead<'_>,
-            upper: TensorRead<'_>,
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("clamp", input)?;
-            let lower = tenferro_tensor::backend::read_owned_tensor("clamp", lower)?;
-            let upper = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.clamp_read(
-                    TensorRead::from_tensor(input),
-                    TensorRead::from_tensor(lower),
-                    TensorRead::from_tensor(upper),
-                )
-            })
-            .unwrap()
-        }
-    }
-
-    impl TensorAnalytic for DefaultOnlyBackend {
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("exp", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.exp_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn log_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("log", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.log_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn sin_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("sin", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.sin_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn cos_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("cos", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.cos_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn tanh_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("tanh", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.tanh_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn sqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("sqrt", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.sqrt_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn rsqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.rsqrt_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn pow_read(
-            &mut self,
-            lhs: tenferro_tensor::TensorRead<'_>,
-            rhs: tenferro_tensor::TensorRead<'_>,
-        ) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("pow", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("pow", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.pow_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn expm1_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("expm1", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.expm1_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn log1p_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.log1p_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        fn erf_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("erf", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.erf_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-    }
-
-    impl TensorStructural for DefaultOnlyBackend {
-        panic_backend_methods! {
-        cast(input: &Tensor, to: DType) -> crate::Result<Tensor>;
-        extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
-        embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
-        tril(input: &Tensor, k: i64) -> crate::Result<Tensor>;
-        triu(input: &Tensor, k: i64) -> crate::Result<Tensor>;
-        }
-
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected borrowed views. Reproduce it explicitly rather than
-        // forwarding a view, which would widen the accepted input surface.
-        fn transpose_read(
-            &mut self,
-            input: TensorRead<'_>,
-            perm: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.transpose_read(TensorRead::from_tensor(input), perm)
-            })
-            .unwrap()
-        }
-
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected borrowed views. Reproduce it explicitly rather than
-        // forwarding a view, which would widen the accepted input surface.
-        fn reshape_read(
-            &mut self,
-            input: TensorRead<'_>,
-            shape: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reshape_read(TensorRead::from_tensor(input), shape)
-            })
-            .unwrap()
-        }
-
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected borrowed views. Reproduce it explicitly rather than
-        // forwarding a view, which would widen the accepted input surface.
-        fn broadcast_in_dim_read(
-            &mut self,
-            input: TensorRead<'_>,
-            shape: &[usize],
-            dims: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
-            })
-            .unwrap()
-        }
-    }
-
-    impl TensorReduction for DefaultOnlyBackend {
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected views. Reproduce it explicitly.
-        fn reduce_sum_read(
-            &mut self,
-            input: TensorRead<'_>,
-            axes: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_sum_read(TensorRead::from_tensor(input), axes)
-            })
-            .unwrap()
-        }
-
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected views. Reproduce it explicitly.
-        fn reduce_prod_read(
-            &mut self,
-            input: TensorRead<'_>,
-            axes: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_prod_read(TensorRead::from_tensor(input), axes)
-            })
-            .unwrap()
-        }
-
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected views. Reproduce it explicitly.
-        fn reduce_max_read(
-            &mut self,
-            input: TensorRead<'_>,
-            axes: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_max_read(TensorRead::from_tensor(input), axes)
-            })
-            .unwrap()
-        }
-
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected views. Reproduce it explicitly.
-        fn reduce_min_read(
-            &mut self,
-            input: TensorRead<'_>,
-            axes: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_min_read(TensorRead::from_tensor(input), axes)
-            })
-            .unwrap()
-        }
-    }
-
-    impl TensorIndexing for DefaultOnlyBackend {
-        panic_backend_methods! {
-        gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) -> crate::Result<Tensor>;
-        scatter(operand: &Tensor, scatter_indices: &Tensor, updates: &Tensor, config: &ScatterConfig) -> crate::Result<Tensor>;
-        slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
-        dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> crate::Result<Tensor>;
-        dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) -> crate::Result<Tensor>;
-        pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
-        concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
-        reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-        }
-    }
-
-    impl TensorDot for DefaultOnlyBackend {
-        // The previous read-half default delegated an owned pair to the one-shot
-        // method and materialized borrowed views through to_contiguous_read before
-        // contracting. Reproduce that exactly rather than forwarding a view.
-        fn dot_general_read(
-            &mut self,
-            lhs: TensorRead<'_>,
-            rhs: TensorRead<'_>,
-            config: &DotGeneralConfig,
-        ) -> crate::Result<Tensor> {
-            match (lhs.as_tensor(), rhs.as_tensor()) {
-                (Some(lhs), Some(rhs)) => {
-                    let mut backend = CpuBackend::new();
-                    tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                        __s.dot_general_read(
-                            TensorRead::from_tensor(lhs),
-                            TensorRead::from_tensor(rhs),
-                            config,
-                        )
-                    })
-                    .unwrap()
-                }
-                _ => {
-                    let lhs = self.to_contiguous_read(lhs)?;
-                    let rhs = self.to_contiguous_read(rhs)?;
-                    {
-                        let mut backend = CpuBackend::new();
-                        tenferro_tensor::BackendSessionHost::with_backend_session(
-                            &mut backend,
-                            |__s| {
-                                __s.dot_general_read(
-                                    TensorRead::from_tensor(&lhs),
-                                    TensorRead::from_tensor(&rhs),
-                                    config,
-                                )
-                            },
-                        )
-                        .unwrap()
-                    }
-                }
-            }
-        }
-    }
-
-    impl BackendCachedDot for DefaultOnlyBackend {}
-
-    impl BackendSession for DefaultOnlyBackend {}
-
-    impl BackendSessionHost for DefaultOnlyBackend {
-        fn with_backend_session<R>(
-            &mut self,
-            f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R,
-        ) -> Result<R, tenferro_tensor::SessionEntryError> {
-            tenferro_tensor::with_session_entry_guard("test backend", || f(self))
-        }
-    }
-
-    impl TensorDeviceTransfer for DefaultOnlyBackend {
-        fn download_to_host(&mut self, _tensor: TensorRead<'_>) -> crate::Result<Tensor> {
-            Err(crate::Error::unsupported(
-                "DefaultOnlyBackend::download_to_host",
-                "test backend does not transfer tensors",
-            ))
-        }
-
-        fn upload_host_tensor(&mut self, _tensor: TensorRead<'_>) -> crate::Result<Tensor> {
-            Err(crate::Error::unsupported(
-                "DefaultOnlyBackend::upload_host_tensor",
-                "test backend does not transfer tensors",
-            ))
-        }
-    }
-
-    impl TensorBuffer for DefaultOnlyBackend {}
-
-    impl TensorFusion for DefaultOnlyBackend {}
-
-    impl TensorBackend for DefaultOnlyBackend {}
-
-    struct DefaultOnlyExec;
-
-    impl TensorElementwise for DefaultOnlyExec {
-        fn elementwise_read_into(
-            &mut self,
-            op: ElementwiseReadOp,
-            inputs: &[TensorRead<'_>],
-            out: TensorWrite<'_>,
-        ) -> crate::Result<()> {
-            CpuBackend::new()
-                .with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))
+                .as_slice::<f64>()
+                .unwrap(),
+            &[4.0]
+        );
+        assert_eq!(
+            exec.reduce_min_read(TensorRead::from_tensor(&rhs), &[0])
                 .unwrap()
-        }
+                .as_slice::<f64>()
+                .unwrap(),
+            &[3.0]
+        );
 
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("add", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("add", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("sub", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("sub", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("mul", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("mul", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("neg", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.neg_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.conj_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("div", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("div", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.abs_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("sign", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.sign_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn maximum_read(
-            &mut self,
-            lhs: TensorRead<'_>,
-            rhs: TensorRead<'_>,
-        ) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn minimum_read(
-            &mut self,
-            lhs: TensorRead<'_>,
-            rhs: TensorRead<'_>,
-        ) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn compare_read(
-            &mut self,
-            lhs: TensorRead<'_>,
-            rhs: TensorRead<'_>,
-            dir: &CompareDir,
-        ) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.compare_read(
-                    TensorRead::from_tensor(lhs),
-                    TensorRead::from_tensor(rhs),
-                    dir,
-                )
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn select_read(
-            &mut self,
-            pred: TensorRead<'_>,
-            on_true: TensorRead<'_>,
-            on_false: TensorRead<'_>,
-        ) -> crate::Result<Tensor> {
-            let pred = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
-            let on_true = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
-            let on_false = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.select_read(
-                    TensorRead::from_tensor(pred),
-                    TensorRead::from_tensor(on_true),
-                    TensorRead::from_tensor(on_false),
-                )
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn clamp_read(
-            &mut self,
-            input: TensorRead<'_>,
-            lower: TensorRead<'_>,
-            upper: TensorRead<'_>,
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("clamp", input)?;
-            let lower = tenferro_tensor::backend::read_owned_tensor("clamp", lower)?;
-            let upper = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.clamp_read(
-                    TensorRead::from_tensor(input),
-                    TensorRead::from_tensor(lower),
-                    TensorRead::from_tensor(upper),
-                )
-            })
-            .unwrap()
-        }
-    }
-
-    impl TensorAnalytic for DefaultOnlyExec {
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("exp", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.exp_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn log_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("log", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.log_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn sin_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("sin", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.sin_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn cos_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("cos", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.cos_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn tanh_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("tanh", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.tanh_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn sqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("sqrt", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.sqrt_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn rsqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.rsqrt_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn pow_read(
-            &mut self,
-            lhs: tenferro_tensor::TensorRead<'_>,
-            rhs: tenferro_tensor::TensorRead<'_>,
-        ) -> crate::Result<Tensor> {
-            let lhs = tenferro_tensor::backend::read_owned_tensor("pow", lhs)?;
-            let rhs = tenferro_tensor::backend::read_owned_tensor("pow", rhs)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.pow_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn expm1_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("expm1", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.expm1_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        // Reproduce the previous read-half default: delegate an owned tensor and
-        // reject a borrowed view.
-        fn log1p_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.log1p_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-
-        fn erf_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("erf", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.erf_read(TensorRead::from_tensor(input))
-            })
-            .unwrap()
-        }
-    }
-
-    impl TensorStructural for DefaultOnlyExec {
-        panic_backend_methods! {
-        cast(input: &Tensor, to: DType) -> crate::Result<Tensor>;
-        extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
-        embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
-        tril(input: &Tensor, k: i64) -> crate::Result<Tensor>;
-        triu(input: &Tensor, k: i64) -> crate::Result<Tensor>;
-        }
-
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected borrowed views. Reproduce it explicitly rather than
-        // forwarding a view, which would widen the accepted input surface.
-        fn transpose_read(
-            &mut self,
-            input: TensorRead<'_>,
-            perm: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.transpose_read(TensorRead::from_tensor(input), perm)
-            })
-            .unwrap()
-        }
-
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected borrowed views. Reproduce it explicitly rather than
-        // forwarding a view, which would widen the accepted input surface.
-        fn reshape_read(
-            &mut self,
-            input: TensorRead<'_>,
-            shape: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reshape_read(TensorRead::from_tensor(input), shape)
-            })
-            .unwrap()
-        }
-
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected borrowed views. Reproduce it explicitly rather than
-        // forwarding a view, which would widen the accepted input surface.
-        fn broadcast_in_dim_read(
-            &mut self,
-            input: TensorRead<'_>,
-            shape: &[usize],
-            dims: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
-            })
-            .unwrap()
-        }
-    }
-
-    impl TensorReduction for DefaultOnlyExec {
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected views. Reproduce it explicitly.
-        fn reduce_sum_read(
-            &mut self,
-            input: TensorRead<'_>,
-            axes: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_sum_read(TensorRead::from_tensor(input), axes)
-            })
-            .unwrap()
-        }
-
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected views. Reproduce it explicitly.
-        fn reduce_prod_read(
-            &mut self,
-            input: TensorRead<'_>,
-            axes: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_prod_read(TensorRead::from_tensor(input), axes)
-            })
-            .unwrap()
-        }
-
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected views. Reproduce it explicitly.
-        fn reduce_max_read(
-            &mut self,
-            input: TensorRead<'_>,
-            axes: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_max_read(TensorRead::from_tensor(input), axes)
-            })
-            .unwrap()
-        }
-
-        // The previous read-half default delegated owned tensors to the one-shot
-        // method and rejected views. Reproduce it explicitly.
-        fn reduce_min_read(
-            &mut self,
-            input: TensorRead<'_>,
-            axes: &[usize],
-        ) -> crate::Result<Tensor> {
-            let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
-            let mut backend = CpuBackend::new();
-            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                __s.reduce_min_read(TensorRead::from_tensor(input), axes)
-            })
-            .unwrap()
-        }
-    }
-
-    impl TensorIndexing for DefaultOnlyExec {
-        panic_backend_methods! {
-        gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) -> crate::Result<Tensor>;
-        scatter(operand: &Tensor, scatter_indices: &Tensor, updates: &Tensor, config: &ScatterConfig) -> crate::Result<Tensor>;
-        slice(input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
-        dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> crate::Result<Tensor>;
-        dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) -> crate::Result<Tensor>;
-        pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
-        concatenate(inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
-        reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-        }
-    }
-
-    impl TensorDot for DefaultOnlyExec {
-        // The previous read-half default delegated an owned pair to the one-shot
-        // method and materialized borrowed views through to_contiguous_read before
-        // contracting. Reproduce that exactly rather than forwarding a view.
-        fn dot_general_read(
-            &mut self,
-            lhs: TensorRead<'_>,
-            rhs: TensorRead<'_>,
-            config: &DotGeneralConfig,
-        ) -> crate::Result<Tensor> {
-            match (lhs.as_tensor(), rhs.as_tensor()) {
-                (Some(lhs), Some(rhs)) => {
-                    let mut backend = CpuBackend::new();
-                    tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
-                        __s.dot_general_read(
-                            TensorRead::from_tensor(lhs),
-                            TensorRead::from_tensor(rhs),
-                            config,
-                        )
-                    })
-                    .unwrap()
-                }
-                _ => {
-                    let lhs = self.to_contiguous_read(lhs)?;
-                    let rhs = self.to_contiguous_read(rhs)?;
-                    {
-                        let mut backend = CpuBackend::new();
-                        tenferro_tensor::BackendSessionHost::with_backend_session(
-                            &mut backend,
-                            |__s| {
-                                __s.dot_general_read(
-                                    TensorRead::from_tensor(&lhs),
-                                    TensorRead::from_tensor(&rhs),
-                                    config,
-                                )
-                            },
-                        )
-                        .unwrap()
-                    }
-                }
-            }
-        }
-    }
-
-    impl SessionCachedDot for DefaultOnlyExec {}
-
-    impl TensorBuffer for DefaultOnlyExec {
-        fn reclaim_buffer(&mut self, _tensor: Tensor) {}
-    }
-
-    impl TensorFusion for DefaultOnlyExec {}
-
-    let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
-    let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
-    let one_shape = [1usize, 1];
-    let lhs_data = [2.0_f64];
-    let rhs_data = [3.0_f64];
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [].as_slice().into(),
-        rhs_batch_dims: [].as_slice().into(),
-    };
-    let mut backend = DefaultOnlyBackend;
-    let mut cache = ();
-
-    let add_read_tensor = TensorElementwise::add_read(
-        &mut backend,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-    )
-    .unwrap();
-    assert_eq!(add_read_tensor.as_slice::<f64>().unwrap(), &[5.0]);
-    let add_view_err = TensorElementwise::add_read(
-        &mut backend,
-        TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
-        TensorRead::from_tensor(&rhs),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        &add_view_err,
-        crate::Error::Unsupported { op: "add", .. }
-    ));
-    assert_eq!(add_view_err.kind(), tenferro_tensor::ErrorKind::Unsupported);
-
-    let reduce_input = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
-    let reduce_view_shape = [2usize];
-    let reduce_view_data = [2.0_f64, 3.0];
-    assert_eq!(
-        TensorReduction::reduce_sum_read(
-            &mut backend,
-            TensorRead::from_tensor(&reduce_input),
-            &[0],
-        )
-        .unwrap()
-        .as_slice::<f64>()
-        .unwrap(),
-        &[5.0]
-    );
-    assert_eq!(
-        TensorReduction::reduce_prod_read(
-            &mut backend,
-            TensorRead::from_tensor(&reduce_input),
-            &[0],
-        )
-        .unwrap()
-        .as_slice::<f64>()
-        .unwrap(),
-        &[6.0]
-    );
-    assert_eq!(
-        TensorReduction::reduce_max_read(
-            &mut backend,
-            TensorRead::from_tensor(&reduce_input),
-            &[0],
-        )
-        .unwrap()
-        .as_slice::<f64>()
-        .unwrap(),
-        &[3.0]
-    );
-    assert_eq!(
-        TensorReduction::reduce_min_read(
-            &mut backend,
-            TensorRead::from_tensor(&reduce_input),
-            &[0],
-        )
-        .unwrap()
-        .as_slice::<f64>()
-        .unwrap(),
-        &[2.0]
-    );
-    for (op, err) in [
-        (
-            "reduce_sum",
-            TensorReduction::reduce_sum_read(
-                &mut backend,
-                TensorRead::from_view(
-                    TensorView::f64(&reduce_view_shape, &reduce_view_data).unwrap(),
-                ),
-                &[0],
-            )
-            .unwrap_err(),
-        ),
-        (
-            "reduce_prod",
-            TensorReduction::reduce_prod_read(
-                &mut backend,
-                TensorRead::from_view(
-                    TensorView::f64(&reduce_view_shape, &reduce_view_data).unwrap(),
-                ),
-                &[0],
-            )
-            .unwrap_err(),
-        ),
-        (
-            "reduce_max",
-            TensorReduction::reduce_max_read(
-                &mut backend,
-                TensorRead::from_view(
-                    TensorView::f64(&reduce_view_shape, &reduce_view_data).unwrap(),
-                ),
-                &[0],
-            )
-            .unwrap_err(),
-        ),
-        (
-            "reduce_min",
-            TensorReduction::reduce_min_read(
-                &mut backend,
-                TensorRead::from_view(
-                    TensorView::f64(&reduce_view_shape, &reduce_view_data).unwrap(),
-                ),
-                &[0],
-            )
-            .unwrap_err(),
-        ),
-    ] {
-        assert!(matches!(
-            &err,
-            crate::Error::Unsupported { op: actual_op, .. } if *actual_op == op
+        exec.reclaim_buffer(Tensor::from_typed::<f32>(
+            TypedTensor::from_vec_col_major(vec![1], vec![0.0_f32]).unwrap(),
         ));
-    }
-
-    let direct = backend
-        .with_backend_session_cached(&mut cache, |__s| {
-            __s.dot_general_cached(Some(0), &lhs, &rhs, &config)
-        })
-        .unwrap()
-        .unwrap();
-    assert_eq!(direct.as_slice::<f64>().unwrap(), &[6.0]);
-
-    let lhs_folded =
-        TensorDot::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, false).unwrap();
-    assert_eq!(lhs_folded.as_slice::<f64>().unwrap(), &[6.0]);
-
-    let both_folded =
-        TensorDot::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, true).unwrap();
-    assert_eq!(both_folded.as_slice::<f64>().unwrap(), &[6.0]);
-
-    let read_views = TensorDot::dot_general_read(
-        &mut backend,
-        TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
-        TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
-        &config,
-    )
+        exec.reclaim_buffer(Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap(),
+        ));
+        exec.reclaim_buffer(Tensor::from_typed::<i32>(
+            TypedTensor::from_vec_col_major(vec![1], vec![0_i32]).unwrap(),
+        ));
+        exec.reclaim_buffer(Tensor::from_typed::<i64>(
+            TypedTensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
+        ));
+        exec.reclaim_buffer(Tensor::from_typed::<bool>(
+            TypedTensor::from_vec_col_major(vec![1], vec![false]).unwrap(),
+        ));
+        exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex32>(
+            TypedTensor::from_vec_col_major(vec![1], vec![Complex32::new(0.0, 0.0)]).unwrap(),
+        ));
+        exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex64>(
+            TypedTensor::from_vec_col_major(vec![1], vec![Complex64::new(0.0, 0.0)]).unwrap(),
+        ));
+    })
     .unwrap();
-    assert_eq!(read_views.as_slice::<f64>().unwrap(), &[6.0]);
 
-    let rhs_folded = backend
-        .with_backend_session_cached(&mut cache, |__s| {
-            __s.dot_general_with_conj_cached(Some(1), &lhs, &rhs, &config, false, true)
-        })
-        .unwrap()
-        .unwrap();
-    assert_eq!(rhs_folded.as_slice::<f64>().unwrap(), &[6.0]);
-
-    let upload_error = backend
-        .upload_host_tensor(TensorRead::from_tensor(&lhs))
-        .unwrap_err();
-    assert!(matches!(
-        upload_error,
-        crate::Error::Unsupported {
-            op: "DefaultOnlyBackend::upload_host_tensor",
-            ..
-        }
-    ));
-    let download_error = backend
-        .download_to_host(TensorRead::from_tensor(&lhs))
-        .unwrap_err();
-    assert!(matches!(
-        download_error,
-        crate::Error::Unsupported {
-            op: "DefaultOnlyBackend::download_to_host",
-            ..
-        }
-    ));
-
-    let fusion_plan =
-        tenferro_tensor::backend::ElementwiseFusionPlan::new(DType::F64, 0, vec![], vec![]);
-    assert!(backend
-        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[], &fusion_plan))
-        .unwrap()
-        .unwrap()
-        .is_none());
-
-    let session_value =
-        BackendSessionHost::with_backend_session_cached(&mut backend, &mut cache, |exec| {
-            let cached = exec
-                .dot_general_cached(Some(2), &lhs, &rhs, &config)
-                .unwrap();
-            let folded = exec
-                .dot_general_with_conj_cached(Some(3), &lhs, &rhs, &config, true, false)
-                .unwrap();
-            cached.as_slice::<f64>().unwrap()[0] + folded.as_slice::<f64>().unwrap()[0]
-        })
-        .unwrap();
-    assert_eq!(session_value, 12.0);
-
-    let mut exec = DefaultOnlyExec;
-    let exec_read_tensor = TensorDot::dot_general_read(
-        &mut exec,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &config,
-    )
-    .unwrap();
-    assert_eq!(exec_read_tensor.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_read_views = TensorDot::dot_general_read(
-        &mut exec,
-        TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
-        TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
-        &config,
-    )
-    .unwrap();
-    assert_eq!(exec_read_views.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_no_conj =
-        TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, false, false).unwrap();
-    assert_eq!(exec_no_conj.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_lhs_conj =
-        TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, true, false).unwrap();
-    assert_eq!(exec_lhs_conj.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_rhs_conj =
-        TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, false, true).unwrap();
-    assert_eq!(exec_rhs_conj.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_both_conj =
-        TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, true, true).unwrap();
-    assert_eq!(exec_both_conj.as_slice::<f64>().unwrap(), &[6.0]);
-
-    // A foreign session has no faer pool to lend, so the capability refuses
-    // without running the callback.
-    #[cfg(feature = "native")]
-    {
-        use crate::FaerParallelismExt;
-        let mut ran = false;
-        let error = BackendSessionHost::with_backend_session(&mut backend, |session| {
-            session.with_faer_parallelism(|_| {
-                ran = true;
-                Ok(())
-            })
-        })
-        .unwrap()
-        .unwrap_err();
-        assert!(!ran);
-        match error {
-            crate::Error::Unsupported { op, message } => {
-                assert_eq!(op, "with_faer_parallelism");
-                assert_eq!(
-                    message,
-                    "selected session is not a CPU/faer execution session"
-                );
-            }
-            other => panic!("expected Unsupported, got {other:?}"),
-        }
-    }
+    assert!(backend.buffer_pool_len() >= 7);
 }
 
 #[test]
@@ -3351,25 +1912,22 @@ fn test_pool_backed_structural_public_paths_cover_dispatch_and_helpers() {
         &[7.0, 7.0, 7.0, 7.0]
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = crate::CpuEngine::serial();
     let i64_matrix = Tensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
-    let as_c64 = backend
-        .with_backend_session(|__s| __s.cast(&i64_matrix, DType::C64))
-        .unwrap()
-        .unwrap();
+    let as_c64 =
+        crate::test_support::on_engine(&mut backend, |__s| __s.cast(&i64_matrix, DType::C64))
+            .unwrap()
+            .unwrap();
     assert_eq!(as_c64.dtype(), DType::C64);
-    let as_f32 = backend
-        .with_backend_session(|__s| __s.cast(&as_c64, DType::F32))
+    let as_f32 = crate::test_support::on_engine(&mut backend, |__s| __s.cast(&as_c64, DType::F32))
         .unwrap()
         .unwrap();
     assert_eq!(as_f32.dtype(), DType::F32);
-    let as_c32 = backend
-        .with_backend_session(|__s| __s.cast(&matrix, DType::C32))
+    let as_c32 = crate::test_support::on_engine(&mut backend, |__s| __s.cast(&matrix, DType::C32))
         .unwrap()
         .unwrap();
     assert_eq!(as_c32.dtype(), DType::C32);
-    let as_i64 = backend
-        .with_backend_session(|__s| __s.cast(&as_c32, DType::I64))
+    let as_i64 = crate::test_support::on_engine(&mut backend, |__s| __s.cast(&as_c32, DType::I64))
         .unwrap()
         .unwrap();
     assert_eq!(as_i64.as_slice::<i64>().unwrap(), &[1, 2, 3, 4]);
@@ -3627,10 +2185,8 @@ where
 
 #[test]
 fn session_read_delegates_cover_non_add_ops() {
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|exec| exercise_read_delegate_ops(exec))
-        .unwrap();
+    let mut backend = crate::CpuEngine::serial();
+    crate::test_support::on_engine(&mut backend, |exec| exercise_read_delegate_ops(exec)).unwrap();
 }
 
 #[test]
@@ -3639,7 +2195,7 @@ fn fused_activation_read_matches_the_reference_formula() {
 
     let xs: Vec<f64> = vec![-3.5, -1.0, -0.0, 0.0, 0.25, 1.5, 4.0];
     let input = Tensor::from_vec_col_major(vec![xs.len()], xs.clone()).unwrap();
-    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let mut backend = crate::test_support::cpu_engine(2).unwrap();
 
     for op in [
         ActivationOp::Sigmoid,
@@ -3648,13 +2204,12 @@ fn fused_activation_read_matches_the_reference_formula() {
         ActivationOp::Gelu,
         ActivationOp::GeluTanh,
     ] {
-        let out = backend
-            .with_backend_session(|session| {
-                session.fused_activation_read(op, TensorRead::from_tensor(&input))
-            })
-            .unwrap()
-            .unwrap()
-            .expect("f64 has a fused kernel");
+        let out = crate::test_support::on_engine(&mut backend, |session| {
+            session.fused_activation_read(op, TensorRead::from_tensor(&input))
+        })
+        .unwrap()
+        .unwrap()
+        .expect("f64 has a fused kernel");
         let got = out.as_slice::<f64>().unwrap();
         for (i, &x) in xs.iter().enumerate() {
             let expected = match op {
@@ -3689,14 +2244,13 @@ fn fused_activation_read_declines_dtypes_without_a_fused_kernel() {
     let complex =
         Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex64::new(1.0, 2.0)]).unwrap();
     let integer = Tensor::from_vec_col_major(vec![1], vec![3_i32]).unwrap();
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
     for input in [&complex, &integer] {
-        let out = backend
-            .with_backend_session(|session| {
-                session.fused_activation_read(ActivationOp::Sigmoid, TensorRead::from_tensor(input))
-            })
-            .unwrap()
-            .unwrap();
+        let out = crate::test_support::on_engine(&mut backend, |session| {
+            session.fused_activation_read(ActivationOp::Sigmoid, TensorRead::from_tensor(input))
+        })
+        .unwrap()
+        .unwrap();
         assert!(out.is_none(), "{:?} must decline", input.dtype());
     }
 }

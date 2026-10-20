@@ -1,11 +1,9 @@
 //! Tensor-boundary adapters; numerical plans and scheduling belong to cpueinsum.
 
-pub(crate) mod grouped;
 #[cfg(test)]
 mod tests;
 mod workspaces;
 pub use workspaces::ContractionWorkspaces;
-pub(crate) use workspaces::WorkspaceLease;
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use cpueinsum::tcontract::{
@@ -15,6 +13,7 @@ use cpueinsum::tcontract::{
 use cpueinsum::{ArenaProvider, Exec, Pool, SliceAccumulationSource};
 use std::any::Any;
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tenferro_cpu_basic::PooledUninitOutput;
 use tenferro_tensor::{
@@ -151,11 +150,17 @@ impl LowerContractionError for cpueinsum_blas::BlasError {
     }
 }
 
-// Exactly one retained wrapper per raw pool, shared by CpuContext clones.
+// Exactly one retained wrapper per raw pool: the engine owns the pool and its
+// provider wrapper together, so the SPMD gate and arena are never split.
 pub(crate) struct ExecutionResources {
     pool: Option<Pool<'static>>,
+    #[cfg(test)]
+    raw_pool: Option<std::sync::Arc<rayon::ThreadPool>>,
     serial: ArenaProvider,
     pub(crate) nary: ContractionWorkspaces,
+    /// Entries into the raw Rayon pool made directly by the faer lane. The
+    /// tcontract wrapper counts its own entries through [`Pool::stats`].
+    faer_entries: AtomicU64,
 }
 impl fmt::Debug for ExecutionResources {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -166,12 +171,50 @@ impl fmt::Debug for ExecutionResources {
     }
 }
 impl ExecutionResources {
-    pub(crate) fn new(pool: Option<Arc<rayon::ThreadPool>>) -> Self {
+    pub(crate) fn new(pool: Option<rayon::ThreadPool>) -> Self {
+        #[cfg(test)]
+        let (pool, raw_pool) = match pool {
+            Some(pool) => {
+                let raw_pool = std::sync::Arc::new(pool);
+                (
+                    Some(Pool::shared(std::sync::Arc::clone(&raw_pool))),
+                    Some(raw_pool),
+                )
+            }
+            None => (None, None),
+        };
+        #[cfg(not(test))]
+        let pool = pool.map(Pool::owned);
         Self {
-            pool: pool.map(Pool::shared),
+            pool,
+            #[cfg(test)]
+            raw_pool,
             serial: ArenaProvider::new(),
             nary: ContractionWorkspaces::default(),
+            faer_entries: AtomicU64::new(0),
         }
+    }
+
+    /// Test handle to the owned raw pool, so a test can enter that exact pool
+    /// from another thread without borrowing the engine.
+    #[cfg(test)]
+    pub(crate) fn raw_pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
+        self.raw_pool.clone()
+    }
+    /// Entry counters of the provider pool this engine owns.
+    pub(crate) fn pool_stats(&self) -> crate::CpuPoolStats {
+        let provider = self.pool.as_ref().map(Pool::stats).unwrap_or_default();
+        crate::CpuPoolStats {
+            entries: provider
+                .entries
+                .saturating_add(self.faer_entries.load(Ordering::Relaxed)),
+            broadcasts: provider.broadcasts,
+            inline_runs: provider.inline_runs,
+        }
+    }
+    #[cfg(feature = "native")]
+    pub(crate) fn count_faer_entry(&self) {
+        self.faer_entries.fetch_add(1, Ordering::Relaxed);
     }
     pub(crate) fn retained_bytes(&self) -> usize {
         self.workspace().retained_bytes()
@@ -185,6 +228,15 @@ impl ExecutionResources {
             arena: self.workspace(),
             max_bytes,
         }
+    }
+    /// The pool this engine runs on, if any.
+    pub(crate) fn rayon_pool(&self) -> Option<&rayon::ThreadPool> {
+        self.pool.as_ref().map(Pool::rayon_pool)
+    }
+    /// Number of workers of the owned pool, or one without a pool.
+    pub(crate) fn thread_budget(&self) -> std::num::NonZeroUsize {
+        std::num::NonZeroUsize::new(self.pool.as_ref().map_or(1, Pool::size))
+            .unwrap_or(std::num::NonZeroUsize::MIN)
     }
     fn workspace(&self) -> &ArenaProvider {
         self.pool.as_ref().map_or(&self.serial, Pool::workspace)
@@ -245,7 +297,7 @@ struct Key {
 struct CachedBinary {
     key: Key,
     config: DotGeneralConfig,
-    plan: Box<dyn Any + Send + Sync>,
+    plan: Arc<dyn Any + Send + Sync>,
 }
 #[derive(Default)]
 #[cfg(any(feature = "native", feature = "blas"))]
@@ -325,14 +377,19 @@ impl BinaryCache {
         self.slots.truncate(capacity);
         self.slots.shrink_to(capacity);
     }
-    fn with_plan<T: Scalar, R>(
+    /// The plan for `key`, cached in `slot` when the slot is within `capacity`.
+    ///
+    /// The cache only hands out shared, immutable plans: the caller runs the
+    /// returned plan after releasing whatever lock guards this cache, so two
+    /// engines sharing one plan cache never wait for each other's numerical
+    /// work.
+    fn plan<T: Scalar>(
         &mut self,
         slot: Option<usize>,
         capacity: usize,
         key: Key,
         config: &DotGeneralConfig,
-        run: impl FnOnce(&BinaryPlan<T>) -> crate::Result<R>,
-    ) -> crate::Result<R> {
+    ) -> crate::Result<Arc<BinaryPlan<T>>> {
         let prepare = || {
             let lhs = if key.lhs_conj {
                 key.lhs.spec()?.conj()
@@ -356,7 +413,7 @@ impl BinaryCache {
                 .map_err(|error| error.into_crate_error("dot_general"))
         };
         let Some(slot) = slot.filter(|&slot| slot < capacity) else {
-            return run(&prepare()?);
+            return Ok(Arc::new(prepare()?));
         };
         let matches = self
             .slots
@@ -377,35 +434,22 @@ impl BinaryCache {
             self.slots[slot] = Some(CachedBinary {
                 key,
                 config: config.clone(),
-                plan: Box::new(plan),
+                plan: Arc::new(plan),
             });
         }
         let plan = self.slots[slot]
             .as_ref()
-            .and_then(|entry| entry.plan.downcast_ref::<BinaryPlan<T>>())
+            .map(|entry| Arc::clone(&entry.plan))
             .ok_or_else(|| {
-                crate::Error::runtime_state(
-                    "dot_general",
-                    "cached numerical plan has incompatible scalar type",
-                )
+                crate::Error::runtime_state("dot_general", "cached numerical plan slot is empty")
             })?;
-        run(plan)
+        plan.downcast::<BinaryPlan<T>>().map_err(|_| {
+            crate::Error::runtime_state(
+                "dot_general",
+                "cached numerical plan has incompatible scalar type",
+            )
+        })
     }
-}
-
-/// Reject non-host operand placements before any numerical work.
-pub(crate) fn validate_host_operands(
-    op: &'static str,
-    lhs: &TensorRead<'_>,
-    rhs: &TensorRead<'_>,
-) -> crate::Result<()> {
-    crate::validate_cpu_host_read(op, "lhs", lhs)?;
-    crate::validate_cpu_host_read(op, "rhs", rhs)
-}
-
-/// Reject a non-host destination placement before any numerical work.
-pub(crate) fn validate_host_output(op: &'static str, out: &TensorWrite<'_>) -> crate::Result<()> {
-    crate::validate_cpu_host_write(op, "output", out)
 }
 
 #[cfg(any(feature = "native", feature = "blas"))]
@@ -430,7 +474,7 @@ fn key<T: Scalar>(
 fn initialized<T: Scalar>(
     exec: &Exec<'_>,
     buffers: &mut BufferPool,
-    cache: &mut crate::gemm::GemmAnalysisCache,
+    plans: &crate::CpuPlanCache,
     slot: Option<usize>,
     lhs: TypedTensorView<'_, T>,
     rhs: TypedTensorView<'_, T>,
@@ -450,10 +494,9 @@ fn initialized<T: Scalar>(
     let a = lhs.host_storage()?;
     let b = rhs.host_storage()?;
     let d = out.host_storage_mut()?;
-    let capacity = cache.capacity();
-    cache
-        .binary
-        .with_plan::<T, _>(slot, capacity, key, config, |plan| {
+    let plan = plans.binary_plan::<T>(slot, key, config)?;
+    {
+        {
             #[cfg(feature = "blas")]
             let mut work = T::pool_acquire_zeroed(buffers, plan.work_len());
             #[cfg(feature = "native")]
@@ -479,7 +522,8 @@ fn initialized<T: Scalar>(
             #[cfg(feature = "blas")]
             T::pool_release(buffers, work);
             result
-        })
+        }
+    }
 }
 
 #[cfg(any(feature = "native", feature = "blas"))]
@@ -487,7 +531,7 @@ fn initialized<T: Scalar>(
 fn fresh<T: Scalar>(
     exec: &Exec<'_>,
     buffers: &mut BufferPool,
-    cache: &mut crate::gemm::GemmAnalysisCache,
+    plans: &crate::CpuPlanCache,
     slot: Option<usize>,
     lhs: TypedTensorView<'_, T>,
     rhs: TypedTensorView<'_, T>,
@@ -501,10 +545,9 @@ fn fresh<T: Scalar>(
     let key = key(&lhs, &rhs, Layout::new(&shape, &strides, 0), accumulation);
     let a = lhs.host_storage()?;
     let b = rhs.host_storage()?;
-    let capacity = cache.capacity();
-    cache
-        .binary
-        .with_plan::<T, _>(slot, capacity, key, config, |plan| {
+    let plan = plans.binary_plan::<T>(slot, key, config)?;
+    {
+        {
             #[cfg(feature = "blas")]
             let mut work = T::pool_acquire_zeroed(buffers, plan.work_len());
             let mut output = PooledUninitOutput::<T>::new(buffers, shape)?;
@@ -532,7 +575,8 @@ fn fresh<T: Scalar>(
             // SAFETY: BinaryPlan succeeded on MaybeUninit storage and proves complete
             // physical coverage. No initialized output reference existed before it.
             unsafe { output.assume_init_recycled() }.map(Tensor::from_typed::<T>)
-        })
+        }
+    }
 }
 
 #[cfg(any(feature = "native", feature = "blas"))]
@@ -540,7 +584,7 @@ fn fresh<T: Scalar>(
 pub(crate) fn dot_fresh(
     exec: &Exec<'_>,
     buffers: &mut BufferPool,
-    cache: &mut crate::gemm::GemmAnalysisCache,
+    plans: &crate::CpuPlanCache,
     slot: Option<usize>,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
@@ -552,7 +596,7 @@ pub(crate) fn dot_fresh(
     macro_rules! dispatch {
         ($($variant:ident),*) => { match (lhs.tensor_view(), rhs.tensor_view(), accumulation.alpha, accumulation.beta) {
             $((TensorView::$variant(a), TensorView::$variant(b), ContractionScalar::$variant(alpha), ContractionScalar::$variant(beta)) =>
-                fresh(exec, buffers, cache, slot, a, b, shape, config, accumulation, alpha, beta),)*
+                fresh(exec, buffers, plans, slot, a, b, shape, config, accumulation, alpha, beta),)*
             _ => Err(crate::Error::runtime_state("dot_general", "operands and accumulation scalars must have matching supported dtypes")),
         } };
     }
@@ -578,7 +622,7 @@ fn writable_view<'a>(out: TensorWrite<'a>, op: &'static str) -> crate::Result<Te
 pub(crate) fn dot_into(
     exec: &Exec<'_>,
     buffers: &mut BufferPool,
-    cache: &mut crate::gemm::GemmAnalysisCache,
+    plans: &crate::CpuPlanCache,
     slot: Option<usize>,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
@@ -627,11 +671,27 @@ pub(crate) fn dot_into(
     macro_rules! dispatch {
         ($($variant:ident),*) => { match (lhs.tensor_view(), rhs.tensor_view(), out, accumulation.alpha, accumulation.beta) {
             $((TensorView::$variant(a), TensorView::$variant(b), TensorViewMut::$variant(d), ContractionScalar::$variant(alpha), ContractionScalar::$variant(beta)) =>
-                initialized(exec, buffers, cache, slot, a, b, d, config, accumulation, alpha, beta),)*
+                initialized(exec, buffers, plans, slot, a, b, d, config, accumulation, alpha, beta),)*
             _ => Err(crate::Error::runtime_state("dot_general", "operands and accumulation scalars must have matching supported dtypes")),
         } };
     }
     dispatch!(F32, F64, C32, C64)
+}
+
+#[cfg(any(feature = "native", feature = "blas"))]
+impl crate::CpuPlanCache {
+    /// The shared contraction plan for `key`, looked up under the cache lock
+    /// and returned for execution after the lock is released.
+    fn binary_plan<T: Scalar>(
+        &self,
+        slot: Option<usize>,
+        key: Key,
+        config: &DotGeneralConfig,
+    ) -> crate::Result<Arc<BinaryPlan<T>>> {
+        let mut state = self.lock();
+        let capacity = state.gemm.capacity();
+        state.gemm.binary.plan::<T>(slot, capacity, key, config)
+    }
 }
 
 #[cfg(test)]
@@ -689,7 +749,7 @@ impl BinaryCache {
 pub(crate) fn dot_fresh(
     _exec: &Exec<'_>,
     _buffers: &mut BufferPool,
-    _cache: &mut crate::gemm::GemmAnalysisCache,
+    _plans: &crate::CpuPlanCache,
     _slot: Option<usize>,
     _lhs: TensorRead<'_>,
     _rhs: TensorRead<'_>,
@@ -705,7 +765,7 @@ pub(crate) fn dot_fresh(
 pub(crate) fn dot_into(
     _exec: &Exec<'_>,
     _buffers: &mut BufferPool,
-    _cache: &mut crate::gemm::GemmAnalysisCache,
+    _plans: &crate::CpuPlanCache,
     _slot: Option<usize>,
     _lhs: TensorRead<'_>,
     _rhs: TensorRead<'_>,

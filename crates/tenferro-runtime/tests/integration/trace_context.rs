@@ -1,14 +1,13 @@
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{CoreSemanticOp, ProgramBuildError, ProgramInputSpec};
-use tenferro_runtime::{GraphCompiler, Runtime, TraceContext};
-use tenferro_tensor::{DType, Tensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
+use tenferro_tensor::{DType, Tensor, TensorRead};
 
-fn cpu_runtime() -> Runtime {
-    let backend = CpuBackend::new();
+fn cpu_runtime(engine: &CpuEngine) -> Runtime {
     let mut builder = Runtime::builder();
     builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .register_engine(tenferro_cpu::runtime_engine_registration(engine).unwrap())
         .unwrap();
     builder.build().unwrap()
 }
@@ -77,8 +76,20 @@ fn traced_graph_compiles_and_executes_with_ordered_inputs() {
     let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
     let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-    let mut result = cpu_runtime()
-        .run_compiled(&compiled, &[&lhs, &rhs])
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
+    let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
+    let prepared = runtime
+        .prepare(&compiled, &reads, &[engine.target()])
+        .unwrap();
+    let mut result = runtime
+        .run(&mut [&mut engine], &prepared, &reads)
+        .map(|outputs| {
+            outputs
+                .into_iter()
+                .map(|output| output.into_tensor(&mut engine).unwrap())
+                .collect::<Vec<_>>()
+        })
         .unwrap();
 
     assert_eq!(compiled.program().inputs().len(), 2);
@@ -86,5 +97,46 @@ fn traced_graph_compiles_and_executes_with_ordered_inputs() {
     assert_eq!(
         result.pop().unwrap().as_slice::<f64>().unwrap(),
         &[4.0, 6.0]
+    );
+}
+
+#[test]
+fn duplicate_finish_outputs_execute_in_order_as_independent_results() {
+    let mut trace = TraceContext::new();
+    let lhs = trace
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let rhs = trace
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let sum = trace.add_op(CoreSemanticOp::Add, &[lhs, rhs]).unwrap()[0];
+    let neg = trace.add_op(CoreSemanticOp::Neg, &[sum]).unwrap()[0];
+    let graph = trace.finish(&[sum, neg, sum]).unwrap();
+
+    let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
+    let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
+    let prepared = runtime
+        .prepare(&compiled, &reads, &[engine.target()])
+        .unwrap();
+    let outputs = runtime
+        .run(&mut [&mut engine], &prepared, &reads)
+        .expect("a duplicated computed output is not a missing value");
+    assert_eq!(outputs.len(), 3);
+
+    let outputs: Vec<_> = outputs
+        .into_iter()
+        .map(|output| output.into_tensor(&mut engine).unwrap())
+        .collect();
+    assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[-4.0, -6.0]);
+    assert_eq!(outputs[2].as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    assert_ne!(
+        outputs[0].as_slice::<f64>().unwrap().as_ptr(),
+        outputs[2].as_slice::<f64>().unwrap().as_ptr(),
+        "repeated owned outputs are independent copies"
     );
 }

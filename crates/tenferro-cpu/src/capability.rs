@@ -3,7 +3,7 @@ use tenferro_tensor::{
     BackendId, DType, OperationCapability, SupportLevel, TensorBackendCapability,
 };
 
-use crate::CpuBackend;
+use crate::CpuEngine;
 
 const U: SupportLevel = SupportLevel::Unsupported;
 const F: SupportLevel = SupportLevel::FallbackCopy;
@@ -29,7 +29,7 @@ pub const fn cpu_capabilities() -> &'static [OperationCapability] {
     CPU_CAPABILITIES
 }
 
-impl TensorBackendCapability for CpuBackend {
+impl TensorBackendCapability for CpuEngine {
     fn backend_id(&self) -> BackendId {
         BackendId::Cpu
     }

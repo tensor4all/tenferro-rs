@@ -4,20 +4,20 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp};
 use tenferro_tensor::{DType, MemoryKind, Placement, ShapeVec, StrideVec, Tensor};
 
 use crate::program::{CoreSemanticOp, FrozenProgram, ProgramInputSpec, SemanticProgramBuilder};
+use crate::runtime::engine_registration::ExecutableEngineContract;
 use crate::runtime::{
     CacheInFlightBehavior, CoreCapabilityBundle, ElementwisePrepareRequest, ElementwiseRuntime,
-    EngineId, EngineRegistration, ExecutableEngineContract, ExecutionContextIdentity,
-    ExtensionEngine, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
-    ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest, HardwareClassId,
-    ImmediateEventDomainDriver, InputIngressContract, InputPlacementContract, InputSignature,
-    InputSignatureContract, InputSignatureEntry, InputSpecializationRequirements, LayoutClass,
-    LayoutRuntime, PrepareCapability, PrepareError, PrepareOptions, PreparedOperation,
+    EngineId, EngineRegistration, ExecutionContextIdentity, ExtensionEngine, ExtensionModule,
+    ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
+    ExtensionPrepareRequest, HardwareClassId, InputIngressContract, InputPlacementContract,
+    InputSignature, InputSignatureContract, InputSignatureEntry, InputSpecializationRequirements,
+    LayoutClass, LayoutRuntime, PrepareCapability, PrepareError, PrepareOptions, PreparedOperation,
     PreparedOperationBinding, PreparedOperationPlan, ProgramPlacementConstraint,
     ProviderContractError, ProviderDeviceIdentity, ProviderExecutableBinding, ProviderId,
     ProviderPreparationBinding, ResidentOutputContract, ResolvedProgramPlacement, Runtime,
@@ -448,11 +448,9 @@ fn engine_registration(
             storage,
             ExecutableEngineContract::new(
                 provider_device_identity(id),
+                ExecutionContextIdentity::of::<CpuEngine>(),
                 capabilities.build(),
-                CpuBackend::new(),
-                Arc::new(ImmediateEventDomainDriver::new()),
                 ingress,
-                None,
             ),
         )
         .expect("engine registration"),
@@ -466,7 +464,7 @@ fn preparation_only_constant_registration(id: &str, storage: StorageClass) -> En
         ProviderPreparationBinding::new(
             engine_id(id),
             provider_device_identity(id),
-            ExecutionContextIdentity::of::<CpuBackend>(),
+            ExecutionContextIdentity::of::<CpuEngine>(),
             hardware_id("tenferro.cpu.host"),
             Arc::from(vec![storage.clone()]),
             storage,
@@ -545,7 +543,7 @@ fn genuinely_ineligible_engine_keeps_the_ordinary_no_match_error() {
         ProviderPreparationBinding::new(
             engine_id.clone(),
             provider_device_identity(engine_id.as_str()),
-            ExecutionContextIdentity::of::<CpuBackend>(),
+            ExecutionContextIdentity::of::<CpuEngine>(),
             hardware_id("tenferro.cpu.host"),
             Arc::from(vec![storage.clone()]),
             storage,
@@ -765,16 +763,14 @@ fn per_operation_placement_can_mix_same_storage_core_and_extension_engines() {
                     storage.clone(),
                     ExecutableEngineContract::new(
                         provider_device_identity(extension_engine_id.as_str()),
+                        ExecutionContextIdentity::of::<CpuEngine>(),
                         CoreCapabilityBundle::builder().build(),
-                        CpuBackend::new(),
-                        Arc::new(ImmediateEventDomainDriver::new()),
                         InputIngressContract::new(
                             InputPlacementContract::new(|_, _| true),
                             InputSignatureContract::new(|_, _, _, _| true),
                             RuntimeInputContract::new(|_, _| true),
                             ResidentOutputContract::new(|_, _| true),
                         ),
-                        None,
                     ),
                 )
                 .expect("extension engine registration"),

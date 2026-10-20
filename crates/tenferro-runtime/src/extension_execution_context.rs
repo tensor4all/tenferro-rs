@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use tenferro_tensor::BackendSession;
+use tenferro_tensor::Engine;
 
 use crate::extension_cache::ExtensionCacheStore;
 
@@ -19,54 +19,45 @@ use crate::extension_cache::ExtensionCacheStore;
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::CpuBackend;
-/// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+/// use tenferro_cpu::CpuEngine;
+/// use tenferro_tensor::{Tensor, TensorElementwise, TensorRead};
 /// use tenferro_runtime::{
 ///     ExtensionCacheSelector, ExtensionCacheStore, ExtensionExecutionContext,
 /// };
 ///
-/// let mut backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let mut caches = ExtensionCacheStore::new();
-/// backend.with_backend_session(|session| {
-///     let mut context = ExtensionExecutionContext::new(session, &mut caches);
-///     let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-///     let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-///     let output = context
-///         .backend_mut()
-///         .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-///         .unwrap();
+/// let mut context = ExtensionExecutionContext::new(&mut engine, &mut caches);
+/// let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+/// let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+/// let output = context
+///     .backend_mut()
+///     .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+///     .unwrap();
 ///
-///     assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-///     assert_eq!(context.caches().stats(ExtensionCacheSelector::All).entries, 0);
-/// })?;
+/// assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+/// assert_eq!(context.caches().stats(ExtensionCacheSelector::All).entries, 0);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
-/// A session borrow cannot escape the call that supplied it.
+/// The context cannot outlive the engine and cache state it borrows.
 ///
 /// ```compile_fail
-/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_runtime::{ExtensionCacheStore, ExtensionExecutionContext};
-/// use tenferro_tensor::BackendSessionHost;
 ///
-/// fn leak_context<'a>(
-///     backend: &'a mut CpuBackend,
-///     caches: &'a mut ExtensionCacheStore,
-/// ) -> ExtensionExecutionContext<'a, CpuExecSession<'a>> {
-///     backend.with_backend_session(move |session| {
-///         with_cpu_exec_session(session, |cpu_session| {
-///             ExtensionExecutionContext::new(cpu_session, caches)
-///         })
-///         .unwrap()
-///     })
+/// fn leak_context() -> ExtensionExecutionContext<'static, CpuEngine> {
+///     let mut engine = CpuEngine::serial();
+///     let mut caches = ExtensionCacheStore::new();
+///     ExtensionExecutionContext::new(&mut engine, &mut caches)
 /// }
 /// ```
-pub struct ExtensionExecutionContext<'a, B: BackendSession + ?Sized> {
+pub struct ExtensionExecutionContext<'a, B: Engine + ?Sized> {
     backend: &'a mut B,
     caches: &'a mut ExtensionCacheStore,
 }
 
-impl<B: BackendSession + ?Sized> fmt::Debug for ExtensionExecutionContext<'_, B> {
+impl<B: Engine + ?Sized> fmt::Debug for ExtensionExecutionContext<'_, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExtensionExecutionContext")
             .field("backend_type", &std::any::type_name::<B>())
@@ -75,7 +66,7 @@ impl<B: BackendSession + ?Sized> fmt::Debug for ExtensionExecutionContext<'_, B>
     }
 }
 
-impl<'a, B: BackendSession + ?Sized> ExtensionExecutionContext<'a, B> {
+impl<'a, B: Engine + ?Sized> ExtensionExecutionContext<'a, B> {
     /// Build a context from externally-owned backend and cache state.
     pub fn new(backend: &'a mut B, caches: &'a mut ExtensionCacheStore) -> Self {
         Self { backend, caches }
@@ -110,36 +101,32 @@ impl<'a, B: BackendSession + ?Sized> ExtensionExecutionContext<'a, B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tenferro_cpu::CpuBackend;
-    use tenferro_tensor::{BackendSession, BackendSessionHost, Tensor, TensorRead};
+    use tenferro_cpu::CpuEngine;
+    use tenferro_tensor::{Engine, Tensor, TensorElementwise, TensorRead};
 
     use crate::ExtensionCacheSelector;
 
     #[test]
-    fn context_accepts_non_owning_backend_session() {
-        let mut backend = CpuBackend::new();
+    fn context_accepts_a_caller_held_engine() {
+        let mut engine = CpuEngine::serial();
         let mut caches = ExtensionCacheStore::new();
 
-        backend
-            .with_backend_session(|session| {
-                let mut context = ExtensionExecutionContext::new(session, &mut caches);
-                let _: &dyn BackendSession = context.backend();
-                let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-                let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-                let output = context
-                    .backend_mut()
-                    .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-                    .unwrap();
-
-                assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-                assert_eq!(
-                    context.caches().stats(ExtensionCacheSelector::All).entries,
-                    0
-                );
-
-                let (_, caches) = context.parts_mut();
-                assert_eq!(caches.stats(ExtensionCacheSelector::All).entries, 0);
-            })
+        let mut context = ExtensionExecutionContext::new(&mut engine, &mut caches);
+        let _: &dyn Engine = context.backend();
+        let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+        let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+        let output = context
+            .backend_mut()
+            .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
             .unwrap();
+
+        assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+        assert_eq!(
+            context.caches().stats(ExtensionCacheSelector::All).entries,
+            0
+        );
+
+        let (_, caches) = context.parts_mut();
+        assert_eq!(caches.stats(ExtensionCacheSelector::All).entries, 0);
     }
 }

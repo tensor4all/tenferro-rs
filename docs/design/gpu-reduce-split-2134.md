@@ -131,7 +131,7 @@ iterations.
 ### Where the partials buffer comes from
 
 The launch functions receive `TensorBinding`s and do not allocate: `launch_*` is
-called from `BackendSession::launch_reduce_axis_typed`, which owns `alloc_output`
+called from `Engine::launch_reduce_axis_typed`, which owns `alloc_output`
 and the binding construction. Two options were weighed, and the first was
 rejected after reading the binding path:
 

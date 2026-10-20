@@ -14,11 +14,11 @@ OpenXLA test described below executes the same generated einsum module through
 
 <!-- snippet-source: docs/tutorial-code/src/bin/xla_einsum_backend.rs -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TraceContext};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext};
 use tenferro_xla::XlaExecutor;
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
@@ -55,11 +55,10 @@ fn tail_value() -> Result<Tensor, Box<dyn std::error::Error>> {
     )?)
 }
 
-fn cpu_runtime_with_einsum() -> Result<Runtime, Box<dyn std::error::Error>> {
-    let backend = CpuBackend::new();
+fn cpu_runtime_with_einsum(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>> {
     let mut builder = Runtime::builder();
-    builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
-    builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(engine)?)?;
+    builder.install_extension_module(tenferro_einsum::extension_module::<CpuEngine>(
         tenferro_cpu::runtime_engine_id()?,
     )?)?;
     Ok(builder.build()?)
@@ -86,10 +85,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let graph = trace.finish(&[product])?;
     let program = GraphCompiler::new().compile_traced_graph(&graph)?;
 
-    let runtime = cpu_runtime_with_einsum()?;
-    let mut outputs = runtime.run_compiled(&program, &[&a_value, &b_value, &c_value])?;
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime_with_einsum(&engine)?;
+    let reads = [
+        tenferro_runtime::TensorRead::from_tensor(&a_value),
+        tenferro_runtime::TensorRead::from_tensor(&b_value),
+        tenferro_runtime::TensorRead::from_tensor(&c_value),
+    ];
+    let prepared = runtime.prepare(&program, &reads, &[engine.target()])?;
+    let mut outputs = runtime.run(&mut [&mut engine], &prepared, &reads)?;
     assert_eq!(outputs.len(), 1);
-    let cpu_value = outputs.remove(0);
+    let cpu_value = outputs.remove(0).into_tensor(&mut engine)?;
     assert_eq!(cpu_value.shape(), &[2, 2]);
     assert_close(
         cpu_value.as_slice::<f64>().unwrap(),
@@ -127,6 +133,6 @@ export LD_LIBRARY_PATH=$CUDA_PATH/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12
 
 Only fixed-shape extension plans that expand to the supported standard
 operation subset can use this path. Dynamic extension-runtime execution still
-runs through `Runtime::run_compiled` with installed extension modules. For the full environment setup and
+runs through `Runtime::prepare` / `Runtime::run` with installed extension modules. For the full environment setup and
 the external OpenXLA execution check for this generated einsum module, see the
 [XLA and PJRT guide](../guides/xla.md).

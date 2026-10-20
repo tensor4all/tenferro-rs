@@ -80,15 +80,15 @@ fn runtime_plan_cache_reuses_identical_shapes() {
     let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
     let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
-    let backend = tenferro_cpu::CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let runtime = support::cpu_runtime_with_einsum(&backend).unwrap();
 
-    runtime.run_compiled(&compiled, &[&lhs, &rhs]).unwrap();
-    let after_first = runtime.cache_stats().unwrap().extensions.entries;
-    runtime.run_compiled(&compiled, &[&lhs, &rhs]).unwrap();
+    support::run_on_cpu_with_engine(&runtime, &mut backend, &compiled, &[&lhs, &rhs]).unwrap();
+    let after_first = support::extension_cache_stats(&mut backend).entries;
+    support::run_on_cpu_with_engine(&runtime, &mut backend, &compiled, &[&lhs, &rhs]).unwrap();
 
     assert_eq!(
-        runtime.cache_stats().unwrap().extensions.entries,
+        support::extension_cache_stats(&mut backend).entries,
         after_first
     );
     assert!(after_first >= 1);

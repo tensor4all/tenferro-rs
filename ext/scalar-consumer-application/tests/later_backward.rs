@@ -8,14 +8,17 @@
 use std::sync::Arc;
 
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::ad::Df64VjpRule;
 use tenferro_df64_proof::extension::{module, Df64Qr, Df64QrVjp, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::{DType, Tensor, TensorStructural};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
+
+mod support;
+use support::run_on_engine;
 
 fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
@@ -36,16 +39,16 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
 }
 
 /// A runtime that composes the CPU engine with the contribution's module.
-fn runtime() -> Runtime {
-    let backend = CpuBackend::new();
+fn runtime() -> (Runtime, CpuEngine) {
+    let engine = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
+        .register_engine(tenferro_cpu::runtime_engine_registration(&engine).expect("engine"))
         .expect("register the CPU engine");
     builder
         .install_extension_module(module().expect("module"))
         .expect("install the Df64 module");
-    builder.build().expect("runtime with the module")
+    (builder.build().expect("runtime with the module"), engine)
 }
 
 /// Overwrite one element of a caller-owned payload, which only the storage's owner can do.
@@ -64,7 +67,7 @@ fn overwrite(tensor: &mut Tensor, index: usize, value: Df64) {
 #[test]
 fn the_factors_outlive_the_forward_runtime_and_still_serve_a_later_program() {
     // 1. The forward program runs in its own runtime and its factors leave with it.
-    let forward_runtime = runtime();
+    let (forward_runtime, mut forward_engine) = runtime();
     let input = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
         external(vec![Df64::from_f64(3.0), Df64::from_f64(4.0)], vec![2, 1]),
         DF64_SCALAR_IDENTITY,
@@ -76,8 +79,7 @@ fn the_factors_outlive_the_forward_runtime_and_still_serve_a_later_program() {
     let forward = compiler
         .compile_many(&[&outputs[0], &outputs[1]])
         .expect("compiled QR");
-    let mut factors = forward_runtime
-        .run_compiled(&forward, &[])
+    let mut factors = run_on_engine(&forward_runtime, &mut forward_engine, &forward, &[])
         .expect("executed QR")
         .into_iter();
     let mut q = factors.next().expect("the factor");
@@ -110,13 +112,12 @@ fn the_factors_outlive_the_forward_runtime_and_still_serve_a_later_program() {
     )
     .expect("traced adjoint");
 
-    let later_runtime = runtime();
+    let (later_runtime, mut later_engine) = runtime();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile(&adjoint[0])
         .expect("compiled the later program");
-    let results = later_runtime
-        .run_compiled(&program, &[])
+    let results = run_on_engine(&later_runtime, &mut later_engine, &program, &[])
         .expect("executed the later program");
     let gradient = payload(&results[0]);
     assert_eq!(gradient.len(), 2);
@@ -143,37 +144,31 @@ fn a_retained_value_survives_an_eager_session_it_was_computed_in() {
     // The eager path retains the same caller-owned storage, so a value computed inside an
     // admitted session is still usable after the session borrow ends.
     use tenferro_ad::EagerRuntime;
-    use tenferro_tensor::BackendSessionHost;
 
-    let mut backend = CpuBackend::new();
-    let retained = backend
-        .with_backend_session(|session| {
-            let values = external(vec![Df64::from_f64(1.0), Df64::from_f64(2.0)], vec![2]);
-            let copied = session
-                .to_contiguous_read(tenferro_tensor::TensorRead::from_tensor(&values))
-                .expect("a contiguous read inside the session");
-            assert_eq!(
-                copied.dtype(),
-                DType::External(std::any::TypeId::of::<Df64>())
-            );
-            copied
-        })
-        .unwrap();
+    let mut engine = CpuEngine::serial();
+    let values = external(vec![Df64::from_f64(1.0), Df64::from_f64(2.0)], vec![2]);
+    let retained = engine
+        .to_contiguous_read(tenferro_tensor::TensorRead::from_tensor(&values))
+        .expect("a contiguous read on the engine");
+    assert_eq!(
+        retained.dtype(),
+        DType::External(std::any::TypeId::of::<Df64>())
+    );
     assert_eq!(
         payload(&retained),
         vec![Df64::from_f64(1.0), Df64::from_f64(2.0)]
     );
 
     // And the eager runtime's own retention keeps an external payload alive the same way.
-    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).expect("cpu runtime");
-    let leaf = tenferro_ad::EagerTensor::from_tensor_in(
-        external(vec![Df64::from_f64(7.0)], vec![1]),
-        Arc::clone(&runtime),
-    )
-    .expect("eager tensor");
+    let runtime = EagerRuntime::new().expect("cpu runtime");
+    let leaf = runtime
+        .with_eager_session(&mut engine, |session| {
+            session.constant_from(external(vec![Df64::from_f64(7.0)], vec![1]))
+        })
+        .expect("eager tensor");
     drop(runtime);
     assert_eq!(
-        payload(&leaf.to_tensor().expect("round trip")),
+        payload(&leaf.to_tensor(&mut engine).expect("round trip")),
         vec![Df64::from_f64(7.0)]
     );
 }

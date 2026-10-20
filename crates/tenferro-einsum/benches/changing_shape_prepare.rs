@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::EagerSessionEinsumExt;
 use tenferro_runtime::Tensor;
 
@@ -25,8 +25,17 @@ fn bench_threads() -> usize {
         .unwrap_or(1)
 }
 
-fn cpu_ctx(threads: usize) -> Arc<EagerRuntime> {
-    EagerRuntime::with_cpu_backend(CpuBackend::with_threads(threads).unwrap()).unwrap()
+fn cpu_ctx(_threads: usize) -> Arc<EagerRuntime> {
+    EagerRuntime::new().unwrap()
+}
+
+fn cpu_engine(threads: usize) -> CpuEngine {
+    CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(threads)
+            .build()
+            .unwrap(),
+    )
 }
 
 fn f64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
@@ -41,8 +50,8 @@ fn eager(ctx: &Arc<EagerRuntime>, tensor: Tensor) -> EagerTensor {
     EagerTensor::from_tensor_in(tensor, Arc::clone(ctx)).unwrap()
 }
 
-fn consume_f64(tensor: &EagerTensor) {
-    let materialized = tensor.to_tensor().unwrap();
+fn consume_f64(tensor: &EagerTensor, engine: &mut CpuEngine) {
+    let materialized = tensor.to_tensor(engine).unwrap();
     let data = &materialized;
     black_box(data.shape());
     black_box(data.as_slice::<f64>().unwrap()[0]);
@@ -66,26 +75,26 @@ fn shape_cases(ctx: &Arc<EagerRuntime>) -> Vec<ShapeCase> {
         .collect()
 }
 
-fn run_shape_sequence(cases: &[ShapeCase]) {
+fn run_shape_sequence(cases: &[ShapeCase], engine: &mut CpuEngine) {
     for case in cases {
         let inputs = [
             black_box(&case.lhs),
             black_box(&case.mid),
             black_box(&case.rhs),
         ];
-        // One eager session per call, as before the borrowed-session API.
         let out = case
             .lhs
             .runtime()
-            .with_eager_session(|s| s.einsum(&inputs, "abc,cde,ef->abdf"))
+            .with_eager_session(engine, |s| s.einsum(&inputs, "abc,cde,ef->abdf"))
             .unwrap();
-        consume_f64(&out);
+        consume_f64(&out, engine);
     }
 }
 
 fn bench_changing_shape_prepare(c: &mut Criterion) {
     let threads = bench_threads();
     let ctx = cpu_ctx(threads);
+    let mut engine = cpu_engine(threads);
     let cases = shape_cases(&ctx);
 
     let mut group = c.benchmark_group(format!(
@@ -94,7 +103,7 @@ fn bench_changing_shape_prepare(c: &mut Criterion) {
     group.bench_function(
         BenchmarkId::new("complete_call_sequence_shapes", cases.len()),
         |bench| {
-            bench.iter(|| run_shape_sequence(black_box(&cases)));
+            bench.iter(|| run_shape_sequence(black_box(&cases), &mut engine));
         },
     );
     group.finish();

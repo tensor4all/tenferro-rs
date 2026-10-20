@@ -176,6 +176,6 @@ staging ownership, unproven-lease drop, and lock ordering all survived falsifica
 - Bench: `transfer_large` (256 MiB, both directions and families), `transfer_chunk_boundary`
   (8 MiB and 8 MiB + 8 B, the routing decision) and `transfer_host_copies` (the cost attribution).
 - `cargo fmt --check`, workspace clippy with the repository flags, `cargo doc -D warnings`, doctests, the
-  non-CUDA all-targets check, `scripts/check-public-error-docs.py`, `scripts/audit-session-entry.py
+  non-CUDA all-targets check, `scripts/check-public-error-docs.py`, `scripts/audit-engine-entry.py
   --check`, `scripts/repository-rules-review.py` and the docs-site build all pass on this branch; the
   audited CUDA partition keeps an exact inventory match.

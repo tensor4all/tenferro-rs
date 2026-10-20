@@ -5,7 +5,7 @@ use std::panic;
 use crate::cubecl::dispatch::{
     cubecl_shape_and_strides, typed_tensor_array_arg, typed_tensor_binding,
 };
-use crate::cubecl::{CudaBackend, CudaExtensionCache, CutensorWorkspaceStats};
+use crate::cubecl::{CudaEngine, CudaExtensionCache, CutensorWorkspaceStats};
 use crate::{
     CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer,
     TypedTensor,
@@ -238,32 +238,32 @@ fn cuda_extension_cache_byte_pressure_evicts_largest_entry() {
 
 #[test]
 fn cuda_backend_exposes_extension_cache_retained_byte_controls() {
-    let _getter: fn(&CudaBackend) -> crate::Result<NonZeroUsize> =
-        CudaBackend::cuda_extension_cache_max_retained_bytes;
-    let _setter: fn(&CudaBackend, NonZeroUsize) -> crate::Result<()> =
-        CudaBackend::set_cuda_extension_cache_max_retained_bytes;
-    let _cutensor_stats: fn(&CudaBackend) -> crate::Result<CacheStats> =
-        CudaBackend::cutensor_plan_cache_stats;
-    let _cutensor_workspace_bytes: fn(&CudaBackend) -> crate::Result<u64> =
-        CudaBackend::cutensor_workspace_bytes;
-    let _cutensor_workspace_stats: fn(&CudaBackend) -> crate::Result<CutensorWorkspaceStats> =
-        CudaBackend::cutensor_workspace_stats;
-    let _cutensor_workspace_cap_getter: fn(&CudaBackend) -> u64 =
-        CudaBackend::cutensor_workspace_max_retained_bytes;
-    let _cutensor_workspace_cap_setter: fn(&CudaBackend, u64) -> crate::Result<()> =
-        CudaBackend::set_cutensor_workspace_max_retained_bytes;
-    let _cutensor_temporary_uses: fn(&CudaBackend) -> u64 =
-        CudaBackend::cutensor_workspace_temporary_uses;
-    let _cutensor_getter: fn(&CudaBackend) -> crate::Result<NonZeroUsize> =
-        CudaBackend::cutensor_plan_cache_max_entries;
-    let _cutensor_setter: fn(&CudaBackend, NonZeroUsize) -> crate::Result<()> =
-        CudaBackend::set_cutensor_plan_cache_max_entries;
-    let _cutensor_permutation_stats: fn(&CudaBackend) -> crate::Result<CacheStats> =
-        CudaBackend::cutensor_permutation_plan_cache_stats;
-    let _cutensor_permutation_getter: fn(&CudaBackend) -> crate::Result<NonZeroUsize> =
-        CudaBackend::cutensor_permutation_plan_cache_max_entries;
-    let _cutensor_permutation_setter: fn(&CudaBackend, NonZeroUsize) -> crate::Result<()> =
-        CudaBackend::set_cutensor_permutation_plan_cache_max_entries;
+    let _getter: fn(&CudaEngine) -> crate::Result<NonZeroUsize> =
+        CudaEngine::cuda_extension_cache_max_retained_bytes;
+    let _setter: fn(&CudaEngine, NonZeroUsize) -> crate::Result<()> =
+        CudaEngine::set_cuda_extension_cache_max_retained_bytes;
+    let _cutensor_stats: fn(&CudaEngine) -> crate::Result<CacheStats> =
+        CudaEngine::cutensor_plan_cache_stats;
+    let _cutensor_workspace_bytes: fn(&CudaEngine) -> crate::Result<u64> =
+        CudaEngine::cutensor_workspace_bytes;
+    let _cutensor_workspace_stats: fn(&CudaEngine) -> crate::Result<CutensorWorkspaceStats> =
+        CudaEngine::cutensor_workspace_stats;
+    let _cutensor_workspace_cap_getter: fn(&CudaEngine) -> u64 =
+        CudaEngine::cutensor_workspace_max_retained_bytes;
+    let _cutensor_workspace_cap_setter: fn(&CudaEngine, u64) -> crate::Result<()> =
+        CudaEngine::set_cutensor_workspace_max_retained_bytes;
+    let _cutensor_temporary_uses: fn(&CudaEngine) -> u64 =
+        CudaEngine::cutensor_workspace_temporary_uses;
+    let _cutensor_getter: fn(&CudaEngine) -> crate::Result<NonZeroUsize> =
+        CudaEngine::cutensor_plan_cache_max_entries;
+    let _cutensor_setter: fn(&CudaEngine, NonZeroUsize) -> crate::Result<()> =
+        CudaEngine::set_cutensor_plan_cache_max_entries;
+    let _cutensor_permutation_stats: fn(&CudaEngine) -> crate::Result<CacheStats> =
+        CudaEngine::cutensor_permutation_plan_cache_stats;
+    let _cutensor_permutation_getter: fn(&CudaEngine) -> crate::Result<NonZeroUsize> =
+        CudaEngine::cutensor_permutation_plan_cache_max_entries;
+    let _cutensor_permutation_setter: fn(&CudaEngine, NonZeroUsize) -> crate::Result<()> =
+        CudaEngine::set_cutensor_permutation_plan_cache_max_entries;
 }
 
 #[test]

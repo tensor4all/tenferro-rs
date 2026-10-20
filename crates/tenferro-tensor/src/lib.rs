@@ -86,18 +86,15 @@ pub mod capability;
 pub mod config;
 pub mod dispatch;
 pub mod error;
-mod native_session;
+mod native_engine;
 pub mod prelude;
-mod session_entry;
 pub mod types;
 pub mod validate;
 
 pub use backend::{
-    has_active_backend_session, has_held_backend_session, with_session_entry_guard, ActivationOp,
-    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, ContractionScalar,
-    DotGeneralAccumulation, ElementwiseReadOp, HeldSessionMarker, SessionCachedDot, TensorAnalytic,
-    TensorBackend, TensorBackendOps, TensorBuffer, TensorDeviceTransfer, TensorDot,
-    TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
+    ActivationOp, ContractionScalar, DotGeneralAccumulation, ElementwiseReadOp, Engine,
+    SessionCachedDot, TensorAnalytic, TensorBackendOps, TensorBuffer, TensorDeviceTransfer,
+    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
     TensorViewCanonicalization,
 };
 pub use cache::{CacheStats, RuntimeCacheControl};
@@ -111,9 +108,8 @@ pub use config::{
 };
 pub use erased_host::ErasedHostTensor;
 pub use error::{BoxError, Error, ReinterpretError, Result};
-pub use native_session::NativeSessionRef;
+pub use native_engine::NativeSessionRef;
 pub use scalar_set::ScalarSet;
-pub use session_entry::SessionEntryError;
 
 pub use default_scalars::{DefaultScalars, DefaultScalarsRef, DefaultScalarsView};
 

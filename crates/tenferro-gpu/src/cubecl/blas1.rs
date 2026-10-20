@@ -1,6 +1,6 @@
 //! cuBLAS-backed BLAS1 session operations for the CUDA backend.
 //!
-//! Implements the [`tenferro_tensor::backend::BackendSession`] BLAS1 hooks —
+//! Implements the [`tenferro_tensor::backend::Engine`] BLAS1 hooks —
 //! `vdot_read`, `norm_squared_read`, and `axpby_read_into_accum` — as single
 //! cuBLAS calls on the runtime's CubeCL stream, so a TDVP/Krylov-style loop
 //! does not have to compose them from full `dot_general` contractions.
@@ -54,7 +54,7 @@ use super::error::unsupported_dtype;
 use super::gemm::{typed_device_ptr, write_device_ptr};
 use super::interop::{alloc_zero_output, offset_device_ptr, upload_typed_tensor};
 use super::runtime::check_cublas;
-use super::{CudaBackend, CudaRuntime};
+use super::{CudaEngine, CudaRuntime};
 use crate::{
     col_major_strides, Error, Tensor, TensorScalar, TensorView, TensorViewMut, TypedTensor,
     TypedTensorView, TypedTensorViewMut,
@@ -106,19 +106,19 @@ pub(crate) fn strided_source_passes_for_test() -> usize {
     STRIDED_SOURCE_PASSES.with(std::cell::Cell::get)
 }
 
-const VDOT_OP: &str = "BackendSession::vdot_read";
-const NORM_OP: &str = "BackendSession::norm_squared_read";
-const AXPBY_OP: &str = "BackendSession::axpby_read_into_accum";
+const VDOT_OP: &str = "Engine::vdot_read";
+const NORM_OP: &str = "Engine::norm_squared_read";
+const AXPBY_OP: &str = "Engine::axpby_read_into_accum";
 
 /// Compute `sum(conj(lhs) * rhs)` into a rank-0 device tensor via cuBLAS.
 ///
 /// # Errors
 ///
-/// See [`tenferro_tensor::backend::BackendSession::vdot_read`]; additionally
+/// See [`tenferro_tensor::backend::Engine::vdot_read`]; additionally
 /// returns [`Error::Io`] when the cuBLAS library cannot be loaded and
 /// [`Error::RuntimeState`] when an input is not resident on this runtime.
 pub(super) fn vdot_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -161,12 +161,12 @@ pub(super) fn vdot_read(
 ///
 /// # Errors
 ///
-/// See [`tenferro_tensor::backend::BackendSession::norm_squared_read`];
+/// See [`tenferro_tensor::backend::Engine::norm_squared_read`];
 /// additionally returns [`Error::Io`] when the cuBLAS library cannot be
 /// loaded and [`Error::RuntimeState`] when the input is not resident on this
 /// runtime.
 pub(super) fn norm_squared_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     validate_norm_squared_read(&input)?;
@@ -197,12 +197,12 @@ pub(super) fn norm_squared_read(
 ///
 /// # Errors
 ///
-/// See [`tenferro_tensor::backend::BackendSession::axpby_read_into_accum`];
+/// See [`tenferro_tensor::backend::Engine::axpby_read_into_accum`];
 /// additionally returns [`Error::Io`] when the cuBLAS library cannot be
 /// loaded and [`Error::RuntimeState`] when an operand is not resident on this
 /// runtime.
 pub(super) fn axpby_read_into_accum(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     alpha: ContractionScalar,
     x: TensorRead<'_>,
     beta: ContractionScalar,
@@ -268,7 +268,8 @@ impl<T: TensorScalar + 'static + Scalar> ReadRef<'_, '_, T> {
             Self::Owned(tensor) => typed_device_ptr(rt, tensor, op),
             Self::View(view) => {
                 let prepared = prepared_view_access(view, op)?;
-                offset_device_ptr::<T>(rt, prepared, view.offset(), op)
+                let buffer = cubecl_view_buffer(view, op)?;
+                offset_device_ptr::<T>(rt, buffer, prepared, view.offset(), false, op)
             }
         }
     }
@@ -313,7 +314,9 @@ impl<T: TensorScalar + 'static + Scalar> WriteRef<'_, '_, T> {
             Self::View(view) => {
                 let offset = view.offset();
                 let prepared = prepared_view_mut_access(view, op)?;
-                offset_device_ptr::<T>(rt, prepared, offset, op)
+                let buffer = cubecl_view_mut_buffer(view, op)?;
+                // A vendor write takes the round trip, as an owned destination does (#1949).
+                offset_device_ptr::<T>(rt, buffer, prepared, offset, true, op)
             }
         }
     }
@@ -410,7 +413,7 @@ pub(super) fn blas1_len(n: usize, op: &'static str) -> crate::Result<i32> {
 }
 
 fn vdot_typed<T: CublasScalar>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &TensorRead<'_>,
     rhs: &TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -455,7 +458,7 @@ fn vdot_typed<T: CublasScalar>(
 }
 
 fn norm_squared_typed<T: CublasScalar>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     input: &TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     let rt = backend.runtime();
@@ -502,7 +505,7 @@ fn norm_squared_typed<T: CublasScalar>(
 }
 
 fn axpby_typed<T: CublasScalar>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     alpha: ContractionScalar,
     x: &TensorRead<'_>,
     beta: ContractionScalar,

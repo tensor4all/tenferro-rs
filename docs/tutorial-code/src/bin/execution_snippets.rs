@@ -11,10 +11,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // snippet source: docs/guides/parallelism-and-caching.md:27
     fn snippet_parallelism_and_caching_1() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_1
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{thread_pool_builder, CpuEngine};
 
-let backend = CpuBackend::with_threads(4)?;
-assert_eq!(backend.num_threads(), 4);
+let pool = thread_pool_builder().num_threads(4).build()?;
+let engine = CpuEngine::new(pool);
+assert_eq!(engine.num_threads(), 4);
         // snippet-end:parallelism_and_caching_1
         Ok(())
     }
@@ -24,16 +25,16 @@ assert_eq!(backend.num_threads(), 4);
     // snippet source: docs/guides/parallelism-and-caching.md:92
     fn snippet_parallelism_and_caching_2() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_2
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSessionHost, TypedTensor};
+use tenferro_cpu::{thread_pool_builder, CpuEngine};
+use tenferro_tensor::{TensorStructural, TypedTensor};
 
 let tensor = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
 let transposed = tensor.as_view().transpose_view([1, 0])?.into_tensor_read()?;
-let mut backend = CpuBackend::with_threads(4)?;
-let compact = backend.with_backend_session(|session| session.to_contiguous_read(transposed))??;
+let mut engine = CpuEngine::new(thread_pool_builder().num_threads(4).build()?);
+let compact = engine.to_contiguous_read(transposed)?;
 
 assert_eq!(compact.shape(), &[3, 2]);
 assert_eq!(compact.as_slice::<f64>()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
@@ -46,9 +47,10 @@ assert_eq!(compact.as_slice::<f64>()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
     // snippet source: docs/guides/parallelism-and-caching.md:166
     fn snippet_parallelism_and_caching_3() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_3
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{thread_pool_builder, CpuEngine};
 
-let backend = CpuBackend::with_threads(1)?;
+let engine = CpuEngine::new(thread_pool_builder().num_threads(1).build()?);
+assert_eq!(engine.num_threads(), 1);
         // snippet-end:parallelism_and_caching_3
         Ok(())
     }
@@ -58,13 +60,13 @@ let backend = CpuBackend::with_threads(1)?;
     // snippet source: docs/guides/parallelism-and-caching.md:194
     fn snippet_parallelism_and_caching_4() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_4
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{thread_pool_builder, CpuEngine};
 use tenferro_runtime::{GraphCompiler, Runtime};
 
 let mut compiler = GraphCompiler::new();
-let backend = CpuBackend::with_threads(4)?;
+let engine = CpuEngine::new(thread_pool_builder().num_threads(4).build()?);
 let mut builder = Runtime::builder();
-builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
 let runtime = builder.build()?;
         // snippet-end:parallelism_and_caching_4
         Ok(())
@@ -76,16 +78,21 @@ let runtime = builder.build()?;
     fn snippet_parallelism_and_caching_5() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_5
 use std::num::NonZeroUsize;
-use tenferro_ad::EagerRuntime;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::extension::ExtensionCacheLimits;
+use tenferro_runtime::ExecutionEngine;
 
-let eager = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-eager.set_extension_cache_limits(ExtensionCacheLimits::new(
-    NonZeroUsize::new(128).ok_or("positive cache-entry limit")?,
-).with_max_retained_bytes(
-    NonZeroUsize::new(64 * 1024 * 1024).ok_or("positive cache-byte limit")?,
-))?;
+let mut engine = CpuEngine::serial();
+let mut caches = engine.take_extension_caches();
+caches.set_limits(
+    ExtensionCacheLimits::new(
+        NonZeroUsize::new(128).ok_or("positive cache-entry limit")?,
+    )
+    .with_max_retained_bytes(
+        NonZeroUsize::new(64 * 1024 * 1024).ok_or("positive cache-byte limit")?,
+    ),
+);
+engine.restore_extension_caches(caches);
         // snippet-end:parallelism_and_caching_5
         Ok(())
     }
@@ -95,10 +102,10 @@ eager.set_extension_cache_limits(ExtensionCacheLimits::new(
     // snippet source: docs/guides/parallelism-and-caching.md:246
     fn snippet_parallelism_and_caching_6() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_6
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 
-let mut backend = CpuBackend::new();
-backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024)?;
+let mut engine = CpuEngine::serial();
+engine.set_buffer_pool_limit_bytes(32 * 1024 * 1024);
         // snippet-end:parallelism_and_caching_6
         Ok(())
     }
@@ -109,11 +116,10 @@ backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024)?;
     fn snippet_parallelism_and_caching_7() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_7
 use tenferro_ad::EagerRuntime;
-use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, Runtime};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-let eager = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let eager = EagerRuntime::new()?;
 let runtime = Runtime::builder().build()?;
 let mut compiler = GraphCompiler::new();
 
@@ -133,11 +139,33 @@ main()?;
     // snippet source: docs/guides/parallelism-and-caching.md:279
     fn snippet_parallelism_and_caching_8() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_8
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 
-let mut backend = CpuBackend::new();
-backend.reset_buffer_pool()?;
+let mut engine = CpuEngine::serial();
+engine.reset_buffer_pool();
         // snippet-end:parallelism_and_caching_8
+        Ok(())
+    }
+
+    snippet_choosing_a_backend_engine_id()?;
+
+    // snippet source: docs/guides/choosing-a-backend.md (custom engine id)
+    fn snippet_choosing_a_backend_engine_id() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:choosing_a_backend_engine_id
+use tenferro_cpu::{runtime_engine_registration_with_id, thread_pool_builder, CpuEngine};
+use tenferro_runtime::{EngineId, ExecutionEngine, Runtime};
+
+// A caller-chosen engine id must agree on both sides: extension modules are
+// installed against the id the runtime registered.
+let engine_id = EngineId::new("example.cpu.primary.v1")?;
+let engine = CpuEngine::new(thread_pool_builder().num_threads(1).build()?)
+    .with_runtime_engine_id(engine_id.clone());
+
+let mut builder = Runtime::builder();
+builder.register_engine(runtime_engine_registration_with_id(&engine, engine_id)?)?;
+let runtime = builder.build()?;
+assert_eq!(runtime.snapshot()?.engine_count(), 1);
+        // snippet-end:choosing_a_backend_engine_id
         Ok(())
     }
 
@@ -146,17 +174,17 @@ backend.reset_buffer_pool()?;
     // snippet source: docs/guides/troubleshooting.md:37
     fn snippet_troubleshooting_9() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:troubleshooting_9
-use tenferro_gpu::cuda::{cuda_devices, gpu_available, upload_tensor, CudaBackend};
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro_gpu::cuda::{cuda_devices, gpu_available, upload_tensor, CudaEngine};
+use tenferro_tensor::Tensor;
 
 if !gpu_available() {
     return Ok(());
 }
 let devices = cuda_devices()?;
 let device = devices.first().ok_or("no CUDA device is visible")?;
-let backend = CudaBackend::new(device.id())?;
+let engine = CudaEngine::open(device.id())?;
 let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-let gpu_x = upload_tensor(backend.runtime(), &x)?;
+let gpu_x = upload_tensor(engine.runtime(), &x)?;
 assert_eq!(gpu_x.shape(), &[2]);
         // snippet-end:troubleshooting_9
         Ok(())
@@ -169,8 +197,8 @@ assert_eq!(gpu_x.shape(), &[2]);
     // snippet source: docs/guides/troubleshooting.md:87
     fn snippet_troubleshooting_11() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:troubleshooting_11
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSessionHost, TypedTensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{TensorStructural, TypedTensor};
 
 let source = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
@@ -182,9 +210,9 @@ assert!(error
     .to_string()
     .contains("view is not slice-contiguous"));
 
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let read = transposed.into_tensor_read()?;
-let compact = backend.with_backend_session(|session| session.to_contiguous_read(read))??;
+let compact = engine.to_contiguous_read(read)?;
 assert_eq!(compact.as_slice::<f64>()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
         // snippet-end:troubleshooting_11
         Ok(())
@@ -216,18 +244,18 @@ assert_eq!(owner.as_slice()?, &[3.0, 2.0]);
     // snippet source: docs/guides/troubleshooting.md:54
     fn snippet_troubleshooting_10() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:troubleshooting_10
-use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend};
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaEngine};
+use tenferro_tensor::Tensor;
 
 if !gpu_available() {
     return Ok(());
 }
 let devices = cuda_devices()?;
 let device = devices.first().ok_or("no CUDA device is visible")?;
-let backend = CudaBackend::new(device.id())?;
+let engine = CudaEngine::open(device.id())?;
 let x = Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
-let gpu_x = upload_tensor(backend.runtime(), &x)?;
-let cpu_x = download_tensor(backend.runtime(), &gpu_x)?;
+let gpu_x = upload_tensor(engine.runtime(), &x)?;
+let cpu_x = download_tensor(engine.runtime(), &gpu_x)?;
 assert_eq!(cpu_x.as_slice::<f64>()?, &[3.0]);
         // snippet-end:troubleshooting_10
         Ok(())

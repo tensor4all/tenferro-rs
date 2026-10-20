@@ -170,7 +170,7 @@ fn qr_options_routes_owned_read_and_typed_surfaces_through_backend_hooks() {
     let extension = extension_source();
     let cuda_admission = source_section(
         &extension,
-        "if type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>()",
+        "if type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaEngine>()",
         "false\n}",
     );
     assert!(!cuda_admission.contains("HouseholderQrFactor"));
@@ -192,7 +192,7 @@ fn tenferro_gpu_no_longer_owns_linalg_specific_ffi_or_kernels() {
     for needle in ["CudaLinalgHandles", "linalg_handles", "cusolver", "cublas"] {
         assert!(
             !cubecl_mod.contains(needle),
-            "CudaBackend should not expose linalg-specific state: found {needle}"
+            "CudaEngine should not expose linalg-specific state: found {needle}"
         );
     }
 }
@@ -396,7 +396,7 @@ fn cuda_rrqr_has_no_payload_download_or_cpu_fallback() {
         1,
         "only the downloaded provider-status tensor may use host_data"
     );
-    for banned in ["CpuBackend", "CubeCount::new_single"] {
+    for banned in ["CpuEngine", "CubeCount::new_single"] {
         assert!(
             !source.contains(banned),
             "CUDA RRQR must not use payload host access, CPU fallback, or a single-worker launch: {banned}"

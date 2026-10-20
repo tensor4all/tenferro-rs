@@ -1,7 +1,7 @@
 use std::fmt;
 use std::ops::Range;
 
-use tenferro_tensor::{BackendSession, Tensor};
+use tenferro_tensor::{Engine, Tensor};
 
 use crate::backend::CompactQrResult;
 use crate::QrOptions;
@@ -14,19 +14,17 @@ use crate::QrOptions;
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_linalg::{QrOptions, TensorLinalgExt};
-/// use tenferro_tensor::{BackendSessionHost, Tensor};
+/// use tenferro_tensor::Tensor;
 ///
 /// let a = Tensor::from_vec_col_major(
 ///     vec![3, 2],
 ///     vec![1.0_f64, 0.0, 1.0, 0.0, 1.0, 1.0],
 /// )?;
-/// let mut host = CpuBackend::new();
-/// let r = host.with_backend_session(|session| {
-///     let qr = a.householder_qr(session)?;
-///     qr.r(QrOptions::default(), session)
-/// })??;
+/// let mut host = tenferro_cpu::CpuEngine::serial();
+/// let qr = a.householder_qr(&mut host)?;
+/// let r = qr.r(QrOptions::default(), &mut host)?;
 /// assert_eq!(r.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -63,7 +61,7 @@ impl HouseholderQr<Tensor> {
     pub fn from_factors(
         q: &Tensor,
         r: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Self> {
         crate::tensor_ext::with_linalg_backend(session, "householder_qr_from_factors", |backend| {
             backend
@@ -83,7 +81,7 @@ impl HouseholderQr<Tensor> {
     pub fn append_columns(
         &self,
         block: &Tensor,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Self> {
         crate::tensor_ext::with_linalg_backend(session, "householder_qr_append", |backend| {
             backend
@@ -102,7 +100,7 @@ impl HouseholderQr<Tensor> {
     pub fn r(
         &self,
         options: QrOptions,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         crate::tensor_ext::with_linalg_backend(session, "householder_qr_r", |backend| {
             backend.householder_qr_r(&self.packed, &self.coeff, options)
@@ -128,7 +126,7 @@ impl HouseholderQr<Tensor> {
         &self,
         columns: Range<usize>,
         options: QrOptions,
-        session: &mut dyn BackendSession,
+        session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         crate::tensor_ext::with_linalg_backend(session, "householder_qr_q_columns", |backend| {
             backend.householder_qr_q_columns(&self.packed, &self.coeff, columns, options)
@@ -152,7 +150,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// use tenferro_linalg::HouseholderQr;
     /// let ctx = EagerRuntime::new()?;
-    /// let state = ctx.with_eager_session(|s| {
+    /// let state = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let q = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![1.0_f64])?)?;
     ///     let r = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     HouseholderQr::<EagerTensor>::from_factors(&q, &r, s)
@@ -184,7 +182,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::EagerSessionLinalgExt;
     /// let ctx = EagerRuntime::new()?;
-    /// let state = ctx.with_eager_session(|s| {
+    /// let state = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 0.0])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![0.0_f64, 1.0])?)?;
     ///     s.householder_qr(&a)?.append_columns(&b, s)
@@ -216,7 +214,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::{EagerSessionLinalgExt, QrOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let r = ctx.with_eager_session(|s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
     ///     s.householder_qr(&a)?.r(QrOptions::default(), s)
     /// })?;
@@ -252,7 +250,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_linalg::{EagerSessionLinalgExt, QrOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let q = ctx.with_eager_session(|s| {
+    /// let q = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
     ///     s.householder_qr(&a)?.q_columns(0..1, QrOptions::default(), s)
     /// })?;

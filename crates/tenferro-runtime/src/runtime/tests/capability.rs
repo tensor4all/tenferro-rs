@@ -337,7 +337,7 @@ fn prepared_operation_source_contract_splits_metadata_from_execution_surface() {
         "fn execute_in_session(",
         "fn supports_session(",
         "&mut ErasedExecutionContext<'_>",
-        "&mut dyn BackendSession",
+        "&mut dyn Engine",
         "&mut ExtensionCacheStore",
         "&[TensorRead<'_>]",
     ] {

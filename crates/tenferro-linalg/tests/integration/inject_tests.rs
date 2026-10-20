@@ -8,7 +8,7 @@ use tenferro_cpu::inject::{
     register_blas_gemm_provider_ptrs, register_lapack_provider_ptrs, BlasGemmProviderPtrSet,
     LapackProviderPtrSet, ProviderAbi,
 };
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
 
@@ -243,7 +243,7 @@ fn provider_inject_dot_general_uses_registered_blas() {
         TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let c = backend.dot_general(
         &a,
         &b,
@@ -280,7 +280,7 @@ fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
         TypedTensor::from_vec_col_major(vec![1, 2], vec![3.0, 4.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let c = backend.dot_general(
         &a,
         &b,
@@ -315,7 +315,7 @@ fn provider_inject_dot_general_rhs_singleton_contract_uses_registered_blas() {
         TypedTensor::from_vec_col_major(vec![2, 1, 2], vec![3.0, 4.0, 5.0, 6.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let c = backend.dot_general(
         &a,
         &b,
@@ -353,7 +353,7 @@ fn provider_inject_full_piv_lu_solve_uses_registered_lapack() {
         TypedTensor::from_vec_col_major(vec![2, 1], vec![4.0, 8.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = backend.full_piv_lu_solve(&a, &b, false);
 
     assert_eq!(DGETC2_CALLS.load(Ordering::SeqCst), 1);
@@ -385,7 +385,7 @@ fn provider_inject_solve_uses_registered_lapack_getrf_getrs() {
         TypedTensor::from_vec_col_major(vec![2, 1], vec![4.0, 8.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::new();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = backend.solve(&a, &b);
 
     assert_eq!(DGETRF_CALLS.load(Ordering::SeqCst), 1);
@@ -413,7 +413,7 @@ fn provider_inject_svd_uses_registered_lapack_gesvd() {
         TypedTensor::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 2.0]).unwrap(),
     );
 
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let outputs = backend.svd(&a).expect("provider-inject SVD should run");
 
     assert_eq!(DGESVD_CALLS.load(Ordering::SeqCst), 2);

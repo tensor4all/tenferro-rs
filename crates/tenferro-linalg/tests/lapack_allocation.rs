@@ -16,9 +16,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TensorLinalgExt;
-use tenferro_tensor::{BackendSessionHost, Tensor, TypedTensor};
+use tenferro_tensor::{Tensor, TypedTensor};
 
 /// Counts allocations and live bytes while armed.
 ///
@@ -101,8 +101,8 @@ fn measure(operation: impl FnOnce()) -> AllocationReport {
     }
 }
 
-fn blas_backend() -> CpuBackend {
-    CpuBackend::with_threads(1).expect("BLAS CPU backend")
+fn blas_backend() -> CpuEngine {
+    tenferro_cpu::CpuEngine::serial()
 }
 
 fn sample_real(m: usize, n: usize) -> Vec<f64> {
@@ -138,18 +138,15 @@ fn c64_matrix(n: usize) -> Tensor {
 /// repeats removes that additive noise without weakening the ceiling: the
 /// quiet sample is the one the kernels actually cost.
 fn steady_state(
-    host: &mut CpuBackend,
-    operation: impl Fn(&mut dyn tenferro_tensor::BackendSession) + Send + Sync,
+    host: &mut CpuEngine,
+    operation: impl Fn(&mut dyn tenferro_tensor::Engine) + Send + Sync,
 ) -> AllocationReport {
     for _ in 0..4 {
-        host.with_backend_session(|session| operation(session))
-            .unwrap();
+        operation(&mut *host);
     }
     let mut best: Option<AllocationReport> = None;
     for _ in 0..5 {
-        let report = host
-            .with_backend_session(|session| measure(|| operation(session)))
-            .unwrap();
+        let report = measure(|| operation(&mut *host));
         if best.is_none_or(|best| report.allocations < best.allocations) {
             best = Some(report);
         }
@@ -223,21 +220,21 @@ fn lapack_kernels_take_their_scratch_from_the_session_buffer_pool() {
         check!(
             format!("svd/{shape}"),
             input,
-            |input: &Tensor, session: &mut dyn tenferro_tensor::BackendSession| {
+            |input: &Tensor, session: &mut dyn tenferro_tensor::Engine| {
                 input.svd(session).unwrap();
             }
         );
         check!(
             format!("svdvals/{shape}"),
             input,
-            |input: &Tensor, session: &mut dyn tenferro_tensor::BackendSession| {
+            |input: &Tensor, session: &mut dyn tenferro_tensor::Engine| {
                 input.svdvals(session).unwrap();
             }
         );
         check!(
             format!("qr/{shape}"),
             input,
-            |input: &Tensor, session: &mut dyn tenferro_tensor::BackendSession| {
+            |input: &Tensor, session: &mut dyn tenferro_tensor::Engine| {
                 input.qr(session).unwrap();
             }
         );
@@ -247,14 +244,14 @@ fn lapack_kernels_take_their_scratch_from_the_session_buffer_pool() {
         check!(
             format!("eigh/{shape}"),
             input,
-            |input: &Tensor, session: &mut dyn tenferro_tensor::BackendSession| {
+            |input: &Tensor, session: &mut dyn tenferro_tensor::Engine| {
                 input.eigh(session).unwrap();
             }
         );
         check!(
             format!("lu/{shape}"),
             input,
-            |input: &Tensor, session: &mut dyn tenferro_tensor::BackendSession| {
+            |input: &Tensor, session: &mut dyn tenferro_tensor::Engine| {
                 input.lu(session).unwrap();
             }
         );

@@ -6,11 +6,14 @@
 //! boundary the other contribution operations use. Patterns other than a matrix contraction are
 //! refused with a typed error, which `extension_qr.rs`-style boundary tests assert below.
 
+mod support;
+
 use std::sync::Arc;
 
+use support::run_on_fresh_engine;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::ad::{Df64LinearizeRule, Df64VjpRule};
 use tenferro_df64_proof::extension::{module, Df64Einsum, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
@@ -38,7 +41,7 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
 }
 
 fn runtime_with_module() -> Runtime {
-    let backend = CpuBackend::new();
+    let backend = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
@@ -71,15 +74,15 @@ fn contract(
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output[0]).expect("compiled contraction");
-    let results = runtime_with_module()
-        .run_compiled(
-            &program,
-            &[
-                &external(lhs, lhs_shape.to_vec()),
-                &external(rhs, rhs_shape.to_vec()),
-            ],
-        )
-        .expect("contraction execution");
+    let results = run_on_fresh_engine(
+        &runtime_with_module(),
+        &program,
+        &[
+            &external(lhs, lhs_shape.to_vec()),
+            &external(rhs, rhs_shape.to_vec()),
+        ],
+    )
+    .expect("contraction execution");
     payload(&results[0])
 }
 
@@ -155,15 +158,15 @@ fn the_body_refuses_disagreeing_contracted_dimensions() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output[0]).expect("compiled contraction");
-    let error = runtime_with_module()
-        .run_compiled(
-            &program,
-            &[
-                &external(vec![Df64::from_f64(1.0); 2], vec![1, 2]),
-                &external(vec![Df64::from_f64(1.0); 3], vec![3, 1]),
-            ],
-        )
-        .expect_err("a 1x2 contraction with a 3x1 input has no shape");
+    let error = run_on_fresh_engine(
+        &runtime_with_module(),
+        &program,
+        &[
+            &external(vec![Df64::from_f64(1.0); 2], vec![1, 2]),
+            &external(vec![Df64::from_f64(1.0); 3], vec![3, 1]),
+        ],
+    )
+    .expect_err("a 1x2 contraction with a 3x1 input has no shape");
     assert!(
         error.to_string().contains("shared label"),
         "the failure must say the inputs disagree on a shared label: {error}"
@@ -231,12 +234,12 @@ fn contract_with(
         apply(std::sync::Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output[0]).expect("compiled contraction");
-    let results = runtime_with_module()
-        .run_compiled(
-            &program,
-            &[&external(lhs, lhs_shape), &external(rhs, rhs_shape)],
-        )
-        .expect("contraction execution");
+    let results = run_on_fresh_engine(
+        &runtime_with_module(),
+        &program,
+        &[&external(lhs, lhs_shape), &external(rhs, rhs_shape)],
+    )
+    .expect("contraction execution");
     payload(&results[0])
 }
 
@@ -336,8 +339,7 @@ fn contract_nary(
         .map(|(values, shape)| external(values.clone(), shape.clone()))
         .collect();
     let borrowed: Vec<&Tensor> = values.iter().collect();
-    let results = runtime_with_module()
-        .run_compiled(&program, &borrowed)
+    let results = run_on_fresh_engine(&runtime_with_module(), &program, &borrowed)
         .expect("contraction execution");
     payload(&results[0])
 }

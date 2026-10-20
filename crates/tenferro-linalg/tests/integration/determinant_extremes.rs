@@ -1,5 +1,4 @@
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
 use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{GraphCompiler, TracedTensor};
 use tenferro_tensor::Tensor;
@@ -10,25 +9,25 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
     let program = GraphCompiler::new()
         .compile_many(&[&det, &sign, &logabsdet])
         .unwrap();
-    let backend = CpuBackend::with_threads(1).unwrap();
-    let result = super::support::cpu_runtime_with_linalg(&backend)
-        .unwrap()
-        .run_compiled(&program, &[&input])
-        .unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    let runtime = super::support::cpu_runtime_with_linalg(&backend).unwrap();
+    let result = super::support::run_program(&runtime, &mut backend, &program, &[&input]).unwrap();
     #[cfg(feature = "autodiff")]
     {
         use tenferro_ad::{EagerRuntime, EagerTensor};
         use tenferro_linalg::EagerSessionLinalgExt;
-        let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+        let runtime = EagerRuntime::new().unwrap();
         let eager = EagerTensor::from_tensor_in(input, runtime.clone()).unwrap();
         let (det, sign, log) = runtime
-            .with_eager_session(|session| {
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
                 let (sign, log) = session.slogdet(&eager)?;
                 Ok::<_, tenferro_ad::Error>((session.det(&eager)?, sign, log))
             })
             .unwrap();
         for (actual, expected) in [det, sign, log].iter().zip(&result) {
-            let actual = actual.to_tensor().unwrap();
+            let actual = actual
+                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap();
             assert_eq!(actual.shape(), expected.shape());
             if let Ok(values) = actual.as_slice::<f64>() {
                 for (&a, &b) in values.iter().zip(expected.as_slice::<f64>().unwrap()) {
@@ -54,10 +53,10 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
 #[ignore = "requires CUDA"]
 fn cuda_complex_determinant_retains_existing_support() {
     use tenferro_gpu::cuda::{
-        cuda_runtime_engine_registration, download_tensor, upload_tensor, CudaBackend, CudaDeviceId,
+        cuda_runtime_engine_registration, download_tensor, upload_tensor, CudaDeviceId, CudaEngine,
     };
-    use tenferro_runtime::{EngineId, Runtime};
-    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    use tenferro_runtime::{ExecutionEngine, Runtime};
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let data = vec![
         Complex64::new(1.0, 1.0),
         Complex64::new(0.0, 0.0),
@@ -70,16 +69,27 @@ fn cuda_complex_determinant_retains_existing_support() {
     let program = GraphCompiler::new()
         .compile(&traced.det().unwrap())
         .unwrap();
-    let engine = EngineId::new("tenferro.test.cuda.det.v1").unwrap();
+    let engine = backend.runtime_engine_id().clone();
     let mut builder = Runtime::builder();
     builder
-        .register_engine(cuda_runtime_engine_registration(&backend, engine.clone()).unwrap())
+        .register_engine(cuda_runtime_engine_registration(&backend).unwrap())
         .unwrap();
     builder
-        .install_extension_module(tenferro_linalg::extension_module::<CudaBackend>(engine).unwrap())
+        .install_extension_module(tenferro_linalg::extension_module::<CudaEngine>(engine).unwrap())
         .unwrap();
     let runtime = builder.build().unwrap();
-    let result = runtime.run_compiled(&program, &[&input]).unwrap();
+    let reads = [tenferro_tensor::TensorRead::from_tensor(&input)];
+    let prepared = runtime
+        .prepare(&program, &reads, &[backend.target()])
+        .unwrap();
+    let result = {
+        let mut engines: [&mut dyn ExecutionEngine; 1] = [&mut backend];
+        runtime.run(&mut engines, &prepared, &reads).unwrap()
+    };
+    let result = result
+        .into_iter()
+        .map(|output| output.into_tensor(&mut backend).unwrap())
+        .collect::<Vec<_>>();
     let host = download_tensor(backend.runtime(), &result[0]).unwrap();
     assert!((host.as_slice::<Complex64>().unwrap()[0] - Complex64::new(3.0, 1.0)).norm() < 1e-12);
 }

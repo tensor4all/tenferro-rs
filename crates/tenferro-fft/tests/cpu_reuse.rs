@@ -1,7 +1,7 @@
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftNorm, TensorFftExt, TensorReadFftExt};
-use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorView, TypedTensorView};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
 #[test]
 fn compact_real_reads_roundtrip_on_all_axes_and_thread_counts() {
@@ -11,13 +11,14 @@ fn compact_real_reads_roundtrip_on_all_axes_and_thread_counts() {
             let data: Vec<$real> = (0..65536).map(|i| (i % 17) as $real).collect();
             let read = TensorRead::from_view(TensorView::$variant(
                 TypedTensorView::from_slice(shape, [1, 64, 2048], 0, &data).unwrap()));
-            for threads in [1, 8] {
-                let mut backend = CpuBackend::with_threads(threads).unwrap();
+            for threads in [1, 2, 4, 8] {
+                let mut backend = CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(threads).build().unwrap());
                 // Managed backends clamp the request to the process CPU set.
                 assert!((1..=threads).contains(&backend.num_threads()));
                 for (axis, &length) in shape.iter().enumerate() {
                     for norm in [FftNorm::Backward, FftNorm::Forward, FftNorm::Ortho] {
-                        backend.with_backend_session(|session| {
+                        {
+ let session: &mut dyn tenferro_tensor::Engine = &mut backend;
                             let spectrum = read.rfft_read(None, axis as isize, norm, session).unwrap();
                             let dims = spectrum.shape();
                             let spectrum_view = TensorRead::from_view(TensorView::$complex_variant(
@@ -37,7 +38,7 @@ fn compact_real_reads_roundtrip_on_all_axes_and_thread_counts() {
                                 .map(|(a, b)| (a.re - *b).abs().max(a.im.abs()))
                                 .fold(0.0 as $real, <$real>::max);
                             assert!(error < $tolerance, "full roundtrip threads={threads} axis={axis} norm={norm:?} max_error={error}");
-                        }).unwrap();
+                        };
                     }
                 }
             }
@@ -50,88 +51,63 @@ fn compact_real_reads_roundtrip_on_all_axes_and_thread_counts() {
 #[test]
 fn explicit_reclaim_to_another_backend_does_not_also_return_to_origin() {
     let input = Tensor::from_vec_col_major([4], vec![Complex64::new(1., 0.); 4]).unwrap();
-    let mut origin = CpuBackend::with_threads(1).unwrap();
-    let mut destination = CpuBackend::with_threads(1).unwrap();
-    let output = origin
-        .with_backend_session(|s| input.fft(None, 0, FftNorm::Backward, s))
-        .unwrap()
-        .unwrap();
+    let mut origin = CpuEngine::serial();
+    let mut destination = CpuEngine::serial();
+    let output = {
+        let s: &mut dyn tenferro_tensor::Engine = &mut origin;
+        input.fft(None, 0, FftNorm::Backward, s)
+    }
+    .unwrap();
     let pointer = output.as_slice::<Complex64>().unwrap().as_ptr();
     // The origin session retains the lane scratch the FFT acquired from its
     // pool. Clear that working buffer so the reclamation accounting below
     // measures only the output buffer.
-    origin.reset_buffer_pool().unwrap();
-    destination
-        .with_backend_session(|s| s.reclaim_buffer(output))
-        .unwrap();
-    assert_eq!(origin.buffer_pool_stats().unwrap().buffers, 0);
-    assert_eq!(destination.buffer_pool_stats().unwrap().buffers, 1);
-    let reused = destination
-        .with_backend_session(|s| input.fft(None, 0, FftNorm::Backward, s))
-        .unwrap()
-        .unwrap();
+    origin.reset_buffer_pool();
+    {
+        let s: &mut dyn tenferro_tensor::Engine = &mut destination;
+        s.reclaim_buffer(output)
+    };
+    assert_eq!(origin.buffer_pool_stats().buffers, 0);
+    assert_eq!(destination.buffer_pool_stats().buffers, 1);
+    let reused = {
+        let s: &mut dyn tenferro_tensor::Engine = &mut destination;
+        input.fft(None, 0, FftNorm::Backward, s)
+    }
+    .unwrap();
     assert_eq!(reused.as_slice::<Complex64>().unwrap().as_ptr(), pointer);
     // The second execution retains its own lane scratch in the destination.
-    destination.reset_buffer_pool().unwrap();
-    assert_eq!(destination.buffer_pool_stats().unwrap().buffers, 0);
+    destination.reset_buffer_pool();
+    assert_eq!(destination.buffer_pool_stats().buffers, 0);
     drop(reused);
-    assert_eq!(origin.buffer_pool_stats().unwrap().buffers, 0);
-    assert_eq!(destination.buffer_pool_stats().unwrap().buffers, 1);
+    assert_eq!(origin.buffer_pool_stats().buffers, 0);
+    assert_eq!(destination.buffer_pool_stats().buffers, 1);
 }
 
 #[test]
 fn output_drop_recycles_while_session_remains_active() {
     let input = Tensor::from_vec_col_major([32, 32], vec![Complex64::new(1., 0.); 1024]).unwrap();
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend
-        .with_backend_session(|session| {
-            let first = input.fft(None, 0, FftNorm::Backward, session).unwrap();
-            let first_pointer = first.as_slice::<Complex64>().unwrap().as_ptr();
-            let second = input.fft(None, 0, FftNorm::Backward, session).unwrap();
-            assert_ne!(
-                second.as_slice::<Complex64>().unwrap().as_ptr(),
-                first_pointer
-            );
-            drop(first);
-            let third = input.fft(None, 0, FftNorm::Backward, session).unwrap();
-            assert_eq!(
-                third.as_slice::<Complex64>().unwrap().as_ptr(),
-                first_pointer
-            );
-            assert_eq!(
-                second.as_slice::<Complex64>().unwrap(),
-                third.as_slice::<Complex64>().unwrap()
-            );
-        })
-        .unwrap();
-    assert!(backend.buffer_pool_stats().unwrap().buffers >= 2);
-}
-
-#[test]
-fn nested_fft_session_is_rejected_and_backend_remains_usable() {
-    let mut backend = CpuBackend::with_threads(8).unwrap();
-    let mut nested = backend.clone();
-    let input = Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2]).unwrap();
-    let nested_entry = backend
-        .with_backend_session(|_| {
-            nested.with_backend_session(|s| input.fft(None, 0, FftNorm::Backward, s))
-        })
-        .unwrap();
-    assert!(
-        matches!(
-            nested_entry,
-            Err(tenferro_tensor::SessionEntryError::Reentered { .. })
-        ),
-        "CPU admission must reject a nested execution: {nested_entry:?}"
-    );
-    let result = backend
-        .with_backend_session(|s| input.fft(None, 0, FftNorm::Backward, s))
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        result.as_slice::<Complex64>().unwrap(),
-        &[Complex64::new(2., 0.), Complex64::new(0., 0.)]
-    );
+    let mut backend = CpuEngine::serial();
+    {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        let first = input.fft(None, 0, FftNorm::Backward, session).unwrap();
+        let first_pointer = first.as_slice::<Complex64>().unwrap().as_ptr();
+        let second = input.fft(None, 0, FftNorm::Backward, session).unwrap();
+        assert_ne!(
+            second.as_slice::<Complex64>().unwrap().as_ptr(),
+            first_pointer
+        );
+        drop(first);
+        let third = input.fft(None, 0, FftNorm::Backward, session).unwrap();
+        assert_eq!(
+            third.as_slice::<Complex64>().unwrap().as_ptr(),
+            first_pointer
+        );
+        assert_eq!(
+            second.as_slice::<Complex64>().unwrap(),
+            third.as_slice::<Complex64>().unwrap()
+        );
+    };
+    assert!(backend.buffer_pool_stats().buffers >= 2);
 }
 
 #[test]
@@ -144,16 +120,23 @@ fn uneven_parallel_lane_partition_matches_serial() {
             .collect(),
     )
     .unwrap();
-    let mut serial = CpuBackend::with_threads(1).unwrap();
-    let mut parallel = CpuBackend::with_threads(8).unwrap();
-    let expected = serial
-        .with_backend_session(|s| input.fft(None, 2, FftNorm::Backward, s))
-        .unwrap()
-        .unwrap();
-    let actual = parallel
-        .with_backend_session(|s| input.fft(None, 2, FftNorm::Backward, s))
-        .unwrap()
-        .unwrap();
+    let mut serial = CpuEngine::serial();
+    let mut parallel = CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(8)
+            .build()
+            .unwrap(),
+    );
+    let expected = {
+        let s: &mut dyn tenferro_tensor::Engine = &mut serial;
+        input.fft(None, 2, FftNorm::Backward, s)
+    }
+    .unwrap();
+    let actual = {
+        let s: &mut dyn tenferro_tensor::Engine = &mut parallel;
+        input.fft(None, 2, FftNorm::Backward, s)
+    }
+    .unwrap();
     assert_eq!(
         actual.as_slice::<Complex64>().unwrap(),
         expected.as_slice::<Complex64>().unwrap()
@@ -170,35 +153,44 @@ fn parallel_lanes_match_serial_on_every_axis_with_padding_and_truncation() {
             .collect(),
     )
     .unwrap();
-    let mut serial = CpuBackend::with_threads(1).unwrap();
-    let mut parallel = CpuBackend::with_threads(8).unwrap();
+    let mut serial = CpuEngine::serial();
+    let mut parallel = CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(8)
+            .build()
+            .unwrap(),
+    );
     assert_eq!(serial.num_threads(), 1);
     // CI may expose fewer than eight CPUs; keep testing its effective budget.
     assert!((1..=8).contains(&parallel.num_threads()));
     for (axis, &length) in shape.iter().enumerate() {
         for n in [None, Some(length + 3), Some(length - 1)] {
             for norm in [FftNorm::Backward, FftNorm::Forward, FftNorm::Ortho] {
-                let expected = serial
-                    .with_backend_session(|s| input.fft(n, axis as isize, norm, s))
-                    .unwrap()
-                    .unwrap();
-                let actual = parallel
-                    .with_backend_session(|s| input.fft(n, axis as isize, norm, s))
-                    .unwrap()
-                    .unwrap();
+                let expected = {
+                    let s: &mut dyn tenferro_tensor::Engine = &mut serial;
+                    input.fft(n, axis as isize, norm, s)
+                }
+                .unwrap();
+                let actual = {
+                    let s: &mut dyn tenferro_tensor::Engine = &mut parallel;
+                    input.fft(n, axis as isize, norm, s)
+                }
+                .unwrap();
                 assert_eq!(
                     actual.as_slice::<Complex64>().unwrap(),
                     expected.as_slice::<Complex64>().unwrap(),
                     "axis={axis} n={n:?} norm={norm:?}"
                 );
-                let expected = serial
-                    .with_backend_session(|s| input.ifft(n, axis as isize, norm, s))
-                    .unwrap()
-                    .unwrap();
-                let actual = parallel
-                    .with_backend_session(|s| input.ifft(n, axis as isize, norm, s))
-                    .unwrap()
-                    .unwrap();
+                let expected = {
+                    let s: &mut dyn tenferro_tensor::Engine = &mut serial;
+                    input.ifft(n, axis as isize, norm, s)
+                }
+                .unwrap();
+                let actual = {
+                    let s: &mut dyn tenferro_tensor::Engine = &mut parallel;
+                    input.ifft(n, axis as isize, norm, s)
+                }
+                .unwrap();
                 assert_eq!(
                     actual.as_slice::<Complex64>().unwrap(),
                     expected.as_slice::<Complex64>().unwrap()

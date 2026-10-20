@@ -67,7 +67,7 @@ pub use crate::runtime::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegi
 /// `inputs.len()` must equal `op.input_count()`, and each input's
 /// `shape_hint` must be present (i.e. the extension must be used on
 /// tensors whose rank is known at graph-build time). For symbolic-shape
-/// composition, pass concrete tensors to [`crate::Runtime::run_compiled`] at
+/// composition, pass concrete tensors to [`crate::Runtime::run`] at
 /// evaluation time.
 ///
 /// # Examples

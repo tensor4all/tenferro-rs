@@ -498,7 +498,7 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
     let meta_lexemes = rust_code_lexemes(source_section(
         mod_source,
         "fn scatter_launch_meta(",
-        "impl TensorIndexing for CudaBackend",
+        "impl TensorIndexing for CudaEngine",
     ));
     for required in [
         &[
@@ -561,7 +561,7 @@ fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), S
         (
             "scatter_complex_typed",
             "    fn scatter_complex_typed<",
-            "impl BackendRuntimeCache for CudaBackend",
+            "impl BackendRuntimeCache for CudaEngine",
             "indexing::scatter_complex_kernel::launch_unchecked",
         ),
     ] {
@@ -987,7 +987,7 @@ fn cubecl_binary_elementwise_kernels_do_not_materialize_scalar_broadcasts() {
         "pub(super) fn vdot_read(",
     );
     assert_ordered_needles(
-        "CudaBackend broadcast multiply hook",
+        "CudaEngine broadcast multiply hook",
         fusion_impl,
         &[
             "fn execute_broadcast_multiply(",
@@ -1241,7 +1241,10 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
         raw_device_ptr,
         &[
             ".get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)",
-            "cuda_device_ptr_from_addr(resource.resource().ptr, op)",
+            // The binding stays pinned on the raw session while the address is
+            // in use, so the allocation cannot be freed or relocated (#2207).
+            "self.pins.borrow_mut().push(resource);",
+            "cuda_device_ptr_from_addr(addr, op)",
         ],
     );
     // The checked view binding keeps owned storage on `Session::tensor`, is
@@ -1294,9 +1297,11 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
         &[
             "ensure_resident_on_runtime(rt, tensor, op)?;",
             "let prepared = prepared_tensor_access(tensor, op)?;",
-            "memoized_device_addr(rt, buffer, prepared, op)?;",
-            "fn memoized_device_addr(",
-            ".get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())",
+            "pinned_buffer_addr(rt, buffer, prepared, op)?;",
+            "fn pinned_buffer_addr(",
+            // The buffer resolves through `get_resource` and keeps the binding for its
+            // lifetime, so the address cannot outlive the allocation (#2207).
+            "buffer.pinned_device_addr(rt.client(), prepared.into_handle(), false, op)",
         ],
     );
 }
@@ -1393,7 +1398,7 @@ fn cubecl_scatter_validates_all_device_inputs_before_binding() {
     let scatter_complex = source_section(
         &mod_source,
         "    fn scatter_complex_typed<",
-        "impl BackendRuntimeCache for CudaBackend",
+        "impl BackendRuntimeCache for CudaEngine",
     );
     assert_ordered_needles(
         "scatter_complex_typed",
@@ -1654,7 +1659,7 @@ fn cubecl_extension_cache_guard_validates_downcast_before_deref() {
     let guard_source = source_section(
         &mod_source,
         "pub struct CudaExtensionCacheGuard",
-        "impl CudaBackend",
+        "impl CudaEngine",
     );
 
     assert!(

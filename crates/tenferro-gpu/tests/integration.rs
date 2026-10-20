@@ -4,6 +4,8 @@ mod apple_context;
 mod backend_read_contract;
 #[path = "integration/cubecl_launch_contract.rs"]
 mod cubecl_launch_contract;
+#[path = "integration/engine_run.rs"]
+mod engine_run;
 #[path = "integration/kernel_metadata_contract.rs"]
 mod kernel_metadata_contract;
 #[path = "integration/public_surface_contract.rs"]
