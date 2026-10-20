@@ -188,6 +188,7 @@ impl ExecutionResources {
             inline_runs: provider.inline_runs,
         }
     }
+    #[cfg(feature = "native")]
     pub(crate) fn count_faer_entry(&self) {
         self.faer_entries.fetch_add(1, Ordering::Relaxed);
     }
