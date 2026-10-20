@@ -240,6 +240,7 @@ impl<'a> CpuExecutionContext<'a> {
         let par = self.faer_parallelism();
         match (par, self.rayon_pool()) {
             (faer::Par::Rayon(_), Some(pool)) if pool.current_thread_index().is_none() => {
+                self.resources.count_faer_entry();
                 pool.install(|| operation(par))
             }
             _ => operation(par),
@@ -256,14 +257,13 @@ impl<'a> CpuExecutionContext<'a> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::{with_cpu_engine, CpuEngine};
+    /// use tenferro_cpu::CpuEngine;
     ///
     /// let mut engine = CpuEngine::serial();
     /// let seq = engine
     ///     .with_linalg_pool(|context, _| Ok(context.with_faer_width(4, |par| par == tenferro_cpu::faer::Par::Seq)))
     ///     .unwrap();
     /// assert!(seq);
-    /// # let _ = with_cpu_engine::<CpuEngine, ()>;
     /// ```
     #[cfg(feature = "native")]
     pub fn with_faer_width<R: Send>(
@@ -278,6 +278,7 @@ impl<'a> CpuExecutionContext<'a> {
                 if pool.current_thread_index().is_some() {
                     operation(par)
                 } else {
+                    self.resources.count_faer_entry();
                     pool.install(|| operation(par))
                 }
             }

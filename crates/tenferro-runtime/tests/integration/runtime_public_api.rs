@@ -112,6 +112,41 @@ fn runtime_prepared_compiled_graph_runs_repeated_inputs() {
 }
 
 #[test]
+fn one_prepared_program_runs_concurrently_on_two_engines() {
+    let (engine, runtime) = cpu_engine_and_runtime();
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[4]).unwrap();
+    let y = (&x + &x).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[4])])
+        .unwrap();
+    let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
+
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let runtime = &runtime;
+                let prepared = &prepared;
+                let input = &input;
+                scope.spawn(move || {
+                    let mut engine = CpuEngine::serial();
+                    run_prepared(&mut engine, runtime, prepared, &[input])
+                        .unwrap()
+                        .into_iter()
+                        .map(|output| output.as_slice::<f64>().unwrap().to_vec())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for handle in handles {
+            let outputs = handle.join().expect("concurrent prepared run");
+            assert_eq!(outputs, vec![vec![2.0, 4.0, 6.0, 8.0]]);
+        }
+    });
+}
+
+#[test]
 fn prepared_execution_checks_retained_defaults_preparation_did_not_validate() {
     use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
 
@@ -1489,4 +1524,34 @@ fn traced_slice_rejects_out_of_range_limit_at_graph_build() {
             },
         }
     ));
+}
+
+#[test]
+fn prepared_identity_output_is_borrowed_and_a_computed_output_is_compact() {
+    let (engine, runtime) = cpu_engine_and_runtime();
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 2]).unwrap();
+    let identity = GraphCompiler::new()
+        .compile_with_input_specs(&x, &[(&x, DType::F64, &[2, 2])])
+        .unwrap();
+    let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let prepared = prepare(&engine, &runtime, &identity, &[&input]).unwrap();
+    let reads = inputs_of(&[&input]);
+    let mut engine = engine;
+    let outputs = runtime.run(&mut [&mut engine], &prepared, &reads).unwrap();
+    assert!(matches!(outputs[0], tenferro_runtime::Output::Borrowed(_)));
+
+    // A computed value with a non-compact program layout is materialized.
+    let y = x.transpose(&[1, 0]).unwrap().neg().unwrap();
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 2])])
+        .unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
+    let outputs = runtime.run(&mut [&mut engine], &prepared, &reads).unwrap();
+    match &outputs[0] {
+        tenferro_runtime::Output::Owned(tensor) => {
+            assert!(tensor.is_col_major_contiguous().unwrap());
+            assert_eq!(tensor.shape(), &[2, 2]);
+        }
+        tenferro_runtime::Output::Borrowed(_) => panic!("a computed output must be owned"),
+    }
 }

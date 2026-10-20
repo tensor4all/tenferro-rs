@@ -135,3 +135,47 @@ fn an_oversized_transfer_is_refused_before_submission() {
         .iter()
         .all(|&x| x == 2.0));
 }
+
+/// A long run loop keeps the device memory retained by unfinished work within
+/// the caller's limit. Each iteration detaches a pending copy without waiting;
+/// the next admission either fits, drains completed work, or waits for the
+/// stream, so the retained counter never passes the limit.
+#[test]
+#[ignore = "requires a CUDA device"]
+fn unfinished_work_stays_within_its_limit_in_a_long_run_loop() {
+    let mut engine = engine();
+    let runtime = engine.runtime().clone();
+    let host = vector(&[1.0; 64]);
+    let seed = upload_tensor(&runtime, &host).expect("seed");
+    let bytes = std::mem::size_of_val(host.as_slice::<f64>().expect("host values")) as u64;
+    let limit = 4 * bytes;
+    engine.set_unfinished_memory_limit(Some(limit));
+
+    let mut observed_retained = false;
+    for iteration in 0..64 {
+        let value = engine
+            .add_read(
+                TensorRead::from_tensor(&seed),
+                TensorRead::from_tensor(&seed),
+            )
+            .expect("produce a value");
+        let publication = engine.publish(value).expect("publish");
+        let pending = publication.copy_into(&mut engine).expect("copy");
+        // Drop without waiting: the copy detaches its completion record, which
+        // the next submission must account for.
+        drop(pending);
+        let retained = engine.unfinished_memory_bytes();
+        observed_retained |= retained > 0;
+        assert!(
+            retained <= limit,
+            "iteration {iteration}: retained {retained} bytes exceeds the limit {limit}"
+        );
+    }
+    assert!(
+        observed_retained,
+        "the loop must actually retain unfinished work at least once"
+    );
+
+    engine.synchronize().expect("drain the run loop");
+    engine.set_unfinished_memory_limit(None);
+}

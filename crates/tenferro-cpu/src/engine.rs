@@ -99,6 +99,31 @@ pub enum CpuEngineError {
     Broken,
 }
 
+/// Entry counters of the provider pool a [`CpuEngine`] owns.
+///
+/// A serial engine has no pool and reports zero. The counters include entries
+/// made by the tcontract execution wrapper (contraction and tlinalg providers)
+/// and by the direct faer lane, so a small operation that stays inline leaves
+/// every counter at zero.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuEngine;
+///
+/// assert_eq!(CpuEngine::serial().pool_stats().entries, 0);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct CpuPoolStats {
+    /// Entries into the engine's Rayon pool from outside it.
+    pub entries: u64,
+    /// SPMD broadcasts started from outside the pool.
+    pub broadcasts: u64,
+    /// Parallel requests served in place because the caller was a worker.
+    pub inline_runs: u64,
+}
+
 /// A caller-held CPU execution engine.
 ///
 /// The engine owns one Rayon pool (or none for [`CpuEngine::serial`]) and the
@@ -337,6 +362,18 @@ impl CpuEngine {
     /// ```
     pub fn pool(&self) -> Option<&rayon::ThreadPool> {
         self.resources.rayon_pool()
+    }
+
+    /// Entry counters of this engine's provider pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(tenferro_cpu::CpuEngine::serial().pool_stats().entries, 0);
+    /// ```
+    #[doc(hidden)]
+    pub fn pool_stats(&self) -> CpuPoolStats {
+        self.resources.pool_stats()
     }
 
     /// The number of workers operations may use: the pool size, or one.
