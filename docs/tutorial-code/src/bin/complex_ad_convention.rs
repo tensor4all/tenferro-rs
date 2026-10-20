@@ -1,7 +1,7 @@
 use num_complex::{Complex64, ComplexFloat};
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TracedTensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TracedTensor};
 
 const TOL: f64 = 1.0e-12;
 
@@ -23,11 +23,11 @@ fn assert_complex_slice_close(actual: &[Complex64], expected: &[Complex64]) {
 fn run(tensor: &TracedTensor) -> Result<Tensor, tenferro_runtime::Error> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(tensor)?;
-    let backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
         .register_engine(
-            tenferro_cpu::runtime_engine_registration(&backend).map_err(|source| {
+            tenferro_cpu::runtime_engine_registration(&engine).map_err(|source| {
                 tenferro_runtime::Error::runtime_state_source(
                     "tutorial_runtime",
                     tenferro_runtime::ErrorPhase::Execution,
@@ -49,9 +49,10 @@ fn run(tensor: &TracedTensor) -> Result<Tensor, tenferro_runtime::Error> {
             source,
         )
     })?;
-    let mut outputs = runtime.run_compiled(&program, &[])?;
+    let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+    let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
     assert_eq!(outputs.len(), 1);
-    Ok(outputs.remove(0))
+    Ok(outputs.remove(0).into_tensor(&mut engine)?)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

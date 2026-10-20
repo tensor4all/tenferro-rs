@@ -137,9 +137,9 @@ implementations.
 The current workspace no longer has a separate `tenferro-prims` crate. Core
 primitive metadata lives in `tenferro-core-ops`, graph vocabulary lives in
 `tenferro-internal-ops::StdTensorOp`, and execution vocabulary lives in
-`tenferro-runtime::ExecOp`. Backend execution is provided through
-`tenferro-tensor::TensorBackend` implementations such as `tenferro-cpu` and
-`tenferro-gpu`.
+`tenferro-runtime::ExecOp`. Backend execution is provided by
+`tenferro-tensor::Engine` implementations such as `tenferro_cpu::CpuEngine` and
+`tenferro_gpu::cuda::CudaEngine`.
 
 - contraction and semiring-oriented paths
   - `DotGeneral`

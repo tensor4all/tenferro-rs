@@ -1,4 +1,4 @@
-//! End-to-end runs of the fixture kernels through the public session seam.
+//! End-to-end runs of the fixture kernels through the public engine seam.
 
 use std::time::{Duration, Instant};
 
@@ -22,9 +22,9 @@ fn first_engine(op: &'static str) -> tenferro_tensor::Result<CudaEngine> {
 /// Run `out = in * 2.0` on the first CUDA device, print it, and assert it.
 ///
 /// This is the canonical downstream flow: upload the input, **allocate the
-/// output through the session**, launch a downstream `#[cube]` kernel through
-/// `Session::client()`, synchronize explicitly, download, and check the values.
-/// It uses only the public `cuda::cubecl::Session` surface.
+/// output through the engine's CubeCL scope**, launch a downstream `#[cube]`
+/// kernel through `Session::client()`, synchronize explicitly, download, and
+/// check the values. It uses only the public `CudaEngine::with_cubecl` surface.
 ///
 /// Hardware-gated: `cuda_devices` returns an error when no CUDA device is
 /// reachable, so this is safe to call from a hardware-gated test.
@@ -45,9 +45,9 @@ fn first_engine(op: &'static str) -> tenferro_tensor::Result<CudaEngine> {
 /// # Errors
 ///
 /// Returns [`tenferro_tensor::Error::runtime_state`] when no CUDA device is
-/// reachable, the CUDA backend or session cannot be created, the kernel
-/// launch or explicit synchronization fails, or a downloaded value mismatches
-/// the expected scaled output.
+/// reachable, the CUDA engine cannot be opened, the kernel launch or explicit
+/// synchronization fails, or a downloaded value mismatches the expected scaled
+/// output.
 pub fn run_scale_check() -> tenferro_tensor::Result<()> {
     const OP: &str = "cubecl-kernel-sample.scale";
     let n = 8192usize;
@@ -55,7 +55,7 @@ pub fn run_scale_check() -> tenferro_tensor::Result<()> {
         TypedTensor::<f32>::from_vec_col_major(vec![n], (0..n).map(|i| i as f32).collect())?;
 
     let mut engine = first_engine(OP)?;
-    let downloaded = run_scale_in_session(OP, &mut engine, host_input, n)?;
+    let downloaded = run_scale_in_engine(OP, &mut engine, host_input, n)?;
 
     let (shape, values): (Vec<usize>, Vec<f32>) = downloaded
         .into_vec_col_major()
@@ -86,8 +86,8 @@ pub fn run_scale_check() -> tenferro_tensor::Result<()> {
 }
 
 // snippet-start:downstream-cube-launch
-/// Upload `input`, allocate an output on the session, launch [`scale`], and
-/// download the result.
+/// Upload `input`, allocate an output inside one CubeCL scope on `engine`,
+/// launch [`scale`], and download the result.
 ///
 /// The three launch inputs the CubeCL API does not make obvious are all named
 /// here: the output comes from `Session::alloc_output`, the launch domain from
@@ -102,7 +102,7 @@ pub fn run_scale_check() -> tenferro_tensor::Result<()> {
 /// `n` must be a multiple of the 256-unit cube dim: `cube_count_1d` rounds the
 /// domain up, and `scale` has no `ABSOLUTE_POS < n` guard, so only an exact
 /// domain keeps it in bounds.
-fn run_scale_in_session(
+fn run_scale_in_engine(
     op: &'static str,
     engine: &mut CudaEngine,
     host_input: TypedTensor<f32>,
@@ -171,7 +171,7 @@ fn run_scale_in_session(
 /// # Errors
 ///
 /// Returns [`tenferro_tensor::Error::runtime_state`] when no CUDA device is
-/// reachable, a session or launch fails, or a downloaded value is wrong.
+/// reachable, a launch fails, or a downloaded value is wrong.
 pub fn run_typing_rules_check() -> tenferro_tensor::Result<()> {
     const OP: &str = "cubecl-kernel-sample.typing";
     const N: usize = 8;
@@ -179,7 +179,7 @@ pub fn run_typing_rules_check() -> tenferro_tensor::Result<()> {
     let indices: Vec<i32> = vec![7, 0, 3, 6, 1, 5, 2, 4];
 
     let mut engine = first_engine(OP)?;
-    let (gathered, reversed) = run_typing_rules_in_session(&mut engine, &input, &indices, OP)?;
+    let (gathered, reversed) = run_typing_rules_in_engine(&mut engine, &input, &indices, OP)?;
 
     let values = |tensor: TypedTensor<f32>| -> tenferro_tensor::Result<Vec<f32>> {
         let (_, values) = tensor
@@ -199,9 +199,9 @@ pub fn run_typing_rules_check() -> tenferro_tensor::Result<()> {
     Ok(())
 }
 
-/// Upload the three inputs, launch the typing-rule kernels in one session
+/// Upload the three inputs, launch the typing-rule kernels in one CubeCL
 /// scope, and download the three outputs.
-fn run_typing_rules_in_session(
+fn run_typing_rules_in_engine(
     engine: &mut CudaEngine,
     input: &[f32],
     indices: &[i32],
@@ -325,8 +325,8 @@ fn launches_across_scopes(
 
 /// Show that the compiled kernel is reused across `with_cubecl` scopes.
 ///
-/// Launches [`scale()`] from `LAUNCHES` separate session scopes on one backend and
-/// then from a second, freshly constructed [`CudaEngine`] for the same device,
+/// Launches [`scale()`] from `LAUNCHES` separate CubeCL scopes on one engine and
+/// then from a second, freshly opened [`CudaEngine`] for the same device,
 /// printing the host cost of every scope. The first scope pays the JIT compile;
 /// the rest are launch-only. Every launch is verified after a single barrier.
 ///
@@ -345,14 +345,14 @@ fn launches_across_scopes(
 /// # Errors
 ///
 /// Returns [`tenferro_tensor::Error::runtime_state`] when no CUDA device is
-/// reachable, a session or launch fails, or a downloaded value is wrong.
+/// reachable, a launch fails, or a downloaded value is wrong.
 pub fn run_kernel_cache_check() -> tenferro_tensor::Result<()> {
     const OP: &str = "cubecl-kernel-sample.cache";
     const LAUNCHES: usize = 6;
     let n = 1024usize;
     let input: Vec<f32> = (0..n).map(|i| i as f32).collect();
 
-    for backend_index in 0..2 {
+    for engine_index in 0..2 {
         // A fresh engine per round: the second one proves the compiled kernel
         // is not owned by the first engine object.
         let mut engine = first_engine(OP)?;
@@ -362,7 +362,7 @@ pub fn run_kernel_cache_check() -> tenferro_tensor::Result<()> {
         let uploaded = uploaded.into_typed::<f32>().expect("f32 upload stays f32");
         // The second engine runs one launch only: its cost shows whether the
         // artifact outlives the first engine.
-        let launches = if backend_index == 0 { LAUNCHES } else { 1 };
+        let launches = if engine_index == 0 { LAUNCHES } else { 1 };
         let (costs, outputs) = launches_across_scopes(&mut engine, &uploaded, n, launches)?;
         for (index, output) in outputs.into_iter().enumerate() {
             let (_, values) = download_tensor(&runtime, &Tensor::from_typed(output))?
@@ -381,7 +381,7 @@ pub fn run_kernel_cache_check() -> tenferro_tensor::Result<()> {
             }
         }
 
-        println!("{OP}: backend {backend_index} per-scope host cost:");
+        println!("{OP}: engine {engine_index} per-scope host cost:");
         for (index, cost) in costs.iter().enumerate() {
             println!("  launch {index}: {cost:?}");
         }
@@ -415,7 +415,7 @@ fn launch_then_raw(
                 2.0f32,
             );
         }
-        // Dispatch the launch onto this session's stream before the raw work
+        // Dispatch the launch onto this engine's stream before the raw work
         // that depends on it: without this fence the raw kernel below can reach
         // the stream first (#2092).
         raw.flush_cubecl()?;

@@ -832,7 +832,7 @@ impl Runtime {
     /// use std::hash::Hasher;
     /// use std::sync::Arc;
     ///
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_ops::ExtensionShapeContext;
     /// use tenferro_runtime::extension::ExtensionOp;
     /// use tenferro_runtime::{
@@ -891,15 +891,15 @@ impl Runtime {
     /// impl ExtensionEngine for NoopEngine {
     ///     fn family_id(&self) -> &'static str { Probe.family_id() }
     ///     fn engine_id(&self) -> &tenferro_runtime::EngineId { &self.engine_id }
-    ///     fn context_identity(&self) -> tenferro_runtime::ExecutionContextIdentity { tenferro_runtime::ExecutionContextIdentity::of::<CpuBackend>() }
+    ///     fn context_identity(&self) -> tenferro_runtime::ExecutionContextIdentity { tenferro_runtime::ExecutionContextIdentity::of::<CpuEngine>() }
     ///     fn prepare(&self, _request: tenferro_runtime::ExtensionPrepareRequest<'_>) -> Result<PrepareCapability, PrepareError> {
     ///         Ok(PrepareCapability::Unsupported(UnsupportedReason::Operation { operation: Probe.family_id() }))
     ///     }
     /// }
     ///
-    /// let backend = CpuBackend::new();
+    /// let engine = CpuEngine::serial();
     /// let mut builder = Runtime::builder();
-    /// builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    /// builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
     /// builder.install_extension_module(Arc::new(Module(ExtensionModuleId::new("tenferro-tests.immediate-probe.module")?)))?;
     /// let runtime = builder.build()?;
     /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
@@ -1906,9 +1906,9 @@ impl<'a> EngineSnapshotView<'a> {
     /// ```rust
     /// use tenferro_runtime::{InputSignature, Runtime, Tensor, TensorRead};
     ///
-    /// let backend = tenferro_cpu::CpuBackend::new();
+    /// let engine = tenferro_cpu::CpuEngine::serial();
     /// let mut builder = Runtime::builder();
-    /// builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    /// builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
     /// let runtime = builder.build()?;
     /// let engine_id = tenferro_cpu::runtime_engine_id()?;
     /// let snapshot = runtime.snapshot()?;

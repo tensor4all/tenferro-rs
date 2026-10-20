@@ -70,9 +70,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(spectrum.dtype(), DType::C32);
     assert_eq!(spectrum.shape(), &[3]);
 
-    // The cuFFT execution runs inside the credentialed raw session: the bound
-    // stream is synchronized before the session returns, while a fresh
-    // session-scoped work area and the input/output retention guards pin the
+    // The cuFFT execution runs inside the engine's raw scope: the bound
+    // stream is synchronized before the scope returns, while a fresh
+    // scope-scoped work area and the input/output retention guards pin the
     // allocations. The explicit download below synchronizes stream-managed
     // postprocessing and is the visible device-to-host boundary for the final
     // output.

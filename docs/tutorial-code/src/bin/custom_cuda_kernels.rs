@@ -137,8 +137,8 @@ mod smem_limit {
 
     /// Dynamic shared memory a raw launch may opt into on this device, from
     /// `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`.
-    fn max_shared_memory_bytes(session: &mut CudaEngine) -> tenferro_tensor::Result<usize> {
-        session.with_cubecl("custom_cuda.smem_limit", |cubecl| {
+    fn max_shared_memory_bytes(engine: &mut CudaEngine) -> tenferro_tensor::Result<usize> {
+        engine.with_cubecl("custom_cuda.smem_limit", |cubecl| {
             Ok(cubecl.client().properties().hardware.max_shared_memory_size)
         })
     }

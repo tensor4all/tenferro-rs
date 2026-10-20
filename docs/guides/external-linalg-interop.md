@@ -11,8 +11,8 @@ The contract is **direct dependencies** for BLAS/LAPACK: your application adds
 `cblas-sys` + `lapack` at the tested compatible versions listed below, and
 enables the matching CPU provider feature on the tenferro crates. For faer you
 have a choice. `tenferro-cpu` re-exports the build it links as
-`tenferro_cpu::faer` (behind `native`), which makes the `Par` and `Mat` types a
-session hands out the same ones your own code sees and removes the
+`tenferro_cpu::faer` (behind `native`), which makes the `Par` and `Mat` types an
+engine hands out the same ones your own code sees and removes the
 version-mismatch class entirely; add a direct `faer` dependency only when you
 want to control that build yourself, and then keep it on the version below.
 tenferro does not wrap these crates and does not add a hidden interop layer to
@@ -37,26 +37,23 @@ system OpenBLAS (`blas` with the native library linked through
 OpenBLAS from source.
 
 For direct faer work that should remain parallel, import
-`tenferro_cpu::FaerParallelismExt` and scope the call inside the backend
-session:
+`tenferro_cpu::FaerParallelismExt` and scope the call on the engine you already
+hold:
 
 ```text
-backend.with_backend_session(|session| {
-    session.with_faer_parallelism(|parallel| {
-        faer_operation(..., parallel)
-    })
-})??;
+engine.with_faer_parallelism(|parallel| {
+    faer_operation(..., parallel)
+})?;
 ```
 
-This capability supplies the session-selected `faer::Par` - spell it as
+This capability supplies the engine-selected `faer::Par` - spell it as
 `tenferro_cpu::faer::Par`, the re-exported build, so it is the same type the
-capability produces: managed multi-thread
-inner execution receives bounded `Par::rayon(n)`, while one-thread or nested
-execution receives `Par::Seq`. The callback cannot retain the capability or
-session executor. A direct `Par::Seq` call remains the simplest portable escape
-hatch; an ambient `Par::rayon(n)` is outside tenferro's thread-budget and
-affinity contract. The scoped capability is CPU/faer-specific and does not
-claim affinity for external BLAS/OpenMP workers.
+capability produces: a pooled engine receives bounded `Par::rayon(n)`, while a
+serial engine receives `Par::Seq`. The callback cannot retain the capability or
+the pool. A direct `Par::Seq` call remains the simplest portable escape hatch;
+an ambient `Par::rayon(n)` is outside tenferro's thread-budget contract. The
+scoped capability is CPU/faer-specific and does not claim affinity for external
+BLAS/OpenMP workers.
 
 ## When to use this
 
@@ -64,9 +61,9 @@ Use direct external calls when tenferro's own APIs do not cover the routine you
 need (an exotic LAPACK driver), when you already maintain a tuned system BLAS
 you want to reuse, or when you need faer's specific algorithms. Prefer
 tenferro's own operations otherwise: they manage provider selection, buffer
-pools, placement, and thread budgets for you. This escape hatch is not a
+pools, and thread budgets for you. This escape hatch is not a
 license to reimplement what `tenferro-linalg` already provides. On the host it
-borrows tenferro storage directly; for CUDA buffers, the raw CUDA session gives
+borrows tenferro storage directly; for CUDA buffers, the raw CUDA scope gives
 checked device pointers instead (see
 [Direct vendor calls on CUDA](#direct-vendor-calls-on-cuda)). Other GPU
 backends (WebGPU/Metal) have no such contract.
@@ -140,10 +137,10 @@ kind, so the zero-copy slice it hands to faer is provably compact column-major.
 A non-contiguous view (transpose, slice, broadcast) is rejected by `as_slice()`
 with an explicit error and is never silently materialized. A backend-placed
 tensor is rejected the same way and is never implicitly downloaded. The caller
-performs the explicit copy or transfer: the session's `to_contiguous_read` for
-host non-contiguous views, and the owning backend's explicit download API for
-backend buffers (`CpuBackend` itself rejects foreign backend buffers, so the
-tensor's own backend must perform the transfer).
+performs the explicit copy or transfer: `Engine::to_contiguous_read` for host
+non-contiguous views, and the owning engine's explicit download API for backend
+buffers (`CpuEngine` rejects foreign backend buffers, so the tensor's own engine
+must perform the transfer).
 
 ## faer: zero-copy views over tenferro storage
 
@@ -261,10 +258,10 @@ fn faer_rejects_non_contiguous_without_materializing() -> tenferro_tensor::Resul
         "unexpected error: {error}"
     );
 
-    // The caller decides to materialize through an explicit backend session.
-    let mut backend = CpuBackend::new();
+    // The caller decides to materialize through an explicit engine call.
+    let mut engine = CpuEngine::serial();
     let read = transposed.into_tensor_read()?;
-    let compact = backend.with_backend_session(|session| session.to_contiguous_read(read))??;
+    let compact = engine.to_contiguous_read(read)?;
     let compact = compact
         .as_typed::<f64>()
         .expect("materialized an f64 tensor");
@@ -312,9 +309,9 @@ fn faer_rejects_non_host_storage() -> tenferro_tensor::Result<()> {
         "unexpected error: {error}"
     );
 
-    // The required transfer is an explicit download through the owning
-    // backend (CpuBackend rejects foreign backend buffers); only then can faer
-    // read the data.
+    // The required transfer is an explicit download through the owning engine
+    // (CpuEngine rejects foreign backend buffers); only then can faer read the
+    // data.
     Ok(())
 }
 ```
@@ -450,16 +447,15 @@ fn lapack_potrf_on_host_storage() -> tenferro_tensor::Result<()> {
 
 ## Threading and resource domains
 
-Tenferro operations on a `CpuBackend` run inside that backend's execution
-context: its thread count, buffer pool, and (for faer) its selected faer
-parallelism. Direct external calls deliberately sit outside that context:
+Tenferro operations on a `CpuEngine` run on the pool the caller built for it:
+its width, its buffer pool, and (for faer) its selected faer parallelism. Direct
+external calls deliberately sit outside that context:
 
 - A direct faer call with `Par::Seq` runs inline on the calling thread.
 - A direct faer call with `Par::Rayon(n)` uses rayon's **global** thread pool.
-  That is not the pool tenferro's faer-backed kernels use: `CpuContext`
-  constructs its own Rayon pools scoped to the requested thread count and the
-  domain CPU set. A direct call therefore does not participate in tenferro's CPU
-  resource domain at all — not its pool, not its budget, not its affinity.
+  That is not the pool the engine computes on: the engine uses only the pool the
+  caller passed to `CpuEngine::new`. A direct call therefore does not participate
+  in the engine's resources at all — not its pool, not its budget.
 - A direct BLAS/LAPACK call runs on the provider's own threads as described
   above.
 
@@ -467,15 +463,15 @@ The consequence is that your application owns the coordination: if your outer
 loop already runs many tenferro calls in parallel, do not also fan out each
 direct call with a large thread budget. See
 [Parallelism and Caching](parallelism-and-caching.md) for the oversubscription
-rules that apply equally here. If you need tenferro-managed NUMA placement,
-use tenferro's own operations instead of direct calls.
+rules that apply equally here. If you need the engine's own pool and thread
+budget, use tenferro's own operations instead of direct calls.
 
 ## Direct vendor calls on CUDA
 
-The CUDA counterpart of the host escape hatch is the raw CUDA session
-(`CudaExecSession::with_raw`, issue #1597). Inside it a downstream crate can
+The CUDA counterpart of the host escape hatch is the raw CUDA scope
+(`CudaEngine::with_raw`, issue #1597). Inside it a downstream crate can
 call cuBLAS, cuSOLVER or another CUDA library on tenferro-owned device buffers,
-on tenferro's execution stream, using only public APIs:
+on the engine's stream, using only public APIs:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/cuda_vendor_interop.rs#cuda-vendor-cublas -->
 ```rust
@@ -487,7 +483,7 @@ use tenferro_gpu::cuda::cudarc::cublas::{result as cublas, sys as cublas_sys};
 /// tensors resident on `backend`. The output is allocated by tenferro and
 /// written by cuBLAS on tenferro's stream.
 fn cublas_dgemm(
-    backend: &mut CudaBackend,
+    engine: &mut CudaEngine,
     a: &TypedTensor<f64>,
     b: &TypedTensor<f64>,
 ) -> tenferro_tensor::Result<TypedTensor<f64>> {
@@ -499,58 +495,53 @@ fn cublas_dgemm(
     };
     let (m32, k32, n32) = (dim(m)?, dim(k)?, dim(n)?);
 
-    backend.with_backend_session(|backend_session| {
-        with_cuda_exec_session(backend_session, |cuda| {
-            cuda.with_raw(OP, |session| {
-                let a_ref = session.tensor(a)?;
-                let b_ref = session.tensor(b)?;
-                let mut c = session.alloc_output::<f64>(&[m, n])?;
-                let c_ref = session.tensor_mut(&mut c)?;
-                let (alpha, beta) = (1.0_f64, 0.0_f64);
+    engine.with_raw(OP, |session| {
+        let a_ref = session.tensor(a)?;
+        let b_ref = session.tensor(b)?;
+        let mut c = session.alloc_output::<f64>(&[m, n])?;
+        let c_ref = session.tensor_mut(&mut c)?;
+        let (alpha, beta) = (1.0_f64, 0.0_f64);
 
-                // The handle is the runtime's own, already bound to this
-                // session's stream, so a raw scope pays neither `cublasCreate`
-                // nor `cublasDestroy` (tenferro-rs #2083) and never has to
-                // re-bind the stream. It is usable only inside this closure.
-                session.with_cublas_handle(
-                    OP,
-                    cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
-                    |handle| {
-                        // SAFETY: the three device pointers come from checked
-                        // tensor references that stay borrowed until the
-                        // `synchronize` below; A is m x k (lda = m), B is k x n
-                        // (ldb = k) and C is m x n (ldc = m) in compact
-                        // column-major storage, which is cuBLAS's native layout.
-                        // C is the only buffer written and does not alias A or B.
-                        unsafe {
-                            cublas::dgemm(
-                                handle,
-                                cublas_sys::cublasOperation_t::CUBLAS_OP_N,
-                                cublas_sys::cublasOperation_t::CUBLAS_OP_N,
-                                m32,
-                                n32,
-                                k32,
-                                &alpha,
-                                a_ref.raw_ptr().cast(),
-                                m32,
-                                b_ref.raw_ptr().cast(),
-                                k32,
-                                &beta,
-                                c_ref.raw_ptr().cast(),
-                                m32,
-                            )
-                        }
-                        .map_err(|err| Error::backend_source(OP, err))
-                    },
-                )?;
-                // `synchronize` is the only host barrier: the GEMM was merely
-                // enqueued on the session's stream.
-                session.synchronize()?;
-                Ok(c)
-            })
-        })
-        .ok_or_else(|| Error::runtime_state(OP, "backend session is not CUDA"))?
-    })?
+        // The handle is the runtime's own, already bound to this raw
+        // scope's stream, so a raw scope pays neither `cublasCreate`
+        // nor `cublasDestroy` (tenferro-rs #2083) and never has to
+        // re-bind the stream. It is usable only inside this closure.
+        session.with_cublas_handle(
+            OP,
+            cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
+            |handle| {
+                // SAFETY: the three device pointers come from checked
+                // tensor references that stay borrowed until the
+                // `synchronize` below; A is m x k (lda = m), B is k x n
+                // (ldb = k) and C is m x n (ldc = m) in compact
+                // column-major storage, which is cuBLAS's native layout.
+                // C is the only buffer written and does not alias A or B.
+                unsafe {
+                    cublas::dgemm(
+                        handle,
+                        cublas_sys::cublasOperation_t::CUBLAS_OP_N,
+                        cublas_sys::cublasOperation_t::CUBLAS_OP_N,
+                        m32,
+                        n32,
+                        k32,
+                        &alpha,
+                        a_ref.raw_ptr().cast(),
+                        m32,
+                        b_ref.raw_ptr().cast(),
+                        k32,
+                        &beta,
+                        c_ref.raw_ptr().cast(),
+                        m32,
+                    )
+                }
+                .map_err(|err| Error::backend_source(OP, err))
+            },
+        )?;
+        // `synchronize` is the only host barrier: the GEMM was merely
+        // enqueued on the engine's stream.
+        session.synchronize()?;
+        Ok(c)
+    })
 }
 ```
 <!-- end-snippet-source -->

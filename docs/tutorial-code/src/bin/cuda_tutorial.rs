@@ -35,19 +35,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return skip_or_fail(require_cuda, "CUDA reported no devices");
     };
 
-    let mut backend = CudaEngine::open(device.id())?;
+    // One caller-held engine owns the device, its stream and its caches.
+    let mut engine = CudaEngine::open(device.id())?;
     let a = Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0])?;
     let b = Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0])?;
-    let gpu_a = upload_tensor(backend.runtime(), &a)?;
-    let gpu_b = upload_tensor(backend.runtime(), &b)?;
+    let gpu_a = upload_tensor(engine.runtime(), &a)?;
+    let gpu_b = upload_tensor(engine.runtime(), &b)?;
 
-    let gpu_sum = backend.add_read(
+    let gpu_sum = engine.add_read(
         TensorRead::from_tensor(&gpu_a),
         TensorRead::from_tensor(&gpu_b),
     )?;
-    let sum = download_tensor(backend.runtime(), &gpu_sum)?;
+    let sum = download_tensor(engine.runtime(), &gpu_sum)?;
     assert_eq!(sum.as_slice::<f64>()?, &[4.0, 6.0]);
     println!("cuda_tutorial: upload -> engine -> download passed");
-    cuda_vendor_interop::run(&mut backend)?;
+    cuda_vendor_interop::run(&mut engine)?;
     Ok(())
 }

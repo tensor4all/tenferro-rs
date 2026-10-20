@@ -725,7 +725,7 @@ impl<'s> Session<'s> {
     ///   read it under [`Session::launch`]'s aliasing contract.
     /// - **Caller-owned lifetime through completion**: the allocation must stay
     ///   alive and unmoved until all work that touches it has completed.
-    ///   [`CudaEngine::with_raw`](super::exec_session::CudaEngine::with_raw)
+    ///   `CudaEngine::with_raw`
     ///   does not synchronize on return, including on its error paths, so
     ///   dropping or freeing the external allocation immediately after the
     ///   callback is a use-after-free unless the caller has observed completion
@@ -1169,7 +1169,7 @@ impl<'s> Session<'s> {
     /// `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`, readable as
     /// `CubeCL`'s `client().properties().hardware.max_shared_memory_size`
     /// through
-    /// [`CudaEngine::with_cubecl`](super::exec_session::CudaEngine::with_cubecl).
+    /// `CudaEngine::with_cubecl` (feature `cubecl-interop`).
     /// A request above it is rejected by the driver and returned as
     /// [`crate::Error::BackendSource`]; the value is never clamped.
     ///

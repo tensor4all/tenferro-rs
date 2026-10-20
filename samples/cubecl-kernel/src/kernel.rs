@@ -15,7 +15,7 @@ use cubecl::prelude::*;
 ///
 /// # Examples
 ///
-/// The kernel is launched through the public `cubecl` session seam; see
+/// The kernel is launched through the public CubeCL engine scope; see
 /// [`run_scale_check`](crate::run::run_scale_check) for the full end-to-end
 /// upload → launch → sync → download flow.
 ///

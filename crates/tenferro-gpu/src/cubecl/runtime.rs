@@ -1135,7 +1135,7 @@ impl CudaRuntime {
     /// Measured on this pin (A100): dropping a 1 GiB tensor leaves the driver's
     /// free memory 1 GiB lower, and one `trim_memory` restores it exactly - the
     /// test in this crate asserts both halves. `MemoryAllocationMode::Dedicated`
-    /// exists here and is reachable through [`Session::client`]
+    /// exists here and is reachable through the CubeCL session's client
     /// (`Client::memory_dedicated_allocation`), but it is **not** a substitute for
     /// the trim: with an allocation made inside that window, dropping it still
     /// leaves the driver's free memory unchanged, and only the trim returns it.
@@ -1146,7 +1146,7 @@ impl CudaRuntime {
     /// The cleanup result is discarded because this method returns `()`; the
     /// pinned CubeCL reports one case, a refusal while a stream records a graph,
     /// and a caller that has to see it can call `Client::memory_cleanup` through
-    /// [`Session::client`]. An allocation the pool cannot serve is *not* a panic
+    /// that session's client. An allocation the pool cannot serve is *not* a panic
     /// on the device thread: CubeCL records the failure on the buffer and reports
     /// it at that buffer's next use
     /// (`docs/design/gpu-correctness-invariants-2137.md`, I2 and I5).

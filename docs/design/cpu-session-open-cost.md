@@ -1,7 +1,7 @@
 # CPU Session-Open Cost Structure (eager single-op dispatch)
 
 For current usage guidance and the separate 2026-09-27 macOS Rayon dispatch
-measurements, see [CPU Session Entry and Rayon Dispatch Cost](../guides/session-entry-cost.md).
+measurements, see [CPU Session Entry and Rayon Dispatch Cost](../guides/dispatch-and-engine-cost.md).
 The historical breakdown below uses different conditions and must not be
 combined with those timings.
 

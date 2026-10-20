@@ -4,16 +4,17 @@ tenferro keeps CPU parallelism and execution caches explicit. Use this page to
 control CPU thread counts, avoid provider oversubscription, and release cached
 memory in long-running processes.
 
-Thread count is not CPU affinity. For NUMA-node definitions, pinned engines,
-external BLAS safety, and the location of elementwise Rayon work, see
-[CPU Execution and NUMA Placement](cpu-execution.md).
+The caller owns the pool, so thread count and affinity are pool properties. For
+how to build the pool, affinity/NUMA guidance, external BLAS safety, and the
+location of elementwise Rayon work, see
+[CPU Execution and Thread Pools](cpu-execution.md).
 
 For tensor memory layout and column-major buffers, see
 [Memory Order](memory-order.md). That is part of the tensor data model, not the
 parallelism contract.
 
-For measured session entry and Rayon worker handoff costs, batching and
-one-thread alternatives, see [CPU Session Entry and Rayon Dispatch Cost](session-entry-cost.md).
+For measured per-call dispatch and Rayon worker handoff costs, batching and
+one-thread alternatives, see [Dispatch and Engine Cost](dispatch-and-engine-cost.md).
 
 ## CPU Backend Provider
 
@@ -24,57 +25,53 @@ runtime mechanics below for users who have already selected a provider.
 
 ## CPU Thread Count
 
-Use `CpuBackend::with_threads(n)` when one backend should carry a fixed CPU
+Build one pool with the width you want when one engine should carry a fixed CPU
 parallelism policy:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_1 -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{thread_pool_builder, CpuEngine};
 
-let backend = CpuBackend::with_threads(4)?;
-assert_eq!(backend.num_threads(), 4);
+let pool = thread_pool_builder().num_threads(4).build()?;
+let engine = CpuEngine::new(pool);
+assert_eq!(engine.num_threads(), 4);
 ```
 <!-- end-snippet-source -->
 
-`CpuBackend::new()` reads `RAYON_NUM_THREADS` and falls back to the
-process-visible CPU count when the variable is unset.
+A Rayon pool built without an explicit `num_threads` honors `RAYON_NUM_THREADS`
+and falls back to the process-visible CPU count, so
+`thread_pool_builder().build()` follows the same convention:
 
 ```bash
 RAYON_NUM_THREADS=4 cargo run --release
 ```
 
-For `native`, tenferro passes the `CpuContext` thread count to faer-backed
-kernels. A one-thread context uses sequential faer execution; a multi-thread
-context uses faer's Rayon parallelism with the requested thread count.
-The external TBLIS provider example clamps TBLIS calls to one thread while it
-owns the call, then restores the previous TBLIS setting. `CpuBackend` thread
-counts still apply to tenferro-owned CPU kernels and fallback paths.
+For `native`, tenferro passes the engine's worker count to faer-backed kernels.
+A serial engine uses sequential faer execution; a pooled engine uses faer's
+Rayon parallelism with the pool's width. The external TBLIS provider example
+clamps TBLIS calls to one thread while it owns the call, then restores the
+previous TBLIS setting. The engine's worker count still applies to
+tenferro-owned CPU kernels and fallback paths.
 
 ## CPU Operation Parallelism
 
-`CpuContext` owns the Rayon pool used by tenferro-owned CPU tensor kernels.
-Standalone backend calls and compiled `Engine` operations cross the
-selected domain executor exactly once before dispatch. Provider-facing
-execution contexts are already entered and cannot install or submit nested
-executor work.
-
-Inside that entry, tenferro-native strided kernels use the policy selected by
-`CpuExecutionContext`: `Inner` work whose selected executor advertises Rayon
-uses only that executor up to its validated budget, while `Sequential`,
-engine-outer children, and external-worker `Inner` contexts stay sequential.
-An ambient Rayon pool is never an implicit fallback. External BLAS/LAPACK
+The `CpuEngine` owns the workspace and the buffer pool; the Rayon pool it
+computes on is the one the caller passed to `CpuEngine::new`. An operation
+starts on the calling thread and enters that pool only after a provider has
+chosen more than one worker for it. An ambient Rayon pool is never an implicit
+fallback, and `CpuEngine::serial` never enters any pool. External BLAS/LAPACK
 workers remain provider-owned and may fan out independently.
 
 | Operation family | Threading behavior |
 | --- | --- |
-| Elementwise and analytic ops | Shared typed paths use `strided-basic`, ordinary dtype dispatch uses `strided-kernel`, and erased fused replay uses `strided-fused`; all use the already-entered context's native policy. Rayon-capable `Inner` may use the selected executor; all other modes above are sequential. |
-| Reductions | sum/product erased replay and typed max/min reductions use the same selected native policy and never ambient Rayon. Upstream strided plan coverage determines whether a specific multi-axis reduction shape can actually partition work. |
-| View materialization, transpose/permute, broadcast, convert, and diagonal extraction | Strided copy/map kernels use the same selected native policy; layout fallback and linalg input materialization are included. |
-| `dot_general` through `native` | faer receives `Par::rayon(n)` only for `Inner` execution whose selected executor advertises Rayon and whose validated budget is greater than one; otherwise it receives `Par::Seq`. Downstream direct faer calls can obtain the same scoped value through `FaerParallelismExt::with_faer_parallelism`, without exposing tenferro's executor. |
+| Elementwise and analytic ops | Shared typed paths use `strided-basic`, ordinary dtype dispatch uses `strided-kernel`, and erased fused replay uses `strided-fused`; all use the engine's pool. Rayon-capable `Inner` work may use the pool; other modes stay sequential. |
+| Reductions | sum/product erased replay and typed max/min reductions use the same engine policy and never ambient Rayon. Upstream strided plan coverage determines whether a specific multi-axis reduction shape can actually partition work. |
+| View materialization, transpose/permute, broadcast, convert, and diagonal extraction | Strided copy/map kernels use the same engine policy; layout fallback and linalg input materialization are included. |
+| `dot_general` through `native` | faer receives `Par::rayon(n)` only for `Inner` execution on a pooled engine; otherwise it receives `Par::Seq`. Downstream direct faer calls can obtain the same scoped value through `FaerParallelismExt::with_faer_parallelism`, without exposing the pool. |
 | GEMM and linalg through `blas` | Threading is owned by the linked BLAS/LAPACK provider, not Rayon. Configure the provider variables below. |
 | Supported `dot_general` contractions through an external TBLIS provider | The example provider clamps TBLIS to one thread per call; unsupported TBLIS shapes fall back to the compiled faer/BLAS provider in preferred mode. |
-| Indexed gather/scatter and dynamic slice/update | These delegate to strided erased plans with an explicit `ExecContext` derived from `CpuExecutionContext`; upstream strided plan coverage determines whether a specific indexed plan can actually partition work. |
-| Slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside the selected executor entry, and source comments mark the intentional sequential path. |
+| Indexed gather/scatter and dynamic slice/update | These delegate to strided erased plans with an explicit `ExecContext` derived from the engine; upstream strided plan coverage determines whether a specific indexed plan can actually partition work. |
+| Slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run on the engine, and source comments mark the intentional sequential path. |
 
 CPU affine-strided copy, permutation, broadcast, map, zip-map, and axis
 reduction delegate to `strided-rs`, while tenferro supplies operation semantics,
@@ -82,30 +79,28 @@ validation, dtype and placement checks, error translation, and execution
 resources. Einsum/dot-general is the benchmark-backed tenferro exception:
 tenferro owns its planning, optimized preparation, and provider integration.
 
-Even a host-to-host materialization must enter through `CpuBackend`. The
-backend owns a persistent buffer pool, can allocate an uninitialized output
-when the copy fully overwrites it, and runs the kernel in the configured
-`CpuContext` Rayon pool. That scope also preserves nested-execution safety and
-the kernel's serial/parallel threshold. A context-free copy, a temporary buffer
-pool, or Rayon's ambient global pool would create a second memory and threading
-policy. Memory reuse and thread policy are execution resources, not tensor
-metadata.
+Even a host-to-host materialization goes through the engine. The engine owns a
+persistent buffer pool, can allocate an uninitialized output when the copy fully
+overwrites it, and runs the kernel on the caller's pool. A pool-free copy, a
+temporary buffer pool, or Rayon's ambient global pool would create a second
+memory and threading policy. Memory reuse and thread policy are execution
+resources, not tensor metadata.
 
-Use the session canonicalization operation when a metadata-only view must
+Use the engine's canonicalization operation when a metadata-only view must
 become compact:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_2 -->
 ```rust
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSessionHost, TypedTensor};
+use tenferro_cpu::{thread_pool_builder, CpuEngine};
+use tenferro_tensor::{TensorStructural, TypedTensor};
 
 let tensor = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
 let transposed = tensor.as_view().transpose_view([1, 0])?.into_tensor_read()?;
-let mut backend = CpuBackend::with_threads(4)?;
-let compact = backend.with_backend_session(|session| session.to_contiguous_read(transposed))??;
+let mut engine = CpuEngine::new(thread_pool_builder().num_threads(4).build()?);
+let compact = engine.to_contiguous_read(transposed)?;
 
 assert_eq!(compact.shape(), &[3, 2]);
 assert_eq!(compact.as_slice::<f64>()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
@@ -117,7 +112,7 @@ download device data.
 
 ## BLAS And LAPACK Threads
 
-For `blas`, `CpuBackend::with_threads(n)` controls tenferro-native work, but
+For `blas`, the engine's pool width controls tenferro-native work, but
 the linked BLAS/LAPACK provider has its own thread controls. Set provider thread
 variables before process start when appropriate:
 
@@ -139,9 +134,8 @@ need `MKLROOT` or `MKL_LIB_DIR`.
 
 These variables limit vendor thread counts; they do not let tenferro verify or
 enforce vendor worker affinity. tenferro guarantees only the calling thread's
-mask, and because placement never widens that mask, a caller already pinned to
-one CPU also confines a newly created vendor team. NUMA placement is a
-tenferro-owned engine property and is available in both compiled
+mask, so a caller already pinned to one CPU also confines a newly created vendor
+team. Affinity is a property of the thread and pool you build, in both compiled
 configurations.
 
 There is one CPU resource contract for both compiled providers: tenferro passes
@@ -163,9 +157,10 @@ parallel, use a smaller inner backend:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_3 -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{thread_pool_builder, CpuEngine};
 
-let backend = CpuBackend::with_threads(1)?;
+let engine = CpuEngine::new(thread_pool_builder().num_threads(1).build()?);
+assert_eq!(engine.num_threads(), 1);
 ```
 <!-- end-snippet-source -->
 
@@ -173,12 +168,11 @@ For BLAS/LAPACK providers, apply the same rule to provider thread variables.
 For benchmarks, pin all relevant thread counts and report them with the result.
 
 When the host already partitions coarse work across caller-owned Rayon pools,
-use caller-managed external domains instead of fabricating disjoint CPU sets.
-Each domain's `worker_count` is the pool capacity visible to tenferro and its
-`thread_budget` is the maximum inner participation for one operation. Distinct
-domains may overlap in process affinity and execute concurrently; the host must
-admit at most one coarse tenferro operation per pool and account for any physical
-CPU oversubscription. See [CPU Execution and NUMA Placement](cpu-execution.md#caller-managed-executor-domains).
+give each partition its own `CpuEngine` over its own pool. One computation uses
+one engine at a time (every operation takes `&mut`), so a partition must admit
+at most one coarse tenferro operation per pool and account for any physical CPU
+oversubscription itself. See
+[CPU Execution and Thread Pools](cpu-execution.md).
 
 ## Reuse Runtime State
 
@@ -186,28 +180,27 @@ Reuse execution objects when you repeat related work:
 
 - `tenferro_runtime::Runtime` retains immutable engine/extension registration
   snapshots, prepared-plan cache entries, and registered runtime cache owners
-  for the `Runtime::prepare_for` and `Runtime::run_compiled*` pipelines.
+  for the `Runtime::prepare` / `Runtime::run` pipeline.
 - `EagerRuntime` retains eager extension plans and compiled inner extension
-  programs across immediate operations. CPU-backed eager runtimes also keep a
-  private `Runtime` snapshot so placement-bound CPU views can refresh runtime
-  registration metadata by epoch comparison without holding idle resources.
-  The CPU registration is built by `tenferro-cpu` and includes the runtime
-  execution bridge.
+  programs across immediate operations. It stores no engine: every eager call
+  takes the one the caller holds and registers it with the runtime on first
+  use.
 - `GraphCompiler` retains graph lowering and static extension planning caches.
   Its compiled artifact keeps semantic program plus compiler options, not
   backend staging.
 - `Runtime` owns prepared-plan caching and registered runtime cache owners.
-  CPU backend buffer pools remain owned by the registered CPU backend.
+  CPU buffer pools and extension caches remain owned by the caller-held engine
+  that the registration describes.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_4 -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{thread_pool_builder, CpuEngine};
 use tenferro_runtime::{GraphCompiler, Runtime};
 
 let mut compiler = GraphCompiler::new();
-let backend = CpuBackend::with_threads(4)?;
+let engine = CpuEngine::new(thread_pool_builder().num_threads(4).build()?);
 let mut builder = Runtime::builder();
-builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
 let runtime = builder.build()?;
 ```
 <!-- end-snippet-source -->
@@ -223,27 +216,32 @@ configured independently.
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_5 -->
 ```rust
 use std::num::NonZeroUsize;
-use tenferro_ad::EagerRuntime;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::extension::ExtensionCacheLimits;
+use tenferro_runtime::ExecutionEngine;
 
-let eager = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-eager.set_extension_cache_limits(ExtensionCacheLimits::new(
-    NonZeroUsize::new(128).ok_or("positive cache-entry limit")?,
-).with_max_retained_bytes(
-    NonZeroUsize::new(64 * 1024 * 1024).ok_or("positive cache-byte limit")?,
-))?;
+let mut engine = CpuEngine::serial();
+let mut caches = engine.take_extension_caches();
+caches.set_limits(
+    ExtensionCacheLimits::new(
+        NonZeroUsize::new(128).ok_or("positive cache-entry limit")?,
+    )
+    .with_max_retained_bytes(
+        NonZeroUsize::new(64 * 1024 * 1024).ok_or("positive cache-byte limit")?,
+    ),
+);
+engine.restore_extension_caches(caches);
 ```
 <!-- end-snippet-source -->
 
-For CPU backends, the CPU buffer pool has its own retention limit:
+For CPU engines, the buffer pool has its own retention limit:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_6 -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 
-let mut backend = CpuBackend::new();
-backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024)?;
+let mut engine = CpuEngine::serial();
+engine.set_buffer_pool_limit_bytes(32 * 1024 * 1024);
 ```
 <!-- end-snippet-source -->
 
@@ -256,11 +254,10 @@ than reusing old plans and buffers.
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_7 -->
 ```rust
 use tenferro_ad::EagerRuntime;
-use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphCompiler, Runtime};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-let eager = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let eager = EagerRuntime::new()?;
 let runtime = Runtime::builder().build()?;
 let mut compiler = GraphCompiler::new();
 
@@ -274,14 +271,14 @@ main()?;
 ```
 <!-- end-snippet-source -->
 
-For CPU backends, clear the buffer pool through the backend:
+For CPU engines, clear the buffer pool through the engine:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_8 -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 
-let mut backend = CpuBackend::new();
-backend.reset_buffer_pool()?;
+let mut engine = CpuEngine::serial();
+engine.reset_buffer_pool();
 ```
 <!-- end-snippet-source -->
 

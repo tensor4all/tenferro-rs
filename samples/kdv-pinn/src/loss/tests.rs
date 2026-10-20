@@ -8,8 +8,9 @@ fn mean_square_computes_correctly() {
     let loss = mean_square(&pred, &target, 2).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&loss).unwrap();
-    let mut cpu = crate::cpu_engine().unwrap();
-    let out = crate::run_single(&mut cpu, &program, &[]).unwrap();
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+    let runtime = crate::cpu_runtime(&engine).unwrap();
+    let out = crate::run_single(&runtime, &mut engine, &program, &[]).unwrap();
     assert!((out.as_slice::<f64>().unwrap()[0] - 2.5).abs() < 1e-6);
 }
 
@@ -19,8 +20,9 @@ fn mean_square_single_computes_correctly() {
     let loss = mean_square_single(&tensor, 2).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&loss).unwrap();
-    let mut cpu = crate::cpu_engine().unwrap();
-    let out = crate::run_single(&mut cpu, &program, &[]).unwrap();
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+    let runtime = crate::cpu_runtime(&engine).unwrap();
+    let out = crate::run_single(&runtime, &mut engine, &program, &[]).unwrap();
     assert!((out.as_slice::<f64>().unwrap()[0] - 5.0).abs() < 1e-6);
 }
 
@@ -34,8 +36,9 @@ fn total_loss_weights_pde_only() {
     .unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&loss).unwrap();
-    let mut cpu = crate::cpu_engine().unwrap();
-    let out = crate::run_single(&mut cpu, &program, &[]).unwrap();
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+    let runtime = crate::cpu_runtime(&engine).unwrap();
+    let out = crate::run_single(&runtime, &mut engine, &program, &[]).unwrap();
     assert!((out.as_slice::<f64>().unwrap()[0] - 5.0).abs() < 1e-6);
 }
 
@@ -49,7 +52,8 @@ fn total_loss_applies_pde_weight_once_after_mean_square() {
     .unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&loss).unwrap();
-    let mut cpu = crate::cpu_engine().unwrap();
-    let out = crate::run_single(&mut cpu, &program, &[]).unwrap();
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+    let runtime = crate::cpu_runtime(&engine).unwrap();
+    let out = crate::run_single(&runtime, &mut engine, &program, &[]).unwrap();
     assert!((out.as_slice::<f64>().unwrap()[0] - 10.0).abs() < 1e-6);
 }

@@ -2,11 +2,11 @@
 //!
 //! A downstream crate calls a vendor library on tenferro's device memory and
 //! tenferro's execution stream through the public raw CUDA session only:
-//! `CudaEngine::with_raw` binds the stream, `tensor` / `tensor_mut` give checked
-//! device pointers, `with_cublas_handle` hands out the runtime's stream-bound
-//! cuBLAS handle, `stream().raw_handle()` gives the native stream, and
-//! `synchronize` is the host barrier. The cuBLAS bindings come from the `cudarc`
-//! that tenferro-gpu re-exports, so the vendor binding cannot disagree with
+//! `CudaEngine::with_raw` binds the stream, `tensor` / `tensor_mut` give checked device
+//! pointers, `with_cublas_handle` hands out the runtime's stream-bound cuBLAS
+//! handle, `stream().raw_handle()` gives the native stream, and `synchronize`
+//! is the host barrier. The cuBLAS bindings come from the `cudarc` that
+//! tenferro-gpu re-exports, so the vendor binding cannot disagree with
 //! tenferro's CUDA version selection.
 //!
 //! `cuda_tutorial` also runs [`run`], which is how the GPU CI lane executes this
@@ -24,7 +24,7 @@ use tenferro_gpu::cuda::cudarc::cublas::{result as cublas, sys as cublas_sys};
 /// `C = A * B` with cuBLAS `dgemm` on tenferro device tensors.
 ///
 /// `a` is `m x k` and `b` is `k x n`; both are compact column-major CUDA
-/// tensors resident on `engine`. The output is allocated by tenferro and
+/// tensors resident on `backend`. The output is allocated by tenferro and
 /// written by cuBLAS on tenferro's stream.
 fn cublas_dgemm(
     engine: &mut CudaEngine,
@@ -46,8 +46,8 @@ fn cublas_dgemm(
         let c_ref = session.tensor_mut(&mut c)?;
         let (alpha, beta) = (1.0_f64, 0.0_f64);
 
-        // The handle is the runtime's own, already bound to this
-        // session's stream, so a raw scope pays neither `cublasCreate`
+        // The handle is the runtime's own, already bound to this raw
+        // scope's stream, so a raw scope pays neither `cublasCreate`
         // nor `cublasDestroy` (tenferro-rs #2083) and never has to
         // re-bind the stream. It is usable only inside this closure.
         session.with_cublas_handle(
@@ -82,7 +82,7 @@ fn cublas_dgemm(
             },
         )?;
         // `synchronize` is the only host barrier: the GEMM was merely
-        // enqueued on the session's stream.
+        // enqueued on the engine's stream.
         session.synchronize()?;
         Ok(c)
     })

@@ -19,7 +19,7 @@ backend and device choices remain explicit.
 | Typed concrete tensor | `torch.Tensor` with fixed dtype | `jax.Array` with fixed dtype | `TypedTensor<T>` |
 | Dynamic concrete tensor | `torch.Tensor` | `jax.Array` / `jnp.ndarray` | `Tensor` + a backend |
 | Graph-building tensor handle | `torch.Tensor` under compiled/tracing tools | traced `jax.Array` values | `TracedTensor` |
-| Concrete result | `torch.Tensor` | `jax.Array` | `Tensor` returned by `Runtime::run_compiled` |
+| Concrete result | `torch.Tensor` | `jax.Array` | `Tensor` returned by `Runtime::run` |
 | Execution | Eager by default | Eager arrays, often staged with `jit` | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `GraphCompiler` + `Runtime`) |
 | Eager forward and gradients | eager ops plus `loss.backward()` or `torch.autograd.grad(...)` | eager arrays with function transforms | `EagerTensor` forward ops, `backward()` for accumulated gradients, and `EagerRuntime` functional `grad`/`vjp`/`jvp` |
 | Transform AD | `torch.autograd.grad(...)`, `torch.func.jvp` | `jax.grad`, `jax.vjp`, `jax.jvp`, HVP via composition | `EagerRuntime::{grad,vjp,jvp}` or traced `.grad()?` / `.vjp()?` / `.jvp()?`; HVP via composition |
@@ -33,16 +33,16 @@ backend and device choices remain explicit.
 |---|---|---|---|---|
 | Create typed tensor | `torch.tensor(data, dtype=...)` | `jnp.array(data, dtype=...)` | `TypedTensor::<T>::from_vec_col_major(shape, data)` | — |
 | Create dynamic tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::from_vec_col_major(shape, data)` | `TracedTensor::from_vec_col_major(shape, data)` |
-| Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `ctx.with_backend_session(\|s\| a.matmul(&b, s))` via `TensorSessionOpsExt` | `a.matmul(&b)` |
-| Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `ctx.with_backend_session(\|s\| x.reshape(&shape, s))` via `TensorSessionOpsExt` | `x.reshape(&shape)?` |
-| Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `ctx.with_backend_session(\|s\| x.transpose(&perm, s))` via `TensorSessionOpsExt` | `x.transpose(&perm)` |
+| Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `a.matmul(&b, &mut engine)?` via `TensorSessionOpsExt` | `a.matmul(&b)` |
+| Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `x.reshape(&shape, &mut engine)?` via `TensorSessionOpsExt` | `x.reshape(&shape)?` |
+| Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut engine)?` via `TensorSessionOpsExt` | `x.transpose(&perm)` |
 | Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast_in_dim(&shape, &dims)` |
-| Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `ctx.with_backend_session(\|s\| x.reduce_sum(&axes, s))` via `TensorSessionOpsExt` | `x.reduce_sum(Some(&axes))` |
-| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `ctx.with_eager_session(\|s\| s.einsum(&[&a, &b], spec))` via `EagerSessionEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus extension module installation |
-| SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `ctx.with_backend_session(\|s\| x.svd(s))` via `TensorLinalgExt` | `x.svd()?` via `TracedTensorLinalgExt` |
-| QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `ctx.with_backend_session(\|s\| x.qr(s))` via `TensorLinalgExt` | `x.qr()?` via `TracedTensorLinalgExt` |
-| Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `ctx.with_backend_session(\|s\| x.cholesky(s))` via `TensorLinalgExt` | `x.cholesky()?` via `TracedTensorLinalgExt` |
-| Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `ctx.with_backend_session(\|s\| a.solve(&b, s))` via `TensorLinalgExt` | `a.solve(&b)?` via `TracedTensorLinalgExt` |
+| Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(Some(&axes), &mut engine)?` via `TensorSessionOpsExt` | `x.reduce_sum(Some(&axes))` |
+| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `ctx.with_eager_session(&mut engine, \|s\| s.einsum(&[&a, &b], spec))` via `EagerSessionEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus extension module installation |
+| SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `x.svd(&mut engine)?` via `TensorLinalgExt` | `x.svd()?` via `TracedTensorLinalgExt` |
+| QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `x.qr(&mut engine)?` via `TensorLinalgExt` | `x.qr()?` via `TracedTensorLinalgExt` |
+| Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `x.cholesky(&mut engine)?` via `TensorLinalgExt` | `x.cholesky()?` via `TracedTensorLinalgExt` |
+| Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `a.solve(&b, &mut engine)?` via `TensorLinalgExt` | `a.solve(&b)?` via `TracedTensorLinalgExt` |
 | Scalar-loss backward | `loss.backward()` | — | `loss.backward()` on `EagerTensor` | — |
 | Reverse-mode grad | `torch.autograd.grad(loss, x)` | `jax.grad(f)(x)` | `ctx.grad(&loss, &x)?` | `loss.grad(&x)` |
 | VJP | `torch.autograd.grad(..., grad_outputs=...)` | `jax.vjp` | `ctx.vjp(&y, &x, &cotangent)?` | `y.vjp(&x, &cotangent)?` |
@@ -100,7 +100,7 @@ concrete sizes during execution. See
 PyTorch users usually expect every operation to execute immediately. JAX users
 often switch between eager execution and `jit`. tenferro's traced API stays
 lazy until you lower a `TracedTensor` graph with `GraphCompiler` and run the
-resulting `CompiledGraph` with `Runtime::run_compiled`.
+resulting `CompiledGraph` with `Runtime::prepare` and `Runtime::run`.
 
 ### Autodiff split
 

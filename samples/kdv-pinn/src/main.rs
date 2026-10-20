@@ -33,10 +33,8 @@ use network::Mlp;
 use optimizer::{step_decay_lr, Adam};
 use sampler::Sampler;
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_cpu::{runtime_engine_registration, thread_pool_builder, CpuEngine};
-use tenferro_runtime::{
-    CompiledGraph, DType, ExecutionEngine, GraphCompiler, Runtime, TracedTensor,
-};
+use tenferro_cpu::{runtime_engine_registration, CpuEngine};
+use tenferro_runtime::{CompiledGraph, DType, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{Tensor, TensorRead};
 
 /// Return the value following the given command-line `flag`, if present.
@@ -53,39 +51,25 @@ fn arg_value(flag: &str) -> Option<String> {
     None
 }
 
-/// The CPU engine and the runtime registration that describes it.
-struct Cpu {
-    engine: CpuEngine,
-    runtime: Runtime,
-}
-
-fn cpu_engine() -> Result<Cpu, Box<dyn std::error::Error>> {
-    // The multi-threaded pool the training loop relies on; `serial()` would run
-    // every contraction on this thread.
-    let engine = CpuEngine::new(thread_pool_builder().build()?);
+fn cpu_runtime(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>> {
     let mut builder = Runtime::builder();
-    builder.register_engine(runtime_engine_registration(&engine)?)?;
-    Ok(Cpu {
-        engine,
-        runtime: builder.build()?,
-    })
+    builder.register_engine(runtime_engine_registration(engine)?)?;
+    Ok(builder.build()?)
 }
 
-/// Prepare `program` for the engine's target, run it, and return its single
-/// output on the host.
 fn run_single(
-    cpu: &mut Cpu,
+    runtime: &Runtime,
+    engine: &mut CpuEngine,
     program: &CompiledGraph,
     inputs: &[&Tensor],
 ) -> tenferro_runtime::Result<Tensor> {
-    let reads: Vec<TensorRead<'_>> = inputs.iter().map(|t| TensorRead::from_tensor(t)).collect();
-    let target = cpu.engine.target();
-    let prepared = cpu
-        .runtime
-        .prepare(program, &reads, std::slice::from_ref(&target))?;
-    let mut outputs = cpu.runtime.run(&mut [&mut cpu.engine], &prepared, &reads)?;
-    let output = outputs.remove(0);
-    output.into_tensor(&mut cpu.engine).map_err(Into::into)
+    let reads: Vec<TensorRead<'_>> = inputs.iter().map(|t| TensorRead::from_tensor(*t)).collect();
+    let prepared = runtime.prepare(program, &reads, &[engine.target()])?;
+    let mut outputs = runtime.run(&mut [engine], &prepared, &reads)?;
+    outputs
+        .remove(0)
+        .into_tensor(engine)
+        .map_err(tenferro_runtime::Error::from)
 }
 
 const N_IC: usize = 128;
@@ -157,7 +141,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|g| compiler.compile_with_input_specs(g, &specs))
         .collect::<tenferro_runtime::Result<Vec<_>>>()?;
 
-    let mut cpu = cpu_engine()?;
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine)?;
     let sampler = Sampler::new(-5.0, 5.0, 0.0, 1.0);
     let mut opt = Adam::new(LR);
 
@@ -180,13 +165,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &u_bc_tensor,
         ]);
 
-        let loss_tensor = run_single(&mut cpu, &loss_program, &inputs)?;
+        let loss_tensor = run_single(&runtime, &mut engine, &loss_program, &inputs)?;
         final_loss = loss_tensor.as_slice::<f64>().expect("loss data")[0];
         loss_history.push(final_loss);
 
         let mut grads = Vec::new();
         for program in &grad_programs {
-            grads.push(run_single(&mut cpu, program, &inputs)?);
+            grads.push(run_single(&runtime, &mut engine, program, &inputs)?);
         }
 
         opt.set_lr(step_decay_lr(epoch, EPOCHS, LR));
@@ -234,7 +219,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eval_inputs.push(&x_eval_tensor);
     eval_inputs.push(&t_eval_tensor);
 
-    let u_pred = run_single(&mut cpu, &eval_program, &eval_inputs)?;
+    let u_pred = run_single(&runtime, &mut engine, &eval_program, &eval_inputs)?;
     let pred = u_pred.as_slice::<f64>().expect("predicted solution data");
     let truth = u_true_tensor.as_slice::<f64>().expect("true solution data");
     let l2_error = pred
@@ -257,7 +242,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             frame_inputs.push(&x_eval_tensor);
             frame_inputs.push(&t_eval_tensor);
 
-            let u_pred = run_single(&mut cpu, &eval_program, &frame_inputs)?;
+            let u_pred = run_single(&runtime, &mut engine, &eval_program, &frame_inputs)?;
             let pred = u_pred
                 .as_slice::<f64>()
                 .expect("predicted frame data")

@@ -16,9 +16,10 @@ fn eval(tensor: &TracedTensor, bindings: &[(&TracedTensor, &Tensor)]) -> Tensor 
         .map(|(p, t)| (*p, t.dtype(), t.shape()))
         .collect();
     let program = compiler.compile_with_input_specs(tensor, &specs).unwrap();
-    let mut cpu = crate::cpu_engine().unwrap();
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+    let runtime = crate::cpu_runtime(&engine).unwrap();
     let inputs: Vec<&Tensor> = bindings.iter().map(|(_, tensor)| *tensor).collect();
-    crate::run_single(&mut cpu, &program, &inputs).unwrap()
+    crate::run_single(&runtime, &mut engine, &program, &inputs).unwrap()
 }
 
 #[test]

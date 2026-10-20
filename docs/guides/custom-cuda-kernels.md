@@ -7,16 +7,15 @@ CUDA memory they already own through the explicitly unsafe
 supported path is:
 
 ```text
-CudaBackend::with_backend_session
-  -> with_cuda_exec_session
-  -> CudaExecSession::with_raw
+CudaEngine::with_raw
   -> load PTX/CUBIN or compile with NVRTC
-  -> launch on the session stream
+  -> launch on the engine's stream
 ```
 
 Do not extract pointers or streams from `CudaRuntime` directly. The raw session
 is the scoped execution authority that keeps the tenferro CUDA context, stream,
-and allocation ownership aligned.
+and allocation ownership aligned, and it restores the calling thread's previous
+device/context on return, error and unwind.
 
 ## Dependencies
 
@@ -150,56 +149,50 @@ The launch code is identical for PTX, CUBIN, and NVRTC modules:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/custom_cuda_kernels.rs#custom_cuda_launch -->
 ```rust
-    use tenferro_gpu::cuda::{raw, with_cuda_exec_session, CudaBackend};
-    use tenferro_tensor::{BackendSessionHost, Error, TypedTensor};
+    use tenferro_gpu::cuda::{raw, CudaEngine};
+    use tenferro_tensor::TypedTensor;
 
     fn launch_add(
-        backend: &mut CudaBackend,
+        engine: &mut CudaEngine,
         lhs: &TypedTensor<f32>,
         rhs: &TypedTensor<f32>,
     ) -> tenferro_tensor::Result<TypedTensor<f32>> {
-        backend.with_backend_session(|backend_session| {
-            with_cuda_exec_session(backend_session, |cuda| {
-                cuda.with_raw("custom_cuda.add", |session| {
-                    let lhs = session.tensor(lhs)?;
-                    let rhs = session.tensor(rhs)?;
-                    let mut output = session.alloc_output::<f32>(&[8])?;
-                    let output_ref = session.tensor_mut(&mut output)?;
+        engine.with_raw("custom_cuda.add", |session| {
+            let lhs = session.tensor(lhs)?;
+            let rhs = session.tensor(rhs)?;
+            let mut output = session.alloc_output::<f32>(&[8])?;
+            let output_ref = session.tensor_mut(&mut output)?;
 
-                    let module =
-                        session.compile_nvrtc(CUDA_SOURCE, &raw::NvrtcOptions::default())?;
-                    let function = module.function("add_kernel")?;
-                    let config = raw::LaunchConfig::flat(8, 128, 0)?;
+            let module = session.compile_nvrtc(CUDA_SOURCE, &raw::NvrtcOptions::default())?;
+            let function = module.function("add_kernel")?;
+            let config = raw::LaunchConfig::flat(8, 128, 0)?;
 
-                    // SAFETY: the kernel ABI is (float*, const float*, const float*,
-                    // int); all three tensors contain at least 8 f32 values; output
-                    // is exclusively borrowed and does not alias either input; the
-                    // kernel bounds-checks i < n; module and tensor borrows remain
-                    // live until the explicit synchronization below.
-                    unsafe {
-                        session.launch(
-                            &function,
-                            config,
-                            &[
-                                raw::KernelArg::tensor_mut(&output_ref),
-                                raw::KernelArg::tensor(&lhs),
-                                raw::KernelArg::tensor(&rhs),
-                                raw::KernelArg::i32(8),
-                            ],
-                        )?;
-                    }
+            // SAFETY: the kernel ABI is (float*, const float*, const float*,
+            // int); all three tensors contain at least 8 f32 values; output
+            // is exclusively borrowed and does not alias either input; the
+            // kernel bounds-checks i < n; module and tensor borrows remain
+            // live until the explicit synchronization below.
+            unsafe {
+                session.launch(
+                    &function,
+                    config,
+                    &[
+                        raw::KernelArg::tensor_mut(&output_ref),
+                        raw::KernelArg::tensor(&lhs),
+                        raw::KernelArg::tensor(&rhs),
+                        raw::KernelArg::i32(8),
+                    ],
+                )?;
+            }
 
-                    session.synchronize()?;
-                    Ok(output)
-                })
-            })
-            .ok_or_else(|| Error::runtime_state("custom_cuda.add", "backend session is not CUDA"))?
-        })?
+            session.synchronize()?;
+            Ok(output)
+        })
     }
 ```
 <!-- end-snippet-source -->
 
-Inputs must already be uploaded to the same `CudaBackend` runtime. The safe
+Inputs must already be uploaded to the same `CudaEngine` runtime. The safe
 `tensor` and `tensor_mut` methods validate residency and return bounded device
 spans. `tensor_mut` requires an exclusive tensor borrow; a fresh
 `alloc_output` is the simplest output path. Owned `TypedTensor` values are
@@ -325,14 +318,12 @@ session reports as `hardware.max_shared_memory_size` (166912 bytes on an A100,
 
 <!-- snippet-source: docs/tutorial-code/src/bin/custom_cuda_kernels.rs#custom_cuda_smem_limit -->
 ```rust
-    use tenferro_gpu::cuda::CudaExecSession;
+    use tenferro_gpu::cuda::CudaEngine;
 
     /// Dynamic shared memory a raw launch may opt into on this device, from
     /// `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`.
-    fn max_shared_memory_bytes(
-        session: &mut CudaExecSession<'_>,
-    ) -> tenferro_tensor::Result<usize> {
-        session.with_cubecl("custom_cuda.smem_limit", |cubecl| {
+    fn max_shared_memory_bytes(engine: &mut CudaEngine) -> tenferro_tensor::Result<usize> {
+        engine.with_cubecl("custom_cuda.smem_limit", |cubecl| {
             Ok(cubecl.client().properties().hardware.max_shared_memory_size)
         })
     }
@@ -394,9 +385,7 @@ page's kernels outside `tenferro-gpu`, and its tests launch all of them on CUDA
 hardware.
 
 ```text
-CudaBackend::with_backend_session
-  -> with_cuda_exec_session
-  -> CudaExecSession::with_cubecl
+CudaEngine::with_cubecl
   -> cuda::cubecl::Session::client
   -> #[cube(launch_unchecked)] kernel launch
 ```
@@ -430,13 +419,13 @@ fixture's `run_scale_in_session` (`samples/cubecl-kernel`, executed by
 
 `with_cubecl` flushes the launches it holds on exit (including on `Err` and
 unwind) but does not wait for the device. A caller that needs the values calls
-`CudaExecSession::synchronize` — the only host barrier — and then
+`CudaEngine::synchronize` — the only host barrier — and then
 `download_tensor`:
 
 <!-- snippet-source: samples/cubecl-kernel/src/run.rs#downstream-cube-launch -->
 ```rust
-/// Upload `input`, allocate an output on the session, launch [`scale`], and
-/// download the result.
+/// Upload `input`, allocate an output inside one CubeCL scope on `engine`,
+/// launch [`scale`], and download the result.
 ///
 /// The three launch inputs the CubeCL API does not make obvious are all named
 /// here: the output comes from `Session::alloc_output`, the launch domain from
@@ -444,24 +433,24 @@ unwind) but does not wait for the device. A caller that needs the values calls
 /// arguments are the `BufferArg` values `Session::array_arg` hands back —
 /// `KernelArguments` is never built by hand.
 ///
-/// The runtime handle is cloned out of the session first so uploads do not
-/// hold a borrow of `exec` while the mutable `with_cubecl`/`synchronize`
+/// The runtime handle is cloned out of the engine first so uploads do not
+/// hold a borrow of the engine while the mutable `with_cubecl`/`synchronize`
 /// methods run.
 ///
 /// `n` must be a multiple of the 256-unit cube dim: `cube_count_1d` rounds the
 /// domain up, and `scale` has no `ABSOLUTE_POS < n` guard, so only an exact
 /// domain keeps it in bounds.
-fn run_scale_in_session(
+fn run_scale_in_engine(
     op: &'static str,
-    exec: &mut CudaExecSession<'_>,
+    engine: &mut CudaEngine,
     host_input: TypedTensor<f32>,
     n: usize,
 ) -> tenferro_tensor::Result<TypedTensor<f32>> {
-    let runtime = exec.runtime().clone();
+    let runtime = engine.runtime().clone();
     let input = upload_tensor(&runtime, &Tensor::from_typed::<f32>(host_input))?;
     let input = input.into_typed::<f32>().expect("f32 upload stays f32");
 
-    let output = exec.with_cubecl(op, |cubecl| {
+    let output = engine.with_cubecl(op, |cubecl| {
         // SAFETY: both bindings are created for tensors this call owns, and the
         // kernel writes only `output`.
         let input_arg: BufferArg = unsafe { cubecl.array_arg(&input, op)? };
@@ -490,7 +479,7 @@ fn run_scale_in_session(
     })?;
 
     // Explicit host barrier, then download.
-    exec.synchronize()?;
+    engine.synchronize()?;
     Ok(download_tensor(&runtime, &Tensor::from_typed(output))?
         .into_typed::<f32>()
         .expect("f32 download"))
@@ -515,12 +504,12 @@ back, so it is not a host barrier for device completion:
 /// The fence is what orders the raw continuation after the launch; see the
 /// external-kernel guide for the mechanism.
 fn launch_then_raw(
-    exec: &mut CudaExecSession<'_>,
+    engine: &mut CudaEngine,
     client: &Client,
     input: BufferArg,
     output: BufferArg,
 ) -> tenferro_tensor::Result<()> {
-    exec.with_raw("downstream.hybrid", |raw| {
+    engine.with_raw("downstream.hybrid", |raw| {
         // SAFETY: the caller owns both bindings, the launch domain matches their
         // element counts, and the kernel writes only `output`.
         unsafe {
@@ -533,7 +522,7 @@ fn launch_then_raw(
                 2.0f32,
             );
         }
-        // Dispatch the launch onto this session's stream before the raw work
+        // Dispatch the launch onto this engine's stream before the raw work
         // that depends on it: without this fence the raw kernel below can reach
         // the stream first (#2092).
         raw.flush_cubecl()?;
@@ -676,26 +665,26 @@ KernelLoader<CudaModules>` — and the loader keys what it compiled by
 identity plus its `CubeDim`, address type and execution mode. A repeated
 identity is one lookup and a clone of the loaded kernel; nothing compiles
 again. A kernel compiled inside one `with_cubecl` scope is therefore reused by
-every later scope, and by a second `CudaBackend` constructed for the same
-device, because both reach the same context and loader.
+every later scope, and by a second `CudaEngine` opened on the same device,
+because both reach the same context and loader.
 
 The fixture's `run_kernel_cache_check` measures exactly that: it launches the
-same kernel from six successive `with_cubecl` scopes on one backend and then
-from a freshly constructed backend. Measured on an A100 (CUDA 12.6, debug
+same kernel from six successive `with_cubecl` scopes on one engine and then
+from a freshly opened engine. Measured on an A100 (CUDA 12.6, debug
 profile, one test thread so the other fixture tests do not share the device):
 
 | scope | host cost |
 | --- | --- |
-| backend 0, launch 0 (JIT compile) | 77.8 ms |
-| backend 0, launches 1-5 | 499 µs, 239 µs, 215 µs, 214 µs, 216 µs |
-| backend 1 (fresh `CudaBackend`, first launch) | 279 µs |
+| engine 0, launch 0 (JIT compile) | 77.8 ms |
+| engine 0, launches 1-5 | 499 µs, 239 µs, 215 µs, 214 µs, 216 µs |
+| engine 1 (fresh `CudaEngine`, first launch) | 279 µs |
 
 Only the first scope pays the ~78 ms compile (three consecutive runs: 77.8 ms,
 77.5 ms, 78.9 ms). The second scope is the expensive repeat at ~500 µs
 (499 µs, 495 µs, 554 µs over the same runs); from the third scope on the cost
-settles at ~200–280 µs, and a fresh backend for the same device pays about the
+settles at ~200–280 µs, and a fresh engine for the same device pays about the
 same as a warm scope (268–298 µs over five runs), so the compiled artifact
-outlives the backend object that first produced it.
+outlives the engine object that first produced it.
 
 Two consequences follow from the kernel identity. A kernel whose `CubeDim`
 changes is a *different* kernel and compiles again, so fix one `CubeDim` per

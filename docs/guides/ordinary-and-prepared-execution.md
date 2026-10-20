@@ -1,26 +1,26 @@
 # Ordinary calls and prepared execution
 
 Start with the ordinary API. Prepare explicitly when you repeat a compatible
-contraction, not merely because the equation is a string. Construct the
-backend/runtime once and reuse it. This page uses CPU tensors with **column-major**
+contraction, not merely because the equation is a string. Build the engine and
+the runtime once and reuse them. This page uses CPU tensors with **column-major**
 data; see [crate setup and full einsum examples](einsum.md) for dependencies.
 
 ## Choose by need
 
 | Need | Supported recipe |
 |---|---|
-| Execute concrete tensors now, without AD | `TensorEinsumExt::einsum` on `[&lhs, &rhs]` inside `backend.with_backend_session(...)` |
-| Execute eager tensors with AD | Import `EagerSessionEinsumExt` (`autodiff` feature), then `ctx.with_eager_session(\|s\| s.einsum(&[&lhs, &rhs], "ij,jk->ik"))?`; core ops are `EagerSession` methods such as `s.dot_general(&lhs, &rhs, config)` |
+| Execute concrete tensors now, without AD | `TensorEinsumExt::einsum` on `[&lhs, &rhs]` with the caller's `&mut engine` |
+| Execute eager tensors with AD | Import `EagerSessionEinsumExt` (`autodiff` feature), then `ctx.with_eager_session(&mut engine, \|s\| s.einsum(&[&lhs, &rhs], "ij,jk->ik"))?`; core ops are `EagerSession` methods such as `s.dot_general(&lhs, &rhs, config)` |
 | Repeat one compatible concrete contraction | Keep a `ConcreteEinsumPlan`; prepare once and execute with new inputs |
 | Repeat a traced computation | Compile once and reuse the program and configured runtime; see [traced execution](einsum.md#traced-matrix-multiply) |
 | Generate an equation in code | Use `EinsumSubscripts` integer labels; use `EinsumNotation` for unresolved ellipsis |
 
-Concrete calls require the `BackendSessionHost` import. The callback's session
-is borrowed from the backend; do not retain it or recursively open that same
-backend from inside its callback. Multiple compatible concrete operations can
-share a callback. Eager tensors instead retain their `EagerRuntime`; keep inputs
-in the same runtime and preserve AD/capture semantics. Do not replace eager work
-with concrete operations when gradients are needed. See the executable
+Concrete calls take the engine the caller holds. Borrow it for the whole
+sequence of compatible operations instead of rebuilding it per call; nothing is
+entered or locked. Eager tensors instead retain their `EagerRuntime`, and each
+eager session borrows the same engine; keep inputs in the same runtime and
+preserve AD/capture semantics. Do not replace eager work with concrete
+operations when gradients are needed. See the executable
 [eager example](einsum.md#eagertensor).
 
 ## Ordinary, prepared, and programmatic recipes
@@ -32,42 +32,34 @@ For a standalone program, place the fragment inside
 
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#ordinary-and-prepared-einsum -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::{ConcreteEinsumPlan, EinsumSubscripts, TensorEinsumExt};
-use tenferro_tensor::{BackendSessionHost, Tensor};
+use tenferro_tensor::Tensor;
 
 let lhs = Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 let rhs = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 1.0, 2.0])?;
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 // Ordinary execution: no explicit preparation needed.
-let ordinary = backend.with_backend_session(|session| {
-    [&lhs, &rhs].einsum("ij,jk->ik", session)
-})??;
+let ordinary = [&lhs, &rhs].einsum("ij,jk->ik", &mut engine)?;
 assert_eq!(ordinary.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 
 // Strings are fine for one-time preparation. The plan does not retain inputs.
 let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
-// One session for the whole batch: opening a multi-worker backend admits its
-// workers and installs the session resources, so reopen it once rather than per
-// iteration. The per-operation cost itself is unchanged - the pool installation
-// is per numerical operation.
-backend.with_backend_session(|session| -> Result<(), Box<dyn std::error::Error>> {
-    for (data, expected) in [
-        (vec![1.0_f64, 2.0, 3.0, 4.0], [2.0, 4.0, 7.0, 10.0]),
-        (vec![2.0_f64, 4.0, 6.0, 8.0], [4.0, 8.0, 14.0, 20.0]),
-    ] {
-        let next_lhs = Tensor::from_vec_col_major([2, 2], data)?;
-        let result = plan.execute([&next_lhs, &rhs], session)?;
-        assert_eq!(result.as_slice::<f64>()?, &expected);
-    }
-    Ok(())
-})??;
+// Borrow the same engine for the whole batch. The engine holds the plan cache
+// and buffer pool, so reusing it is what makes the per-call cost the numerical
+// operation alone.
+for (data, expected) in [
+    (vec![1.0_f64, 2.0, 3.0, 4.0], [2.0, 4.0, 7.0, 10.0]),
+    (vec![2.0_f64, 4.0, 6.0, 8.0], [4.0, 8.0, 14.0, 20.0]),
+] {
+    let next_lhs = Tensor::from_vec_col_major([2, 2], data)?;
+    let result = plan.execute([&next_lhs, &rhs], &mut engine)?;
+    assert_eq!(result.as_slice::<f64>()?, &expected);
+}
 
 // Integer labels describe the equation; this ordinary call still plans.
 let equation = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-let structured = backend.with_backend_session(|session| {
-    [&lhs, &rhs].einsum_subscripts(&equation, session)
-})??;
+let structured = [&lhs, &rhs].einsum_subscripts(&equation, &mut engine)?;
 assert_eq!(structured.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 ```
 <!-- end-snippet-source -->
@@ -77,14 +69,14 @@ assert_eq!(structured.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 Keep the equation, operand ordering, input count, dtypes and shapes compatible
 with the prepared plan. Values may change, as the second execution demonstrates.
 The plan owns its prepared contraction tree and metadata, not the input tensors
-or a backend session. Execution still validates inputs and performs backend
+or the engine. Execution still validates inputs and performs backend
 work: preparation does not remove validation, allocation, dispatch or required
 materialization. Prepare a new plan when the equation or input metadata changes.
 Device placement and backend capabilities must still match; a plan does not
 transfer data or make an unsupported dtype/device executable. For repeated traced
-work, keep the compiled program and configured runtime, pass new concrete inputs
-to `Runtime::run_compiled`, and recompile if the program's input metadata contract
-changes; register its extension modules before execution.
+work, keep the compiled program, the prepared program and the configured runtime,
+pass new concrete inputs to `Runtime::run`, and recompile if the program's input
+metadata contract changes; register its extension modules before preparation.
 
 Typed owned inputs use `TypedTensorEinsumExt` and `prepare_typed` /
 `execute_typed`. Borrowed views use the `*ReadEinsumExt` traits and
@@ -108,36 +100,39 @@ supported explicit path/tree controls on the traced route, described in
 [einsum optimization controls](einsum.md#optimization-controls), rather than
 silently discarding it. Parenthesized ellipsis is unsupported.
 
-## CPU execution scopes
+## One engine across ordinary, eager and prepared work
 
-`CpuBackend::with_execution_scope` amortizes executor entry across sequential
-ordinary eager operations, eager AD and prepared trace replay. Build their
-runtimes from **clones of the same configured CPU backend**, then enter a scope
-on that backend. The scope retains the executor and provider-exclusion permit;
-each call still uses its own normal exclusive operation/session borrow. It does
-not change tensor ownership, AD semantics, graph/runtime identity checks or cache
-ownership. Returned outputs remain usable after scope exit.
+Concrete operations, eager sessions and prepared runs all borrow the same
+engine, so a stage that mixes them keeps one value instead of one per layer:
 
-Run the complete primal/JVP/VJP and prepared-replay example:
-`cargo run -p tenferro-ad --example cpu_execution_scope`.
-The [example source](https://github.com/tensor4all/tenferro-rs/blob/main/crates/tenferro-ad/examples/cpu_execution_scope.rs)
-uses one explicit CPU thread. See the
-[engine ownership and verification contract](../design/execution-engine-ownership.md).
+```text
+let mut engine = CpuEngine::serial();
+let eager = EagerRuntime::new()?;
+let mut builder = Runtime::builder();
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
+builder.install_extension_module(tenferro_einsum::extension_module::<CpuEngine>(
+    tenferro_cpu::runtime_engine_id()?,
+)?)?;
+let runtime = builder.build()?;
 
-This API supports Tenferro-managed CPU domains, not GPU or external executor
-scopes. Nested scopes return errors. Do not call ordinary eager/backend APIs from
-an active borrowed session or another worker thread: such an entry is rejected
-with a `SessionEntryError` before its callback runs. A different immutable
-backend witness cannot borrow the scope, and its session entry fails the same
-way. A returned error or unwinding releases the current operation loan and, when
-the callback exits, the scope permit.
+let product = [&lhs, &rhs].einsum("ij,jk->ik", &mut engine)?;
+let loss = eager.with_eager_session(&mut engine, |s| s.einsum(&[&product, &rhs], "ij,jk->ik"))?;
+let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+let outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+```
 
-For steady-state measurement, create inputs, compile/prepare graphs, enter the
-scope and warm up **before** starting the clock. Stop the clock before cleanup.
-Allocation-returning operations still allocate outputs; a shared scope is not an
-output-reuse API. Thread count and CPU affinity remain separate settings. A scope
-removes repeated executor admission, not every high-level per-call cost, and is
-not a promise that four threads outperform one.
+Nothing is entered or locked, so there is no scope to nest and no reentry error
+to avoid: the `&mut` borrow is the whole exclusion contract. Returned outputs
+remain usable after the borrow ends. The ownership rules behind this shape are
+in [execution engine ownership](../design/execution-engine-ownership.md).
+
+For steady-state measurement, create inputs, build the engine, compile and
+prepare graphs and warm up **before** starting the clock. Stop the clock before
+cleanup. Allocation-returning operations still allocate outputs; a shared engine
+is not an output-reuse API (the `_into` forms are). Thread count and CPU affinity
+remain pool properties. Reusing one engine removes repeated construction, not
+every high-level per-call cost, and is not a promise that four threads outperform
+one.
 
 ## Interpret overhead without inventing a budget
 
