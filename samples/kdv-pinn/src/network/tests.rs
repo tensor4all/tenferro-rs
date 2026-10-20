@@ -19,7 +19,7 @@ fn mlp_forward_shape() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &bindings).unwrap();
-    let runtime = crate::cpu_runtime().unwrap();
+    let mut cpu = crate::cpu_engine().unwrap();
 
     let x_tensor = Tensor::from_vec_col_major(vec![4, 2], vec![0.0_f64; 8]).unwrap();
     let param_tensors: Vec<Tensor> = specs
@@ -33,6 +33,6 @@ fn mlp_forward_shape() {
     bind_tensors.extend(param_tensors.iter());
     bind_tensors.push(&x_tensor);
 
-    let out = crate::run_single(&runtime, &program, &bind_tensors).unwrap();
+    let out = crate::run_single(&mut cpu, &program, &bind_tensors).unwrap();
     assert_eq!(out.shape(), &[4, 1]);
 }
