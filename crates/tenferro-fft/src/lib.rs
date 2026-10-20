@@ -147,8 +147,7 @@ use tenferro_runtime::extension::{
 use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
 use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
 use tenferro_tensor::{
-    Engine, CacheStats, DType, ErrorKind, Tensor, TensorBackend, TensorRead,
-    ValidationError,
+    CacheStats, DType, Engine, ErrorKind, Tensor, TensorBackend, TensorRead, ValidationError,
 };
 
 mod backend;

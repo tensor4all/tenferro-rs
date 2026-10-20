@@ -106,8 +106,8 @@ macro_rules! unreachable_methods {
 mod default_session_impls {
     use super::DefaultFftSession;
     use tenferro_tensor::{
-        BackendCachedDot, BackendRuntimeCache, Engine, BackendSessionHost, CompareDir,
-        DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig, ScatterConfig,
+        BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType,
+        DotGeneralConfig, ElementwiseReadOp, Engine, GatherConfig, PadConfig, ScatterConfig,
         SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
         TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction,
         TensorStructural, TensorWrite,

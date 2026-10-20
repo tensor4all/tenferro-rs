@@ -44,8 +44,7 @@ fn ad_ctx(threads: usize) -> Arc<EagerRuntime> {
         .build()
         .unwrap();
 
-    EagerRuntime::with_ad_context(&ad)
-        .unwrap()
+    EagerRuntime::with_ad_context(&ad).unwrap()
 }
 
 #[cfg(not(feature = "__bench_unification_semantic_ad_api"))]
@@ -55,8 +54,7 @@ fn ad_ctx(threads: usize) -> Arc<EagerRuntime> {
         .build()
         .unwrap();
 
-    EagerRuntime::with_ad_context(&ad)
-        .unwrap()
+    EagerRuntime::with_ad_context(&ad).unwrap()
 }
 
 fn tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -114,7 +112,9 @@ fn triangular_solve_fixture(n: usize, threads: usize) -> Fixture {
     let matrix = variable(&ctx, vec![n, n], upper_matrix(n));
     let rhs = eager(&ctx, vec![n, 2], dense_matrix(n, 3)[0..(n * 2)].to_vec());
     let solution = ctx
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.triangular_solve(&matrix, &rhs, true, false, false, false))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.triangular_solve(&matrix, &rhs, true, false, false, false)
+        })
         .unwrap();
     let loss = reduce_all(&solution);
     Fixture {
@@ -127,7 +127,9 @@ fn triangular_solve_fixture(n: usize, threads: usize) -> Fixture {
 fn svd_values_fixture(n: usize, threads: usize) -> Fixture {
     let ctx = ad_ctx(threads);
     let matrix = variable(&ctx, vec![n, n], dense_matrix(n, 5));
-    let (_u, singular_values, _vt) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.svd(&matrix)).unwrap();
+    let (_u, singular_values, _vt) = ctx
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.svd(&matrix))
+        .unwrap();
     let loss = singular_values.reduce_sum(Some(&[0])).unwrap();
     Fixture {
         ctx,

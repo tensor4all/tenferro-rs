@@ -49,8 +49,7 @@ fn ad_ctx() -> Arc<EagerRuntime> {
         .unwrap()
         .build()
         .unwrap();
-    EagerRuntime::with_ad_context(&ad)
-        .unwrap()
+    EagerRuntime::with_ad_context(&ad).unwrap()
 }
 
 fn tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -131,7 +130,9 @@ fn fixture(n: usize, threads: usize) -> Fixture {
     let rhs = eager(&ctx, vec![n, n], dense_matrix(n, 3));
     let scalar_one = eager(&ctx, vec![], vec![1.0]);
 
-    let (_p, l, u, _parity) = ctx.with_eager_session(&mut engine, |s| s.lu(&matrix)).unwrap();
+    let (_p, l, u, _parity) = ctx
+        .with_eager_session(&mut engine, |s| s.lu(&matrix))
+        .unwrap();
     let lu_loss = ctx
         .with_eager_session(&mut engine, |s| {
             let l_axes: Vec<usize> = (0..l.shape().len()).collect();
@@ -158,7 +159,9 @@ fn fixture(n: usize, threads: usize) -> Fixture {
 }
 
 fn consume_f64(tensor: &EagerTensor) {
-    let materialized = tensor.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
+    let materialized = tensor
+        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
     black_box(materialized.shape());
     black_box(materialized.as_slice::<f64>().unwrap()[0]);
 }
@@ -271,7 +274,9 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
             bench.iter(|| {
                 let out = fixture
                     .ctx
-                    .with_eager_session(&mut fixture.engine, |session| session.triu(black_box(&fixture.upper), 0))
+                    .with_eager_session(&mut fixture.engine, |session| {
+                        session.triu(black_box(&fixture.upper), 0)
+                    })
                     .unwrap();
                 consume_f64(&out);
             });

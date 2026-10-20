@@ -117,4 +117,3 @@ path = "tests/blas1_pool_aliasing.rs"
 name = "faer_reexport_identity"
 path = "tests/faer_reexport_identity.rs"
 required-features = ["native"]
-
