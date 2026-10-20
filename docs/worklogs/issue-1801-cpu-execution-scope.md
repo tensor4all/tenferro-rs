@@ -11,7 +11,7 @@
   backend session across arbitrary high-level calls. It is not a TLS cache.
 - External executor admission remains operation-scoped. Infallible session
   entry retains its established panic boundary rather than changing a public
-  trait in this feature. See the [design contract](../design/cpu-shared-execution-scope.md).
+  trait in this feature. The shared-scope design is retired by #2206; see the [engine ownership record](../design/execution-engine-ownership.md).
 
 ## Verification conclusions and constraints
 

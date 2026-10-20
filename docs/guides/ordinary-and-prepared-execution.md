@@ -122,7 +122,7 @@ Run the complete primal/JVP/VJP and prepared-replay example:
 `cargo run -p tenferro-ad --example cpu_execution_scope`.
 The [example source](https://github.com/tensor4all/tenferro-rs/blob/main/crates/tenferro-ad/examples/cpu_execution_scope.rs)
 uses one explicit CPU thread. See the
-[scope design and verification contract](../design/cpu-shared-execution-scope.md).
+[engine ownership and verification contract](../design/execution-engine-ownership.md).
 
 This API supports Tenferro-managed CPU domains, not GPU or external executor
 scopes. Nested scopes return errors. Do not call ordinary eager/backend APIs from

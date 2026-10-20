@@ -1,9 +1,11 @@
 # Explicit Backend Session Boundary
 
-Status: implemented for #1929's reduced 2026-09-27 delivery contract. This
-record includes a **historical** source inventory and step-by-step design at the
-stated baseline; its line numbers, provisional statuses and measurement runbook
-do not describe the current source. See the current-state summary below and the
+Status: implemented for #1929's reduced 2026-09-27 delivery contract, then
+superseded by #2206: the session model is removed and the current contract is
+[execution-engine-ownership.md](./execution-engine-ownership.md). This record
+includes a **historical** source inventory and step-by-step design at the stated
+baseline; its line numbers, provisional statuses and measurement runbook do not
+describe the current source. See the current-state summary below and the
 [handoff](../worklogs/2026-09-27-1929-reduced-contract-handoff.md). The work
 belongs to [#1926](https://github.com/tensor4all/tenferro-rs/issues/1926) under
 [#1929](https://github.com/tensor4all/tenferro-rs/issues/1929).
@@ -13,7 +15,7 @@ revision named by #1926).
 
 Related authorities and records:
 
-- [`exec-session.md`](./exec-session.md) — what a session *is* and how each
+- [`execution-engine-ownership.md`](./execution-engine-ownership.md) — what an engine *is* and how each
   backend maps it.
 - [`session-oriented-concrete-apis.md`](./session-oriented-concrete-apis.md) —
   the session-explicit concrete surface (#1673). Its "the one-shot API stays
@@ -452,10 +454,10 @@ the inventory in sections B–E.
 
 ### Audit gate: implemented
 
-`scripts/audit-session-entry.py` implements the gate described above, earlier
+`scripts/audit-engine-entry.py` implements the gate described above, earlier
 than slice 5 because it is useful as a *freeze* rather than as a cleanup: it
 records today's legitimate entry functions in
-`scripts/session-entry-allowlist.json` and fails on any new one.
+`scripts/engine-entry-allowlist.json` and fails on any new one.
 
 - Mechanisms tracked: `default_backend_session`, `with_session_entry_guard`,
   `install_with_pool_context[_fresh]`,
@@ -514,7 +516,7 @@ exit=0
 ```
 
 The temporary entry is not in the tree; the demonstration is reproducible by
-appending those two lines and re-running `python3 scripts/audit-session-entry.py
+appending those two lines and re-running `python3 scripts/audit-engine-entry.py
 --check`.
 
 ### B3(iii) blocks on an acceptance-surface decision
@@ -703,7 +705,7 @@ Verification on this host: `cargo check --workspace --all-targets` and
 `cargo check -p tenferro-gpu --features cuda --all-targets` are error- and
 warning-free; the CUDA suite reports 108 passed / 189 ignored in the lib and 73
 passed in the integration target; the WebGPU suite reports 89 + 31 + 3 + 2
-passed; and `scripts/audit-session-entry.py --check` stays green without an
+passed; and `scripts/audit-engine-entry.py --check` stays green without an
 allowlist change. What this host cannot do is run the hardware-gated kernels, so
 their behaviour remains with the hosted GPU matrix; the bodies themselves are
 verbatim moves, and no receiver rewrite changes an argument.
@@ -758,9 +760,9 @@ means a file, a command output, or a test that runs in CI, not an intention.
 | B3 GPU `delegate!` shim decided and documented | CUDA operations moved to `ops.rs` and deleted from the shim; `delegate!` remains only for `TensorBuffer`/`TensorDeviceTransfer` |
 | B3 generic-bound and call-site migration (~215 sites, doctests, examples) | `cargo check --workspace --all-targets` is clean, which is the machine-checkable form of the migration |
 | B4 extension owner path is session-primary | `define_extension_runtime!`'s owner entry forms the session and hands extensions `&mut dyn Engine`; owner routes are limited to the runtime-formed fallback (`execute_owner_extension_fallback`); the linalg helper is session-typed |
-| B5 deterministic audit gate | `scripts/audit-session-entry.py` + `scripts/session-entry-allowlist.json`, run by `scripts/check-pr-fast.sh`; tracked mechanisms and the 16-entry inventory are in the table above |
+| B5 deterministic audit gate | `scripts/audit-engine-entry.py` + `scripts/engine-entry-allowlist.json`, run by `scripts/check-pr-fast.sh`; #2206 replaced the session mechanisms with the engine entry surfaces recorded there |
 | B5 alias negative test, deny on a hidden entry, pass on the boundary | the `--check` self-test plus the recorded demonstration below (exit 1 with the hidden entry, exit 0 without) |
-| B5 single rules owner and doc consistency | `REPOSITORY_RULES.md` "Backend Session Entry" section, routed by `scripts/repository-rules-review.py`; `docs/design/explicit-session-boundary.md` and `docs/design/index.md` updated together |
+| B5 single rules owner and doc consistency | `REPOSITORY_RULES.md` "Execution Engine Entry" section, routed by `scripts/repository-rules-review.py`; `docs/design/explicit-session-boundary.md` and `docs/design/index.md` updated together |
 | B5 `with_cpu_exec_session` as the single documented exception | `explicit-session-boundary.md` "capability bridge" entry plus the allowlist row |
 | Final state: one-shot spellings do not compile | the `compile_fail` fixtures above |
 | Final state: `with_backend_session`/`with_execution_scope` are the only boundaries | the 16-entry allowlist, whose remaining rows are session construction and the runtime cache entry |
@@ -786,7 +788,7 @@ With the CUDA body move in, Phase B is closed on this host:
 | `cargo check -p tenferro-gpu --features cuda --all-targets` | 0 error, 0 warning |
 | `cargo test --workspace --no-fail-fast` | all targets pass except one fixture of the pre-existing `tenferro-ad` trybuild contract, verified pre-existing by running the same test on the baseline worktree |
 | `cargo test --manifest-path ext/tenferro-cpu-tblis/Cargo.toml` | 5 + 3 passed |
-| `scripts/audit-session-entry.py --check` | pass, 16 entries, no allowlist change |
+| `scripts/audit-engine-entry.py --check` | pass; the engine audit records its own sites |
 | `scripts/repository-rules-review.py --dry-run` | pass |
 
 What Phase B does not include is evidence that the refactor is
@@ -1067,12 +1069,11 @@ lifetime. A scope is evidence that a permit is held, not a new kind of session: 
 session at a time inside it stays the rule, and the existing nested-entry detection
 is unchanged.
 
-**Audit gate (implemented now, before the hook exists).** The session-entry audit
-tracks mechanisms that create execution state, and a scope is one of them even though
-it is not a session entry: it holds an execution permit and the resource set that
-permit keys. Two mechanisms were therefore added to
-`scripts/audit-session-entry.py`, and `REPOSITORY_RULES.md` names both in its
-"Backend Session Entry" section:
+**Audit gate (historical).** The session-entry audit tracked mechanisms that
+created execution state, including the execution scope. That audit was retired
+with the session model; the current `scripts/audit-engine-entry.py` tracks engine
+surfaces and raw scopes instead. `REPOSITORY_RULES.md` names it in its
+"Execution Engine Entry" section. For the record, two mechanisms were added then:
 
 * `with_execution_scope` — allowlisted at exactly one site, the API definition in
   `tenferro-cpu` (the reviewed boundary). Adding the mechanism immediately surfaced
@@ -1308,10 +1309,10 @@ thin wrapper that opens a session per call is still an implicit entry. What
 (`_in`/`_read` methods, `&mut dyn Engine`, preserved `Send` bounds), the
 nested-entry prohibition, and cache parity.
 
-`exec-session.md` remains the owner for "what a session is". Its
-`CpuBackend::with_backend_session` code sample predates the permit-based
-`run_backend_session_cached` implementation and was corrected in the same
-change that added this document.
+`execution-engine-ownership.md` is the owner for the engine model. The retired
+`exec-session.md` record kept a `CpuBackend::with_backend_session` sample that
+predated the permit-based `run_backend_session_cached` implementation; that
+history is not part of the active design.
 
 ## Non-goals
 
@@ -1795,7 +1796,7 @@ The workable order is:
 * B3(iii): delete the owner-side operation impls (`TensorElementwise` and the
   other families for `CpuBackend`, `CudaBackend`, `WebGpuBackend`), the
   `BackendCachedDot` impls and the GPU `delegate!` shims, then shrink
-  `scripts/session-entry-allowlist.json`.
+  `scripts/engine-entry-allowlist.json`.
 
 ### B4 landed: the owner entry now forms the session
 
@@ -1873,7 +1874,7 @@ moves their bodies to the module functions the sessions already call), migrate
 the downstream call sites in `tenferro-ad`, `tenferro-linalg`, `tenferro-einsum`
 and the runtime tests/benches, delete `install_with_pool_context*` once the CPU
 owner impls are gone, and re-bless
-`scripts/session-entry-allowlist.json` (the CPU entries it lists are exactly the
+`scripts/engine-entry-allowlist.json` (the CPU entries it lists are exactly the
 ones that disappear).
 
 ### B1 fail fixtures: the deleted spellings are pinned by `compile_fail` doctests

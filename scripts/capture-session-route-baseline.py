@@ -16,6 +16,12 @@ Fail-closed: the capture refuses to write when
 Expectations encode the harness at the revision that captured the baseline. If
 the harness case list changes, the baseline must be recaptured; that is why a
 count mismatch is an error rather than a warning.
+
+Issue #2206 removed the session/scope routes: the CPU operation matrix now
+emits `engine/single` and `engine/marginal16`, the chain emits one
+`one_session` arm per shape, and the graph bench emits only `prepared_graph`.
+The GPU matrix still labels its engine-backed arms `session/*`; those names are
+what the bench emits and the baseline keys must match them.
 """
 
 from __future__ import annotations
@@ -32,27 +38,36 @@ SCHEMA = "tenferro.session-route-baseline.v1"
 
 # package|bench -> required case count at the capturing harness revision.
 #
-# Recaptured for the post-unification harness (issue #1926 deleted the one-shot
-# spelling, so the `oneshot`/`one_shot` arms no longer exist): route_matrix
-# 47 -> 31, session_chain 6 -> 5, route_matrix_gpu 25 -> 13. The 29 before-only
-# rows stay in the frozen `docs/testing/session-route-baseline.json`, which
-# remains the before-reference; `docs/testing/session-route-baseline-recaptured.json`
-# is the matched baseline for comparisons against the current harness.
+# Post-#2206 engine harness: route_matrix 16 (the `engine/single` and
+# `engine/marginal16` arms), session_chain 3 (one `one_session` arm per shape),
+# elementwise_fusion 7 (`prepared_graph` only), route_matrix_gpu 29 (the two
+# `session/*` arm pairs per dtype, `sync_empty`, and the prepared fused/matmul
+# rows). The pre-#2206 rows stay in the frozen
+# `docs/testing/session-route-baseline.json` as the before-reference;
+# `docs/testing/session-route-baseline-recaptured.json` is the matched baseline
+# for comparisons against the current harness.
 EXPECTED_CASES: dict[str, int] = {
-    "tenferro-cpu|route_matrix": 31,
-    "tenferro-runtime|session_chain": 5,
-    "tenferro-runtime|elementwise_fusion": 14,
+    "tenferro-cpu|route_matrix": 16,
+    "tenferro-runtime|session_chain": 3,
+    "tenferro-runtime|elementwise_fusion": 7,
     "tenferro-ad|eager_dispatch_baseline": 28,
     "tenferro-ad|eager_backward_shape_churn": 1,
     "tenferro-linalg|linalg_vjp_gate": 4,
-    "tenferro-gpu|route_matrix_gpu": 13,
+    "tenferro-gpu|route_matrix_gpu": 29,
 }
 
-# Cases that exist only because the one-shot operation spelling still exists.
-# Issue #1926 deletes that spelling, so these are before-only references and are
-# not errors when they disappear from a candidate run.
-def is_deleted_route_case(name: str) -> bool:
-    return "/oneshot/" in name or name.endswith("/one_shot")
+# Cases that exist only in a pre-#2206 harness. They are before-only references
+# and are not errors when they disappear from a candidate run. The GPU
+# `session/*` arms survive, so the CPU session route is deleted only for the CPU
+# matrix.
+def is_deleted_route_case(target: str, name: str) -> bool:
+    if "/oneshot/" in name or name.endswith("/one_shot"):
+        return True
+    if "/scope/" in name or name.endswith("/execution_scope"):
+        return True
+    if "/unprepared_graph/" in name:
+        return True
+    return target == "tenferro-cpu|route_matrix" and "/session/" in name
 
 TIME_RE = re.compile(
     r"time:\s+\[([0-9.]+) (\S+) ([0-9.]+) (\S+) ([0-9.]+) (\S+)\]"
@@ -117,8 +132,8 @@ def main() -> int:
     parser.add_argument("--label", default="baseline", help="campaign label to read")
     parser.add_argument(
         "--output",
-        default="docs/testing/session-route-baseline.json",
-        help="baseline artifact to write",
+        default="docs/testing/session-route-baseline-recaptured.json",
+        help="matched baseline artifact to write",
     )
     parser.add_argument(
         "--allow-dirty",
@@ -187,7 +202,10 @@ def main() -> int:
             "nproc_as_seen_by_runner": manifest.get("nproc"),
             "host_loadavg_at_start": manifest.get("loadavg"),
         },
-        "deleted_route_predicate": "/oneshot/ or trailing one_shot",
+        "deleted_route_predicate": (
+            "*/oneshot/*, trailing /one_shot, */scope/*, */execution_scope, "
+            "*/unprepared_graph/*, and route_matrix CPU */session/*"
+        ),
         "targets": targets,
     }
 
@@ -200,9 +218,9 @@ def main() -> int:
     total = sum(len(t["cases"]) for t in targets.values())
     deleted = sum(
         1
-        for t in targets.values()
-        for name in t["cases"]
-        if is_deleted_route_case(name)
+        for target, entry in targets.items()
+        for name in entry["cases"]
+        if is_deleted_route_case(target, name)
     )
     print(f"wrote {out}")
     print(f"  targets: {len(targets)}  cases: {total}  before-only (deleted route): {deleted}")

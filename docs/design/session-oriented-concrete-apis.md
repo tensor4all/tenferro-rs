@@ -61,7 +61,7 @@ synchronously on the calling thread and therefore proposed dropping the
 - `CpuBackend::with_backend_session` → `run_backend_session_cached` →
   `enter_managed_session`/`enter` → `install_scoped`
   (`crates/tenferro-cpu/src/provider.rs`) → `CpuContext::install`
-  (`docs/design/exec-session.md`, "Backend Mapping / CPU") →
+  (`docs/design/execution-engine-ownership.md`, engine model) →
   `rayon::ThreadPool::install` — a **real thread handoff to a Rayon worker**,
   even for 1-thread pools (verified empirically: caller thread id differs
   from the closure thread id).
@@ -86,7 +86,7 @@ as a prerequisite.
 ## Evaluation-wide scope
 
 A2 (one execution scope around a whole evaluation) remains deferred; see
-[`exec-session.md`](./exec-session.md#evaluation-wide-scope-a2-is-deferred).
+[`execution-engine-ownership.md`](./execution-engine-ownership.md).
 
 ## Nested-entry prohibition: mechanism, not convention
 
