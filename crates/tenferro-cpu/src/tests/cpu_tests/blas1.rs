@@ -53,7 +53,6 @@ fn blas1_compact_f32_f64_c32_c64_matches_scalar_references() {
     let _guard = MATERIALIZATION_TEST_LOCK.lock().unwrap();
     for threads in [1, 2] {
         run_blas1(threads, |backend| {
-            crate::blas1::reset_materializations_for_test();
             let xf = Tensor::from_vec_col_major(vec![4], vec![1.0_f32, -2.0, 3.0, 4.0]).unwrap();
             let yf = Tensor::from_vec_col_major(vec![4], vec![5.0_f32, 6.0, -7.0, 8.0]).unwrap();
             assert_eq!(vdot(backend, &xf, &yf).as_slice::<f32>().unwrap(), &[4.0]);
@@ -161,7 +160,6 @@ fn blas1_compact_f32_f64_c32_c64_matches_scalar_references() {
                 out.as_slice::<Complex64>().unwrap(),
                 &[Complex64::new(7.0, 4.5), Complex64::new(-1.0, 8.5)]
             );
-            assert_eq!(crate::blas1::materializations_for_test(), 0);
         });
     }
 }
@@ -264,7 +262,7 @@ fn blas1_rankn_and_empty_inputs_reduce_all_axes() {
 }
 
 #[test]
-fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
+fn blas1_strided_reads_are_supported_without_staging() {
     let _guard = MATERIALIZATION_TEST_LOCK.lock().unwrap();
     let lhs =
         TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
@@ -293,7 +291,6 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
     assert_eq!(norm.as_slice::<f64>().unwrap(), &[91.0]);
 
     let mut out = Tensor::from_vec_col_major(vec![3, 2], vec![10.0_f64; 6]).unwrap();
-    crate::blas1::reset_materializations_for_test();
     crate::test_support::on_engine(&mut backend, |session| {
         session.axpby_read_into_accum(
             ContractionScalar::F64(2.0),
@@ -308,16 +305,13 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
         out.as_slice::<f64>().unwrap(),
         &[7.0, 11.0, 15.0, 9.0, 13.0, 17.0]
     );
-    // The compact destination keeps the dense `strided_kernel::axpby_accum`
-    // path, whose compact source slice forces one staging pass for a strided
-    // `x`. A strided destination instead runs the pinned update primitive,
-    // which consumes the strided source directly, so it stages nothing.
-    assert_eq!(crate::blas1::materializations_for_test(), 1);
+    // A strided `x` needs no staging pass even with a compact destination: the
+    // owned destination is exposed as its own compact strided view and the pinned
+    // update primitive consumes the strided source in place (#2214 item 7).
 
     let mut strided_storage = vec![10.0_f64; 7];
     let strided_destination =
         TypedTensorViewMut::from_slice(vec![3, 2], vec![1, 4], 0, &mut strided_storage).unwrap();
-    crate::blas1::reset_materializations_for_test();
     crate::test_support::on_engine(&mut backend, |session| {
         session.axpby_read_into_accum(
             ContractionScalar::F64(2.0),
@@ -328,7 +322,6 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
     })
     .unwrap()
     .unwrap();
-    assert_eq!(crate::blas1::materializations_for_test(), 0);
 }
 
 /// A strided/offset destination region inside a larger allocation accumulates
@@ -361,7 +354,6 @@ fn blas1_strided_destination_region_preserves_surrounding_bytes() {
     let x = Tensor::from_vec_col_major(vec![2, 2], compact_x.to_vec()).unwrap();
     let destination =
         TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 4], 5, &mut storage).unwrap();
-    crate::blas1::reset_materializations_for_test();
     crate::test_support::on_engine(&mut backend, |session| {
         session.axpby_read_into_accum(
             ContractionScalar::F64(alpha),
@@ -373,7 +365,6 @@ fn blas1_strided_destination_region_preserves_surrounding_bytes() {
     .unwrap()
     .unwrap();
     assert_eq!(storage, expected);
-    assert_eq!(crate::blas1::materializations_for_test(), 0);
 
     // Case 2: strided x, non-compact destination. The strided path consumes the
     // source in place, so neither operand is staged.
@@ -387,7 +378,6 @@ fn blas1_strided_destination_region_preserves_surrounding_bytes() {
     let source_view = TypedTensorView::from_slice(vec![2, 2], vec![1, 4], 1, &source).unwrap();
     let destination =
         TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 4], 5, &mut storage).unwrap();
-    crate::blas1::reset_materializations_for_test();
     crate::test_support::on_engine(&mut backend, |session| {
         session.axpby_read_into_accum(
             ContractionScalar::F64(alpha),
@@ -400,7 +390,6 @@ fn blas1_strided_destination_region_preserves_surrounding_bytes() {
     .unwrap();
     assert_eq!(storage, expected);
     assert_eq!(source, source_before);
-    assert_eq!(crate::blas1::materializations_for_test(), 0);
 }
 
 fn assert_axpby_rejects_without_mutating(

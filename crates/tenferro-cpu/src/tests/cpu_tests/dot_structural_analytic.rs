@@ -1761,3 +1761,107 @@ fn dot_read_hooks_do_not_stage_view_operands() {
         .unwrap();
     assert_eq!(engine.resources.read_stagings(), 1);
 }
+
+/// #2214: every read entry that claims to consume a view must not stage a copy.
+///
+/// The counter is raised only when `to_contiguous_read` actually canonicalizes a
+/// view, so an entry that delegates to a materializing default fails here. Each
+/// entry is exercised with borrowed views, which is the read a typed tensor
+/// produces.
+#[test]
+fn read_entries_consume_views_without_staging() {
+    use tenferro_tensor::{
+        Engine, SessionCachedDot, TensorAnalytic, TensorDot, TensorElementwise, TensorReduction,
+        TensorStructural, TensorValue,
+    };
+
+    let a = TensorValue::from_tensor(Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+    ));
+    let b = TensorValue::from_tensor(Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]).unwrap(),
+    ));
+    let dot_config = DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
+    };
+    let mut engine = crate::CpuEngine::serial();
+
+    macro_rules! check {
+        ($label:literal, $call:expr) => {{
+            let before = engine.resources.read_stagings();
+            let _ = $call.unwrap();
+            assert_eq!(
+                engine.resources.read_stagings(),
+                before,
+                concat!($label, " must not stage a view operand")
+            );
+        }};
+    }
+
+    check!(
+        "add_read",
+        engine.add_read(
+            TensorRead::from_view(a.tensor_view()),
+            TensorRead::from_view(a.tensor_view())
+        )
+    );
+    check!(
+        "exp_read",
+        engine.exp_read(TensorRead::from_view(a.tensor_view()))
+    );
+    check!(
+        "reduce_sum_read",
+        engine.reduce_sum_read(TensorRead::from_view(a.tensor_view()), &[0])
+    );
+    check!(
+        "transpose_read",
+        engine.transpose_read(TensorRead::from_view(a.tensor_view()), &[1, 0])
+    );
+    check!(
+        "reshape_read",
+        engine.reshape_read(TensorRead::from_view(a.tensor_view()), &[3, 2])
+    );
+    check!(
+        "broadcast_in_dim_read",
+        engine.broadcast_in_dim_read(TensorRead::from_view(a.tensor_view()), &[2, 3, 2], &[0, 1])
+    );
+    check!(
+        "vdot_read",
+        engine.vdot_read(
+            TensorRead::from_view(a.tensor_view()),
+            TensorRead::from_view(a.tensor_view())
+        )
+    );
+    check!(
+        "norm_squared_read",
+        engine.norm_squared_read(TensorRead::from_view(a.tensor_view()))
+    );
+    check!(
+        "dot_general_read",
+        engine.dot_general_read(
+            TensorRead::from_view(a.tensor_view()),
+            TensorRead::from_view(b.tensor_view()),
+            &dot_config
+        )
+    );
+    check!(
+        "dot_general_read_cached",
+        engine.dot_general_read_cached(
+            Some(0),
+            TensorRead::from_view(a.tensor_view()),
+            TensorRead::from_view(b.tensor_view()),
+            &dot_config
+        )
+    );
+
+    // `to_contiguous_read` is the canonicalization itself: copying a view is its
+    // contract, so it is the live positive control for the counter.
+    let before = engine.resources.read_stagings();
+    let _ = engine
+        .to_contiguous_read(TensorRead::from_view(a.tensor_view()))
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before + 1);
+}
