@@ -210,6 +210,7 @@ pub trait ExecutionEngine: Engine {
 /// let owned = Output::Owned(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap());
 /// assert!(owned.into_owned().is_some());
 /// ```
+#[allow(clippy::large_enum_variant)]
 pub enum Output<'a> {
     /// A tensor the program computed.
     Owned(Tensor),
