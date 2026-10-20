@@ -534,8 +534,8 @@ extension op and normalization.
 
 Use `AdContext` for explicit extension-rule ownership, or import
 `tenferro_ad::TracedTensorAdExt` for the compact traced AD method syntax.
-For eager AD, construct the runtime with
-`EagerRuntime::with_cpu_backend_and_ad_context` using the same `AdContext`.
+For eager AD, construct the runtime with `EagerRuntime::with_ad_context` using
+the same `AdContext`.
 
 Real-to-complex and complex-to-real AD are not enabled yet. They require the
 usual Hermitian symmetry handling so cotangents match the half-spectrum

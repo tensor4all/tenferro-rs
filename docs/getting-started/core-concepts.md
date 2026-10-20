@@ -68,7 +68,7 @@ mismatch, not `Option`.
 
 ## Direct Tensor Execution
 
-`Tensor` operations run immediately through an explicit backend. Use this for
+`Tensor` operations run immediately through an explicit engine. Use this for
 ordinary tensor computation without autodiff when runtime dtype is useful.
 
 <!-- snippet-source: crates/tenferro-runtime/examples/direct_tensor_execution.rs -->

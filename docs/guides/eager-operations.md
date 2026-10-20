@@ -220,8 +220,8 @@ assert_eq!(both.0.value()?.as_slice::<f64>()?, &[-1.0, 2.0]);
 ## Materializing metadata-only views
 
 View transforms such as transpose and slice only change layout metadata. When
-an owned compact tensor is required, materialize through the active backend so
-the copy uses that backend's memory pool and thread policy:
+an owned compact tensor is required, materialize on the active engine so
+the copy uses that engine's memory pool and thread policy:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_3 -->
 ```rust
@@ -579,8 +579,8 @@ Ok(())
 | Scenario | Recommended |
 |----------|-------------|
 | Fixed scalar type and no autodiff | `TypedTensor<T, R>` |
-| Dynamic dtype and no autodiff | `Tensor` + a backend |
-| Data preprocessing | `Tensor` + a backend |
+| Dynamic dtype and no autodiff | `Tensor` + an engine |
+| Data preprocessing | `Tensor` + an engine |
 | Tight inner loops | Direct/eager execution |
 | Exploratory computation | Direct/eager execution |
 | Immediate forward execution through one runtime | `EagerTensor` |

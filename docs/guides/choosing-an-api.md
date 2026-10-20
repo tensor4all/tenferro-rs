@@ -64,7 +64,7 @@ not the default concrete tensor type.
 
 | Model | Similar to | What happens on each op |
 | --- | --- | --- |
-| Direct tensor execution | NumPy-style explicit backend calls | The backend runs the op immediately and returns a concrete `Tensor` |
+| Direct tensor execution | NumPy-style explicit engine calls | The engine runs the op immediately and returns a concrete `Tensor` |
 | Eager execution | PyTorch eager/autograd | The op runs immediately; tracked values record enough state for `backward()` and functional eager transforms |
 | Traced execution | JAX tracing/jit/grad | The op records graph structure; compute runs after compile/execute |
 
