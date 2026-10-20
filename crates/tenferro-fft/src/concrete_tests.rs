@@ -1,8 +1,7 @@
 use num_complex::Complex64;
 use std::num::NonZeroUsize;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::ExtensionCacheLimits;
-use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{ErrorKind, Tensor, TensorRead, TensorView, TypedTensorView};
 
 use crate::{FftExecutor, FftNorm, FftPlanCache, TensorFftExt, TensorReadFftExt};
@@ -19,48 +18,46 @@ fn cpu_fft_spec_rejects_changed_dtype_and_shape_before_execution() {
         FftNorm::Backward,
     )
     .unwrap();
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = CpuEngine::serial();
     let mut plans = FftPlanCache::default();
     for input in [
         Tensor::from_vec_col_major([2], vec![1.0_f64; 2]).unwrap(),
         Tensor::from_vec_col_major([3], vec![Complex64::new(1., 0.); 3]).unwrap(),
     ] {
-        let error = backend
-            .with_backend_session(|session| {
-                tenferro_cpu::with_cpu_exec_session(session, |cpu| {
-                    crate::FftBackend::execute_fft(
-                        cpu,
-                        &input,
-                        &spec,
-                        crate::FftExecutionCache::caller_owned(&mut plans),
-                    )
-                })
-                .unwrap()
+        let error = {
+            let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+            tenferro_cpu::with_cpu_engine(session, |cpu| {
+                crate::FftBackend::execute_fft(
+                    cpu,
+                    &input,
+                    &spec,
+                    crate::FftExecutionCache::caller_owned(&mut plans),
+                )
             })
             .unwrap()
-            .unwrap_err();
+        }
+        .unwrap_err();
         assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
     }
     let data = [1.0_f64, 2.0];
     let view = TensorRead::from_view(TensorView::F64(
         TypedTensorView::from_slice([2], [1], 0, &data).unwrap(),
     ));
-    let error = backend
-        .with_backend_session(|session| {
-            tenferro_cpu::with_cpu_exec_session(session, |cpu| {
-                crate::FftBackend::execute_fft_read(
-                    cpu,
-                    view,
-                    &spec,
-                    crate::FftExecutionCache::caller_owned(&mut plans),
-                )
-            })
-            .unwrap()
+    let error = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        tenferro_cpu::with_cpu_engine(session, |cpu| {
+            crate::FftBackend::execute_fft_read(
+                cpu,
+                view,
+                &spec,
+                crate::FftExecutionCache::caller_owned(&mut plans),
+            )
         })
         .unwrap()
-        .unwrap_err();
+    }
+    .unwrap_err();
     assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
-    assert_eq!(backend.buffer_pool_stats().unwrap().buffers, 0);
+    assert_eq!(backend.buffer_pool_stats().buffers, 0);
 }
 
 fn assert_complex_close(actual: &[Complex64], expected: &[Complex64]) {
@@ -85,19 +82,18 @@ fn assert_real_close(actual: &[f64], expected: &[f64]) {
 
 #[test]
 fn public_tensor_fft_ext_executes_real_and_complex_transforms() {
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
     let real = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    let (full, onesided, recovered, recovered_real) = backend
-        .with_backend_session(|session| {
-            let full = real.fft(None, -1, FftNorm::Backward, session).unwrap();
-            let onesided = real.rfft(None, -1, FftNorm::Backward, session).unwrap();
-            let recovered = full.ifft(None, -1, FftNorm::Backward, session).unwrap();
-            let recovered_real = onesided
-                .irfft(Some(4), -1, FftNorm::Backward, session)
-                .unwrap();
-            (full, onesided, recovered, recovered_real)
-        })
-        .unwrap();
+    let (full, onesided, recovered, recovered_real) = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        let full = real.fft(None, -1, FftNorm::Backward, session).unwrap();
+        let onesided = real.rfft(None, -1, FftNorm::Backward, session).unwrap();
+        let recovered = full.ifft(None, -1, FftNorm::Backward, session).unwrap();
+        let recovered_real = onesided
+            .irfft(Some(4), -1, FftNorm::Backward, session)
+            .unwrap();
+        (full, onesided, recovered, recovered_real)
+    };
 
     assert_eq!(full.shape(), &[4]);
     assert_complex_close(
@@ -137,22 +133,21 @@ fn public_tensor_fft_ext_executes_real_and_complex_transforms() {
 
 #[test]
 fn public_tensor_read_fft_ext_accepts_strided_host_views() {
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
     let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
     let view = TypedTensorView::from_slice([4], [2], 0, &data).unwrap();
     let input = TensorRead::from_view(TensorView::F64(view));
 
-    let (full, onesided) = backend
-        .with_backend_session(|session| {
-            let full = input
-                .fft_read(None, -1, FftNorm::Backward, session)
-                .unwrap();
-            let onesided = input
-                .rfft_read(None, -1, FftNorm::Backward, session)
-                .unwrap();
-            (full, onesided)
-        })
-        .unwrap();
+    let (full, onesided) = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        let full = input
+            .fft_read(None, -1, FftNorm::Backward, session)
+            .unwrap();
+        let onesided = input
+            .rfft_read(None, -1, FftNorm::Backward, session)
+            .unwrap();
+        (full, onesided)
+    };
 
     assert_complex_close(
         full.as_slice::<Complex64>().unwrap(),
@@ -175,7 +170,7 @@ fn public_tensor_read_fft_ext_accepts_strided_host_views() {
 
 #[test]
 fn public_tensor_fft_ext_reports_invalid_dtype_and_shape_errors() {
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
     let bools = Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap();
     let spectrum = Tensor::from_vec_col_major(
         vec![3],
@@ -187,15 +182,14 @@ fn public_tensor_fft_ext_reports_invalid_dtype_and_shape_errors() {
     )
     .unwrap();
 
-    let (dtype_err, shape_err) = backend
-        .with_backend_session(|session| {
-            let dtype_err = bools.fft(None, -1, FftNorm::Backward, session).unwrap_err();
-            let shape_err = spectrum
-                .irfft(Some(6), -1, FftNorm::Backward, session)
-                .unwrap_err();
-            (dtype_err, shape_err)
-        })
-        .unwrap();
+    let (dtype_err, shape_err) = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        let dtype_err = bools.fft(None, -1, FftNorm::Backward, session).unwrap_err();
+        let shape_err = spectrum
+            .irfft(Some(6), -1, FftNorm::Backward, session)
+            .unwrap_err();
+        (dtype_err, shape_err)
+    };
 
     assert!(matches!(
         dtype_err,
@@ -284,26 +278,25 @@ fn fft_plan_cache_key_distinguishes_scalar_dtype_length_and_direction() {
 
 #[test]
 fn caller_owned_fft_executor_reuses_plans() {
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
     let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let mut executor = FftExecutor::default();
 
-    backend
-        .with_backend_session(|session| {
-            let full = executor
-                .fft(&input, None, -1, FftNorm::Backward, session)
-                .unwrap();
-            executor
-                .ifft(&full, None, -1, FftNorm::Backward, session)
-                .unwrap();
-            let onesided = executor
-                .rfft(&input, None, -1, FftNorm::Backward, session)
-                .unwrap();
-            executor
-                .irfft(&onesided, Some(4), -1, FftNorm::Backward, session)
-                .unwrap();
-        })
-        .unwrap();
+    {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        let full = executor
+            .fft(&input, None, -1, FftNorm::Backward, session)
+            .unwrap();
+        executor
+            .ifft(&full, None, -1, FftNorm::Backward, session)
+            .unwrap();
+        let onesided = executor
+            .rfft(&input, None, -1, FftNorm::Backward, session)
+            .unwrap();
+        executor
+            .irfft(&onesided, Some(4), -1, FftNorm::Backward, session)
+            .unwrap();
+    };
 
     assert_eq!(executor.cache_stats().entries, 2);
     assert_eq!(executor.plan_cache().stats().entries, 2);
@@ -316,7 +309,7 @@ fn caller_owned_fft_executor_reuses_plans() {
 #[test]
 fn configured_fft_executor_validates_each_public_operation_before_dispatch() {
     let mut executor = FftExecutor::new(FftPlanCache::default());
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
     let real = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let complex = Tensor::from_vec_col_major(
         vec![2],
@@ -324,20 +317,19 @@ fn configured_fft_executor_validates_each_public_operation_before_dispatch() {
     )
     .unwrap();
 
-    backend
-        .with_backend_session(|session| {
-            assert!(executor
-                .fft(&real, Some(0), -1, FftNorm::Backward, session)
-                .is_err());
-            assert!(executor
-                .ifft(&real, None, -1, FftNorm::Backward, session)
-                .is_err());
-            assert!(executor
-                .rfft(&complex, None, -1, FftNorm::Backward, session)
-                .is_err());
-            assert!(executor
-                .irfft(&complex, Some(0), -1, FftNorm::Backward, session)
-                .is_err());
-        })
-        .unwrap();
+    {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        assert!(executor
+            .fft(&real, Some(0), -1, FftNorm::Backward, session)
+            .is_err());
+        assert!(executor
+            .ifft(&real, None, -1, FftNorm::Backward, session)
+            .is_err());
+        assert!(executor
+            .rfft(&complex, None, -1, FftNorm::Backward, session)
+            .is_err());
+        assert!(executor
+            .irfft(&complex, Some(0), -1, FftNorm::Backward, session)
+            .is_err());
+    };
 }

@@ -527,15 +527,21 @@ pub(crate) mod native_participants {
         pub(crate) fn thread_count(&self) -> usize {
             self.thread_ids.lock().unwrap().len()
         }
+
+        pub(crate) fn thread_ids(&self) -> Vec<ThreadId> {
+            self.thread_ids.lock().unwrap().clone()
+        }
     }
 
-    pub(crate) fn run_unscoped_native_map(require_two: bool) -> Arc<NativeParticipants> {
-        let source = strided_kernel::StridedArray::<f64>::from_fn_col_major(
-            &[LARGE_NATIVE_TEST_LEN],
-            |index| index[0] as f64,
-        );
-        let mut destination =
-            strided_kernel::StridedArray::<f64>::col_major(&[LARGE_NATIVE_TEST_LEN]);
+    /// Run one native strided map of `len` elements and report which threads
+    /// executed it together with the mapped values.
+    pub(crate) fn run_native_map_of_len(
+        len: usize,
+        require_two: bool,
+    ) -> (Arc<NativeParticipants>, Vec<f64>) {
+        let source =
+            strided_kernel::StridedArray::<f64>::from_fn_col_major(&[len], |index| index[0] as f64);
+        let mut destination = strided_kernel::StridedArray::<f64>::col_major(&[len]);
         let participants = Arc::new(if require_two {
             NativeParticipants::requiring_two()
         } else {
@@ -549,10 +555,11 @@ pub(crate) mod native_participants {
         .unwrap();
         let output = destination.into_data();
         assert_eq!(output[0], 1.0);
-        assert_eq!(
-            output[LARGE_NATIVE_TEST_LEN - 1],
-            LARGE_NATIVE_TEST_LEN as f64
-        );
-        participants
+        assert_eq!(output[len - 1], len as f64);
+        (participants, output)
+    }
+
+    pub(crate) fn run_unscoped_native_map(require_two: bool) -> Arc<NativeParticipants> {
+        run_native_map_of_len(LARGE_NATIVE_TEST_LEN, require_two).0
     }
 }

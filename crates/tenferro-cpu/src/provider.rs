@@ -233,10 +233,14 @@ impl<'a> CpuExecutionContext<'a> {
     /// parallel faer call must run inside the engine's pool; a serial context
     /// runs on the caller with `Par::Seq`.
     #[cfg(feature = "native")]
-    pub(crate) fn with_faer_pool<R: Send>(&self, operation: impl FnOnce(faer::Par) -> R + Send) -> R {
+    pub(crate) fn with_faer_pool<R: Send>(
+        &self,
+        operation: impl FnOnce(faer::Par) -> R + Send,
+    ) -> R {
         let par = self.faer_parallelism();
         match (par, self.rayon_pool()) {
             (faer::Par::Rayon(_), Some(pool)) if pool.current_thread_index().is_none() => {
+                self.resources.count_faer_entry();
                 pool.install(|| operation(par))
             }
             _ => operation(par),
@@ -253,17 +257,20 @@ impl<'a> CpuExecutionContext<'a> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::{with_cpu_engine, CpuEngine};
+    /// use tenferro_cpu::CpuEngine;
     ///
     /// let mut engine = CpuEngine::serial();
     /// let seq = engine
     ///     .with_linalg_pool(|context, _| Ok(context.with_faer_width(4, |par| par == tenferro_cpu::faer::Par::Seq)))
     ///     .unwrap();
     /// assert!(seq);
-    /// # let _ = with_cpu_engine::<CpuEngine, ()>;
     /// ```
     #[cfg(feature = "native")]
-    pub fn with_faer_width<R: Send>(&self, width: usize, operation: impl FnOnce(faer::Par) -> R + Send) -> R {
+    pub fn with_faer_width<R: Send>(
+        &self,
+        width: usize,
+        operation: impl FnOnce(faer::Par) -> R + Send,
+    ) -> R {
         let width = width.min(self.native_thread_count());
         match self.rayon_pool() {
             Some(pool) if width > 1 => {
@@ -271,6 +278,7 @@ impl<'a> CpuExecutionContext<'a> {
                 if pool.current_thread_index().is_some() {
                     operation(par)
                 } else {
+                    self.resources.count_faer_entry();
                     pool.install(|| operation(par))
                 }
             }

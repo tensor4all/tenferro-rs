@@ -1,0 +1,34 @@
+{
+  "CUDA engine open": {},
+  "CUDA raw scope": {
+    "crates/tenferro-fft/src/cuda/plan.rs::CufftPlanEntry::execute_pair": "cuFFT plan execution on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-gpu/src/cubecl/transfer.rs::SourcePublication::copy_into": "source publication writes through the engine-owned stream: the raw scope orders the copy and restores the caller context on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg.rs::cholesky_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg.rs::clone_device_tensor": "device-to-device copy on the engine stream: the raw scope keeps the allocation pinned and restores the caller context on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg.rs::eigh_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg.rs::eigh_values_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg.rs::empty_svd_outputs": "empty device output allocation on the engine stream: the raw scope keeps the allocation domain current and restores the caller context on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg.rs::lu_factor_core": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg.rs::lu_solve_prepared_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg.rs::qr_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg.rs::svd_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg.rs::svd_values_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg.rs::triangular_solve_typed_with_op": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg/householder_qr.rs::apply_householder_reflectors_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg/householder_qr.rs::compact_qr_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg/householder_qr.rs::concatenate_compact_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg/householder_qr.rs::gemm_nn_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg/householder_qr.rs::geqrf_trailing_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-linalg/src/gpu/linalg/svd_polar.rs::svd_polar_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)"
+  },
+  "Engine implementation": {
+    "crates/tenferro-cpu/src/exec_session.rs::CpuEngine": "CPU engine implementation: the caller-held CPU operation surface over its own Rayon pool, buffer pool and workspace (#2206)",
+    "crates/tenferro-gpu/src/cubecl/exec_session.rs::CudaEngine": "CUDA engine implementation: every operation runs on the caller-held engine and its logical stream (#2206)",
+    "crates/tenferro-gpu/src/webgpu/exec_session.rs::WebGpuBackend": "WebGPU engine implementation: the caller-held WebGPU backend now implements Engine on its own logical stream (#2206)"
+  },
+  "ExecutionEngine implementation": {
+    "crates/tenferro-cpu/src/runtime_adapter.rs::CpuEngine": "CPU prepared-program target: one engine value is the runtime target for one supplied slot (#2206)",
+    "crates/tenferro-gpu/src/cubecl/engine.rs::CudaEngine": "CUDA prepared-program target: one engine value is the runtime target for one supplied slot; retirement stays engine-owned (#2206)",
+    "crates/tenferro-gpu/src/webgpu/mod.rs::WebGpuBackend": "WebGPU prepared-program target: one engine value is the runtime target for one supplied slot (#2206)"
+  }
+}

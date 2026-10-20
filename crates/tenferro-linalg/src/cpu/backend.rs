@@ -15,7 +15,11 @@ use tenferro_cpu::same_variant_pair;
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_cpu::{CpuEngine, CpuExecutionContext};
-use tenferro_tensor::{validate::validate_nonsingular_u, AllocationDomainId, DType, Error, HostAccessError, MemoryKind, SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor};
+use tenferro_tensor::{
+    validate::validate_nonsingular_u, AllocationDomainId, DType, Error, HostAccessError,
+    MemoryKind, SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorStructural,
+    TensorView, TensorViewMut, TensorWrite, TypedTensor,
+};
 
 /// The Rust scalar type behind a preset variant name a macro received.
 macro_rules! preset_scalar {
@@ -48,7 +52,6 @@ trait CpuBackendLinalgAffinityExt {
         &mut self,
         op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
     ) -> tenferro_tensor::Result<R>;
-
 }
 
 impl CpuBackendLinalgAffinityExt for CpuEngine {
@@ -62,7 +65,6 @@ impl CpuBackendLinalgAffinityExt for CpuEngine {
             op(context, buffers)
         })
     }
-
 }
 
 impl LinalgBackend for CpuEngine {
@@ -272,7 +274,9 @@ impl LinalgBackend for CpuEngine {
 
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("full_piv_lu", input)?;
-        self.with_linalg_pool_checked(|context, buffers| full_piv_lu_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| {
+            full_piv_lu_entered(context, buffers, input)
+        })
     }
 
     fn full_piv_lu_solve(
@@ -363,7 +367,9 @@ impl LinalgBackend for CpuEngine {
 
     fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("svd_values", input)?;
-        self.with_linalg_pool_checked(|context, buffers| svd_values_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| {
+            svd_values_entered(context, buffers, input)
+        })
     }
 
     fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -630,7 +636,9 @@ impl LinalgBackend for CpuEngine {
 
     fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("eigh_values", input)?;
-        self.with_linalg_pool_checked(|context, buffers| eigh_values_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| {
+            eigh_values_entered(context, buffers, input)
+        })
     }
 
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -642,7 +650,9 @@ impl LinalgBackend for CpuEngine {
     fn eig_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("eig_values", input)?;
         ensure_supported_linalg_dtype("eig_values", input.dtype())?;
-        self.with_linalg_pool_checked(|context, buffers| eig_values_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| {
+            eig_values_entered(context, buffers, input)
+        })
     }
 
     fn lu_solve_prepared(

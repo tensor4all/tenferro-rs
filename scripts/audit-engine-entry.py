@@ -1,47 +1,35 @@
 #!/usr/bin/env python3
-"""Audit backend-session entry mechanisms against a function-level allowlist.
+"""Audit the surviving execution-engine entry surfaces against an allowlist.
 
-Session entry is defined by the *mechanism*, not by the exported name: a
-`use ... as alias` import or a fully-qualified path must be caught the same way
-as the plain identifier.
+Issue #2206 removed the session machinery: there is no `BackendSession`,
+`BackendSessionHost`, `with_backend_session*`, `SessionEntryError`, held session,
+execution scope or admission permit to audit. Execution now enters through a
+caller-held engine, so the mechanisms that create or widen an execution surface
+are:
 
-Mechanisms tracked (issue #1926 / umbrella #1929, hardened by #1946):
+  * `Engine implementation`           - `impl Engine for T`: a new operation
+                                        surface over a caller-held engine
+  * `ExecutionEngine implementation`  - `impl ExecutionEngine for T`: a new
+                                        prepared-program target
+  * `CUDA engine open`                - `CudaEngine::open`: opens a device and
+                                        creates the engine's stream and memory
+  * `CUDA raw scope`                  - `with_raw`: enters the raw CubeCL/CUDA
+                                        context through the engine's stream
 
-  * `CPU execution admission`            - `execution_admission()`: the permit every
-                                           CPU entry acquires
-  * `run_backend_session_cached`         - CPU session construction
-  * `with_execution_scope`               - CPU execution-scope entry (holds a permit)
-  * `with_session_entry_guard`           - the portable nested-entry guard
-  * `CpuExecSession construction`        - CPU session construction
-  * `CudaExecSession construction`       - CUDA session construction
-  * `WebGpuExecSession construction`     - WebGPU session construction
-  * `backend session entry`              - a library call of `with_backend_session`
-                                           / `with_backend_session_cached`
-  * `eager session entry`                - a library call of `with_eager_session` /
-                                           `with_execution_session`
-  * `eager extension context entry`      - a library call that hands an extension the
-                                           owner context (`with_extension_*_context`,
-                                           `erased_context`)
+The definition of each mechanism may live in library code; every *call* in
+library code must sit inside an allowlisted function or impl. The allowlist maps
+`repository-relative-path::function-or-impl` entries to the reason that entry is
+a legitimate boundary. A tracked mechanism must match a library definition or
+site, so a rename cannot silently shrink coverage.
 
-Retired mechanisms must stay absent from library code:
-
-  * `default_backend_session`            - the deleted backend-as-session factory
-  * `with_evaluation_scope`              - execution-scope hook, not implemented (A2)
-  * `CPU backend install wrappers`       - `try_install` / `install_with_pool*`, the
-                                           deleted owner-side entry helpers (#1946 F6)
-
-Every occurrence must sit inside an allowlisted function; the allowlist is keyed
-by mechanism and maps `repository-relative-path::function` entries to the reason
-that entry is a legitimate boundary. Every tracked (non-retired) mechanism must
-match at least one library site, so a rename cannot silently shrink coverage.
 Test, benchmark and example sources (`tests/`, `benches/`, `examples/`,
-`tests.rs`, `*_tests.rs`) are the boundary's users, not its owners.
-`--bless` rewrites the allowlist from the tree, keeping existing reasons;
-`--self-test` runs the negative tests that prove the check is not merely name
-matching.
+`tests.rs`, `*_tests.rs`) are the boundary's users, not its owners, and are out
+of scope. `--bless` rewrites the allowlist from the tree, keeping existing
+reasons; `--self-test` runs the negative tests that prove the check is not
+merely name matching.
 
 Usage:
-    python3 scripts/audit-session-entry.py [--check|--bless|--self-test]
+    python3 scripts/audit-engine-entry.py [--check|--bless|--self-test]
 """
 
 from __future__ import annotations
@@ -52,60 +40,34 @@ import re
 import sys
 from pathlib import Path
 
-# mechanism -> (pattern, identifiers whose import can rename it)
+IMPL_ENGINE = r"\bimpl\b[^\n{]*?(?<![A-Za-z0-9_])Engine\s+for\b[^\n{]*\{"
+IMPL_EXECUTION_ENGINE = (
+    r"\bimpl\b[^\n{]*?(?<![A-Za-z0-9_])ExecutionEngine\s+for\b[^\n{]*\{"
+)
+
+# mechanism -> (pattern, identifiers whose import alias can carry it)
 MECHANISMS: dict[str, tuple[str, tuple[str, ...]]] = {
-    "default_backend_session": (r"\bdefault_backend_session\b", ("default_backend_session",)),
-    "with_session_entry_guard": (r"\bwith_session_entry_guard\b", ("with_session_entry_guard",)),
-    "CPU execution admission": (r"\bexecution_admission\b", ("execution_admission",)),
-    "CPU backend install wrappers": (
-        r"\b(?:try_install|install_with_pool(?:_context)?(?:_unmarked)?)\b",
-        (
-            "try_install",
-            "install_with_pool",
-            "install_with_pool_unmarked",
-            "install_with_pool_context",
-            "install_with_pool_context_unmarked",
-        ),
-    ),
-    "run_backend_session_cached": (r"\brun_backend_session_cached\b", ("run_backend_session_cached",)),
-    "with_execution_scope": (r"\bwith_execution_scope\b", ("with_execution_scope",)),
-    "with_evaluation_scope": (r"\bwith_evaluation_scope\b", ("with_evaluation_scope",)),
-    "CpuExecSession construction": (r"\bCpuExecSession\s*\{", ("CpuExecSession",)),
-    "held session entry": (
-        r"\b(?:open_session|adopt_held_permit)\b",
-        ("open_session", "adopt_held_permit"),
-    ),
-    "CpuHeldSession construction": (r"\bCpuHeldSession\s*\{", ("CpuHeldSession",)),
-    "CudaHeldSession construction": (r"\bCudaHeldSession\s*\{", ("CudaHeldSession",)),
-    "held session marker entry": (r"\bHeldSessionMarker::enter\b", ("HeldSessionMarker",)),
-    "CudaExecSession construction": (r"\bCudaExecSession\s*\{", ("CudaExecSession",)),
-    "WebGpuExecSession construction": (r"\bWebGpuExecSession\s*\{", ("WebGpuExecSession",)),
-    "backend session entry": (
-        r"\bwith_backend_session(?:_cached)?\b",
-        ("with_backend_session", "with_backend_session_cached"),
-    ),
-    "eager session entry": (
-        r"\bwith_(?:eager|execution)_session\b",
-        ("with_eager_session", "with_execution_session"),
-    ),
-    "eager extension context entry": (
-        r"\b(?:with_extension_(?:execution|erased)_context|erased_context)\b",
-        ("with_extension_execution_context", "with_extension_erased_context", "erased_context"),
-    ),
+    "Engine implementation": (IMPL_ENGINE, ("Engine",)),
+    "ExecutionEngine implementation": (IMPL_EXECUTION_ENGINE, ("ExecutionEngine",)),
+    "CUDA engine open": (r"\bCudaEngine\s*::\s*open\b", ()),
+    "CUDA raw scope": (r"\bwith_raw\b", ()),
 }
 
-# Retired mechanisms: any library occurrence fails, and they are exempt from
-# the "must match at least one site" self-check.
-RETIRED: frozenset[str] = frozenset(
-    {"default_backend_session", "with_evaluation_scope", "CPU backend install wrappers"}
-)
+# mechanism -> definition pattern. A mechanism with no call site in the tree is
+# still tracked while its library definition exists.
+DEFINITIONS: dict[str, str] = {
+    "CUDA engine open": r"\bfn\s+open\s*\(",
+    "CUDA raw scope": r"\bfn\s+with_raw\s*\(",
+}
+
+IMPL_MECHANISMS = frozenset({"Engine implementation", "ExecutionEngine implementation"})
 
 # identifier -> mechanism, for every name that can carry a mechanism
 MECHANISM_NAMES: dict[str, str] = {
     name: mechanism for mechanism, (_, names) in MECHANISMS.items() for name in names
 }
 
-ALLOWLIST = Path("scripts") / "session-entry-allowlist.json"
+ALLOWLIST = Path("scripts") / "engine-entry-allowlist.json"
 SOURCE_ROOTS = ("crates", "ext")
 
 USE_GROUP = re.compile(r"^\s*use\s+([A-Za-z_][\w:]*)\s*(?:::\s*\{([^}]*)\}|(?:::\s*([A-Za-z_]\w*))?\s*(?:as\s+([A-Za-z_]\w*))?)\s*;")
@@ -198,7 +160,9 @@ def item_spans(source: str) -> list[tuple[int, int, str, str]]:
             container_match = None if impl_match else CONTAINER_START.match(line)
             fn_match = None if impl_match or container_match else FN_START.match(line)
             if impl_match:
-                name = (impl_match.group(1) or impl_match.group(2) or "").strip()
+                # Prefer the implemented type over the trait when both exist, so
+                # `impl Engine for CudaEngine` is keyed by `CudaEngine`.
+                name = (impl_match.group(2) or impl_match.group(1) or "").strip()
                 stack.append([position, "impl", name, at_line_start, False])
             elif container_match:
                 name = container_match.group(1) or container_match.group(2)
@@ -225,7 +189,7 @@ def item_spans(source: str) -> list[tuple[int, int, str, str]]:
 
 
 def enclosing_function(source: str, offset: int, spans=None) -> str:
-    """`Impl::fn` or `fn` for the innermost item containing `offset`."""
+    """`Impl::fn`, the impl type for an impl header, or `fn` for an item."""
     if spans is None:
         spans = item_spans(source)
     enclosing = [span for span in spans if span[0] <= offset < span[1]]
@@ -240,14 +204,16 @@ def enclosing_function(source: str, offset: int, spans=None) -> str:
         else:
             function = name
     if function is None:
-        return "<module>"
+        # An entry in an impl header is keyed by the implemented type. An entry
+        # in a bare module still has no named owner.
+        return impl.split("<")[0].strip() if impl else "<module>"
     if impl:
         return f"{impl.split('<')[0].strip()}::{function}"
     return function
 
 
 def _is_entry_use(source: str, match: re.Match[str]) -> bool:
-    """True when the match is a call, a path segment, a generic or a literal."""
+    """True when the match is a call, a path segment, a generic or an impl header."""
     if match.group(0).rstrip().endswith("{"):
         return True
     # The name in `fn name(` is a definition, not a use; a definition that
@@ -310,22 +276,20 @@ def strip_cfg_test_items(source: str) -> str:
 
 
 def scan_source(text: str) -> list[tuple[str, str]]:
-    """(mechanism, enclosing function) for every entry-mechanism occurrence."""
+    """(mechanism, enclosing function or impl type) for every entry occurrence."""
     source = strip_cfg_test_items(strip_comments_and_strings(text))
     spans = item_spans(source)
     aliases = alias_map(source)
     found: set[tuple[str, str]] = set()
     for mechanism, (pattern, canonical) in MECHANISMS.items():
         needles = [pattern]
-        method = mechanism.split("::")[-1] if "::" in mechanism else None
-        literal = pattern.rstrip().endswith(r"\{")
         for alias, target in aliases.items():
             if target not in canonical:
                 continue
-            if literal:
-                needles.append(rf"\b{re.escape(alias)}\s*\{{")
-            elif method is not None:
-                needles.append(rf"\b{re.escape(alias)}\s*::\s*{re.escape(method)}\b")
+            if mechanism in IMPL_MECHANISMS:
+                needles.append(
+                    rf"\bimpl\b[^\n{{]*?(?<![A-Za-z0-9_]){re.escape(alias)}\s+for\b[^\n{{]*\{{"
+                )
             else:
                 needles.append(rf"\b{re.escape(alias)}\b")
         for needle in needles:
@@ -349,11 +313,14 @@ def is_library_source(path: Path) -> bool:
 
 
 def defined_mechanisms(text: str) -> set[str]:
-    """Mechanisms whose entry function is defined (`fn name`) in this source."""
-    source = strip_comments_and_strings(text)
+    """Mechanisms whose entry is defined (`fn name`, impl header) in this source."""
+    source = strip_cfg_test_items(strip_comments_and_strings(text))
     defined: set[str] = set()
-    for mechanism, (_, names) in MECHANISMS.items():
-        if any(re.search(rf"\bfn\s+{re.escape(name)}\b", source) for name in names):
+    for mechanism, pattern in DEFINITIONS.items():
+        if re.search(pattern, source):
+            defined.add(mechanism)
+    for mechanism, (pattern, _) in MECHANISMS.items():
+        if mechanism in IMPL_MECHANISMS and re.search(pattern, source):
             defined.add(mechanism)
     return defined
 
@@ -407,20 +374,12 @@ def check(repo: Path) -> int:
             failed = True
     for mechanism, sites in inventory.items():
         allowed = allowlist.get(mechanism, {})
-        if mechanism in RETIRED:
-            for site in sites:
-                print(f"{mechanism}: retired mechanism used at {site}")
-                failed = True
-            if allowed:
-                print(f"{mechanism}: a retired mechanism cannot be allowlisted")
-                failed = True
-            continue
         if not sites and mechanism not in defined and has_sources:
             print(f"{mechanism}: tracked mechanism matches no library definition or site; update its pattern")
             failed = True
         for site in sites:
             if site not in allowed:
-                print(f"{mechanism}: unallowlisted session entry at {site}")
+                print(f"{mechanism}: unallowlisted engine entry at {site}")
                 failed = True
             elif not str(allowed[site]).strip() or str(allowed[site]).startswith("TODO"):
                 print(f"{mechanism}: allowlist entry has no reason: {site}")
@@ -441,120 +400,86 @@ def bless(repo: Path) -> int:
     previous = load_allowlist(repo)
     blessed: dict[str, dict[str, str]] = {}
     for mechanism, sites in inventory.items():
-        if mechanism in RETIRED:
-            blessed[mechanism] = {}
-            continue
         reasons = previous.get(mechanism, {})
         if isinstance(reasons, list):
             reasons = {}
-        blessed[mechanism] = {site: reasons.get(site, "TODO: state why this is a legitimate entry") for site in sites}
+        blessed[mechanism] = {
+            site: reasons.get(site, "TODO: state why this is a legitimate entry")
+            for site in sites
+        }
     target = repo / ALLOWLIST
     target.write_text(json.dumps(blessed, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
     print(f"wrote {target.relative_to(repo)}")
     return 0
 
 
-SELF_TEST_HIDDEN_ALIAS = """
-use tenferro_tensor::default_backend_session as session_entry;
+SELF_TEST_ENGINE_IMPL = """
+use tenferro_tensor::Engine;
 
-fn hidden(backend: &mut B) {
-    session_entry(backend, |_| ());
+impl Engine for FakeEngine {
+    fn name(&self) -> &'static str {
+        "fake"
+    }
+}
+
+impl ExtensionEngine for OtherEngine {}
+
+
+impl tenferro_runtime::ExecutionEngine for FakeEngine {
+    fn target(&self) -> Target {
+        Target::new()
+    }
 }
 """
 
-SELF_TEST_ALLOWLISTED = """
-use tenferro_tensor::with_session_entry_guard;
+SELF_TEST_ALIASED_IMPL = """
+use tenferro_tensor::Engine as Exec;
 
-fn run_backend_session_cached(&self) {
-    with_session_entry_guard(|| ());
+impl Exec for AliasedEngine {}
+"""
+
+SELF_TEST_CUDA_OPEN = """
+fn open_engine(device: CudaDeviceId) -> Result<CudaEngine> {
+    CudaEngine::open(device)
 }
 """
 
-SELF_TEST_QUALIFIED = """
-fn install(&self) {
-    let _ = self.install_with_pool_context_unmarked(|context, buffers| ());
+SELF_TEST_RAW_SCOPE = """
+fn launch(engine: &mut CudaEngine) -> Result<()> {
+    engine.with_raw("bench.op", |raw| {
+        let _ = raw.stream();
+        Ok(())
+    })
+}
+
+impl CudaEngine {
+    fn with_raw_on_stream(&mut self) {}
 }
 """
 
 SELF_TEST_CFG_TEST = """
 #[cfg(test)]
 mod tests {
-    fn helper(&self) {
-        let _ = self.runtime().with_eager_session(|session| session.run());
+    fn helper(engine: &mut CudaEngine) {
+        engine.with_raw("test.op", |_| Ok(()));
     }
 }
 
 #[cfg(not(test))]
-fn production(&self) {
-    let _ = self.runtime().with_eager_session(|session| session.run());
+fn production(engine: &mut CudaEngine) {
+    engine.with_raw("production.op", |_| Ok(()));
 }
 """
 
-SELF_TEST_CFG_TEST_ARM = """
-fn dispatch(&self) {
-    match self {
-        #[cfg(test)]
-        Self::Recording(_) => None,
-        Self::Cpu(_) => Some(1),
-    };
-}
-
-fn after(&self) {
-    let _ = self.runtime().with_eager_session(|session| session.run());
-}
-"""
-
-SELF_TEST_TRAIT_DEFAULT = """
-pub trait Host {
-    fn with_backend_session_cached(&mut self) {
-        self.with_backend_session(|s| ());
-    }
-}
-"""
-
-SELF_TEST_EAGER_ENTRY = """
-fn einsum(&self) {
-    let _ = self.runtime().with_eager_session(|session| session.run());
-}
-"""
-
-SELF_TEST_HELD_ENTRY = """
-fn open_session(&self) -> Held {
-    let permit = self.acquire();
-    self.adopt_held_permit(permit)
-}
-
-fn adopt_held_permit(&self, permit: Permit) -> Held {
-    let marker = HeldSessionMarker::enter("backend");
-    Held {
-        state: CpuHeldSession { permit, marker },
-    }
-}
-"""
-
-SELF_TEST_UNRELATED_STRUCT = """
+SELF_TEST_UNRELATED = """
 struct Other;
 
 fn build() -> Other {
     Other {}
 }
-"""
 
-SELF_TEST_GROUP_IMPORT = """
-use tenferro_cpu::exec_session::{CpuExecSession as Session};
-
-fn build() -> Session<'static> {
-    Session {}
-}
-"""
-
-SELF_TEST_SCOPE_ENTRY = """
-use tenferro_cpu::with_execution_scope as scope_entry;
-use tenferro_tensor::with_evaluation_scope as evaluation_scope;
-
-fn hidden_scope(backend: &mut B) {
-    scope_entry(backend, || ());
-    evaluation_scope(backend, |_| ());
+fn open_stream(stream: &mut Stream) {
+    stream.with_raw_on_stream();
 }
 """
 
@@ -565,42 +490,36 @@ def self_test() -> int:
     def sites(snippet: str) -> set[tuple[str, str]]:
         return set(scan_source(snippet))
 
-    hidden = sites(SELF_TEST_HIDDEN_ALIAS)
-    if ("default_backend_session", "hidden") not in hidden:
-        failures.append("a renamed import must still be traced to its mechanism")
+    impls = sites(SELF_TEST_ENGINE_IMPL)
+    if ("Engine implementation", "FakeEngine") not in impls:
+        failures.append("an `impl Engine for T` header must be reported with its type")
+    if ("ExecutionEngine implementation", "FakeEngine") not in impls:
+        failures.append("an `impl ExecutionEngine for T` header must be reported with its type")
+    if ("Engine implementation", "OtherEngine") in impls:
+        failures.append("an `ExtensionEngine` impl must not be reported as the Engine trait")
 
-    allowlisted = sites(SELF_TEST_ALLOWLISTED)
-    if ("with_session_entry_guard", "run_backend_session_cached") not in allowlisted:
-        failures.append("an allowlisted boundary must be reported with its function")
+    aliased = sites(SELF_TEST_ALIASED_IMPL)
+    if ("Engine implementation", "AliasedEngine") not in aliased:
+        failures.append("a renamed `Engine` import must still be traced")
 
-    qualified = sites(SELF_TEST_QUALIFIED)
-    if ("CPU backend install wrappers", "install") not in qualified:
-        failures.append("an `_unmarked` install helper call must be reported")
+    opened = sites(SELF_TEST_CUDA_OPEN)
+    if ("CUDA engine open", "open_engine") not in opened:
+        failures.append("a `CudaEngine::open` call must be reported with its function")
 
-    held = sites(SELF_TEST_HELD_ENTRY)
-    if ("held session entry", "open_session") not in held:
-        failures.append("a held-session entry call must be reported with its function")
-    if ("CpuHeldSession construction", "adopt_held_permit") not in held:
-        failures.append("held-session construction must be reported with its function")
-    if ("held session marker entry", "adopt_held_permit") not in held:
-        failures.append("a lifetime held-session marker must be reported with its function")
-
-    eager = sites(SELF_TEST_EAGER_ENTRY)
-    if ("eager session entry", "einsum") not in eager:
-        failures.append("a library eager-session entry must be reported")
+    raw = sites(SELF_TEST_RAW_SCOPE)
+    if ("CUDA raw scope", "launch") not in raw:
+        failures.append("a `with_raw` call must be reported with its function")
+    if any(mechanism == "CUDA raw scope" and site != "launch" for mechanism, site in raw):
+        failures.append("`with_raw_on_stream` must not be reported as the raw entry")
 
     cfg_test = sites(SELF_TEST_CFG_TEST)
-    if ("eager session entry", "helper") in cfg_test:
+    if ("CUDA raw scope", "helper") in cfg_test:
         failures.append("a `#[cfg(test)]` item must be out of scope")
-    if ("eager session entry", "production") not in cfg_test:
+    if ("CUDA raw scope", "production") not in cfg_test:
         failures.append("a `#[cfg(not(test))]` item must stay in scope")
 
-    if ("eager session entry", "after") not in sites(SELF_TEST_CFG_TEST_ARM):
-        failures.append("a `#[cfg(test)]` match arm must not hide the items after it")
-
-    trait_default = sites(SELF_TEST_TRAIT_DEFAULT)
-    if ("backend session entry", "Host::with_backend_session_cached") not in trait_default:
-        failures.append("a trait default method must be keyed by its trait, not `<module>`")
+    if sites(SELF_TEST_UNRELATED):
+        failures.append("an unrelated struct or method must not be reported")
 
     for name in ("src/backend/tests.rs", "src/typed_eager_tests.rs", "tests/integration.rs"):
         if is_library_source(Path("crates/x") / name):
@@ -608,27 +527,14 @@ def self_test() -> int:
     if not is_library_source(Path("crates/x/src/backend.rs")):
         failures.append("library source must stay in scope")
 
-    grouped = sites(SELF_TEST_GROUP_IMPORT)
-    if ("CpuExecSession construction", "build") not in grouped:
-        failures.append("a grouped `as` import must be traced")
-
-    # Scope entry points create execution state (a permit and its resources), so
-    # they are tracked by the same gate that guards session construction.
-    scope_entry = sites(SELF_TEST_SCOPE_ENTRY)
-    if ("with_execution_scope", "hidden_scope") not in scope_entry:
-        failures.append("a renamed execution scope must be traced to its mechanism")
-    if ("with_evaluation_scope", "hidden_scope") not in scope_entry:
-        failures.append("a renamed evaluation-scope hook must be traced to its mechanism")
-
-    unrelated = sites(SELF_TEST_UNRELATED_STRUCT)
-    if unrelated:
-        failures.append("an unrelated struct literal must not be reported")
-
     for failure in failures:
         print(f"self-test failure: {failure}")
     if failures:
         return 1
-    print("self-test passed: alias, boundary, method, eager, held, test-scope, cfg(test), trait, grouped-import and scope cases")
+    print(
+        "self-test passed: engine/execution-engine impls, aliased impl, CUDA open, "
+        "raw scope, cfg(test), unrelated-method cases"
+    )
     return 0
 
 
@@ -637,7 +543,7 @@ def main() -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--check", action="store_true", help="fail on unallowlisted entries (default)")
     group.add_argument("--bless", action="store_true", help="rewrite the allowlist from the tree")
-    group.add_argument("--self-test", action="store_true", help="run the alias/boundary negative tests")
+    group.add_argument("--self-test", action="store_true", help="run the negative tests")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     if args.self_test:

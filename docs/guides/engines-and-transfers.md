@@ -5,8 +5,10 @@ device per operation, and moving host data without making the host wait for the
 device. This guide covers the engine shape, the prepared-run route on that
 engine, the pinned transfer routes, the rules each one keeps, and what is
 deliberately not supported yet. The runnable driver is
-`crates/tenferro-gpu/examples/cuda_session_transfer.rs`; the transfer reasoning
-and measurements are in
+`crates/tenferro-gpu/examples/cuda_session_transfer.rs`; the engine ownership
+model is recorded in
+[execution engine ownership](../design/execution-engine-ownership.md), and the
+transfer reasoning and measurements in
 [the transfer record](../design/asynchronous-transfer-1945-u4.md) and the
 [explicit-transfer work log](../worklogs/2026-07-29-issue-1471-explicit-transfers.md).
 

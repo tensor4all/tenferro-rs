@@ -2,7 +2,7 @@
 
 pub use crate::{FftBackend, FftNorm, TensorFftExt, TensorReadFftExt, TracedTensorFftExt};
 pub use tenferro_runtime::{Tensor, TensorRead, TracedTensor};
-pub use tenferro_tensor::BackendSessionHost;
+pub use tenferro_tensor::Engine;
 
 #[cfg(feature = "autodiff")]
 pub use crate::{EagerSessionFftExt, EagerTensorFftExt};

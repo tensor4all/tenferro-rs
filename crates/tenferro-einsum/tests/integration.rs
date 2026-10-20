@@ -14,6 +14,8 @@ mod runtime_buffer_pool;
 mod session_plan;
 #[path = "integration/shape_constraints.rs"]
 mod shape_constraints;
+#[path = "integration/small_contraction.rs"]
+mod small_contraction;
 #[path = "integration/support.rs"]
 mod support;
 #[path = "integration/trace_context_einsum.rs"]

@@ -1,7 +1,8 @@
 //! The runtime-facing side of [`CudaEngine`]: prepared-program execution,
 //! pending-run retirement, publication and teardown.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tenferro_runtime::{EngineId, EngineTarget, EventDomainRun, ExecutionContextIdentity};
 
@@ -9,7 +10,255 @@ use super::event_domain::CudaEventDomainDriver;
 use super::transfer::{publish_in_stream, PublicationAdmissionError, SourcePublication};
 use super::{CudaEngine, MAX_PENDING_RUNS};
 
+/// Why a [`CudaEngine`] refuses an operation.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::cuda::CudaEngineError;
+///
+/// let error = CudaEngineError::Broken;
+/// assert!(error.to_string().contains("panicked"));
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum CudaEngineError {
+    /// An earlier operation on this engine panicked. Waiting for and cleaning up
+    /// its earlier work still runs; replace the engine to continue.
+    #[error("the CUDA engine is broken: an earlier operation panicked; replace the engine")]
+    Broken,
+    /// The device reported a fault CUDA makes sticky (an illegal address, a
+    /// device-side assertion, an ECC error, ...). The device's driver context can
+    /// no longer be used in this process: every engine on the device fails the
+    /// same way, and opening the device again is not a recovery.
+    #[error(
+        "the CUDA device is poisoned ({reason}); its context cannot be used again in this \
+         process, and reopening the device is not a recovery"
+    )]
+    DevicePoisoned {
+        /// What the device reported.
+        reason: String,
+    },
+}
+
+/// Devices whose driver context a sticky fault has already destroyed in this process.
+///
+/// A sticky fault belongs to the device's primary context, not to one engine, so every engine
+/// opened on that device must fail the same way; reopening it is not a recovery.
+fn poisoned_devices() -> &'static Mutex<HashMap<[u8; 16], String>> {
+    static POISONED: OnceLock<Mutex<HashMap<[u8; 16], String>>> = OnceLock::new();
+    POISONED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn poisoned_device_reason(uuid: [u8; 16]) -> Option<String> {
+    poisoned_devices()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(&uuid)
+        .cloned()
+}
+
+fn mark_device_poisoned(uuid: [u8; 16], reason: String) {
+    poisoned_devices()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .entry(uuid)
+        .or_insert(reason);
+}
+
+/// CUDA statuses the driver makes sticky for the whole context; the driver API documents each
+/// with "the context cannot be used, so it must be destroyed".
+fn sticky_cuda_status(status: cudarc::driver::sys::CUresult) -> bool {
+    use cudarc::driver::sys::CUresult;
+    matches!(
+        status,
+        CUresult::CUDA_ERROR_ECC_UNCORRECTABLE
+            | CUresult::CUDA_ERROR_ILLEGAL_ADDRESS
+            | CUresult::CUDA_ERROR_LAUNCH_TIMEOUT
+            | CUresult::CUDA_ERROR_CONTEXT_IS_DESTROYED
+            | CUresult::CUDA_ERROR_ASSERT
+            | CUresult::CUDA_ERROR_HARDWARE_STACK_ERROR
+            | CUresult::CUDA_ERROR_ILLEGAL_INSTRUCTION
+            | CUresult::CUDA_ERROR_MISALIGNED_ADDRESS
+            | CUresult::CUDA_ERROR_INVALID_ADDRESS_SPACE
+            | CUresult::CUDA_ERROR_INVALID_PC
+            | CUresult::CUDA_ERROR_LAUNCH_FAILED
+    )
+}
+
+/// The sticky device fault an error carries anywhere in its source chain, if any.
+#[cfg_attr(test, allow(unused))]
+pub(crate) fn device_poison_reason(error: &crate::Error) -> Option<String> {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(current) = source {
+        if current
+            .downcast_ref::<cubecl_runtime::poison::DevicePoison>()
+            .is_some()
+        {
+            return Some(current.to_string());
+        }
+        if let Some(launch) = current.downcast_ref::<cubecl_runtime::server::LaunchError>() {
+            if launch.is_device_poisoned() {
+                return Some(current.to_string());
+            }
+        }
+        if let Some(server) = current.downcast_ref::<cubecl_runtime::server::ServerError>() {
+            if server.is_device_poisoned() {
+                return Some(current.to_string());
+            }
+        }
+        if let Some(io) = current.downcast_ref::<cubecl_runtime::server::IoError>() {
+            if io.is_device_poisoned() {
+                return Some(current.to_string());
+            }
+        }
+        if let Some(driver) = current.downcast_ref::<cudarc::driver::DriverError>() {
+            if sticky_cuda_status(driver.0) {
+                return Some(current.to_string());
+            }
+        }
+        source = current.source();
+    }
+    None
+}
+
 impl CudaEngine {
+    /// Run one operation of this engine.
+    ///
+    /// Refuses the operation when the engine is broken or its device poisoned, admits it against
+    /// the unfinished-memory limit, and records a panic (engine broken) or a sticky device fault
+    /// (device poisoned) it raises.
+    pub(crate) fn guarded<R>(
+        &mut self,
+        op: &'static str,
+        f: impl FnOnce(&mut Self) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        #[cfg(test)]
+        let device_uuid = self
+            .test_device_uuid
+            .unwrap_or_else(|| self.runtime().device_info().uuid().to_bytes());
+        #[cfg(not(test))]
+        let device_uuid = self.runtime().device_info().uuid().to_bytes();
+        if let Some(reason) = self
+            .device_poisoned
+            .clone()
+            .or_else(|| poisoned_device_reason(device_uuid))
+        {
+            // Record the device-wide reason on this engine so its public accessor reports it too.
+            self.device_poisoned = Some(reason.clone());
+            return Err(crate::Error::runtime_state_source(
+                op,
+                CudaEngineError::DevicePoisoned { reason },
+            ));
+        }
+        if self.broken {
+            return Err(crate::Error::runtime_state_source(
+                op,
+                CudaEngineError::Broken,
+            ));
+        }
+        self.runtime().admit_unfinished(op, 0)?;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => {
+                if let Some(reason) = device_poison_reason(&error) {
+                    mark_device_poisoned(device_uuid, reason.clone());
+                    self.device_poisoned = Some(reason);
+                }
+                Err(error)
+            }
+            Err(payload) => {
+                self.broken = true;
+                std::panic::resume_unwind(payload)
+            }
+        }
+    }
+
+    /// Test seam: record the device-wide poison a sticky fault would have caused.
+    ///
+    /// A real sticky fault cannot be induced without destroying the test process's CUDA context, so
+    /// the device fault itself is unit-tested on the status classification and this seam proves the
+    /// cross-engine propagation.
+    #[cfg(test)]
+    pub(crate) fn use_test_device_uuid(&mut self, uuid: [u8; 16]) {
+        self.test_device_uuid = Some(uuid);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_device_poison_for_test(&mut self, reason: &str) {
+        let uuid = self
+            .test_device_uuid
+            .unwrap_or_else(|| self.runtime().device_info().uuid().to_bytes());
+        mark_device_poisoned(uuid, reason.to_owned());
+        self.device_poisoned = Some(reason.to_owned());
+    }
+
+    /// Whether an earlier operation panicked; a broken engine refuses operations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let _check: fn(&tenferro_gpu::cuda::CudaEngine) -> bool = tenferro_gpu::cuda::CudaEngine::is_broken;
+    /// ```
+    pub fn is_broken(&self) -> bool {
+        self.broken
+    }
+
+    /// The sticky device fault this engine observed, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let _check: fn(&tenferro_gpu::cuda::CudaEngine) -> Option<&str> =
+    ///     tenferro_gpu::cuda::CudaEngine::device_poisoned;
+    /// ```
+    pub fn device_poisoned(&self) -> Option<&str> {
+        self.device_poisoned.as_deref()
+    }
+
+    /// Limit the device memory that unfinished work of this engine may retain.
+    ///
+    /// Unfinished work retains memory until the device is done with it: vendor workspaces and
+    /// transfer packages waiting for their completion event (tensors the caller still holds and
+    /// idle recycled memory are not counted). Before each operation the engine releases completed
+    /// work and, if the retained bytes plus what the operation will retain would exceed the limit,
+    /// waits for its stream. A transfer that would retain more than the limit by itself is refused
+    /// before anything is submitted. `None` (the default) sets no limit.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let _set: fn(&mut tenferro_gpu::cuda::CudaEngine, Option<u64>) =
+    ///     tenferro_gpu::cuda::CudaEngine::set_unfinished_memory_limit;
+    /// ```
+    pub fn set_unfinished_memory_limit(&mut self, bytes: Option<u64>) {
+        self.runtime().set_unfinished_memory_limit(bytes);
+    }
+
+    /// The unfinished-memory limit, if one is set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let _get: fn(&tenferro_gpu::cuda::CudaEngine) -> Option<u64> =
+    ///     tenferro_gpu::cuda::CudaEngine::unfinished_memory_limit;
+    /// ```
+    pub fn unfinished_memory_limit(&self) -> Option<u64> {
+        self.runtime().unfinished_memory_limit()
+    }
+
+    /// Device bytes currently retained by this engine's unfinished work.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let _bytes: fn(&tenferro_gpu::cuda::CudaEngine) -> u64 =
+    ///     tenferro_gpu::cuda::CudaEngine::unfinished_memory_bytes;
+    /// ```
+    pub fn unfinished_memory_bytes(&self) -> u64 {
+        self.runtime().unfinished_memory_bytes()
+    }
+
     /// The runtime engine id this engine runs prepared programs as.
     ///
     /// # Examples

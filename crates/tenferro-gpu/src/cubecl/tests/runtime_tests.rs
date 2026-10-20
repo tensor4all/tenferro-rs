@@ -835,7 +835,7 @@ fn prepared_identity_run_returns_the_input_without_a_copy() {
         Output::Borrowed(read) => read.as_tensor().expect("the input itself"),
         Output::Owned(tensor) => tensor,
     };
-    let actual = download_tensor(engine.runtime(), &tensor).expect("download");
+    let actual = download_tensor(engine.runtime(), tensor).expect("download");
     assert_eq!(
         actual.as_slice::<f64>().expect("host values"),
         &[4.0, 7.0, 9.0]

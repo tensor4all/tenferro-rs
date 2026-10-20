@@ -120,7 +120,6 @@ impl SharedTensorAllocationDomain for AppleAllocationDomain {
 ///     )),
 /// }
 /// ```
-#[derive(Clone)]
 pub struct AppleContext {
     state: Arc<AppleDomainState>,
     cpu: CpuEngine,
@@ -166,6 +165,20 @@ impl AppleContext {
     /// Returns a typed runtime or backend error when Metal or host-visible
     /// primary buffers are unavailable.
     pub fn new() -> crate::Result<Self> {
+        Self::with_cpu_engine(CpuEngine::serial())
+    }
+
+    /// Create an independent host-visible Metal context around a caller-supplied
+    /// CPU engine.
+    ///
+    /// The engine is given the context's shared allocation domain, so CPU outputs
+    /// are allocated in the same domain the Metal side maps and launches.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed runtime or backend error when Metal or host-visible
+    /// primary buffers are unavailable.
+    pub fn with_cpu_engine(cpu: CpuEngine) -> crate::Result<Self> {
         static NEXT_ORDINAL: AtomicUsize = AtomicUsize::new(1_000_000);
         let options = RuntimeOptions {
             tasks_max: 32,
@@ -196,7 +209,7 @@ impl AppleContext {
         let domain: Arc<dyn SharedTensorAllocationDomain> = Arc::new(AppleAllocationDomain {
             state: Arc::clone(&state),
         });
-        let cpu = CpuEngine::serial().with_allocation_domain(domain);
+        let cpu = cpu.with_allocation_domain(domain);
         let metal = WebGpuBackend::from_runtime(state.runtime());
         Ok(Self { state, cpu, metal })
     }
@@ -245,6 +258,52 @@ impl AppleContext {
     /// ```
     pub fn cpu_backend(&self) -> &CpuEngine {
         &self.cpu
+    }
+
+    /// Borrow both paired engines mutably for one operation sequence.
+    ///
+    /// The engines are not `Clone`: a caller that keeps the context borrows
+    /// them here instead of copying a handle.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_gpu::apple::AppleContext;
+    ///
+    /// match AppleContext::new() {
+    ///     Ok(mut context) => {
+    ///         let domain = context.domain_id();
+    ///         let (cpu, metal) = context.parts();
+    ///         assert_eq!(cpu.allocation_domain(), Some(domain));
+    ///         let _ = metal.runtime_identity();
+    ///     }
+    ///     Err(error) => assert!(matches!(
+    ///         error,
+    ///         tenferro_tensor::Error::RuntimeState { .. }
+    ///             | tenferro_tensor::Error::BackendSource { .. }
+    ///     )),
+    /// }
+    /// ```
+    ///
+    /// The example is a compile check only; it is not run with a Metal device.
+    pub fn parts(&mut self) -> (&mut CpuEngine, &mut WebGpuBackend) {
+        (&mut self.cpu, &mut self.metal)
+    }
+
+    /// Consume the context and return its paired engines.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_gpu::apple::AppleContext;
+    ///
+    /// fn split(context: AppleContext) {
+    ///     let (_cpu, _metal) = context.into_engines();
+    /// }
+    /// let _ = split;
+    /// ```
+    pub fn into_engines(self) -> (CpuEngine, WebGpuBackend) {
+        (self.cpu, self.metal)
     }
 
     /// Return the paired Metal WebGPU backend.

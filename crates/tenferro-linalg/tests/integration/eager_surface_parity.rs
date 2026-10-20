@@ -104,7 +104,9 @@ fn f64_values(tensor: &EagerTensor) -> Vec<f64> {
 fn eager_lstsq(matrix: &EagerTensor, rhs: &EagerTensor) -> tenferro_ad::Result<EagerTensor> {
     matrix
         .runtime()
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.lstsq(matrix, rhs))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.lstsq(matrix, rhs)
+        })
 }
 
 fn eager_norm(
@@ -115,7 +117,9 @@ fn eager_norm(
 ) -> tenferro_ad::Result<EagerTensor> {
     input
         .runtime()
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.norm(input, ord, dim, keepdim))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.norm(input, ord, dim, keepdim)
+        })
 }
 
 #[test]
@@ -268,7 +272,9 @@ fn eager_composite_records_existing_primitives_for_backward() {
     .unwrap();
 
     a.runtime()
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.det(&a))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.det(&a)
+        })
         .unwrap()
         .backward(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap();

@@ -210,9 +210,10 @@ pub trait ExecutionEngine: Engine {
 /// let owned = Output::Owned(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap());
 /// assert!(owned.into_owned().is_some());
 /// ```
-// `Tensor` is much larger than a borrowed read, and an output is a transient
-// value, so boxing the owned variant would cost an allocation per output;
-// `Borrowed` keeps the caller's read unboxed so a passthrough adds none.
+// The borrowed variant carries a `TensorRead` by value so the output keeps
+// the input's layout and ownership without an allocation on the common path;
+// the size difference is the accepted cost (phase decision, T1): boxing the
+// owned variant instead would cost an allocation per output.
 #[allow(clippy::large_enum_variant)]
 pub enum Output<'a> {
     /// A tensor the program computed.

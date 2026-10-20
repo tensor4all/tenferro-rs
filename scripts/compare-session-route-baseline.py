@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Compare a session-route candidate run against the captured baseline.
 
-Consumes docs/testing/session-route-baseline.json (schema
+Consumes docs/testing/session-route-baseline-recaptured.json (schema
 tenferro.session-route-baseline.v1) and the candidate run logs written by
-scripts/run-session-route-performance-gate.sh.
+scripts/run-session-route-performance-gate.sh. The frozen
+docs/testing/session-route-baseline.json remains the pre-#2206 before-reference;
+`--baseline` can still point at it, and its retired session/scope arms are then
+classified DELETED rather than MISSING.
 
 Fail-closed behaviour:
   * a baseline case that is not a deleted-route case and is absent from the
@@ -47,8 +50,16 @@ TEN_PERCENT_TARGETS = (
 )
 
 
-def is_deleted_route_case(name: str) -> bool:
-    return "/oneshot/" in name or name.endswith("/one_shot")
+def is_deleted_route_case(target: str, name: str) -> bool:
+    if "/oneshot/" in name or name.endswith("/one_shot"):
+        return True
+    if "/scope/" in name or name.endswith("/execution_scope"):
+        return True
+    if "/unprepared_graph/" in name:
+        return True
+    # The CPU matrix emits engine/* after #2206; its old session/* rows are
+    # before-only. The GPU matrix still emits session/*, so it stays pairable.
+    return target == "tenferro-cpu|route_matrix" and "/session/" in name
 
 
 def parse_log(path: Path) -> dict[str, dict[str, float]]:
@@ -93,7 +104,9 @@ def fmt_ns(value: float) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root-dir", default=".")
-    parser.add_argument("--baseline", default="docs/testing/session-route-baseline.json")
+    parser.add_argument(
+        "--baseline", default="docs/testing/session-route-baseline-recaptured.json"
+    )
     parser.add_argument("--logs-dir", default=None)
     parser.add_argument("--label", default="candidate")
     parser.add_argument("--json-out", default=None, help="optional report path")
@@ -116,7 +129,7 @@ def main() -> int:
         for name, base in sorted(entry["cases"].items()):
             cand = candidate.pop(name, None)
             if cand is None:
-                if is_deleted_route_case(name):
+                if is_deleted_route_case(target, name):
                     rows.append((target, name, "DELETED", base["mid_ns"], None, None))
                 else:
                     rows.append((target, name, "MISSING", base["mid_ns"], None, None))

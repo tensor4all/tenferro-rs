@@ -1,5 +1,11 @@
 # U4-2a: an unadmitted same-runtime consumer copy of a published value (#1945 U4)
 
+
+> **Update (#2206, engine-only model).** Engines no longer share memory, so this copy is the explicit
+> transfer between engines: the consumer may be any engine on the *same device* (engines opened on one
+> device share its primary context). A consumer on another device is refused with a typed
+> `Unsupported` error pointing at the host route (`download_into`, then an upload on the consumer).
+> The eligibility row below now applies to the device, not to the runtime instance.
 Revision 4. **No substrate-level blocker remains**: three independent pre-implementation reviews rejected the
 registry-authorized designs (4b) but confirmed this scope, and the last review of this record left only wording
 corrections, applied in §0. The record's own review history is: revision 1 (scope and ordering confirmed; error

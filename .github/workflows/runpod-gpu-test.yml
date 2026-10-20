@@ -630,6 +630,7 @@ jobs:
             -p tenferro-gpu \
             -p tenferro-ad \
             -p tenferro-linalg \
+            -p tenferro-fft \
             --features cuda,tenferro-gpu/cubecl-interop
 
       - name: Build PJRT test archive

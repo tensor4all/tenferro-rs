@@ -22,7 +22,8 @@
   and one finish takes one dispatch fence and one stream barrier.
 - Left out of scope: a queue-full policy for an unbounded detached submit loop,
   and completion-aware reuse outside the caller-held guard. Those remain the
-  open stage-2 items in `docs/design/held-cuda-session-1945-u3.md` §8.
+  open stage-2 items recorded in the retired held-session design; the engine model is in
+  [`docs/design/execution-engine-ownership.md`](../design/execution-engine-ownership.md).
 
 ## Verification conclusions and constraints
 

@@ -1,8 +1,9 @@
 {
+  "arm_rename": "#2206: route_matrix CPU session/* -> engine/*; scope/* and unprepared_graph/* dropped; session_chain execution_scope dropped; GPU route_matrix_gpu session/* unchanged because the bench still emits it",
   "baseline_commit": "25da8d431",
   "campaign": "session-route-unification",
   "captured_at_utc": "2026-09-26T11:58:42+00:00",
-  "deleted_route_predicate": "/oneshot/ or trailing one_shot",
+  "deleted_route_predicate": "*/oneshot/*, trailing one_shot, */scope/*, */unprepared_graph/*, */execution_scope, and route_matrix CPU */session/*",
   "environment": {
     "cpu_affinity": "1",
     "host_loadavg_at_start": "3.98 7.94 9.52",
@@ -16,6 +17,7 @@
   "harness_commit": "5c55496fe109e0d147589d3a9fb1b997238bed13",
   "issue": 1926,
   "label": "baseline",
+  "recapture_note": "Numbers are carried from the #1926 recapture that this file recorded; only the post-#2206 arm names changed. Recapture with scripts/capture-session-route-baseline.py before making a post-#2206 performance claim. Cases added after that recapture (route_matrix_gpu dot_general_into_* and prepared_*) are not in this file and appear as NEW in a comparison until the next capture.",
   "schema": "tenferro.session-route-baseline.v1",
   "targets": {
     "tenferro-ad|eager_backward_shape_churn": {
@@ -175,157 +177,82 @@
     },
     "tenferro-cpu|route_matrix": {
       "cases": {
-        "route_matrix/cast_f64_f32/session/single": {
+        "route_matrix/cast_f64_f32/engine/single": {
           "high_ns": 9934.2,
           "low_ns": 9768.3,
           "mid_ns": 9847.0
         },
-        "route_matrix/dot_general_f64/scope/single/2": {
-          "high_ns": 9929.4,
-          "low_ns": 9726.0,
-          "mid_ns": 9821.400000000001
-        },
-        "route_matrix/dot_general_f64/scope/single/256": {
-          "high_ns": 707220.0,
-          "low_ns": 685800.0,
-          "mid_ns": 696560.0
-        },
-        "route_matrix/dot_general_f64/scope/single/64": {
-          "high_ns": 22721.0,
-          "low_ns": 22356.0,
-          "mid_ns": 22538.0
-        },
-        "route_matrix/dot_general_f64/session/single/2": {
+        "route_matrix/dot_general_f64/engine/single/2": {
           "high_ns": 9693.099999999999,
           "low_ns": 9471.0,
           "mid_ns": 9576.1
         },
-        "route_matrix/dot_general_f64/session/single/256": {
+        "route_matrix/dot_general_f64/engine/single/256": {
           "high_ns": 692090.0,
           "low_ns": 682660.0,
           "mid_ns": 687300.0
         },
-        "route_matrix/dot_general_f64/session/single/64": {
+        "route_matrix/dot_general_f64/engine/single/64": {
           "high_ns": 22213.0,
           "low_ns": 21807.0,
           "mid_ns": 22000.0
         },
-        "route_matrix/elementwise_add_f64/scope/marginal16/1": {
-          "high_ns": 33751.0,
-          "low_ns": 33024.0,
-          "mid_ns": 33373.0
-        },
-        "route_matrix/elementwise_add_f64/scope/marginal16/4096": {
-          "high_ns": 53444.0,
-          "low_ns": 52524.0,
-          "mid_ns": 52958.0
-        },
-        "route_matrix/elementwise_add_f64/scope/marginal16/64": {
-          "high_ns": 33619.0,
-          "low_ns": 33054.0,
-          "mid_ns": 33327.0
-        },
-        "route_matrix/elementwise_add_f64/scope/marginal16/65536": {
-          "high_ns": 347110.0,
-          "low_ns": 340810.0,
-          "mid_ns": 343820.0
-        },
-        "route_matrix/elementwise_add_f64/scope/single/1": {
-          "high_ns": 9845.0,
-          "low_ns": 9594.6,
-          "mid_ns": 9714.6
-        },
-        "route_matrix/elementwise_add_f64/scope/single/4096": {
-          "high_ns": 10989.0,
-          "low_ns": 10782.0,
-          "mid_ns": 10882.0
-        },
-        "route_matrix/elementwise_add_f64/scope/single/64": {
-          "high_ns": 10088.0,
-          "low_ns": 9885.9,
-          "mid_ns": 9982.0
-        },
-        "route_matrix/elementwise_add_f64/scope/single/65536": {
-          "high_ns": 31055.0,
-          "low_ns": 30542.0,
-          "mid_ns": 30789.0
-        },
-        "route_matrix/elementwise_add_f64/session/marginal16/1": {
+        "route_matrix/elementwise_add_f64/engine/marginal16/1": {
           "high_ns": 29537.0,
           "low_ns": 28873.0,
           "mid_ns": 29188.0
         },
-        "route_matrix/elementwise_add_f64/session/marginal16/4096": {
+        "route_matrix/elementwise_add_f64/engine/marginal16/4096": {
           "high_ns": 48580.0,
           "low_ns": 47806.0,
           "mid_ns": 48192.0
         },
-        "route_matrix/elementwise_add_f64/session/marginal16/64": {
+        "route_matrix/elementwise_add_f64/engine/marginal16/64": {
           "high_ns": 29591.0,
           "low_ns": 29187.0,
           "mid_ns": 29385.0
         },
-        "route_matrix/elementwise_add_f64/session/marginal16/65536": {
+        "route_matrix/elementwise_add_f64/engine/marginal16/65536": {
           "high_ns": 340740.0,
           "low_ns": 334140.0,
           "mid_ns": 337320.0
         },
-        "route_matrix/elementwise_add_f64/session/single/1": {
+        "route_matrix/elementwise_add_f64/engine/single/1": {
           "high_ns": 9689.0,
           "low_ns": 9452.1,
           "mid_ns": 9566.0
         },
-        "route_matrix/elementwise_add_f64/session/single/4096": {
+        "route_matrix/elementwise_add_f64/engine/single/4096": {
           "high_ns": 11233.0,
           "low_ns": 10990.0,
           "mid_ns": 11107.0
         },
-        "route_matrix/elementwise_add_f64/session/single/64": {
+        "route_matrix/elementwise_add_f64/engine/single/64": {
           "high_ns": 9921.6,
           "low_ns": 9734.8,
           "mid_ns": 9825.4
         },
-        "route_matrix/elementwise_add_f64/session/single/65536": {
+        "route_matrix/elementwise_add_f64/engine/single/65536": {
           "high_ns": 30731.0,
           "low_ns": 30266.0,
           "mid_ns": 30493.0
         },
-        "route_matrix/reduce_sum_f64/scope/single/64": {
-          "high_ns": 9947.699999999999,
-          "low_ns": 9782.0,
-          "mid_ns": 9863.4
-        },
-        "route_matrix/reduce_sum_f64/scope/single/65536": {
-          "high_ns": 18151.0,
-          "low_ns": 17850.0,
-          "mid_ns": 17995.0
-        },
-        "route_matrix/reduce_sum_f64/session/single/64": {
+        "route_matrix/reduce_sum_f64/engine/single/64": {
           "high_ns": 9683.400000000001,
           "low_ns": 9521.9,
           "mid_ns": 9601.6
         },
-        "route_matrix/reduce_sum_f64/session/single/65536": {
+        "route_matrix/reduce_sum_f64/engine/single/65536": {
           "high_ns": 17863.0,
           "low_ns": 17563.0,
           "mid_ns": 17709.0
         },
-        "route_matrix/slice_f64/scope/single/64": {
-          "high_ns": 9915.6,
-          "low_ns": 9762.9,
-          "mid_ns": 9837.6
-        },
-        "route_matrix/slice_f64/scope/single/65536": {
-          "high_ns": 24654.0,
-          "low_ns": 24289.0,
-          "mid_ns": 24467.0
-        },
-        "route_matrix/slice_f64/session/single/64": {
+        "route_matrix/slice_f64/engine/single/64": {
           "high_ns": 9840.9,
           "low_ns": 9703.099999999999,
           "mid_ns": 9771.9
         },
-        "route_matrix/slice_f64/session/single/65536": {
+        "route_matrix/slice_f64/engine/single/65536": {
           "high_ns": 24295.0,
           "low_ns": 23897.0,
           "mid_ns": 24088.0
@@ -445,21 +372,6 @@
           "low_ns": 1261900.0,
           "mid_ns": 1274400.0
         },
-        "runtime_elementwise_chain/f64/add_mul/unprepared_graph/1048576": {
-          "high_ns": 19840000.0,
-          "low_ns": 19527000.0,
-          "mid_ns": 19680000.0
-        },
-        "runtime_elementwise_chain/f64/add_mul/unprepared_graph/4096": {
-          "high_ns": 123260.0,
-          "low_ns": 121120.0,
-          "mid_ns": 122150.0
-        },
-        "runtime_elementwise_chain/f64/add_mul/unprepared_graph/65536": {
-          "high_ns": 1322400.0,
-          "low_ns": 1301900.0,
-          "mid_ns": 1311600.0
-        },
         "runtime_elementwise_chain/f64/broadcast_mul/prepared_graph/1024x1024": {
           "high_ns": 1139500.0,
           "low_ns": 1109200.0,
@@ -470,16 +382,6 @@
           "low_ns": 130539.99999999999,
           "mid_ns": 131460.0
         },
-        "runtime_elementwise_chain/f64/broadcast_mul/unprepared_graph/1024x1024": {
-          "high_ns": 1229700.0,
-          "low_ns": 1193800.0,
-          "mid_ns": 1210500.0
-        },
-        "runtime_elementwise_chain/f64/broadcast_mul/unprepared_graph/256x256": {
-          "high_ns": 208510.0,
-          "low_ns": 206260.0,
-          "mid_ns": 207370.0
-        },
         "runtime_elementwise_chain/f64/broadcast_mul_add/prepared_graph/1024x1024": {
           "high_ns": 19934000.0,
           "low_ns": 19631000.0,
@@ -489,36 +391,16 @@
           "high_ns": 1301300.0,
           "low_ns": 1283100.0,
           "mid_ns": 1291700.0
-        },
-        "runtime_elementwise_chain/f64/broadcast_mul_add/unprepared_graph/1024x1024": {
-          "high_ns": 20108000.0,
-          "low_ns": 19743000.0,
-          "mid_ns": 19923000.0
-        },
-        "runtime_elementwise_chain/f64/broadcast_mul_add/unprepared_graph/256x256": {
-          "high_ns": 1356000.0,
-          "low_ns": 1328900.0,
-          "mid_ns": 1341800.0
         }
       },
       "source": "crates/tenferro-runtime/benches/elementwise_fusion.rs"
     },
     "tenferro-runtime|session_chain": {
       "cases": {
-        "session_chain/broadcast/execution_scope": {
-          "high_ns": 35619.0,
-          "low_ns": 35094.0,
-          "mid_ns": 35346.0
-        },
         "session_chain/broadcast/one_session": {
           "high_ns": 35562.0,
           "low_ns": 34897.0,
           "mid_ns": 35215.0
-        },
-        "session_chain/no_broadcast/execution_scope": {
-          "high_ns": 22991.0,
-          "low_ns": 22672.0,
-          "mid_ns": 22824.0
         },
         "session_chain/no_broadcast/one_session": {
           "high_ns": 23216.0,

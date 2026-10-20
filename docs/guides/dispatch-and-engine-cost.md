@@ -7,9 +7,18 @@ argument validation, a plan-cache lookup, the output buffer (pooled when the
 engine has one to reuse) and the provider dispatch itself.
 
 This page separates the costs that still exist and shows how to avoid paying
-them more often than necessary. It replaces the older "session entry" guidance:
-the mechanisms described there (held sessions, phase leases, child execution
-tickets) are gone with the caller-held engine (#2206).
+them more often than necessary. It replaces the older "CPU session entry and
+Rayon dispatch cost" guide: the mechanisms described there (held sessions, phase
+leases, child execution tickets) are gone with the caller-held engine (#2206).
+
+Related records:
+
+- [Execution engine ownership](../design/execution-engine-ownership.md): the
+  engine/prepare/run model, pool ownership, and the removed mechanisms.
+- [Ordinary and prepared execution](ordinary-and-prepared-execution.md):
+  `Runtime::prepare` and `Runtime::run` with caller-supplied engines.
+- [CPU backend execution](../design/cpu-backend-execution.md): provider routes
+  and the engine's parallelism token.
 
 ## What one call costs
 

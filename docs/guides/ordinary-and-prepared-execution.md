@@ -123,7 +123,8 @@ let outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
 
 Nothing is entered or locked, so there is no scope to nest and no reentry error
 to avoid: the `&mut` borrow is the whole exclusion contract. Returned outputs
-remain usable after the borrow ends.
+remain usable after the borrow ends. The ownership rules behind this shape are
+in [execution engine ownership](../design/execution-engine-ownership.md).
 
 For steady-state measurement, create inputs, build the engine, compile and
 prepare graphs and warm up **before** starting the clock. Stop the clock before

@@ -78,7 +78,9 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         group.bench_function(BenchmarkId::new("matmul_2x2", "f64"), |bench| {
             bench.iter(|| {
                 let out = rt
-                    .with_eager_session(&mut engine, |session| session.matmul(black_box(&a), black_box(&b)))
+                    .with_eager_session(&mut engine, |session| {
+                        session.matmul(black_box(&a), black_box(&b))
+                    })
                     .expect("matmul");
                 consume(&mut engine, out);
             });
@@ -91,7 +93,9 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         let b = leaf(&rt, tracked, tensor(vec![2, 1], vec![1.0, 1.0]));
         group.bench_function(BenchmarkId::new("solve_2x2", "f64"), |bench| {
             bench.iter(|| {
-                let out = black_box(&a).solve(&mut engine, black_box(&b)).expect("solve");
+                let out = black_box(&a)
+                    .solve(&mut engine, black_box(&b))
+                    .expect("solve");
                 consume(&mut engine, out);
             });
         });

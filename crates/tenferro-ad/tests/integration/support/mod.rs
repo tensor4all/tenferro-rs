@@ -28,14 +28,32 @@ pub fn run_on_cpu(
     program: &CompiledGraph,
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
-    let mut engine = tenferro_cpu::CpuEngine::serial();
+    run_on(
+        &mut tenferro_cpu::CpuEngine::serial(),
+        runtime,
+        program,
+        inputs,
+    )
+}
+
+/// Prepare and run a compiled graph on `engine`, returning owned outputs.
+///
+/// # Errors
+///
+/// Propagates preparation and execution errors from the runtime.
+pub fn run_on(
+    engine: &mut dyn ExecutionEngine,
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+) -> Result<Vec<Tensor>> {
     let reads: Vec<TensorRead<'_>> = inputs.iter().map(|t| TensorRead::from_tensor(t)).collect();
     let target = engine.target();
     let prepared = runtime.prepare(program, &reads, std::slice::from_ref(&target))?;
-    let outputs = runtime.run(&mut [&mut engine], &prepared, &reads)?;
+    let outputs = runtime.run(&mut [&mut *engine], &prepared, &reads)?;
     outputs
         .into_iter()
-        .map(|output| output.into_tensor(&mut engine).map_err(Error::from))
+        .map(|output| output.into_tensor(&mut *engine).map_err(Error::from))
         .collect()
 }
 

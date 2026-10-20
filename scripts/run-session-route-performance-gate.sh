@@ -10,11 +10,13 @@ set -euo pipefail
 # CPU affinity, recorded manifest, Criterion relative-change comparison,
 # three alternating pairs) is shared.
 #
-# Purpose: measure the coexisting CPU execution routes BEFORE the route/API
-# unification deletes the one-shot spelling, so that the surviving routes can
-# be compared as a matched pair afterwards. The `oneshot/*` cases and
-# `session_chain/*/one_shot` are before-only references: they cannot be
-# reproduced after #1926 removes the spelling.
+# Purpose: measure the surviving caller-held engine routes. #2206 removed the
+# session/scope spellings, so the CPU operation matrix emits `engine/single` and
+# `engine/marginal16`, the chain one `one_session` arm per shape, and the graph
+# bench the `prepared_graph` route. The GPU matrix still labels its
+# engine-backed arms `session/*`; the baseline keys use exactly the names the
+# benches emit. Pre-#2206 `oneshot`/`scope`/CPU `session` rows stay in the frozen
+# docs/testing/session-route-baseline.json as before-only references.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
@@ -89,13 +91,13 @@ case "$LABEL" in baseline|candidate|diagnostic) ;; *) die "--label must be basel
 
 # package|bench|features|source|description
 BENCHMARKS=(
-  "tenferro-cpu|route_matrix||crates/tenferro-cpu/benches/route_matrix.rs|coexisting CPU entry routes on the same logical op: oneshot vs session vs execution scope, per-op and marginal-in-entry, plus throughput sizes"
-  "tenferro-runtime|session_chain||crates/tenferro-runtime/benches/session_chain.rs|10-op chain through one session vs one-shot-per-op vs one execution scope; phase-1 mixed chain"
+  "tenferro-cpu|route_matrix||crates/tenferro-cpu/benches/route_matrix.rs|CPU operations called directly on a caller-held CpuEngine: engine/single and engine/marginal16, plus throughput sizes"
+  "tenferro-runtime|session_chain||crates/tenferro-runtime/benches/session_chain.rs|10-op chain on one caller-held engine (one_session) per shape, plus the phase-1 mixed chain"
   "tenferro-runtime|elementwise_fusion||crates/tenferro-runtime/benches/elementwise_fusion.rs|compiled graph steady-state execution"
   "tenferro-ad|eager_dispatch_baseline||crates/tenferro-ad/benches/eager_dispatch_baseline.rs|eager small-op dispatch, including indexed slice"
   "tenferro-ad|eager_backward_shape_churn||crates/tenferro-ad/benches/eager_backward_shape_churn.rs|eager backward under shape churn"
-  "tenferro-linalg|linalg_vjp_gate|autodiff|crates/tenferro-linalg/benches/linalg_vjp_gate.rs|extension-bearing linalg VJP through the CPU session downcast path"
-  "tenferro-gpu|route_matrix_gpu|cuda|crates/tenferro-gpu/benches/route_matrix_gpu.rs|coexisting CUDA entry routes on one contraction, with enqueue and synchronized completion reported separately"
+  "tenferro-linalg|linalg_vjp_gate|autodiff|crates/tenferro-linalg/benches/linalg_vjp_gate.rs|extension-bearing linalg VJP through the CPU engine downcast path"
+  "tenferro-gpu|route_matrix_gpu|cuda|crates/tenferro-gpu/benches/route_matrix_gpu.rs|CUDA engine contraction routes (session/* arm names as emitted) with enqueue and synchronized completion reported separately"
 )
 
 # CUDA runtime for the GPU targets. CUBECL_DEBUG_LOG=0 is required: without it

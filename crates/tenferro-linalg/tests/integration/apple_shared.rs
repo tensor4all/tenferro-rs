@@ -183,7 +183,9 @@ fn eager_cholesky_preserves_apple_domain_without_transfers() {
     let input_id = f32_ids(&input).1;
     let eager_input = EagerTensor::from_tensor_in(input, runtime.clone()).unwrap();
     let eager = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.cholesky(&eager_input))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.cholesky(&eager_input)
+        })
         .unwrap()
         .to_tensor()
         .unwrap();

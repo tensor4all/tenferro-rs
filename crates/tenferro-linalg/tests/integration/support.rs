@@ -1,6 +1,6 @@
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{CompiledGraph, Runtime, RuntimeConfigError};
 use tenferro_runtime::ExecutionEngine;
+use tenferro_runtime::{CompiledGraph, Runtime, RuntimeConfigError};
 use tenferro_tensor::{Tensor, TensorRead};
 
 /// Run a test operation on a CPU engine.
@@ -63,7 +63,10 @@ pub fn run_program(
     program: &CompiledGraph,
     inputs: &[&Tensor],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
-    let reads: Vec<TensorRead<'_>> = inputs.iter().map(|tensor| TensorRead::from_tensor(tensor)).collect();
+    let reads: Vec<TensorRead<'_>> = inputs
+        .iter()
+        .map(|tensor| TensorRead::from_tensor(tensor))
+        .collect();
     let prepared = runtime.prepare(program, &reads, &[engine.target()])?;
     let outputs = {
         let mut engines: [&mut dyn ExecutionEngine; 1] = [&mut *engine];
