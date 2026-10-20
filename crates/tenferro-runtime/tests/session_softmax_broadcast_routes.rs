@@ -2,12 +2,11 @@
 //! rather than through the materializing `broadcast_in_dim_read` route.
 #![cfg(feature = "native")]
 
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::composite::{
     set_broadcast_route_observation, take_broadcast_routes, BroadcastRoute,
 };
 use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
 #[test]
 fn the_session_softmax_broadcasts_as_a_view() -> tenferro_runtime::Result<()> {
@@ -20,17 +19,13 @@ fn the_session_softmax_broadcasts_as_a_view() -> tenferro_runtime::Result<()> {
     )?;
     // A right-aligned mask that the composite has to broadcast explicitly.
     let mask = TypedTensor::<bool>::from_vec_col_major(vec![1, 2], vec![true, false])?;
-    let mut backend = CpuBackend::with_threads(1).expect("a CPU backend with one thread");
+    let mut engine = CpuEngine::serial();
 
     set_broadcast_route_observation(true);
-    let (softmax_routes, y) = backend.with_backend_session(|session| {
-        let y = x.softmax(1, session)?;
-        Ok::<_, tenferro_runtime::Error>((take_broadcast_routes(), y))
-    })??;
-    let (masked_routes, masked) = backend.with_backend_session(|session| {
-        let masked = x.masked_softmax(&mask, 1, session)?;
-        Ok::<_, tenferro_runtime::Error>((take_broadcast_routes(), masked))
-    })??;
+    let y = x.softmax(1, &mut engine)?;
+    let softmax_routes = take_broadcast_routes();
+    let masked = x.masked_softmax(&mask, 1, &mut engine)?;
+    let masked_routes = take_broadcast_routes();
     set_broadcast_route_observation(false);
 
     assert_eq!(y.shape(), &[2, 4, 2]);

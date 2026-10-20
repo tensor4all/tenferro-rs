@@ -1,6 +1,6 @@
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{TensorSessionOpsExt, TypedTensor, TypedTensorSessionOpsExt};
-use tenferro_tensor::{BackendSessionHost, Error as TensorError, ShapeMismatch, ValidationError};
+use tenferro_tensor::{Error as TensorError, ShapeMismatch, ValidationError};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -15,25 +15,16 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 
 #[test]
 fn typed_tensor_reduction_and_structural_wrappers_preserve_values() {
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0])
         .unwrap();
 
     let row = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![10.0, 20.0, 30.0]).unwrap();
-    let [row_sums, total, reshaped, transposed, broadcast] = backend
-        .with_backend_session(
-            |session| -> tenferro_tensor::Result<[TypedTensor<f64>; 5]> {
-                Ok([
-                    x.reduce_sum(Some(&[1]), session)?,
-                    x.reduce_sum(Some(&[0, 1]), session)?,
-                    x.reshape(&[3, 2], session)?,
-                    x.transpose(&[1, 0], session)?,
-                    row.broadcast_in_dim(&[2, 3], &[1], session)?,
-                ])
-            },
-        )
-        .unwrap()
-        .unwrap();
+    let row_sums = x.reduce_sum(Some(&[1]), &mut engine).unwrap();
+    let total = x.reduce_sum(Some(&[0, 1]), &mut engine).unwrap();
+    let reshaped = x.reshape(&[3, 2], &mut engine).unwrap();
+    let transposed = x.transpose(&[1, 0], &mut engine).unwrap();
+    let broadcast = row.broadcast_in_dim(&[2, 3], &[1], &mut engine).unwrap();
     assert_eq!(row_sums.shape(), &[2]);
     assert_close(row_sums.host_data().unwrap(), &[6.0, 15.0]);
     assert!(total.shape().is_empty());
@@ -57,14 +48,11 @@ fn typed_tensor_reduction_and_structural_wrappers_preserve_values() {
 
 #[test]
 fn typed_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let scalar = TypedTensor::<f64>::from_vec_col_major(vec![], vec![1.0]).unwrap();
     let vector = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]).unwrap();
 
-    let err = backend
-        .with_backend_session(|session| scalar.matmul(&vector, session))
-        .unwrap()
-        .unwrap_err();
+    let err = scalar.matmul(&vector, &mut engine).unwrap_err();
 
     assert!(matches!(
         err,
@@ -80,14 +68,11 @@ fn typed_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
 
 #[test]
 fn direct_tensor_broadcast_uses_the_shared_shape_payload() {
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let lhs = tenferro_tensor::Tensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
     let rhs = tenferro_tensor::Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
 
-    let error = backend
-        .with_backend_session(|session| lhs.add(&rhs, session))
-        .unwrap()
-        .unwrap_err();
+    let error = lhs.add(&rhs, &mut engine).unwrap_err();
 
     assert!(matches!(
         error,
@@ -102,15 +87,12 @@ fn direct_tensor_broadcast_uses_the_shared_shape_payload() {
 #[test]
 fn typed_complex_abs_returns_the_real_dtype() {
     use num_complex::Complex64;
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let z = TypedTensor::<Complex64>::from_vec_col_major(
         vec![2],
         vec![Complex64::new(3.0, 4.0), Complex64::new(0.0, -2.0)],
     )
     .unwrap();
-    let magnitude = backend
-        .with_backend_session(|session| z.abs(session))
-        .unwrap()
-        .unwrap();
+    let magnitude = z.abs(&mut engine).unwrap();
     assert_close(magnitude.host_data().unwrap(), &[5.0, 2.0]);
 }

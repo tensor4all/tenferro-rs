@@ -1021,6 +1021,37 @@ fn single_domain_coalescing_eligible(schedule: &ScheduledGraph) -> bool {
 
 impl ScheduledEventDomains {
     fn new(schedule: &ScheduledGraph, engines: &EngineSet<'_, '_>) -> Result<Self> {
+        Self::build(schedule, |engine_id| engines.driver(engine_id))
+    }
+
+    /// Build the runs a schedule needs with an explicit driver lookup.
+    ///
+    /// Test-only: production always takes each run's driver from the engine the
+    /// schedule placed the work on.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        schedule: &ScheduledGraph,
+        drivers: &[(EngineId, Arc<dyn super::EventDomainDriver>)],
+    ) -> Result<Self> {
+        Self::build(schedule, |engine_id| {
+            drivers
+                .iter()
+                .find(|(id, _)| id == engine_id)
+                .map(|(_, driver)| Arc::clone(driver))
+                .ok_or_else(|| {
+                    Error::runtime_state(
+                        "ScheduledEventDomains::new_for_test",
+                        ErrorPhase::Execution,
+                        format!("no test driver for engine {:?}", engine_id.as_str()),
+                    )
+                })
+        })
+    }
+
+    fn build(
+        schedule: &ScheduledGraph,
+        driver_for: impl Fn(&EngineId) -> Result<Arc<dyn super::EventDomainDriver>>,
+    ) -> Result<Self> {
         schedule.preflight().map_err(|source| {
             Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
         })?;
@@ -1034,7 +1065,7 @@ impl ScheduledEventDomains {
             let mut run = RuntimeOwnedEventDomainRun::new(
                 domain,
                 engine_id.clone(),
-                engines.driver(&engine_id)?.begin_run(domain)?,
+                driver_for(&engine_id)?.begin_run(domain)?,
             );
             let actual = run.domain(EventDomainOperation::BeginRun)?;
             if actual != domain {
@@ -1100,7 +1131,7 @@ impl ScheduledEventDomains {
         }
         let mut runs = Vec::with_capacity(drivers.len());
         for (domain, engine_id) in drivers {
-            let driver = engines.driver(&engine_id)?;
+            let driver = driver_for(&engine_id)?;
             let run = RuntimeOwnedEventDomainRun::new(domain, engine_id, driver.begin_run(domain)?);
             let actual = run.domain(EventDomainOperation::BeginRun)?;
             if actual != domain {

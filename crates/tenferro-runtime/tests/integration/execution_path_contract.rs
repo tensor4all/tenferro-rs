@@ -81,29 +81,6 @@ fn fusion_policy_has_a_single_decision_site() {
 /// segmented executor's whole-program entry points are reachable only from the
 /// test module, so it cannot diverge from the production path at run time.
 #[test]
-fn segmented_executor_entry_points_are_test_only() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/runtime/execution.rs");
-    let text = fs::read_to_string(&path).expect("executor source should be readable");
-    let test_module = text
-        .find("mod tests {")
-        .expect("execution.rs should have a test module");
-    for entry in [
-        "ErasedTensorBackendExecutor::execute(",
-        "ErasedTensorBackendExecutor::execute_tensor_refs(",
-        "ErasedTensorBackendExecutor::execute_values(",
-        "ErasedTensorBackendExecutor::execute_value_refs(",
-    ] {
-        for (index, _) in text.match_indices(entry) {
-            assert!(
-                index > test_module,
-                "{entry} is called outside the test module; the segmented executor would \
-                 become a second production path"
-            );
-        }
-    }
-}
-
-#[test]
 fn planned_regions_are_the_only_prepared_fusion_entry() {
     // The prepared path may only fuse through planned regions: the region type
     // is produced by `region.rs`, stored on the prepared root, and executed by
@@ -114,16 +91,10 @@ fn planned_regions_are_the_only_prepared_fusion_entry() {
         vec!["region.rs".to_string()],
         "regions must be constructed once, found in {region_producers:?}"
     );
-    for (path, text) in runtime_sources() {
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        if name == "execution.rs" {
-            assert!(
-                text.contains("execute_elementwise_fusion_slots"),
-                "the executor must run planned regions through the region entry point"
-            );
-        }
-    }
+    let executor = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/runtime/execution.rs");
+    let text = fs::read_to_string(&executor).expect("executor source should be readable");
+    assert!(
+        text.contains("execute_elementwise_fusion_slots"),
+        "the executor must run planned regions through the region entry point"
+    );
 }

@@ -1,6 +1,5 @@
 use super::*;
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
-use tenferro_cpu::CpuBackend;
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::backend::{ElementwiseFusionInputView, ElementwiseFusionOp};
 use tenferro_tensor::{DType, Tensor};
@@ -107,7 +106,7 @@ fn multiply(lhs: usize, rhs: usize, output: usize) -> ExecInstruction {
 }
 
 #[test]
-fn fused_segment_with_a_foreign_input_dtype_declines_and_runs_unfused() {
+fn fused_segment_with_a_foreign_input_dtype_declines_fusion() {
     // `Abs` on a complex input records the real result dtype, so an all-real
     // instruction chain can still read a complex region input. One fused kernel
     // requires every value to share the plan dtype, so the region must fall back
@@ -158,16 +157,17 @@ fn fused_segment_with_a_foreign_input_dtype_declines_and_runs_unfused() {
     );
     let scalar = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
 
-    assert!(
-        build_elementwise_fusion_plan(&program.instructions, &[0, 1], &[4]).is_some(),
-        "the mixed-dtype region must still build a plan for this test to cover the fallback"
+    let plan = build_elementwise_fusion_plan(&program.instructions, &[0, 1], &[4]).expect(
+        "the mixed-dtype region must still build a plan for this test to cover the fallback",
     );
-
-    let mut backend = CpuBackend::new();
-    let outputs = eval_exec_segmented(&mut backend, &program, vec![complex, scalar]).unwrap();
-
-    assert_eq!(outputs[0].dtype(), DType::F64);
-    assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[6.0, 0.0, 0.0, 8.0]);
+    assert!(
+        !plan_matches_input_dtypes(&plan, &[&complex, &scalar]),
+        "a complex region input must decline the single-dtype fused kernel"
+    );
+    assert!(
+        plan_matches_input_dtypes(&plan, &[&scalar, &scalar]),
+        "matching-dtype inputs keep the fused kernel eligible"
+    );
 }
 
 #[test]
@@ -296,18 +296,6 @@ fn segmenter_isolates_single_broadcast_multiply_pairs() {
 }
 
 #[test]
-fn single_broadcast_multiply_pair_handles_reused_broadcast_output() {
-    let instructions = vec![broadcast(0, 4, vec![0]), multiply(4, 4, 5)];
-
-    let pair = single_broadcast_multiply_pair(&instructions, &[5]);
-
-    assert!(matches!(
-        pair,
-        Some(SingleBroadcastMultiplyPair::ReusedBroadcast { .. })
-    ));
-}
-
-#[test]
 fn segment_use_summary_tracks_program_outputs_and_future_inputs() {
     let program = ExecProgram {
         instructions: vec![
@@ -329,79 +317,4 @@ fn segment_use_summary_tracks_program_outputs_and_future_inputs() {
     assert!(summary.is_used_at_or_after(1, 2));
     assert!(summary.is_used_at_or_after(3, 2));
     assert!(!summary.is_used_at_or_after(3, 3));
-}
-
-#[test]
-fn segmented_eval_executes_single_broadcast_multiply_pairs() {
-    let program = ExecProgram {
-        instructions: vec![
-            broadcast(0, 4, vec![0]),
-            multiply(4, 1, 5),
-            broadcast(2, 6, vec![1]),
-            multiply(3, 6, 7),
-        ],
-        input_slots: vec![0, 1, 2, 3],
-        output_slots: vec![5, 7],
-        n_slots: 8,
-        shape_guards: Vec::new(),
-    };
-    let mut backend = CpuBackend::new();
-    let inputs = vec![
-        Tensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]).unwrap(),
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-        Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap(),
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-    ];
-
-    let outputs = eval_exec_segmented(&mut backend, &program, inputs).unwrap();
-
-    assert_eq!(
-        outputs[0].as_slice::<f64>().unwrap(),
-        &[10.0, 40.0, 30.0, 80.0]
-    );
-    assert_eq!(
-        outputs[1].as_slice::<f64>().unwrap(),
-        &[5.0, 10.0, 21.0, 28.0]
-    );
-}
-
-#[test]
-fn segmented_eval_executes_reused_broadcast_multiply_pair() {
-    let program = ExecProgram {
-        instructions: vec![broadcast(0, 1, vec![0]), multiply(1, 1, 2)],
-        input_slots: vec![0],
-        output_slots: vec![2],
-        n_slots: 3,
-        shape_guards: Vec::new(),
-    };
-    let mut backend = CpuBackend::new();
-    let inputs = vec![Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap()];
-
-    let outputs = eval_exec_segmented(&mut backend, &program, inputs).unwrap();
-
-    assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[4.0, 9.0, 4.0, 9.0]);
-}
-
-#[test]
-fn segmented_eval_executes_single_broadcast_multiply_with_implicit_scalar_other() {
-    let program = ExecProgram {
-        instructions: vec![
-            broadcast_with_shape(1, 2, &[3], vec![]),
-            multiply_with_shape(0, 2, 3, &[3]),
-        ],
-        input_slots: vec![0, 1],
-        output_slots: vec![3],
-        n_slots: 4,
-        shape_guards: Vec::new(),
-    };
-    let mut backend = CpuBackend::new();
-    let inputs = vec![
-        Tensor::from_vec_col_major(vec![], vec![10.0_f64]).unwrap(),
-        Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap(),
-    ];
-
-    let outputs = eval_exec_segmented(&mut backend, &program, inputs).unwrap();
-
-    assert_eq!(outputs[0].shape(), &[3]);
-    assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[20.0, 20.0, 20.0]);
 }

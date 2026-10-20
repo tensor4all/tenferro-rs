@@ -6,7 +6,7 @@ use std::sync::{Arc, Barrier};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::super::*;
-use crate::runtime::engine_registration::EngineRegistrationState;
+use crate::runtime::engine_registration::{EngineRegistrationState, ExecutableEngineContract};
 
 #[derive(Debug)]
 struct TestContext;
@@ -87,10 +87,7 @@ fn registration(
     .map(EngineRegistration::preparation_only)
 }
 
-fn executable_registration(
-    engine_name: &str,
-    driver: Arc<dyn EventDomainDriver>,
-) -> Result<EngineRegistration, RuntimeConfigError> {
+fn executable_registration(engine_name: &str) -> Result<EngineRegistration, RuntimeConfigError> {
     let host = storage("tenferro.storage.host");
     let provider = provider_target(engine_name);
     let ingress = InputIngressContract::new(
@@ -101,11 +98,9 @@ fn executable_registration(
     );
     let contract = ExecutableEngineContract::new(
         provider.clone(),
+        ExecutionContextIdentity::of::<tenferro_cpu::CpuEngine>(),
         capabilities(),
-        tenferro_cpu::CpuBackend::new(),
-        driver,
         ingress,
-        None,
     );
     ProviderExecutableBinding::new(
         engine_id(engine_name),
@@ -438,30 +433,6 @@ fn new_route_binding_ignores_pre_freeze_engine_edits() -> Result<(), Box<dyn Std
 }
 
 #[test]
-fn custom_event_domain_driver_survives_snapshot_freeze() -> Result<(), Box<dyn StdError>> {
-    let driver: Arc<dyn EventDomainDriver> = Arc::new(ImmediateEventDomainDriver::new());
-    let weak_driver = Arc::downgrade(&driver);
-    let registration =
-        executable_registration("tenferro.engine.event-driver", Arc::clone(&driver))?;
-    let mut builder = Runtime::builder();
-    builder.register_engine(registration)?;
-    let runtime = builder.build()?;
-    drop(driver);
-
-    let snapshot = runtime.snapshot()?;
-    let frozen = snapshot
-        .engine(&engine_id("tenferro.engine.event-driver"))
-        .expect("engine slot")
-        .executable_witness()
-        .expect("explicit event-domain driver");
-    assert!(Arc::ptr_eq(
-        frozen.event_domain_driver(),
-        &weak_driver.upgrade().expect("snapshot retains driver")
-    ));
-    Ok(())
-}
-
-#[test]
 fn fresh_builds_have_distinct_runtime_and_registration_identities() -> Result<(), Box<dyn StdError>>
 {
     let first = runtime_with("tenferro.engine.same", 1)?;
@@ -621,10 +592,7 @@ fn engine_registration_validates_storage_classes_before_candidate_token() {
 
 #[test]
 fn engine_registration_records_tensor_backend_execution_bridge() -> Result<(), Box<dyn StdError>> {
-    let registration = executable_registration(
-        "tenferro.engine.bridge",
-        Arc::new(ImmediateEventDomainDriver::new()),
-    )?;
+    let registration = executable_registration("tenferro.engine.bridge")?;
     assert!(matches!(
         registration.execution_state(),
         EngineRegistrationState::Executable(_)

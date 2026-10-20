@@ -1,14 +1,17 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::Runtime;
-use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, Tensor, TracedTensor};
+use tenferro_runtime::{
+    CompiledGraph, DType, ExecutionEngine, GraphCompiler, Tensor, TensorRead, TracedTensor,
+};
 
-fn cpu_runtime() -> Runtime {
+fn cpu_engine_and_runtime() -> (CpuEngine, Runtime) {
+    let engine = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new()).unwrap())
+        .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
         .unwrap();
-    builder.build().unwrap()
+    (engine, builder.build().unwrap())
 }
 
 fn input_tensor(n: usize, scale: f64) -> Tensor {
@@ -68,38 +71,29 @@ fn compile_broadcast_mul_add(rows: usize, cols: usize) -> CompiledGraph {
         .expect("compiled broadcast-multiply-add graph")
 }
 
-/// Benchmark one graph through both runtime paths.
+/// Benchmark one graph through the prepared path.
 ///
-/// `prepared_graph` is `prepare_compiled` + `run_prepared`, which dispatches one
-/// command per instruction. `unprepared_graph` is `run_compiled`, whose
-/// segmented executor fuses a pure elementwise chain into one command. Running
-/// both in one group is what makes that divergence visible: earlier revisions of
-/// this benchmark only measured the prepared path under a `segmented_graph`
-/// label, which hid it.
+/// Every production run now goes through the scheduled executor that
+/// `prepared_graph` measures, so there is one timing per case: the former
+/// `unprepared_graph` label measured the same executor.
 fn bench_both_paths(
     group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
     program: &CompiledGraph,
     inputs: &[&Tensor],
     case: String,
 ) {
-    group.bench_function(BenchmarkId::new("prepared_graph", case.clone()), |bench| {
-        let runtime = cpu_runtime();
+    group.bench_function(BenchmarkId::new("prepared_graph", case), |bench| {
+        let (mut engine, runtime) = cpu_engine_and_runtime();
+        let reads: Vec<TensorRead<'_>> = inputs
+            .iter()
+            .map(|input| TensorRead::from_tensor(input))
+            .collect();
         let prepared = runtime
-            .prepare_compiled(program, inputs)
+            .prepare(program, &reads, &[engine.target()])
             .expect("graph should prepare");
         bench.iter(|| {
             let out = runtime
-                .run_prepared(black_box(&prepared), inputs)
-                .expect("graph run");
-            black_box(out);
-        });
-    });
-
-    group.bench_function(BenchmarkId::new("unprepared_graph", case), |bench| {
-        let runtime = cpu_runtime();
-        bench.iter(|| {
-            let out = runtime
-                .run_compiled(black_box(program), inputs)
+                .run(&mut [&mut engine], black_box(&prepared), &reads)
                 .expect("graph run");
             black_box(out);
         });

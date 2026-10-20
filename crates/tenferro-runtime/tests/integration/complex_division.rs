@@ -6,8 +6,8 @@
 //! one-element tensors and for longer tensors that take the vectorized path.
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorScalar};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{Tensor, TensorRead, TensorScalar};
 
 const LONG: usize = 1024;
 
@@ -18,13 +18,13 @@ fn tensor<T: TensorScalar>(len: usize, value: T) -> Tensor {
 }
 
 fn divide(lhs: &Tensor, rhs: &Tensor) -> Tensor {
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|session| {
-            session.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
-        .unwrap()
-        .unwrap()
+    let mut engine = CpuEngine::serial();
+    tenferro_tensor::TensorElementwise::div_read(
+        &mut engine,
+        TensorRead::from_tensor(lhs),
+        TensorRead::from_tensor(rhs),
+    )
+    .unwrap()
 }
 
 fn assert_close64(actual: Complex64, expected: Complex64, context: &str) {

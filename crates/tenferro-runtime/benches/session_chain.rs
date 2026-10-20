@@ -1,17 +1,16 @@
-//! Session-entry cost benchmark for the session-explicit concrete-ops surface.
+//! Engine-chain cost benchmark for the concrete-ops surface.
 //!
 //! Exact 10-op chain: three repetitions of `add -> exp -> mul` (9 ops)
 //! followed by a final `reduce_sum([0])` (10th). Two shape arms (no-broadcast
 //! 1x8 duplicate path vs 1x1/1x8 real reshape+broadcast), each executing the
-//! chain inside ONE `with_backend_session` entry.
+//! whole chain on one caller-held engine.
 //!
 //! Constants are chosen so the chain does not overflow (`exp` of large
 //! values); the result is validated outside the timed region.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
 /// `a` is a 1x8 constant row in the no-broadcast arm and a 1x1 row (the
 /// singleton broadcast source) in the broadcast arm.
@@ -28,54 +27,18 @@ fn operand_b() -> Tensor {
     Tensor::from_vec_col_major(vec![8], vec![1.0_f64; 8]).expect("benchmark tensor")
 }
 
-/// 10 ops inside one backend session (1 entry).
-fn run_chain_one_session(a: &Tensor, b: &Tensor, backend: &mut CpuBackend) -> Tensor {
-    backend
-        .with_backend_session(|session| {
-            let x = a.add(b, session).expect("add 1");
-            let x = x.exp(session).expect("exp 1");
-            let x = x.mul(a, session).expect("mul 1");
-            let x = x.add(b, session).expect("add 2");
-            let x = x.exp(session).expect("exp 2");
-            let x = x.mul(a, session).expect("mul 2");
-            let x = x.add(b, session).expect("add 3");
-            let x = x.exp(session).expect("exp 3");
-            let x = x.mul(a, session).expect("mul 3");
-            x.reduce_sum(Some(&[0]), session).expect("reduce_sum")
-        })
-        .unwrap()
-}
-
-/// The same 10-op chain through one execution scope wrapping one session entry.
-///
-/// Written as `with_execution_scope` + `with_backend_session` so that it
-/// survives the route/API unification of issue #1926: both spellings remain
-/// public boundaries, while the one-shot operation methods do not. The scope
-/// holds the resource permit and this single entry reuses it. Because the chain
-/// runs on the session surface, it also supports the broadcast operand set.
-fn run_chain_execution_scope(
-    a: &Tensor,
-    b: &Tensor,
-    owner: &CpuBackend,
-    ops: &mut CpuBackend,
-) -> Tensor {
-    owner
-        .with_execution_scope(|| {
-            ops.with_backend_session(|session| {
-                let x = a.add(b, session).expect("add 1");
-                let x = x.exp(session).expect("exp 1");
-                let x = x.mul(a, session).expect("mul 1");
-                let x = x.add(b, session).expect("add 2");
-                let x = x.exp(session).expect("exp 2");
-                let x = x.mul(a, session).expect("mul 2");
-                let x = x.add(b, session).expect("add 3");
-                let x = x.exp(session).expect("exp 3");
-                let x = x.mul(a, session).expect("mul 3");
-                x.reduce_sum(Some(&[0]), session).expect("reduce_sum")
-            })
-            .unwrap()
-        })
-        .expect("scope admission should succeed")
+/// The 10-op chain on one caller-held engine.
+fn run_chain_one_session(a: &Tensor, b: &Tensor, engine: &mut CpuEngine) -> Tensor {
+    let x = a.add(b, engine).expect("add 1");
+    let x = x.exp(engine).expect("exp 1");
+    let x = x.mul(a, engine).expect("mul 1");
+    let x = x.add(b, engine).expect("add 2");
+    let x = x.exp(engine).expect("exp 2");
+    let x = x.mul(a, engine).expect("mul 2");
+    let x = x.add(b, engine).expect("add 3");
+    let x = x.exp(engine).expect("exp 3");
+    let x = x.mul(a, engine).expect("mul 3");
+    x.reduce_sum(Some(&[0]), engine).expect("reduce_sum")
 }
 
 fn bench_session_chain(c: &mut Criterion) {
@@ -83,44 +46,28 @@ fn bench_session_chain(c: &mut Criterion) {
         let mut group = c.benchmark_group(format!("session_chain/{arm}"));
         let a = operand_a(broadcast);
         let b = operand_b();
-        // One explicit worker, per the repository dispatch/overhead rule.
-        let mut backend = CpuBackend::with_threads(1).expect("one-worker backend");
-        let mut ops = backend.clone();
+        // A serial engine keeps the measurement on the dispatch path.
+        let mut engine = CpuEngine::serial();
 
         // Validation outside the timed region: the chain must reduce to a
-        // finite scalar, and both registered arms must agree.
+        // finite scalar.
         //
-        // The `one_shot` arm that measured the deleted per-operation entry
-        // spelling is gone with that spelling (issue #1926); its baseline
-        // numbers remain in docs/testing/session-route-baseline.json as
-        // before-only references.
-        let one_session = run_chain_one_session(&a, &b, &mut backend);
-        let scope = run_chain_execution_scope(&a, &b, &backend, &mut ops);
-        for (name, out) in [("one_session", &one_session), ("scope", &scope)] {
-            assert!(
-                out.shape().is_empty(),
-                "{name}: chain must reduce to a scalar"
-            );
-            assert!(
-                out.as_slice::<f64>().unwrap()[0].is_finite(),
-                "{name}: finite"
-            );
-        }
-        assert_eq!(
-            one_session.as_slice::<f64>().unwrap()[0],
-            scope.as_slice::<f64>().unwrap()[0],
-            "one_session and scope must agree"
+        // The `one_shot` and `execution_scope` arms measured spellings that are
+        // gone with the session-entry model (#2206); their baseline numbers
+        // remain in docs/testing/session-route-baseline.json as before-only
+        // references.
+        let one_session = run_chain_one_session(&a, &b, &mut engine);
+        assert!(
+            one_session.shape().is_empty(),
+            "chain must reduce to a scalar"
+        );
+        assert!(
+            one_session.as_slice::<f64>().unwrap()[0].is_finite(),
+            "chain result must be finite"
         );
         group.bench_function("one_session", |bench| {
             bench.iter(|| {
-                let out = run_chain_one_session(black_box(&a), black_box(&b), &mut backend);
-                black_box(out);
-            });
-        });
-        group.bench_function("execution_scope", |bench| {
-            bench.iter(|| {
-                let out =
-                    run_chain_execution_scope(black_box(&a), black_box(&b), &backend, &mut ops);
+                let out = run_chain_one_session(black_box(&a), black_box(&b), &mut engine);
                 black_box(out);
             });
         });
@@ -191,38 +138,34 @@ impl Phase1Operands {
     }
 }
 
-/// 10 ops inside one backend session (1 entry).
-fn run_phase1_chain_one_session(ops: &Phase1Operands, backend: &mut CpuBackend) -> Tensor {
-    backend
-        .with_backend_session(|session| {
-            let x = ops.a.sub(&ops.b, session).expect("sub");
-            let x = x.log(session).expect("log");
-            let x = x.pow(&ops.power, session).expect("pow");
-            let x = x.maximum(&ops.max, session).expect("maximum");
-            let x = x.neg(session).expect("neg");
-            let x = x.reshape(&[4, 1], session).expect("reshape");
-            let x = x.transpose(&[1, 0], session).expect("transpose");
-            let x = x.clamp(&ops.lower, &ops.upper, session).expect("clamp");
-            let x = x.matmul(&ops.rhs, session).expect("matmul");
-            x.cast(tenferro_runtime::DType::F32, session).expect("cast")
-        })
-        .unwrap()
+/// The phase-1 10-op chain on one caller-held engine.
+fn run_phase1_chain_one_session(ops: &Phase1Operands, engine: &mut CpuEngine) -> Tensor {
+    let x = ops.a.sub(&ops.b, engine).expect("sub");
+    let x = x.log(engine).expect("log");
+    let x = x.pow(&ops.power, engine).expect("pow");
+    let x = x.maximum(&ops.max, engine).expect("maximum");
+    let x = x.neg(engine).expect("neg");
+    let x = x.reshape(&[4, 1], engine).expect("reshape");
+    let x = x.transpose(&[1, 0], engine).expect("transpose");
+    let x = x.clamp(&ops.lower, &ops.upper, engine).expect("clamp");
+    let x = x.matmul(&ops.rhs, engine).expect("matmul");
+    x.cast(tenferro_runtime::DType::F32, engine).expect("cast")
 }
 
 fn bench_session_chain_phase1(c: &mut Criterion) {
     let mut group = c.benchmark_group("session_chain/phase1");
     let ops = Phase1Operands::new();
-    let mut backend = CpuBackend::with_threads(1).expect("one-worker backend");
+    let mut engine = CpuEngine::serial();
 
     // Validation outside the timed region: the known scalar result -8.0
     // (see the chain comment above).
-    let one_session = run_phase1_chain_one_session(&ops, &mut backend);
+    let one_session = run_phase1_chain_one_session(&ops, &mut engine);
     assert_eq!(one_session.shape(), &[1, 1], "chain must reduce to [1,1]");
     assert_eq!(one_session.as_slice::<f32>().unwrap(), &[-8.0]);
 
     group.bench_function("one_session", |bench| {
         bench.iter(|| {
-            let out = run_phase1_chain_one_session(black_box(&ops), &mut backend);
+            let out = run_phase1_chain_one_session(black_box(&ops), &mut engine);
             black_box(out);
         });
     });

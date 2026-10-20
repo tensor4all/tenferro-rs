@@ -8,8 +8,8 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{ShapeExtent, SymDim};
 use tenferro_tensor::{
-    BackendSessionHost, CompareDir, DType, DotGeneralConfig, Engine, GatherConfig, PadConfig,
-    ScatterConfig, SliceConfig, Tensor,
+    CompareDir, DType, DotGeneralConfig, Engine, GatherConfig, PadConfig, ScatterConfig,
+    SliceConfig, Tensor,
 };
 
 use super::dispatch::{
@@ -17,9 +17,8 @@ use super::dispatch::{
     BACKEND_DISPATCH_TABLE,
 };
 use super::{
-    collect_outputs_from, constant_tensor, get, initialize_exec_slots_in,
-    tensor_value_for_lazy_view, validate_exec_program, ExecInstruction, ExecOp, ExecProgram,
-    ExecSlot,
+    constant_tensor, get, initialize_exec_slots_in, validate_exec_program, ExecInstruction, ExecOp,
+    ExecProgram, ExecSlot,
 };
 use crate::runtime::{
     EngineId, ExecutionContextIdentity, HardwareClassId, InputSignature, PreparedOperation,
@@ -27,7 +26,7 @@ use crate::runtime::{
     SpecializationProjection, SpecializationRequirements,
 };
 use crate::ExtensionCacheStore;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 
 #[test]
 fn exec_op_maps_to_catalog_kind() {
@@ -147,109 +146,27 @@ fn exec_instruction_single_output_metadata_stays_inline() {
 }
 
 #[test]
-fn lazy_view_input_conversion_duplicates_when_input_remains_live() {
+fn exec_slot_owned_and_read_tensor_conversions_preserve_shape_and_data() {
     let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let mut slots = vec![Some(ExecSlot::Owned(tensor))];
-    let mut backend = CpuBackend::new();
-
-    let value = backend
-        .with_backend_session(|exec| tensor_value_for_lazy_view(exec, &mut slots, 0, false))
-        .unwrap()
-        .unwrap();
-
-    let output = value.as_tensor().unwrap();
-    let stored = match slots[0].as_ref().unwrap() {
-        ExecSlot::Value(value) => value.as_tensor().unwrap(),
-        _ => panic!("expected promoted tensor value"),
-    };
-    assert_eq!(output.shape(), stored.shape());
-    assert!(!std::ptr::eq(output, stored));
-}
-
-#[test]
-fn exec_slot_owned_value_and_read_tensor_conversions_preserve_shape_and_data() {
-    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let value = tenferro_tensor::TensorValue::from_tensor(tensor.duplicate().unwrap());
-    let view = value.duplicate().unwrap().reshape_view([1, 2]).unwrap();
+    let typed = tensor.as_typed::<f64>().expect("f64 tensor");
+    let view = typed.as_view().reshape_view(&[1, 2]).expect("reshape view");
     let owned = ExecSlot::Owned(tensor.duplicate().unwrap());
-    let stored = ExecSlot::Value(value.duplicate().unwrap());
     let read = ExecSlot::Read(tenferro_tensor::TensorRead::from_tensor(&tensor));
 
     assert_eq!(owned.as_tensor("test").unwrap().shape(), &[2]);
-    assert_eq!(stored.as_tensor("test").unwrap().shape(), &[2]);
     assert_eq!(read.as_tensor("test").unwrap().shape(), &[2]);
     assert_eq!(owned.shape(), &[2]);
-    assert_eq!(stored.shape(), &[2]);
     assert_eq!(read.shape(), &[2]);
+    assert_eq!(owned.as_read().as_slice::<f64>().unwrap(), &[1.0_f64, 2.0]);
+    assert_eq!(read.as_read().as_slice::<f64>().unwrap(), &[1.0_f64, 2.0]);
+    // A borrowed view is not an owned tensor: the owned-only boundary reports
+    // an internal error instead of materializing behind the caller's back.
+    let view_slot = ExecSlot::Read(view.into_tensor_read().expect("view read"));
     assert!(matches!(
-        ExecSlot::Value(value.duplicate().unwrap().reshape_view([1, 2]).unwrap())
-            .as_tensor("test"),
-        Err(crate::Error::Internal(message)) if message.contains("owned TensorValue view")
-    ));
-    assert!(matches!(
-        ExecSlot::Read(view.tensor_read()).as_tensor("test"),
+        view_slot.as_tensor("test"),
         Err(crate::Error::Internal(message)) if message.contains("borrowed TensorView")
     ));
-
-    let mut backend = CpuBackend::new();
-    backend
-        .with_backend_session(|exec| {
-            assert_eq!(
-                ExecSlot::Owned(tensor.duplicate()?)
-                    .into_tensor(exec)?
-                    .shape(),
-                &[2]
-            );
-            assert_eq!(
-                ExecSlot::Value(value.duplicate()?)
-                    .into_tensor(exec)?
-                    .shape(),
-                &[2]
-            );
-            assert_eq!(
-                ExecSlot::Read(tenferro_tensor::TensorRead::from_tensor(&tensor))
-                    .into_tensor(exec)?
-                    .shape(),
-                &[2]
-            );
-            assert_eq!(
-                ExecSlot::Value(value.duplicate()?.reshape_view([1, 2]).unwrap())
-                    .into_tensor(exec)?
-                    .shape(),
-                &[1, 2]
-            );
-            assert_eq!(
-                ExecSlot::Read(view.tensor_read())
-                    .into_tensor(exec)?
-                    .shape(),
-                &[1, 2]
-            );
-            assert_eq!(
-                ExecSlot::Owned(tensor.duplicate()?)
-                    .into_value(exec)?
-                    .shape(),
-                &[2]
-            );
-            assert_eq!(
-                ExecSlot::Value(value.duplicate()?)
-                    .into_value(exec)?
-                    .shape(),
-                &[2]
-            );
-            assert_eq!(
-                ExecSlot::Read(tenferro_tensor::TensorRead::from_tensor(&tensor))
-                    .into_value(exec)?
-                    .shape(),
-                &[2]
-            );
-            assert_eq!(
-                ExecSlot::Read(view.tensor_read()).into_value(exec)?.shape(),
-                &[1, 2]
-            );
-            Ok::<(), crate::Error>(())
-        })
-        .unwrap()
-        .unwrap();
+    assert_eq!(view_slot.shape(), &[1, 2]);
 }
 
 #[test]
@@ -293,22 +210,15 @@ fn initialize_exec_slots_rejects_input_count_mismatch_without_panicking() {
 }
 
 #[test]
-fn collect_outputs_rejects_out_of_range_slot_without_panicking() {
+fn validate_exec_program_rejects_out_of_range_output_slot_without_panicking() {
     let mut program = empty_program(1);
     program.output_slots = vec![3];
-    let mut slots = vec![Some(ExecSlot::Owned(
-        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
-    ))];
 
-    let mut backend = CpuBackend::new();
-    let err = backend
-        .with_backend_session(|exec| collect_outputs_from(&program, &mut slots, exec))
-        .unwrap()
-        .unwrap_err();
+    let err = validate_exec_program(&program, "test executor").unwrap_err();
 
     let message = err.to_string();
-    assert!(message.contains("output slot 3"), "{message}");
-    assert!(message.contains("out of range"), "{message}");
+    assert!(message.contains("slot 3"), "{message}");
+    assert!(message.contains("1 slots"), "{message}");
 }
 
 #[test]
@@ -722,7 +632,7 @@ fn metadata_only_prepared_operation() -> Arc<dyn PreparedOperation> {
                 NonZeroU64::new(1).expect("registration issuer"),
                 NonZeroU64::new(1).expect("registration ordinal"),
             ),
-            ExecutionContextIdentity::of::<CpuBackend>(),
+            ExecutionContextIdentity::of::<CpuEngine>(),
             HardwareClassId::new("tenferro-test.metadata-only-hardware").expect("hardware class"),
         ),
         specialization: SpecializationRequirements::polymorphic(0)
@@ -758,10 +668,11 @@ fn missing_extension_executor_reports_typed_fields_on_both_execution_paths() {
         metadata_only_prepared_operation(),
     )];
     let mut caches = ExtensionCacheStore::new();
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
 
     let error = super::execute_prepared_extension_instruction(
-        &mut backend,
+        &mut engine,
+        ExecutionContextIdentity::of::<CpuEngine>(),
         &[],
         &instruction,
         &TestExtension,
@@ -771,18 +682,14 @@ fn missing_extension_executor_reports_typed_fields_on_both_execution_paths() {
     .expect_err("metadata-only extension must not execute");
     assert_missing_extension_executor(error);
 
-    let error = backend
-        .with_backend_session(|session| {
-            super::execute_prepared_extension_instruction_in_session(
-                session,
-                &[],
-                &instruction,
-                &TestExtension,
-                &operations,
-                &mut caches,
-            )
-        })
-        .unwrap()
-        .expect_err("metadata-only extension must not execute in a session");
+    let error = super::execute_prepared_extension_instruction_in_session(
+        &mut engine,
+        &[],
+        &instruction,
+        &TestExtension,
+        &operations,
+        &mut caches,
+    )
+    .expect_err("metadata-only extension must not execute in a session");
     assert_missing_extension_executor(error);
 }

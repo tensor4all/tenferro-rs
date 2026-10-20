@@ -2,10 +2,10 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::TensorSessionOpsExt;
 use tenferro_tensor::TensorRead;
-use tenferro_tensor::{BackendSessionHost, CompareDir, DotGeneralConfig, Engine, Tensor};
+use tenferro_tensor::{CompareDir, DotGeneralConfig, Engine, Tensor};
 
 const LEN: usize = 4096;
 const INPUT_BYTES: usize = LEN * size_of::<f64>();
@@ -84,144 +84,149 @@ fn count_large_allocations(call: impl FnOnce() -> Tensor) -> usize {
 fn same_shape_wrappers_do_not_allocate_operand_copies() {
     let a = Tensor::from_vec_col_major([LEN], vec![2.0_f64; LEN]).unwrap();
     let b = Tensor::from_vec_col_major([LEN], vec![3.0_f64; LEN]).unwrap();
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = CpuEngine::serial();
     assert_eq!(backend.num_threads(), 1);
-    backend
-        .with_backend_session(|session: &mut dyn Engine| {
-            macro_rules! check {
-                ($name:ident, $read:ident) => {{
-                    drop(
-                        session
-                            .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-                            .unwrap(),
-                    );
-                    eprintln!(
-                        "{}: raw then public (effective backend threads=1)",
-                        stringify!($name)
-                    );
-                    let raw = session
+    {
+        let session: &mut dyn Engine = &mut backend;
+        macro_rules! check {
+            ($name:ident, $read:ident) => {{
+                drop(
+                    session
                         .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-                        .unwrap();
-                    let public = a.$name(&b, session).unwrap();
-                    assert_eq!(
-                        public.as_slice::<f64>().unwrap(),
-                        raw.as_slice::<f64>().unwrap()
-                    );
-                    drop(raw);
-                    drop(public);
-                    let baseline = count_large_allocations(|| {
-                        session
-                            .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-                            .unwrap()
-                    });
-                    let actual = count_large_allocations(|| a.$name(&b, session).unwrap());
-                    assert!(
-                        actual <= baseline,
-                        "{}: public={actual}, backend={baseline}",
-                        stringify!($name)
-                    );
-                }};
-            }
-            check!(add, add_read);
-            check!(sub, sub_read);
-            check!(mul, mul_read);
-            check!(div, div_read);
-            check!(rem, rem_read);
-            check!(pow, pow_read);
-            check!(maximum, maximum_read);
-            check!(minimum, minimum_read);
-            eprintln!("compare: raw then public");
-            let raw = session
+                        .unwrap(),
+                );
+                eprintln!(
+                    "{}: raw then public (effective backend threads=1)",
+                    stringify!($name)
+                );
+                let raw = session
+                    .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+                    .unwrap();
+                let public = a.$name(&b, session).unwrap();
+                assert_eq!(
+                    public.as_slice::<f64>().unwrap(),
+                    raw.as_slice::<f64>().unwrap()
+                );
+                drop(raw);
+                drop(public);
+                // Measure the reference route twice: the first measurement
+                // can see a cold pool bin that the second one reuses, so the
+                // steady-state number is what the public route is compared to.
+                let _warm = count_large_allocations(|| {
+                    session
+                        .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+                        .unwrap()
+                });
+                let baseline = count_large_allocations(|| {
+                    session
+                        .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+                        .unwrap()
+                });
+                let actual = count_large_allocations(|| a.$name(&b, session).unwrap());
+                assert!(
+                    actual <= baseline,
+                    "{}: public={actual}, backend={baseline}",
+                    stringify!($name)
+                );
+            }};
+        }
+        check!(add, add_read);
+        check!(sub, sub_read);
+        check!(mul, mul_read);
+        check!(div, div_read);
+        check!(rem, rem_read);
+        check!(pow, pow_read);
+        check!(maximum, maximum_read);
+        check!(minimum, minimum_read);
+        eprintln!("compare: raw then public");
+        let raw = session
+            .compare_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &CompareDir::Lt,
+            )
+            .unwrap();
+        let public = a.compare(&b, CompareDir::Lt, session).unwrap();
+        assert_eq!(
+            public.as_slice::<bool>().unwrap(),
+            raw.as_slice::<bool>().unwrap()
+        );
+        drop(raw);
+        drop(public);
+        let baseline = count_large_allocations(|| {
+            session
                 .compare_read(
                     TensorRead::from_tensor(&a),
                     TensorRead::from_tensor(&b),
                     &CompareDir::Lt,
                 )
-                .unwrap();
-            let public = a.compare(&b, CompareDir::Lt, session).unwrap();
-            assert_eq!(
-                public.as_slice::<bool>().unwrap(),
-                raw.as_slice::<bool>().unwrap()
-            );
-            drop(raw);
-            drop(public);
-            let baseline = count_large_allocations(|| {
-                session
-                    .compare_read(
-                        TensorRead::from_tensor(&a),
-                        TensorRead::from_tensor(&b),
-                        &CompareDir::Lt,
-                    )
-                    .unwrap()
-            });
-            let actual =
-                count_large_allocations(|| a.compare(&b, CompareDir::Lt, session).unwrap());
-            assert!(
-                actual <= baseline,
-                "compare: public={actual}, backend={baseline}"
-            );
-            eprintln!("clamp: raw then public");
-            let raw = session
+                .unwrap()
+        });
+        let actual = count_large_allocations(|| a.compare(&b, CompareDir::Lt, session).unwrap());
+        assert!(
+            actual <= baseline,
+            "compare: public={actual}, backend={baseline}"
+        );
+        eprintln!("clamp: raw then public");
+        let raw = session
+            .clamp_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+            )
+            .unwrap();
+        let public = a.clamp(&a, &b, session).unwrap();
+        assert_eq!(
+            public.as_slice::<f64>().unwrap(),
+            raw.as_slice::<f64>().unwrap()
+        );
+        drop(raw);
+        drop(public);
+        let baseline = count_large_allocations(|| {
+            session
                 .clamp_read(
                     TensorRead::from_tensor(&a),
                     TensorRead::from_tensor(&a),
                     TensorRead::from_tensor(&b),
                 )
-                .unwrap();
-            let public = a.clamp(&a, &b, session).unwrap();
-            assert_eq!(
-                public.as_slice::<f64>().unwrap(),
-                raw.as_slice::<f64>().unwrap()
-            );
-            drop(raw);
-            drop(public);
-            let baseline = count_large_allocations(|| {
-                session
-                    .clamp_read(
-                        TensorRead::from_tensor(&a),
-                        TensorRead::from_tensor(&a),
-                        TensorRead::from_tensor(&b),
-                    )
-                    .unwrap()
-            });
-            let actual = count_large_allocations(|| a.clamp(&a, &b, session).unwrap());
-            assert!(
-                actual <= baseline,
-                "clamp: public={actual}, backend={baseline}"
-            );
-            let condition = Tensor::from_vec_col_major([LEN], vec![true; LEN]).unwrap();
-            eprintln!("select: raw then public");
-            let raw = session
+                .unwrap()
+        });
+        let actual = count_large_allocations(|| a.clamp(&a, &b, session).unwrap());
+        assert!(
+            actual <= baseline,
+            "clamp: public={actual}, backend={baseline}"
+        );
+        let condition = Tensor::from_vec_col_major([LEN], vec![true; LEN]).unwrap();
+        eprintln!("select: raw then public");
+        let raw = session
+            .select_read(
+                tenferro_tensor::TensorRead::from_tensor(&condition),
+                tenferro_tensor::TensorRead::from_tensor(&a),
+                tenferro_tensor::TensorRead::from_tensor(&b),
+            )
+            .unwrap();
+        let public = condition.where_select(&a, &b, session).unwrap();
+        assert_eq!(
+            public.as_slice::<f64>().unwrap(),
+            raw.as_slice::<f64>().unwrap()
+        );
+        drop(raw);
+        drop(public);
+        let baseline = count_large_allocations(|| {
+            session
                 .select_read(
                     tenferro_tensor::TensorRead::from_tensor(&condition),
                     tenferro_tensor::TensorRead::from_tensor(&a),
                     tenferro_tensor::TensorRead::from_tensor(&b),
                 )
-                .unwrap();
-            let public = condition.where_select(&a, &b, session).unwrap();
-            assert_eq!(
-                public.as_slice::<f64>().unwrap(),
-                raw.as_slice::<f64>().unwrap()
-            );
-            drop(raw);
-            drop(public);
-            let baseline = count_large_allocations(|| {
-                session
-                    .select_read(
-                        tenferro_tensor::TensorRead::from_tensor(&condition),
-                        tenferro_tensor::TensorRead::from_tensor(&a),
-                        tenferro_tensor::TensorRead::from_tensor(&b),
-                    )
-                    .unwrap()
-            });
-            let actual =
-                count_large_allocations(|| condition.where_select(&a, &b, session).unwrap());
-            assert!(
-                actual <= baseline,
-                "select: public={actual}, backend={baseline}"
-            );
-        })
-        .unwrap();
+                .unwrap()
+        });
+        let actual = count_large_allocations(|| condition.where_select(&a, &b, session).unwrap());
+        assert!(
+            actual <= baseline,
+            "select: public={actual}, backend={baseline}"
+        );
+    }
 }
 
 /// #2141 item 3: the canonical-fallback contraction must not copy its operands.
@@ -245,43 +250,40 @@ fn canonical_fallback_contraction_does_not_copy_operands() {
         lhs_batch_dims: [].as_slice().into(),
         rhs_batch_dims: [].as_slice().into(),
     };
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend
-        .with_backend_session(|session: &mut dyn Engine| {
-            let plain = TensorRead::from_tensor(&a);
-            let typed_b = b.as_typed::<f64>().expect("an f64 tensor");
-            let view = typed_b.as_view();
-            let transposed = view
-                .transpose_view([1, 0])
-                .unwrap()
-                .into_tensor_read()
-                .unwrap();
-            // Warm the pool on both routes before counting.
-            drop(
-                session
-                    .dot_general_read(plain.clone(), TensorRead::from_tensor(&b), &config)
-                    .unwrap(),
-            );
-            drop(
-                session
-                    .dot_general_read(plain.clone(), transposed.clone(), &config)
-                    .unwrap(),
-            );
+    let mut backend = CpuEngine::serial();
+    {
+        let session: &mut dyn Engine = &mut backend;
+        let plain = TensorRead::from_tensor(&a);
+        let typed_b = b.as_typed::<f64>().expect("an f64 tensor");
+        let view = typed_b.as_view();
+        let transposed = view
+            .transpose_view([1, 0])
+            .unwrap()
+            .into_tensor_read()
+            .unwrap();
+        // Warm the pool on both routes before counting.
+        drop(
+            session
+                .dot_general_read(plain.clone(), TensorRead::from_tensor(&b), &config)
+                .unwrap(),
+        );
+        drop(
+            session
+                .dot_general_read(plain.clone(), transposed.clone(), &config)
+                .unwrap(),
+        );
 
-            let baseline = count_large_allocations(|| {
-                session
-                    .dot_general_read(plain.clone(), TensorRead::from_tensor(&b), &config)
-                    .unwrap()
-            });
-            let fallback = count_large_allocations(|| {
-                session
-                    .dot_general_read(plain.clone(), transposed.clone(), &config)
-                    .unwrap()
-            });
-            assert_eq!(baseline, 0, "the canonical route copied an operand");
-            assert_eq!(fallback, 0, "the canonical fallback copied an operand");
-            Ok::<_, tenferro_tensor::Error>(())
-        })
-        .unwrap()
-        .unwrap();
+        let baseline = count_large_allocations(|| {
+            session
+                .dot_general_read(plain.clone(), TensorRead::from_tensor(&b), &config)
+                .unwrap()
+        });
+        let fallback = count_large_allocations(|| {
+            session
+                .dot_general_read(plain.clone(), transposed.clone(), &config)
+                .unwrap()
+        });
+        assert_eq!(baseline, 0, "the canonical route copied an operand");
+        assert_eq!(fallback, 0, "the canonical fallback copied an operand");
+    }
 }

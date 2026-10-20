@@ -3,17 +3,16 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use crate::compiler::semantic_staging::stage_semantic_program;
-use crate::exec;
 use crate::{DType, DotGeneralConfig, Error, ErrorPhase, GraphCompiler, Tensor, TracedTensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_tensor::{
     Error as TensorError, ErrorKind, ShapeMismatch, ValidationError, ValidationKind,
 };
 
 fn run_compiled(program: &crate::CompiledGraph, inputs: Vec<Tensor>) -> crate::Result<Vec<Tensor>> {
     let staged = stage_semantic_program(program.program(), program.compiler_options()).unwrap();
-    let mut backend = CpuBackend::new();
-    exec::eval_exec_ir_unsegmented_with_cache(&mut backend, &staged, inputs)
+    let mut engine = CpuEngine::serial();
+    crate::exec::run_exec_program_for_test(&mut engine, &staged, inputs)
 }
 
 fn run_compiled_one(program: &crate::CompiledGraph, inputs: Vec<Tensor>) -> Tensor {

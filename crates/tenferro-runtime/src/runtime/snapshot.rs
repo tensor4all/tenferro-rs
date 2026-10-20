@@ -323,7 +323,7 @@ impl ExecutableEngineSnapshot {
             super::RuntimeInputContract::new(|_, _| true),
             super::ResidentOutputContract::new(|_, _| true),
         );
-        let contract = super::ExecutableEngineContract::new(
+        let contract = super::engine_registration::ExecutableEngineContract::new(
             provider_device_identity,
             ExecutionContextIdentity::of::<TestEngine>(),
             CoreCapabilityBundle::default(),

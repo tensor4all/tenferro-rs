@@ -832,5 +832,51 @@ fn reclaim_exec_slot_with_session(slot: ExecSlot<'_>, exec: &mut dyn Engine) {
     }
 }
 
+/// Execute `program` instruction by instruction on `engine`.
+///
+/// Test-only: production execution goes through the scheduled executor. A
+/// compiler or traced-surface test that holds only an [`ExecProgram`] replays
+/// it here so its numerical end-to-end check keeps running on a real engine.
+#[cfg(test)]
+pub(crate) fn run_exec_program_for_test(
+    engine: &mut dyn tenferro_tensor::Engine,
+    program: &ExecProgram,
+    inputs: Vec<Tensor>,
+) -> Result<Vec<Tensor>> {
+    validate_exec_program(program, "test exec program replay")?;
+    let mut slots = Vec::new();
+    initialize_exec_slots_in(
+        program,
+        inputs.into_iter().map(ExecSlot::Owned).collect(),
+        &mut slots,
+    )?;
+    for instruction in &program.instructions {
+        if is_host_instruction(instruction) {
+            execute_host_instruction_exec(engine, &mut slots, instruction)?;
+            continue;
+        }
+        if is_ffi_instruction(instruction) {
+            execute_ffi_instruction_exec(engine, &mut slots, instruction, Some(0), None)?;
+            continue;
+        }
+        let result = execute_backend_op(engine, &mut slots, instruction)?;
+        slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
+    }
+    let mut outputs = Vec::with_capacity(program.output_slots.len());
+    for &slot in &program.output_slots {
+        let value = slots
+            .get_mut(slot)
+            .and_then(Option::take)
+            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+        outputs.push(match value {
+            ExecSlot::Owned(tensor) => tensor,
+            ExecSlot::Read(read) => {
+                tenferro_tensor::TensorStructural::to_contiguous_read(engine, read)?
+            }
+        });
+    }
+    Ok(outputs)
+}
+
 #[cfg(test)]
 mod tests;
