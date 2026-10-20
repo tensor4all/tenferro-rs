@@ -28,7 +28,7 @@ use tenferro_runtime::extension::{ExtensionCacheKey, ExtensionExecutionContext};
 use tenferro_runtime::program::{
     CoreSemanticOp, ProgramValue, ProgramValueMetadata, SemanticProgramBuilder,
 };
-use tenferro_tensor::{Engine, DType, Error as TensorError, Tensor, TensorRead};
+use tenferro_tensor::{DType, Engine, Error as TensorError, Tensor, TensorRead};
 
 use crate::builder::build_einsum_graph;
 use crate::cache::{
@@ -1050,14 +1050,12 @@ fn execute_einsum_extension_reads_in_session(
     execute_einsum_extension_session_reads(op, inputs, &mut ctx)
 }
 
-fn einsum_session_supported<B: tenferro_tensor::TensorBackend + 'static>(
-    _op: &EinsumExtensionOp,
-) -> bool {
+fn einsum_session_supported<B: tenferro_tensor::Engine + 'static>(_op: &EinsumExtensionOp) -> bool {
     // The session executor runs the same forward kernel on any backend session
     // below (the einsum execution only needs elementwise/dot session ops), so
     // CPU and CUDA sessions both qualify for `apply_eager`'s native path.
     let type_id = std::any::TypeId::of::<B>();
-    type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() || {
+    type_id == std::any::TypeId::of::<tenferro_cpu::CpuEngine>() || {
         #[cfg(feature = "cuda")]
         {
             type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>()

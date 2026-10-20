@@ -8,8 +8,8 @@ pub use crate::{
     TypedTensorTensordotExt,
 };
 pub use tenferro_runtime::{
-    DType, Tensor, TensorBackend, TensorRead, TensorScalar, TensorView, TraceContext, TraceValue,
-    TracedTensor, TypedTensor, TypedTensorView,
+    DType, Tensor, TensorRead, TensorScalar, TensorView, TraceContext, TraceValue, TracedTensor,
+    TypedTensor, TypedTensorView,
 };
 pub use tenferro_tensor::{DotGeneralAccumulation, TensorWrite, TypedTensorWrite};
 

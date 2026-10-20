@@ -1,7 +1,7 @@
 //! Public concrete tensor einsum extension API.
 
 use tenferro_tensor::{
-    Engine, DType, DotGeneralAccumulation, Tensor, TensorRead, TensorScalar, TensorWrite,
+    DType, DotGeneralAccumulation, Engine, Tensor, TensorRead, TensorScalar, TensorWrite,
     TypedTensor, TypedTensorView, TypedTensorWrite,
 };
 use tinyvec::TinyVec;
@@ -111,17 +111,17 @@ impl<T: TensorScalar> TypedTensorTensordotExt<T> for TypedTensor<T> {
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_einsum::TensorEinsumExt;
-/// use tenferro_tensor::{BackendSessionHost, Tensor};
+/// use tenferro_tensor::Tensor;
 ///
 /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
 /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
-/// let mut backend = CpuBackend::new();
+/// let mut backend = CpuEngine::serial();
 ///
-/// let out = backend.with_backend_session(|session| {
+/// let out = { let session = &mut backend;  {
 ///     [&lhs, &rhs].einsum("ij,jk->ik", session)
-/// })??;
+/// } }?;
 /// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -342,17 +342,17 @@ impl<const N: usize> TensorEinsumIntoExt for [&Tensor; N] {
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_einsum::TypedTensorEinsumExt;
-/// use tenferro_tensor::{BackendSessionHost, TypedTensor};
+/// use tenferro_tensor::TypedTensor;
 ///
 /// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
 /// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], vec![1.0; 12]).unwrap();
-/// let mut backend = CpuBackend::new();
+/// let mut backend = CpuEngine::serial();
 ///
-/// let out = backend.with_backend_session(|session| {
+/// let out = { let session = &mut backend;  {
 ///     [&lhs, &rhs].einsum("ij,jk->ik", session)
-/// })??;
+/// } }?;
 /// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -454,16 +454,16 @@ impl<T: TensorScalar, const N: usize> TypedTensorEinsumExt<T> for [&TypedTensor<
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_einsum::TypedTensorReadEinsumExt;
-/// use tenferro_tensor::{BackendSessionHost, TypedTensor};
+/// use tenferro_tensor::TypedTensor;
 ///
 /// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
 /// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0])?;
-/// let mut backend = CpuBackend::new();
-/// let result = backend.with_backend_session(|session| {
+/// let mut backend = CpuEngine::serial();
+/// let result = { let session = &mut backend;  {
 ///     [lhs.as_view(), rhs.as_view()].einsum_read("i,i->", session)
-/// })??;
+/// } }?;
 /// assert_eq!(result.as_slice()?, &[11.0]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -473,15 +473,15 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_einsum::TypedTensorReadEinsumExt;
-    /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// use tenferro_tensor::TypedTensor;
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0])?;
-    /// let mut backend = CpuBackend::new();
-    /// let result = backend.with_backend_session(|session| {
+    /// let mut backend = CpuEngine::serial();
+    /// let result = { let session = &mut backend;  {
     ///     [input.as_view()].einsum_read("i->i", session)
-    /// })??;
+    /// } }?;
     /// assert_eq!(result.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -491,11 +491,7 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
     /// Returns [`Error::InvalidSubscripts`] for malformed notation,
     /// [`Error::Validation`] with shape or rank payloads for incompatible
     /// views, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_read(
-        &self,
-        subscripts: &str,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>>;
+    fn einsum_read(&self, subscripts: &str, session: &mut dyn Engine) -> Result<TypedTensor<T>>;
 
     /// Execute an einsum from rank-unresolved notation over typed views.
     ///
@@ -522,16 +518,16 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_einsum::{EinsumSubscripts, TypedTensorReadEinsumExt};
-    /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// use tenferro_tensor::TypedTensor;
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0])?;
     /// let subscripts = EinsumSubscripts::new(&[&[0]], &[0]);
-    /// let mut backend = CpuBackend::new();
-    /// let result = backend.with_backend_session(|session| {
+    /// let mut backend = CpuEngine::serial();
+    /// let result = { let session = &mut backend;  {
     ///     [input.as_view()].einsum_read_subscripts(&subscripts, session)
-    /// })??;
+    /// } }?;
     /// assert_eq!(result.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -548,11 +544,7 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
 }
 
 impl<'a, T: TensorScalar> TypedTensorReadEinsumExt<T> for [TypedTensorView<'a, T>] {
-    fn einsum_read(
-        &self,
-        subscripts: &str,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn einsum_read(&self, subscripts: &str, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let notation = parse_einsum_notation(subscripts)?;
         self.einsum_read_notation(&notation, session)
     }
@@ -579,11 +571,7 @@ impl<'a, T: TensorScalar> TypedTensorReadEinsumExt<T> for [TypedTensorView<'a, T
 impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumExt<T>
     for [TypedTensorView<'a, T>; N]
 {
-    fn einsum_read(
-        &self,
-        subscripts: &str,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
+    fn einsum_read(&self, subscripts: &str, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         self.as_slice().einsum_read(subscripts, session)
     }
 
@@ -662,12 +650,7 @@ pub trait TypedTensorEinsumIntoExt<T: TensorScalar> {
 }
 
 impl<T: TensorScalar> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>] {
-    fn einsum_into<'out, O>(
-        &self,
-        subscripts: &str,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
+    fn einsum_into<'out, O>(&self, subscripts: &str, session: &mut dyn Engine, out: O) -> Result<()>
     where
         O: Into<TypedTensorWrite<'out, T>>,
     {
@@ -724,12 +707,7 @@ impl<T: TensorScalar> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>] {
 }
 
 impl<T: TensorScalar, const N: usize> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>; N] {
-    fn einsum_into<'out, O>(
-        &self,
-        subscripts: &str,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
+    fn einsum_into<'out, O>(&self, subscripts: &str, session: &mut dyn Engine, out: O) -> Result<()>
     where
         O: Into<TypedTensorWrite<'out, T>>,
     {
@@ -767,17 +745,17 @@ impl<T: TensorScalar, const N: usize> TypedTensorEinsumIntoExt<T> for [&TypedTen
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_einsum::TypedTensorReadEinsumIntoExt;
-/// use tenferro_tensor::{BackendSessionHost, TypedTensor};
+/// use tenferro_tensor::TypedTensor;
 ///
 /// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
 /// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0])?;
 /// let mut output = TypedTensor::<f64>::from_vec_col_major(vec![], vec![0.0])?;
-/// let mut backend = CpuBackend::new();
-/// backend.with_backend_session(|session| {
+/// let mut backend = CpuEngine::serial();
+/// { let session = &mut backend;  {
 ///     [lhs.as_view(), rhs.as_view()].einsum_read_into("i,i->", session, &mut output)
-/// })??;
+/// } }?;
 /// assert_eq!(output.as_slice()?, &[11.0]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -788,16 +766,16 @@ pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_einsum::TypedTensorReadEinsumIntoExt;
-    /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// use tenferro_tensor::TypedTensor;
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0])?;
     /// let mut output = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0; 2])?;
-    /// let mut backend = CpuBackend::new();
-    /// backend.with_backend_session(|session| {
+    /// let mut backend = CpuEngine::serial();
+    /// { let session = &mut backend;  {
     ///     [input.as_view()].einsum_read_into("i->i", session, &mut output)
-    /// })??;
+    /// } }?;
     /// assert_eq!(output.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -844,17 +822,17 @@ pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_einsum::{EinsumSubscripts, TypedTensorReadEinsumIntoExt};
-    /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// use tenferro_tensor::TypedTensor;
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0])?;
     /// let mut output = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0; 2])?;
     /// let subscripts = EinsumSubscripts::new(&[&[0]], &[0]);
-    /// let mut backend = CpuBackend::new();
-    /// backend.with_backend_session(|session| {
+    /// let mut backend = CpuEngine::serial();
+    /// { let session = &mut backend;  {
     ///     [input.as_view()].einsum_read_into_subscripts(&subscripts, session, &mut output)
-    /// })??;
+    /// } }?;
     /// assert_eq!(output.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1009,9 +987,9 @@ impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumIntoExt<T>
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_einsum::TensorReadEinsumExt;
-/// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorView};
+/// use tenferro_tensor::{Tensor, TensorRead, TensorView};
 ///
 /// let shape = [2, 3];
 /// let data = [1.0_f64; 6];
@@ -1020,9 +998,9 @@ impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumIntoExt<T>
 ///     TensorRead::from_view(TensorView::f64(&shape, &data)?),
 ///     TensorRead::from_tensor(&rhs),
 /// ];
-/// let mut backend = CpuBackend::new();
+/// let mut backend = CpuEngine::serial();
 ///
-/// let out = backend.with_backend_session(|session| inputs.einsum_read("ij,j->i", session))??;
+/// let out = { let session = &mut backend;  inputs.einsum_read("ij,j->i", session) }?;
 /// assert_eq!(out.shape(), &[2]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -1273,17 +1251,16 @@ impl<'a, const N: usize> TensorReadEinsumIntoExt for [TensorRead<'a>; N] {
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_einsum::ConcreteEinsumPlan;
-/// use tenferro_tensor::{BackendSessionHost, Tensor};
+/// use tenferro_tensor::Tensor;
 ///
 /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
 /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
 /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
 ///
-/// let mut backend = CpuBackend::new();
-/// let out = backend
-///     .with_backend_session(|session| plan.execute([&lhs, &rhs], session))??;
+/// let mut backend = CpuEngine::serial();
+/// let out = { let session = &mut backend;  plan.execute([&lhs, &rhs], session) }?;
 /// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -1498,17 +1475,16 @@ impl ConcreteEinsumPlan {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::{BackendSessionHost, Tensor};
+    /// use tenferro_tensor::Tensor;
     ///
     /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
     /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
     ///
-    /// let mut backend = CpuBackend::new();
-    /// let out = backend
-    ///     .with_backend_session(|session| plan.execute([&lhs, &rhs], session))??;
+    /// let mut backend = CpuEngine::serial();
+    /// let out = { let session = &mut backend;  plan.execute([&lhs, &rhs], session) }?;
     /// assert_eq!(out.shape(), &[2, 4]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1552,17 +1528,16 @@ impl ConcreteEinsumPlan {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// use tenferro_tensor::TypedTensor;
     ///
     /// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
     /// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], vec![1.0; 12]).unwrap();
     /// let plan = ConcreteEinsumPlan::prepare_typed([&lhs, &rhs], "ij,jk->ik")?;
     ///
-    /// let mut backend = CpuBackend::new();
-    /// let out = backend
-    ///     .with_backend_session(|session| plan.execute_typed([&lhs, &rhs], session))??;
+    /// let mut backend = CpuEngine::serial();
+    /// let out = { let session = &mut backend;  plan.execute_typed([&lhs, &rhs], session) }?;
     /// assert_eq!(out.shape(), &[2, 4]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1607,9 +1582,9 @@ impl ConcreteEinsumPlan {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// use tenferro_tensor::{Tensor, TensorRead};
     ///
     /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
@@ -1618,10 +1593,9 @@ impl ConcreteEinsumPlan {
     ///     "ij,jk->ik",
     /// )?;
     ///
-    /// let mut backend = CpuBackend::new();
+    /// let mut backend = CpuEngine::serial();
     /// let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
-    /// let out = backend
-    ///     .with_backend_session(|session| plan.execute_read(reads, session))??;
+    /// let out = { let session = &mut backend;  plan.execute_read(reads, session) }?;
     /// assert_eq!(out.shape(), &[2, 4]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1656,23 +1630,23 @@ impl ConcreteEinsumPlan {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorWrite};
+    /// use tenferro_tensor::{Tensor, TensorWrite};
     ///
     /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
     /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
     ///
-    /// let mut backend = CpuBackend::new();
+    /// let mut backend = CpuEngine::serial();
     /// let mut out = Tensor::from_vec_col_major(vec![2, 4], vec![0.0_f64; 8]).unwrap();
-    /// backend.with_backend_session(|session| {
+    /// { let session = &mut backend;  {
     ///     plan.execute_into(
     ///         [&lhs, &rhs],
     ///         session,
     ///         TensorWrite::from_tensor(&mut out),
     ///     )
-    /// })??;
+    /// } }?;
     /// assert_eq!(out.as_slice::<f64>()?, vec![3.0_f64; 8].as_slice());
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1719,19 +1693,19 @@ impl ConcreteEinsumPlan {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::{BackendSessionHost, TypedTensor};
+    /// use tenferro_tensor::TypedTensor;
     ///
     /// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
     /// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], vec![1.0; 12]).unwrap();
     /// let plan = ConcreteEinsumPlan::prepare_typed([&lhs, &rhs], "ij,jk->ik")?;
     ///
-    /// let mut backend = CpuBackend::new();
+    /// let mut backend = CpuEngine::serial();
     /// let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 4], vec![0.0; 8]).unwrap();
-    /// backend.with_backend_session(|session| {
+    /// { let session = &mut backend;  {
     ///     plan.execute_typed_into([&lhs, &rhs], session, &mut out)
-    /// })??;
+    /// } }?;
     /// assert_eq!(out.as_slice()?, vec![3.0_f64; 8].as_slice());
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1779,9 +1753,9 @@ impl ConcreteEinsumPlan {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorWrite};
+    /// use tenferro_tensor::{Tensor, TensorRead, TensorWrite};
     ///
     /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
@@ -1790,12 +1764,12 @@ impl ConcreteEinsumPlan {
     ///     "ij,jk->ik",
     /// )?;
     ///
-    /// let mut backend = CpuBackend::new();
+    /// let mut backend = CpuEngine::serial();
     /// let mut out = Tensor::from_vec_col_major(vec![2, 4], vec![0.0_f64; 8]).unwrap();
     /// let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
-    /// backend.with_backend_session(|session| {
+    /// { let session = &mut backend;  {
     ///     plan.execute_read_into(reads, session, TensorWrite::from_tensor(&mut out))
-    /// })??;
+    /// } }?;
     /// assert_eq!(out.as_slice::<f64>()?, vec![3.0_f64; 8].as_slice());
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1835,25 +1809,25 @@ impl ConcreteEinsumPlan {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_einsum::ConcreteEinsumPlan;
     /// use tenferro_tensor::{
-    ///     BackendSessionHost, DotGeneralAccumulation, DType, Tensor, TensorRead, TensorWrite,
+    ///     DotGeneralAccumulation, DType, Tensor, TensorRead, TensorWrite,
     /// };
     ///
     /// let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
     /// let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
     /// let mut out = Tensor::from_vec_col_major(vec![], vec![1.0_f64])?;
     /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "i,i->")?;
-    /// let mut backend = CpuBackend::new();
-    /// backend.with_backend_session(|session| {
+    /// let mut backend = CpuEngine::serial();
+    /// { let session = &mut backend;  {
     ///     plan.execute_read_into_accum(
     ///         [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
     ///         session,
     ///         DotGeneralAccumulation::add_to(DType::F64)?,
     ///         TensorWrite::from_tensor(&mut out),
     ///     )
-    /// })??;
+    /// } }?;
     /// assert_eq!(out.as_slice::<f64>()?, &[7.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
