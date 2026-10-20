@@ -4,11 +4,14 @@
 //! reverse pass crosses the conversion, which is what #1790's connected programs
 //! need before QR joins them.
 
+mod support;
+
 use std::sync::Arc;
 
+use support::run_compiled;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::ad::Df64VjpRule;
 use tenferro_df64_proof::extension::{module, Df64FromF64, Df64ToF64, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
@@ -36,7 +39,7 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
 }
 
 fn runtime_with_module() -> Runtime {
-    let backend = CpuBackend::new();
+    let backend = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
@@ -95,9 +98,7 @@ fn a_narrowing_program_differentiates_and_does_not_recover_discarded_information
     let program = compiler
         .compile(gradient)
         .expect("compiled reverse program");
-    let results = runtime
-        .run_compiled(&program, &[])
-        .expect("executed reverse program");
+    let results = run_compiled(&runtime, &program, &[]).expect("executed reverse program");
     assert_eq!(results.len(), 1);
 
     // d/dx sum(x^2) = 2x, evaluated at the *narrowed* values, so the low component
@@ -147,9 +148,7 @@ fn a_widening_program_differentiates_across_the_conversion() {
     let program = compiler
         .compile(gradient)
         .expect("compiled reverse program");
-    let results = runtime
-        .run_compiled(&program, &[])
-        .expect("executed reverse program");
+    let results = run_compiled(&runtime, &program, &[]).expect("executed reverse program");
     assert_eq!(results.len(), 1);
     // d/dx sum(x^2) = 2x in ordinary f64, so the gradient carries no external dtype.
     assert_eq!(results[0].dtype(), DType::F64);

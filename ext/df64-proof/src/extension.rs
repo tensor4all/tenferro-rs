@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tenferro_ad::extension::{apply_eager_with_extension_session, ExtensionOp};
 use tenferro_ad::EagerTensor;
-use tenferro_cpu::{scalar_fold, CpuBackend};
+use tenferro_cpu::{scalar_fold, CpuEngine};
 use tenferro_ops::{ExtensionShapeContext, SymDim};
 use tenferro_runtime::{
     EngineId, ErasedExecutionContext, ExecutionContextIdentity, ExtensionCacheKey,
@@ -2281,13 +2281,21 @@ impl PreparedOperation for Df64Prepared {
 impl PreparedOperationExecutor for Df64Prepared {
     fn execute(
         &self,
-        _context: &mut ErasedExecutionContext<'_>,
+        context: &mut ErasedExecutionContext<'_>,
         caches: &mut ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> tenferro_runtime::Result<Vec<Tensor>> {
-        // The erased context does not expose a session, so a body that needs one relies
-        // on the session entry point and gathers what it can without one.
-        self.body.execute(None, caches, inputs)
+        // The runtime passes the caller's engine as the erased context.
+        let engine = context
+            .downcast_mut::<CpuEngine>(self.binding.context_identity())
+            .map_err(|source| {
+                tenferro_runtime::Error::runtime_state_source(
+                    "extension",
+                    tenferro_runtime::ErrorPhase::Execution,
+                    source,
+                )
+            })?;
+        self.body.execute(Some(engine), caches, inputs)
     }
 
     fn supports_session(&self) -> bool {
@@ -2320,7 +2328,7 @@ impl ExtensionEngine for Df64Engine {
     }
 
     fn context_identity(&self) -> ExecutionContextIdentity {
-        ExecutionContextIdentity::of::<CpuBackend>()
+        ExecutionContextIdentity::of::<CpuEngine>()
     }
 
     fn prepare(
@@ -2491,7 +2499,7 @@ pub fn module_for_engine(
     }))
 }
 
-/// Run [`Df64Total`] on an eagerly held external tensor.
+/// Run [`Df64Total`] on an eagerly held external tensor using `engine`.
 ///
 /// # Errors
 ///
@@ -2508,7 +2516,10 @@ pub fn module_for_engine(
 /// assert_eq!(<Df64Total as ExtensionOp>::input_count(&Df64Total), 1);
 /// assert!(module().is_ok());
 /// ```
-pub fn apply_total(input: &EagerTensor) -> tenferro_runtime::Result<Vec<EagerTensor>> {
+pub fn apply_total(
+    engine: &mut dyn tenferro_runtime::ExecutionEngine,
+    input: &EagerTensor,
+) -> tenferro_runtime::Result<Vec<EagerTensor>> {
     let module = module().map_err(|source| {
         tenferro_runtime::Error::runtime_state_source(
             "df64_total",
@@ -2516,5 +2527,5 @@ pub fn apply_total(input: &EagerTensor) -> tenferro_runtime::Result<Vec<EagerTen
             source,
         )
     })?;
-    apply_eager_with_extension_session(Arc::new(Df64Total), &[input], module)
+    apply_eager_with_extension_session(engine, Arc::new(Df64Total), &[input], module)
 }
