@@ -396,7 +396,11 @@ impl CudaEngine {
     /// Lower-triangular part of `input` (diagonal offset `k`) on this engine's
     /// stream; used by first-party linalg kernels.
     #[doc(hidden)]
-    pub fn linalg_tril_typed<T>(&mut self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
+    pub fn linalg_tril_typed<T>(
+        &mut self,
+        input: &TypedTensor<T>,
+        k: i64,
+    ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + TensorScalar + CubePrimitive + Scalar + Clone,
     {
@@ -407,7 +411,11 @@ impl CudaEngine {
     /// Upper-triangular part of `input` (diagonal offset `k`) on this engine's
     /// stream; used by first-party linalg kernels.
     #[doc(hidden)]
-    pub fn linalg_triu_typed<T>(&mut self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
+    pub fn linalg_triu_typed<T>(
+        &mut self,
+        input: &TypedTensor<T>,
+        k: i64,
+    ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + TensorScalar + CubePrimitive + Scalar + Clone,
     {

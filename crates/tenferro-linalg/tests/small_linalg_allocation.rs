@@ -215,7 +215,12 @@ fn check_lane(
     svd_growth: usize,
     packed_lu_growth: usize,
 ) {
-    let mut backend = tenferro_cpu::CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(threads).build().unwrap());
+    let mut backend = tenferro_cpu::CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(threads)
+            .build()
+            .unwrap(),
+    );
     let suffix = format!("{threads}T");
     check_family(
         &mut backend,

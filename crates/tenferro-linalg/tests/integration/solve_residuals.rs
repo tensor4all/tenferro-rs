@@ -12,8 +12,7 @@ fn context() -> Arc<EagerRuntime> {
         .unwrap()
         .build()
         .unwrap();
-    EagerRuntime::with_ad_context(&ad)
-        .unwrap()
+    EagerRuntime::with_ad_context(&ad).unwrap()
 }
 
 fn values(tensor: &EagerTensor, complex: bool) -> Vec<Complex64> {
@@ -75,17 +74,29 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
             };
             let a = input(av.clone());
             let b = input(bv.clone());
-            let direction = input(dv.clone()).detach(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
+            let direction = input(dv.clone())
+                .detach(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap();
             let axes: Vec<_> = (0..shape.len()).collect();
             let solution = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
             let loss = ctx
-                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.reduce_sum(&solution, Some(&axes)))
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.reduce_sum(&solution, Some(&axes))
+                })
                 .unwrap();
             drop(solution); // LU/pivots and X must survive without user handles.
-            let ga = ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &a).unwrap();
-            let gb = ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &b).unwrap();
-            let haa = ctx.jvp(&mut tenferro_cpu::CpuEngine::serial(), &ga, &a, &direction).unwrap();
-            let hba = ctx.jvp(&mut tenferro_cpu::CpuEngine::serial(), &gb, &a, &direction).unwrap();
+            let ga = ctx
+                .grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &a)
+                .unwrap();
+            let gb = ctx
+                .grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &b)
+                .unwrap();
+            let haa = ctx
+                .jvp(&mut tenferro_cpu::CpuEngine::serial(), &ga, &a, &direction)
+                .unwrap();
+            let hba = ctx
+                .jvp(&mut tenferro_cpu::CpuEngine::serial(), &gb, &a, &direction)
+                .unwrap();
             let first_at = |sign: f64| {
                 let a = input(
                     av.iter()
@@ -96,11 +107,21 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
                 let b = input(bv.clone());
                 let solution = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
                 let loss = ctx
-                    .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.reduce_sum(&solution, Some(&axes)))
+                    .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                        s.reduce_sum(&solution, Some(&axes))
+                    })
                     .unwrap();
                 (
-                    values(&ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &a).unwrap(), complex),
-                    values(&ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &b).unwrap(), complex),
+                    values(
+                        &ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &a)
+                            .unwrap(),
+                        complex,
+                    ),
+                    values(
+                        &ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &b)
+                            .unwrap(),
+                        complex,
+                    ),
                 )
             };
             let plus = first_at(1.0);
@@ -123,12 +144,20 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
                 })
                 .unwrap();
             close(
-                &values(&ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &directional, &a).unwrap(), complex),
+                &values(
+                    &ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &directional, &a)
+                        .unwrap(),
+                    complex,
+                ),
                 &values(&haa, complex),
                 2e-10,
             );
             close(
-                &values(&ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &directional, &b).unwrap(), complex),
+                &values(
+                    &ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &directional, &b)
+                        .unwrap(),
+                    complex,
+                ),
                 &values(&hba, complex),
                 2e-10,
             );
@@ -154,10 +183,14 @@ fn solve_handles_single_and_multiple_tracked_inputs_and_no_grad() {
         close(&values(&solution, false), &[2.0.into(), 3.0.into()], 1e-12);
         if track_a || track_b {
             let loss = ctx
-                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.reduce_sum(&solution, Some(&[0, 1])))
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.reduce_sum(&solution, Some(&[0, 1]))
+                })
                 .unwrap();
             drop(solution);
-            let gradients = loss.backward(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
+            let gradients = loss
+                .backward(&mut tenferro_cpu::CpuEngine::serial())
+                .unwrap();
             assert_eq!(gradients.len(), usize::from(track_a) + usize::from(track_b));
             if track_a {
                 assert_eq!(
@@ -173,7 +206,10 @@ fn solve_handles_single_and_multiple_tracked_inputs_and_no_grad() {
             }
         }
         let _guard = ctx.no_grad();
-        assert!(!a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap().tracks_grad());
+        assert!(!a
+            .solve(&mut tenferro_cpu::CpuEngine::serial(), &b)
+            .unwrap()
+            .tracks_grad());
     }
 }
 
@@ -214,7 +250,12 @@ fn solve_validates_both_operands_before_factorization() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    assert_eq!(a.solve(&mut tenferro_cpu::CpuEngine::serial(), &empty).unwrap().shape(), &[2, 0]);
+    assert_eq!(
+        a.solve(&mut tenferro_cpu::CpuEngine::serial(), &empty)
+            .unwrap()
+            .shape(),
+        &[2, 0]
+    );
     let b = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64; 2]).unwrap(),
         Arc::clone(&ctx),

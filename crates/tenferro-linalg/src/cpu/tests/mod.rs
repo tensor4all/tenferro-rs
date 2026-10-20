@@ -10,7 +10,9 @@ use num_complex::{Complex32, Complex64};
 use super::linalg::faer_linalg;
 use crate::LinalgBackend;
 use tenferro_cpu::{with_cpu_engine, CpuEngine};
-use tenferro_tensor::config::{CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
+use tenferro_tensor::config::{
+    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+};
 use tenferro_tensor::types::{DType, Tensor, TensorRead, TensorView, TypedTensor, TypedTensorView};
 
 pub(super) fn with_cpu_linalg<R>(

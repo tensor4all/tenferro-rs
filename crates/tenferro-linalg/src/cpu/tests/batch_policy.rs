@@ -12,7 +12,12 @@ use tenferro_cpu::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy};
 fn forced_outer_reaches_the_faer_exec() {
     use crate::cpu::tlinalg::exec_from;
 
-    let mut backend = tenferro_cpu::CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(4).build().unwrap());
+    let mut backend = tenferro_cpu::CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(4)
+            .build()
+            .unwrap(),
+    );
     let decision = with_cpu_linalg(&mut backend, |session| {
         with_batch_policy(
             session,
@@ -48,7 +53,12 @@ fn forced_strategy_on_the_blas_linalg_lane_is_refused_before_writes() {
     let a_data: Vec<f64> = (0..n * n * batch)
         .map(|index| ((index % 7) as f64) - 3.0)
         .collect();
-    let mut backend = tenferro_cpu::CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(2).build().unwrap());
+    let mut backend = tenferro_cpu::CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(2)
+            .build()
+            .unwrap(),
+    );
 
     let strategies = [
         CpuBatchStrategy::Outer,
@@ -66,8 +76,7 @@ fn forced_strategy_on_the_blas_linalg_lane_is_refused_before_writes() {
         for strategy in strategies {
             let result = with_cpu_linalg(&mut backend, |session| {
                 with_batch_policy(session, CpuBatchPolicy::new(strategy), |session| {
-                    with_cpu_engine(session, |cpu| cpu.lu_factor(&input))
-                        .expect("a CPU session")
+                    with_cpu_engine(session, |cpu| cpu.lu_factor(&input)).expect("a CPU session")
                 })
                 .expect("the CPU session accepts the policy")
             });
@@ -99,7 +108,12 @@ fn forced_strategy_on_blas_solve_read_into_is_refused_before_writes() {
 
     let a = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
     let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
-    let mut backend = tenferro_cpu::CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(2).build().unwrap());
+    let mut backend = tenferro_cpu::CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(2)
+            .build()
+            .unwrap(),
+    );
 
     for strategy in [
         CpuBatchStrategy::Outer,
@@ -144,7 +158,12 @@ fn forced_strategy_on_blas_solve_read_into_is_refused_before_writes() {
 fn forced_whole_batch_vendor_on_native_empty_inputs_is_refused() {
     use std::error::Error as _;
 
-    let mut backend = tenferro_cpu::CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(2).build().unwrap());
+    let mut backend = tenferro_cpu::CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(2)
+            .build()
+            .unwrap(),
+    );
     for shape in [vec![2, 2, 0], vec![0, 0]] {
         let input = Tensor::from_vec_col_major(shape.clone(), Vec::<f64>::new()).unwrap();
         let result = with_cpu_linalg(&mut backend, |session| {
@@ -152,8 +171,7 @@ fn forced_whole_batch_vendor_on_native_empty_inputs_is_refused() {
                 session,
                 CpuBatchPolicy::new(CpuBatchStrategy::WholeBatchVendor),
                 |session| {
-                    with_cpu_engine(session, |cpu| cpu.cholesky(&input))
-                        .expect("a CPU session")
+                    with_cpu_engine(session, |cpu| cpu.cholesky(&input)).expect("a CPU session")
                 },
             )
             .expect("the CPU session accepts the policy")
