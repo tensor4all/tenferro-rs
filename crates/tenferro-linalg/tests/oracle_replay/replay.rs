@@ -1184,8 +1184,10 @@ fn run_compiled_cpu(
 ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
     use tenferro_runtime::ExecutionEngine;
     let mut engine = tenferro_cpu::CpuEngine::serial();
-    let reads: Vec<tenferro_tensor::TensorRead<'_>> =
-        inputs.iter().map(|tensor| tenferro_tensor::TensorRead::from_tensor(tensor)).collect();
+    let reads: Vec<tenferro_tensor::TensorRead<'_>> = inputs
+        .iter()
+        .map(|tensor| tenferro_tensor::TensorRead::from_tensor(tensor))
+        .collect();
     let prepared = runtime.prepare(program, &reads, &[engine.target()])?;
     let outputs = {
         let mut engines: [&mut dyn ExecutionEngine; 1] = [&mut engine];

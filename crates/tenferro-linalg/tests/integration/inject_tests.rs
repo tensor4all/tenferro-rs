@@ -4,7 +4,10 @@ use std::ffi::{c_char, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, Once};
 
-use tenferro_cpu::inject::{register_blas_gemm_provider_ptrs, register_lapack_provider_ptrs, BlasGemmProviderPtrSet, LapackProviderPtrSet, ProviderAbi};
+use tenferro_cpu::inject::{
+    register_blas_gemm_provider_ptrs, register_lapack_provider_ptrs, BlasGemmProviderPtrSet,
+    LapackProviderPtrSet, ProviderAbi,
+};
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};

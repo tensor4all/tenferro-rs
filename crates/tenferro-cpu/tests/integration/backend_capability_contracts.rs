@@ -480,7 +480,7 @@ fn strided_kernel_ownership_requires_backend_execution_resources() {
         contract.get("einsum-owner"),
         Some(&"tenferro:benchmark-backed-exception")
     );
-    assert_eq!(contract.get("execution-entry"), Some(&"CpuBackend"));
+    assert_eq!(contract.get("execution-entry"), Some(&"CpuEngine"));
     assert_eq!(
         contract_set(&contract, "affine-kernels"),
         BTreeSet::from([
@@ -500,7 +500,7 @@ fn strided_kernel_ownership_requires_backend_execution_resources() {
     assert_eq!(
         contract_set(&contract, "execution-resources"),
         BTreeSet::from([
-            "CpuContext-Rayon",
+            "engine-owned-Rayon",
             "nested-execution",
             "persistent-BufferPool",
             "serial-parallel-threshold",

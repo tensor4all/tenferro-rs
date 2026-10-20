@@ -5,7 +5,10 @@
 use std::sync::Arc;
 
 use tenferro_ad::error::{Error, Result};
-use tenferro_ad::extension::{apply_eager_with_targeted_extension_in_session, apply_eager_with_targeted_extension_session, EagerExtensionBackendKind, EagerExtensionTarget};
+use tenferro_ad::extension::{
+    apply_eager_with_targeted_extension_in_session, apply_eager_with_targeted_extension_session,
+    EagerExtensionBackendKind, EagerExtensionTarget,
+};
 use tenferro_ad::{EagerSession, EagerTensor};
 use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
@@ -15,7 +18,10 @@ use tenferro_gpu::webgpu::WebGpuBackend;
 use tenferro_runtime::{ErrorPhase, ExecutionEngine, ExtensionModule};
 
 use crate::eager_composites;
-use crate::extension::{extension_module, validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions};
+use crate::extension::{
+    extension_module, validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions,
+    SvdOptions,
+};
 use crate::rank_revealing_qr::validate_rank_revealing_qr_options;
 use crate::{RankRevealingQrOptions, RankRevealingQrResult};
 
@@ -1037,10 +1043,17 @@ pub fn solve(
     b: &EagerTensor,
 ) -> Result<EagerTensor> {
     if !a.tracks_grad() && !b.tracks_grad() {
-        return one_output(apply_linalg_eager(engine, LinalgOp::Solve, &[a, b])?, "solve");
+        return one_output(
+            apply_linalg_eager(engine, LinalgOp::Solve, &[a, b])?,
+            "solve",
+        );
     }
     validate_tracked_solve_inputs(a, b)?;
-    factor_solve_output(apply_linalg_eager(engine, LinalgOp::LuFactorSolve, &[a, b])?)
+    factor_solve_output(apply_linalg_eager(
+        engine,
+        LinalgOp::LuFactorSolve,
+        &[a, b],
+    )?)
 }
 
 fn validate_tracked_solve_inputs(a: &EagerTensor, b: &EagerTensor) -> Result<()> {

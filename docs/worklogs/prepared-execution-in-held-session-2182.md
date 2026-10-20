@@ -5,7 +5,8 @@
   `CudaHeldSession::with_session`). Every node, fusion and output collection uses that session; the executor state is taken once
   per call without waiting. Retirement still happens before the call returns (stage 1). Removing the per-call stream barrier
   needs an ownership protocol for the run's inputs and outputs and is left as an open maintainer decision (stage 2), see
-  [held-cuda-session-1945-u3.md](../design/held-cuda-session-1945-u3.md) §8.
+  the retired held-session design; the engine model is in
+  [execution-engine-ownership.md](../design/execution-engine-ownership.md).
 - Session ownership is checked by the backend (`BackendSessionHost::owns_session`, default `false`) against its exact
   runtime identity, not by backend type: two CUDA backends on one device share a type but not allocations.
 - Readback into caller memory takes an owned, reusable `Vec<T>` (`download_tensor_into`), not `&mut [T]`: after an unproven copy

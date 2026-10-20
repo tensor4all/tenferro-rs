@@ -2,17 +2,27 @@ use std::ffi::c_void;
 use std::ops::Neg;
 use std::os::raw::c_char;
 
-use cubecl::prelude::{ComplexCore, CubeElement, CubeMul, CubeNeg, CubePartialOrd, CubePrimitive, Scalar};
+use cubecl::prelude::{
+    ComplexCore, CubeElement, CubeMul, CubeNeg, CubePartialOrd, CubePrimitive, Scalar,
+};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
-use super::ffi::cusolver::{CublasDiagType, CublasFillMode, CublasOperation, CublasPointerMode, CublasSideMode, CudaDataType, CudaLinalgHandles, CudaStream, CusolverEigMode};
+use super::ffi::cusolver::{
+    CublasDiagType, CublasFillMode, CublasOperation, CublasPointerMode, CublasSideMode,
+    CudaDataType, CudaLinalgHandles, CudaStream, CusolverEigMode,
+};
 use super::kernels as cubecl_linalg;
 use crate::backend::CompactQrResult;
 use crate::extension::{EighDriver, QrGauge, QrOptions, SvdDriver};
-use tenferro_gpu::{cuda::cubecl::Session as CubeclSession, cuda::download_tensor, cuda::CudaEngine};
+use tenferro_gpu::{
+    cuda::cubecl::Session as CubeclSession, cuda::download_tensor, cuda::CudaEngine,
+};
 use tenferro_tensor::config::SliceConfig;
-use tenferro_tensor::{DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorRead, TensorReduction, TensorScalar, TensorStructural, TypedTensor, ValidationError};
+use tenferro_tensor::{
+    DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorRead, TensorReduction,
+    TensorScalar, TensorStructural, TypedTensor, ValidationError,
+};
 
 type Result<T> = tenferro_tensor::Result<T>;
 
@@ -471,10 +481,7 @@ fn lu_factor_with_op(
 /// factorization; the caller's residual check decides whether the result is
 /// acceptable. The public `lu_factor`/`lu` operations keep the status check and
 /// parity output.
-fn lu_factor_for_solve(
-    backend: &mut CudaEngine,
-    input: &Tensor,
-) -> Result<(Tensor, Tensor)> {
+fn lu_factor_for_solve(backend: &mut CudaEngine, input: &Tensor) -> Result<(Tensor, Tensor)> {
     match input.dtype() {
         DType::F32 => {
             lu_factor_for_solve_typed(backend, typed_host::<f32>("solve", input)?, "solve").map(
@@ -519,10 +526,7 @@ fn lu_factor_for_solve(
     }
 }
 
-pub(super) fn full_piv_lu(
-    _backend: &mut CudaEngine,
-    _input: &Tensor,
-) -> Result<Vec<Tensor>> {
+pub(super) fn full_piv_lu(_backend: &mut CudaEngine, _input: &Tensor) -> Result<Vec<Tensor>> {
     Err(Error::unsupported(
         "full_piv_lu",
         "complete-pivoting LU is not implemented for the CubeCL backend",
@@ -661,10 +665,7 @@ pub(super) fn rank_revealing_qr(
     rank_revealing_qr::rank_revealing_qr(backend, input, options)
 }
 
-pub(super) fn householder_qr(
-    backend: &mut CudaEngine,
-    input: &Tensor,
-) -> Result<CompactQrResult> {
+pub(super) fn householder_qr(backend: &mut CudaEngine, input: &Tensor) -> Result<CompactQrResult> {
     let (packed, coeff) = match input.dtype() {
         DType::F32 => {
             let (packed, coeff) = compact_qr_typed(
@@ -1307,10 +1308,7 @@ pub(super) fn lu_solve_prepared(
     }
 }
 
-fn cholesky_typed<T>(
-    backend: &mut CudaEngine,
-    input: &TypedTensor<T>,
-) -> Result<TypedTensor<T>>
+fn cholesky_typed<T>(backend: &mut CudaEngine, input: &TypedTensor<T>) -> Result<TypedTensor<T>>
 where
     T: LinalgScalar + TensorScalar + Scalar,
 {

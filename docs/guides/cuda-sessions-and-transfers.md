@@ -5,7 +5,7 @@ moving host data without making the host wait for the device. This guide covers 
 the transfer routes that provide them, the rules each one keeps, and what is deliberately not
 supported yet. The runnable driver is
 `crates/tenferro-gpu/examples/cuda_session_transfer.rs`; the reasoning and the measurements are in
-[the held-session record](../design/held-cuda-session-1945-u3.md) and
+[the engine ownership record](../design/execution-engine-ownership.md) and
 [the transfer record](../design/asynchronous-transfer-1945-u4.md).
 
 ## Two entry shapes

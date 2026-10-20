@@ -409,7 +409,9 @@ fn fixed_transpose_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension::{EighDriver, EighGauge, QrGauge, SvdDriver, SvdGauge, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS};
+    use crate::extension::{
+        EighDriver, EighGauge, QrGauge, SvdDriver, SvdGauge, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+    };
     use computegraph::graph::GraphBuilder;
     use std::collections::HashSet;
     use tenferro_ops::input_key::TensorInputKey;
@@ -422,7 +424,12 @@ mod tests {
         program: &tenferro_runtime::CompiledGraph,
         inputs: &[&tenferro_tensor::Tensor],
     ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
-        run_compiled_on(runtime, &mut tenferro_cpu::CpuEngine::serial(), program, inputs)
+        run_compiled_on(
+            runtime,
+            &mut tenferro_cpu::CpuEngine::serial(),
+            program,
+            inputs,
+        )
     }
 
     /// Prepare and run `program` on `engine`, returning owned outputs.
@@ -433,8 +440,10 @@ mod tests {
         inputs: &[&tenferro_tensor::Tensor],
     ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
         use tenferro_runtime::ExecutionEngine;
-        let reads: Vec<tenferro_tensor::TensorRead<'_>> =
-            inputs.iter().map(|tensor| tenferro_tensor::TensorRead::from_tensor(tensor)).collect();
+        let reads: Vec<tenferro_tensor::TensorRead<'_>> = inputs
+            .iter()
+            .map(|tensor| tenferro_tensor::TensorRead::from_tensor(tensor))
+            .collect();
         let prepared = runtime.prepare(program, &reads, &[engine.target()])?;
         let outputs = {
             let mut engines: [&mut dyn ExecutionEngine; 1] = [&mut *engine];
@@ -1765,8 +1774,9 @@ mod tests {
                             let vjp = GraphCompiler::new()
                                 .compile_frozen_program(vjp.frozen())
                                 .unwrap();
-                            let input_cotangents = run_compiled_cpu(&runtime, &vjp, &[&matrix, &rhs, &cotangent])
-                                .unwrap();
+                            let input_cotangents =
+                                run_compiled_cpu(&runtime, &vjp, &[&matrix, &rhs, &cotangent])
+                                    .unwrap();
                             assert_eq!(input_cotangents.len(), 2);
 
                             let lhs = semantic_real_inner_product(&cotangent, &tangent_output);
@@ -1979,11 +1989,10 @@ mod tests {
                     .unwrap();
                 let mut vjp_inputs = primal_inputs;
                 vjp_inputs.push(&cotangent);
-                let input_cotangents =
-                    run_compiled_cpu(&runtime, &vjp, &vjp_inputs)
-                        .unwrap_or_else(|error| {
-                            panic!("{name} complex={complex} semantic VJP execution: {error}")
-                        });
+                let input_cotangents = run_compiled_cpu(&runtime, &vjp, &vjp_inputs)
+                    .unwrap_or_else(|error| {
+                        panic!("{name} complex={complex} semantic VJP execution: {error}")
+                    });
                 assert_eq!(input_cotangents.len(), 2, "{name}");
 
                 let lhs = semantic_real_inner_product(&cotangent, &tangent_output);
@@ -2103,25 +2112,29 @@ mod tests {
                     .collect();
                 let matrix = Tensor::from_vec_col_major(vec![rows, cols], matrix_data).unwrap();
                 let tangent = Tensor::from_vec_col_major(vec![rows, cols], tangent_data).unwrap();
-                let primal_outputs = run_compiled_cpu(&runtime, &primal, &[&row_anchor, &col_anchor, &matrix])
-                    .unwrap_or_else(|error| {
-                        panic!("{name} {rows}x{cols} symbolic primal execution: {error}")
-                    });
+                let primal_outputs =
+                    run_compiled_cpu(&runtime, &primal, &[&row_anchor, &col_anchor, &matrix])
+                        .unwrap_or_else(|error| {
+                            panic!("{name} {rows}x{cols} symbolic primal execution: {error}")
+                        });
                 let cotangents: Vec<_> = primal_outputs
                     .iter()
                     .map(|output| ones_tensor(output.dtype(), output.shape().to_vec()).unwrap())
                     .collect();
-                let tangent_outputs = run_compiled_cpu(&runtime, &jvp, &[&row_anchor, &col_anchor, &matrix, &tangent])
-                    .unwrap_or_else(|error| {
-                        panic!("{name} {rows}x{cols} symbolic JVP execution: {error}")
-                    });
+                let tangent_outputs = run_compiled_cpu(
+                    &runtime,
+                    &jvp,
+                    &[&row_anchor, &col_anchor, &matrix, &tangent],
+                )
+                .unwrap_or_else(|error| {
+                    panic!("{name} {rows}x{cols} symbolic JVP execution: {error}")
+                });
                 let mut vjp_inputs = vec![&row_anchor, &col_anchor, &matrix];
                 vjp_inputs.extend(&cotangents);
-                let input_cotangents =
-                    run_compiled_cpu(&runtime, &vjp, &vjp_inputs)
-                        .unwrap_or_else(|error| {
-                            panic!("{name} {rows}x{cols} symbolic VJP execution: {error}")
-                        });
+                let input_cotangents = run_compiled_cpu(&runtime, &vjp, &vjp_inputs)
+                    .unwrap_or_else(|error| {
+                        panic!("{name} {rows}x{cols} symbolic VJP execution: {error}")
+                    });
                 assert_eq!(input_cotangents.len(), 1);
                 for (index, output) in tangent_outputs.iter().enumerate() {
                     let values = output.as_slice::<f64>().unwrap();
@@ -2213,8 +2226,8 @@ mod tests {
             let tangent =
                 Tensor::from_vec_col_major(vec![3, 2], vec![0.2_f64, -0.1, 0.05, 0.3, 0.4, -0.2])
                     .unwrap();
-            let outputs = run_compiled_on(&runtime, &mut backend, &compiled, &[&matrix, &tangent])
-                .unwrap();
+            let outputs =
+                run_compiled_on(&runtime, &mut backend, &compiled, &[&matrix, &tangent]).unwrap();
             drop(outputs);
             (
                 jvp_operations,

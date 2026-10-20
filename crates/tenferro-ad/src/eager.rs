@@ -4724,6 +4724,11 @@ impl EagerTensor {
     /// The returned tensor keeps the concrete value but no longer contributes
     /// gradients to the original graph.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the value cannot be duplicated on `engine` or when
+    /// it cannot be represented with a symbolic shape for the detached record.
+    ///
     /// # Examples
     ///
     /// ```

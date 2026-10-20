@@ -814,7 +814,7 @@ update affected records on the implementation branch:
 - `docs/design/tensor.md`, `storage-ownership-contracts.md` and
   `docs/storage-ownership.md`: compact payloads, groups, mapping, allocation
   initialization and container-copy boundary.
-- `docs/design/exec-session.md`, `explicit-session-boundary.md` and
+- `docs/design/execution-engine-ownership.md`, `explicit-session-boundary.md` and
   `session-oriented-concrete-apis.md`: fallible entry, native visitors, compact
   inputs/outputs, A2's explicit deferral.
 - `docs/architecture/tenferro-crates.md`: concrete ownership moves in D10 and

@@ -34,9 +34,7 @@ const RRQR_PLANE_WIDTH: u32 = 32;
 type CudaTensorBinding = TensorBinding;
 
 trait CudaRrqrScalar: LinalgScalar + TensorScalar {
-    fn device_imaginary_unit(
-        backend: &mut CudaEngine,
-    ) -> Result<Option<TypedTensor<Self>>>;
+    fn device_imaginary_unit(backend: &mut CudaEngine) -> Result<Option<TypedTensor<Self>>>;
 
     fn launch_norms(
         cubecl: &CubeclSession<'_>,
