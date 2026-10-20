@@ -324,17 +324,21 @@ fn raw_session_reuses_the_runtime_cublas_handle() {
         "two raw scopes of one runtime must use the same cached cuBLAS handle"
     );
 
-    // The handle really is the runtime's own: a vendor enqueue that does not go
-    // through a raw session reaches the same cached handle.
+    // The handle really is the runtime's own for the engine's stream: a vendor
+    // enqueue on that stream that does not go through a raw session reaches the
+    // same cached handle.
     let runtime = backend.runtime().clone();
-    let runtime_handle = runtime
-        .with_current_context("test.raw_cublas_runtime", || {
-            runtime.with_cublas_handle(
-                "test.raw_cublas_runtime",
-                cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
-                Vec::new(),
-                |handle| Ok(handle as usize),
-            )
+    let runtime_handle = backend
+        .stream
+        .executes(|| {
+            runtime.with_current_context("test.raw_cublas_runtime", || {
+                runtime.with_cublas_handle(
+                    "test.raw_cublas_runtime",
+                    cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
+                    Vec::new(),
+                    |handle| Ok(handle as usize),
+                )
+            })
         })
         .expect("primary context")
         .expect("runtime cuBLAS handle");

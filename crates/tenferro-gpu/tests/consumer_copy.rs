@@ -123,5 +123,6 @@ fn a_copy_from_another_runtime_instance_is_refused_with_the_publication() {
     // The publication came back unchanged and is still usable: the source value is intact.
     let mut publication = *publication;
     assert_eq!(publication.bytes(), 32 * 8);
+    publication.await_frontier().expect("await frontier");
     assert!(publication.frontier_ready().expect("frontier query"));
 }

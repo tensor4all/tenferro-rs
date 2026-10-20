@@ -198,6 +198,8 @@ pub struct CudaRuntime {
 
 pub(crate) struct CudaRuntimeState {
     client: Client,
+    // The home stream: one runtime, one engine, one logical stream (#2206).
+    stream: cubecl_environment::stream::StreamId,
     device_id: CudaDeviceId,
     device_ordinal: usize,
     device_info: CudaDeviceInfo,
@@ -556,6 +558,7 @@ impl CudaRuntime {
         Ok(Self {
             inner: Arc::new(CudaRuntimeState {
                 client,
+                stream: cubecl_environment::stream::StreamId::allocate(),
                 device_id,
                 device_ordinal,
                 device_info,
@@ -1009,7 +1012,17 @@ impl CudaRuntime {
     /// current stream, or [`crate::Error::BackendSource`] when CUDA context or
     /// stream synchronization fails.
     pub fn synchronize(&self) -> crate::Result<()> {
-        self.inner.synchronize()
+        let inner = &self.inner;
+        self.stream().executes(|| inner.synchronize())
+    }
+
+    /// The logical CubeCL stream this runtime and the engine that owns it issue work on.
+    ///
+    /// Every public entry point that takes a runtime runs on this stream, so a free-function
+    /// upload, download or synchronize is ordered with the engine's operations on the same
+    /// runtime instead of running on the calling thread's ambient stream.
+    pub(crate) fn stream(&self) -> cubecl_environment::stream::StreamId {
+        self.inner.stream
     }
 
     /// Ask the allocator to release device memory it can release.

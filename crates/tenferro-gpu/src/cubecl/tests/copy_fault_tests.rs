@@ -52,6 +52,7 @@ fn a_recoverable_preparation_failure_refuses_with_the_publication() {
     // The publication came back unchanged, so the caller can still consume it.
     let mut publication = *publication;
     assert_eq!(publication.bytes(), 32 * 8);
+    publication.await_frontier().expect("await frontier");
     assert!(publication.frontier_ready().expect("frontier query"));
 }
 

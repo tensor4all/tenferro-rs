@@ -127,8 +127,9 @@ fn materialize_strided_kernel_compiles_once_per_rank() {
             let view = typed_f64(&source)
                 .backend_region_view(shape.to_vec(), strides.to_vec(), offset)
                 .unwrap();
-            let out = gpu
-                .to_contiguous_view_typed(&view, "kernel_specialization_test")
+            let stream = gpu.stream;
+            let out = stream
+                .executes(|| gpu.to_contiguous_view_typed(&view, "kernel_specialization_test"))
                 .unwrap();
             let actual = host_f64(gpu, &Tensor::from_typed(out));
             assert_bits_eq(
@@ -159,8 +160,9 @@ fn tiled_transpose_kernel_compiles_once_per_tile_configuration() {
             let view = typed_f64(&source)
                 .backend_region_view(vec![rows, cols], strides.to_vec(), 0)
                 .unwrap();
-            let out = gpu
-                .to_contiguous_view_typed(&view, "kernel_specialization_test")
+            let stream = gpu.stream;
+            let out = stream
+                .executes(|| gpu.to_contiguous_view_typed(&view, "kernel_specialization_test"))
                 .unwrap();
             let actual = host_f64(gpu, &Tensor::from_typed(out));
             assert_bits_eq(
@@ -208,7 +210,10 @@ fn strided_copy_kernels_compile_once_per_rank() {
                     .unwrap()
                     .backend_region_view_mut(shape.to_vec(), dst_strides.to_vec(), dst_offset)
                     .unwrap();
-                gpu.copy_view_to_view_typed(&src, &mut dst, "kernel_specialization_test")
+                gpu.stream
+                    .executes(|| {
+                        gpu.copy_view_to_view_typed(&src, &mut dst, "kernel_specialization_test")
+                    })
                     .unwrap();
             }
             let mut expected = dst_init;
@@ -245,7 +250,10 @@ fn strided_copy_kernels_compile_once_per_rank() {
                     .unwrap()
                     .backend_region_view_mut(shape.to_vec(), dst_strides.to_vec(), dst_offset)
                     .unwrap();
-                gpu.copy_view_to_view_typed(&src, &mut dst, "kernel_specialization_test")
+                gpu.stream
+                    .executes(|| {
+                        gpu.copy_view_to_view_typed(&src, &mut dst, "kernel_specialization_test")
+                    })
                     .unwrap();
             }
             let mut expected = dst_init;

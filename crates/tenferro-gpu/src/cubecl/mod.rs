@@ -858,8 +858,9 @@ impl CudaEngine {
     /// discovered, or [`CudaDeviceError::Initialization`] when CUDA runtime,
     /// context, or CubeCL client initialization fails.
     pub fn open(device_id: CudaDeviceId) -> Result<Self, CudaDeviceError> {
+        let rt = CudaRuntime::new(device_id)?;
         Ok(Self {
-            stream: StreamId::allocate(),
+            stream: rt.stream(),
             runtime_engine_id: runtime_adapter::default_cuda_engine_id(),
             extension_caches: tenferro_runtime::ExtensionCacheStore::default(),
             pending_runs: Vec::new(),
@@ -870,7 +871,7 @@ impl CudaEngine {
                     DEFAULT_CUTENSOR_WORKSPACE_MAX_RETAINED_BYTES,
                 ),
                 cutensor_workspace_temporary_uses: AtomicU64::new(0),
-                rt: CudaRuntime::new(device_id)?,
+                rt,
             },
         })
     }

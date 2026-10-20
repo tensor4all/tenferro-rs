@@ -30,32 +30,48 @@ use cubecl::frontend::Scalar;
 /// or belongs to another placement, [`crate::Error::Unsupported`] for a dtype
 /// unavailable in CubeCL, or [`crate::Error::BackendSource`] on allocation.
 pub fn upload_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
-    let client = rt.client();
-    match tensor.dtype() {
-        DType::F64 => upload_typed::<f64>(rt, client, gpu_typed::<f64>("upload_tensor", tensor)?)
-            .map(Tensor::from_typed::<f64>),
-        DType::F32 => upload_typed::<f32>(rt, client, gpu_typed::<f32>("upload_tensor", tensor)?)
-            .map(Tensor::from_typed::<f32>),
-        DType::I32 => upload_typed::<i32>(rt, client, gpu_typed::<i32>("upload_tensor", tensor)?)
-            .map(Tensor::from_typed::<i32>),
-        DType::I64 => upload_typed::<i64>(rt, client, gpu_typed::<i64>("upload_tensor", tensor)?)
-            .map(Tensor::from_typed::<i64>),
-        DType::Bool => upload_bool(rt, client, gpu_typed::<bool>("upload_tensor", tensor)?)
-            .map(Tensor::from_typed::<bool>),
-        DType::C64 => {
-            upload_typed::<Complex64>(rt, client, gpu_typed::<Complex64>("upload_tensor", tensor)?)
-                .map(Tensor::from_typed::<tenferro_tensor::Complex64>)
+    // Every entry point of this runtime runs on its home stream, so it is ordered with the
+    // engine that owns the runtime (#2206).
+    rt.stream().executes(|| {
+        let client = rt.client();
+        match tensor.dtype() {
+            DType::F64 => {
+                upload_typed::<f64>(rt, client, gpu_typed::<f64>("upload_tensor", tensor)?)
+                    .map(Tensor::from_typed::<f64>)
+            }
+            DType::F32 => {
+                upload_typed::<f32>(rt, client, gpu_typed::<f32>("upload_tensor", tensor)?)
+                    .map(Tensor::from_typed::<f32>)
+            }
+            DType::I32 => {
+                upload_typed::<i32>(rt, client, gpu_typed::<i32>("upload_tensor", tensor)?)
+                    .map(Tensor::from_typed::<i32>)
+            }
+            DType::I64 => {
+                upload_typed::<i64>(rt, client, gpu_typed::<i64>("upload_tensor", tensor)?)
+                    .map(Tensor::from_typed::<i64>)
+            }
+            DType::Bool => upload_bool(rt, client, gpu_typed::<bool>("upload_tensor", tensor)?)
+                .map(Tensor::from_typed::<bool>),
+            DType::C64 => upload_typed::<Complex64>(
+                rt,
+                client,
+                gpu_typed::<Complex64>("upload_tensor", tensor)?,
+            )
+            .map(Tensor::from_typed::<tenferro_tensor::Complex64>),
+            DType::C32 => upload_typed::<Complex32>(
+                rt,
+                client,
+                gpu_typed::<Complex32>("upload_tensor", tensor)?,
+            )
+            .map(Tensor::from_typed::<tenferro_tensor::Complex32>),
+            // A caller-owned payload has no GPU implementation for this operation.
+            DType::External(_) => Err(crate::Error::unsupported(
+                "upload_tensor",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
-        DType::C32 => {
-            upload_typed::<Complex32>(rt, client, gpu_typed::<Complex32>("upload_tensor", tensor)?)
-                .map(Tensor::from_typed::<tenferro_tensor::Complex32>)
-        }
-        // A caller-owned payload has no GPU implementation for this operation.
-        DType::External(_) => Err(crate::Error::unsupported(
-            "upload_tensor",
-            "an externally defined payload is not supported by this GPU operation",
-        )),
-    }
+    })
 }
 
 /// The typed tensor behind `tensor`, or a typed refusal.
@@ -88,32 +104,36 @@ fn gpu_typed<'a, T: TensorScalar>(
 /// [`crate::Error::BackendSource`] when synchronization/readback fails, or a
 /// typed validation error when device data cannot be decoded.
 pub fn download_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
-    ensure_tensor_resident_on_runtime(rt, tensor, "download")?;
-    match tensor.dtype() {
-        DType::F64 => download_typed::<f64>(rt, gpu_typed::<f64>("download_tensor", tensor)?)
-            .map(Tensor::from_typed::<f64>),
-        DType::F32 => download_typed::<f32>(rt, gpu_typed::<f32>("download_tensor", tensor)?)
-            .map(Tensor::from_typed::<f32>),
-        DType::I32 => download_typed::<i32>(rt, gpu_typed::<i32>("download_tensor", tensor)?)
-            .map(Tensor::from_typed::<i32>),
-        DType::I64 => download_typed::<i64>(rt, gpu_typed::<i64>("download_tensor", tensor)?)
-            .map(Tensor::from_typed::<i64>),
-        DType::Bool => download_bool(rt, gpu_typed::<bool>("download_tensor", tensor)?)
-            .map(Tensor::from_typed::<bool>),
-        DType::C64 => {
-            download_typed::<Complex64>(rt, gpu_typed::<Complex64>("download_tensor", tensor)?)
-                .map(Tensor::from_typed::<tenferro_tensor::Complex64>)
+    // Every entry point of this runtime runs on its home stream, so it is ordered with the
+    // engine that owns the runtime (#2206).
+    rt.stream().executes(|| {
+        ensure_tensor_resident_on_runtime(rt, tensor, "download")?;
+        match tensor.dtype() {
+            DType::F64 => download_typed::<f64>(rt, gpu_typed::<f64>("download_tensor", tensor)?)
+                .map(Tensor::from_typed::<f64>),
+            DType::F32 => download_typed::<f32>(rt, gpu_typed::<f32>("download_tensor", tensor)?)
+                .map(Tensor::from_typed::<f32>),
+            DType::I32 => download_typed::<i32>(rt, gpu_typed::<i32>("download_tensor", tensor)?)
+                .map(Tensor::from_typed::<i32>),
+            DType::I64 => download_typed::<i64>(rt, gpu_typed::<i64>("download_tensor", tensor)?)
+                .map(Tensor::from_typed::<i64>),
+            DType::Bool => download_bool(rt, gpu_typed::<bool>("download_tensor", tensor)?)
+                .map(Tensor::from_typed::<bool>),
+            DType::C64 => {
+                download_typed::<Complex64>(rt, gpu_typed::<Complex64>("download_tensor", tensor)?)
+                    .map(Tensor::from_typed::<tenferro_tensor::Complex64>)
+            }
+            DType::C32 => {
+                download_typed::<Complex32>(rt, gpu_typed::<Complex32>("download_tensor", tensor)?)
+                    .map(Tensor::from_typed::<tenferro_tensor::Complex32>)
+            }
+            // A caller-owned payload has no GPU implementation for this operation.
+            DType::External(_) => Err(crate::Error::unsupported(
+                "download_tensor",
+                "an externally defined payload is not supported by this GPU operation",
+            )),
         }
-        DType::C32 => {
-            download_typed::<Complex32>(rt, gpu_typed::<Complex32>("download_tensor", tensor)?)
-                .map(Tensor::from_typed::<tenferro_tensor::Complex32>)
-        }
-        // A caller-owned payload has no GPU implementation for this operation.
-        DType::External(_) => Err(crate::Error::unsupported(
-            "download_tensor",
-            "an externally defined payload is not supported by this GPU operation",
-        )),
-    }
+    })
 }
 
 /// A [`download_tensor_into`] that did not return a filled buffer.
@@ -211,6 +231,19 @@ pub enum DownloadIntoError<T> {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn download_tensor_into<T>(
+    rt: &CudaRuntime,
+    tensor: &Tensor,
+    buffer: Vec<T>,
+) -> Result<Vec<T>, DownloadIntoError<T>>
+where
+    T: TensorScalar,
+{
+    // Ordered with the engine that owns the runtime, like every runtime entry point (#2206).
+    rt.stream()
+        .executes(|| download_tensor_into_on_stream(rt, tensor, buffer))
+}
+
+fn download_tensor_into_on_stream<T>(
     rt: &CudaRuntime,
     tensor: &Tensor,
     mut buffer: Vec<T>,

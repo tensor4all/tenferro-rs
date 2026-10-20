@@ -109,7 +109,7 @@ pub fn alloc_output<T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync
     rt: &CudaRuntime,
     shape: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    dispatch::alloc_output(rt, shape)
+    rt.stream().executes(|| dispatch::alloc_output(rt, shape))
 }
 
 /// Allocate and fill a dense CUDA tensor with semantic zeros on `rt`.
@@ -130,19 +130,21 @@ pub fn alloc_zero_output<T>(rt: &CudaRuntime, shape: &[usize]) -> crate::Result<
 where
     T: CubeElement + CubePrimitive + TensorScalar + Clone + Send + Sync + 'static + Scalar,
 {
-    let mut output = alloc_output::<T>(rt, shape)?;
-    // One stream-ordered memset over the fresh allocation: dtype-agnostic,
-    // exact `+0.0` bits, and no kernel compilation on the first call for a
-    // dtype. This is the same primitive `fill_zero_write` uses.
-    let len = output.n_elements();
-    if len > 0 {
-        let handle = dispatch::cubecl_buffer(&output, "alloc_zero_output")?
-            .handle()
-            .clone();
-        let prepared = dispatch::prepared_tensor_mut_access(&mut output, "alloc_zero_output")?;
-        fill_zero_span::<T>(rt, prepared, 0, len, handle)?;
-    }
-    Ok(output)
+    rt.stream().executes(|| {
+        let mut output = alloc_output::<T>(rt, shape)?;
+        // One stream-ordered memset over the fresh allocation: dtype-agnostic,
+        // exact `+0.0` bits, and no kernel compilation on the first call for a
+        // dtype. This is the same primitive `fill_zero_write` uses.
+        let len = output.n_elements();
+        if len > 0 {
+            let handle = dispatch::cubecl_buffer(&output, "alloc_zero_output")?
+                .handle()
+                .clone();
+            let prepared = dispatch::prepared_tensor_mut_access(&mut output, "alloc_zero_output")?;
+            fill_zero_span::<T>(rt, prepared, 0, len, handle)?;
+        }
+        Ok(output)
+    })
 }
 
 /// Build a CubeCL tensor binding for operation-family kernels.
@@ -196,20 +198,22 @@ pub fn upload_typed_tensor<T>(
 where
     T: CubeElement + TensorScalar + Clone + Scalar + Send + Sync + 'static,
 {
-    let byte_len = T::as_bytes(&data).len();
-    // `data` is owned: hand its allocation to CubeCL instead of staging a copy.
-    let handle = rt.client().create(cubecl::bytes::Bytes::from_elems(data));
-    dispatch::typed_from_cubecl(
-        shape,
-        crate::CubeclBuffer::new(
-            handle,
-            byte_len,
+    rt.stream().executes(|| {
+        let byte_len = T::as_bytes(&data).len();
+        // `data` is owned: hand its allocation to CubeCL instead of staging a copy.
+        let handle = rt.client().create(cubecl::bytes::Bytes::from_elems(data));
+        dispatch::typed_from_cubecl(
+            shape,
+            crate::CubeclBuffer::new(
+                handle,
+                byte_len,
+                rt.device_ordinal(),
+                rt.allocation_domain_id(),
+                rt.output_pool(),
+            ),
             rt.device_ordinal(),
-            rt.allocation_domain_id(),
-            rt.output_pool(),
-        ),
-        rt.device_ordinal(),
-    )
+        )
+    })
 }
 
 /// Download a dense CubeCL-backed typed tensor to host memory.
@@ -226,28 +230,30 @@ pub fn download_typed_tensor<T>(
 where
     T: CubeElement + TensorScalar + Clone + Scalar + 'static,
 {
-    dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
-    let prepared = dispatch::prepared_tensor_access(tensor, op)?;
-    if tensor.n_elements() == 0 {
-        return TypedTensor::from_vec_col_major(tensor.shape().to_vec(), Vec::new());
-    }
-    let handle = prepared.into_handle();
-    let len = tensor.n_elements();
-    let byte_len = len.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
-        crate::Error::invalid_argument(op, "shape", "download byte length overflows")
-    })?;
-    let data = if handle.size_in_used() == byte_len as u64 {
-        // Copy straight into the vector the host tensor will own (#2009).
-        super::memory::download_owned_vec::<T>(rt, handle, len, byte_len, op)?
-    } else {
-        rt.synchronize()?;
-        let bytes = rt
-            .client()
-            .read_one(handle)
-            .map_err(|err| crate::Error::backend_source(op, err))?;
-        T::from_bytes(&bytes).to_vec()
-    };
-    TypedTensor::from_vec_col_major(tensor.shape().to_vec(), data)
+    rt.stream().executes(|| {
+        dispatch::ensure_resident_on_runtime(rt, tensor, op)?;
+        let prepared = dispatch::prepared_tensor_access(tensor, op)?;
+        if tensor.n_elements() == 0 {
+            return TypedTensor::from_vec_col_major(tensor.shape().to_vec(), Vec::new());
+        }
+        let handle = prepared.into_handle();
+        let len = tensor.n_elements();
+        let byte_len = len.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+            crate::Error::invalid_argument(op, "shape", "download byte length overflows")
+        })?;
+        let data = if handle.size_in_used() == byte_len as u64 {
+            // Copy straight into the vector the host tensor will own (#2009).
+            super::memory::download_owned_vec::<T>(rt, handle, len, byte_len, op)?
+        } else {
+            rt.synchronize()?;
+            let bytes = rt
+                .client()
+                .read_one(handle)
+                .map_err(|err| crate::Error::backend_source(op, err))?;
+            T::from_bytes(&bytes).to_vec()
+        };
+        TypedTensor::from_vec_col_major(tensor.shape().to_vec(), data)
+    })
 }
 
 /// Allocate a CubeCL-owned byte workspace and return its CUDA pointer.
@@ -261,11 +267,13 @@ pub fn alloc_device_bytes(
     nbytes: usize,
     op: &'static str,
 ) -> crate::Result<DeviceByteBuffer> {
-    if nbytes == 0 {
-        return Ok(DeviceByteBuffer::none());
-    }
-    let handle = rt.client().empty(nbytes);
-    device_bytes_from_handle(rt, handle, op)
+    rt.stream().executes(|| {
+        if nbytes == 0 {
+            return Ok(DeviceByteBuffer::none());
+        }
+        let handle = rt.client().empty(nbytes);
+        device_bytes_from_handle(rt, handle, op)
+    })
 }
 
 /// Upload bytes into a CubeCL-owned workspace and return its CUDA pointer.
@@ -278,11 +286,13 @@ pub fn upload_device_bytes(
     bytes: &[u8],
     op: &'static str,
 ) -> crate::Result<DeviceByteBuffer> {
-    if bytes.is_empty() {
-        return Ok(DeviceByteBuffer::none());
-    }
-    let handle = rt.client().create_from_slice(bytes);
-    device_bytes_from_handle(rt, handle, op)
+    rt.stream().executes(|| {
+        if bytes.is_empty() {
+            return Ok(DeviceByteBuffer::none());
+        }
+        let handle = rt.client().create_from_slice(bytes);
+        device_bytes_from_handle(rt, handle, op)
+    })
 }
 
 /// Retain a clone of a resident tensor's CubeCL allocation handle.
@@ -387,65 +397,69 @@ pub fn scale_tensor_write(
     output: TensorWrite<'_>,
     factor: f64,
 ) -> crate::Result<()> {
-    ensure_tensor_write_resident(rt, &output, SCALE_OP)?;
-    let dtype = output.dtype();
-    if !matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
-        return Err(unsupported_dtype(SCALE_OP, dtype));
-    }
+    rt.stream().executes(|| {
+        ensure_tensor_write_resident(rt, &output, SCALE_OP)?;
+        let dtype = output.dtype();
+        if !matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
+            return Err(unsupported_dtype(SCALE_OP, dtype));
+        }
 
-    match output {
-        TensorWrite::Tensor(output) => match output.dtype() {
-            DType::F32 => scale_typed_tensor(
-                rt,
-                output
-                    .as_typed_mut::<f32>()
-                    .expect("the dtype guard selects this arm"),
-                factor as f32,
-                launch_scale_f32,
-            ),
-            DType::F64 => scale_typed_tensor(
-                rt,
-                output
-                    .as_typed_mut::<f64>()
-                    .expect("the dtype guard selects this arm"),
-                factor,
-                launch_scale_f64,
-            ),
-            DType::C32 => scale_typed_tensor(
-                rt,
-                output
-                    .as_typed_mut::<Complex32>()
-                    .expect("the dtype guard selects this arm"),
-                Complex32::new(factor as f32, 0.0),
-                launch_scale_c32,
-            ),
-            DType::C64 => scale_typed_tensor(
-                rt,
-                output
-                    .as_typed_mut::<Complex64>()
-                    .expect("the dtype guard selects this arm"),
-                Complex64::new(factor, 0.0),
-                launch_scale_c64,
-            ),
-            _ => Err(unsupported_dtype(SCALE_OP, dtype)),
-        },
-        TensorWrite::View(mut output) => match &mut output {
-            TensorViewMut::F32(output) => {
-                scale_typed_view(rt, output, factor as f32, launch_scale_f32)
-            }
-            TensorViewMut::F64(output) => scale_typed_view(rt, output, factor, launch_scale_f64),
-            TensorViewMut::C32(output) => scale_typed_view(
-                rt,
-                output,
-                Complex32::new(factor as f32, 0.0),
-                launch_scale_c32,
-            ),
-            TensorViewMut::C64(output) => {
-                scale_typed_view(rt, output, Complex64::new(factor, 0.0), launch_scale_c64)
-            }
-            _ => Err(unsupported_dtype(SCALE_OP, dtype)),
-        },
-    }
+        match output {
+            TensorWrite::Tensor(output) => match output.dtype() {
+                DType::F32 => scale_typed_tensor(
+                    rt,
+                    output
+                        .as_typed_mut::<f32>()
+                        .expect("the dtype guard selects this arm"),
+                    factor as f32,
+                    launch_scale_f32,
+                ),
+                DType::F64 => scale_typed_tensor(
+                    rt,
+                    output
+                        .as_typed_mut::<f64>()
+                        .expect("the dtype guard selects this arm"),
+                    factor,
+                    launch_scale_f64,
+                ),
+                DType::C32 => scale_typed_tensor(
+                    rt,
+                    output
+                        .as_typed_mut::<Complex32>()
+                        .expect("the dtype guard selects this arm"),
+                    Complex32::new(factor as f32, 0.0),
+                    launch_scale_c32,
+                ),
+                DType::C64 => scale_typed_tensor(
+                    rt,
+                    output
+                        .as_typed_mut::<Complex64>()
+                        .expect("the dtype guard selects this arm"),
+                    Complex64::new(factor, 0.0),
+                    launch_scale_c64,
+                ),
+                _ => Err(unsupported_dtype(SCALE_OP, dtype)),
+            },
+            TensorWrite::View(mut output) => match &mut output {
+                TensorViewMut::F32(output) => {
+                    scale_typed_view(rt, output, factor as f32, launch_scale_f32)
+                }
+                TensorViewMut::F64(output) => {
+                    scale_typed_view(rt, output, factor, launch_scale_f64)
+                }
+                TensorViewMut::C32(output) => scale_typed_view(
+                    rt,
+                    output,
+                    Complex32::new(factor as f32, 0.0),
+                    launch_scale_c32,
+                ),
+                TensorViewMut::C64(output) => {
+                    scale_typed_view(rt, output, Complex64::new(factor, 0.0), launch_scale_c64)
+                }
+                _ => Err(unsupported_dtype(SCALE_OP, dtype)),
+            },
+        }
+    })
 }
 
 fn ensure_tensor_write_resident(
@@ -737,28 +751,32 @@ const FILL_ZERO_OP: &str = "fill_zero_write";
 /// or its byte span cannot be represented, and [`crate::Error::BackendSource`]
 /// when the fill cannot be enqueued.
 pub fn fill_zero_write(rt: &CudaRuntime, output: TensorWrite<'_>) -> crate::Result<()> {
-    ensure_tensor_write_resident(rt, &output, FILL_ZERO_OP)?;
-    match output {
-        TensorWrite::Tensor(output) => match output.dtype() {
-            DType::F32 => fill_zero_typed_tensor::<f32>(rt, output),
-            DType::F64 => fill_zero_typed_tensor::<f64>(rt, output),
-            DType::I32 => fill_zero_typed_tensor::<i32>(rt, output),
-            DType::I64 => fill_zero_typed_tensor::<i64>(rt, output),
-            DType::Bool => fill_zero_typed_tensor::<bool>(rt, output),
-            DType::C32 => fill_zero_typed_tensor::<Complex32>(rt, output),
-            DType::C64 => fill_zero_typed_tensor::<Complex64>(rt, output),
-            dtype => Err(unsupported_dtype(FILL_ZERO_OP, dtype)),
-        },
-        TensorWrite::View(mut output) => match &mut output {
-            TensorViewMut::F32(output) => fill_zero_typed_view::<f32>(rt, output),
-            TensorViewMut::F64(output) => fill_zero_typed_view::<f64>(rt, output),
-            TensorViewMut::I32(output) => fill_zero_typed_view::<i32>(rt, output),
-            TensorViewMut::I64(output) => fill_zero_typed_view::<i64>(rt, output),
-            TensorViewMut::Bool(output) => fill_zero_bool_view(rt, output),
-            TensorViewMut::C32(output) => fill_zero_typed_view::<Complex32>(rt, output),
-            TensorViewMut::C64(output) => fill_zero_typed_view::<Complex64>(rt, output),
-        },
-    }
+    // Every entry point of this runtime runs on its home stream, so it is ordered with the
+    // engine that owns the runtime (#2206).
+    rt.stream().executes(|| {
+        ensure_tensor_write_resident(rt, &output, FILL_ZERO_OP)?;
+        match output {
+            TensorWrite::Tensor(output) => match output.dtype() {
+                DType::F32 => fill_zero_typed_tensor::<f32>(rt, output),
+                DType::F64 => fill_zero_typed_tensor::<f64>(rt, output),
+                DType::I32 => fill_zero_typed_tensor::<i32>(rt, output),
+                DType::I64 => fill_zero_typed_tensor::<i64>(rt, output),
+                DType::Bool => fill_zero_typed_tensor::<bool>(rt, output),
+                DType::C32 => fill_zero_typed_tensor::<Complex32>(rt, output),
+                DType::C64 => fill_zero_typed_tensor::<Complex64>(rt, output),
+                dtype => Err(unsupported_dtype(FILL_ZERO_OP, dtype)),
+            },
+            TensorWrite::View(mut output) => match &mut output {
+                TensorViewMut::F32(output) => fill_zero_typed_view::<f32>(rt, output),
+                TensorViewMut::F64(output) => fill_zero_typed_view::<f64>(rt, output),
+                TensorViewMut::I32(output) => fill_zero_typed_view::<i32>(rt, output),
+                TensorViewMut::I64(output) => fill_zero_typed_view::<i64>(rt, output),
+                TensorViewMut::Bool(output) => fill_zero_bool_view(rt, output),
+                TensorViewMut::C32(output) => fill_zero_typed_view::<Complex32>(rt, output),
+                TensorViewMut::C64(output) => fill_zero_typed_view::<Complex64>(rt, output),
+            },
+        }
+    })
 }
 
 fn fill_zero_typed_tensor<T>(rt: &CudaRuntime, output: &mut crate::Tensor) -> crate::Result<()>

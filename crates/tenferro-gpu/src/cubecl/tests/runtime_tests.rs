@@ -264,48 +264,51 @@ gpu_test!(
 
 gpu_test!(test_cached_scalar_read_observes_queued_writes, {
     let rt = CudaRuntime::new(CudaDeviceId::from_ordinal(0)).unwrap();
-    let output = upload_tensor(
-        &rt,
-        &Tensor::from_vec_col_major([1], vec![0.0_f64]).unwrap(),
-    )
-    .unwrap();
-    let Some(typed) = output.as_typed::<f64>() else {
-        unreachable!()
-    };
-    let handle = super::super::dispatch::cubecl_buffer(typed, "test")
-        .unwrap()
-        .handle()
-        .clone();
-    let a = rt.client().create_from_slice(f64::as_bytes(&[1.0]));
-    let b = rt.client().create_from_slice(f64::as_bytes(&[2.0]));
-    // Prime both pointer lookup and the raw stream before issuing more work.
-    assert_eq!(
-        download_tensor(&rt, &output)
+    // Direct CubeCL launches join the runtime's home stream, like every runtime entry point.
+    rt.stream().executes(|| {
+        let output = upload_tensor(
+            &rt,
+            &Tensor::from_vec_col_major([1], vec![0.0_f64]).unwrap(),
+        )
+        .unwrap();
+        let Some(typed) = output.as_typed::<f64>() else {
+            unreachable!()
+        };
+        let handle = super::super::dispatch::cubecl_buffer(typed, "test")
             .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
-        &[0.0]
-    );
-    for i in 0..32 {
-        let rhs = if i % 2 == 0 { &a } else { &b };
-        // SAFETY: all handles contain one f64; output is fresh and is only read
-        // after the runtime's stream-ordered download completes each iteration.
-        unsafe {
-            kernel_add_f64::launch_unchecked(
-                rt.client(),
-                CubeCount::new_single(),
-                CubeDim::new_1d(1),
-                BufferArg::from_raw_parts(handle.clone(), 1),
-                BufferArg::from_raw_parts(a.clone(), 1),
-                BufferArg::from_raw_parts(rhs.clone(), 1),
+            .handle()
+            .clone();
+        let a = rt.client().create_from_slice(f64::as_bytes(&[1.0]));
+        let b = rt.client().create_from_slice(f64::as_bytes(&[2.0]));
+        // Prime both pointer lookup and the raw stream before issuing more work.
+        assert_eq!(
+            download_tensor(&rt, &output)
+                .unwrap()
+                .as_slice::<f64>()
+                .unwrap(),
+            &[0.0]
+        );
+        for i in 0..32 {
+            let rhs = if i % 2 == 0 { &a } else { &b };
+            // SAFETY: all handles contain one f64; output is fresh and is only read
+            // after the runtime's stream-ordered download completes each iteration.
+            unsafe {
+                kernel_add_f64::launch_unchecked(
+                    rt.client(),
+                    CubeCount::new_single(),
+                    CubeDim::new_1d(1),
+                    BufferArg::from_raw_parts(handle.clone(), 1),
+                    BufferArg::from_raw_parts(a.clone(), 1),
+                    BufferArg::from_raw_parts(rhs.clone(), 1),
+                );
+            }
+            let actual = download_tensor(&rt, &output).unwrap();
+            assert_eq!(
+                actual.as_slice::<f64>().unwrap(),
+                &[if i % 2 == 0 { 2.0 } else { 3.0 }]
             );
         }
-        let actual = download_tensor(&rt, &output).unwrap();
-        assert_eq!(
-            actual.as_slice::<f64>().unwrap(),
-            &[if i % 2 == 0 { 2.0 } else { 3.0 }]
-        );
-    }
+    });
 });
 
 gpu_test!(test_complex_sign_is_scale_safe, {

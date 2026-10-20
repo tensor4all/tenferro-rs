@@ -861,100 +861,109 @@ pub fn download_pending(
     source: Tensor,
     buffer: PinnedHostBuffer,
 ) -> Result<PendingDownload, TransferSubmitError> {
-    // Every submission drains what earlier detachments left behind, so a caller that never polls or
-    // synchronizes still bounds the queue.
-    runtime.drain_transfer_retirements();
-    let (handle, byte_len) = match device_allocation(&source) {
-        Ok(allocation) => allocation,
-        Err(error) => return Err(rejected(error, source, buffer)),
-    };
-    if byte_len != buffer.len() {
-        return Err(rejected(
-            crate::Error::invalid_argument(
-                OP,
-                "buffer",
-                format!(
-                    "the pinned buffer holds {} bytes but the source holds {byte_len}",
-                    buffer.len()
-                ),
-            ),
-            source,
-            buffer,
-        ));
-    }
-    let resource = match runtime
-        .client()
-        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
-    {
-        Ok(resource) => resource,
-        Err(err) => {
+    // Every entry point of this runtime runs on its home stream, so it is ordered with the
+    // engine that owns the runtime (#2206).
+    runtime.stream().executes(|| {
+        // Every submission drains what earlier detachments left behind, so a caller that never polls or
+        // synchronizes still bounds the queue.
+        runtime.drain_transfer_retirements();
+        let (handle, byte_len) = match device_allocation(&source) {
+            Ok(allocation) => allocation,
+            Err(error) => return Err(rejected(error, source, buffer)),
+        };
+        if byte_len != buffer.len() {
             return Err(rejected(
-                crate::Error::backend_source(OP, err),
+                crate::Error::invalid_argument(
+                    OP,
+                    "buffer",
+                    format!(
+                        "the pinned buffer holds {} bytes but the source holds {byte_len}",
+                        buffer.len()
+                    ),
+                ),
                 source,
                 buffer,
             ));
         }
-    };
-    let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
-    if available < byte_len {
-        return Err(rejected(
-            crate::Error::Internal(format!(
-                "{OP}: download of {byte_len} bytes exceeds the {available}-byte allocation"
-            )),
-            source,
-            buffer,
-        ));
-    }
-
-    // Past this point an enqueue may happen, so failures retain the package instead of returning it.
-    let stream = match runtime
-        .set_current_cuda_context(OP)
-        .and_then(|()| runtime.raw_cuda_stream())
-    {
-        Ok(stream) => stream as usize as CUstream,
-        Err(error) => return Err(rejected(error, source, buffer)),
-    };
-    let event = match cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING) {
-        Ok(event) => event,
-        Err(err) => {
+        let resource = match runtime
+            .client()
+            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
+        {
+            Ok(resource) => resource,
+            Err(err) => {
+                return Err(rejected(
+                    crate::Error::backend_source(OP, err),
+                    source,
+                    buffer,
+                ));
+            }
+        };
+        let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
+        if available < byte_len {
             return Err(rejected(
-                crate::Error::backend_source(OP, err),
+                crate::Error::Internal(format!(
+                    "{OP}: download of {byte_len} bytes exceeds the {available}-byte allocation"
+                )),
                 source,
                 buffer,
-            ))
+            ));
         }
-    };
-    let src = resource.resource().ptr;
-    // SAFETY: `src` is the device address of a live CubeCL allocation of at least `byte_len` bytes
-    // (checked above) retained by `resource`; `buffer` owns `byte_len` bytes of pinned host memory;
-    // `stream` is the CubeCL stream the publication boundary ordered the allocation on.
-    let enqueued = unsafe {
-        cudarc::driver::sys::cuMemcpyDtoHAsync_v2(buffer.as_mut_ptr().cast(), src, byte_len, stream)
-    }
-    .result()
-    .and_then(|()| unsafe { cuda_result::event::record(event, stream) });
 
-    if let Err(err) = enqueued {
-        // The event may not have been recorded, and an unrecorded event queries as complete, so this
-        // record must never be released by a later drain: it is retained for soundness.
-        runtime.retain_transfer_for_soundness(TransferRetirement {
-            event,
-            value: Some(source),
+        // Past this point an enqueue may happen, so failures retain the package instead of returning it.
+        let stream = match runtime
+            .set_current_cuda_context(OP)
+            .and_then(|()| runtime.raw_cuda_stream())
+        {
+            Ok(stream) => stream as usize as CUstream,
+            Err(error) => return Err(rejected(error, source, buffer)),
+        };
+        let event = match cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING) {
+            Ok(event) => event,
+            Err(err) => {
+                return Err(rejected(
+                    crate::Error::backend_source(OP, err),
+                    source,
+                    buffer,
+                ))
+            }
+        };
+        let src = resource.resource().ptr;
+        // SAFETY: `src` is the device address of a live CubeCL allocation of at least `byte_len` bytes
+        // (checked above) retained by `resource`; `buffer` owns `byte_len` bytes of pinned host memory;
+        // `stream` is the CubeCL stream the publication boundary ordered the allocation on.
+        let enqueued = unsafe {
+            cudarc::driver::sys::cuMemcpyDtoHAsync_v2(
+                buffer.as_mut_ptr().cast(),
+                src,
+                byte_len,
+                stream,
+            )
+        }
+        .result()
+        .and_then(|()| unsafe { cuda_result::event::record(event, stream) });
+
+        if let Err(err) = enqueued {
+            // The event may not have been recorded, and an unrecorded event queries as complete, so this
+            // record must never be released by a later drain: it is retained for soundness.
+            runtime.retain_transfer_for_soundness(TransferRetirement {
+                event,
+                value: Some(source),
+                buffer: Some(buffer),
+                resource: Some(Box::new(resource)),
+            });
+            return Err(TransferSubmitError::Unproven {
+                error: crate::Error::backend_source(OP, err),
+            });
+        }
+
+        Ok(PendingDownload {
+            runtime: runtime.clone(),
+            source: Some(source),
             buffer: Some(buffer),
+            event,
             resource: Some(Box::new(resource)),
-        });
-        return Err(TransferSubmitError::Unproven {
-            error: crate::Error::backend_source(OP, err),
-        });
-    }
-
-    Ok(PendingDownload {
-        runtime: runtime.clone(),
-        source: Some(source),
-        buffer: Some(buffer),
-        event,
-        resource: Some(Box::new(resource)),
-        live: true,
+            live: true,
+        })
     })
 }
 
@@ -1265,97 +1274,106 @@ pub fn upload_pending(
     source: PinnedHostBuffer,
     destination: Tensor,
 ) -> Result<PendingUpload, TransferSubmitError> {
-    runtime.drain_transfer_retirements();
-    let (handle, byte_len) = match device_allocation(&destination) {
-        Ok(allocation) => allocation,
-        Err(error) => return Err(rejected(error, destination, source)),
-    };
-    if byte_len != source.len() {
-        return Err(rejected(
-            crate::Error::invalid_argument(
-                OP,
-                "source",
-                format!(
-                    "the pinned buffer holds {} bytes but the destination holds {byte_len}",
-                    source.len()
+    // Every entry point of this runtime runs on its home stream, so it is ordered with the
+    // engine that owns the runtime (#2206).
+    runtime.stream().executes(|| {
+        runtime.drain_transfer_retirements();
+        let (handle, byte_len) = match device_allocation(&destination) {
+            Ok(allocation) => allocation,
+            Err(error) => return Err(rejected(error, destination, source)),
+        };
+        if byte_len != source.len() {
+            return Err(rejected(
+                crate::Error::invalid_argument(
+                    OP,
+                    "source",
+                    format!(
+                        "the pinned buffer holds {} bytes but the destination holds {byte_len}",
+                        source.len()
+                    ),
                 ),
-            ),
-            destination,
-            source,
-        ));
-    }
-    let resource = match runtime
-        .client()
-        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
-    {
-        Ok(resource) => resource,
-        Err(err) => {
-            return Err(rejected(
-                crate::Error::backend_source(OP, err),
                 destination,
                 source,
             ));
         }
-    };
-    let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
-    if available < byte_len {
-        return Err(rejected(
-            crate::Error::Internal(format!(
-                "{OP}: upload of {byte_len} bytes exceeds the {available}-byte allocation"
-            )),
-            destination,
-            source,
-        ));
-    }
-
-    let stream = match runtime
-        .set_current_cuda_context(OP)
-        .and_then(|()| runtime.raw_cuda_stream())
-    {
-        Ok(stream) => stream as usize as CUstream,
-        Err(error) => return Err(rejected(error, destination, source)),
-    };
-    let event = match cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING) {
-        Ok(event) => event,
-        Err(err) => {
+        let resource = match runtime
+            .client()
+            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
+        {
+            Ok(resource) => resource,
+            Err(err) => {
+                return Err(rejected(
+                    crate::Error::backend_source(OP, err),
+                    destination,
+                    source,
+                ));
+            }
+        };
+        let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
+        if available < byte_len {
             return Err(rejected(
-                crate::Error::backend_source(OP, err),
+                crate::Error::Internal(format!(
+                    "{OP}: upload of {byte_len} bytes exceeds the {available}-byte allocation"
+                )),
                 destination,
                 source,
             ));
         }
-    };
-    let dst = resource.resource().ptr;
-    // SAFETY: `dst` is the device address of a live CubeCL allocation of at least `byte_len` bytes
-    // (checked above) retained by `resource`; `source` owns `byte_len` bytes of pinned host memory;
-    // `stream` is the CubeCL stream the publication boundary ordered the allocation on.
-    let enqueued = unsafe {
-        cudarc::driver::sys::cuMemcpyHtoDAsync_v2(dst, source.as_mut_ptr().cast(), byte_len, stream)
-    }
-    .result()
-    .and_then(|()| unsafe { cuda_result::event::record(event, stream) });
 
-    if let Err(err) = enqueued {
-        // The event may not have been recorded, and an unrecorded event queries as complete, so this
-        // record must never be released by a later drain: it is retained for soundness.
-        runtime.retain_transfer_for_soundness(TransferRetirement {
+        let stream = match runtime
+            .set_current_cuda_context(OP)
+            .and_then(|()| runtime.raw_cuda_stream())
+        {
+            Ok(stream) => stream as usize as CUstream,
+            Err(error) => return Err(rejected(error, destination, source)),
+        };
+        let event = match cuda_result::event::create(CUevent_flags::CU_EVENT_DISABLE_TIMING) {
+            Ok(event) => event,
+            Err(err) => {
+                return Err(rejected(
+                    crate::Error::backend_source(OP, err),
+                    destination,
+                    source,
+                ));
+            }
+        };
+        let dst = resource.resource().ptr;
+        // SAFETY: `dst` is the device address of a live CubeCL allocation of at least `byte_len` bytes
+        // (checked above) retained by `resource`; `source` owns `byte_len` bytes of pinned host memory;
+        // `stream` is the CubeCL stream the publication boundary ordered the allocation on.
+        let enqueued = unsafe {
+            cudarc::driver::sys::cuMemcpyHtoDAsync_v2(
+                dst,
+                source.as_mut_ptr().cast(),
+                byte_len,
+                stream,
+            )
+        }
+        .result()
+        .and_then(|()| unsafe { cuda_result::event::record(event, stream) });
+
+        if let Err(err) = enqueued {
+            // The event may not have been recorded, and an unrecorded event queries as complete, so this
+            // record must never be released by a later drain: it is retained for soundness.
+            runtime.retain_transfer_for_soundness(TransferRetirement {
+                event,
+                value: Some(destination),
+                buffer: Some(source),
+                resource: Some(Box::new(resource)),
+            });
+            return Err(TransferSubmitError::Unproven {
+                error: crate::Error::backend_source(OP, err),
+            });
+        }
+
+        Ok(PendingUpload {
+            runtime: runtime.clone(),
+            source: Some(source),
+            destination: Some(destination),
             event,
-            value: Some(destination),
-            buffer: Some(source),
             resource: Some(Box::new(resource)),
-        });
-        return Err(TransferSubmitError::Unproven {
-            error: crate::Error::backend_source(OP, err),
-        });
-    }
-
-    Ok(PendingUpload {
-        runtime: runtime.clone(),
-        source: Some(source),
-        destination: Some(destination),
-        event,
-        resource: Some(Box::new(resource)),
-        live: true,
+            live: true,
+        })
     })
 }
 

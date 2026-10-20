@@ -487,14 +487,7 @@ impl<'s> Session<'s> {
     /// CUDA host runs the fence inside a real raw session.
     ///
     /// ```
-    /// use tenferro_gpu::cuda::{
-    ///     cuda_devices, gpu_available, with_cuda_engine, CudaEngine, CudaEngine,
-    /// };
-    /// use tenferro_tensor::backend::BackendSessionHost;
-    ///
-    /// fn flush(session: &mut CudaEngine) -> tenferro_tensor::Result<()> {
-    ///     session.with_raw("docs.flush_cubecl", |raw| raw.flush_cubecl())
-    /// }
+    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaEngine};
     ///
     /// // `gpu_available` never panics without a CUDA driver.
     /// if !gpu_available() {
@@ -506,12 +499,8 @@ impl<'s> Session<'s> {
     ///     .ok_or_else(|| {
     ///         tenferro_tensor::Error::runtime_state("docs.flush_cubecl", "no CUDA device")
     ///     })?;
-    /// let mut backend = CudaEngine::open(device)?;
-    /// backend
-    ///     .with_backend_session(|session| with_cuda_engine(session, flush))?
-    ///     .ok_or_else(|| {
-    ///         tenferro_tensor::Error::runtime_state("docs.flush_cubecl", "not a CUDA backend")
-    ///     })??;
+    /// let mut engine = CudaEngine::open(device)?;
+    /// engine.with_raw("docs.flush_cubecl", |raw| raw.flush_cubecl())?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
@@ -607,7 +596,7 @@ impl<'s> Session<'s> {
     /// use tenferro_gpu::cuda::cudarc::cublas::sys as cublas_sys;
     /// use tenferro_gpu::cuda::CudaEngine;
     ///
-    /// // Method-call check only: `CudaEngine` is not user-constructible.
+    /// // Method-call check only: opening a `CudaEngine` needs a device.
     /// fn check(session: &mut CudaEngine) -> tenferro_tensor::Result<()> {
     ///     session.with_raw("test.raw_cublas", |raw| {
     ///         raw.with_cublas_handle(

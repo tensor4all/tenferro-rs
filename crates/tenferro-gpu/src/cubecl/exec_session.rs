@@ -88,10 +88,10 @@ impl CudaEngine {
     /// ```
     /// use tenferro_gpu::cuda::{CudaEngine, GpuExtensionCapability};
     ///
-    /// // Method-call check only: `CudaEngine` is not user-constructible, so
+    /// // Method-call check only: opening a `CudaEngine` needs a device, so
     /// // the example asserts the method is callable from an external crate.
-    /// fn check(session: &CudaEngine, capability: GpuExtensionCapability) -> bool {
-    ///     session.supports(capability)
+    /// fn check(engine: &CudaEngine, capability: GpuExtensionCapability) -> bool {
+    ///     engine.supports(capability)
     /// }
     /// let _ = check;
     /// ```
@@ -99,17 +99,17 @@ impl CudaEngine {
         self.runtime().supports_extension(capability)
     }
 
-    /// Borrow immutable metadata for the session's device.
+    /// Borrow immutable metadata for the engine's device.
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_gpu::cuda::CudaEngine;
     ///
-    /// // Method-call check only: `CudaEngine` is not user-constructible, so
+    /// // Method-call check only: opening a `CudaEngine` needs a device, so
     /// // the example asserts the method is callable from an external crate.
-    /// fn check(session: &CudaEngine) {
-    ///     let _ = session.device_info();
+    /// fn check(engine: &CudaEngine) {
+    ///     let _ = engine.device_info();
     /// }
     /// let _ = check;
     /// ```
@@ -117,17 +117,17 @@ impl CudaEngine {
         self.runtime().device_info()
     }
 
-    /// Return the allocation ownership domain of this session.
+    /// Return the allocation ownership domain of this engine.
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_gpu::cuda::CudaEngine;
     ///
-    /// // Method-call check only: `CudaEngine` is not user-constructible, so
+    /// // Method-call check only: opening a `CudaEngine` needs a device, so
     /// // the example asserts the method is callable from an external crate.
-    /// fn check(session: &CudaEngine) -> tenferro_tensor::AllocationDomainId {
-    ///     session.allocation_domain()
+    /// fn check(engine: &CudaEngine) -> tenferro_tensor::AllocationDomainId {
+    ///     engine.allocation_domain()
     /// }
     /// let _ = check;
     /// ```
@@ -135,28 +135,28 @@ impl CudaEngine {
         self.runtime().allocation_domain()
     }
 
-    /// Validate that a dense GPU tensor is resident on this exact session:
+    /// Validate that a dense GPU tensor is resident on this exact engine:
     /// CubeCL-backed, same allocation domain, and placed on this runtime's
     /// CUDA device. Rejects host tensors, foreign-backend buffers, and
     /// foreign-runtime/device tensors without an implicit transfer.
     ///
     /// This is the credentialed public-seam residency guard for extension
-    /// crates that receive a session but must validate inputs before entering
+    /// crates that receive an engine but must validate inputs before entering
     /// a `with_raw`/`with_cubecl` sub-session.
     ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] when the tensor is not resident
-    /// on this exact session runtime/device.
+    /// on this exact engine runtime/device.
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_gpu::cuda::CudaEngine;
     ///
-    /// // Method-call check only: `CudaEngine` is not user-constructible.
-    /// fn check(session: &CudaEngine, tensor: &tenferro_tensor::Tensor) -> tenferro_tensor::Result<()> {
-    ///     session.ensure_gpu_resident(tensor, "test.ensure_gpu_resident")
+    /// // Method-call check only: opening a `CudaEngine` needs a device.
+    /// fn check(engine: &CudaEngine, tensor: &tenferro_tensor::Tensor) -> tenferro_tensor::Result<()> {
+    ///     engine.ensure_gpu_resident(tensor, "test.ensure_gpu_resident")
     /// }
     /// let _ = check;
     /// ```
@@ -205,10 +205,10 @@ impl CudaEngine {
         }
     }
 
-    /// Block the host until work enqueued on the session's stream completes.
+    /// Block the host until work enqueued on the engine's stream completes.
     ///
     /// This is the only host barrier on the success path; ordinary successful
-    /// session operations only enqueue.
+    /// engine operations only enqueue.
     ///
     /// # Errors
     ///
@@ -282,9 +282,9 @@ impl CudaEngine {
     /// ```
     /// use tenferro_gpu::cuda::CudaEngine;
     ///
-    /// // Method-call check only: `CudaEngine` is not user-constructible.
-    /// fn check(session: &mut CudaEngine) -> tenferro_tensor::Result<()> {
-    ///     session.with_raw("test.raw", |raw| {
+    /// // Method-call check only: opening a `CudaEngine` needs a device.
+    /// fn check(engine: &mut CudaEngine) -> tenferro_tensor::Result<()> {
+    ///     engine.with_raw("test.raw", |raw| {
     ///         let _ = raw.stream();
     ///         Ok(SessionOutcome::Done)
     ///     })?;
@@ -357,7 +357,7 @@ impl CudaEngine {
     /// [`raw::Session::tensor_mut_from_raw`](crate::cuda::raw::Session::tensor_mut_from_raw),
     /// and launch a raw module with [`raw::Session::launch`](crate::cuda::raw::Session::launch).
     /// That path requires the external allocation to belong to this runtime's
-    /// primary CUDA context and to be ordered on the session's captured stream;
+    /// primary CUDA context and to be ordered on the engine's captured stream;
     /// the full contract is on the constructors. A downstream that needs a CubeCL
     /// binding must re-host the state in a tenferro tensor instead (uploading
     /// once, not per kernel).
@@ -367,8 +367,8 @@ impl CudaEngine {
     /// ```
     /// use tenferro_gpu::cuda::CudaEngine;
     ///
-    /// fn check(session: &mut CudaEngine) {
-    ///     let _ = session.with_cubecl("test.cubecl", |_cubecl| Ok(()));
+    /// fn check(engine: &mut CudaEngine) {
+    ///     let _ = engine.with_cubecl("test.cubecl", |_cubecl| Ok(()));
     /// }
     /// let _ = check;
     /// ```
