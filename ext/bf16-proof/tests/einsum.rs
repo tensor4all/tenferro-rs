@@ -10,22 +10,45 @@ use std::sync::Arc;
 
 use tenferro_bf16_proof::einsum::{module, Bf16Einsum};
 use tenferro_bf16_proof::Bf16;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{CompiledGraph, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 fn runtime_with_module() -> Runtime {
-    let backend = CpuBackend::new();
+    let engine = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).expect("engine"))
+        .register_engine(tenferro_cpu::runtime_engine_registration(&engine).expect("engine"))
         .expect("register the CPU engine");
     builder
         .install_extension_module(module().expect("module"))
         .expect("install the bf16 module");
     builder.build().expect("runtime with the module")
+}
+
+fn run_compiled(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let mut engine = CpuEngine::serial();
+    let reads: Vec<tenferro_tensor::TensorRead<'_>> = inputs
+        .iter()
+        .map(|t| tenferro_tensor::TensorRead::from_tensor(t))
+        .collect();
+    let target = engine.target();
+    let prepared = runtime.prepare(program, &reads, std::slice::from_ref(&target))?;
+    let outputs = runtime.run(&mut [&mut engine], &prepared, &reads)?;
+    outputs
+        .into_iter()
+        .map(|output| {
+            output
+                .into_tensor(&mut engine)
+                .map_err(tenferro_runtime::Error::from)
+        })
+        .collect()
 }
 
 fn external(values: &[f32], shape: Vec<usize>) -> Tensor {
@@ -68,15 +91,15 @@ fn contract(lhs: &[f32], lhs_shape: [usize; 2], rhs: &[f32], rhs_shape: [usize; 
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output[0]).expect("compiled contraction");
-    let results = runtime_with_module()
-        .run_compiled(
-            &program,
-            &[
-                &external(lhs, lhs_shape.to_vec()),
-                &external(rhs, rhs_shape.to_vec()),
-            ],
-        )
-        .expect("contraction execution");
+    let results = run_compiled(
+        &runtime_with_module(),
+        &program,
+        &[
+            &external(lhs, lhs_shape.to_vec()),
+            &external(rhs, rhs_shape.to_vec()),
+        ],
+    )
+    .expect("contraction execution");
     values(&results[0])
 }
 
