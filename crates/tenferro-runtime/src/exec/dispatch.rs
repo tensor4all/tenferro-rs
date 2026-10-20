@@ -1,8 +1,8 @@
 use crate::error::{Error, Result};
 use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::{
-    Engine, GatherConfig, PadConfig, SliceConfig, Tensor, TensorBackendOps, TensorDeviceTransfer,
-    TensorRead,
+    DType, Engine, GatherConfig, PadConfig, SliceConfig, StridedSliceSpec, Tensor,
+    TensorBackendOps, TensorDeviceTransfer, TensorRead, TensorView,
 };
 
 use super::{
@@ -205,6 +205,81 @@ pub(super) fn host_dispatch_entry<B: HostExecution + ?Sized>(
     host_dispatch_table::<B>()
         .into_iter()
         .find(|entry| entry.key == key)
+}
+
+/// Return a metadata-only view of a borrowed input for a structural operation,
+/// or `None` when the operation must materialize through the engine.
+///
+/// A view is derivable only from an `ExecSlot::Read`: an owned intermediate
+/// lives in the slot table, so a borrow of it could not carry the run's input
+/// lifetime. Computed intermediates therefore keep the materializing path.
+pub(super) fn view_backend_op<'input>(
+    slots: &[Option<ExecSlot<'input>>],
+    inst: &ExecInstruction,
+) -> Option<ExecSlot<'input>> {
+    if inst.input_slots.len() != 1 || inst.output_slots.len() != 1 {
+        return None;
+    }
+    let read = match slots.get(inst.input_slots[0])?.as_ref()? {
+        ExecSlot::Read(read) => read.clone(),
+        ExecSlot::Owned(_) => return None,
+    };
+    // A caller-owned payload has no borrowed view.
+    if matches!(read.dtype(), DType::External(_)) {
+        return None;
+    }
+    macro_rules! typed_view_map {
+        ($view:expr, $method:ident ( $($arg:expr),* )) => {
+            match $view {
+                TensorView::F32(view) => TensorView::F32(view.$method($($arg),*).ok()?),
+                TensorView::F64(view) => TensorView::F64(view.$method($($arg),*).ok()?),
+                TensorView::I32(view) => TensorView::I32(view.$method($($arg),*).ok()?),
+                TensorView::I64(view) => TensorView::I64(view.$method($($arg),*).ok()?),
+                TensorView::Bool(view) => TensorView::Bool(view.$method($($arg),*).ok()?),
+                TensorView::C32(view) => TensorView::C32(view.$method($($arg),*).ok()?),
+                TensorView::C64(view) => TensorView::C64(view.$method($($arg),*).ok()?),
+            }
+        };
+    }
+    let view = match &inst.op {
+        ExecOp::Transpose { perm } => {
+            typed_view_map!(read.tensor_view(), transpose_view(perm))
+        }
+        ExecOp::Reshape { shape } => {
+            let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape).ok()?;
+            typed_view_map!(read.tensor_view(), reshape_view(&shape))
+        }
+        ExecOp::BroadcastInDim { shape, dims } => {
+            let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape).ok()?;
+            return read
+                .broadcast_in_dim_view(&shape, dims)
+                .ok()
+                .map(ExecSlot::Read);
+        }
+        ExecOp::Slice(config) => {
+            if config.starts.len() != config.limits.len()
+                || config.starts.len() != config.strides.len()
+            {
+                return None;
+            }
+            let mut specs = Vec::with_capacity(config.starts.len());
+            for ((&start, &limit), &step) in config
+                .starts
+                .iter()
+                .zip(&config.limits)
+                .zip(&config.strides)
+            {
+                specs.push(StridedSliceSpec::new(
+                    isize::try_from(start).ok()?,
+                    Some(isize::try_from(limit).ok()?),
+                    isize::try_from(step).ok()?,
+                ));
+            }
+            typed_view_map!(read.tensor_view(), slice_view(&specs))
+        }
+        _ => return None,
+    };
+    Some(ExecSlot::Read(TensorRead::from_view(view)))
 }
 
 pub(super) fn execute_backend_dispatch(

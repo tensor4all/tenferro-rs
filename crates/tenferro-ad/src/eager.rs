@@ -330,10 +330,32 @@ pub(crate) fn execute_prepared_extension_on(
     executor: &dyn tenferro_runtime::PreparedOperationExecutor,
     inputs: &[TensorRead<'_>],
 ) -> Result<Vec<Tensor>> {
+    with_lent_extension_caches(engine, |engine, caches| {
+        executor.execute_in_session(engine, caches, inputs)
+    })
+}
+
+/// Lend `engine`'s extension caches to `callback` and restore them on every
+/// exit path, including unwind.
+///
+/// A callback panic also marks the engine broken before it is resumed: the
+/// caches may be half updated, so the engine must not accept more work.
+pub(crate) fn with_lent_extension_caches<R>(
+    engine: &mut dyn ExecutionEngine,
+    callback: impl FnOnce(&mut dyn ExecutionEngine, &mut tenferro_runtime::ExtensionCacheStore) -> R,
+) -> R {
     let mut caches = engine.take_extension_caches();
-    let result = executor.execute_in_session(&mut *engine, &mut caches, inputs);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        callback(&mut *engine, &mut caches)
+    }));
     engine.restore_extension_caches(caches);
-    result
+    match result {
+        Ok(value) => value,
+        Err(payload) => {
+            engine.mark_broken();
+            std::panic::resume_unwind(payload)
+        }
+    }
 }
 
 /// The eager extension backend kind of an engine target, or `None` for an
@@ -2550,9 +2572,7 @@ impl EagerSession<'_> {
         &mut self,
         f: impl FnOnce(&mut tenferro_runtime::ExtensionCacheStore) -> R,
     ) -> Result<R> {
-        let mut caches = self.engine.take_extension_caches();
-        let result = f(&mut caches);
-        self.engine.restore_extension_caches(caches);
+        let result = with_lent_extension_caches(self.engine, |_, caches| f(caches));
         Ok(result)
     }
 }

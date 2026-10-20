@@ -70,7 +70,6 @@ fn extension_runtime_macro_generates_module_engine_and_prepared_op_without_regis
         runtime = TinyRuntime,
         family_id = TINY_EXTENSION_FAMILY_ID,
         op_type = TinyExtensionOp,
-        execute = execute_tiny_extension,
         execute_reads = execute_tiny_extension_reads,
     });
     let source = tokens
@@ -95,27 +94,11 @@ fn extension_runtime_macro_generates_module_engine_and_prepared_op_without_regis
 }
 
 #[test]
-fn extension_runtime_macro_accepts_omitted_legacy_execute() {
-    let args = syn::parse_str::<super::RuntimeArgs>(
-        r#"
-        runtime = TinyRuntime,
-        family_id = TINY_EXTENSION_FAMILY_ID,
-        op_type = TinyExtensionOp,
-        execute_reads = execute_tiny_extension_reads,
-        "#,
-    )
-    .expect("execute_reads is the only required callback");
-
-    assert!(args.execute.is_none());
-}
-
-#[test]
 fn extension_runtime_macro_accepts_custom_backend_bound() {
     let tokens = expand_extension_runtime(syn::parse_quote! {
         runtime = LinalgRuntime,
         family_id = LINALG_EXTENSION_FAMILY_ID,
         op_type = LinalgExtensionOp,
-        execute = execute_linalg_extension,
         execute_reads = execute_linalg_extension_reads,
         backend_bound = crate::backend::LinalgBackend,
     });
@@ -132,7 +115,6 @@ fn extension_runtime_macro_generates_required_prepared_read_executor() {
         runtime = EinsumRuntime,
         family_id = EINSUM_EXTENSION_FAMILY_ID,
         op_type = EinsumExtensionOp,
-        execute = execute_einsum_extension,
         execute_reads = execute_einsum_extension_reads,
     });
     let source = tokens.expect("read executor should generate").to_string();
@@ -166,7 +148,6 @@ fn extension_runtime_macro_rejects_legacy_register_fn_argument() {
         runtime = EinsumRuntime,
         family_id = EINSUM_EXTENSION_FAMILY_ID,
         op_type = EinsumExtensionOp,
-        execute = execute_einsum_extension,
         execute_reads = execute_einsum_extension_reads,
         register_fn = register_runtime,
         "#,

@@ -157,7 +157,7 @@ impl CudaEngine {
                 CudaEngineError::Broken,
             ));
         }
-        self.runtime().admit_unfinished(op, 0)?;
+        let _reservation = self.runtime().admit_unfinished(op, 0)?;
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => {
@@ -358,6 +358,10 @@ impl tenferro_runtime::ExecutionEngine for CudaEngine {
 
     fn restore_extension_caches(&mut self, caches: tenferro_runtime::ExtensionCacheStore) {
         self.extension_caches = caches;
+    }
+
+    fn mark_broken(&mut self) {
+        self.broken = true;
     }
 
     fn event_domain_driver(&self) -> Arc<dyn tenferro_runtime::EventDomainDriver> {

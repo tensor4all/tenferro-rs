@@ -1,6 +1,6 @@
 use super::*;
 use crate::{Tensor, TensorRead};
-use tenferro_tensor::{TensorElementwise, TensorStructural};
+use tenferro_tensor::{TensorDeviceTransfer, TensorElementwise, TensorStructural};
 
 fn pool(threads: usize) -> rayon::ThreadPool {
     thread_pool_builder()
@@ -291,4 +291,60 @@ fn elementwise_families_match_serial_on_pooled_engines_at_one_two_and_four_threa
             serial_mul.as_slice::<f64>().unwrap()
         );
     }
+}
+
+#[test]
+fn fast_paths_refuse_a_broken_engine_before_touching_storage() {
+    let mut engine = CpuEngine::serial();
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = engine.with_linalg_pool::<()>(|_, _| panic!("break the engine"));
+    }));
+    assert!(unwind.is_err());
+    assert!(engine.is_broken());
+
+    let input = vector(&[1.0, 2.0]);
+    let read = TensorRead::from_tensor(&input);
+    let upload = engine
+        .upload_host_tensor(read.clone())
+        .expect_err("a broken engine refuses upload");
+    let download = engine
+        .download_to_host(read.clone())
+        .expect_err("a broken engine refuses download");
+    let reshape = engine
+        .reshape_read(read, &[2])
+        .expect_err("a broken engine refuses the small reshape fast path");
+    for error in [upload, download, reshape] {
+        assert_eq!(engine_error(&error), Some(CpuEngineError::Broken));
+    }
+}
+
+#[test]
+fn fast_paths_reject_a_worker_of_the_engine_own_pool() {
+    let mut engine = CpuEngine::new(pool(2));
+    let raw_pool = engine.resources.raw_pool().expect("pooled engine");
+    let input = vector(&[1.0, 2.0]);
+    std::thread::scope(|scope| {
+        let engine = &mut engine;
+        let input = &input;
+        scope
+            .spawn(move || {
+                raw_pool.install(|| {
+                    let read = TensorRead::from_tensor(input);
+                    let upload = engine
+                        .upload_host_tensor(read.clone())
+                        .expect_err("an own-pool worker cannot upload");
+                    let download = engine
+                        .download_to_host(read.clone())
+                        .expect_err("an own-pool worker cannot download");
+                    let reshape = engine
+                        .reshape_read(read, &[2])
+                        .expect_err("an own-pool worker cannot take the small reshape fast path");
+                    for error in [upload, download, reshape] {
+                        assert_eq!(engine_error(&error), Some(CpuEngineError::CallerInOwnPool));
+                    }
+                });
+            })
+            .join()
+            .expect("own-pool worker probe");
+    });
 }

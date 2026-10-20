@@ -420,6 +420,15 @@ pub(crate) fn execute_backend_op<'input>(
     dispatch::execute_backend_dispatch(exec, slots, inst)
 }
 
+/// Execute a backend instruction as a borrowed view when the input slot is
+/// borrowed and the operation is metadata-only.
+pub(crate) fn execute_backend_view_op<'input>(
+    slots: &[Option<ExecSlot<'input>>],
+    inst: &ExecInstruction,
+) -> Option<ExecSlot<'input>> {
+    dispatch::view_backend_op(slots, inst)
+}
+
 pub(crate) fn execute_host_instruction_exec<'input>(
     exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'input>>],

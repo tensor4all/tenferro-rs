@@ -28,7 +28,6 @@ struct RuntimeArgs {
     runtime: Ident,
     family_id: Path,
     op_type: Path,
-    execute: Option<Path>,
     execute_reads: Option<Path>,
     execute_in_session: Option<Path>,
     session_supported: Option<Path>,
@@ -67,7 +66,6 @@ impl Parse for RuntimeArgs {
         let mut runtime = None;
         let mut family_id = None;
         let mut op_type = None;
-        let mut execute = None;
         let mut execute_reads = None;
         let mut execute_in_session = None;
         let mut session_supported = None;
@@ -80,7 +78,6 @@ impl Parse for RuntimeArgs {
                 "runtime" => runtime = Some(input.parse()?),
                 "family_id" => family_id = Some(input.parse()?),
                 "op_type" => op_type = Some(input.parse()?),
-                "execute" => execute = Some(input.parse()?),
                 "execute_reads" => execute_reads = Some(input.parse()?),
                 "execute_in_session" => execute_in_session = Some(input.parse()?),
                 "session_supported" => session_supported = Some(input.parse()?),
@@ -102,7 +99,6 @@ impl Parse for RuntimeArgs {
             runtime: required(runtime, "runtime")?,
             family_id: required(family_id, "family_id")?,
             op_type: required(op_type, "op_type")?,
-            execute,
             execute_reads,
             execute_in_session,
             session_supported,
@@ -146,7 +142,7 @@ pub fn derive_extension_family_id(input: TokenStream) -> TokenStream {
 ///   With it, the generated owner entry forms the session itself and hands the
 ///   extension only a session, so no operation ever runs on the owner.
 ///
-/// The legacy `execute` argument is accepted but unused and may be omitted.
+/// The removed legacy `execute` argument is rejected, not silently ignored.
 #[proc_macro]
 pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(input as RuntimeArgs);
@@ -195,7 +191,6 @@ fn expand_extension_runtime(args: RuntimeArgs) -> syn::Result<proc_macro2::Token
         runtime,
         family_id,
         op_type,
-        execute: _execute,
         execute_reads,
         execute_in_session,
         session_supported,

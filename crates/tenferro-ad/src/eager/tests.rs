@@ -1456,3 +1456,29 @@ fn untracked_results_are_retained_without_an_allocation_group() {
     };
     assert_eq!(owned.as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
 }
+
+#[test]
+fn a_panicking_extension_callback_restores_the_lent_cache_and_breaks_the_engine() {
+    use tenferro_runtime::{ExecutionEngine, ExtensionCacheKey};
+
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+    let key = ExtensionCacheKey::new("tenferro-tests.eager-cache-panic.v1", "entries", 0);
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::with_lent_extension_caches(&mut engine, |_, caches| {
+            caches.put(key, 7_u64, 8);
+            panic!("extension callback panic");
+        });
+    }));
+    assert!(unwind.is_err());
+    assert!(
+        engine.is_broken(),
+        "a panic outside an individually guarded tensor operation still breaks the engine"
+    );
+
+    let mut caches = engine.take_extension_caches();
+    assert_eq!(
+        caches.get::<u64>(&key),
+        Some(&7),
+        "the cache store lent to the callback is restored rather than dropped"
+    );
+}

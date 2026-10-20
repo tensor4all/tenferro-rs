@@ -155,13 +155,24 @@ impl Prepared {
     }
 }
 
-/// Run one scheduled instruction on `exec` without entering a session.
+/// Run an extension callback, marking the engine broken if it unwinds.
+fn run_extension_callback<R>(
+    engine: &mut dyn ExecutionEngine,
+    callback: impl FnOnce(&mut dyn ExecutionEngine) -> Result<R>,
+) -> Result<R> {
+    match std::panic::catch_unwind(AssertUnwindSafe(|| callback(engine))) {
+        Ok(result) => result,
+        Err(payload) => {
+            engine.mark_broken();
+            std::panic::resume_unwind(payload)
+        }
+    }
+}
+
+/// Run one scheduled instruction on `exec`.
 ///
-/// This is the shared body of the leased scheduler path and the
-/// caller-borrowed `Runtime::run` path; only the session source
-/// differs. The owner extension fallback is not reachable here: `run_prepared_in`
-/// preflight rejects every non-session-capable prepared operation, and the leased
-/// path handles that fallback before entering this function.
+/// The owner extension fallback is handled first, so every other instruction
+/// executes through the engine's typed operations.
 #[allow(clippy::too_many_arguments)]
 fn execute_slot_instruction_on_engine<'input>(
     engine: &mut dyn ExecutionEngine,
@@ -187,36 +198,51 @@ fn execute_slot_instruction_on_engine<'input>(
             operations,
             caches: extension_caches,
         };
-        crate::exec::execute_owner_extension_fallback(
-            engine.as_any_mut(),
-            identity,
-            slots,
-            instruction,
-            Some(&mut extension_dispatch),
-        )?;
+        run_extension_callback(engine, |engine| {
+            crate::exec::execute_owner_extension_fallback(
+                engine.as_any_mut(),
+                identity,
+                slots,
+                instruction,
+                Some(&mut extension_dispatch),
+            )
+        })?;
         crate::exec::reclaim_last_use_inputs_exec(slots, instruction, engine);
         return Ok(());
     }
-    let exec: &mut dyn Engine = engine;
     let mut extension_dispatch = ExtensionExecutionDispatch {
         operations,
         caches: extension_caches,
     };
     if crate::exec::is_host_instruction(instruction) {
-        crate::exec::execute_host_instruction_exec(exec, slots, instruction)?;
+        crate::exec::execute_host_instruction_exec(engine, slots, instruction)?;
     } else if crate::exec::is_ffi_instruction(instruction) {
-        crate::exec::execute_ffi_instruction_exec(
-            exec,
-            slots,
-            instruction,
-            Some(instruction_index),
-            Some(&mut extension_dispatch),
-        )?;
+        if matches!(&instruction.op, crate::exec::ExecOp::Extension(_)) {
+            run_extension_callback(engine, |engine| {
+                crate::exec::execute_ffi_instruction_exec(
+                    engine,
+                    slots,
+                    instruction,
+                    Some(instruction_index),
+                    Some(&mut extension_dispatch),
+                )
+            })?;
+        } else {
+            crate::exec::execute_ffi_instruction_exec(
+                engine,
+                slots,
+                instruction,
+                Some(instruction_index),
+                Some(&mut extension_dispatch),
+            )?;
+        }
+    } else if let Some(view) = crate::exec::execute_backend_view_op(slots, instruction) {
+        slots[instruction.output_slots[0]] = Some(view);
     } else {
-        let result = crate::exec::execute_backend_op(exec, slots, instruction)?;
+        let result = crate::exec::execute_backend_op(engine, slots, instruction)?;
         slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
     }
-    crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
+    crate::exec::reclaim_last_use_inputs_exec(slots, instruction, engine);
     Ok(())
 }
 
@@ -389,6 +415,13 @@ pub(super) fn run<'a>(
     validate_prepared_runtime(runtime, prepared, CALLER)?;
     let mut engines = EngineSet::bind(engines, &prepared.targets, CALLER)?;
     let inputs = resolve_input_reads(&prepared.program, inputs, prepared.bound_input_check())?;
+    let signature = input_signature_reads(&inputs)?;
+    super::preparation::validate_execution_signature(
+        prepared.prepared.as_ref(),
+        prepared.program.frozen(),
+        &signature,
+    )
+    .map_err(prepare_error)?;
     let root = prepared.prepared.root();
     engines.take_caches();
     let result = execute_scheduled(
@@ -520,6 +553,11 @@ impl<'e, 'r> EngineSet<'e, 'r> {
             })
     }
 
+    fn engine(&mut self, engine_id: &EngineId) -> Result<&mut dyn ExecutionEngine> {
+        let index = self.index_of(engine_id)?;
+        Ok(&mut *self.engines[index])
+    }
+
     fn driver(&self, engine_id: &EngineId) -> Result<Arc<dyn EventDomainDriver>> {
         let index = self.index_of(engine_id)?;
         Ok(self.engines[index].event_domain_driver())
@@ -601,6 +639,12 @@ impl<'e, 'r> EngineSet<'e, 'r> {
     }
 }
 
+impl Drop for EngineSet<'_, '_> {
+    fn drop(&mut self) {
+        self.restore_caches();
+    }
+}
+
 fn execute_scheduled<'input>(
     program: &ExecProgram,
     schedule: &ScheduledGraph,
@@ -633,7 +677,8 @@ fn execute_scheduled<'input>(
             ))
         });
     };
-    let collected = executed.and_then(|mut outputs| collect_outputs(program, &mut outputs));
+    let collected =
+        executed.and_then(|mut outputs| collect_outputs(program, &mut outputs, engines));
     match collected {
         Ok(outputs) => {
             engines.retire(event_domains)?;
@@ -655,25 +700,70 @@ fn execute_scheduled<'input>(
 ///
 /// A slot that still reads one of the run's inputs (the input itself or a view
 /// of it) is returned borrowed, without a copy. Owned results, which are
-/// always compact, are returned as they are.
+/// always compact, are returned as they are. A program may name one output slot
+/// more than once; repeated borrowed reads are cloned shallowly, and repeated
+/// owned results are explicit engine copies.
 fn collect_outputs<'input>(
     program: &ExecProgram,
     outputs: &mut [Option<LocatedExecSlot<'input>>],
+    engines: &mut EngineSet<'_, '_>,
 ) -> Result<Vec<Output<'input>>> {
-    program
-        .output_slots
-        .iter()
-        .map(|&slot| {
-            let located = outputs
-                .get_mut(slot)
-                .and_then(Option::take)
-                .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
-            match located.value {
-                ExecSlot::Read(read) => Ok(Output::Borrowed(read)),
-                ExecSlot::Owned(tensor) => Ok(Output::Owned(tensor)),
+    let mut positions: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (index, &slot) in program.output_slots.iter().enumerate() {
+        positions.entry(slot).or_default().push(index);
+    }
+    let mut collected = (0..program.output_slots.len())
+        .map(|_| None)
+        .collect::<Vec<Option<Output<'input>>>>();
+    for (slot, positions) in positions {
+        let located = outputs
+            .get_mut(slot)
+            .and_then(Option::take)
+            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+        match located.value {
+            ExecSlot::Read(read) => {
+                for position in positions {
+                    collected[position] = Some(Output::Borrowed(read.clone()));
+                }
             }
+            ExecSlot::Owned(tensor) => {
+                let mut originals = positions.into_iter();
+                let last = originals
+                    .next_back()
+                    .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+                for position in originals {
+                    collected[position] = Some(Output::Owned(duplicate_owned_output(
+                        engines,
+                        &located.location,
+                        &tensor,
+                    )?));
+                }
+                collected[last] = Some(Output::Owned(tensor));
+            }
+        }
+    }
+    collected
+        .into_iter()
+        .enumerate()
+        .map(|(index, output)| {
+            output.ok_or_else(|| {
+                Error::Internal(format!(
+                    "Runtime::run: output slot {index} was not collected"
+                ))
+            })
         })
         .collect()
+}
+
+fn duplicate_owned_output(
+    engines: &mut EngineSet<'_, '_>,
+    location: &ExecutionLocation,
+    tensor: &Tensor,
+) -> Result<Tensor> {
+    let engine = engines.engine(location.engine_id())?;
+    engine
+        .to_contiguous_read(TensorRead::from_tensor(tensor))
+        .map_err(Error::from)
 }
 
 #[allow(clippy::too_many_arguments)]

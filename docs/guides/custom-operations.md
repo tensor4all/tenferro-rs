@@ -86,8 +86,8 @@ prepared-operation adapter plus an `extension_module` constructor. Its required
 callback is `execute_reads`, which receives borrowed `TensorRead` inputs and an
 `ExtensionExecutionContext` over the backend session the runtime opened for it
 (write it generic as `fn execute<B: Engine + ?Sized>(..., context: &mut
-ExtensionExecutionContext<'_, B>)`); the legacy `execute` argument may still be present
-for existing callers but is unused and may be omitted. A host/reference executor
+ExtensionExecutionContext<'_, B>)`); the removed legacy `execute` argument is
+rejected rather than silently ignored. A host/reference executor
 should use `TensorRead::as_slice::<T>()` to borrow compact host storage directly.
 That accessor never allocates or transfers: it rejects a noncompact view or
 backend-owned buffer with a typed error. If a kernel requires canonical compact

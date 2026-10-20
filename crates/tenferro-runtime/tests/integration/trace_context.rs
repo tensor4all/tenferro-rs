@@ -99,3 +99,44 @@ fn traced_graph_compiles_and_executes_with_ordered_inputs() {
         &[4.0, 6.0]
     );
 }
+
+#[test]
+fn duplicate_finish_outputs_execute_in_order_as_independent_results() {
+    let mut trace = TraceContext::new();
+    let lhs = trace
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let rhs = trace
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let sum = trace.add_op(CoreSemanticOp::Add, &[lhs, rhs]).unwrap()[0];
+    let neg = trace.add_op(CoreSemanticOp::Neg, &[sum]).unwrap()[0];
+    let graph = trace.finish(&[sum, neg, sum]).unwrap();
+
+    let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
+    let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
+    let prepared = runtime
+        .prepare(&compiled, &reads, &[engine.target()])
+        .unwrap();
+    let outputs = runtime
+        .run(&mut [&mut engine], &prepared, &reads)
+        .expect("a duplicated computed output is not a missing value");
+    assert_eq!(outputs.len(), 3);
+
+    let outputs: Vec<_> = outputs
+        .into_iter()
+        .map(|output| output.into_tensor(&mut engine).unwrap())
+        .collect();
+    assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[-4.0, -6.0]);
+    assert_eq!(outputs[2].as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    assert_ne!(
+        outputs[0].as_slice::<f64>().unwrap().as_ptr(),
+        outputs[2].as_slice::<f64>().unwrap().as_ptr(),
+        "repeated owned outputs are independent copies"
+    );
+}
