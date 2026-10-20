@@ -367,11 +367,11 @@ fn eager_compact_qr_executes_on_cpu() {
     )
     .unwrap();
     let (r, q) = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |&mut backend| {
-            let state = &mut backend.householder_qr(&a)?;
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            let state = session.householder_qr(&a)?;
             Ok::<_, tenferro_ad::Error>((
-                state.r(QrOptions::default(), &mut backend)?,
-                state.q_columns(0..2, QrOptions::default(), &mut backend)?,
+                state.r(QrOptions::default(), session)?,
+                state.q_columns(0..2, QrOptions::default(), session)?,
             ))
         })
         .unwrap();
@@ -407,18 +407,18 @@ fn eager_borrowed_compact_qr_append_import_and_ad() {
     )
     .unwrap();
     let (q, r, imported_r, loss) = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |&mut backend| {
-            let state = &mut backend.householder_qr(&a)?;
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            let state = session.householder_qr(&a)?;
             assert!(matches!(
-                state.append_columns(&foreign, &mut backend),
+                state.append_columns(&foreign, session),
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
-            let state = state.append_columns(&b, &mut backend)?;
-            let q = state.q_columns(0..2, QrOptions::default(), &mut backend)?;
-            let r = state.r(QrOptions::default(), &mut backend)?;
-            let imported = HouseholderQr::<EagerTensor>::from_factors(&q, &r, &mut backend)?;
-            let imported_r = imported.r(QrOptions::default(), &mut backend)?;
-            let loss = &mut backend.reduce_sum(&r, None)?;
+            let state = state.append_columns(&b, session)?;
+            let q = state.q_columns(0..2, QrOptions::default(), session)?;
+            let r = state.r(QrOptions::default(), session)?;
+            let imported = HouseholderQr::<EagerTensor>::from_factors(&q, &r, session)?;
+            let imported_r = imported.r(QrOptions::default(), session)?;
+            let loss = session.reduce_sum(&r, None)?;
             Ok::<_, tenferro_ad::Error>((q, r, imported_r, loss))
         })
         .unwrap();
