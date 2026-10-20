@@ -61,7 +61,7 @@ pub(crate) fn engine_kind_registration(
     #[cfg(feature = "webgpu")]
     if let Some(webgpu) = engine
         .as_any_mut()
-        .downcast_mut::<tenferro_gpu::webgpu::WebGpuEngine>()
+        .downcast_mut::<tenferro_gpu::webgpu::WebGpuBackend>()
     {
         return Some(tenferro_gpu::webgpu::webgpu_runtime_engine_registration(
             webgpu,

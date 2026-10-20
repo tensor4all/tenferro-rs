@@ -158,7 +158,7 @@ impl Prepared {
 /// Run one scheduled instruction on `exec` without entering a session.
 ///
 /// This is the shared body of the leased scheduler path and the
-/// caller-borrowed `Runtime::run_prepared_in` path; only the session source
+/// caller-borrowed `Runtime::run` path; only the session source
 /// differs. The owner extension fallback is not reachable here: `run_prepared_in`
 /// preflight rejects every non-session-capable prepared operation, and the leased
 /// path handles that fallback before entering this function.
@@ -689,7 +689,7 @@ fn execute_scheduled_slots_into<'input>(
 ) -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
     let domains = event_domains.as_mut().ok_or_else(|| {
         Error::runtime_state(
-            "Runtime::run_compiled",
+            "Runtime::run",
             ErrorPhase::Execution,
             "scheduled execution has no event-domain run to submit into",
         )
@@ -719,7 +719,7 @@ fn execute_scheduled_slots_into<'input>(
                 crate::exec::initialize_exec_slots_in(program, inputs, &mut staged)?;
                 if schedule.input_locations().len() != program.input_slots.len() {
                     return Err(Error::runtime_state(
-                        "Runtime::run_compiled",
+                        "Runtime::run",
                         ErrorPhase::Execution,
                         format!(
                             "prepared schedule has {} input locations for {} inputs",
@@ -750,7 +750,7 @@ fn execute_scheduled_slots_into<'input>(
                             .get(region.instruction_range.start)
                             .ok_or_else(|| {
                                 Error::runtime_state(
-                                    "Runtime::run_prepared",
+                                    "Runtime::run",
                                     ErrorPhase::Execution,
                                     format!(
                                         "elementwise region references instruction {}, but the                                          execution program has {} instructions",
@@ -762,7 +762,7 @@ fn execute_scheduled_slots_into<'input>(
                                 let operation = instruction_execution(schedule, first_instruction)?;
                                 if operation.location() != operation_node.location() {
                                     return Err(Error::runtime_state(
-                                "Runtime::run_prepared",
+                                "Runtime::run",
                                 ErrorPhase::Execution,
                                 "elementwise region location does not match its first prepared                                  operation"
                                     .to_string(),
@@ -807,7 +807,7 @@ fn execute_scheduled_slots_into<'input>(
                                         let member = instruction_execution(schedule, instruction)?;
                                         if member.location() != operation_node.location() {
                                             return Err(Error::runtime_state(
-                                        "Runtime::run_prepared",
+                                        "Runtime::run",
                                         ErrorPhase::Execution,
                                         "elementwise region member location does not match the                                          region location"
                                             .to_string(),
@@ -855,7 +855,7 @@ fn execute_scheduled_slots_into<'input>(
                                         }
                                         let covered_node = schedule.nodes().get(covered).ok_or_else(|| {
                                     Error::runtime_state(
-                                        "Runtime::run_prepared",
+                                        "Runtime::run",
                                         ErrorPhase::Execution,
                                         format!(
                                             "elementwise region references schedule node {covered},                                              but the schedule has {} nodes",
@@ -884,7 +884,7 @@ fn execute_scheduled_slots_into<'input>(
                                     .get(instruction_index)
                                     .ok_or_else(|| {
                                         Error::runtime_state(
-                                            "Runtime::run_compiled",
+                                            "Runtime::run",
                                             ErrorPhase::Execution,
                                             format!(
                                                 "scheduled operation references instruction \
@@ -897,7 +897,7 @@ fn execute_scheduled_slots_into<'input>(
                                 let operation = instruction_execution(schedule, instruction)?;
                                 if operation.location() != operation_node.location() {
                                     return Err(Error::runtime_state(
-                                        "Runtime::run_compiled",
+                                        "Runtime::run",
                                         ErrorPhase::Execution,
                                         format!(
                                     "scheduled instruction {instruction_index} location does not \
@@ -941,7 +941,7 @@ fn execute_scheduled_slots_into<'input>(
                         }
                         ScheduledNode::Collective(_) => {
                             return Err(Error::runtime_state_source(
-                                "Runtime::run_compiled",
+                                "Runtime::run",
                                 ErrorPhase::Execution,
                                 UnsupportedScheduledNodeError {
                                     node_index,
@@ -1053,7 +1053,7 @@ impl ScheduledEventDomains {
         driver_for: impl Fn(&EngineId) -> Result<Arc<dyn super::EventDomainDriver>>,
     ) -> Result<Self> {
         schedule.preflight().map_err(|source| {
-            Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
+            Error::runtime_state_source("Runtime::run", ErrorPhase::Execution, source)
         })?;
         // A coalescing-eligible schedule names exactly one event domain: every
         // location, completion, and dependency carries the root's, and no
@@ -1235,7 +1235,7 @@ impl ScheduledEventDomains {
             let dependency_completion =
                 self.completions.get(dependency).cloned().ok_or_else(|| {
                     Error::runtime_state_source(
-                        "Runtime::run_compiled",
+                        "Runtime::run",
                         ErrorPhase::Execution,
                         MissingScheduledDependencyCompletionError {
                             dependency: *dependency,
@@ -1509,7 +1509,7 @@ fn event_domain_run_state_error(
     state: EventDomainRunTerminalState,
 ) -> Error {
     Error::runtime_state_source(
-        "Runtime::run_compiled",
+        "Runtime::run",
         ErrorPhase::Execution,
         EventDomainRunLifecycleError {
             operation,
@@ -1569,7 +1569,7 @@ fn instruction_execution<'a>(
         .get(operation_index)
         .ok_or_else(|| {
             Error::runtime_state(
-                "Runtime::run_compiled",
+                "Runtime::run",
                 ErrorPhase::Execution,
                 format!(
                     "instruction references semantic operation {operation_index}, but prepared schedule has {} operations",
@@ -1650,7 +1650,7 @@ fn validate_region_outputs(
             .owns_resident_tensor(&output, location.storage_class())
         {
             return Err(Error::runtime_state_source(
-                "Runtime::run_prepared",
+                "Runtime::run",
                 ErrorPhase::Execution,
                 super::EngineExecutionContractError::OutputResidencyMismatch {
                     instruction_index: region.instruction_range.start,
@@ -1714,7 +1714,7 @@ fn validate_instruction_outputs(
             .owns_resident_tensor(&output, location.storage_class())
         {
             return Err(Error::runtime_state_source(
-                "Runtime::run_compiled",
+                "Runtime::run",
                 ErrorPhase::Execution,
                 super::EngineExecutionContractError::OutputResidencyMismatch {
                     instruction_index,
@@ -1787,7 +1787,7 @@ fn validate_runtime_input_ingress(
         return Ok(());
     }
     Err(Error::runtime_state_source(
-        "Runtime::run_compiled",
+        "Runtime::run",
         ErrorPhase::Execution,
         super::InputIngressContractError::ResidencyMismatch {
             input_slot: slot,
@@ -1815,7 +1815,7 @@ fn execute_scheduled_transfer<'input>(
             })?;
     if values.iter().any(|value| &value.location == destination) {
         return Err(Error::runtime_state_source(
-            "Runtime::run_compiled",
+            "Runtime::run",
             ErrorPhase::Execution,
             DuplicateTransferDestinationError {
                 value_slot: transfer.value_slot(),
@@ -1853,7 +1853,7 @@ fn validate_transfer_output(
 ) -> Result<()> {
     let expected_elements = checked_transfer_element_count(expected_shape).map_err(|source| {
         Error::runtime_state_source(
-            "Runtime::run_compiled",
+            "Runtime::run",
             ErrorPhase::Execution,
             TransferError::ProviderContract { source },
         )
@@ -1902,7 +1902,7 @@ fn validate_transfer_output(
     match contract_error {
         None => Ok(()),
         Some(source) => Err(Error::runtime_state_source(
-            "Runtime::run_compiled",
+            "Runtime::run",
             ErrorPhase::Execution,
             TransferError::ProviderContract { source },
         )),
@@ -1912,12 +1912,8 @@ fn validate_transfer_output(
 fn checked_transfer_element_count(
     shape: &[usize],
 ) -> std::result::Result<usize, TransferProviderContractError> {
-    tenferro_tensor::validate::checked_shape_product(
-        "Runtime::run_compiled",
-        "transfer source shape",
-        shape,
-    )
-    .map_err(|source| TransferProviderContractError::LogicalElementCount { source })
+    tenferro_tensor::validate::checked_shape_product("Runtime::run", "transfer source shape", shape)
+        .map_err(|source| TransferProviderContractError::LogicalElementCount { source })
 }
 
 fn tensor_buffer_len(tensor: &Tensor) -> usize {
@@ -2156,7 +2152,7 @@ fn validate_exec_input_count(program: &ExecProgram, actual: usize) -> Result<()>
     let expected = program.input_slots.len();
     if actual != expected {
         return Err(Error::runtime_state(
-            "Runtime::run_compiled",
+            "Runtime::run",
             ErrorPhase::Execution,
             format!("expected {expected} inputs for execution program, got {actual}"),
         ));
@@ -2166,7 +2162,7 @@ fn validate_exec_input_count(program: &ExecProgram, actual: usize) -> Result<()>
 
 fn prepare_error(source: Arc<PrepareError>) -> Error {
     Error::runtime_state_source(
-        "Runtime::run_compiled",
+        "Runtime::run",
         ErrorPhase::Execution,
         SharedPrepareError(source),
     )

@@ -351,7 +351,7 @@ pub(crate) fn eager_extension_backend_kind(
     }
     #[cfg(feature = "webgpu")]
     if target.context_identity()
-        == ExecutionContextIdentity::of::<tenferro_gpu::webgpu::WebGpuEngine>()
+        == ExecutionContextIdentity::of::<tenferro_gpu::webgpu::WebGpuBackend>()
     {
         return Some(EagerExtensionBackendKind::WebGpu);
     }

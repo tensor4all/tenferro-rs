@@ -1,6 +1,6 @@
 //! End-to-end tests for the placeholder constructor API
 //! (`input_concrete_shape` / `input_symbolic_shape`) and
-//! [`tenferro_runtime::Runtime::run_compiled`].
+//! [`tenferro_runtime::Runtime::run`].
 //!
 //! These tests verify that:
 //! * A graph built against a placeholder can be evaluated by binding a

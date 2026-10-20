@@ -64,7 +64,7 @@ pub fn run_on(
 /// Propagates [`Error::Validation`] for input binding or shape mismatches,
 /// [`Error::RuntimeState`] when the graph returns any output count other than
 /// one, and typed backend/runtime execution errors from
-/// [`Runtime::run_compiled`].
+/// [`Runtime::run`].
 pub fn run_compiled_one(
     runtime: &Runtime,
     program: &CompiledGraph,
@@ -96,7 +96,7 @@ pub trait RunCompiledTestExt {
     /// Propagates [`Error::Validation`] for input binding or shape mismatches,
     /// [`Error::RuntimeState`] when the graph returns any output count other
     /// than one, and typed backend/runtime execution errors from
-    /// [`Runtime::run_compiled`].
+    /// [`Runtime::run`].
     fn run_compiled_one_output(
         &self,
         program: &CompiledGraph,
