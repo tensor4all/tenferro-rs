@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
-use tenferro_cpu::{runtime_engine_registration, runtime_engine_registration_with_id, CpuBackend};
+use tenferro_cpu::{runtime_engine_registration, runtime_engine_registration_with_id, CpuEngine};
 use tenferro_df64_proof::ad::Df64VjpRule;
 use tenferro_df64_proof::extension::{
     module, module_for_engine, Df64Qr, Df64ToF64, DF64_SCALAR_IDENTITY,
@@ -27,6 +27,9 @@ use tenferro_runtime::{EngineId, Error, ErrorPhase, GraphCompiler, Runtime, Trac
 use tenferro_scalar_consumer_algorithm::{factor_norm_gradient, ScalarSupport};
 use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
+
+mod support;
+use support::run_compiled_on;
 
 /// Canonical standard support.
 struct Standard;
@@ -110,6 +113,7 @@ fn run<S: ScalarSupport>(
     ad: &AdContext,
     input: TracedTensor,
     runtime: &Runtime,
+    engine: &mut CpuEngine,
 ) -> Tensor {
     let seed = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![], vec![1.0_f64]).expect("shape matches data"),
@@ -118,8 +122,7 @@ fn run<S: ScalarSupport>(
     let gradient = factor_norm_gradient(ad, &input, &seed, support).expect("the program runs");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&gradient).expect("compiled program");
-    let mut results = runtime
-        .run_compiled(&program, &[])
+    let mut results = run_compiled_on(runtime, engine, &program, &[])
         .expect("executed the program")
         .into_iter();
     results.next().expect("one result")
@@ -160,42 +163,18 @@ fn assert_extended_gradient(gradient: &Tensor) {
 ///
 /// Returns `None` when the host offers no spare CPU for a second owner, because then the
 /// shape cannot be built at all.
-fn two_owner_runtime() -> Option<Runtime> {
-    use tenferro_cpu::{discover_cpu_topology, CpuBackend, CpuSet};
-
-    let topology = discover_cpu_topology().expect("CPU topology");
-    let node = topology.nodes().first()?;
-    let available = node.cpus().as_slice();
-    if available.len() < 2 {
-        eprintln!("two owners: the host declares fewer than two CPUs");
-        return None;
-    }
-    let middle = available.len() / 2;
-    let assigned = |range: std::ops::Range<usize>| {
-        CpuSet::new(available[range].iter().copied())
-            .map_err(|error| eprintln!("two owners: CPU set rejected: {error}"))
-            .ok()
-    };
-    // Each owner takes its own disjoint slice of the node's CPUs and builds its own pool
-    // over it, which is what makes them separate owners rather than two names for one.
-    let owner = |cpus: CpuSet| {
-        CpuBackend::builder()
-            .cpus(cpus)
-            .threads(1)
-            .ok()?
-            .build()
-            .map_err(|error| eprintln!("two owners: backend rejected: {error}"))
-            .ok()
-    };
-    let standard_backend = owner(assigned(0..middle)?)?;
-    let contribution_backend = owner(assigned(middle..available.len())?)?;
-
-    let standard_engine = EngineId::new("tenferro-cpu.standard.v1").expect("engine id");
-    let contribution_engine = EngineId::new("tenferro-cpu.contribution.v1").expect("engine id");
+fn two_owner_runtime() -> Option<(Runtime, CpuEngine, CpuEngine)> {
+    let standard_engine_id = EngineId::new("tenferro-cpu.standard.v1").expect("engine id");
+    let contribution_engine_id = EngineId::new("tenferro-cpu.contribution.v1").expect("engine id");
+    // Each owner is its own engine under its own runtime identity, which is what makes
+    // them separate owners rather than two names for one.
+    let standard_engine = CpuEngine::serial().with_runtime_engine_id(standard_engine_id.clone());
+    let contribution_engine =
+        CpuEngine::serial().with_runtime_engine_id(contribution_engine_id.clone());
     let mut builder = Runtime::builder();
     builder
         .register_engine(
-            runtime_engine_registration_with_id(&standard_backend, standard_engine.clone())
+            runtime_engine_registration_with_id(&standard_engine, standard_engine_id.clone())
                 .map_err(|error| eprintln!("two owners: standard engine rejected: {error}"))
                 .ok()?,
         )
@@ -203,15 +182,18 @@ fn two_owner_runtime() -> Option<Runtime> {
         .ok()?;
     builder
         .register_engine(
-            runtime_engine_registration_with_id(&contribution_backend, contribution_engine.clone())
-                .map_err(|error| eprintln!("two owners: contribution engine rejected: {error}"))
-                .ok()?,
+            runtime_engine_registration_with_id(
+                &contribution_engine,
+                contribution_engine_id.clone(),
+            )
+            .map_err(|error| eprintln!("two owners: contribution engine rejected: {error}"))
+            .ok()?,
         )
         .map_err(|error| eprintln!("two owners: contribution registration rejected: {error}"))
         .ok()?;
     builder
         .install_extension_module(
-            tenferro_linalg::extension_module::<CpuBackend>(standard_engine)
+            tenferro_linalg::extension_module::<CpuEngine>(standard_engine_id)
                 .map_err(|error| eprintln!("two owners: linalg module rejected: {error}"))
                 .ok()?,
         )
@@ -219,71 +201,85 @@ fn two_owner_runtime() -> Option<Runtime> {
         .ok()?;
     builder
         .install_extension_module(
-            module_for_engine(contribution_engine)
+            module_for_engine(contribution_engine_id)
                 .map_err(|error| eprintln!("two owners: contribution module rejected: {error}"))
                 .ok()?,
         )
         .map_err(|error| eprintln!("two owners: contribution install rejected: {error}"))
         .ok()?;
-    builder
+    let runtime = builder
         .build()
         .map_err(|error| eprintln!("two owners: runtime rejected: {error}"))
-        .ok()
+        .ok()?;
+    Some((runtime, standard_engine, contribution_engine))
 }
 
 /// Standard support assembled from the repository's linalg module.
-fn standard_runtime() -> Runtime {
-    let backend = CpuBackend::new();
+fn standard_runtime() -> (Runtime, CpuEngine) {
+    let engine = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
-        .register_engine(runtime_engine_registration(&backend).expect("engine"))
+        .register_engine(runtime_engine_registration(&engine).expect("engine"))
         .expect("register the CPU engine");
     builder
         .install_extension_module(
-            tenferro_linalg::extension_module::<CpuBackend>(
+            tenferro_linalg::extension_module::<CpuEngine>(
                 tenferro_cpu::runtime_engine_id().expect("engine id"),
             )
             .expect("linalg module"),
         )
         .expect("install the linalg module");
-    builder.build().expect("runtime")
+    (builder.build().expect("runtime"), engine)
 }
 
 #[test]
 fn the_standard_configuration_runs_the_algorithm() {
-    let runtime = standard_runtime();
-    let gradient = run(&Standard, &standard_context(), standard_input(), &runtime);
+    let (runtime, mut engine) = standard_runtime();
+    let gradient = run(
+        &Standard,
+        &standard_context(),
+        standard_input(),
+        &runtime,
+        &mut engine,
+    );
     assert_standard_gradient(&gradient);
 }
 
 #[test]
 fn the_df64_only_configuration_needs_no_linalg_support() {
     // Only the contribution's module is installed, so nothing standard is available.
-    let backend = CpuBackend::new();
+    let engine = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
-        .register_engine(runtime_engine_registration(&backend).expect("engine"))
+        .register_engine(runtime_engine_registration(&engine).expect("engine"))
         .expect("register the CPU engine");
     builder
         .install_extension_module(module().expect("module"))
         .expect("install the Df64 module");
     let runtime = builder.build().expect("runtime");
+    let mut engine = engine;
 
-    let gradient = run(&Extended, &extended_context(), extended_input(), &runtime);
+    let gradient = run(
+        &Extended,
+        &extended_context(),
+        extended_input(),
+        &runtime,
+        &mut engine,
+    );
     assert_extended_gradient(&gradient);
 }
 
 #[test]
 fn the_mixed_configuration_carries_both_supports_in_one_runtime() {
-    let backend = CpuBackend::new();
+    let engine = CpuEngine::serial();
     let engine_id = tenferro_cpu::runtime_engine_id().expect("engine id");
     let mut builder = Runtime::builder();
     builder
-        .register_engine(runtime_engine_registration(&backend).expect("engine"))
+        .register_engine(runtime_engine_registration(&engine).expect("engine"))
         .expect("register the CPU engine");
     builder
         .install_extension_module(
-            tenferro_linalg::extension_module::<CpuBackend>(engine_id.clone())
+            tenferro_linalg::extension_module::<CpuEngine>(engine_id.clone())
                 .expect("linalg module"),
         )
         .expect("install the linalg module");
@@ -291,18 +287,21 @@ fn the_mixed_configuration_carries_both_supports_in_one_runtime() {
         .install_extension_module(module().expect("module"))
         .expect("install the Df64 module");
     let runtime = builder.build().expect("runtime");
+    let mut engine = engine;
 
     assert_standard_gradient(&run(
         &Standard,
         &standard_context(),
         standard_input(),
         &runtime,
+        &mut engine,
     ));
     assert_extended_gradient(&run(
         &Extended,
         &extended_context(),
         extended_input(),
         &runtime,
+        &mut engine,
     ));
 }
 
@@ -314,8 +313,8 @@ fn the_mixed_configuration_carries_both_supports_in_one_runtime() {
 /// differ by resource domain, which is how the runtime tells two CPU owners apart.
 #[test]
 fn the_cooperating_configuration_serves_each_family_from_its_own_engine() {
-    let Some(runtime) = two_owner_runtime() else {
-        // The host offers no second owner, so the shape cannot be built here.
+    let Some((runtime, mut standard_engine, mut contribution_engine)) = two_owner_runtime() else {
+        // The runtime rejected the two-owner shape, so it cannot be built here.
         return;
     };
 
@@ -324,12 +323,14 @@ fn the_cooperating_configuration_serves_each_family_from_its_own_engine() {
         &standard_context(),
         standard_input(),
         &runtime,
+        &mut standard_engine,
     ));
     assert_extended_gradient(&run(
         &Extended,
         &extended_context(),
         extended_input(),
         &runtime,
+        &mut contribution_engine,
     ));
 }
 
@@ -346,8 +347,8 @@ fn the_cooperating_configuration_serves_each_family_from_its_own_engine() {
 fn a_value_from_one_owner_reaches_the_other_owner_explicitly() {
     use tenferro_df64_proof::extension::Df64FromF64;
 
-    let Some(runtime) = two_owner_runtime() else {
-        // The host offers no second owner, so the shape cannot be built here.
+    let Some((runtime, mut standard_engine, mut contribution_engine)) = two_owner_runtime() else {
+        // The runtime rejected the two-owner shape, so it cannot be built here.
         return;
     };
 
@@ -359,8 +360,7 @@ fn a_value_from_one_owner_reaches_the_other_owner_explicitly() {
     let (q, _r) = standard_input.qr().expect("traced QR");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&q).expect("compiled the standard program");
-    let produced = runtime
-        .run_compiled(&program, &[])
+    let produced = run_compiled_on(&runtime, &mut standard_engine, &program, &[])
         .expect("executed the standard program")
         .into_iter()
         .next()
@@ -373,7 +373,7 @@ fn a_value_from_one_owner_reaches_the_other_owner_explicitly() {
     let program = compiler
         .compile(&widened[0])
         .expect("compiled the contribution program");
-    let outcome = runtime.run_compiled(&program, &[]);
+    let outcome = run_compiled_on(&runtime, &mut contribution_engine, &program, &[]);
 
     match outcome {
         Ok(results) => {
