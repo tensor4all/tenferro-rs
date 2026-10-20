@@ -195,14 +195,11 @@ fn execute_prepared_executor(
         return execute_prepared_extension_on(engine, executor, input_reads);
     }
     let identity = engine.target().context_identity();
-    let mut caches = engine.take_extension_caches();
-    let result = {
+    crate::eager::with_lent_extension_caches(engine, |engine, caches| {
         let mut erased =
             tenferro_runtime::ErasedExecutionContext::from_dyn(identity, engine.as_any_mut());
-        executor.execute(&mut erased, &mut caches, input_reads)
-    };
-    engine.restore_extension_caches(caches);
-    result
+        executor.execute(&mut erased, caches, input_reads)
+    })
 }
 
 fn try_prepared_eager_extension(

@@ -164,6 +164,14 @@ pub trait ExecutionEngine: Engine {
         drop(caches);
     }
 
+    /// Record that an extension callback panicked while the runtime had lent
+    /// this engine's extension caches to it.
+    ///
+    /// The runtime restores the caches, calls this, and resumes the panic. An
+    /// engine that tracks a broken state refuses later operations; the default
+    /// keeps no such state.
+    fn mark_broken(&mut self) {}
+
     /// The driver that opens this engine's event-domain runs.
     ///
     /// Host engines complete each launch before it returns, which the default

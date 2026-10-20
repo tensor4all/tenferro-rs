@@ -255,6 +255,7 @@ impl CpuEngine {
 
 impl TensorDeviceTransfer for CpuEngine {
     fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.check_entry("CpuEngine::download_to_host")?;
         if tensor.backend_family().is_some() {
             return Err(crate::Error::runtime_state(
                 "CpuEngine::download_to_host",
@@ -265,6 +266,7 @@ impl TensorDeviceTransfer for CpuEngine {
     }
 
     fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.check_entry("CpuEngine::upload_host_tensor")?;
         if tensor.backend_family().is_some() {
             return Err(crate::Error::runtime_state(
                 "CpuEngine::upload_host_tensor",
@@ -396,6 +398,7 @@ impl TensorStructural for CpuEngine {
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
+        self.check_entry("CpuEngine::reshape_read")?;
         if let TensorRead::Tensor(tensor) = &input {
             // INVARIANT: a compact input keeps the serial host copy and its typed
             // refusal for an external payload, without the engine entry or a

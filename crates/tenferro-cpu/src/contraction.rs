@@ -154,6 +154,8 @@ impl LowerContractionError for cpueinsum_blas::BlasError {
 // provider wrapper together, so the SPMD gate and arena are never split.
 pub(crate) struct ExecutionResources {
     pool: Option<Pool<'static>>,
+    #[cfg(test)]
+    raw_pool: Option<std::sync::Arc<rayon::ThreadPool>>,
     serial: ArenaProvider,
     pub(crate) nary: ContractionWorkspaces,
     /// Entries into the raw Rayon pool made directly by the faer lane. The
@@ -170,12 +172,34 @@ impl fmt::Debug for ExecutionResources {
 }
 impl ExecutionResources {
     pub(crate) fn new(pool: Option<rayon::ThreadPool>) -> Self {
+        #[cfg(test)]
+        let (pool, raw_pool) = match pool {
+            Some(pool) => {
+                let raw_pool = std::sync::Arc::new(pool);
+                (
+                    Some(Pool::shared(std::sync::Arc::clone(&raw_pool))),
+                    Some(raw_pool),
+                )
+            }
+            None => (None, None),
+        };
+        #[cfg(not(test))]
+        let pool = pool.map(Pool::owned);
         Self {
-            pool: pool.map(Pool::owned),
+            pool,
+            #[cfg(test)]
+            raw_pool,
             serial: ArenaProvider::new(),
             nary: ContractionWorkspaces::default(),
             faer_entries: AtomicU64::new(0),
         }
+    }
+
+    /// Test handle to the owned raw pool, so a test can enter that exact pool
+    /// from another thread without borrowing the engine.
+    #[cfg(test)]
+    pub(crate) fn raw_pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
+        self.raw_pool.clone()
     }
     /// Entry counters of the provider pool this engine owns.
     pub(crate) fn pool_stats(&self) -> crate::CpuPoolStats {

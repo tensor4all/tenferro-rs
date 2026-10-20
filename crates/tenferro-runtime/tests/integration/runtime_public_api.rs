@@ -1555,3 +1555,121 @@ fn prepared_identity_output_is_borrowed_and_a_computed_output_is_compact() {
         tenferro_runtime::Output::Borrowed(_) => panic!("a computed output must be owned"),
     }
 }
+
+#[test]
+fn run_rejects_a_replacement_input_that_changes_the_prepared_specialization() {
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let product = lhs
+        .dot_general(
+            &rhs,
+            DotGeneralConfig {
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
+            },
+        )
+        .unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(
+            &product,
+            &[(&lhs, DType::F64, &[2, 3]), (&rhs, DType::F64, &[3, 2])],
+        )
+        .unwrap();
+    let lhs_data =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs_data =
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&lhs_data, &rhs_data]).unwrap();
+    run_prepared(&mut engine, &runtime, &prepared, &[&lhs_data, &rhs_data])
+        .expect("the prepared layout runs");
+
+    // Same shape and rank, but a non-compact layout: the graph metadata accepts
+    // it, so run must re-project the actual signature against the prepared
+    // layout-class specialization.
+    let lhs_base =
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let transposed_lhs = lhs_base
+        .as_typed::<f64>()
+        .unwrap()
+        .as_view()
+        .transpose_view([1, 0])
+        .unwrap()
+        .into_tensor_read()
+        .unwrap();
+    let rhs_read = TensorRead::from_tensor(&rhs_data);
+    let error = runtime
+        .run(&mut [&mut engine], &prepared, &[transposed_lhs, rhs_read])
+        .expect_err(
+            "a replacement input that does not match the prepared specialization is rejected",
+        );
+    assert!(
+        error.to_string().contains("specialization"),
+        "the rejection names the prepared contract: {error}"
+    );
+}
+
+#[test]
+fn prepared_transpose_and_slice_outputs_alias_their_input_without_a_copy() {
+    let (mut engine, runtime) = cpu_engine_and_runtime();
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[1, 4]).unwrap();
+    let transposed = x.transpose(&[1, 0]).unwrap();
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&transposed, &[(&x, DType::F64, &[1, 4])])
+        .unwrap();
+    let input = Tensor::from_vec_col_major(vec![1, 4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
+    let reads = inputs_of(&[&input]);
+    let outputs = runtime.run(&mut [&mut engine], &prepared, &reads).unwrap();
+    let tenferro_runtime::Output::Borrowed(read) = &outputs[0] else {
+        panic!("a transpose of an input must stay borrowed");
+    };
+    assert_eq!(read.shape(), &[4, 1]);
+    let tenferro_tensor::TensorView::F64(view) = read.clone().tensor_view() else {
+        panic!("test input is F64");
+    };
+    let input_values = input.as_slice::<f64>().unwrap();
+    for (index, expected) in input_values.iter().enumerate() {
+        let element = view.get(&[index, 0]).expect("transposed view element");
+        assert_eq!(element, expected);
+        assert_eq!(
+            std::ptr::from_ref(element),
+            std::ptr::from_ref(&input_values[index]),
+            "the transpose output shares the input allocation"
+        );
+    }
+
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]).unwrap();
+    let sliced = x
+        .slice(SliceConfig {
+            starts: vec![0, 0],
+            limits: vec![2, 1],
+            strides: vec![1, 1],
+        })
+        .unwrap();
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&sliced, &[(&x, DType::F64, &[2, 3])])
+        .unwrap();
+    let input =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
+    let reads = inputs_of(&[&input]);
+    let outputs = runtime.run(&mut [&mut engine], &prepared, &reads).unwrap();
+    let tenferro_runtime::Output::Borrowed(read) = &outputs[0] else {
+        panic!("a slice of an input must stay borrowed");
+    };
+    assert_eq!(read.shape(), &[2, 1]);
+    let aliased = read
+        .as_slice::<f64>()
+        .expect("the compact slice aliases the input");
+    assert_eq!(aliased, &[1.0, 2.0]);
+    assert_eq!(
+        aliased.as_ptr(),
+        input.as_slice::<f64>().unwrap().as_ptr(),
+        "the slice output shares the input allocation"
+    );
+}

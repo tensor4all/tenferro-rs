@@ -1882,6 +1882,31 @@ fn project_requirements(
         })
 }
 
+/// Validate the actual run signature against a prepared program.
+///
+/// Preparation is the only other place that runs these checks; a run with
+/// replacement inputs must repeat them because the graph's metadata alone does
+/// not carry specialized strides, alignment, layout class, or concrete
+/// dimensions.
+pub(crate) fn validate_execution_signature(
+    prepared: &PreparedProgram,
+    frozen: &FrozenProgram,
+    signature: &InputSignature,
+) -> PreparedProgramResult<()> {
+    validate_signature_arity(frozen, signature)?;
+    validate_semantic_shape_guards(&frozen.program, signature)?;
+    let actual = prepared.specialization.requirements().project(signature)?;
+    if actual != prepared.specialization {
+        return Err(Arc::new(PrepareError::ProviderContract {
+            source: ProviderContractError::ProjectionMismatch {
+                expected: Box::new(prepared.specialization.clone()),
+                actual: Box::new(actual),
+            },
+        }));
+    }
+    Ok(())
+}
+
 fn validate_signature_arity(
     frozen: &FrozenProgram,
     signature: &InputSignature,

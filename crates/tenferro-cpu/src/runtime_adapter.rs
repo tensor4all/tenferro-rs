@@ -298,6 +298,10 @@ impl tenferro_runtime::ExecutionEngine for CpuEngine {
         self.extension_caches = caches;
     }
 
+    fn mark_broken(&mut self) {
+        self.broken = true;
+    }
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
