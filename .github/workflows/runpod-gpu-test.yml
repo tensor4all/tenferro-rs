@@ -519,7 +519,7 @@ jobs:
           # archive build commands or toolkit selection change; unrelated
           # workflow edits must not invalidate the key (#1403).
           rustc_version="$(rustc -V | awk '{print $2}')"
-          key="cuda-pjrt-archive-v17-ci-ubuntu24.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*', 'tenferro-rs/REPOSITORY_RULES.md', 'tenferro-rs/PERFORMANCE_TIPS.md', 'tenferro-rs/docs/tutorial-code/**', 'tenferro-rs/docs/guides/devices-and-gpu.md', 'tenferro-rs/docs/performance/tt-inner-product-overhead.md') }}"
+          key="cuda-pjrt-archive-v18-ci-ubuntu24.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*', 'tenferro-rs/REPOSITORY_RULES.md', 'tenferro-rs/PERFORMANCE_TIPS.md', 'tenferro-rs/docs/tutorial-code/**', 'tenferro-rs/docs/guides/devices-and-gpu.md', 'tenferro-rs/docs/performance/tt-inner-product-overhead.md') }}"
           {
             echo "key=${key}"
             echo "artifact_name=${key}"
@@ -630,7 +630,8 @@ jobs:
             -p tenferro-gpu \
             -p tenferro-ad \
             -p tenferro-linalg \
-            --features cuda
+            -p tenferro-fft \
+            --features cuda,tenferro-gpu/cubecl-interop
 
       - name: Build PJRT test archive
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true' && steps.archive_reuse.outputs.reused != 'true'
