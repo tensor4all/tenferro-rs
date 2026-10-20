@@ -51,8 +51,23 @@ pub(crate) fn engine_kind_registration(
             cpu, engine_id,
         ));
     }
-    // TODO(#2206 gpu): register CUDA and WebGPU engine kinds once the GPU
-    // engines implement `ExecutionEngine`.
+    #[cfg(feature = "cuda")]
+    if let Some(cuda) = engine
+        .as_any_mut()
+        .downcast_mut::<tenferro_gpu::cuda::CudaEngine>()
+    {
+        return Some(tenferro_gpu::cuda::cuda_runtime_engine_registration(cuda));
+    }
+    #[cfg(feature = "webgpu")]
+    if let Some(webgpu) = engine
+        .as_any_mut()
+        .downcast_mut::<tenferro_gpu::webgpu::WebGpuEngine>()
+    {
+        return Some(tenferro_gpu::webgpu::webgpu_runtime_engine_registration(
+            webgpu,
+        ));
+    }
+    let _ = engine_id;
     None
 }
 

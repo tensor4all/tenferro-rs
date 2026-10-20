@@ -344,7 +344,17 @@ pub(crate) fn eager_extension_backend_kind(
     if target.context_identity() == ExecutionContextIdentity::of::<tenferro_cpu::CpuEngine>() {
         return Some(EagerExtensionBackendKind::Cpu);
     }
-    // TODO(#2206 gpu): map the CUDA and WebGPU engine types.
+    #[cfg(feature = "cuda")]
+    if target.context_identity() == ExecutionContextIdentity::of::<tenferro_gpu::cuda::CudaEngine>()
+    {
+        return Some(EagerExtensionBackendKind::Cuda);
+    }
+    #[cfg(feature = "webgpu")]
+    if target.context_identity()
+        == ExecutionContextIdentity::of::<tenferro_gpu::webgpu::WebGpuEngine>()
+    {
+        return Some(EagerExtensionBackendKind::WebGpu);
+    }
     None
 }
 

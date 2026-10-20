@@ -41,13 +41,6 @@ mod event_retirement;
 mod kernels;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod native_permutation;
-// TODO(#2206 webgpu): the WebGPU backend and the Apple shared-allocation bridge
-// still use the removed session/backend contracts; they move to the engine
-// shape (one engine owning its queue, caches and pending runs) in their own unit.
-#[cfg(feature = "webgpu")]
-compile_error!(
-    "TODO(#2206 webgpu): the `webgpu` feature is disabled until WebGPU and the Apple bridge move to the engine model"
-);
 #[cfg(feature = "webgpu")]
 pub mod webgpu;
 
@@ -59,11 +52,11 @@ pub mod cuda {
         cuda_runtime_hardware_class, download_pending, download_tensor, download_tensor_into,
         gpu_available, upload_pending, upload_tensor, with_cuda_engine, CompletionUnproven,
         CudaComputeCapability, CudaDeviceError, CudaDeviceId, CudaDeviceInfo, CudaDeviceUuid,
-        CudaEngine, CudaExtensionCache, CudaExtensionCacheGuard, CudaRuntime, CudaRuntimeIdentity,
-        CutensorWorkspaceStats, DownloadIntoError, GpuExtensionCapability, PendingDownload,
-        PendingRead, PendingUpload, PinnedHostBuffer, PublicationAdmissionError, PublicationError,
-        PublicationRejected, SourcePublication, TransferRejected, TransferSubmitError,
-        WorkspaceRetirementStats,
+        CudaEngine, CudaEngineError, CudaExtensionCache, CudaExtensionCacheGuard, CudaRuntime,
+        CudaRuntimeIdentity, CutensorWorkspaceStats, DownloadIntoError, GpuExtensionCapability,
+        PendingDownload, PendingRead, PendingUpload, PinnedHostBuffer, PublicationAdmissionError,
+        PublicationError, PublicationRejected, SourcePublication, TransferRejected,
+        TransferSubmitError, WorkspaceRetirementStats,
     };
 
     /// Public tenferro-wide CubeCL session (issue #1597), behind the

@@ -86,6 +86,11 @@ impl WorkspaceRetirementQueue {
         self.stats
     }
 
+    /// Device bytes of the workspaces still waiting for their stream.
+    pub(crate) fn retained_bytes(&self) -> u64 {
+        self.entries.iter().map(|entry| entry.handle.size()).sum()
+    }
+
     /// Defer `handle` until the work already enqueued on `stream` completes.
     ///
     /// Falls back to a stream barrier when no event can be recorded, when the

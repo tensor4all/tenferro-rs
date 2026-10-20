@@ -200,6 +200,8 @@ pub(crate) struct CudaRuntimeState {
     client: Client,
     // The home stream: one runtime, one engine, one logical stream (#2206).
     stream: cubecl_environment::stream::StreamId,
+    // Limit on device bytes retained by unfinished work (the retirement queues), 0 = no limit.
+    unfinished_limit: std::sync::atomic::AtomicU64,
     device_id: CudaDeviceId,
     device_ordinal: usize,
     device_info: CudaDeviceInfo,
@@ -559,6 +561,7 @@ impl CudaRuntime {
             inner: Arc::new(CudaRuntimeState {
                 client,
                 stream: cubecl_environment::stream::StreamId::allocate(),
+                unfinished_limit: std::sync::atomic::AtomicU64::new(0),
                 device_id,
                 device_ordinal,
                 device_info,
@@ -586,6 +589,87 @@ impl CudaRuntime {
 
     pub(crate) fn client(&self) -> &Client {
         &self.inner.client
+    }
+
+    /// Set the limit on device bytes retained by unfinished work; `None` removes it.
+    pub(crate) fn set_unfinished_memory_limit(&self, bytes: Option<u64>) {
+        self.inner
+            .unfinished_limit
+            .store(bytes.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The limit on device bytes retained by unfinished work, if one is set.
+    pub(crate) fn unfinished_memory_limit(&self) -> Option<u64> {
+        match self
+            .inner
+            .unfinished_limit
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            0 => None,
+            limit => Some(limit),
+        }
+    }
+
+    /// Device bytes currently retained by unfinished work: workspaces and transfer packages whose
+    /// completion has not been observed yet (permanently retained packages included).
+    pub(crate) fn unfinished_memory_bytes(&self) -> u64 {
+        let workspaces = self
+            .inner
+            .workspace_retirements
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retained_bytes();
+        let transfers = self
+            .inner
+            .transfer_retirements
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retained_bytes();
+        workspaces.saturating_add(transfers)
+    }
+
+    /// Admit work that will retain `prospective` more bytes until it completes.
+    ///
+    /// Without a limit this does nothing. Work larger than the limit on its own is refused before
+    /// anything is submitted. Otherwise, when the retained bytes plus `prospective` would exceed the
+    /// limit, completed work is released and, if that is not enough, the engine's stream is waited for
+    /// so the retained work completes and is released.
+    pub(crate) fn admit_unfinished(&self, op: &'static str, prospective: u64) -> crate::Result<()> {
+        let Some(limit) = self.unfinished_memory_limit() else {
+            return Ok(());
+        };
+        if prospective > limit {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "unfinished memory",
+                format!(
+                    "the operation would retain {prospective} bytes until it completes, more than \
+                     the engine's unfinished-memory limit of {limit} bytes"
+                ),
+            ));
+        }
+        if self.unfinished_memory_bytes().saturating_add(prospective) <= limit {
+            return Ok(());
+        }
+        self.drain_transfer_retirements();
+        if self.unfinished_memory_bytes().saturating_add(prospective) <= limit {
+            return Ok(());
+        }
+        // Waiting for the stream completes the retained work; `synchronize` then releases it.
+        self.synchronize()?;
+        let retained = self.unfinished_memory_bytes();
+        if retained.saturating_add(prospective) > limit {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "unfinished memory",
+                format!(
+                    "the operation would retain {} bytes for unfinished work, more than the \
+                     engine's unfinished-memory limit of {limit} bytes after draining completed work",
+                    retained.saturating_add(prospective)
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// Lease the runtime's pinned staging buffer for a chunked blocking transfer.

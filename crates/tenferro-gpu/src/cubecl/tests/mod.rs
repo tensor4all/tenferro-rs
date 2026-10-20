@@ -33,6 +33,7 @@ mod copy_fault_tests;
 mod cubecl_session_tests;
 mod device_tests;
 mod elementwise_tests;
+mod engine_tests;
 mod fusion_tests;
 mod gemm_accum_tests;
 mod gemm_tests;

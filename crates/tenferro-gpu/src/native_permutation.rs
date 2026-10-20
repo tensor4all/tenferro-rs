@@ -46,6 +46,7 @@ pub(crate) struct NativeTransposeTile {
     pub(crate) vector_width: u32,
 }
 
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 impl NativeTransposeTile {
     const DEFAULT_NAME: &'static str = "16x8-p1-v1";
 
@@ -146,6 +147,7 @@ pub(crate) struct NativeStridedCopyPlan {
     pub(crate) len: usize,
 }
 
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 impl NativeStridedCopyPlan {
     /// Validate both operand layouts and fuse the affine axes.
     ///

@@ -3,6 +3,7 @@ use std::fmt;
 
 use cubecl::client::Client;
 use cubecl::future;
+use cubecl_environment::stream::StreamId;
 use cubecl_wgpu::WgpuDevice;
 use tenferro_tensor::AllocationDomainId;
 
@@ -61,6 +62,7 @@ impl Eq for WebGpuRuntimeIdentity {}
 #[derive(Clone)]
 pub struct WebGpuRuntime {
     client: Client,
+    stream: StreamId,
     device_ordinal: usize,
     pub(super) apple_domain: Option<std::sync::Arc<AppleDomainState>>,
     identity: WebGpuRuntimeIdentity,
@@ -127,6 +129,7 @@ impl WebGpuRuntime {
         })?;
         Ok(Self {
             client,
+            stream: StreamId::allocate(),
             device_ordinal,
             apple_domain: None,
             identity: WebGpuRuntimeIdentity::fresh(),
@@ -142,6 +145,7 @@ impl WebGpuRuntime {
         let allocation_domain = domain.id;
         Self {
             client,
+            stream: StreamId::allocate(),
             device_ordinal,
             apple_domain: Some(domain),
             identity: WebGpuRuntimeIdentity::fresh(),
@@ -171,6 +175,10 @@ impl WebGpuRuntime {
 
     pub(crate) fn client(&self) -> &Client {
         &self.client
+    }
+
+    pub(super) fn stream(&self) -> StreamId {
+        self.stream
     }
 
     /// Return the WebGPU device ordinal requested at construction.
