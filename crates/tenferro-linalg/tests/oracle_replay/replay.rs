@@ -1206,7 +1206,7 @@ fn eval_named_tensors(runtime: &Runtime, outputs: &[NamedTensor]) -> Result<Vec<
         .collect::<Vec<_>>();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&traced).map_err(to_string)?;
-    run_compiled_cpu(&runtime, &program, &[]).map_err(to_string)
+    run_compiled_cpu(runtime, &program, &[]).map_err(to_string)
 }
 
 fn compare_named_results(

@@ -2,16 +2,9 @@
 
 use num_complex::Complex64;
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{EagerSessionLinalgExt, TracedTensorLinalgExt};
 use tenferro_runtime::{DType, Error, ErrorPhase, TracedTensor, TypedTensor};
 use tenferro_tensor::Error as TensorError;
-
-fn single_thread_backend() -> CpuEngine {
-    let backend = tenferro_cpu::CpuEngine::serial();
-    assert_eq!(backend.num_threads(), 1);
-    backend
-}
 
 fn eager(data: Vec<f64>, shape: Vec<usize>) -> EagerTensor {
     EagerTensor::from_tensor_in(

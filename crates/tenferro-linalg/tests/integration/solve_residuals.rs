@@ -3,7 +3,6 @@
 use num_complex::Complex64;
 use std::sync::Arc;
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuEngine;
 use tenferro_linalg::EagerTensorLinalgExt;
 
 fn context() -> Arc<EagerRuntime> {

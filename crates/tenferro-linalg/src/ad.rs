@@ -476,7 +476,7 @@ mod tests {
         program: &tenferro_runtime::CompiledGraph,
         inputs: &[&tenferro_tensor::Tensor],
     ) -> tenferro_runtime::Result<tenferro_tensor::Tensor> {
-        let mut outputs = run_compiled_cpu(&runtime, program, inputs)?;
+        let mut outputs = run_compiled_cpu(runtime, program, inputs)?;
         assert_eq!(outputs.len(), 1);
         Ok(outputs.remove(0))
     }
