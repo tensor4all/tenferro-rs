@@ -1775,18 +1775,25 @@ impl SourcePublication {
         })
     }
 
-    /// Consume the publication by copying it into `consumer`'s device, ordered after its frontier
+    /// Consume the publication by copying it into `consumer`'s memory, ordered after its frontier
     /// (`U4-2a`; see `docs/design/consumer-copy-1945-u4-2a.md`).
+    ///
+    /// This is the explicit transfer between two engines on one device (#2206): engines do not
+    /// share memory, so a value moves from the producing engine to another one by publishing it
+    /// there and copying it here. Both sides are ordered: the copy waits for the producer's work up
+    /// to the publication, the source stays owned (so it cannot be overwritten or recycled) until
+    /// the copy has read it, and the destination is handed out only by [`PendingRead::wait`].
+    /// The consumer may also be the producing engine itself.
     ///
     /// The publication is consumed: the source value, its allocation and the frontier move into the
     /// returned [`PendingRead`], so no later `download_into`, write or reuse can race the copy. The
-    /// destination is an owned device tensor on the consumer's runtime, and the copy runs on the
-    /// consumer session's captured stream behind the publication's frontier.
+    /// destination is an owned device tensor in the consumer engine's memory, and the copy runs on
+    /// the consumer's stream behind the publication's frontier.
     ///
     /// # Errors
     ///
-    /// [`PublicationError::CopyRejected`] when the consumer session does not belong to this
-    /// publication's runtime instance, when the publication is terminal, or when the destination could
+    /// [`PublicationError::CopyRejected`] when the consumer engine is on another device, when the
+    /// publication is terminal, or when the destination could
     /// not be prepared; the publication comes back unchanged and nothing of this copy was submitted.
     /// [`PublicationError::Unproven`] when the copy may have been enqueued and completion cannot be
     /// proven; nothing is returned and the package is retained for soundness.
@@ -1806,14 +1813,18 @@ impl SourcePublication {
     pub fn copy_into(mut self, consumer: &mut CudaEngine) -> Result<PendingRead, PublicationError> {
         // Eligibility and the terminal record are checked before the captured-stream entry, so a
         // refusal submits nothing at all.
+        // The consumer may be another engine: engines opened on one device share the device's
+        // primary context, so the producer's address is valid on the consumer's stream, and the
+        // frontier event orders the copy after the producer's work. Copies between devices go
+        // through the host (`download_into`, then an upload on the consumer).
         let consumer_runtime = consumer.runtime().clone();
-        if self.runtime.runtime_identity() != consumer_runtime.runtime_identity() {
+        if self.runtime.device_ordinal() != consumer_runtime.device_ordinal() {
             return Err(copy_refused(
                 self,
-                crate::Error::invalid_argument(
+                crate::Error::unsupported(
                     PUBLICATION_OP,
-                    "consumer",
-                    "the consumer engine does not belong to the publication's runtime instance",
+                    "the consumer engine is on another device; copy through the host with \
+                     `download_into` and an upload on the consumer",
                 ),
             ));
         }
@@ -1835,7 +1846,9 @@ impl SourcePublication {
             ));
         }
 
-        let runtime = self.runtime.clone();
+        // Everything the copy creates (destination, completion event, retirement record) belongs to
+        // the consumer's runtime; the publication keeps the producer's source value alive.
+        let runtime = consumer_runtime;
         let destination = match self.value.as_ref() {
             Some(source_value) => match allocate_like(&runtime, source_value) {
                 Ok(destination) => destination,

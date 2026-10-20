@@ -3,13 +3,12 @@
 //! Consumer-copy contract (#1945 U4-2a).
 //!
 //! An engine publishes a value it produced and later copies that value into a fresh device tensor of
-//! the same runtime instance, ordered behind the producer's frontier and running on the engine's own
-//! stream; an engine of another runtime instance is refused. These tests are ignored by default;
-//! explicitly running them requires a CUDA device.
+//! itself or of another engine on the same device (the explicit transfer between engines, #2206),
+//! ordered behind the producer's frontier and running on the consumer's own stream. These tests are
+//! ignored by default; explicitly running them requires a CUDA device.
 
 use tenferro_gpu::cuda::{
     download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine, CudaRuntime,
-    PublicationError,
 };
 use tenferro_tensor::{Tensor, TensorElementwise, TensorRead};
 
@@ -94,35 +93,90 @@ fn a_copy_behind_a_pending_frontier_completes_with_the_produced_bytes() {
 
 #[test]
 #[ignore = "requires a CUDA device"]
-fn a_copy_from_another_runtime_instance_is_refused_with_the_publication() {
+fn a_value_transfers_to_another_engine_and_the_producer_moves_on_at_once() {
     let mut producer = backend();
-    let runtime = runtime_of(&producer);
-    let data = values(32);
-    let seed = upload_tensor(&runtime, &vector(&data)).expect("seed");
+    let producer_runtime = runtime_of(&producer);
+    let mut consumer = backend();
+    let consumer_runtime = runtime_of(&consumer);
+    let data = values(CHAINED_ELEMENTS);
+    let seed = upload_tensor(&producer_runtime, &vector(&data)).expect("seed");
+
+    // A chain of dependent steps keeps the producer busy, so the transfer is submitted while its
+    // source is still being written.
+    let mut value = produced_value(&mut producer, &seed);
+    for _ in 1..CHAINED_STEPS {
+        value = produced_value(&mut producer, &value);
+    }
+    let publication = producer.publish(value).expect("publish");
+    let pending = publication.copy_into(&mut consumer).expect("copy");
+
+    // The producer goes on immediately: it drops its inputs and allocates and overwrites new
+    // values of the same size, which would reuse the source memory if the transfer did not own it.
+    drop(seed);
+    let scratch_seed =
+        upload_tensor(&producer_runtime, &vector(&values(CHAINED_ELEMENTS))).expect("scratch seed");
+    for _ in 0..8 {
+        let scratch = produced_value(&mut producer, &scratch_seed);
+        drop(scratch);
+    }
+
+    // The consumer uses the destination on its own stream.
+    let received = pending.wait().expect("wait");
+    let doubled = consumer
+        .add_read(
+            TensorRead::from_tensor(&received),
+            TensorRead::from_tensor(&received),
+        )
+        .expect("consumer add");
+    let host = download_tensor(&consumer_runtime, &doubled).expect("read back");
+    let expected: Vec<f64> = data
+        .iter()
+        .map(|value| value * 2f64.powi(CHAINED_STEPS as i32 + 1))
+        .collect();
+    assert_eq!(host.as_slice::<f64>().expect("values"), expected.as_slice());
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn a_transfer_outlives_its_producer_engine() {
+    let mut producer = backend();
+    let producer_runtime = runtime_of(&producer);
+    let mut consumer = backend();
+    let consumer_runtime = runtime_of(&consumer);
+    let data = values(1024);
+    let seed = upload_tensor(&producer_runtime, &vector(&data)).expect("seed");
 
     let value = produced_value(&mut producer, &seed);
     let publication = producer.publish(value).expect("publish");
+    let pending = publication.copy_into(&mut consumer).expect("copy");
+    // The producing engine goes away while the copy may still run; the transfer owns the source.
+    drop(seed);
+    drop(producer);
 
-    // A second engine on the same device is a *different* runtime instance, so it is not authorized
-    // for this publication.
+    let received = pending.wait().expect("wait");
+    let host = download_tensor(&consumer_runtime, &received).expect("read back");
+    let expected: Vec<f64> = data.iter().map(|value| value * 2.0).collect();
+    assert_eq!(host.as_slice::<f64>().expect("values"), expected.as_slice());
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn a_forgotten_transfer_leaks_instead_of_releasing_memory_in_use() {
+    let mut producer = backend();
+    let producer_runtime = runtime_of(&producer);
     let mut consumer = backend();
-    let error = publication.copy_into(&mut consumer).expect_err("refused");
+    let data = values(1024);
+    let seed = upload_tensor(&producer_runtime, &vector(&data)).expect("seed");
 
-    let PublicationError::CopyRejected {
-        error: reason,
-        publication,
-    } = error
-    else {
-        panic!("expected a device-copy rejection");
-    };
-    assert!(
-        reason.to_string().contains("runtime instance"),
-        "the refusal must name the runtime mismatch: {reason}"
-    );
-
-    // The publication came back unchanged and is still usable: the source value is intact.
-    let mut publication = *publication;
-    assert_eq!(publication.bytes(), 32 * 8);
-    publication.await_frontier().expect("await frontier");
-    assert!(publication.frontier_ready().expect("frontier query"));
+    let value = produced_value(&mut producer, &seed);
+    let publication = producer.publish(value).expect("publish");
+    let pending = publication.copy_into(&mut consumer).expect("copy");
+    // Forgetting the handle keeps the source and destination allocated forever; nothing is freed
+    // while the copy may still use it, and both engines still work afterwards.
+    std::mem::forget(pending);
+    let again = produced_value(&mut producer, &seed);
+    let host = download_tensor(&producer_runtime, &again).expect("read back");
+    let expected: Vec<f64> = data.iter().map(|value| value * 2.0).collect();
+    assert_eq!(host.as_slice::<f64>().expect("values"), expected.as_slice());
+    consumer.synchronize().expect("consumer synchronize");
 }
