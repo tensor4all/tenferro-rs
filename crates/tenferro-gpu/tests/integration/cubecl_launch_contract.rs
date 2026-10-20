@@ -1241,7 +1241,10 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
         raw_device_ptr,
         &[
             ".get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)",
-            "cuda_device_ptr_from_addr(resource.resource().ptr, op)",
+            // The binding stays pinned on the raw session while the address is
+            // in use, so the allocation cannot be freed or relocated (#2207).
+            "self.pins.borrow_mut().push(resource);",
+            "cuda_device_ptr_from_addr(addr, op)",
         ],
     );
     // The checked view binding keeps owned storage on `Session::tensor`, is
@@ -1294,9 +1297,11 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
         &[
             "ensure_resident_on_runtime(rt, tensor, op)?;",
             "let prepared = prepared_tensor_access(tensor, op)?;",
-            "memoized_device_addr(rt, buffer, prepared, op)?;",
-            "fn memoized_device_addr(",
-            ".get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())",
+            "pinned_buffer_addr(rt, buffer, prepared, op)?;",
+            "fn pinned_buffer_addr(",
+            // The buffer resolves through `get_resource` and keeps the binding for its
+            // lifetime, so the address cannot outlive the allocation (#2207).
+            "buffer.pinned_device_addr(rt.client(), prepared.into_handle(), false, op)",
         ],
     );
 }
