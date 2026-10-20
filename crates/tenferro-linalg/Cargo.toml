@@ -101,10 +101,12 @@ faer = { workspace = true, optional = true }
 # The extracted tensor-free linalg providers, both from the tlinalg-rs workspace: `tlinalg` (faer)
 # and `tlinalg-blas` (LAPACK/BLAS). Neither depends on the other; the interface they are adapted to
 # lives in this crate. Requirements are exact so the whole CPU stack resolves one strided source
-# and one faer identity; tlinalg 0.4.0 takes a `tcontract_exec::Exec` parallelism token and pins
-# `t4a-faer =0.24.6`, and adds the borrowed-workspace `*_workspace` / `*_into` entries the host
+# and one faer identity; tlinalg 0.4.1 takes a `tcontract_exec::Exec` parallelism token and pins
+# `t4a-faer =0.24.7`, and adds the borrowed-workspace `*_workspace` / `*_into` entries the host
 # routes every faer family through. Keep the two requirements identical.
-tlinalg = { version = "=0.4.0", optional = true }
+tlinalg = { version = "=0.4.1", optional = true }
+# `tlinalg-blas` takes no `Exec` and no faer, so it moves only when it changes; the two
+# requirements move together whenever either crate does.
 tlinalg-blas = { version = "=0.4.0", optional = true }
 tcontract-exec.workspace = true
 rayon.workspace = true
