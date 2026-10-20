@@ -1,7 +1,9 @@
 use std::error::Error as _;
 use std::panic::AssertUnwindSafe;
 
-use crate::cubecl::{download_tensor, upload_tensor, CudaDeviceId, CudaEngine};
+use crate::cubecl::{
+    download_pending, download_tensor, upload_tensor, CudaDeviceId, CudaEngine, PinnedHostBuffer,
+};
 use crate::cuda::{CudaEngineError, PublicationError};
 use crate::Tensor;
 use tenferro_tensor::{TensorElementwise, TensorRead};
@@ -177,5 +179,51 @@ fn unfinished_work_stays_within_its_limit_in_a_long_run_loop() {
     );
 
     engine.synchronize().expect("drain the run loop");
+    engine.set_unfinished_memory_limit(None);
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn a_live_pending_transfer_counts_against_the_unfinished_limit() {
+    let mut engine = engine();
+    let runtime = engine.runtime().clone();
+    let host = vector(&[1.0; 32]);
+    let bytes = std::mem::size_of_val(host.as_slice::<f64>().expect("host values")) as u64;
+    let seed = upload_tensor(&runtime, &host).expect("seed");
+    engine.set_unfinished_memory_limit(Some(bytes));
+
+    let value = engine
+        .add_read(
+            TensorRead::from_tensor(&seed),
+            TensorRead::from_tensor(&seed),
+        )
+        .expect("produce");
+    let buffer = PinnedHostBuffer::new(&runtime, bytes as usize).expect("pinned buffer");
+    let pending = download_pending(&runtime, value, buffer).expect("pending download");
+    assert!(
+        engine.unfinished_memory_bytes() >= bytes,
+        "a live pending handle is unfinished work before it is detached"
+    );
+
+    // A second copy of the same size would exceed the limit while the first
+    // reservation is live, even after the admission drains the stream.
+    let second = engine
+        .add_read(
+            TensorRead::from_tensor(&seed),
+            TensorRead::from_tensor(&seed),
+        )
+        .expect("produce");
+    let buffer = PinnedHostBuffer::new(&runtime, bytes as usize).expect("pinned buffer");
+    assert!(
+        download_pending(&runtime, second, buffer).is_err(),
+        "the live reservation is admitted before the second submission"
+    );
+
+    pending.wait().expect("complete the first copy");
+    assert_eq!(
+        engine.unfinished_memory_bytes(),
+        0,
+        "observing completion releases the live reservation"
+    );
     engine.set_unfinished_memory_limit(None);
 }

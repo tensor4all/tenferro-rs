@@ -1450,6 +1450,18 @@ where
         retained_workspace_bytes(&state.workspaces),
         backend.cutensor_workspace_limit(),
     );
+    // Admit the transient workspace before allocating or reusing it. A cached
+    // workspace is idle pool memory after the call, but while this submission
+    // is unfinished it is still scratch the engine must bound.
+    // ponytail: the output is a caller-owned tensor from the enqueue onward, so
+    // it is not counted here; only the engine-retained workspace is admitted.
+    let workspace_bytes = match decision {
+        WorkspacePlan::Reuse => state.workspaces[slot]
+            .as_ref()
+            .map_or(0, |workspace| workspace.size),
+        WorkspacePlan::Retain(capacity) | WorkspacePlan::Temporary(capacity) => capacity,
+    };
+    let _workspace_reservation = backend.runtime().admit_unfinished(OP, workspace_bytes)?;
     match decision {
         WorkspacePlan::Reuse => {}
         WorkspacePlan::Retain(capacity) => {

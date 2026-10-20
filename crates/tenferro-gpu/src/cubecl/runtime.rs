@@ -200,8 +200,11 @@ pub(crate) struct CudaRuntimeState {
     client: Client,
     // The home stream: one runtime, one engine, one logical stream (#2206).
     stream: cubecl_environment::stream::StreamId,
-    // Limit on device bytes retained by unfinished work (the retirement queues), 0 = no limit.
+    // Limit on device bytes retained by unfinished work, 0 = no limit.
     unfinished_limit: std::sync::atomic::AtomicU64,
+    // Device bytes reserved by live handles and in-flight submissions that are
+    // not yet in a retirement queue.
+    unfinished_reserved: std::sync::atomic::AtomicU64,
     device_id: CudaDeviceId,
     device_ordinal: usize,
     device_info: CudaDeviceInfo,
@@ -562,6 +565,7 @@ impl CudaRuntime {
                 client,
                 stream: cubecl_environment::stream::StreamId::allocate(),
                 unfinished_limit: std::sync::atomic::AtomicU64::new(0),
+                unfinished_reserved: std::sync::atomic::AtomicU64::new(0),
                 device_id,
                 device_ordinal,
                 device_info,
@@ -610,9 +614,14 @@ impl CudaRuntime {
         }
     }
 
-    /// Device bytes currently retained by unfinished work: workspaces and transfer packages whose
-    /// completion has not been observed yet (permanently retained packages included).
+    /// Device bytes currently retained by unfinished work: live pending handles, workspaces, and
+    /// transfer packages whose completion has not been observed yet (permanently retained packages
+    /// included).
     pub(crate) fn unfinished_memory_bytes(&self) -> u64 {
+        let reserved = self
+            .inner
+            .unfinished_reserved
+            .load(std::sync::atomic::Ordering::Relaxed);
         let workspaces = self
             .inner
             .workspace_retirements
@@ -625,51 +634,76 @@ impl CudaRuntime {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .retained_bytes();
-        workspaces.saturating_add(transfers)
+        reserved
+            .saturating_add(workspaces)
+            .saturating_add(transfers)
     }
 
     /// Admit work that will retain `prospective` more bytes until it completes.
     ///
-    /// Without a limit this does nothing. Work larger than the limit on its own is refused before
-    /// anything is submitted. Otherwise, when the retained bytes plus `prospective` would exceed the
-    /// limit, completed work is released and, if that is not enough, the engine's stream is waited for
-    /// so the retained work completes and is released.
-    pub(crate) fn admit_unfinished(&self, op: &'static str, prospective: u64) -> crate::Result<()> {
-        let Some(limit) = self.unfinished_memory_limit() else {
-            return Ok(());
-        };
-        if prospective > limit {
-            return Err(crate::Error::invalid_argument(
-                op,
-                "unfinished memory",
-                format!(
-                    "the operation would retain {prospective} bytes until it completes, more than \
-                     the engine's unfinished-memory limit of {limit} bytes"
-                ),
-            ));
+    /// The returned reservation counts those bytes until it drops or is released, so a live pending
+    /// handle is visible before it is detached into a retirement queue. Without a limit this only
+    /// records the bytes. Work larger than the limit on its own is refused before anything is
+    /// submitted. Otherwise, when the retained bytes plus `prospective` would exceed the limit,
+    /// completed work is released and, if that is not enough, the engine's stream is waited for so the
+    /// retained work completes and is released.
+    pub(crate) fn admit_unfinished(
+        &self,
+        op: &'static str,
+        prospective: u64,
+    ) -> crate::Result<UnfinishedMemoryReservation> {
+        if let Some(limit) = self.unfinished_memory_limit() {
+            if prospective > limit {
+                return Err(crate::Error::invalid_argument(
+                    op,
+                    "unfinished memory",
+                    format!(
+                        "the operation would retain {prospective} bytes until it completes, more \
+                         than the engine's unfinished-memory limit of {limit} bytes"
+                    ),
+                ));
+            }
+            if self.unfinished_memory_bytes().saturating_add(prospective) <= limit {
+                self.inner
+                    .unfinished_reserved
+                    .fetch_add(prospective, std::sync::atomic::Ordering::Relaxed);
+                return Ok(UnfinishedMemoryReservation::new(
+                    self.weak_state(),
+                    prospective,
+                ));
+            }
+            self.drain_transfer_retirements();
+            if self.unfinished_memory_bytes().saturating_add(prospective) <= limit {
+                self.inner
+                    .unfinished_reserved
+                    .fetch_add(prospective, std::sync::atomic::Ordering::Relaxed);
+                return Ok(UnfinishedMemoryReservation::new(
+                    self.weak_state(),
+                    prospective,
+                ));
+            }
+            // Waiting for the stream completes the retained work; `synchronize` then releases it.
+            self.synchronize()?;
+            let retained = self.unfinished_memory_bytes();
+            if retained.saturating_add(prospective) > limit {
+                return Err(crate::Error::invalid_argument(
+                    op,
+                    "unfinished memory",
+                    format!(
+                        "the operation would retain {} bytes for unfinished work, more than the \
+                         engine's unfinished-memory limit of {limit} bytes after draining completed work",
+                        retained.saturating_add(prospective)
+                    ),
+                ));
+            }
         }
-        if self.unfinished_memory_bytes().saturating_add(prospective) <= limit {
-            return Ok(());
-        }
-        self.drain_transfer_retirements();
-        if self.unfinished_memory_bytes().saturating_add(prospective) <= limit {
-            return Ok(());
-        }
-        // Waiting for the stream completes the retained work; `synchronize` then releases it.
-        self.synchronize()?;
-        let retained = self.unfinished_memory_bytes();
-        if retained.saturating_add(prospective) > limit {
-            return Err(crate::Error::invalid_argument(
-                op,
-                "unfinished memory",
-                format!(
-                    "the operation would retain {} bytes for unfinished work, more than the \
-                     engine's unfinished-memory limit of {limit} bytes after draining completed work",
-                    retained.saturating_add(prospective)
-                ),
-            ));
-        }
-        Ok(())
+        self.inner
+            .unfinished_reserved
+            .fetch_add(prospective, std::sync::atomic::Ordering::Relaxed);
+        Ok(UnfinishedMemoryReservation::new(
+            self.weak_state(),
+            prospective,
+        ))
     }
 
     /// Lease the runtime's pinned staging buffer for a chunked blocking transfer.
@@ -1162,6 +1196,38 @@ impl CudaRuntime {
         // The cleanup result is discarded: see the note above for the one case
         // CubeCL reports (a refusal while a stream records a graph).
         let _ = self.client().memory_cleanup();
+    }
+}
+
+/// Counts device bytes a live handle or in-flight submission retains until it
+/// completes. Dropping the guard releases the count exactly once.
+#[derive(Debug)]
+pub(crate) struct UnfinishedMemoryReservation {
+    state: std::sync::Weak<CudaRuntimeState>,
+    bytes: u64,
+}
+
+impl UnfinishedMemoryReservation {
+    fn new(state: std::sync::Weak<CudaRuntimeState>, bytes: u64) -> Self {
+        Self { state, bytes }
+    }
+
+    pub(crate) fn release(&mut self) {
+        if self.bytes == 0 {
+            return;
+        }
+        if let Some(state) = self.state.upgrade() {
+            state
+                .unfinished_reserved
+                .fetch_sub(self.bytes, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.bytes = 0;
+    }
+}
+
+impl Drop for UnfinishedMemoryReservation {
+    fn drop(&mut self) {
+        self.release();
     }
 }
 

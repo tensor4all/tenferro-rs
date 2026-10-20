@@ -990,3 +990,43 @@ fn cuda_conjugated_complex_batched_matmul_stays_on_the_cutensor_path() {
     );
     assert_tensor_close(&download(&gpu, &actual), &expected, 1e-12);
 }
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn an_oversized_vendor_workspace_is_refused_before_submission() {
+    let mut gpu = gpu_backend();
+    // A zero retention cap routes the contraction to a temporary workspace, so
+    // the prospective workspace is the submission's own unfinished memory.
+    gpu.set_cutensor_workspace_max_retained_bytes(0).unwrap();
+    gpu.set_unfinished_memory_limit(Some(1));
+    let lhs = upload(
+        &gpu,
+        &tensor_f64(
+            vec![64, 64],
+            (0..64 * 64).map(|i| (i % 13) as f64 * 0.1 - 0.7).collect(),
+        ),
+    );
+    let rhs = upload(
+        &gpu,
+        &tensor_f64(
+            vec![64, 63],
+            (0..64 * 63).map(|i| (i % 7) as f64 * 0.2 - 0.3).collect(),
+        ),
+    );
+    let error = gpu
+        .run(|engine| {
+            engine.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &matmul_config(),
+            )
+        })
+        .expect("run the contraction")
+        .expect_err("a vendor workspace larger than the limit is refused");
+    let text = error.to_string();
+    assert!(
+        text.contains("unfinished-memory") || text.contains("unfinished memory"),
+        "the refusal names the limit it would exceed: {error}"
+    );
+    gpu.set_unfinished_memory_limit(None);
+}

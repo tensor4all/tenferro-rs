@@ -97,8 +97,7 @@ impl SharedTensorAllocationDomain for AppleAllocationDomain {
 /// CPU backend and launched by the paired Metal backend without implicit
 /// transfers. The initial mapped CPU operations are RustFFT and rank-2
 /// Cholesky; this context does not turn other CPU operations into automatic
-/// fallbacks. Clone [`Self::cpu_backend`] or [`Self::metal_backend`] to obtain
-/// the mutable handle required by an explicitly selected operation.
+/// fallbacks. The engines are reached through this context, which owns them.
 ///
 /// # Examples
 ///

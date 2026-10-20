@@ -44,7 +44,7 @@ use cudarc::runtime::sys as cuda_sys;
 use tenferro_tensor::{DType, Tensor, TensorScalar};
 
 use super::dispatch;
-use super::runtime::{CudaRuntime, CudaRuntimeState};
+use super::runtime::{CudaRuntime, CudaRuntimeState, UnfinishedMemoryReservation};
 use super::CudaEngine;
 use num_complex::{Complex32, Complex64};
 
@@ -592,6 +592,8 @@ pub struct PendingDownload {
     /// Whether this handle still owns the live event. A resolved transfer has destroyed it, and a
     /// detached one has handed it to the retirement queue, so neither may touch it again.
     live: bool,
+    /// Counts the device bytes this live handle retains until completion is observed.
+    reservation: Option<UnfinishedMemoryReservation>,
 }
 
 impl PendingDownload {
@@ -621,15 +623,21 @@ impl PendingDownload {
     pub fn is_ready(&mut self) -> crate::Result<bool> {
         self.runtime.drain_transfer_retirements();
         if self.source.is_none() {
+            self.reservation.take();
             return Ok(true);
         }
         self.runtime.set_current_cuda_context(OP)?;
         // SAFETY: the event is live and owned by this handle.
-        match unsafe { cuda_result::event::query(self.event) } {
-            Ok(()) => Ok(true),
-            Err(err) if err.0 == CUresult::CUDA_ERROR_NOT_READY => Ok(false),
-            Err(err) => Err(crate::Error::backend_source(OP, err)),
+        let ready = match unsafe { cuda_result::event::query(self.event) } {
+            Ok(()) => true,
+            Err(err) if err.0 == CUresult::CUDA_ERROR_NOT_READY => false,
+            Err(err) => return Err(crate::Error::backend_source(OP, err)),
+        };
+        if ready {
+            // Completion is observed, so the retained device memory is no longer unfinished.
+            self.reservation.take();
         }
+        Ok(ready)
     }
 
     /// Wait for the copy and return the submitted value and the filled pinned buffer.
@@ -688,6 +696,7 @@ impl PendingDownload {
         // SAFETY: the event is live, owned, and no longer needed.
         let _ = unsafe { cuda_result::event::destroy(self.event) };
         self.live = false;
+        self.reservation.take();
         Ok(())
     }
 
@@ -705,6 +714,7 @@ impl PendingDownload {
                 buffer: self.buffer.take(),
                 resource: self.resource.take(),
             });
+        self.reservation.take();
     }
 
     fn detach(&mut self) {
@@ -719,6 +729,7 @@ impl PendingDownload {
             resource: self.resource.take(),
         };
         self.runtime.detach_transfer(record);
+        self.reservation.take();
     }
 }
 
@@ -747,6 +758,8 @@ pub struct PendingRead {
     /// Whether this handle still owns the live event (a resolved copy destroyed it, a detached one
     /// handed it to the retirement queue).
     live: bool,
+    /// Counts the source and destination bytes this live handle retains until completion.
+    reservation: Option<UnfinishedMemoryReservation>,
 }
 
 impl PendingRead {
@@ -789,6 +802,7 @@ impl PendingRead {
         // SAFETY: the event is live, owned, and no longer needed.
         let _ = unsafe { cuda_result::event::destroy(self.event) };
         self.live = false;
+        self.reservation.take();
         Ok(())
     }
 
@@ -807,6 +821,7 @@ impl PendingRead {
                 .map(|destination| Box::new(destination) as Box<dyn std::any::Any + Send>),
         };
         self.runtime.detach_transfer(record);
+        self.reservation.take();
     }
 }
 
@@ -908,9 +923,10 @@ pub fn download_pending(
             ));
         }
         // The pending download keeps the source alive until it completes.
-        if let Err(error) = runtime.admit_unfinished(OP, byte_len as u64) {
-            return Err(rejected(error, source, buffer));
-        }
+        let reservation = match runtime.admit_unfinished(OP, byte_len as u64) {
+            Ok(reservation) => reservation,
+            Err(error) => return Err(rejected(error, source, buffer)),
+        };
         let resource = match runtime
             .client()
             .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
@@ -989,6 +1005,7 @@ pub fn download_pending(
             event,
             resource: Some(Box::new(resource)),
             live: true,
+            reservation: Some(reservation),
         })
     })
 }
@@ -1144,6 +1161,8 @@ pub struct PendingUpload {
     resource: Option<Box<dyn std::any::Any + Send>>,
     /// Whether this handle still owns the live event (see `PendingDownload`).
     live: bool,
+    /// Counts the destination device bytes this live handle retains until completion.
+    reservation: Option<UnfinishedMemoryReservation>,
 }
 
 impl PendingUpload {
@@ -1173,15 +1192,20 @@ impl PendingUpload {
     pub fn is_ready(&mut self) -> crate::Result<bool> {
         self.runtime.drain_transfer_retirements();
         if self.source.is_none() {
+            self.reservation.take();
             return Ok(true);
         }
         self.runtime.set_current_cuda_context(OP)?;
         // SAFETY: the event is live and owned by this handle.
-        match unsafe { cuda_result::event::query(self.event) } {
-            Ok(()) => Ok(true),
-            Err(err) if err.0 == CUresult::CUDA_ERROR_NOT_READY => Ok(false),
-            Err(err) => Err(crate::Error::backend_source(OP, err)),
+        let ready = match unsafe { cuda_result::event::query(self.event) } {
+            Ok(()) => true,
+            Err(err) if err.0 == CUresult::CUDA_ERROR_NOT_READY => false,
+            Err(err) => return Err(crate::Error::backend_source(OP, err)),
+        };
+        if ready {
+            self.reservation.take();
         }
+        Ok(ready)
     }
 
     /// Wait for the copy and return the destination value and the source buffer.
@@ -1237,6 +1261,7 @@ impl PendingUpload {
         // SAFETY: the event is live, owned, and no longer needed.
         let _ = unsafe { cuda_result::event::destroy(self.event) };
         self.live = false;
+        self.reservation.take();
         Ok(())
     }
 
@@ -1253,6 +1278,7 @@ impl PendingUpload {
                 buffer: self.source.take(),
                 resource: self.resource.take(),
             });
+        self.reservation.take();
     }
 
     /// Hand the record to the runtime's retirement queue.
@@ -1267,6 +1293,7 @@ impl PendingUpload {
             buffer: self.source.take(),
             resource: self.resource.take(),
         });
+        self.reservation.take();
     }
 }
 
@@ -1336,9 +1363,10 @@ pub fn upload_pending(
             ));
         }
         // The pending upload keeps the destination alive until it completes.
-        if let Err(error) = runtime.admit_unfinished(OP, byte_len as u64) {
-            return Err(rejected(error, destination, source));
-        }
+        let reservation = match runtime.admit_unfinished(OP, byte_len as u64) {
+            Ok(reservation) => reservation,
+            Err(error) => return Err(rejected(error, destination, source)),
+        };
         let resource = match runtime
             .client()
             .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
@@ -1416,6 +1444,7 @@ pub fn upload_pending(
             event,
             resource: Some(Box::new(resource)),
             live: true,
+            reservation: Some(reservation),
         })
     })
 }
@@ -1762,6 +1791,20 @@ impl SourcePublication {
             });
         }
 
+        let reservation = match self
+            .runtime
+            .admit_unfinished(PUBLICATION_OP, self.bytes as u64)
+        {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                return Err(PublicationError::Rejected {
+                    error,
+                    publication: Box::new(self),
+                    buffer,
+                })
+            }
+        };
+
         let stream = self.stream;
         let event = match stream.executes(|| -> crate::Result<CUevent> {
             self.runtime.set_current_cuda_context(PUBLICATION_OP)?;
@@ -1815,6 +1858,7 @@ impl SourcePublication {
             event,
             resource: None,
             live: true,
+            reservation: Some(reservation),
         })
     }
 
@@ -1882,11 +1926,11 @@ impl SourcePublication {
         }
         let published_bytes = self.bytes;
         // The copy keeps the source and its destination alive until it completes.
-        if let Err(error) =
-            consumer_runtime.admit_unfinished(PUBLICATION_OP, 2 * published_bytes as u64)
-        {
-            return Err(copy_refused(self, error));
-        }
+        let reservation =
+            match consumer_runtime.admit_unfinished(PUBLICATION_OP, 2 * published_bytes as u64) {
+                Ok(reservation) => reservation,
+                Err(error) => return Err(copy_refused(self, error)),
+            };
         #[cfg(test)]
         if let Some(message) = copy_fault_injection::take_preparation() {
             return Err(copy_refused(
@@ -2028,6 +2072,7 @@ impl SourcePublication {
             event,
             bytes: byte_len,
             live: true,
+            reservation: Some(reservation),
         })
     }
 
