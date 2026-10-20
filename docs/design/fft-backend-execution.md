@@ -51,9 +51,9 @@ work area, and retention guards) return. Future asynchronous execution
 requires a separately accepted event-backed external-use ownership design;
 that work is outside #967.
 
-`tenferro-gpu` owns the CUDA provider, including `CudaBackend` and
-`CudaRuntime`. The CUDA FFT adapter is owned by `tenferro-fft` and uses the
-dynamically loaded cuFFT library. Non-empty `TENFERRO_CUFFT_PATH` entries are
+`tenferro-gpu` owns the CUDA provider (`CudaEngine` and its `CudaRuntime`). The
+CUDA FFT adapter is owned by `tenferro-fft` and uses the dynamically loaded
+cuFFT library. Non-empty `TENFERRO_CUFFT_PATH` entries are
 tried first, followed by `libcufft.so.11`, `libcufft.so.10`, and bare
 `libcufft.so`, covering CUDA 12/cuFFT 11 and CUDA 11/cuFFT 10. It executes the
 existing one-dimensional `fft`, `ifft`, `rfft`, and `irfft` operations on
@@ -102,19 +102,28 @@ returns before cuFFT loading, descriptor construction, cache lookup, or plan
 creation. This preserves empty CPU semantics without requiring a vendor
 library.
 
-CUDA plans use the existing `FftExecutionCache` rather than a backend-global
-cache. Repeated concrete calls use the caller-owned `FftExecutor` cache;
-eager and traced calls use the owning runtime's extension cache. The CUDA
-namespace is `cufft-plans`. Its exact structural key contains the CUDA runtime
-identity, device ordinal, transform dtype/kind, operation direction, `n`,
-batch, `istride`, `idist`, `ostride`, and `odist`; embed extents are derived
-from the kind and `n`. Each entry retains that exact key and checks full
-equality before reuse, so a cache-discriminator hash collision cannot reuse a
-plan for a different request. The cuFFT work area is **not** cached: it is a
-session-scoped CubeCL allocation created fresh inside each raw execution
-session, so logical retained bytes charge only the entry's host-side metadata
-(key, plan handle, runtime and library witnesses, workspace-size requirement).
-Opaque cuFFT internal allocations and library-owned state are excluded.
+A cuFFT plan is device-bound, so it lives only in the cache the executing
+engine owns and is released with that engine (#2206). The CUDA FFT adapter
+never writes a plan into a caller-owned `FftPlanCache`: that cache may outlive
+the engine and be handed to several engines, so it receives no cuFFT entry at
+all. Direct concrete calls take the engine's own extension-cache store for the
+call (`ExecutionEngine::take_extension_caches` / `restore_extension_caches`),
+while eager and traced execution receive the same engine-owned store from the
+runtime for the run, so both paths key their plans per engine. Because an
+engine owns exactly one logical stream, engine identity is also stream
+identity.
+
+The CUDA namespace is `cufft-plans`. Its exact structural key contains the
+CUDA runtime identity, device ordinal, transform dtype/kind, operation
+direction, `n`, batch, `istride`, `idist`, `ostride`, and `odist`; embed
+extents are derived from the kind and `n`. Each entry retains that exact key
+and checks full equality before reuse, so a cache-discriminator hash collision
+cannot reuse a plan for a different request. The cuFFT work area is **not**
+cached: it is a session-scoped CubeCL allocation created fresh inside each raw
+execution session, so logical retained bytes charge only the entry's host-side
+metadata (key, plan handle, runtime and library witnesses, workspace-size
+requirement). Opaque cuFFT internal allocations and library-owned state are
+excluded.
 
 The cuFFT adapter creates plans under `CudaRuntime::with_current_context`, a
 scoped guard that activates the tenferro primary context and restores the
@@ -127,18 +136,23 @@ synchronized before the session returns. If synchronization fails, the work
 area and the input/output retention guards are intentionally forgotten so
 allocation reclamation cannot race in-flight vendor writes (issue #967
 invariant). The current `CudaRuntime` exposes one serialized CubeCL current
-stream, and the mutable CUDA FFT session serializes plan rebinding and
+stream, and the mutable CUDA FFT engine serializes plan rebinding and
 execution on that stream. The stream is therefore omitted from the cache key,
 but `cufftSetStream` is called immediately before each execution. Subsequent
 CUDA normalization, Hermitian completion, and axis restoration remain
 stream-managed, and an explicit download synchronizes the final output. If
 selectable concurrent streams are added, stream identity must become part of
-the key before plan reuse is allowed. When an entry is evicted or a cache is
-cleared, retirement runs the synchronize + `cufftDestroy` sequence under the
-same context-restoring guard. Cleanup failures are reported without panicking.
-If context selection, synchronization, or destruction fails, the complete
+the key before plan reuse is allowed.
+
+That execution-time barrier is also what makes plan retirement cheap: a cached
+plan has no queued work that references it, so eviction, `clear`, and engine
+teardown never wait on the stream. `Drop` activates the retained context and
+calls `cufftDestroy`; it does not synchronize. If the context cannot be
+activated, the destroy call fails, or an execution's stream barrier failed
+(which leaves that plan's completion unproven), the complete
 plan/library/runtime witness bundle is intentionally leaked rather than
-dropped while queued work may still be active.
+dropped while queued work may still be active. Cleanup failures are reported
+without panicking.
 
 ## Apple shared execution
 
@@ -163,14 +177,14 @@ The initial CubeK Metal adapter is deliberately narrower:
 and device-local WebGPU buffers return typed errors. They never trigger CPU
 fallback or an implicit transfer.
 
-`EagerSessionFftExt` installs the same FFT runtime against the active borrowed
-`EagerSession`. Consuming CPU-host in-place FFT alone remains tensor-owned via
-`EagerTensorFftExt`. The adapter uses the runtime owner's selected CPU, CUDA,
-or WebGPU capability;
+`EagerSessionFftExt` installs the same FFT runtime against the borrowed
+`EagerSession` that wraps the caller's engine. Consuming CPU-host in-place FFT
+alone remains tensor-owned via `EagerTensorFftExt`. The adapter uses the
+runtime owner's selected CPU, CUDA, or WebGPU capability;
 it does not inspect placement to choose a backend and does not download,
 upload, or select a CPU backend on behalf of a GPU operation. Traced CUDA use
 likewise requires explicit engine registration and
-`extension_module::<CudaBackend>(engine_id)` installation.
+`extension_module::<CudaEngine>(engine_id)` installation.
 
 ## Cache ownership
 
@@ -179,8 +193,8 @@ Every backend receives `FftExecutionCache`, which exposes one bounded typed
 
 | Execution path | Cache owner | Lifetime and control |
 | --- | --- | --- |
-| `FftExecutor` | Caller-owned `FftPlanCache` | Reused across direct calls; caller configures capacity and uses `cache_stats` / `clear_cache` |
-| Registered extension runtime | Runtime-owned `ExtensionCacheStore` | Reused across graph runs; runtime limits, selectors, aggregate stats, and clear APIs apply |
+| `FftExecutor` | Caller-owned `FftPlanCache` | Reused across direct calls; caller configures capacity and uses `cache_stats` / `clear_cache`. Device-bound plans never enter it; a device backend keeps them in its engine instead. |
+| Registered extension runtime | Engine-owned `ExtensionCacheStore` lent by the runtime for the run | Reused across graph runs on that engine; runtime limits, selectors, aggregate stats, and clear APIs apply to the lent store, and the store returns to the engine when the run ends |
 | One-shot tensor/read helper | Temporary capacity-one `FftPlanCache` | Exists only for that call; it does not create hidden long-lived state |
 | Host reference | Temporary capacity-one `FftPlanCache` | Explicit reference execution only; never selected as backend fallback |
 

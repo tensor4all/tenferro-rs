@@ -100,10 +100,13 @@ impl FftBackend for CudaEngine {
                 odist: descriptor.odist,
             };
             let cache_key = extension_plan_key_for_runtime(&key);
-            // A cuFFT plan is device-bound: it lives only in a store owned by this
-            // engine, so it is released with the engine. A caller-owned cache may
-            // outlive the engine, so with one the plan goes into the engine's own
-            // extension caches instead (#2206).
+            // A cuFFT plan is device-bound: it lives only in a store owned by
+            // this engine, and an engine owns exactly one logical stream, so
+            // that store keys the plan per engine and stream. A caller-owned
+            // `FftPlanCache` may outlive the engine and be shared by several
+            // engines, so device-bound plans never go there: with a
+            // caller-owned cache the plan goes into the engine's own extension
+            // caches instead, and those are released with the engine (#2206).
             let mut own_store = (!cache.is_engine_owned())
                 .then(|| tenferro_runtime::ExecutionEngine::take_extension_caches(self));
             let result = (|| {

@@ -1,9 +1,9 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftExecutor, FftNorm, TensorFftExt, TracedTensorFftExt};
-use tenferro_gpu::cuda::{cuda_runtime_engine_registration, CudaBackend};
-use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, Tensor, TracedTensor};
-use tenferro_tensor::{BackendSessionHost, TensorRead};
+use tenferro_gpu::cuda::{cuda_runtime_engine_registration, CudaEngine};
+use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Runtime, Tensor, TracedTensor};
+use tenferro_tensor::TensorRead;
 
 use crate::support;
 
@@ -18,53 +18,51 @@ pub(crate) enum Operation {
 impl Operation {
     pub(crate) fn execute_cpu(
         self,
-        backend: &mut CpuBackend,
+        engine: &mut CpuEngine,
         input: &Tensor,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
     ) -> tenferro_tensor::Result<Tensor> {
-        backend
-            .with_backend_session(|session| match self {
-                Self::Fft => input.fft(n, axis, norm, session),
-                Self::Ifft => input.ifft(n, axis, norm, session),
-                Self::Rfft => input.rfft(n, axis, norm, session),
-                Self::Irfft => input.irfft(n, axis, norm, session),
-            })
-            .unwrap()
+        match self {
+            Self::Fft => input.fft(n, axis, norm, engine),
+            Self::Ifft => input.ifft(n, axis, norm, engine),
+            Self::Rfft => input.rfft(n, axis, norm, engine),
+            Self::Irfft => input.irfft(n, axis, norm, engine),
+        }
     }
 
     pub(crate) fn execute_cuda(
         self,
-        backend: &mut CudaBackend,
+        engine: &mut CudaEngine,
         input: &Tensor,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
     ) -> tenferro_tensor::Result<Tensor> {
-        support::with_cuda_fft_session(backend, |exec_session| match self {
-            Self::Fft => input.fft(n, axis, norm, exec_session),
-            Self::Ifft => input.ifft(n, axis, norm, exec_session),
-            Self::Rfft => input.rfft(n, axis, norm, exec_session),
-            Self::Irfft => input.irfft(n, axis, norm, exec_session),
-        })
+        match self {
+            Self::Fft => input.fft(n, axis, norm, engine),
+            Self::Ifft => input.ifft(n, axis, norm, engine),
+            Self::Rfft => input.rfft(n, axis, norm, engine),
+            Self::Irfft => input.irfft(n, axis, norm, engine),
+        }
     }
 
     pub(crate) fn execute_executor(
         self,
         executor: &mut FftExecutor,
-        backend: &mut CudaBackend,
+        engine: &mut CudaEngine,
         input: &Tensor,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
     ) -> tenferro_tensor::Result<Tensor> {
-        support::with_cuda_fft_session(backend, |exec_session| match self {
-            Self::Fft => executor.fft(input, n, axis, norm, exec_session),
-            Self::Ifft => executor.ifft(input, n, axis, norm, exec_session),
-            Self::Rfft => executor.rfft(input, n, axis, norm, exec_session),
-            Self::Irfft => executor.irfft(input, n, axis, norm, exec_session),
-        })
+        match self {
+            Self::Fft => executor.fft(input, n, axis, norm, engine),
+            Self::Ifft => executor.ifft(input, n, axis, norm, engine),
+            Self::Rfft => executor.rfft(input, n, axis, norm, engine),
+            Self::Irfft => executor.irfft(input, n, axis, norm, engine),
+        }
     }
 }
 
@@ -334,8 +332,8 @@ pub(crate) fn assert_host_close_allow_nonfinite(
 // normalization, and tolerance.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn run_case(
-    cpu: &mut CpuBackend,
-    cuda: &mut CudaBackend,
+    cpu: &mut CpuEngine,
+    cuda: &mut CudaEngine,
     input: &Tensor,
     operation: Operation,
     n: Option<usize>,
@@ -350,7 +348,7 @@ pub(crate) fn run_case(
     let expected = operation
         .execute_cpu(cpu, input, n, axis, norm)
         .expect("CPU FFT oracle");
-    let gpu_input = support::upload_cuda(cuda.runtime(), input);
+    let gpu_input = support::upload_cuda(cuda, input);
     let gpu_domain = TensorRead::from_tensor(&gpu_input)
         .allocation_domain()
         .expect("uploaded input allocation domain");
@@ -360,7 +358,7 @@ pub(crate) fn run_case(
         .expect("CUDA FFT execution");
     support::assert_cuda_resident(&actual, gpu_domain);
     assert_eq!(cuda.runtime_identity(), runtime_identity);
-    let actual = support::download_cuda(cuda.runtime(), &actual).expect("explicit CUDA download");
+    let actual = support::download_cuda(cuda, &actual).expect("explicit CUDA download");
     assert_host_close(&actual, &expected, tolerance);
     actual
 }
@@ -371,8 +369,8 @@ pub(crate) fn run_case(
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn run_executor_case(
     executor: &mut FftExecutor,
-    cpu: &mut CpuBackend,
-    cuda: &mut CudaBackend,
+    cpu: &mut CpuEngine,
+    cuda: &mut CudaEngine,
     input: &Tensor,
     operation: Operation,
     n: Option<usize>,
@@ -387,7 +385,7 @@ pub(crate) fn run_executor_case(
     let expected = operation
         .execute_cpu(cpu, input, n, axis, norm)
         .expect("CPU FFT oracle");
-    let gpu_input = support::upload_cuda(cuda.runtime(), input);
+    let gpu_input = support::upload_cuda(cuda, input);
     let gpu_domain = TensorRead::from_tensor(&gpu_input)
         .allocation_domain()
         .expect("uploaded input allocation domain");
@@ -397,21 +395,21 @@ pub(crate) fn run_executor_case(
         .expect("CUDA FFT execution through FftExecutor");
     support::assert_cuda_resident(&actual, gpu_domain);
     assert_eq!(cuda.runtime_identity(), runtime_identity);
-    let actual = support::download_cuda(cuda.runtime(), &actual).expect("explicit CUDA download");
+    let actual = support::download_cuda(cuda, &actual).expect("explicit CUDA download");
     assert_host_close(&actual, &expected, tolerance);
     actual
 }
 
-pub(crate) fn cuda_runtime_with_fft(backend: &CudaBackend, install_module: bool) -> Runtime {
-    let engine_id = EngineId::new("tenferro-fft.cuda.acceptance.v1").unwrap();
+pub(crate) fn cuda_runtime_with_fft(engine: &CudaEngine, install_module: bool) -> Runtime {
+    let engine_id = engine.runtime_engine_id().clone();
     let mut builder = Runtime::builder();
     builder
-        .register_engine(cuda_runtime_engine_registration(backend, engine_id.clone()).unwrap())
+        .register_engine(cuda_runtime_engine_registration(engine).unwrap())
         .unwrap();
     if install_module {
         builder
             .install_extension_module(
-                tenferro_fft::extension_module::<CudaBackend>(engine_id).unwrap(),
+                tenferro_fft::extension_module::<CudaEngine>(engine_id).unwrap(),
             )
             .unwrap();
     }
@@ -456,6 +454,30 @@ pub(crate) fn assert_full_hermitian(actual: &Tensor) {
         }
         _ => panic!("full real FFT must produce a complex tensor"),
     }
+}
+
+/// Prepare and run `program` on a caller-held CUDA engine, returning its owned
+/// outputs.
+///
+/// The runtime lends the engine's own extension caches to the run and takes
+/// them back, so any cuFFT plan the run created stays with the engine.
+pub(crate) fn run_on_cuda(
+    runtime: &Runtime,
+    engine: &mut CudaEngine,
+    program: &tenferro_runtime::CompiledGraph,
+    inputs: &[&Tensor],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let reads: Vec<TensorRead<'_>> = inputs
+        .iter()
+        .map(|input| TensorRead::from_tensor(input))
+        .collect();
+    let prepared = runtime.prepare(program, &reads, std::slice::from_ref(&engine.target()))?;
+    let outputs = runtime.run(&mut [engine as &mut dyn ExecutionEngine], &prepared, &reads)?;
+    outputs
+        .into_iter()
+        .map(|output| output.into_tensor(&mut *engine))
+        .collect::<tenferro_tensor::Result<Vec<Tensor>>>()
+        .map_err(Into::into)
 }
 
 #[cfg(test)]

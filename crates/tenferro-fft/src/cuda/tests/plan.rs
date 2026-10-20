@@ -18,9 +18,9 @@ use super::super::ffi::{
     CUFFT_INVALID_PLAN, CUFFT_SUCCESS,
 };
 use super::super::plan::{
-    build_plan, merge_execution_errors, plan_key_discriminator_matches, report_cleanup_failures,
-    retained_entry_bytes, retire_entry_resources, retire_handle, with_cufft_plan_for_batch,
-    CufftCleanup, CufftPlanEntry,
+    build_plan, defer_entry_resources, destroy_entry_resources, destroy_handle,
+    merge_execution_errors, plan_key_discriminator_matches, report_cleanup_failures,
+    retained_entry_bytes, with_cufft_plan_for_batch, CufftCleanup, CufftPlanEntry,
 };
 
 #[derive(Default)]
@@ -243,15 +243,6 @@ impl CufftCleanup for FakeRuntime {
             f()
         }
     }
-
-    fn synchronize(&self) -> Result<(), CudaFftError> {
-        record("synchronize");
-        if cleanup_failed("synchronize") {
-            Err(CudaFftError::test_interop("synchronize"))
-        } else {
-            Ok(())
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -277,15 +268,6 @@ impl CufftCleanup for TrackedRuntime {
             Err(CudaFftError::test_interop("set_current"))
         } else {
             f()
-        }
-    }
-
-    fn synchronize(&self) -> Result<(), CudaFftError> {
-        record("synchronize");
-        if cleanup_failed("synchronize") {
-            Err(CudaFftError::test_interop("synchronize"))
-        } else {
-            Ok(())
         }
     }
 }
@@ -318,7 +300,7 @@ fn successful_construction_uses_required_cufft_order() {
         vec!["create", "set_auto_allocation", "make_plan_many_64"]
     );
     let mut handle = Some(handle);
-    let failures = retire_handle(&FakeRuntime, &library, &mut handle);
+    let failures = destroy_handle(&FakeRuntime, &library, &mut handle);
     assert!(failures.is_empty());
     assert_eq!(
         calls(),
@@ -327,7 +309,6 @@ fn successful_construction_uses_required_cufft_order() {
             "set_auto_allocation",
             "make_plan_many_64",
             "set_current",
-            "synchronize",
             "destroy",
         ]
     );
@@ -418,7 +399,7 @@ fn nonzero_batch_plan_gate_loads_and_creates_once() {
 }
 
 #[test]
-fn handle_cleanup_runs_after_stream_synchronization() {
+fn plan_retirement_destroys_under_the_context_without_waiting_on_the_stream() {
     let _lock = test_lock();
     reset_state(128, None);
     let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
@@ -426,9 +407,11 @@ fn handle_cleanup_runs_after_stream_synchronization() {
         .unwrap_or_else(|_| unreachable!("fake plan should build"));
 
     let mut handle = Some(handle);
-    let failures = retire_handle(&FakeRuntime, &library, &mut handle);
+    let failures = destroy_handle(&FakeRuntime, &library, &mut handle);
 
     assert!(failures.is_empty());
+    // `CufftCleanup` exposes no stream-wait step, so retirement can only
+    // activate the context and destroy the handle (#2206).
     assert_eq!(
         calls(),
         vec![
@@ -436,7 +419,6 @@ fn handle_cleanup_runs_after_stream_synchronization() {
             "set_auto_allocation",
             "make_plan_many_64",
             "set_current",
-            "synchronize",
             "destroy"
         ]
     );
@@ -444,82 +426,86 @@ fn handle_cleanup_runs_after_stream_synchronization() {
 }
 
 #[test]
-fn retirement_retains_resources_when_context_or_stream_synchronization_fails() {
-    for cleanup_failure in ["set_current", "synchronize"] {
-        let _lock = test_lock();
-        reset_state(128, None);
-        let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
-        let (handle, _) = build_plan(Arc::clone(&library), FakeRuntime, descriptor())
-            .unwrap_or_else(|_| unreachable!("fake plan should build"));
+fn retirement_retains_resources_when_the_context_cannot_be_activated() {
+    let _lock = test_lock();
+    reset_state(128, None);
+    let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
+    let (handle, _) = build_plan(Arc::clone(&library), FakeRuntime, descriptor())
+        .unwrap_or_else(|_| unreachable!("fake plan should build"));
 
-        reset_state_with_cleanup(128, None, Some(cleanup_failure));
-        let mut handle = Some(handle);
-        let failures = retire_handle(&FakeRuntime, &library, &mut handle);
+    reset_state_with_cleanup(128, None, Some("set_current"));
+    let mut handle = Some(handle);
+    let failures = destroy_handle(&FakeRuntime, &library, &mut handle);
 
-        assert!(!failures.synchronization.is_empty());
-        assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
-    }
+    assert!(failures.context.is_some());
+    assert!(failures.destroy.is_none());
+    assert!(failures.resources_deferred);
+    assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
 }
 
 #[test]
-fn construction_drop_defers_resources_when_cleanup_barrier_fails() {
-    for cleanup_failure in ["set_current", "synchronize"] {
-        let _lock = test_lock();
-        reset_state_with_cleanup(128, Some("make_plan_many_64"), Some(cleanup_failure));
-        let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
-        let witness = Arc::new(());
-        let runtime = TrackedRuntime::new(Arc::clone(&witness));
-        let result = build_plan(Arc::clone(&library), runtime, descriptor());
+fn construction_drop_defers_resources_when_the_context_cannot_be_activated() {
+    let _lock = test_lock();
+    reset_state_with_cleanup(128, Some("make_plan_many_64"), Some("set_current"));
+    let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
+    let witness = Arc::new(());
+    let runtime = TrackedRuntime::new(Arc::clone(&witness));
+    let result = build_plan(Arc::clone(&library), runtime, descriptor());
 
-        assert!(result.is_err());
-        assert_eq!(Arc::strong_count(&library), 2);
-        assert_eq!(Arc::strong_count(&witness), 2);
-        assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
-    }
+    assert!(result.is_err());
+    assert_eq!(Arc::strong_count(&library), 2);
+    assert_eq!(Arc::strong_count(&witness), 2);
+    assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
 }
 
 #[test]
 fn retirement_failure_leaks_complete_lifetime_witness_bundle() {
-    for cleanup_failure in ["set_current", "synchronize"] {
-        let _lock = test_lock();
-        reset_state(128, None);
-        let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
-        let (handle, _) = build_plan(Arc::clone(&library), FakeRuntime, descriptor())
-            .unwrap_or_else(|_| unreachable!("fake plan should build"));
+    let _lock = test_lock();
+    reset_state(128, None);
+    let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
+    let (handle, _) = build_plan(Arc::clone(&library), FakeRuntime, descriptor())
+        .unwrap_or_else(|_| unreachable!("fake plan should build"));
 
-        let witness = Arc::new(());
-        let runtime = TrackedRuntime::new(Arc::clone(&witness));
-        reset_state_with_cleanup(128, None, Some(cleanup_failure));
-        let failures = retire_entry_resources(&runtime, &library, handle);
+    let witness = Arc::new(());
+    let runtime = TrackedRuntime::new(Arc::clone(&witness));
+    reset_state_with_cleanup(128, None, Some("set_current"));
+    let failures = destroy_entry_resources(&runtime, &library, handle);
 
-        assert!(!failures.synchronization.is_empty());
-        assert!(failures.resources_deferred);
-        assert_eq!(Arc::strong_count(&library), 2);
-        assert_eq!(Arc::strong_count(&witness), 3);
-        assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
-    }
+    assert!(failures.context.is_some());
+    assert!(failures.resources_deferred);
+    assert_eq!(Arc::strong_count(&library), 2);
+    assert_eq!(Arc::strong_count(&witness), 3);
+    assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
 }
 
+/// A plan whose execution barrier failed must not be destroyed by `Drop`: its
+/// queued work is unproven, so the handle and both lifetime witnesses are
+/// leaked rather than dropped under in-flight vendor work (#967, #2206).
 #[test]
-fn plan_entry_drop_retirement_leaks_complete_lifetime_witness_bundle() {
-    for cleanup_failure in ["set_current", "synchronize"] {
-        let _lock = test_lock();
-        reset_state(128, None);
-        let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
-        let (handle, _) = build_plan(Arc::clone(&library), FakeRuntime, descriptor())
-            .unwrap_or_else(|_| unreachable!("fake plan should build"));
+fn unproven_entry_drop_leaks_complete_lifetime_witness_bundle() {
+    let _lock = test_lock();
+    reset_state(128, None);
+    let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
+    let (handle, _) = build_plan(Arc::clone(&library), FakeRuntime, descriptor())
+        .unwrap_or_else(|_| unreachable!("fake plan should build"));
 
-        let witness = Arc::new(());
-        let runtime = TrackedRuntime::new(Arc::clone(&witness));
-        reset_state_with_cleanup(128, None, Some(cleanup_failure));
-        let failures = retire_entry_resources(&runtime, &library, handle);
+    let witness = Arc::new(());
+    let runtime = TrackedRuntime::new(Arc::clone(&witness));
+    let failures = defer_entry_resources(&runtime, &library, handle);
 
-        assert!(!failures.synchronization.is_empty());
-        assert!(failures.resources_deferred);
-        assert_eq!(Arc::strong_count(&library), 2);
-        assert_eq!(Arc::strong_count(&witness), 3);
-        assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
-    }
+    assert!(failures.resources_deferred);
+    assert!(failures.is_deferred_only());
+    assert_eq!(Arc::strong_count(&library), 2);
+    assert_eq!(Arc::strong_count(&witness), 3);
+    assert_eq!(calls().iter().filter(|&&call| call == "destroy").count(), 0);
+    assert_eq!(
+        calls()
+            .iter()
+            .filter(|&&call| call == "set_current")
+            .count(),
+        0,
+        "leaking must not activate the context"
+    );
 }
 
 #[test]
@@ -532,7 +518,7 @@ fn successful_retirement_releases_resources_and_lifetime_witnesses() {
 
     let witness = Arc::new(());
     let runtime = TrackedRuntime::new(Arc::clone(&witness));
-    let failures = retire_entry_resources(&runtime, &library, handle);
+    let failures = destroy_entry_resources(&runtime, &library, handle);
 
     assert!(failures.is_empty());
     assert_eq!(Arc::strong_count(&library), 1);
@@ -560,7 +546,7 @@ fn construction_rolls_back_every_completed_stage_without_double_destroy() {
 }
 
 #[test]
-fn failure_before_handle_creation_does_not_destroy_or_synchronize() {
+fn failure_before_handle_creation_does_not_destroy_the_handle() {
     let _lock = test_lock();
     reset_state(128, Some("create"));
     let library = super::super::ffi::CufftLibrary::from_api_for_tests(fake_api());
@@ -592,11 +578,11 @@ fn retirement_errors_are_reported_without_panicking() {
     reset_state(128, Some("destroy"));
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        retire_handle(&FakeRuntime, &library, &mut handle)
+        destroy_handle(&FakeRuntime, &library, &mut handle)
     }));
     assert!(result.is_ok());
     let failures = result.unwrap_or_else(|_| unreachable!("retirement must not panic"));
-    assert!(failures.synchronization.is_empty());
+    assert!(failures.context.is_none());
     assert!(failures.destroy.is_some());
     assert!(failures.resources_deferred);
     assert!(handle.is_none());
@@ -628,7 +614,8 @@ fn retained_entry_bytes_charge_host_metadata_only() {
         + size_of::<CudaRuntime>()
         + size_of::<usize>()
         + size_of::<CufftPlanKey>()
-        + size_of::<CufftHandle>();
+        + size_of::<CufftHandle>()
+        + size_of::<std::sync::atomic::AtomicBool>();
 
     assert_eq!(retained_entry_bytes(), expected);
     assert!(size_of::<CufftPlanEntry>() >= size_of::<usize>());

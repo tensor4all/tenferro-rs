@@ -7,14 +7,19 @@
 //! retains only the required workspace byte size; each execution allocates a
 //! fresh CubeCL workspace on the public raw session so no session-independent
 //! device allocation must survive across `ExtensionCacheStore` lifetimes.
-//! Plan retirement synchronizes the retained CubeCL stream before destroying
-//! the opaque cuFFT handle.
+//! Every execution synchronizes the stream inside that raw session before the
+//! work area is released, so a cached plan has no queued work that references
+//! it. Plan retirement therefore never waits on the stream: `Drop` activates
+//! the retained context and destroys the opaque cuFFT handle. A plan whose
+//! execution barrier failed has unproven completion; it is leaked with its
+//! library and runtime witnesses instead of being destroyed from `Drop`.
 
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::mem::size_of;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tenferro_gpu::cuda::raw::DeviceBytes;
@@ -36,6 +41,10 @@ const OP: &str = "cuda_fft";
 pub(crate) const CUFFT_CACHE_NAMESPACE: &str = "cufft-plans";
 
 /// A cleanup context used by the plan-construction and retirement guards.
+///
+/// Deliberately has no stream-wait step: retirement only destroys an opaque
+/// handle whose executions already synchronized before releasing their work
+/// area, so no cleanup path may block on the stream (#2206).
 pub(crate) trait CufftCleanup {
     /// Run `f` with the retained runtime's context current; restoration of
     /// the caller's previous device/context on exit is best-effort (failures
@@ -45,7 +54,6 @@ pub(crate) trait CufftCleanup {
         op: &'static str,
         f: impl FnOnce() -> Result<R2, CudaFftError>,
     ) -> Result<R2, CudaFftError>;
-    fn synchronize(&self) -> Result<(), CudaFftError>;
 }
 
 impl CufftCleanup for CudaRuntime {
@@ -57,18 +65,15 @@ impl CufftCleanup for CudaRuntime {
         self.with_current_context(op, f)
             .map_err(|source| CudaFftError::interop("cufft_plan_cleanup_context", source))?
     }
-
-    fn synchronize(&self) -> Result<(), CudaFftError> {
-        CudaRuntime::synchronize(self)
-            .map_err(|source| CudaFftError::interop("cufft_plan_cleanup_stream", source))
-    }
 }
 
 #[derive(Default)]
 pub(crate) struct CleanupFailures {
-    pub(crate) synchronization: Vec<CudaFftError>,
+    /// Failure to make the retained runtime's context current.
+    pub(crate) context: Option<CudaFftError>,
     pub(crate) destroy: Option<CudaFftError>,
-    /// True when cleanup could not prove retirement safety and the complete
+    /// True when vendor completion is unproven (a failed execution barrier, a
+    /// context activation failure, or a failed destroy) and the complete
     /// plan/lifetime-witness bundle was intentionally leaked.
     pub(crate) resources_deferred: bool,
 }
@@ -76,20 +81,26 @@ pub(crate) struct CleanupFailures {
 impl CleanupFailures {
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.synchronization.is_empty() && self.destroy.is_none() && !self.resources_deferred
+        self.context.is_none() && self.destroy.is_none() && !self.resources_deferred
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_deferred_only(&self) -> bool {
+        self.context.is_none() && self.destroy.is_none() && self.resources_deferred
     }
 }
 
-/// Retire one plan handle without panicking from `Drop` paths.
+/// Destroy one plan handle without panicking and without waiting on the stream.
 ///
-/// The plan is released only after the retained runtime is made current and
-/// its stream synchronization succeeds. The whole retirement (synchronize +
-/// destroy) runs under a context-restoring guard; restoration of the caller's
-/// previous device/context is best-effort (failures are logged to stderr, not
-/// returned). If any step fails, the opaque plan, library witness, and runtime
+/// The context-restoring guard runs `cufftDestroy`; restoration of the
+/// caller's previous device/context on exit is best-effort (failures are
+/// logged to stderr, not returned). Every cuFFT execution through this plan
+/// synchronized its stream before releasing its work area, so no queued work
+/// can still reference the handle. If the context cannot be made current or
+/// the destroy call fails, the opaque plan, library witness and runtime
 /// witness are intentionally leaked: destroying or dropping any of them could
 /// race work whose completion was not proven.
-pub(crate) fn retire_handle<R>(
+pub(crate) fn destroy_handle<R>(
     runtime: &R,
     library: &Arc<CufftLibrary>,
     handle: &mut Option<CufftHandle>,
@@ -100,10 +111,10 @@ where
     let mut failures = CleanupFailures::default();
     if handle.is_some() {
         let outcome = runtime.with_context("cufft_plan_cleanup", || {
-            runtime.synchronize()?;
             if let Some(plan) = *handle {
                 // SAFETY: `plan` was returned by the same retained cuFFT
-                // library's successful `cufftCreate` call and has not been
+                // library's successful `cufftCreate` call, every execution
+                // through it synchronized the stream, and it has not been
                 // destroyed before this one-shot retirement path.
                 let status = unsafe { (library.api.destroy)(plan) };
                 map_cufft_status("cufftDestroy", status)?;
@@ -112,11 +123,11 @@ where
             Ok(())
         });
         if let Err(error) = outcome {
-            // A typed destroy failure keeps its CufftStatus; any context or
-            // stream barrier failure is reported as a synchronization failure.
+            // A typed destroy failure keeps its CufftStatus; any failure to
+            // activate the retained context is reported separately.
             match error {
                 CudaFftError::CufftStatus { .. } => failures.destroy = Some(error),
-                _ => failures.synchronization.push(error),
+                _ => failures.context = Some(error),
             }
             failures.resources_deferred = true;
             defer_resources(runtime, library, handle);
@@ -130,7 +141,7 @@ where
 ///
 /// This value is deliberately forgotten only when cleanup cannot prove that
 /// vendor work has completed. There is no safe retry or process-global
-/// quarantine for a plan whose context/stream barrier failed.
+/// quarantine for a plan whose context or destroy call failed.
 struct DeferredCufftResources<R> {
     _handle: Option<CufftHandle>,
     _library: Arc<CufftLibrary>,
@@ -152,8 +163,8 @@ where
     });
 }
 
-/// Retire one owned plan, as used by `CufftPlanEntry::Drop`.
-pub(crate) fn retire_entry_resources<R>(
+/// Destroy one owned plan, as used by `CufftPlanEntry::Drop`.
+pub(crate) fn destroy_entry_resources<R>(
     runtime: &R,
     library: &Arc<CufftLibrary>,
     plan: CufftHandle,
@@ -162,17 +173,35 @@ where
     R: CufftCleanup + Clone,
 {
     let mut handle = Some(plan);
-    retire_handle(runtime, library, &mut handle)
+    destroy_handle(runtime, library, &mut handle)
+}
+
+/// Leak one owned plan whose execution barrier failed, keeping every lifetime
+/// witness alive. Used only from `CufftPlanEntry::Drop`.
+pub(crate) fn defer_entry_resources<R>(
+    runtime: &R,
+    library: &Arc<CufftLibrary>,
+    plan: CufftHandle,
+) -> CleanupFailures
+where
+    R: Clone,
+{
+    let mut handle = Some(plan);
+    defer_resources(runtime, library, &mut handle);
+    CleanupFailures {
+        resources_deferred: true,
+        ..CleanupFailures::default()
+    }
 }
 
 #[cold]
 pub(crate) fn report_cleanup_failures(failures: CleanupFailures) {
     let mut stderr = std::io::stderr();
     let resources_deferred = failures.resources_deferred;
-    for error in failures.synchronization {
+    if let Some(error) = failures.context {
         let _ = writeln!(
             stderr,
-            "tenferro-fft: cuFFT cleanup synchronization failed: {error}"
+            "tenferro-fft: cuFFT cleanup could not activate the retained context: {error}"
         );
     }
     if let Some(error) = failures.destroy {
@@ -184,7 +213,7 @@ pub(crate) fn report_cleanup_failures(failures: CleanupFailures) {
     if resources_deferred {
         let _ = writeln!(
             stderr,
-            "tenferro-fft: cuFFT plan and lifetime witnesses were intentionally retained after cleanup failure"
+            "tenferro-fft: cuFFT plan and lifetime witnesses were intentionally retained because completion could not be proven"
         );
     }
 }
@@ -222,7 +251,7 @@ where
     R: CufftCleanup + Clone,
 {
     fn drop(&mut self) {
-        let failures = retire_handle(&self.runtime, &self.library, &mut self.handle);
+        let failures = destroy_handle(&self.runtime, &self.library, &mut self.handle);
         report_cleanup_failures(failures);
     }
 }
@@ -342,11 +371,18 @@ pub(crate) fn merge_execution_errors(
 }
 
 /// One cached cuFFT plan and its required work-area byte size.
-//
+///
+/// Plans live only in the executing engine's own extension-cache store, which
+/// the runtime lends to a run and the engine keeps between direct calls. The
+/// store belongs to exactly one engine, and an engine owns exactly one logical
+/// stream, so the store together with the runtime identity in
+/// [`CufftPlanKey`] identifies both the engine and its stream.
+///
 // INVARIANT: stream identity is intentionally omitted from `CufftPlanKey`;
 // mutable `CudaEngine` access serializes the runtime's one selectable
-// current CubeCL stream. A selectable multi-stream runtime must make stream
-// identity part of this key before concurrent plan reuse is allowed.
+// current CubeCL stream, and the entry is reachable only through the store of
+// that one engine. A selectable multi-stream runtime must make stream identity
+// part of this key before concurrent plan reuse is allowed.
 //
 // INVARIANT: the entry retains the plan handle and the required workspace byte
 // size only. The CubeCL workspace allocation is session-scoped and is created
@@ -359,6 +395,10 @@ pub(crate) struct CufftPlanEntry {
     pub(crate) runtime: CudaRuntime,
     pub(crate) key: CufftPlanKey,
     retained_bytes: usize,
+    /// Set when an execution's stream barrier failed. Completion of work that
+    /// may still reference this plan is then unproven, so `Drop` leaks the
+    /// handle and its witnesses instead of destroying them.
+    pub(crate) retirement_unproven: AtomicBool,
 }
 
 // SAFETY: the library and runtime retain their executable/context witnesses;
@@ -371,14 +411,16 @@ unsafe impl Sync for CufftPlanEntry {}
 
 pub(crate) fn retained_entry_bytes() -> usize {
     // The cached entry owns only host-side metadata: the library and runtime
-    // witnesses, the plan handle, the workspace-size requirement, and the key.
-    // The CubeCL workspace allocation itself is session-scoped and created
-    // fresh inside each raw execution session, so it is not charged here.
+    // witnesses, the plan handle, the workspace-size requirement, the key, and
+    // the retirement witness. The CubeCL workspace allocation itself is
+    // session-scoped and created fresh inside each raw execution session, so it
+    // is not charged here.
     size_of::<Arc<CufftLibrary>>()
         .saturating_add(size_of::<CudaRuntime>())
         .saturating_add(size_of::<usize>())
         .saturating_add(size_of::<CufftPlanKey>())
         .saturating_add(size_of::<CufftHandle>())
+        .saturating_add(size_of::<AtomicBool>())
 }
 
 /// Run cuFFT library loading and plan creation only for a non-empty batch.
@@ -451,6 +493,7 @@ impl CufftPlanEntry {
             runtime,
             key,
             retained_bytes,
+            retirement_unproven: AtomicBool::new(false),
         })
     }
 
@@ -653,6 +696,9 @@ impl CufftPlanEntry {
                     std::mem::forget(workspace);
                     std::mem::forget(input_retained);
                     std::mem::forget(output_retained);
+                    // The plan handle itself cannot be proven idle either, so
+                    // its retirement leaks the handle and its witnesses.
+                    self.retirement_unproven.store(true, Ordering::Relaxed);
                 }
                 Ok::<(), tenferro_tensor::Error>(())
             })
@@ -671,8 +717,16 @@ impl CufftPlanEntry {
 }
 
 impl Drop for CufftPlanEntry {
+    /// Retire the handle without waiting on the stream: every execution through
+    /// this plan synchronized its stream before releasing its work area. A plan
+    /// whose execution barrier failed has unproven completion and is leaked
+    /// with its witnesses instead of being destroyed.
     fn drop(&mut self) {
-        let failures = retire_entry_resources(&self.runtime, &self.library, self.plan);
+        let failures = if self.retirement_unproven.load(Ordering::Relaxed) {
+            defer_entry_resources(&self.runtime, &self.library, self.plan)
+        } else {
+            destroy_entry_resources(&self.runtime, &self.library, self.plan)
+        };
         report_cleanup_failures(failures);
     }
 }
