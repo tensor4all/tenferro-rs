@@ -1012,7 +1012,7 @@ host	tenferro-gpu	native_permutation::tests::zero_sized_plan_is_linear_without_a
 host	tenferro-gpu	cubecl::tests::raw_module_tests::raw_subspan_checks_address_overflow_and_alignment
 host	tenferro-gpu	cubecl::tests::raw_external_tests::raw_external_span_validation_rejects_bad_spans
 host	tenferro-gpu	cubecl::tests::raw_launch_tests::raw_dynamic_shared_memory_opt_in_runs_once_per_function
-host	tenferro-gpu	cubecl::tests::engine_tests::the_sticky_status_classification_covers_context_losing_driver_errors
+gpu	tenferro-gpu	cubecl::tests::engine_tests::the_sticky_status_classification_covers_context_losing_driver_errors
 host	tenferro-gpu::integration	backend_read_contract::cuda_backend_implements_every_required_read_entry_point
 host	tenferro-gpu::integration	cubecl_launch_contract::bool_launch_domains_are_checked_before_output_allocation
 host	tenferro-gpu::integration	cubecl_launch_contract::bool_structural_support_uses_copy_kernels_and_scatter_stays_excluded
