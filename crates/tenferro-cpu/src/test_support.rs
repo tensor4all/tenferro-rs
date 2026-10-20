@@ -62,3 +62,6 @@ pub(crate) trait RunErased: TestEngine {
 }
 
 impl<T: TestEngine + ?Sized> RunErased for T {}
+
+#[cfg(test)]
+mod tests;

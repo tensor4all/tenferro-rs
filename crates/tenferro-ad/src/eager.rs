@@ -45,7 +45,9 @@ use tenferro_tensor::{
     TensorScalar, TensorValue, TensorView,
 };
 
-use crate::eager_backend::{cpu_host_owned_read, engine_kind_registration};
+use crate::eager_backend::{
+    cpu_host_owned_read, engine_kind_registration, unregisterable_engine_error,
+};
 #[cfg(test)]
 use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
 use crate::eager_exec::{eager_input_promotion_plan, exec_extension_op_on_tensor_reads};
@@ -2764,13 +2766,8 @@ impl EagerRuntime {
             }
             return Ok(target);
         }
-        let registration = engine_kind_registration(engine).ok_or_else(|| {
-            Error::unsupported(
-                "EagerRuntime::ensure_engine",
-                ErrorPhase::Execution,
-                "the eager runtime cannot register this engine kind",
-            )
-        })?;
+        let registration = engine_kind_registration(engine)
+            .ok_or_else(|| unregisterable_engine_error(target.engine_id()))?;
         let registration = registration
             .map_err(|source| runtime_config_error("EagerRuntime::ensure_engine", source))?;
         let _install_guard = self.lock_extension_install()?;

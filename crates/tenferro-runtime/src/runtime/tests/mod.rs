@@ -2,6 +2,7 @@ mod architectural_remediation;
 mod cache;
 mod cache_owner;
 mod capability;
+mod engine;
 mod event_domain;
 mod execution;
 mod extension;
