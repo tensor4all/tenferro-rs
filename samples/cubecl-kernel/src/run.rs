@@ -4,22 +4,19 @@ use std::time::{Duration, Instant};
 
 use cubecl::client::Client;
 use cubecl::prelude::{BufferArg, CubeCount, CubeDim};
-use tenferro_gpu::cuda::{
-    download_tensor, upload_tensor, with_cuda_exec_session, CudaBackend, CudaExecSession,
-};
-use tenferro_tensor::backend::BackendSessionHost;
+use tenferro_gpu::cuda::{download_tensor, upload_tensor, CudaEngine};
 use tenferro_tensor::{Error, Tensor, TypedTensor};
 
 use crate::kernel::{gather, reverse_tile, scale};
 
-/// Open the first CUDA device as a tenferro backend.
-fn first_backend(op: &'static str) -> tenferro_tensor::Result<CudaBackend> {
+/// Open the first CUDA device as a tenferro engine.
+fn first_engine(op: &'static str) -> tenferro_tensor::Result<CudaEngine> {
     let devices = tenferro_gpu::cuda::cuda_devices()
         .map_err(|err| Error::runtime_state(op, err.to_string()))?;
     let device = devices
         .first()
         .ok_or_else(|| Error::runtime_state(op, "no CUDA device"))?;
-    CudaBackend::new(device.id()).map_err(|err| Error::runtime_state(op, err.to_string()))
+    CudaEngine::open(device.id()).map_err(|err| Error::runtime_state(op, err.to_string()))
 }
 
 /// Run `out = in * 2.0` on the first CUDA device, print it, and assert it.
@@ -57,14 +54,8 @@ pub fn run_scale_check() -> tenferro_tensor::Result<()> {
     let host_input =
         TypedTensor::<f32>::from_vec_col_major(vec![n], (0..n).map(|i| i as f32).collect())?;
 
-    let mut backend = first_backend(OP)?;
-    let downloaded = backend
-        .with_backend_session(|session| {
-            with_cuda_exec_session(session, |exec| {
-                run_scale_in_session(OP, exec, host_input, n)
-            })
-        })?
-        .ok_or_else(|| Error::runtime_state(OP, "CUDA session rejected backend"))??;
+    let mut engine = first_engine(OP)?;
+    let downloaded = run_scale_in_session(OP, &mut engine, host_input, n)?;
 
     let (shape, values): (Vec<usize>, Vec<f32>) = downloaded
         .into_vec_col_major()
@@ -104,8 +95,8 @@ pub fn run_scale_check() -> tenferro_tensor::Result<()> {
 /// arguments are the `BufferArg` values `Session::array_arg` hands back —
 /// `KernelArguments` is never built by hand.
 ///
-/// The runtime handle is cloned out of the session first so uploads do not
-/// hold a borrow of `exec` while the mutable `with_cubecl`/`synchronize`
+/// The runtime handle is cloned out of the engine first so uploads do not
+/// hold a borrow of the engine while the mutable `with_cubecl`/`synchronize`
 /// methods run.
 ///
 /// `n` must be a multiple of the 256-unit cube dim: `cube_count_1d` rounds the
@@ -113,15 +104,15 @@ pub fn run_scale_check() -> tenferro_tensor::Result<()> {
 /// domain keeps it in bounds.
 fn run_scale_in_session(
     op: &'static str,
-    exec: &mut CudaExecSession<'_>,
+    engine: &mut CudaEngine,
     host_input: TypedTensor<f32>,
     n: usize,
 ) -> tenferro_tensor::Result<TypedTensor<f32>> {
-    let runtime = exec.runtime().clone();
+    let runtime = engine.runtime().clone();
     let input = upload_tensor(&runtime, &Tensor::from_typed::<f32>(host_input))?;
     let input = input.into_typed::<f32>().expect("f32 upload stays f32");
 
-    let output = exec.with_cubecl(op, |cubecl| {
+    let output = engine.with_cubecl(op, |cubecl| {
         // SAFETY: both bindings are created for tensors this call owns, and the
         // kernel writes only `output`.
         let input_arg: BufferArg = unsafe { cubecl.array_arg(&input, op)? };
@@ -150,7 +141,7 @@ fn run_scale_in_session(
     })?;
 
     // Explicit host barrier, then download.
-    exec.synchronize()?;
+    engine.synchronize()?;
     Ok(download_tensor(&runtime, &Tensor::from_typed(output))?
         .into_typed::<f32>()
         .expect("f32 download"))
@@ -187,14 +178,8 @@ pub fn run_typing_rules_check() -> tenferro_tensor::Result<()> {
     let input: Vec<f32> = (0..N).map(|i| i as f32).collect();
     let indices: Vec<i32> = vec![7, 0, 3, 6, 1, 5, 2, 4];
 
-    let mut backend = first_backend(OP)?;
-    let (gathered, reversed) = backend
-        .with_backend_session(|session| {
-            with_cuda_exec_session(session, |exec| {
-                run_typing_rules_in_session(exec, &input, &indices, OP)
-            })
-        })?
-        .ok_or_else(|| Error::runtime_state(OP, "CUDA session rejected backend"))??;
+    let mut engine = first_engine(OP)?;
+    let (gathered, reversed) = run_typing_rules_in_session(&mut engine, &input, &indices, OP)?;
 
     let values = |tensor: TypedTensor<f32>| -> tenferro_tensor::Result<Vec<f32>> {
         let (_, values) = tensor
@@ -217,13 +202,13 @@ pub fn run_typing_rules_check() -> tenferro_tensor::Result<()> {
 /// Upload the three inputs, launch the typing-rule kernels in one session
 /// scope, and download the three outputs.
 fn run_typing_rules_in_session(
-    exec: &mut CudaExecSession<'_>,
+    engine: &mut CudaEngine,
     input: &[f32],
     indices: &[i32],
     op: &'static str,
 ) -> tenferro_tensor::Result<(TypedTensor<f32>, TypedTensor<f32>)> {
     let n = input.len();
-    let runtime = exec.runtime().clone();
+    let runtime = engine.runtime().clone();
     let host_input = TypedTensor::<f32>::from_vec_col_major(vec![n], input.to_vec())?;
     let host_indices = TypedTensor::<i32>::from_vec_col_major(vec![n], indices.to_vec())?;
     let input = upload_tensor(&runtime, &Tensor::from_typed::<f32>(host_input))?;
@@ -231,7 +216,7 @@ fn run_typing_rules_in_session(
     let input = input.into_typed::<f32>().expect("f32 upload stays f32");
     let indices = indices.into_typed::<i32>().expect("i32 upload stays i32");
 
-    let outputs = exec.with_cubecl(op, |cubecl| {
+    let outputs = engine.with_cubecl(op, |cubecl| {
         // SAFETY: each binding is created for a tensor this call owns, and no
         // kernel writes an input.
         let input_arg = unsafe { cubecl.array_arg(&input, op)? };
@@ -273,7 +258,7 @@ fn run_typing_rules_in_session(
         Ok((gathered, reversed))
     })?;
 
-    exec.synchronize()?;
+    engine.synchronize()?;
     Ok((
         download_tensor(&runtime, &Tensor::from_typed(outputs.0))?
             .into_typed::<f32>()
@@ -292,7 +277,7 @@ fn run_typing_rules_in_session(
 /// first launch JIT-compiles, and every later scope reuses that artifact. The
 /// host cost of each scope is returned as the evidence.
 fn launches_across_scopes(
-    exec: &mut CudaExecSession<'_>,
+    engine: &mut CudaEngine,
     input: &TypedTensor<f32>,
     n: usize,
     launches: usize,
@@ -301,7 +286,7 @@ fn launches_across_scopes(
     let mut outputs = Vec::with_capacity(launches);
     for _ in 0..launches {
         let started = Instant::now();
-        let output = exec.with_cubecl("downstream.scale.cache", |cubecl| {
+        let output = engine.with_cubecl("downstream.scale.cache", |cubecl| {
             // SAFETY: this call owns `input` and the fresh `output`; the kernel
             // writes only `output`.
             let input_arg = unsafe { cubecl.array_arg(input, "downstream.scale.cache")? };
@@ -333,7 +318,7 @@ fn launches_across_scopes(
         costs.push(started.elapsed());
         outputs.push(output);
     }
-    exec.synchronize()?;
+    engine.synchronize()?;
     Ok((costs, outputs))
 }
 // snippet-end:downstream-cube-cache
@@ -341,7 +326,7 @@ fn launches_across_scopes(
 /// Show that the compiled kernel is reused across `with_cubecl` scopes.
 ///
 /// Launches [`scale()`] from `LAUNCHES` separate session scopes on one backend and
-/// then from a second, freshly constructed [`CudaBackend`] for the same device,
+/// then from a second, freshly constructed [`CudaEngine`] for the same device,
 /// printing the host cost of every scope. The first scope pays the JIT compile;
 /// the rest are launch-only. Every launch is verified after a single barrier.
 ///
@@ -368,42 +353,33 @@ pub fn run_kernel_cache_check() -> tenferro_tensor::Result<()> {
     let input: Vec<f32> = (0..n).map(|i| i as f32).collect();
 
     for backend_index in 0..2 {
-        // A fresh backend per round: the second one proves the compiled kernel
-        // is not owned by the first backend object.
-        let mut backend = first_backend(OP)?;
+        // A fresh engine per round: the second one proves the compiled kernel
+        // is not owned by the first engine object.
+        let mut engine = first_engine(OP)?;
         let host_input = TypedTensor::<f32>::from_vec_col_major(vec![n], input.clone())?;
-        let costs = backend
-            .with_backend_session(|session| {
-                with_cuda_exec_session(session, |exec| {
-                    let runtime = exec.runtime().clone();
-                    let uploaded = upload_tensor(&runtime, &Tensor::from_typed::<f32>(host_input))?;
-                    let uploaded = uploaded.into_typed::<f32>().expect("f32 upload stays f32");
-                    // The second backend runs one launch only: its cost shows
-                    // whether the artifact outlives the first backend.
-                    let launches = if backend_index == 0 { LAUNCHES } else { 1 };
-                    let (costs, outputs) = launches_across_scopes(exec, &uploaded, n, launches)?;
-                    for (index, output) in outputs.into_iter().enumerate() {
-                        let (_, values) = download_tensor(&runtime, &Tensor::from_typed(output))?
-                            .into_typed::<f32>()
-                            .expect("f32 download")
-                            .into_vec_col_major()
-                            .map_err(|failure| failure.into_parts().1)?;
-                        for (i, value) in values.iter().enumerate() {
-                            let expected = (i as f32) * 2.0;
-                            if (value - expected).abs() > 1e-3 {
-                                return Err(Error::runtime_state(
-                                    OP,
-                                    format!(
-                                        "launch {index} mismatch at {i}: {value} != {expected}"
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-                    Ok(costs)
-                })
-            })?
-            .ok_or_else(|| Error::runtime_state(OP, "CUDA session rejected backend"))??;
+        let runtime = engine.runtime().clone();
+        let uploaded = upload_tensor(&runtime, &Tensor::from_typed::<f32>(host_input))?;
+        let uploaded = uploaded.into_typed::<f32>().expect("f32 upload stays f32");
+        // The second engine runs one launch only: its cost shows whether the
+        // artifact outlives the first engine.
+        let launches = if backend_index == 0 { LAUNCHES } else { 1 };
+        let (costs, outputs) = launches_across_scopes(&mut engine, &uploaded, n, launches)?;
+        for (index, output) in outputs.into_iter().enumerate() {
+            let (_, values) = download_tensor(&runtime, &Tensor::from_typed(output))?
+                .into_typed::<f32>()
+                .expect("f32 download")
+                .into_vec_col_major()
+                .map_err(|failure| failure.into_parts().1)?;
+            for (i, value) in values.iter().enumerate() {
+                let expected = (i as f32) * 2.0;
+                if (value - expected).abs() > 1e-3 {
+                    return Err(Error::runtime_state(
+                        OP,
+                        format!("launch {index} mismatch at {i}: {value} != {expected}"),
+                    ));
+                }
+            }
+        }
 
         println!("{OP}: backend {backend_index} per-scope host cost:");
         for (index, cost) in costs.iter().enumerate() {
@@ -421,12 +397,12 @@ pub fn run_kernel_cache_check() -> tenferro_tensor::Result<()> {
 /// The fence is what orders the raw continuation after the launch; see the
 /// external-kernel guide for the mechanism.
 fn launch_then_raw(
-    exec: &mut CudaExecSession<'_>,
+    engine: &mut CudaEngine,
     client: &Client,
     input: BufferArg,
     output: BufferArg,
 ) -> tenferro_tensor::Result<()> {
-    exec.with_raw("downstream.hybrid", |raw| {
+    engine.with_raw("downstream.hybrid", |raw| {
         // SAFETY: the caller owns both bindings, the launch domain matches their
         // element counts, and the kernel writes only `output`.
         unsafe {

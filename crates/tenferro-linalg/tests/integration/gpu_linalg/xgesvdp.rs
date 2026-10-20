@@ -141,7 +141,7 @@ fn test_cubecl_svd_xgesvdp_traced_and_pruned() {
 #[test]
 #[ignore = "requires CUDA and cuSOLVER Xgesvdp"]
 fn test_cubecl_svd_xgesvdp_eager() {
-    use tenferro_ad::{EagerRuntime, EagerTensor};
+    use tenferro_ad::EagerRuntime;
     use tenferro_linalg::EagerSessionLinalgExt;
     let input = complex_input(7, 3, 1);
     let mut gpu = gpu_backend();
@@ -150,15 +150,20 @@ fn test_cubecl_svd_xgesvdp_eager() {
     let expected =
         with_cuda_linalg_session(&mut gpu, |s| s.svd_with_options(&device, options)).unwrap();
     let runtime = EagerRuntime::new().unwrap();
-    let eager = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
+    let eager = runtime
+        .with_eager_session(&mut gpu, |s| s.constant_from(device))
+        .unwrap();
     let (u, s, vt) = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+        .with_eager_session(&mut gpu, |session| {
             session.svd_with_options(&eager, options)
         })
         .unwrap();
     let factors: Vec<_> = [&u, &s, &vt]
         .into_iter()
-        .map(|x| download(&gpu, &x.to_tensor().unwrap()))
+        .map(|x| {
+            let resident = x.to_tensor(&mut gpu).unwrap();
+            download(&gpu, &resident)
+        })
         .collect();
     check_factors(&input, &factors);
     for (actual, expected) in factors.iter().zip(&expected) {

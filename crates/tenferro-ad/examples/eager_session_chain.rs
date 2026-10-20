@@ -75,7 +75,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for case in cases {
         let mut run = || -> Option<Tensor> {
             match case {
-                "shared" => (|session: &mut dyn tenferro_tensor::Engine| {
+                "shared" => {
+                    let session: &mut dyn tenferro_tensor::Engine = &mut backend;
                     let mut out = None;
                     for _ in 0..10 {
                         out = Some(
@@ -91,12 +92,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
                     out
-                })(&mut backend),
+                }
                 "per_op" => {
                     let mut out = None;
                     for _ in 0..10 {
                         out = Some(
-                            (|session: &mut dyn tenferro_tensor::Engine| {
+                            {
+                                let session: &mut dyn tenferro_tensor::Engine = &mut backend;
                                 session.dot_general_read(
                                     TensorRead::from_tensor(
                                         out.as_ref().unwrap_or(black_box(&lhs)),
@@ -104,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     TensorRead::from_tensor(black_box(&rhs)),
                                     black_box(&config),
                                 )
-                            })(&mut backend)
+                            }
                             .unwrap(),
                         );
                     }
@@ -127,9 +129,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "empty_x10" => {
                     for _ in 0..10 {
-                        (|session: &mut dyn tenferro_tensor::Engine| {
-                            black_box(session);
-                        })(&mut backend);
+                        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+                        black_box(session);
                     }
                     None
                 }

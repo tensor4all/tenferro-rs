@@ -6,7 +6,8 @@ use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::{
-    cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend,
+    cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor, cuda::CudaDeviceId,
+    cuda::CudaEngine,
 };
 use tenferro_linalg::{
     EagerSessionLinalgExt, EagerTensorLinalgExt, EighGauge, EighOptions, LinalgBackend, QrGauge,
@@ -2143,17 +2144,16 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
 
     let a_host = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 1.0, 1.0, 2.0]).unwrap();
     let b_host = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 1.0]).unwrap();
-    let upload_backend =
-        CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut upload_backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let a_gpu = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
     let b_gpu = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
     let ctx = EagerRuntime::new().unwrap();
     let a = EagerTensor::from_tensor_in(a_gpu, ctx.clone()).unwrap();
     let b = EagerTensor::from_tensor_in(b_gpu, ctx).unwrap();
 
-    let x = a.solve(&b).unwrap();
+    let x = a.solve(&mut upload_backend, &b).unwrap();
 
-    let x_host = download_tensor(upload_backend.runtime(), &x.to_tensor().unwrap()).unwrap();
+    let x_host = download_resident(&mut upload_backend, &x);
     assert_eq!(x_host.shape(), &[2, 1]);
     assert_close_slice(f64_data(&x_host), &[1.8, -0.4], 1.0e-9);
 }
@@ -2164,17 +2164,17 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
 fn cuda_borrowed_cholesky_stays_resident() {
     assert!(gpu_available(), "CUDA test requires an available device");
     let host = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]).unwrap();
-    let backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let device = upload_tensor(backend.runtime(), &host).unwrap();
     let runtime = EagerRuntime::new().unwrap();
-    let input = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
+    let input = runtime
+        .with_eager_session(&mut backend, |s| s.constant_from(device))
+        .unwrap();
 
     let factor = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            session.cholesky(&input)
-        })
+        .with_eager_session(&mut backend, |session| session.cholesky(&input))
         .unwrap();
-    let result = download_tensor(backend.runtime(), &factor.to_tensor().unwrap()).unwrap();
+    let result = download_resident(&mut backend, &factor);
     assert_close_slice(
         f64_data(&result),
         &[2.0, 0.5, 0.0, (2.75_f64).sqrt()],
@@ -2188,12 +2188,14 @@ fn cuda_borrowed_cholesky_stays_resident() {
 fn cuda_borrowed_qr_and_svd_options_preserve_values() {
     assert!(gpu_available(), "CUDA test requires an available device");
     let host = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 0.0, 0.0, 2.0]).unwrap();
-    let backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let device = upload_tensor(backend.runtime(), &host).unwrap();
     let runtime = EagerRuntime::new().unwrap();
-    let input = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
+    let input = runtime
+        .with_eager_session(&mut backend, |s| s.constant_from(device))
+        .unwrap();
     let (q, r, singular_values, full_values) = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+        .with_eager_session(&mut backend, |session| {
             let (q, r) = session.qr_with_options(&input, QrOptions::default())?;
             let (_, singular_values, _) =
                 session.svd_with_options(&input, SvdOptions::default())?;
@@ -2201,12 +2203,10 @@ fn cuda_borrowed_qr_and_svd_options_preserve_values() {
             Ok::<_, tenferro_ad::Error>((q, r, singular_values, full_values))
         })
         .unwrap();
-    let q = download_tensor(backend.runtime(), &q.to_tensor().unwrap()).unwrap();
-    let r = download_tensor(backend.runtime(), &r.to_tensor().unwrap()).unwrap();
-    let singular_values =
-        download_tensor(backend.runtime(), &singular_values.to_tensor().unwrap()).unwrap();
-    let full_values =
-        download_tensor(backend.runtime(), &full_values.to_tensor().unwrap()).unwrap();
+    let q = download_resident(&mut backend, &q);
+    let r = download_resident(&mut backend, &r);
+    let singular_values = download_resident(&mut backend, &singular_values);
+    let full_values = download_resident(&mut backend, &full_values);
     let q = f64_data(&q);
     let r = f64_data(&r);
     assert_close_slice(
@@ -2228,7 +2228,7 @@ fn cuda_borrowed_qr_and_svd_options_preserve_values() {
 #[ignore = "requires CUDA"]
 fn cuda_borrowed_householder_qr_append_preserves_residency() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let first = upload_tensor(
         backend.runtime(),
         &Tensor::from_vec_col_major([3, 1], vec![1.0_f64, 0.0, 1.0]).unwrap(),
@@ -2243,7 +2243,7 @@ fn cuda_borrowed_householder_qr_append_preserves_residency() {
     let first = EagerTensor::from_tensor_in(first, runtime.clone()).unwrap();
     let block = EagerTensor::from_tensor_in(block, runtime.clone()).unwrap();
     let (q, r) = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+        .with_eager_session(&mut backend, |session| {
             let state = session
                 .householder_qr(&first)?
                 .append_columns(&block, session)?;
@@ -2254,15 +2254,15 @@ fn cuda_borrowed_householder_qr_append_preserves_residency() {
         })
         .unwrap();
     assert_eq!(
-        q.to_tensor().unwrap().placement(),
-        first.to_tensor().unwrap().placement()
+        q.to_tensor(&mut backend).unwrap().placement(),
+        first.to_tensor(&mut backend).unwrap().placement()
     );
     assert_eq!(
-        r.to_tensor().unwrap().placement(),
-        first.to_tensor().unwrap().placement()
+        r.to_tensor(&mut backend).unwrap().placement(),
+        first.to_tensor(&mut backend).unwrap().placement()
     );
-    let q = download_tensor(backend.runtime(), &q.to_tensor().unwrap()).unwrap();
-    let r = download_tensor(backend.runtime(), &r.to_tensor().unwrap()).unwrap();
+    let q = download_resident(&mut backend, &q);
+    let r = download_resident(&mut backend, &r);
     let q = f64_data(&q);
     let r = f64_data(&r);
     assert_close_slice(
@@ -2284,7 +2284,7 @@ fn cuda_borrowed_householder_qr_append_preserves_residency() {
 #[ignore = "requires CUDA"]
 fn cuda_borrowed_full_piv_lu_requires_separate_owned_fallback() {
     assert!(gpu_available(), "CUDA test requires an available device");
-    let backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let matrix = upload_tensor(
         backend.runtime(),
         &Tensor::from_vec_col_major([1, 1], vec![2.0_f64]).unwrap(),
@@ -2299,7 +2299,7 @@ fn cuda_borrowed_full_piv_lu_requires_separate_owned_fallback() {
     let matrix = EagerTensor::from_tensor_in(matrix, runtime.clone()).unwrap();
     let rhs = EagerTensor::from_tensor_in(rhs, runtime.clone()).unwrap();
     let errors = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+        .with_eager_session(&mut backend, |session| {
             Ok::<_, tenferro_ad::Error>((
                 session.full_piv_lu(&matrix).unwrap_err(),
                 session.full_piv_lu_solve(&matrix, &rhs).unwrap_err(),
@@ -2323,20 +2323,22 @@ fn cuda_borrowed_full_piv_lu_requires_separate_owned_fallback() {
 fn cuda_borrowed_norm_preserves_residency_and_value() {
     assert!(gpu_available(), "CUDA test requires an available device");
     let host = Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0]).unwrap();
-    let backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let device = upload_tensor(backend.runtime(), &host).unwrap();
     let runtime = EagerRuntime::new().unwrap();
-    let input = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
+    let input = runtime
+        .with_eager_session(&mut backend, |s| s.constant_from(device))
+        .unwrap();
     let result = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+        .with_eager_session(&mut backend, |session| {
             session.norm(&input, Some(2.0), Some(&[0]), false)
         })
         .unwrap();
     assert_eq!(
-        result.to_tensor().unwrap().placement(),
-        input.to_tensor().unwrap().placement()
+        result.to_tensor(&mut backend).unwrap().placement(),
+        input.to_tensor(&mut backend).unwrap().placement()
     );
-    let output = download_tensor(backend.runtime(), &result.to_tensor().unwrap()).unwrap();
+    let output = download_resident(&mut backend, &result);
     assert_close_slice(f64_data(&output), &[5.0], 1e-10);
 }
 
@@ -2346,12 +2348,14 @@ fn cuda_borrowed_norm_preserves_residency_and_value() {
 fn cuda_borrowed_pseudoinverse_reports_unsupported_bool_intermediate() {
     assert!(gpu_available(), "CUDA test requires an available device");
     let host = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap();
-    let backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let device = upload_tensor(backend.runtime(), &host).unwrap();
     let runtime = EagerRuntime::new().unwrap();
-    let input = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
+    let input = runtime
+        .with_eager_session(&mut backend, |s| s.constant_from(device))
+        .unwrap();
     let (default_error, explicit_error) = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+        .with_eager_session(&mut backend, |session| {
             Ok::<_, tenferro_ad::Error>((
                 session.pinv(&input).unwrap_err(),
                 session.pinv_with_rtol(&input, 1e-12).unwrap_err(),
@@ -2373,12 +2377,14 @@ fn cuda_borrowed_pseudoinverse_reports_unsupported_bool_intermediate() {
 fn cuda_borrowed_determinants_and_inverse_preserve_value() {
     assert!(gpu_available(), "CUDA test requires an available device");
     let host = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 0.0, 0.0, 2.0]).unwrap();
-    let backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let device = upload_tensor(backend.runtime(), &host).unwrap();
     let runtime = EagerRuntime::new().unwrap();
-    let input = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
+    let input = runtime
+        .with_eager_session(&mut backend, |s| s.constant_from(device))
+        .unwrap();
     let (sign, logabs, det, inverse) = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+        .with_eager_session(&mut backend, |session| {
             let (sign, logabs) = session.slogdet(&input)?;
             let det = session.det(&input)?;
             let inverse = session.inv(&input)?;
@@ -2386,10 +2392,10 @@ fn cuda_borrowed_determinants_and_inverse_preserve_value() {
         })
         .unwrap();
     for (actual, expected) in [(sign, 1.0), (logabs, 6.0_f64.ln()), (det, 6.0)] {
-        let host = download_tensor(backend.runtime(), &actual.to_tensor().unwrap()).unwrap();
+        let host = download_resident(&mut backend, &actual);
         assert_close_slice(f64_data(&host), &[expected], 1.0e-9);
     }
-    let host = download_tensor(backend.runtime(), &inverse.to_tensor().unwrap()).unwrap();
+    let host = download_resident(&mut backend, &inverse);
     assert_close_slice(f64_data(&host), &[1.0 / 3.0, 0.0, 0.0, 0.5], 1.0e-9);
 }
 
@@ -2401,13 +2407,15 @@ fn cuda_eager_qr_and_svd_f64_stay_resident_and_reconstruct() {
 
     let expected = [1.0_f64, 3.0, 2.0, 4.0];
     let host = Tensor::from_vec_col_major(vec![2, 2], expected.to_vec()).unwrap();
-    let backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let device = upload_tensor(backend.runtime(), &host).unwrap();
     let runtime = EagerRuntime::new().unwrap();
-    let input = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
+    let input = runtime
+        .with_eager_session(&mut backend, |s| s.constant_from(device))
+        .unwrap();
 
     let (q, r, rrqr, u, s, vt) = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+        .with_eager_session(&mut backend, |session| {
             let (q, r) = session.qr(&input)?;
             let rrqr = session
                 .rank_revealing_qr(&input, RankRevealingQrOptions::default().rtol(1.0e-12))?;
@@ -2417,22 +2425,32 @@ fn cuda_eager_qr_and_svd_f64_stay_resident_and_reconstruct() {
         .unwrap();
     for output in [&q, &r, &rrqr.q, &rrqr.r, &u, &s, &vt] {
         assert_eq!(output.runtime().id(), runtime.id());
-        assert!(output.to_tensor().unwrap().as_slice::<f64>().is_err());
+        assert!(output
+            .to_tensor(&mut backend)
+            .unwrap()
+            .as_slice::<f64>()
+            .is_err());
     }
     for output in [&rrqr.column_permutation, &rrqr.rank] {
         assert_eq!(output.runtime().id(), runtime.id());
-        assert!(output.to_tensor().unwrap().as_slice::<i64>().is_err());
+        assert!(output
+            .to_tensor(&mut backend)
+            .unwrap()
+            .as_slice::<i64>()
+            .is_err());
     }
 
-    let download = |output: &EagerTensor| {
-        download_tensor(backend.runtime(), &output.to_tensor().unwrap()).unwrap()
-    };
-    let q = download(&q);
-    let r = download(&r);
-    assert_eq!(download(&rrqr.rank).as_slice::<i64>().unwrap(), &[2]);
-    let u = download(&u);
-    let s = download(&s);
-    let vt = download(&vt);
+    let q = download_resident(&mut backend, &q);
+    let r = download_resident(&mut backend, &r);
+    assert_eq!(
+        download_resident(&mut backend, &rrqr.rank)
+            .as_slice::<i64>()
+            .unwrap(),
+        &[2]
+    );
+    let u = download_resident(&mut backend, &u);
+    let s = download_resident(&mut backend, &s);
+    let vt = download_resident(&mut backend, &vt);
     let qr = matmul_2x2_f64(f64_data(&q), f64_data(&r));
     let mut us = f64_data(&u).to_vec();
     for col in 0..2 {
@@ -2443,6 +2461,13 @@ fn cuda_eager_qr_and_svd_f64_stay_resident_and_reconstruct() {
     let usvt = matmul_2x2_f64(&us, f64_data(&vt));
     assert_close_slice(&qr, &expected, 1.0e-9);
     assert_close_slice(&usvt, &expected, 1.0e-9);
+}
+
+#[cfg(feature = "cuda")]
+fn download_resident(backend: &mut CudaEngine, tensor: &EagerTensor) -> Tensor {
+    let resident = tensor.to_tensor(backend).unwrap();
+    let runtime = backend.runtime().clone();
+    download_tensor(&runtime, &resident).unwrap()
 }
 
 #[cfg(feature = "cuda")]
@@ -2469,13 +2494,15 @@ fn cuda_eager_qr_and_svd_c64_stay_resident_and_reconstruct() {
         Complex64::new(4.0, 0.25),
     ];
     let host = Tensor::from_vec_col_major(vec![2, 2], expected.to_vec()).unwrap();
-    let backend = CudaBackend::new(tenferro_gpu::cuda::CudaDeviceId::from_ordinal(0)).unwrap();
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let device = upload_tensor(backend.runtime(), &host).unwrap();
     let runtime = EagerRuntime::new().unwrap();
-    let input = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
+    let input = runtime
+        .with_eager_session(&mut backend, |s| s.constant_from(device))
+        .unwrap();
 
     let (q, r, u, s, vt) = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+        .with_eager_session(&mut backend, |session| {
             let (q, r) = session.qr(&input)?;
             let (u, s, vt) = session.svd(&input)?;
             Ok::<_, tenferro_ad::Error>((q, r, u, s, vt))
@@ -2483,7 +2510,7 @@ fn cuda_eager_qr_and_svd_c64_stay_resident_and_reconstruct() {
         .unwrap();
     for output in [&q, &r, &u, &s, &vt] {
         assert_eq!(output.runtime().id(), runtime.id());
-        let resident = output.to_tensor().unwrap();
+        let resident = output.to_tensor(&mut backend).unwrap();
         assert!(match output.dtype() {
             tenferro_tensor::DType::C64 => resident.as_slice::<Complex64>().is_err(),
             tenferro_tensor::DType::F64 => resident.as_slice::<f64>().is_err(),
@@ -2491,14 +2518,11 @@ fn cuda_eager_qr_and_svd_c64_stay_resident_and_reconstruct() {
         });
     }
 
-    let download = |output: &EagerTensor| {
-        download_tensor(backend.runtime(), &output.to_tensor().unwrap()).unwrap()
-    };
-    let q = download(&q);
-    let r = download(&r);
-    let u = download(&u);
-    let s = download(&s);
-    let vt = download(&vt);
+    let q = download_resident(&mut backend, &q);
+    let r = download_resident(&mut backend, &r);
+    let u = download_resident(&mut backend, &u);
+    let s = download_resident(&mut backend, &s);
+    let vt = download_resident(&mut backend, &vt);
     let qr = matmul_2x2_c64(c64_data(&q), c64_data(&r));
     let mut us = c64_data(&u).to_vec();
     for col in 0..2 {

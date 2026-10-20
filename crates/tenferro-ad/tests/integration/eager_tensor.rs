@@ -1038,9 +1038,11 @@ fn reduce_sum_squares_none_reduces_all_axes_on_every_surface() {
 
     let host = Tensor::from_vec_col_major(vec![2, 2], data).unwrap();
     let mut backend = tenferro_cpu::CpuEngine::serial();
-    let sum =
-        (|session: &mut dyn tenferro_tensor::Engine| host.reduce_sum(None, session))(&mut backend)
-            .unwrap();
+    let sum = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        host.reduce_sum(None, session)
+    }
+    .unwrap();
     assert_eq!(f64_data(&sum), &[2.5]);
 }
 

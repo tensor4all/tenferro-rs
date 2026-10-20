@@ -521,12 +521,16 @@ fn test_gpu_composites_concrete_session_matches_cpu() {
         ),
     ];
     for (name, f) in cases {
-        let expected = (|s: &mut dyn tenferro_tensor::Engine| {
+        let expected = {
+            let s: &mut dyn tenferro_tensor::Engine = &mut cpu;
             f(&host.x, &host.mask, &host.weight, &host.bias, &host.rows, s)
-        })(&mut cpu)
+        }
         .unwrap();
-        let out = (|s: &mut dyn tenferro_tensor::Engine| f(&x, &mask, &w, &b, &rows, s))(&mut gpu)
-            .unwrap();
+        let out = {
+            let s: &mut dyn tenferro_tensor::Engine = &mut gpu;
+            f(&x, &mask, &w, &b, &rows, s)
+        }
+        .unwrap();
         let out = download_tensor(gpu.runtime(), &out).unwrap();
         assert_parity(&host_f64(&out), &host_f64(&expected), 1e-12, 1e-6, name);
     }

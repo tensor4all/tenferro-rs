@@ -4,7 +4,7 @@ use tenferro_tensor::TensorDeviceTransfer;
 
 // Run with: cargo test --features cuda -- --ignored
 
-use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_ad::EagerRuntime;
 use tenferro_gpu::{
     cuda::gpu_available, cuda::upload_tensor, cuda::CudaDeviceId, cuda::CudaEngine,
 };
