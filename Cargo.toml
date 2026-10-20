@@ -70,10 +70,10 @@ syn = "2"
 # tlinalg, strided) on one registry source: a split strided source gives two
 # `StridedView` types that cannot meet at a crate boundary. All six strided
 # crates move together at 0.6.0 -- the core no longer lags a patch behind the
-# providers. The providers move together too: the published `cpueinsum 0.3.1`
-# carries `tcontract 0.3.1` (forced batch strategies honoured on every BLAS and
-# faer route; `tcontract-exec` stays 0.3.0), which pins `strided-view =0.6.0` and
-# `strided-basic =0.6.0` from crates.io; an older `cpueinsum` reaches an older
+# providers. The providers move together too: the published `cpueinsum 0.4.0`
+# carries `tcontract 0.4.0` / `tcontract-exec 0.4.0` (no `WholeBatchVendor`
+# variant; tcontract-rs#135), which pins `strided-view =0.6.0` and
+# `strided-basic =0.6.2` from crates.io; an older `cpueinsum` reaches an older
 # `tcontract` that pins an older strided exactly and would not resolve beside
 # the 0.6.0 requirement. `strided-fused 0.6.0` propagates NaN through the fused
 # DAG so ordered reductions can use it (TF5), and `strided-view` owns its view
@@ -88,19 +88,19 @@ syn = "2"
 strided-view = "=0.6.0"
 strided-traits = "=0.6.0"
 strided-perm = { version = "=0.6.0", features = ["parallel"] }
-cpueinsum = "=0.3.2"
-cpueinsum-blas = "=0.3.2"
-tcontract-exec = "=0.3.1"
+cpueinsum = "=0.4.0"
+cpueinsum-blas = "=0.4.0"
+tcontract-exec = "=0.4.0"
 strided-basic = { version = "=0.6.2", default-features = false }
 strided-fused = { version = "=0.6.0", default-features = false, features = ["parallel"] }
 strided-kernel = { version = "=0.6.0", features = ["parallel"] }
 libloading = "0.8"
-# One faer identity for the whole CPU stack (#1939): the pinned `tlinalg 0.3.1`
+# One faer identity for the whole CPU stack (#1939): the pinned `tlinalg 0.4.0`
 # resolves `t4a-faer =0.24.6` (its own manifest renames it via
 # `package = "t4a-faer"`), and a second, crates.io `faer` would hand a different
 # `Par`/`Mat` type to a downstream direct call than the one
 # `with_faer_parallelism` passes. `t4a-faer 0.24.6` is the fork commit 04542fae
-# that tlinalg 0.3.1 pins: it carries the evd eigenvector-normalization fix
+# that tlinalg 0.4.0 pins: it carries the evd eigenvector-normalization fix
 # (#2131) on top of the 0.24.5 tag. tenferro-cpu re-exports this build as
 # `tenferro_cpu::faer` under `native`. The fork keeps the 0.24 API and the
 # `faer` library name.

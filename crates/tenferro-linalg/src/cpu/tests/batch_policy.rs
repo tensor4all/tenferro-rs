@@ -27,9 +27,7 @@ fn forced_outer_reaches_the_faer_exec() {
                     cpu.with_linalg_pool(|context, _| {
                         let exec = exec_from(context)?;
                         assert_eq!(exec.batch_policy().strategy, CpuBatchStrategy::Outer);
-                        Ok(exec
-                            .batch_decision(&tcontract_exec::BatchQuery::new(8, 4096.0))
-                            .expect("forced Outer is available on the faer route"))
+                        Ok(exec.batch_decision(&tcontract_exec::BatchQuery::new(8, 4096.0)))
                     })
                 })
                 .expect("a CPU session")
@@ -66,7 +64,6 @@ fn forced_strategy_on_the_blas_linalg_lane_is_refused_before_writes() {
         CpuBatchStrategy::Split {
             lanes: NonZeroUsize::new(2).unwrap(),
         },
-        CpuBatchStrategy::WholeBatchVendor,
     ];
 
     for shape in [vec![n, n, batch], vec![0, 0, 0]] {
@@ -121,7 +118,6 @@ fn forced_strategy_on_blas_solve_read_into_is_refused_before_writes() {
         CpuBatchStrategy::Split {
             lanes: NonZeroUsize::new(2).unwrap(),
         },
-        CpuBatchStrategy::WholeBatchVendor,
     ] {
         let mut out = Tensor::from_vec_col_major([2, 1], vec![-41.0_f64; 2]).unwrap();
         let result = with_cpu_linalg(&mut backend, |session| {
@@ -151,43 +147,3 @@ fn forced_strategy_on_blas_solve_read_into_is_refused_before_writes() {
     }
 }
 
-/// `tlinalg` resolves strategy availability before its own empty-batch return;
-/// the native empty shortcuts must not bypass that validation.
-#[cfg(feature = "native")]
-#[test]
-fn forced_whole_batch_vendor_on_native_empty_inputs_is_refused() {
-    use std::error::Error as _;
-
-    let mut backend = tenferro_cpu::CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(2)
-            .build()
-            .unwrap(),
-    );
-    for shape in [vec![2, 2, 0], vec![0, 0]] {
-        let input = Tensor::from_vec_col_major(shape.clone(), Vec::<f64>::new()).unwrap();
-        let result = with_cpu_linalg(&mut backend, |session| {
-            with_batch_policy(
-                session,
-                CpuBatchPolicy::new(CpuBatchStrategy::WholeBatchVendor),
-                |session| {
-                    with_cpu_engine(session, |cpu| cpu.cholesky(&input)).expect("a CPU session")
-                },
-            )
-            .expect("the CPU session accepts the policy")
-        });
-        let error = result.unwrap_err();
-        assert_eq!(
-            error.kind(),
-            tenferro_tensor::ErrorKind::Unsupported,
-            "{shape:?}: {error}"
-        );
-        assert!(
-            matches!(
-                error.source().and_then(|source| source.downcast_ref()),
-                Some(tlinalg::Error::StrategyUnavailable { .. })
-            ),
-            "{shape:?}: the provider refusal must stay the typed source: {error}"
-        );
-    }
-}

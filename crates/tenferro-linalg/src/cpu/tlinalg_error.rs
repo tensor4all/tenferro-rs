@@ -58,15 +58,6 @@ macro_rules! map_provider_error {
 #[cfg(feature = "native")]
 pub(crate) fn map_error(op: tlinalg::Op, error: tlinalg::Error) -> tenferro_tensor::Error {
     map_provider_error!(op, error, tlinalg,
-    // A forced batch strategy this route cannot honor is an unsupported
-    // request, not an internal failure: keep the provider error as the
-    // typed source so a caller can still downcast it.
-    ProviderError::StrategyUnavailable { .. } => tenferro_tensor::Error::extension(
-        op.as_str(),
-        crate::extension::LINALG_EXTENSION_FAMILY_ID,
-        tenferro_tensor::ErrorKind::Unsupported,
-        error,
-    ),
     // The host sizes every call with the matching `*_workspace` query at the
     // same `Exec`, so a short region is a broken host contract rather than a
     // caller error. Keep the provider error as the typed source: it names the

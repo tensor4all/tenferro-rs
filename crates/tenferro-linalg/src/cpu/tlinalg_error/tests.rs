@@ -78,21 +78,6 @@ fn every_variant_rebuilds_tenferros_kind_role_and_source() {
     assert!(matches!(error, TensorError::Internal(_)));
     assert!(error.to_string().contains("different batches"));
 
-    // A forced batch strategy this route cannot honor is `Unsupported`, and the
-    // provider error stays downcastable as the typed source.
-    let error = map_error(
-        Op::Svd,
-        TlError::StrategyUnavailable {
-            op: Op::Svd,
-            strategy: tcontract_exec::BatchStrategy::Outer,
-        },
-    );
-    assert_eq!(error.kind(), ErrorKind::Unsupported);
-    assert!(matches!(
-        error.source().and_then(|source| source.downcast_ref()),
-        Some(TlError::StrategyUnavailable { .. })
-    ));
-
     // A workspace shorter than the host's own query is a broken host contract,
     // not a caller error, so it reports as a runtime-state failure that keeps the
     // provider refusal downcastable, bytes and operation included.

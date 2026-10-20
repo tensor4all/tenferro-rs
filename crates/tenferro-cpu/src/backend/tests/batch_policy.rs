@@ -165,48 +165,6 @@ fn forced_outer_binary_contraction_takes_the_native_route() {
     );
 }
 
-/// `WholeBatchVendor` is unavailable on the per-job BLAS contraction route; the
-/// refusal must precede the caller-owned output write.
-#[cfg(feature = "blas")]
-#[test]
-fn forced_whole_batch_vendor_on_blas_contraction_is_refused_before_writes() {
-    use tenferro_tensor::{TensorRead, TensorWrite};
-
-    let (lhs, rhs) = contraction_inputs();
-    let config = batched_matmul_config();
-    let mut out = Tensor::from_vec_col_major(vec![8, 8, 16], vec![-71.0_f64; 8 * 8 * 16]).unwrap();
-    let mut backend = crate::test_support::cpu_engine(4).unwrap();
-    let result = with_cpu_session(&mut backend, |session| {
-        crate::with_batch_policy(
-            session,
-            CpuBatchPolicy::new(CpuBatchStrategy::WholeBatchVendor),
-            |session| {
-                session.dot_general_read_into(
-                    TensorRead::from_tensor(&lhs),
-                    TensorRead::from_tensor(&rhs),
-                    &config,
-                    TensorWrite::from_tensor(&mut out),
-                )
-            },
-        )
-        .expect("the CPU session accepts the policy")
-    });
-    let error = result.unwrap_err();
-    assert_eq!(
-        error.kind(),
-        tenferro_tensor::ErrorKind::Unsupported,
-        "{error}"
-    );
-    assert!(
-        matches!(
-            std::error::Error::source(&error).and_then(|source| source.downcast_ref()),
-            Some(cpueinsum_blas::BlasError::StrategyUnavailable)
-        ),
-        "the provider refusal must stay the typed source: {error}"
-    );
-    assert_eq!(out.as_slice::<f64>().unwrap(), &[-71.0_f64; 8 * 8 * 16]);
-}
-
 /// A session that is not a CPU execution session and forwards none.
 struct NonCpuSession;
 

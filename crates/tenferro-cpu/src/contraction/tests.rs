@@ -57,11 +57,3 @@ fn blas_workspace_is_a_typed_runtime_state_failure() {
     assert_eq!(error.kind(), ErrorKind::RuntimeState);
     assert!(has_source::<cpueinsum_blas::BlasError>(&error));
 }
-
-#[cfg(feature = "blas")]
-#[test]
-fn blas_strategy_unavailable_is_typed_unsupported() {
-    let error = cpueinsum_blas::BlasError::StrategyUnavailable.into_crate_error("dot_general");
-    assert_eq!(error.kind(), ErrorKind::Unsupported);
-    assert!(has_source::<cpueinsum_blas::BlasError>(&error));
-}
