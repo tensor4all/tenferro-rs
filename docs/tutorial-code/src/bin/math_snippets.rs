@@ -17,15 +17,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // snippet source: docs/guides/linear-algebra.md:101
     fn snippet_linear_algebra_1() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_1
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::BackendSessionHost;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TensorLinalgExt;
 use tenferro_runtime::Tensor;
 
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
 let b = Tensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0])?;
-let mut backend = CpuBackend::new();
-let x = backend.with_backend_session(|session| a.solve(&b, session))??;
+let mut engine = CpuEngine::serial();
+let x = a.solve(&b, &mut engine)?;
 
 assert_eq!(x.shape(), &[2, 1]);
 assert_eq!(x.as_slice::<f64>()?, &[2.0, 3.0]);
@@ -38,8 +37,7 @@ assert_eq!(x.as_slice::<f64>()?, &[2.0, 3.0]);
     // snippet source: docs/guides/linear-algebra.md:118
     fn snippet_linear_algebra_2() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_2
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::BackendSessionHost;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TensorLinalgExt;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
@@ -53,13 +51,10 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
         .fold(0.0, f64::max))
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0])?;
-let mut backend = CpuBackend::new();
-let (factor, reconstructed) = backend.with_backend_session(|session| -> tenferro_tensor::Result<(Tensor, Tensor)> {
-    let factor = a.cholesky(session)?;
-    let factor_t = factor.transpose(&[1, 0], session)?;
-    let reconstructed = factor.matmul(&factor_t, session)?;
-    Ok((factor, reconstructed))
-})??;
+let mut engine = CpuEngine::serial();
+let factor = a.cholesky(&mut engine)?;
+let factor_t = factor.transpose(&[1, 0], &mut engine)?;
+let reconstructed = factor.matmul(&factor_t, &mut engine)?;
 
 assert_eq!(factor.shape(), &[2, 2]);
 assert_eq!(a.shape(), &[2, 2]);
@@ -87,8 +82,7 @@ let ad = AdContext::builder()
     // snippet source: docs/guides/linear-algebra.md:169
     fn snippet_linear_algebra_4() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_4
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::BackendSessionHost;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TensorLinalgExt;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
@@ -102,8 +96,8 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
         .fold(0.0, f64::max))
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
-let mut backend = CpuBackend::new();
-let (u, s, vt) = backend.with_backend_session(|session| a.svd(session))??;
+let mut engine = CpuEngine::serial();
+let (u, s, vt) = a.svd(&mut engine)?;
 
 assert_eq!(u.shape(), &[2, 2]);
 assert_eq!(vt.shape(), &[2, 2]);
@@ -113,11 +107,8 @@ let sigma = Tensor::from_vec_col_major(
     vec![2, 2],
     vec![s_values[0], 0.0, 0.0, s_values[1]],
 )?;
-let (reconstructed,) = backend.with_backend_session(|session| -> tenferro_tensor::Result<(Tensor,)> {
-    let us = u.matmul(&sigma, session)?;
-    let reconstructed = us.matmul(&vt, session)?;
-    Ok((reconstructed,))
-})??;
+let us = u.matmul(&sigma, &mut engine)?;
+let reconstructed = us.matmul(&vt, &mut engine)?;
 
 assert_eq!(a.shape(), &[2, 2]);
 assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
@@ -241,8 +232,7 @@ assert_eq!(repeated.concrete_shape()?, vec![3]);
     // snippet source: docs/guides/linear-algebra.md:265
     fn snippet_linear_algebra_7() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_7
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::BackendSessionHost;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{QrGauge, QrOptions, TensorLinalgExt};
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
@@ -263,24 +253,19 @@ let a = Tensor::from_vec_col_major(
         3.0, 6.0, 10.0, 5.0,
     ],
 )?;
-let mut backend = CpuBackend::new();
-let (q, r) = backend.with_backend_session(|session| {
-    a.qr_with_options(
-        QrOptions::default().gauge(QrGauge::PositiveDiagonal),
-        session,
-    )
-})??;
+let mut engine = CpuEngine::serial();
+let (q, r) = a.qr_with_options(
+    QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+    &mut engine,
+)?;
 
 let identity = Tensor::from_vec_col_major(
     vec![3, 3],
     vec![1.0_f64, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
 )?;
-let (reconstructed, qtq) = backend.with_backend_session(|session| -> tenferro_tensor::Result<(Tensor, Tensor)> {
-    let reconstructed = q.matmul(&r, session)?;
-    let qt = q.transpose(&[1, 0], session)?;
-    let qtq = qt.matmul(&q, session)?;
-    Ok((reconstructed, qtq))
-})??;
+let reconstructed = q.matmul(&r, &mut engine)?;
+let qt = q.transpose(&[1, 0], &mut engine)?;
+let qtq = qt.matmul(&q, &mut engine)?;
 
 assert_eq!(q.shape(), &[4, 3]);
 assert_eq!(r.shape(), &[3, 3]);
@@ -295,9 +280,9 @@ assert!(max_abs_diff(&qtq, &identity)? < 1.0e-12);
 
     fn snippet_incremental_householder_qr() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:incremental_householder_qr
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{QrGauge, QrOptions, TensorLinalgExt};
-use tenferro_runtime::{BackendSessionHost, Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
 let initial = Tensor::from_vec_col_major(
     vec![3, 2],
@@ -309,16 +294,13 @@ let accumulated = Tensor::from_vec_col_major(
     vec![1.0_f64, 2.0, 0.5, -1.0, 0.2, 2.0, 0.5, 1.0, -2.0],
 )?;
 let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
-let mut backend = CpuBackend::new();
-let (q, r, reconstructed) = backend.with_backend_session(|session| {
-    let state = initial
-        .householder_qr(session)?
-        .append_columns(&block, session)?;
-    let q = state.q_columns(0..3, options, session)?;
-    let r = state.r(options, session)?;
-    let reconstructed = q.matmul(&r, session)?;
-    Ok::<_, tenferro_runtime::Error>((q, r, reconstructed))
-})??;
+let mut engine = CpuEngine::serial();
+let state = initial
+    .householder_qr(&mut engine)?
+    .append_columns(&block, &mut engine)?;
+let q = state.q_columns(0..3, options, &mut engine)?;
+let r = state.r(options, &mut engine)?;
+let reconstructed = q.matmul(&r, &mut engine)?;
 
 assert_eq!(q.shape(), &[3, 3]);
 assert_eq!(r.shape(), &[3, 3]);
@@ -338,8 +320,7 @@ assert!(error < 1.0e-12);
     // snippet source: docs/guides/linear-algebra.md:312
     fn snippet_linear_algebra_8() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_8
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::BackendSessionHost;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TensorLinalgExt;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
@@ -353,8 +334,8 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
         .fold(0.0, f64::max))
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0])?;
-let mut backend = CpuBackend::new();
-let (values, vectors) = backend.with_backend_session(|session| a.eigh(session))??;
+let mut engine = CpuEngine::serial();
+let (values, vectors) = a.eigh(&mut engine)?;
 
 assert_eq!(values.shape(), &[2]);
 assert_eq!(vectors.shape(), &[2, 2]);
@@ -364,12 +345,9 @@ let diagonal = Tensor::from_vec_col_major(
     vec![2, 2],
     vec![value_slice[0], 0.0, 0.0, value_slice[1]],
 )?;
-let (reconstructed,) = backend.with_backend_session(|session| -> tenferro_tensor::Result<(Tensor,)> {
-    let vd = vectors.matmul(&diagonal, session)?;
-    let vt = vectors.transpose(&[1, 0], session)?;
-    let reconstructed = vd.matmul(&vt, session)?;
-    Ok((reconstructed,))
-})??;
+let vd = vectors.matmul(&diagonal, &mut engine)?;
+let vt = vectors.transpose(&[1, 0], &mut engine)?;
+let reconstructed = vd.matmul(&vt, &mut engine)?;
 
 assert_eq!(a.shape(), &[2, 2]);
 assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
@@ -382,8 +360,8 @@ assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
     // snippet source: docs/guides/linear-algebra.md:347
     fn snippet_linear_algebra_9() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_9
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
@@ -391,17 +369,18 @@ let factor = a.cholesky()?;
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&factor)?;
-let backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder
-    .register_engine(runtime_engine_registration(&backend)?)?;
+    .register_engine(runtime_engine_registration(&engine)?)?;
 builder
     .install_extension_module(
-        tenferro_linalg::extension_module::<CpuBackend>(runtime_engine_id()?)?,
+        tenferro_linalg::extension_module::<CpuEngine>(runtime_engine_id()?)?,
     )?;
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[])?;
-let result = outputs.remove(0);
+let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+let result = outputs.remove(0).into_tensor(&mut engine)?;
 
 assert_eq!(result.shape(), &[2, 2]);
 assert_eq!(result.as_slice::<f64>()?, &[2.0, 0.0, 0.0, 3.0]);
@@ -414,8 +393,8 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 0.0, 0.0, 3.0]);
     // snippet source: docs/guides/linear-algebra.md:377
     fn snippet_linear_algebra_10() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_10
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
 
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
@@ -424,17 +403,18 @@ let x = a.solve(&b)?;
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&x)?;
-let backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder
-    .register_engine(runtime_engine_registration(&backend)?)?;
+    .register_engine(runtime_engine_registration(&engine)?)?;
 builder
     .install_extension_module(
-        tenferro_linalg::extension_module::<CpuBackend>(runtime_engine_id()?)?,
+        tenferro_linalg::extension_module::<CpuEngine>(runtime_engine_id()?)?,
     )?;
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[])?;
-let result = outputs.remove(0);
+let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+let result = outputs.remove(0).into_tensor(&mut engine)?;
 
 assert_eq!(result.shape(), &[2, 1]);
 assert_eq!(result.as_slice::<f64>()?, &[2.0, 3.0]);
@@ -447,8 +427,7 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 3.0]);
     // snippet source: docs/guides/linear-algebra.md:415
     fn snippet_linear_algebra_11() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_11
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::BackendSessionHost;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TensorLinalgExt;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
@@ -461,7 +440,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
         .map(|(lhs, rhs)| (lhs - rhs).abs())
         .fold(0.0, f64::max))
 }
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(
     vec![4, 4],
     vec![
@@ -473,15 +452,12 @@ let a = Tensor::from_vec_col_major(
 )?;
 let b = Tensor::from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 
-let (p, l, u, q, parity) = backend.with_backend_session(|session| a.full_piv_lu(session))??;
-let (reconstructed,) = backend.with_backend_session(|session| -> tenferro_tensor::Result<(Tensor,)> {
-    let pt = p.transpose(&[1, 0], session)?;
-    let pt_l = pt.matmul(&l, session)?;
-    let pt_lu = pt_l.matmul(&u, session)?;
-    let reconstructed = pt_lu.matmul(&q, session)?;
-    Ok((reconstructed,))
-})??;
-let x = backend.with_backend_session(|session| a.full_piv_lu_solve(&b, session))??;
+let (p, l, u, q, parity) = a.full_piv_lu(&mut engine)?;
+let pt = p.transpose(&[1, 0], &mut engine)?;
+let pt_l = pt.matmul(&l, &mut engine)?;
+let pt_lu = pt_l.matmul(&u, &mut engine)?;
+let reconstructed = pt_lu.matmul(&q, &mut engine)?;
+let x = a.full_piv_lu_solve(&b, &mut engine)?;
 
 assert_eq!(p.shape(), &[4, 4]);
 assert_eq!(a.shape(), &[4, 4]);
@@ -504,13 +480,13 @@ assert_eq!(x.shape(), &[4, 1]);
     fn snippet_einsum_12() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:einsum_12
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::{
     TensorEinsumExt, TensorEinsumIntoExt, TypedTensorEinsumExt,
     TypedTensorEinsumIntoExt, TypedTensorReadEinsumIntoExt,
 };
 use tenferro_tensor::{
-    BackendSessionHost, Tensor, TensorWrite, TypedTensor, TypedTensorView,
+    Tensor, TensorWrite, TypedTensor, TypedTensorView,
     TypedTensorViewMut, TypedTensorWrite,
 };
 
@@ -522,20 +498,16 @@ let rhs = Tensor::from_vec_col_major(
     vec![3, 2],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let mut backend = CpuBackend::new();
-let product = backend.with_backend_session(|session| {
-    [&lhs, &rhs].einsum("ij,jk->ik", session)
-})??;
+let mut engine = CpuEngine::serial();
+let product = [&lhs, &rhs].einsum("ij,jk->ik", &mut engine)?;
 assert_eq!(product.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let mut product_out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4])?;
-backend.with_backend_session(|session| {
-    [&lhs, &rhs].einsum_into(
-        "ij,jk->ik",
-        session,
-        TensorWrite::from_tensor(&mut product_out),
-    )
-})??;
+[&lhs, &rhs].einsum_into(
+    "ij,jk->ik",
+    &mut engine,
+    TensorWrite::from_tensor(&mut product_out),
+)?;
 assert_eq!(product_out.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let complex_lhs = TypedTensor::<Complex64>::from_vec_col_major(
@@ -551,9 +523,7 @@ let complex_rhs = TypedTensor::<Complex64>::from_vec_col_major(
     vec![2, 1],
     vec![Complex64::new(5.0, 0.0), Complex64::new(6.0, -1.0)],
 )?;
-let complex = backend.with_backend_session(|session| {
-    [&complex_lhs, &complex_rhs].einsum("ij,jk->ik", session)
-})??;
+let complex = [&complex_lhs, &complex_rhs].einsum("ij,jk->ik", &mut engine)?;
 assert_eq!(
     complex.as_slice()?,
     &[Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
@@ -564,13 +534,11 @@ let borrowed_rhs = complex_rhs.as_view();
 let mut borrowed_storage = [Complex64::new(0.0, 0.0); 4];
 let borrowed_out =
     TypedTensorViewMut::from_slice([2, 1], [2, 4], 1, &mut borrowed_storage)?;
-backend.with_backend_session(|session| {
-    [borrowed, borrowed_rhs].einsum_read_into(
-        "ij,jk->ik",
-        session,
-        TypedTensorWrite::from_view(borrowed_out),
-    )
-})??;
+[borrowed, borrowed_rhs].einsum_read_into(
+    "ij,jk->ik",
+    &mut engine,
+    TypedTensorWrite::from_view(borrowed_out),
+)?;
 assert_eq!(
     [borrowed_storage[1], borrowed_storage[3]],
     [Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
@@ -584,9 +552,9 @@ assert_eq!(
     // snippet source: docs/guides/einsum.md:146
     fn snippet_einsum_20() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:einsum_20
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::{EinsumAxis, EinsumNotation, TensorEinsumExt};
-use tenferro_tensor::{BackendSessionHost, Tensor};
+use tenferro_tensor::Tensor;
 
 let lhs = Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12])?;
 let rhs = Tensor::from_vec_col_major(vec![1, 3, 2], vec![1.0_f64; 6])?;
@@ -597,13 +565,9 @@ let notation = EinsumNotation::new(
     ],
     &[EinsumAxis::Ellipsis, EinsumAxis::Label(0), EinsumAxis::Label(2)],
 );
-let mut backend = CpuBackend::new();
-let string_result = backend.with_backend_session(|session| {
-    [&lhs, &rhs].einsum("...ij,...jk->...ik", session)
-})??;
-let programmatic_result = backend.with_backend_session(|session| {
-    [&lhs, &rhs].einsum_notation(&notation, session)
-})??;
+let mut engine = CpuEngine::serial();
+let string_result = [&lhs, &rhs].einsum("...ij,...jk->...ik", &mut engine)?;
+let programmatic_result = [&lhs, &rhs].einsum_notation(&notation, &mut engine)?;
 assert_eq!(string_result.shape(), &[2, 2, 2]);
 assert_eq!(string_result.as_slice::<f64>()?, &[3.0; 8]);
 assert_eq!(programmatic_result.as_slice::<f64>()?, &[3.0; 8]);
@@ -616,9 +580,9 @@ assert_eq!(programmatic_result.as_slice::<f64>()?, &[3.0; 8]);
     // snippet source: docs/guides/einsum.md:146
     fn snippet_einsum_13() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:einsum_13
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::{ConcreteEinsumPlan, TensorReadEinsumExt, TensorReadEinsumIntoExt};
-use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorView, TensorWrite, TypedTensorView};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TensorWrite, TypedTensorView};
 
 let matrix_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
 let matrix = TypedTensorView::from_slice([2, 3], [3, 1], 0, &matrix_data)?;
@@ -628,15 +592,12 @@ let inputs = [
     TensorRead::from_tensor(&vector),
 ];
 
-let mut backend = CpuBackend::new();
-let result = backend.with_backend_session(|session| {
-    inputs.einsum_read("ij,j->i", session)
-})??;
+let mut engine = CpuEngine::serial();
+let result = inputs.einsum_read("ij,j->i", &mut engine)?;
 assert_eq!(result.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let plan = ConcreteEinsumPlan::prepare_read(inputs.clone(), "ij,j->i")?;
-let planned = backend
-    .with_backend_session(|session| plan.execute_read(inputs, session))??;
+let planned = plan.execute_read(inputs, &mut engine)?;
 assert_eq!(planned.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let mut planned_out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2])?;
@@ -645,13 +606,11 @@ let inputs = [
     TensorRead::from_view(TensorView::F64(matrix)),
     TensorRead::from_tensor(&vector),
 ];
-backend.with_backend_session(|session| {
-    plan.execute_read_into(
-        inputs,
-        session,
-        TensorWrite::from_tensor(&mut planned_out),
-    )
-})??;
+plan.execute_read_into(
+    inputs,
+    &mut engine,
+    TensorWrite::from_tensor(&mut planned_out),
+)?;
 assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
         // snippet-end:einsum_13
         Ok(())
@@ -662,10 +621,10 @@ assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
     // snippet source: docs/guides/einsum.md:186
     fn snippet_einsum_14() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:einsum_14
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TraceContext};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext};
 
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
@@ -683,15 +642,20 @@ let c = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
 let graph = trace.finish(&[c])?;
 let program = GraphCompiler::new().compile_traced_graph(&graph)?;
 
-let backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
-builder.register_engine(runtime_engine_registration(&backend)?)?;
-builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+builder.register_engine(runtime_engine_registration(&engine)?)?;
+builder.install_extension_module(tenferro_einsum::extension_module::<CpuEngine>(
     runtime_engine_id()?,
 )?)?;
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[&a, &b])?;
-let result = outputs.remove(0);
+let reads = [
+    tenferro_runtime::TensorRead::from_tensor(&a),
+    tenferro_runtime::TensorRead::from_tensor(&b),
+];
+let prepared = runtime.prepare(&program, &reads, &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &reads)?;
+let result = outputs.remove(0).into_tensor(&mut engine)?;
 
 assert_eq!(result.shape(), &[2, 2]);
 assert_eq!(result.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
@@ -705,9 +669,11 @@ assert_eq!(result.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
     fn snippet_einsum_15() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:einsum_15
 use tenferro_ad::{EagerRuntime, Tensor};
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::EagerSessionEinsumExt;
 
 let ctx = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let u = ctx.variable_from(Tensor::from_vec_col_major(
     vec![2],
     vec![1.0_f64, 2.0],
@@ -717,20 +683,20 @@ let v = ctx.variable_from(Tensor::from_vec_col_major(
     vec![3.0_f64, 4.0, 5.0],
 )?)?;
 
-let (outer, diag) = ctx.with_eager_session(|s| {
+let (outer, diag) = ctx.with_eager_session(&mut engine, |s| {
     let outer = s.einsum(&[&u, &v], "i,j->ij")?;
     let diag = s.einsum(&[&v], "i->ii")?;
     Ok::<_, tenferro_einsum::Error>((outer, diag))
 })?;
 
 assert_eq!(outer.shape(), &[2, 3]);
-let outer_tensor = outer.to_tensor()?;
+let outer_tensor = outer.to_tensor(&mut engine)?;
 assert_eq!(
     outer_tensor.as_slice::<f64>()?,
     &[3.0, 6.0, 4.0, 8.0, 5.0, 10.0],
 );
 assert_eq!(diag.shape(), &[3, 3]);
-let diag_tensor = diag.to_tensor()?;
+let diag_tensor = diag.to_tensor(&mut engine)?;
 assert_eq!(
     diag_tensor.as_slice::<f64>()?,
     &[3.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 5.0],
@@ -744,9 +710,9 @@ assert_eq!(
     // snippet source: docs/guides/einsum.md:264
     fn snippet_einsum_16() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:einsum_16
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_einsum::{TensorDotAxes, TracedTensorEinsumExt};
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 let lhs = TracedTensor::from_vec_col_major(
     vec![2, 3],
@@ -766,15 +732,16 @@ let out = lhs.tensordot(&rhs, TensorDotAxes::Count(1))?;
 assert_eq!(out.concrete_shape()?, vec![2, 4]);
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&out)?;
-let backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
-builder.register_engine(runtime_engine_registration(&backend)?)?;
-builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+builder.register_engine(runtime_engine_registration(&engine)?)?;
+builder.install_extension_module(tenferro_einsum::extension_module::<CpuEngine>(
     runtime_engine_id()?,
 )?)?;
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[])?;
-let result = outputs.remove(0);
+let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+let result = outputs.remove(0).into_tensor(&mut engine)?;
 
 assert_eq!(result.shape(), &[2, 4]);
 assert_eq!(
@@ -825,9 +792,9 @@ assert_eq!(metadata.shape().len(), 2);
     fn snippet_autodiff_18() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:autodiff_18
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
 let loss = (&x * &x)?.reduce_sum(Some(&[0]))?;
@@ -836,11 +803,13 @@ let grad = ad.grad(&loss, &x)?;
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&grad)?;
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
-builder.register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new())?)?;
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[])?;
-let result = outputs.remove(0);
+let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+let result = outputs.remove(0).into_tensor(&mut engine)?;
 
 assert_eq!(result.shape(), &[3]);
 assert_eq!(result.as_slice::<f64>()?, &[2.0, 4.0, 6.0]);
@@ -854,8 +823,8 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 4.0, 6.0]);
     fn snippet_autodiff_19() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:autodiff_19
 use tenferro_ad::AdContext;
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
 
 let mut compiler = GraphCompiler::new();
@@ -868,15 +837,16 @@ let loss = factor.reduce_sum(Some(&[0, 1]))?;
 let grad_a = ad.grad(&loss, &a)?;
 let program = compiler.compile(&grad_a)?;
 
-let backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
-builder.register_engine(runtime_engine_registration(&backend)?)?;
-builder.install_extension_module(tenferro_linalg::extension_module::<CpuBackend>(
+builder.register_engine(runtime_engine_registration(&engine)?)?;
+builder.install_extension_module(tenferro_linalg::extension_module::<CpuEngine>(
     runtime_engine_id()?,
 )?)?;
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[])?;
-let result = outputs.remove(0);
+let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+let result = outputs.remove(0).into_tensor(&mut engine)?;
 assert_eq!(result.shape(), &[2, 2]);
         // snippet-end:autodiff_19
         Ok(())
@@ -888,8 +858,8 @@ assert_eq!(result.shape(), &[2, 2]);
     fn snippet_autodiff_20() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:autodiff_20
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
@@ -910,11 +880,13 @@ let ad = AdContext::builder().build()?;
 let ct_a = ad.vjp(&y, &a, &cotangent)?;
 let program = compiler.compile(&ct_a)?;
 
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
-builder.register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new())?)?;
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[])?;
-let result = outputs.remove(0);
+let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+let result = outputs.remove(0).into_tensor(&mut engine)?;
 assert_eq!(result.shape(), &[2, 3]);
 // For y = A * B, the cotangent with respect to A is cotangent * B^T.
 assert_eq!(
@@ -931,8 +903,8 @@ assert_eq!(
     fn snippet_autodiff_21() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:autodiff_21
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
@@ -953,11 +925,13 @@ let ad = AdContext::builder().build()?;
 let dy = ad.jvp(&y, &a, &tangent)?;
 let program = compiler.compile(&dy)?;
 
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
-builder.register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new())?)?;
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[])?;
-let result = outputs.remove(0);
+let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+let result = outputs.remove(0).into_tensor(&mut engine)?;
 assert_eq!(result.shape(), &[2, 2]);
 // For y = A * B, the directional derivative with respect to A is dA * B.
 assert_eq!(
@@ -968,35 +942,88 @@ assert_eq!(
         Ok(())
     }
 
+    snippet_tenferro_fft_traced()?;
+
+    // snippet source: docs/guides/tenferro-fft.md (traced graph)
+    fn snippet_tenferro_fft_traced() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:tenferro_fft_traced
+use num_complex::Complex64;
+use tenferro_cpu::CpuEngine;
+use tenferro_fft::{FftNorm, TracedTensorFftExt};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+
+fn cpu_runtime_with_fft(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>> {
+    let mut builder = Runtime::builder();
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(engine)?)?;
+    builder.install_extension_module(tenferro_fft::extension_module::<CpuEngine>(
+        tenferro_cpu::runtime_engine_id()?,
+    )?)?;
+    Ok(builder.build()?)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let x = TracedTensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let y = x.fft(None, -1, FftNorm::Backward)?;
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&y)?;
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime_with_fft(&engine)?;
+    let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+    let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+    assert_eq!(outputs.len(), 1);
+    let out = outputs.remove(0).into_tensor(&mut engine)?;
+    assert_eq!(out.shape(), &[4]);
+    assert_eq!(
+        out.as_slice::<Complex64>().unwrap(),
+        &[
+            Complex64::new(10.0, 0.0),
+            Complex64::new(-2.0, 2.0),
+            Complex64::new(-2.0, 0.0),
+            Complex64::new(-2.0, -2.0),
+        ],
+    );
+
+    Ok(())
+}
+        // snippet-end:tenferro_fft_traced
+        Ok(())
+    }
+
     snippet_tenferro_fft_22()?;
 
     // snippet source: docs/guides/tenferro-fft.md:100
     fn snippet_tenferro_fft_22() -> Result<(), Box<dyn std::error::Error>> {
 // snippet-start:tenferro_fft_22
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftNorm, TensorFftExt, TensorReadFftExt};
-use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
-let mut backend = CpuBackend::new();
-backend.with_backend_session(|session| -> Result<(), tenferro_tensor::Error> {
-    let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-    let full = x.fft(None, -1, FftNorm::Backward, session)?;
-    let one_sided = x.rfft(None, -1, FftNorm::Backward, session)?;
-    assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
-    assert_eq!(one_sided.shape(), &[3]);
+let mut engine = CpuEngine::serial();
+let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+let full = x.fft(None, -1, FftNorm::Backward, &mut engine)?;
+let one_sided = x.rfft(None, -1, FftNorm::Backward, &mut engine)?;
+assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
+assert_eq!(one_sided.shape(), &[3]);
 
-    let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
-    let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
-    let read = TensorRead::from_view(TensorView::F64(view));
-    let read_full = read.fft_read(None, -1, FftNorm::Backward, session)?;
-    assert_eq!(
-        read_full.as_slice::<Complex64>()?[0],
-        Complex64::new(10.0, 0.0),
-    );
-    Ok(())
-})??;
+let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
+let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
+let read = TensorRead::from_view(TensorView::F64(view));
+let read_full = read.fft_read(None, -1, FftNorm::Backward, &mut engine)?;
+assert_eq!(
+    read_full.as_slice::<Complex64>()?[0],
+    Complex64::new(10.0, 0.0),
+);
 // snippet-end:tenferro_fft_22
 
         Ok(())
@@ -1011,21 +1038,26 @@ backend.with_backend_session(|session| -> Result<(), tenferro_tensor::Error> {
         // snippet-start:tenferro_fft_23
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::{EagerSessionFftExt, FftNorm};
 
 let runtime = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let x = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?,
     runtime.clone(),
 )?;
-let (spectrum, restored) = runtime.with_eager_session(|session| {
+let (spectrum, restored) = runtime.with_eager_session(&mut engine, |session| {
     let spectrum = session.rfft(&x, None, -1, FftNorm::Backward)?;
     let restored = session.irfft(&spectrum, Some(4), -1, FftNorm::Backward)?;
     Ok::<_, tenferro_ad::Error>((spectrum, restored))
 })?;
 
 assert_eq!(spectrum.shape(), &[3]);
-assert_eq!(restored.to_tensor()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
+assert_eq!(
+    restored.to_tensor(&mut engine)?.as_slice::<f64>()?,
+    &[1.0, 2.0, 3.0, 4.0]
+);
         // snippet-end:tenferro_fft_23
         Ok(())
     }

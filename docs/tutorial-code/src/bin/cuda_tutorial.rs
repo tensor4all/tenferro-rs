@@ -1,10 +1,7 @@
-//! Hardware-gated CUDA tutorial: explicit upload, session execution, and download.
+//! Hardware-gated CUDA tutorial: explicit upload, engine execution, and download.
 
-use tenferro_gpu::cuda::{
-    cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend,
-};
-use tenferro_runtime::BackendSessionHost;
-use tenferro_tensor::{Tensor, TensorRead};
+use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaEngine};
+use tenferro_tensor::{Tensor, TensorElementwise, TensorRead};
 
 // The direct cuBLAS example (#1940) runs here so the GPU CI lane, which executes
 // this binary, also executes it.
@@ -38,21 +35,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return skip_or_fail(require_cuda, "CUDA reported no devices");
     };
 
-    let mut backend = CudaBackend::new(device.id())?;
+    // One caller-held engine owns the device, its stream and its caches.
+    let mut engine = CudaEngine::open(device.id())?;
     let a = Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0])?;
     let b = Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0])?;
-    let gpu_a = upload_tensor(backend.runtime(), &a)?;
-    let gpu_b = upload_tensor(backend.runtime(), &b)?;
+    let gpu_a = upload_tensor(engine.runtime(), &a)?;
+    let gpu_b = upload_tensor(engine.runtime(), &b)?;
 
-    let gpu_sum = backend.with_backend_session(|session| {
-        session.add_read(
-            TensorRead::from_tensor(&gpu_a),
-            TensorRead::from_tensor(&gpu_b),
-        )
-    })??;
-    let sum = download_tensor(backend.runtime(), &gpu_sum)?;
+    let gpu_sum = engine.add_read(
+        TensorRead::from_tensor(&gpu_a),
+        TensorRead::from_tensor(&gpu_b),
+    )?;
+    let sum = download_tensor(engine.runtime(), &gpu_sum)?;
     assert_eq!(sum.as_slice::<f64>()?, &[4.0, 6.0]);
-    println!("cuda_tutorial: upload -> session -> download passed");
-    cuda_vendor_interop::run(&mut backend)?;
+    println!("cuda_tutorial: upload -> engine -> download passed");
+    cuda_vendor_interop::run(&mut engine)?;
     Ok(())
 }

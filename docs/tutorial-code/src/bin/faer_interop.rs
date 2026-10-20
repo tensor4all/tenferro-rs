@@ -17,10 +17,10 @@
 use tenferro_cpu::faer::linalg::matmul::matmul;
 use tenferro_cpu::faer::linalg::solvers::Solve;
 use tenferro_cpu::faer::{Accum, Mat, MatMut, MatRef, Par};
-use tenferro_cpu::{CpuBackend, FaerParallelismExt};
+use tenferro_cpu::{CpuEngine, FaerParallelismExt};
 use tenferro_tensor::{
-    BackendSessionHost, BackendStorage, BackendStorageHandle, DeviceId, DeviceKind, MemoryKind,
-    Placement, StorageBuffer, TypedTensor, TypedTensorView,
+    BackendStorage, BackendStorageHandle, DeviceId, DeviceKind, MemoryKind, Placement,
+    StorageBuffer, TensorStructural, TypedTensor, TypedTensorView,
 };
 
 fn assert_close(actual: f64, expected: f64, context: &str) {
@@ -128,27 +128,29 @@ fn faer_solve_on_zero_copy_views() -> tenferro_tensor::Result<()> {
 }
 // snippet-end:faer-solve
 
-// snippet-start:faer-session-parallelism
-fn faer_parallelism_from_session() -> tenferro_tensor::Result<()> {
+// snippet-start:faer-engine-parallelism
+fn faer_parallelism_from_engine() -> tenferro_tensor::Result<()> {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0])?;
     let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0])?;
-    let mut backend = CpuBackend::with_threads(2)?;
+    let pool = tenferro_cpu::thread_pool_builder()
+        .num_threads(2)
+        .build()
+        .map_err(|err| tenferro_tensor::Error::runtime_state("faer_interop", err.to_string()))?;
+    let mut engine = CpuEngine::new(pool);
     let mut product = Mat::<f64>::zeros(2, 2);
-    backend.with_backend_session(|session| {
-        session.with_faer_parallelism(|parallel| {
-            let a_view = MatRef::from_column_major_slice(a.as_slice()?, 2, 2);
-            let b_view = MatRef::from_column_major_slice(b.as_slice()?, 2, 2);
-            matmul(
-                product.as_mut(),
-                Accum::Replace,
-                a_view,
-                b_view,
-                1.0,
-                parallel,
-            );
-            Ok(())
-        })
-    })??;
+    engine.with_faer_parallelism(|parallel| {
+        let a_view = MatRef::from_column_major_slice(a.as_slice()?, 2, 2);
+        let b_view = MatRef::from_column_major_slice(b.as_slice()?, 2, 2);
+        matmul(
+            product.as_mut(),
+            Accum::Replace,
+            a_view,
+            b_view,
+            1.0,
+            parallel,
+        );
+        Ok(())
+    })?;
     let product = product.as_ref();
     assert_close(*product.get(0, 0), 19.0, "A * B (0,0)");
     assert_close(*product.get(1, 0), 43.0, "A * B (1,0)");
@@ -156,7 +158,7 @@ fn faer_parallelism_from_session() -> tenferro_tensor::Result<()> {
     assert_close(*product.get(1, 1), 50.0, "A * B (1,1)");
     Ok(())
 }
-// snippet-end:faer-session-parallelism
+// snippet-end:faer-engine-parallelism
 
 // snippet-start:faer-non-contiguous
 fn faer_rejects_non_contiguous_without_materializing() -> tenferro_tensor::Result<()> {
@@ -173,10 +175,10 @@ fn faer_rejects_non_contiguous_without_materializing() -> tenferro_tensor::Resul
         "unexpected error: {error}"
     );
 
-    // The caller decides to materialize through an explicit backend session.
-    let mut backend = CpuBackend::new();
+    // The caller decides to materialize through an explicit engine call.
+    let mut engine = CpuEngine::serial();
     let read = transposed.into_tensor_read()?;
-    let compact = backend.with_backend_session(|session| session.to_contiguous_read(read))??;
+    let compact = engine.to_contiguous_read(read)?;
     let compact = compact
         .as_typed::<f64>()
         .expect("materialized an f64 tensor");
@@ -222,9 +224,9 @@ fn faer_rejects_non_host_storage() -> tenferro_tensor::Result<()> {
         "unexpected error: {error}"
     );
 
-    // The required transfer is an explicit download through the owning
-    // backend (CpuBackend rejects foreign backend buffers); only then can faer
-    // read the data.
+    // The required transfer is an explicit download through the owning engine
+    // (CpuEngine rejects foreign backend buffers); only then can faer read the
+    // data.
     Ok(())
 }
 // snippet-end:faer-non-host
@@ -233,7 +235,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     faer_immutable_view()?;
     faer_mutable_view()?;
     faer_solve_on_zero_copy_views()?;
-    faer_parallelism_from_session()?;
+    faer_parallelism_from_engine()?;
     faer_rejects_non_contiguous_without_materializing()?;
     faer_rejects_non_host_storage()?;
     println!("faer_interop: all checks passed");

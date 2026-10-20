@@ -11,10 +11,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // snippet source: docs/guides/eager-operations.md:48
     fn snippet_eager_operations_1() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_1
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{Tensor, TypedTensor};
 
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
         // snippet-end:eager_operations_1
         Ok(())
     }
@@ -25,41 +25,40 @@ let mut backend = CpuBackend::new();
     fn snippet_eager_operations_mixing() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_mixing
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::{CpuBackend, CpuPlacement};
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
-let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let runtime = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let x = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?,
     runtime.clone(),
 )?;
 
 // Canonical entry: eager ops on a borrowed `EagerSession`.
-let y = runtime.with_eager_session(|s| s.mul(&x, &x))?;
-let values = y.to_tensor()?;
+let y = runtime.with_eager_session(&mut engine, |s| s.mul(&x, &x))?;
+let values = y.to_tensor(&mut engine)?;
 
-// AD-free work in the same session: the eager session lends its backend session.
-let total = runtime.with_eager_session(|s| {
+// AD-free work in the same session: the eager session lends its engine.
+let total = runtime.with_eager_session(&mut engine, |s| {
     values
-        .reduce_sum(None, s.backend_session())
+        .reduce_sum(None, s.engine())
         .map_err(tenferro_ad::Error::from)
 })?;
 assert_eq!(total.as_slice::<f64>()?, &[5.0]);
 
-// CPU placement bridge: core ops on the runtime's CPU backend session.
-let mut cpu = runtime.on_cpu(CpuPlacement::Auto)?;
-let doubled = cpu.with_eager_session(|session| {
-    values
-        .scale_real(2.0, session)
-        .map_err(tenferro_ad::Error::from)
-})?;
+// The same engine carries concrete work outside an eager session.
+let doubled = values.scale_real(2.0, &mut engine)?;
 assert_eq!(doubled.as_slice::<f64>()?, &[2.0, 8.0]);
 
-// A nested entry into the same runtime is rejected, not deadlocked.
-let nested = runtime.with_eager_session(|_| {
-    Ok::<_, tenferro_ad::Error>(runtime.with_eager_session(|s| s.neg(&x)).is_err())
+// Nested entry is not needed and not offered: the engine is already borrowed,
+// so hold the outer session and issue every operation inside it.
+let both = runtime.with_eager_session(&mut engine, |s| {
+    let negated = s.neg(&x)?;
+    let summed = s.reduce_sum(&negated, None)?;
+    Ok::<_, tenferro_ad::Error>((negated, summed))
 })?;
-assert!(nested);
+assert_eq!(both.0.value()?.as_slice::<f64>()?, &[-1.0, 2.0]);
         // snippet-end:eager_operations_mixing
         Ok(())
     }
@@ -98,8 +97,8 @@ assert_eq!(c.shape(), &[2, 3]);
     // snippet source: docs/guides/eager-operations.md:131
     fn snippet_eager_operations_3() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_3
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSessionHost, TypedTensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{TensorStructural, TypedTensor};
 
 let tensor = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
@@ -107,11 +106,8 @@ let tensor = TypedTensor::<f64>::from_vec_col_major(
 ).unwrap();
 let view = tensor.as_view().transpose_view([1, 0]).unwrap();
 let read = view.into_tensor_read().unwrap();
-let mut backend = CpuBackend::new();
-let compact = backend
-    .with_backend_session(|session| session.to_contiguous_read(read))
-    .unwrap()
-    .unwrap();
+let mut engine = CpuEngine::serial();
+let compact = engine.to_contiguous_read(read).unwrap();
 
 assert_eq!(compact.shape(), &[3, 2]);
 assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
@@ -124,20 +120,16 @@ assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
     // snippet source: docs/guides/eager-operations.md:154
     fn snippet_eager_operations_4() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_4
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
 let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0])?;
 
-let (sum, product, negated) = backend.with_backend_session(|session| {
-    let sum = a.add(&b, session).unwrap();
-    let product = a.mul(&b, session).unwrap();
-    let negated = a.neg(session).unwrap();
-    (sum, product, negated)
-})?;
+let sum = a.add(&b, &mut engine)?;
+let product = a.mul(&b, &mut engine)?;
+let negated = a.neg(&mut engine)?;
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -151,30 +143,28 @@ assert_eq!(negated.as_slice::<f64>().unwrap(), &[-1.0, -2.0, -3.0]);
     // snippet source: docs/guides/eager-operations.md:173
     fn snippet_eager_operations_5() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_5
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TensorLinalgExt;
-use tenferro_runtime::{BackendSessionHost, Tensor};
+use tenferro_runtime::Tensor;
 
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![3, 3], vec![
     2.0_f64, 1.0, 0.0,
     1.0, 3.0, 1.0,
     0.0, 1.0, 2.0,
 ])?;
 let b = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
-backend.with_backend_session(|session| {
-    let svd = a.svd(session).unwrap();
-    let qr = a.qr(session).unwrap();
-    let chol = a.cholesky(session).unwrap();
-    let eigh = a.eigh(session).unwrap();
-    let x = a.solve(&b, session).unwrap();
-    assert_eq!(svd.1.shape(), &[3]);
-    assert_eq!(qr.0.shape(), &[3, 3]);
-    assert_eq!(chol.shape(), &[3, 3]);
-    assert_eq!(eigh.0.shape(), &[3]);
-    assert_eq!(eigh.1.shape(), &[3, 3]);
-    assert_eq!(x.shape(), &[3]);
-})?;
+let svd = a.svd(&mut engine)?;
+let qr = a.qr(&mut engine)?;
+let chol = a.cholesky(&mut engine)?;
+let eigh = a.eigh(&mut engine)?;
+let x = a.solve(&b, &mut engine)?;
+assert_eq!(svd.1.shape(), &[3]);
+assert_eq!(qr.0.shape(), &[3, 3]);
+assert_eq!(chol.shape(), &[3, 3]);
+assert_eq!(eigh.0.shape(), &[3]);
+assert_eq!(eigh.1.shape(), &[3, 3]);
+assert_eq!(x.shape(), &[3]);
         // snippet-end:eager_operations_5
         Ok(())
     }
@@ -184,20 +174,16 @@ backend.with_backend_session(|session| {
     // snippet source: docs/guides/eager-operations.md:214
     fn snippet_eager_operations_6() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_6
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
 
-// Transpose / Reshape / Reduce in one backend session.
-let (at, flat, col_sum) = backend.with_backend_session(|session| {
-    let at = a.transpose(&[1, 0], session).unwrap();
-    let flat = a.reshape(&[6], session).unwrap();
-    let col_sum = a.reduce_sum(Some(&[0]), session).unwrap();
-    (at, flat, col_sum)
-})?;
+// Transpose / Reshape / Reduce on one borrowed engine.
+let at = a.transpose(&[1, 0], &mut engine)?;
+let flat = a.reshape(&[6], &mut engine)?;
+let col_sum = a.reduce_sum(Some(&[0]), &mut engine)?;
 assert_eq!(at.shape(), &[3, 2]);
 assert_eq!(flat.shape(), &[6]);
 assert_eq!(col_sum.shape(), &[3]);
@@ -225,30 +211,37 @@ assert_eq!(data, &[1.0, 2.0, 3.0]);
     fn snippet_eager_operations_8() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_8
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let ctx = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
 let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
 
-let make_loss = || ctx.with_eager_session(|s| {
+// Each forward pass borrows the engine for its own eager session.
+let loss = ctx.with_eager_session(&mut engine, |s| {
     let product = s.mul(&x, &y)?;
     s.reduce_sum(&product, Some(&[0]))
-}).unwrap();
-let loss = make_loss();
-loss.backward().unwrap();
+})?;
+loss.backward(&mut engine)?;
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
-let loss = make_loss();
-loss.backward().unwrap();
+let loss = ctx.with_eager_session(&mut engine, |s| {
+    let product = s.mul(&x, &y)?;
+    s.reduce_sum(&product, Some(&[0]))
+})?;
+loss.backward(&mut engine)?;
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[6.0, 8.0]);
 
 x.clear_grad().unwrap();
 assert!(x.grad().unwrap().is_none());
 
-let loss = make_loss();
-loss.backward().unwrap();
+let loss = ctx.with_eager_session(&mut engine, |s| {
+    let product = s.mul(&x, &y)?;
+    s.reduce_sum(&product, Some(&[0]))
+})?;
+loss.backward(&mut engine)?;
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
 ctx.clear_grads().unwrap();
@@ -266,10 +259,11 @@ Ok(())
     fn snippet_eager_operations_9() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_9
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let ctx = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ctx.clone(),
@@ -279,8 +273,8 @@ let seed = EagerTensor::from_tensor_in(
     ctx,
 ).unwrap();
 
-let y = x.runtime().with_eager_session(|s| s.mul(&x, &x))?;
-y.backward_with(&seed).unwrap();
+let y = x.runtime().with_eager_session(&mut engine, |s| s.mul(&x, &x))?;
+y.backward_with(&mut engine, &seed).unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
 Ok(())
 }
@@ -294,15 +288,16 @@ Ok(())
     fn snippet_eager_operations_10() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_10
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let ctx = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ctx.clone(),
 ).unwrap();
-let y = ctx.with_eager_session(|s| s.mul(&x, &x))?;
+let y = ctx.with_eager_session(&mut engine, |s| s.mul(&x, &x))?;
 let seed = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
     ctx.clone(),
@@ -312,11 +307,11 @@ let tangent = EagerTensor::from_tensor_in(
     ctx.clone(),
 ).unwrap();
 
-let vjp = ctx.vjp(&y, &x, &seed).unwrap();
-let jvp = ctx.jvp(&y, &x, &tangent).unwrap();
-let vjp_tensor = vjp.to_tensor().unwrap();
+let vjp = ctx.vjp(&mut engine, &y, &x, &seed).unwrap();
+let jvp = ctx.jvp(&mut engine, &y, &x, &tangent).unwrap();
+let vjp_tensor = vjp.to_tensor(&mut engine).unwrap();
 assert_eq!(vjp_tensor.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-let jvp_tensor = jvp.to_tensor().unwrap();
+let jvp_tensor = jvp.to_tensor(&mut engine).unwrap();
 assert_eq!(jvp_tensor.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 assert!(x.grad().unwrap().is_none());
 Ok(())
@@ -331,10 +326,11 @@ Ok(())
     fn snippet_eager_operations_11() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_11
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let ctx = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
     ctx.clone(),
@@ -344,16 +340,16 @@ let tangent = EagerTensor::from_tensor_in(
     ctx.clone(),
 ).unwrap();
 
-let loss = ctx.with_eager_session(|s| {
+let loss = ctx.with_eager_session(&mut engine, |s| {
     let square = s.mul(&x, &x)?;
     s.mul(&square, &x)
 })?;
-let grad = ctx.grad(&loss, &x).unwrap();
-let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
+let grad = ctx.grad(&mut engine, &loss, &x).unwrap();
+let hvp = ctx.jvp(&mut engine, &grad, &x, &tangent).unwrap();
 
-let grad_tensor = grad.to_tensor().unwrap();
+let grad_tensor = grad.to_tensor(&mut engine).unwrap();
 assert_eq!(grad_tensor.as_slice::<f64>().unwrap(), &[27.0]);
-let hvp_tensor = hvp.to_tensor().unwrap();
+let hvp_tensor = hvp.to_tensor(&mut engine).unwrap();
 assert_eq!(hvp_tensor.as_slice::<f64>().unwrap(), &[18.0]);
 Ok(())
 }
@@ -367,15 +363,16 @@ Ok(())
     fn snippet_eager_operations_12() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_12
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let ctx = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
     ctx.clone(),
 ).unwrap();
-let y = ctx.with_eager_session(|s| {
+let y = ctx.with_eager_session(&mut engine, |s| {
     let _guard = ctx.no_grad();
     s.mul(&x, &x)
 })?;
@@ -392,10 +389,11 @@ Ok(())
     fn snippet_eager_operations_13() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_13
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let ctx = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let a = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ctx.clone(),
@@ -405,18 +403,18 @@ let x = EagerTensor::requires_grad_in(
     ctx.clone(),
 ).unwrap();
 
-let y = ctx.with_eager_session(|session| session.matmul(&a, &x))?;
-let y_tensor = y.to_tensor().unwrap();
+let y = ctx.with_eager_session(&mut engine, |session| session.matmul(&a, &x))?;
+let y_tensor = y.to_tensor(&mut engine).unwrap();
 assert_eq!(y_tensor.as_slice::<f64>().unwrap(), &[23.0, 34.0]);
 
-let loss = ctx.with_eager_session(|s| {
+let loss = ctx.with_eager_session(&mut engine, |s| {
     let squared = s.mul(&y, &y)?;
     s.reduce_sum(&squared, Some(&[0, 1]))
 })?;
-let loss_tensor = loss.to_tensor().unwrap();
+let loss_tensor = loss.to_tensor(&mut engine).unwrap();
 assert_eq!(loss_tensor.as_slice::<f64>().unwrap(), &[1685.0]);
 
-loss.backward().unwrap();
+loss.backward(&mut engine).unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[182.0, 410.0]);
 Ok(())
 }
@@ -460,24 +458,22 @@ assert_eq!(static_rank.rank(), 2);
     // snippet source: docs/guides/tensor-operations.md:110
     fn snippet_tensor_operations_15() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_15
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{
     CompareDir, TypedTensor, TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt,
 };
-use tenferro_tensor::BackendSessionHost;
 
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
 let y = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0]).unwrap();
 
-let (sum, product, total, mask, selected) = backend.with_backend_session(|session| {
-    let sum = x.add(&y, session).unwrap();
-    let product = x.mul(&y, session).unwrap();
-    let total = product.reduce_sum(Some(&[0]), session).unwrap();
-    let mask = sum.compare(&product, CompareDir::Lt, session).unwrap();
-    let selected = mask.where_select(&sum, &product, session).unwrap();
-    (sum, product, total, mask, selected)
-})?;
+let sum = x.add(&y, &mut engine).unwrap();
+let product = x.mul(&y, &mut engine).unwrap();
+let total = product.reduce_sum(Some(&[0]), &mut engine).unwrap();
+let mask = sum.compare(&product, CompareDir::Lt, &mut engine).unwrap();
+let selected = mask
+    .where_select(&sum, &product, &mut engine)
+    .unwrap();
 
 assert_eq!(sum.as_slice().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice().unwrap(), &[4.0, 10.0, 18.0]);
@@ -509,19 +505,15 @@ assert_eq!(x.as_slice().unwrap(), &[2.0, 4.0, 6.0]);
     // snippet source: docs/guides/tensor-operations.md:207
     fn snippet_tensor_operations_17() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_17
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
 let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0])?;
 
-let (sum, product) = backend.with_backend_session(|session| {
-    let sum = a.add(&b, session).unwrap();
-    let product = a.mul(&b, session).unwrap();
-    (sum, product)
-})?;
+let sum = a.add(&b, &mut engine).unwrap();
+let product = a.mul(&b, &mut engine).unwrap();
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -535,16 +527,18 @@ assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
     fn snippet_tensor_operations_18() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_18
 use tenferro_ad::{EagerRuntime, Tensor};
+use tenferro_cpu::CpuEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
-let y = ctx.with_eager_session(|s| {
+let y = ctx.with_eager_session(&mut engine, |s| {
     let squared = s.mul(&x, &x)?;
     s.reduce_sum(&squared, Some(&[0]))
 })?;
 
-y.backward().unwrap();
+y.backward(&mut engine).unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 Ok(())
 }
@@ -557,8 +551,8 @@ Ok(())
     // snippet source: docs/guides/tensor-operations.md:246
     fn snippet_tensor_operations_19() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_19
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
 let b = TracedTensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
@@ -567,12 +561,18 @@ let product = (&a * &b).unwrap();
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile_many(&[&sum, &product]).unwrap();
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder
-    .register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new()).unwrap())
+    .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
     .unwrap();
 let runtime = builder.build().unwrap();
-let outputs = runtime.run_compiled(&program, &[]).unwrap();
+let prepared = runtime.prepare(&program, &[], &[engine.target()]).unwrap();
+let outputs = runtime.run(&mut [&mut engine], &prepared, &[]).unwrap();
+let outputs: Vec<_> = outputs
+    .into_iter()
+    .map(|output| output.into_tensor(&mut engine).unwrap())
+    .collect();
 
 assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -608,13 +608,15 @@ fn add_three(
     fn snippet_tensor_operations_21() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_21
 use tenferro_ad::{EagerRuntime, Tensor};
+use tenferro_cpu::CpuEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]).unwrap()).unwrap();
-let y = ctx.with_eager_session(|session| session.exp(&x))?;
+let y = ctx.with_eager_session(&mut engine, |session| session.exp(&x))?;
 
-let y_tensor = y.to_tensor().unwrap();
+let y_tensor = y.to_tensor(&mut engine).unwrap();
 let data = y_tensor.as_slice::<f64>().unwrap();
 
 assert!((data[0] - 1.0).abs() < 1e-12);
@@ -631,20 +633,16 @@ Ok(())
     // snippet source: docs/guides/tensor-operations.md:318
     fn snippet_tensor_operations_22() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_22
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let (reshaped, transposed) = backend.with_backend_session(|session| {
-    let reshaped = a.reshape(&[6], session).unwrap();
-    let transposed = a.transpose(&[1, 0], session).unwrap();
-    (reshaped, transposed)
-})?;
+let reshaped = a.reshape(&[6], &mut engine).unwrap();
+let transposed = a.transpose(&[1, 0], &mut engine).unwrap();
 
 assert_eq!(reshaped.shape(), &[6]);
 assert_eq!(reshaped.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -660,14 +658,16 @@ assert_eq!(transposed.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0
     fn snippet_tensor_operations_23() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_23
 use tenferro_ad::{EagerRuntime, Tensor};
+use tenferro_cpu::CpuEngine;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
-let repeated = ctx.with_eager_session(|s| s.broadcast_in_dim(&v, &[3, 2], &[0]))?;
+let repeated = ctx.with_eager_session(&mut engine, |s| s.broadcast_in_dim(&v, &[3, 2], &[0]))?;
 
 assert_eq!(repeated.shape(), &[3, 2]);
-assert_eq!(repeated.to_tensor().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
+assert_eq!(repeated.to_tensor(&mut engine).unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
 Ok(())
 }
         // snippet-end:tensor_operations_23
@@ -679,11 +679,10 @@ Ok(())
     // snippet source: docs/guides/tensor-operations.md:354
     fn snippet_tensor_operations_24() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_24
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
@@ -691,11 +690,8 @@ let a = Tensor::from_vec_col_major(
 // Logical matrix:
 // [[1.0, 3.0, 5.0],
 //  [2.0, 4.0, 6.0]]
-let (row_sums, total) = backend.with_backend_session(|session| {
-    let row_sums = a.reduce_sum(Some(&[1]), session).unwrap();
-    let total = a.reduce_sum(Some(&[0, 1]), session).unwrap();
-    (row_sums, total)
-})?;
+let row_sums = a.reduce_sum(Some(&[1]), &mut engine).unwrap();
+let total = a.reduce_sum(Some(&[0, 1]), &mut engine).unwrap();
 
 assert_eq!(row_sums.shape(), &[2]);
 assert_eq!(row_sums.as_slice::<f64>().unwrap(), &[9.0, 12.0]);
@@ -711,9 +707,8 @@ assert_eq!(total.as_slice::<f64>().unwrap(), &[21.0]);
     // snippet source: docs/guides/tensor-operations.md (Contraction Output Layout)
     fn snippet_tensor_operations_dot_general_layout() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_dot_general_layout
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{DotGeneralConfig, Tensor, TensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
 // Attention scores: q[d, lq, b] and k[d, lk, b] (column-major, batch last).
 let (d, lq, lk, b) = (2, 3, 4, 2);
@@ -727,14 +722,11 @@ let config = DotGeneralConfig {
     lhs_batch_dims: [2].as_slice().into(),
     rhs_batch_dims: [2].as_slice().into(),
 };
-let mut backend = CpuBackend::new();
-let (scores, batch_leading) = backend.with_backend_session(|session| {
-    let scores = q.dot_general(&k, config, session)?;
-    // Output is [lhs free..., rhs free..., batch...] = [lq, lk, b].
-    // Move batch first only if a consumer needs [b, lq, lk].
-    let batch_leading = scores.transpose(&[2, 0, 1], session)?;
-    Ok::<_, tenferro_tensor::Error>((scores, batch_leading))
-})??;
+let mut engine = CpuEngine::serial();
+let scores = q.dot_general(&k, config, &mut engine)?;
+// Output is [lhs free..., rhs free..., batch...] = [lq, lk, b].
+// Move batch first only if a consumer needs [b, lq, lk].
+let batch_leading = scores.transpose(&[2, 0, 1], &mut engine)?;
 assert_eq!(scores.shape(), &[lq, lk, b]);
 assert_eq!(batch_leading.shape(), &[b, lq, lk]);
 
@@ -819,19 +811,12 @@ assert_eq!(data, vec![1.0, 3.0, 2.0, 4.0]);
     // snippet source: docs/guides/cpu-execution.md:23
     fn snippet_cpu_execution_28() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:cpu_execution_28
-use tenferro_cpu::{CpuBackend, CpuPlacement};
+use tenferro_cpu::{thread_pool_builder, CpuEngine};
 
-let backend = CpuBackend::new();
-for node in backend.topology().nodes() {
-    println!("OS node {}: {:?}", node.id(), node.cpus().as_usize_vec());
-}
-
-if backend.supports_placement(CpuPlacement::AllAllowed) {
-    let all = backend.for_placement(CpuPlacement::AllAllowed)?;
-    println!("{:?}", all.placement());
-} else {
-    println!("{:?}", backend.placement());
-}
+// The caller owns the pool: tenferro builds no threads of its own.
+let pool = thread_pool_builder().num_threads(4).build()?;
+let engine = CpuEngine::new(pool);
+println!("workers={}", engine.num_threads());
         // snippet-end:cpu_execution_28
         Ok(())
     }
@@ -841,14 +826,13 @@ if backend.supports_placement(CpuPlacement::AllAllowed) {
     // snippet source: docs/guides/cpu-execution.md:55
     fn snippet_cpu_execution_29() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:cpu_execution_29
-use tenferro_cpu::{CpuBackend, CpuPlacement};
+use tenferro_cpu::CpuEngine;
 
-let coordinator = CpuBackend::with_threads(4)?;
-if let Some(node) = coordinator.topology().nodes().first() {
-    let local = coordinator.for_placement(CpuPlacement::NumaNode(node.id()))?;
-    let another_handle = local.clone();
-    assert_eq!(local.placement(), another_handle.placement());
-}
+// A serial engine has no pool at all: every operation runs on the calling
+// thread, so it is safe to use from inside a pool the caller already owns.
+let engine = CpuEngine::serial();
+assert!(engine.pool().is_none());
+assert_eq!(engine.num_threads(), 1);
         // snippet-end:cpu_execution_29
         Ok(())
     }
@@ -858,9 +842,14 @@ if let Some(node) = coordinator.topology().nodes().first() {
     // snippet source: docs/guides/cpu-execution.md:160
     fn snippet_cpu_execution_30() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:cpu_execution_30
-let backend = tenferro_cpu::CpuBackend::new();
-println!("provider={} workers={}", tenferro_cpu::cpu_provider_id(), backend.num_threads());
-println!("topology={:?} requested={:?}", backend.topology(), backend.placement());
+let engine = tenferro_cpu::CpuEngine::new(
+    tenferro_cpu::thread_pool_builder().num_threads(2).build()?,
+);
+println!(
+    "workers={} batch_policy={:?}",
+    engine.num_threads(),
+    engine.batch_policy()
+);
         // snippet-end:cpu_execution_30
         Ok(())
     }
@@ -870,7 +859,7 @@ println!("topology={:?} requested={:?}", backend.topology(), backend.placement()
     // snippet source: docs/guides/devices-and-gpu.md:181
     fn snippet_devices_and_gpu_31() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:devices_and_gpu_31
-use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend};
+use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaEngine};
 use tenferro_tensor::Tensor;
 
 if !gpu_available() {
@@ -878,10 +867,10 @@ if !gpu_available() {
 }
 let devices = cuda_devices()?;
 let Some(device) = devices.first() else { return Ok(()); };
-let backend = CudaBackend::new(device.id())?;
+let engine = CudaEngine::open(device.id())?;
 let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-let gpu_x = upload_tensor(backend.runtime(), &x)?;
-let cpu_x = download_tensor(backend.runtime(), &gpu_x)?;
+let gpu_x = upload_tensor(engine.runtime(), &x)?;
+let cpu_x = download_tensor(engine.runtime(), &gpu_x)?;
 assert_eq!(cpu_x.as_slice::<f64>()?, &[1.0, 2.0]);
         // snippet-end:devices_and_gpu_31
         Ok(())

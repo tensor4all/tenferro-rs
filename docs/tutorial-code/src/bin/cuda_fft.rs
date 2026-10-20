@@ -2,10 +2,7 @@
 
 use num_complex::Complex32;
 use tenferro_fft::{FftNorm, TensorFftExt};
-use tenferro_gpu::cuda::{
-    cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend,
-};
-use tenferro_runtime::BackendSessionHost;
+use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaEngine};
 use tenferro_tensor::{DType, MemoryKind, Tensor, TensorRead};
 
 const TUTORIAL_SKIP_MARKER: &str = "TENFERRO_TUTORIAL_SKIP:";
@@ -50,10 +47,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     };
 
-    // Keep one backend/runtime for the upload, FFT, synchronization, and download.
-    let mut backend = CudaBackend::new(device.id())?;
+    // Keep one engine for the upload, FFT, synchronization, and download.
+    let mut engine = CudaEngine::open(device.id())?;
     let host = Tensor::from_vec_col_major([4], vec![1.0_f32, 2.0, 3.0, 4.0])?;
-    let gpu_input = upload_tensor(backend.runtime(), &host)?;
+    let gpu_input = upload_tensor(engine.runtime(), &host)?;
 
     let input_read = TensorRead::from_tensor(&gpu_input);
     assert_eq!(input_read.backend_family(), Some("cuda"));
@@ -63,8 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("uploaded tensor has no CUDA allocation domain")?;
 
     // FFT execution consumes the already uploaded tensor; it does not transfer it.
-    let spectrum = backend
-        .with_backend_session(|session| gpu_input.rfft(None, 0, FftNorm::Backward, session))??;
+    let spectrum = gpu_input.rfft(None, 0, FftNorm::Backward, &mut engine)?;
 
     // Check residency before crossing the explicit device-to-host boundary.
     let spectrum_read = TensorRead::from_tensor(&spectrum);
@@ -74,13 +70,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(spectrum.dtype(), DType::C32);
     assert_eq!(spectrum.shape(), &[3]);
 
-    // The cuFFT execution runs inside the credentialed raw session: the bound
-    // stream is synchronized before the session returns, while a fresh
-    // session-scoped work area and the input/output retention guards pin the
+    // The cuFFT execution runs inside the engine's raw scope: the bound
+    // stream is synchronized before the scope returns, while a fresh
+    // scope-scoped work area and the input/output retention guards pin the
     // allocations. The explicit download below synchronizes stream-managed
     // postprocessing and is the visible device-to-host boundary for the final
     // output.
-    let host_spectrum = download_tensor(backend.runtime(), &spectrum)?;
+    let host_spectrum = download_tensor(engine.runtime(), &spectrum)?;
     assert_eq!(host_spectrum.dtype(), DType::C32);
     assert_eq!(host_spectrum.shape(), &[3]);
     let values = host_spectrum.as_slice::<Complex32>()?;
