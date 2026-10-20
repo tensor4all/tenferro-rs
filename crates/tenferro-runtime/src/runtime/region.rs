@@ -214,9 +214,9 @@ impl RegionExecutionCounters {
 
 /// Plan-derived command count for the production execution path.
 ///
-/// The scheduled executor is the only production executor (`run_compiled`,
-/// `run_compiled_values`, `run_prepared`, and scoped/admitted execution all
-/// reach `execute_scheduled_slots`). It submits one command per scheduled
+/// The scheduled executor is the only production executor (`Runtime::run` and
+/// admitted execution both reach `execute_scheduled_slots`). It submits one
+/// command per scheduled
 /// operation, except that a planned region replaces its covered operations with
 /// one fused command. The legacy segmented executor in `segment.rs` is
 /// exercised only by tests, so its segment count is not a production command

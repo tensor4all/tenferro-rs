@@ -832,12 +832,13 @@ pub trait ElementwiseRuntime: fmt::Debug + Send + Sync + 'static {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::ElementwiseRuntime;
+    /// use tenferro_cpu::CpuEngine;
     ///
-    /// // The CPU engine's fused kernel reads at most four region inputs.
-    /// let cpu = CpuBackend::new();
-    /// assert_eq!(cpu.max_fused_region_inputs(), Some(4));
+    /// // The CPU engine registration exposes its own fused-region limit.
+    /// let registration = tenferro_cpu::runtime_engine_registration(&CpuEngine::serial())?;
+    /// let elementwise = registration.capabilities().elementwise().unwrap();
+    /// assert_eq!(elementwise.max_fused_region_inputs(), Some(4));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn max_fused_region_inputs(&self) -> Option<usize> {
         None

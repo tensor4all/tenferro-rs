@@ -22,18 +22,28 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
-//! use tenferro_cpu::CpuBackend;
+//! use tenferro_cpu::CpuEngine;
+//! use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 //!
 //! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 //! let y = (&x + &x).unwrap();
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
-//! let backend = CpuBackend::default();
+//! // One caller-held engine runs every slot of the prepared program.
+//! let mut engine = CpuEngine::serial();
 //! let mut builder = Runtime::builder();
-//! builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap()).unwrap();
+//! builder
+//!     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
+//!     .unwrap();
 //! let runtime = builder.build().unwrap();
-//! let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+//! let prepared = runtime.prepare(&program, &[], &[engine.target()]).unwrap();
+//! let out = runtime
+//!     .run(&mut [&mut engine], &prepared, &[])
+//!     .unwrap()
+//!     .pop()
+//!     .unwrap()
+//!     .into_tensor(&mut engine)
+//!     .unwrap();
 //! assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 //! ```
 

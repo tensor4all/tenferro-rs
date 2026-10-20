@@ -19,46 +19,37 @@ use crate::extension_cache::ExtensionCacheStore;
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::CpuBackend;
-/// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+/// use tenferro_cpu::CpuEngine;
+/// use tenferro_tensor::{Tensor, TensorElementwise, TensorRead};
 /// use tenferro_runtime::{
 ///     ExtensionCacheSelector, ExtensionCacheStore, ExtensionExecutionContext,
 /// };
 ///
-/// let mut backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let mut caches = ExtensionCacheStore::new();
-/// backend.with_backend_session(|session| {
-///     let mut context = ExtensionExecutionContext::new(session, &mut caches);
-///     let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-///     let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-///     let output = context
-///         .backend_mut()
-///         .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-///         .unwrap();
+/// let mut context = ExtensionExecutionContext::new(&mut engine, &mut caches);
+/// let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+/// let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+/// let output = context
+///     .backend_mut()
+///     .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+///     .unwrap();
 ///
-///     assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-///     assert_eq!(context.caches().stats(ExtensionCacheSelector::All).entries, 0);
-/// })?;
+/// assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+/// assert_eq!(context.caches().stats(ExtensionCacheSelector::All).entries, 0);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
-/// A session borrow cannot escape the call that supplied it.
+/// The context cannot outlive the engine and cache state it borrows.
 ///
 /// ```compile_fail
-/// use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_runtime::{ExtensionCacheStore, ExtensionExecutionContext};
-/// use tenferro_tensor::BackendSessionHost;
 ///
-/// fn leak_context<'a>(
-///     backend: &'a mut CpuBackend,
-///     caches: &'a mut ExtensionCacheStore,
-/// ) -> ExtensionExecutionContext<'a, CpuExecSession<'a>> {
-///     backend.with_backend_session(move |session| {
-///         with_cpu_exec_session(session, |cpu_session| {
-///             ExtensionExecutionContext::new(cpu_session, caches)
-///         })
-///         .unwrap()
-///     })
+/// fn leak_context() -> ExtensionExecutionContext<'static, CpuEngine> {
+///     let mut engine = CpuEngine::serial();
+///     let mut caches = ExtensionCacheStore::new();
+///     ExtensionExecutionContext::new(&mut engine, &mut caches)
 /// }
 /// ```
 pub struct ExtensionExecutionContext<'a, B: Engine + ?Sized> {

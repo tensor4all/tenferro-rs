@@ -3413,13 +3413,12 @@ pub trait Engine: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
         ))
     }
 
-    /// Return this session's backend-leaf native capability, if it has one.
+    /// Return this engine's backend-leaf native capability, if it has one.
     ///
-    /// Standard CPU, CUDA and WebGPU sessions return a token their own safe
-    /// visitors (`with_cpu_exec_session`, `with_cuda_exec_session`,
-    /// `with_webgpu_exec_session`) recover. The default is `None`: a custom
-    /// session has no native services unless it forwards the token of a
-    /// standard session it owns. A wrapper that overrides operation dispatch
+    /// The standard engines return a token that their own safe visitors
+    /// (`with_cpu_engine`, `with_cuda_engine`) recover. The default is `None`:
+    /// a custom engine has no native services unless it forwards the token of a
+    /// standard engine it owns. A wrapper that overrides operation dispatch
     /// (for example a custom GEMM) should keep the default, because an
     /// operation family that finds a native token may call the delegate's
     /// native services directly and so bypass the wrapper's override.
