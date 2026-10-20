@@ -8,17 +8,18 @@
 //! devices-and-gpu guide compares this subset with CUDA.
 
 use cubecl::prelude::{CubeCount, CubeDim, CubeElement, CubeType, Sequence, TensorBinding};
+use cubecl_environment::stream::StreamId;
 use std::fmt;
 use std::sync::Arc;
 
 use crate::{
     AccessError, AllocationDomainId, AllocationId, AllocationKey, BackendAllocation, BackendId,
-    BackendRuntimeCache, DType, DeviceAccessError, DeviceAccessRequest, DeviceId, DeviceKind,
-    Error, GpuBackendKind, HostAccessError, MemoryKind, Placement, PreparedDeviceAccess,
-    ProviderCapabilities, ProviderReadMapping, ProviderWriteMapping, RootBoundSpan,
-    RootResourceExtent, Tensor, TensorBackend, TensorDeviceTransfer, TensorRank, TensorRead,
-    TensorScalar, TypedTensor, TypedTensorView,
+    DType, DeviceAccessError, DeviceAccessRequest, DeviceId, DeviceKind, Error, GpuBackendKind,
+    HostAccessError, MemoryKind, Placement, PreparedDeviceAccess, ProviderCapabilities,
+    ProviderReadMapping, ProviderWriteMapping, RootBoundSpan, RootResourceExtent, Tensor,
+    TensorRank, TensorScalar, TypedTensor, TypedTensorView,
 };
+use tenferro_runtime::{EngineTarget, ExecutionContextIdentity, ExecutionEngine};
 
 const DEFAULT_CUBE_DIM_X: u32 = 256;
 
@@ -627,22 +628,24 @@ fn webgpu_placement(rt: &WebGpuRuntime) -> Placement {
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuBackend> = WebGpuBackend::new;
 /// ```
 ///
-/// The backend is not an operation route: the operations live on
-/// [`WebGpuExecSession`], so the owner does not implement the operation traits.
+/// The backend is the WebGPU engine: operations take it as `&mut`, are queued
+/// on its one logical stream, and run on its device.
 ///
 /// ```compile_fail
-/// fn requires_elementwise<B: tenferro_tensor::TensorElementwise>() {}
-/// requires_elementwise::<tenferro_gpu::webgpu::WebGpuBackend>();
+/// fn requires_clone<B: Clone>() {}
+/// requires_clone::<tenferro_gpu::webgpu::WebGpuBackend>();
 /// ```
-#[derive(Clone)]
 pub struct WebGpuBackend {
     runtime: WebGpuRuntime,
+    stream: StreamId,
+    runtime_engine_id: tenferro_runtime::EngineId,
 }
 
 impl fmt::Debug for WebGpuBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WebGpuBackend")
             .field("runtime", &self.runtime)
+            .field("stream", &self.stream)
             .finish_non_exhaustive()
     }
 }
@@ -696,7 +699,12 @@ impl WebGpuBackend {
     /// let _from_runtime: fn(WebGpuRuntime) -> WebGpuBackend = WebGpuBackend::from_runtime;
     /// ```
     pub fn from_runtime(runtime: WebGpuRuntime) -> Self {
-        Self { runtime }
+        let stream = runtime.stream();
+        Self {
+            runtime,
+            stream,
+            runtime_engine_id: runtime_adapter::default_webgpu_engine_id(),
+        }
     }
 
     /// Return this backend's WebGPU runtime.
@@ -763,30 +771,35 @@ macro_rules! unsupported {
 }
 pub(crate) use unsupported;
 
-impl TensorDeviceTransfer for WebGpuBackend {
-    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
-        let tensor = tensor.as_tensor().ok_or_else(|| {
-            crate::Error::unsupported(
-                "WebGpuBackend::download_to_host",
-                "WebGPU transfer currently requires an owned tensor; materialize a view explicitly first",
-            )
-        })?;
-        download_webgpu_tensor(self.runtime(), tensor)
+impl ExecutionEngine for WebGpuBackend {
+    fn target(&self) -> EngineTarget {
+        EngineTarget::new(
+            self.runtime_engine_id.clone(),
+            ExecutionContextIdentity::of::<WebGpuBackend>(),
+            Some(self.runtime.allocation_domain_id()),
+        )
     }
 
-    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
-        let tensor = tensor.as_tensor().ok_or_else(|| {
-            crate::Error::unsupported(
-                "WebGpuBackend::upload_host_tensor",
-                "WebGPU transfer currently requires an owned tensor; materialize a view explicitly first",
-            )
-        })?;
-        upload_webgpu_tensor(self.runtime(), tensor)
+    fn event_domain_driver(&self) -> Arc<dyn tenferro_runtime::EventDomainDriver> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            Arc::new(event_domain::WebGpuEventDomainDriver::new(
+                self.runtime.clone(),
+            ))
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            Arc::new(tenferro_runtime::ImmediateEventDomainDriver::new())
+        }
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
-impl BackendRuntimeCache for WebGpuBackend {
-    type RuntimeCache = ();
+impl Drop for WebGpuBackend {
+    fn drop(&mut self) {
+        let _ = self.stream.executes(|| self.runtime.synchronize());
+    }
 }
-
-impl TensorBackend for WebGpuBackend {}

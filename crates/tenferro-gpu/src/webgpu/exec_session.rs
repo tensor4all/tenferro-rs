@@ -1,5 +1,5 @@
 use tenferro_tensor::backend::{
-    BackendSessionHost, ElementwiseReadOp, Engine, SessionCachedDot, TensorAnalytic, TensorBuffer,
+    ElementwiseReadOp, Engine, SessionCachedDot, TensorAnalytic, TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
@@ -7,34 +7,27 @@ use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use tenferro_tensor::DType;
-use tenferro_tensor::{with_session_entry_guard, Tensor, TensorRead, TensorWrite};
+use tenferro_tensor::{Tensor, TensorRead, TensorWrite};
 
-use super::{
-    gemm, structural, unsupported, unsupported_op, WebGpuBackend, WebGpuRuntime,
-    WebGpuRuntimeIdentity,
-};
+use super::{gemm, structural, unsupported, unsupported_op, WebGpuBackend};
 
-/// Native-session marker for [`WebGpuExecSession`]; private to this crate so no other
-/// crate can create a token that claims to be this session.
-pub(super) struct WebGpuExecSessionMarker;
+/// Native-engine marker for [`WebGpuBackend`]; private to this crate so no other
+/// crate can create a token that claims to be this engine.
+pub(super) struct WebGpuEngineMarker;
 
 /// Borrowed WebGPU execution capability.
+///
+/// This name remains for the extension crates that borrow the engine through
+/// [`with_webgpu_exec_session`]; the engine itself is the execution surface now.
 #[doc(hidden)]
-#[derive(Debug)]
-pub struct WebGpuExecSession<'a> {
-    backend: &'a mut WebGpuBackend,
-}
+pub type WebGpuExecSession<'a> = WebGpuBackend;
 
-// Typed view canonicalization runs on the session, never on the backend
-// owner: the owner is not an execution surface (#1946 F6).
-impl tenferro_tensor::TensorViewCanonicalization<f32, tenferro_tensor::DynRank>
-    for WebGpuExecSession<'_>
-{
+impl tenferro_tensor::TensorViewCanonicalization<f32, tenferro_tensor::DynRank> for WebGpuBackend {
     fn to_contiguous(
         &mut self,
         view: &tenferro_tensor::TypedTensorView<'_, f32>,
     ) -> crate::Result<tenferro_tensor::TypedTensor<f32>> {
-        super::structural::to_contiguous_f32(self.backend, view)
+        super::structural::to_contiguous_f32(self, view)
     }
 
     fn copy_into(
@@ -42,61 +35,32 @@ impl tenferro_tensor::TensorViewCanonicalization<f32, tenferro_tensor::DynRank>
         _src: &tenferro_tensor::TypedTensorView<'_, f32>,
         _dst: &mut tenferro_tensor::TypedTensorViewMut<'_, f32>,
     ) -> crate::Result<()> {
-        super::unsupported!("WebGpuExecSession::copy_into")
+        super::unsupported!("WebGpuBackend::copy_into")
     }
 }
 
-impl WebGpuExecSession<'_> {
-    /// Borrow the provider runtime without exposing the owning backend.
-    #[doc(hidden)]
-    pub fn runtime(&self) -> &WebGpuRuntime {
-        self.backend.runtime()
-    }
-
-    /// Return the identity of the borrowed provider runtime.
-    #[doc(hidden)]
-    pub fn runtime_identity(&self) -> WebGpuRuntimeIdentity {
-        self.backend.runtime_identity()
-    }
-}
-
-/// Visit a WebGPU execution session through the erased backend-session surface.
+/// Visit a WebGPU engine through the erased [`Engine`] surface.
 ///
-/// The callback receives only the lifetime-bound session capability. The
-/// owning [`WebGpuBackend`] never crosses this boundary.
+/// Returns `None` when `engine` is not a WebGPU engine.
 #[doc(hidden)]
 pub fn with_webgpu_exec_session<B, R>(
-    session: &mut B,
-    f: impl for<'a> FnOnce(&'a mut WebGpuExecSession<'a>) -> R,
+    engine: &mut B,
+    f: impl FnOnce(&mut WebGpuBackend) -> R,
 ) -> Option<R>
 where
     B: Engine + ?Sized,
 {
-    let data = session
+    let data = engine
         .native_engine()?
-        .into_marked_ptr::<WebGpuExecSessionMarker>()?;
-    // SAFETY: only `WebGpuExecSession::native_engine` creates a token with the
-    // crate-private `WebGpuExecSessionMarker`, and it points that token at a live
-    // `WebGpuExecSession`. The token borrowed `*session` exclusively, and this function
-    // keeps holding `session: &mut B` for the whole scoped visit.
-    Some(unsafe { f(data.cast::<WebGpuExecSession<'static>>().as_mut()) })
+        .into_marked_ptr::<WebGpuEngineMarker>()?;
+    // SAFETY: only `WebGpuBackend::native_engine` creates a token with the
+    // crate-private `WebGpuEngineMarker`, and it points that token at a live
+    // `WebGpuBackend`. The token borrowed `*engine` exclusively, and this function
+    // keeps holding `engine: &mut B` for the whole scoped visit.
+    Some(f(unsafe { data.cast::<WebGpuBackend>().as_mut() }))
 }
 
-macro_rules! delegate {
-    ($trait:path {
-        $(fn $method:ident($($arg:ident: $arg_ty:ty),* $(,)?) -> $ret:ty;)*
-    }) => {
-        impl $trait for WebGpuExecSession<'_> {
-            $(
-                fn $method(&mut self, $($arg: $arg_ty),*) -> $ret {
-                    self.backend.$method($($arg),*)
-                }
-            )*
-        }
-    };
-}
-
-impl TensorElementwise for WebGpuExecSession<'_> {
+impl TensorElementwise for WebGpuBackend {
     fn elementwise_read_into(
         &mut self,
         _op: ElementwiseReadOp,
@@ -263,7 +227,7 @@ impl TensorElementwise for WebGpuExecSession<'_> {
     }
 }
 
-impl TensorAnalytic for WebGpuExecSession<'_> {
+impl TensorAnalytic for WebGpuBackend {
     // The old chain was: owned input -> the one-shot method -> its unsupported
     // error; view input -> the read-boundary error. WebGPU rejects the operation
     // either way, so evaluate the read input first and then raise the same
@@ -372,9 +336,9 @@ impl TensorAnalytic for WebGpuExecSession<'_> {
     }
 }
 
-impl TensorStructural for WebGpuExecSession<'_> {
+impl TensorStructural for WebGpuBackend {
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        structural::to_contiguous_read(self.backend, input)
+        structural::to_contiguous_read(self, input)
     }
 
     fn copy_read_into(&mut self, _src: TensorRead<'_>, _dst: TensorWrite<'_>) -> crate::Result<()> {
@@ -421,7 +385,7 @@ impl TensorStructural for WebGpuExecSession<'_> {
         // now that entry, so it must keep the operation rather than report it
         // unsupported.
         let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
-        structural::transpose(self.backend, input, perm)
+        structural::transpose(self, input, perm)
     }
 
     // The old chain was: owned input -> the one-shot method -> its unsupported
@@ -450,7 +414,7 @@ impl TensorStructural for WebGpuExecSession<'_> {
     }
 }
 
-impl TensorReduction for WebGpuExecSession<'_> {
+impl TensorReduction for WebGpuBackend {
     // The old chain was: owned input -> the one-shot method -> its unsupported
     // error; view input -> the read-boundary error. WebGPU rejects the reduction
     // either way, so evaluate the read input first and then raise the same
@@ -493,7 +457,7 @@ impl TensorReduction for WebGpuExecSession<'_> {
     }
 }
 
-impl TensorDot for WebGpuExecSession<'_> {
+impl TensorDot for WebGpuBackend {
     // The previous read-half default delegated an owned pair to the one-shot
     // method and materialized views through to_contiguous_read before
     // contracting. That default is inlined here so the later removal of the
@@ -505,11 +469,11 @@ impl TensorDot for WebGpuExecSession<'_> {
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
         match (lhs.as_tensor(), rhs.as_tensor()) {
-            (Some(lhs), Some(rhs)) => gemm::dot_general(self.backend, lhs, rhs, config),
+            (Some(lhs), Some(rhs)) => gemm::dot_general(self, lhs, rhs, config),
             _ => {
                 let lhs = self.to_contiguous_read(lhs)?;
                 let rhs = self.to_contiguous_read(rhs)?;
-                gemm::dot_general(self.backend, &lhs, &rhs, config)
+                gemm::dot_general(self, &lhs, &rhs, config)
             }
         }
     }
@@ -522,11 +486,11 @@ impl TensorDot for WebGpuExecSession<'_> {
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
-        gemm::dot_general_with_conj(self.backend, lhs, rhs, config, lhs_conj, rhs_conj)
+        gemm::dot_general_with_conj(self, lhs, rhs, config, lhs_conj, rhs_conj)
     }
 }
 
-impl TensorIndexing for WebGpuExecSession<'_> {
+impl TensorIndexing for WebGpuBackend {
     fn gather(
         &mut self,
         _operand: &Tensor,
@@ -581,45 +545,43 @@ impl TensorIndexing for WebGpuExecSession<'_> {
     }
 }
 
-impl TensorFusion for WebGpuExecSession<'_> {}
+impl TensorFusion for WebGpuBackend {}
 
 // WebGPU device buffers return to the runtime allocator on drop, so the
 // session keeps the trait's no-op reclaim; the owner is not a buffer surface.
-impl TensorBuffer for WebGpuExecSession<'_> {}
+impl TensorBuffer for WebGpuBackend {}
 
-delegate!(TensorDeviceTransfer {
-    fn download_to_host(tensor: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn upload_host_tensor(tensor: TensorRead<'_>) -> crate::Result<Tensor>;
-});
+impl TensorDeviceTransfer for WebGpuBackend {
+    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        let tensor = tensor.as_tensor().ok_or_else(|| {
+            crate::Error::unsupported(
+                "WebGpuBackend::download_to_host",
+                "WebGPU transfer currently requires an owned tensor; materialize a view explicitly first",
+            )
+        })?;
+        super::download_webgpu_tensor(self.runtime(), tensor)
+    }
 
-// The cached reads are the trait's provided defaults here: WebGPU owns no
-// runtime cache of its own, so the session implements them directly.
-impl SessionCachedDot for WebGpuExecSession<'_> {}
-
-impl Engine for WebGpuExecSession<'_> {
-    fn native_engine(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
-        // SAFETY: `WebGpuExecSessionMarker` is private to this crate, and this is the only
-        // place a token carrying it is created; it always points to a
-        // `WebGpuExecSession`, exclusively borrowed for the token lifetime.
-        Some(unsafe { tenferro_tensor::NativeSessionRef::new::<WebGpuExecSessionMarker, _>(self) })
+    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        let tensor = tensor.as_tensor().ok_or_else(|| {
+            crate::Error::unsupported(
+                "WebGpuBackend::upload_host_tensor",
+                "WebGPU transfer currently requires an owned tensor; materialize a view explicitly first",
+            )
+        })?;
+        super::upload_webgpu_tensor(self.runtime(), tensor)
     }
 }
 
-impl BackendSessionHost for WebGpuBackend {
-    fn with_backend_session<R>(
-        &mut self,
-        f: impl FnOnce(&mut dyn Engine) -> R,
-    ) -> Result<R, tenferro_tensor::SessionEntryError> {
-        let mut session = WebGpuExecSession { backend: self };
-        // The portable in-session guard rejects nested entry before `f` runs;
-        // the WebGPU runtime must never re-enter a session closure.
-        with_session_entry_guard("WebGpuBackend", || f(&mut session))
-    }
+// The cached reads are the trait's provided defaults here: WebGPU owns no
+// runtime cache of its own, so the session implements them directly.
+impl SessionCachedDot for WebGpuBackend {}
 
-    fn owns_session(&self, session: &mut dyn Engine) -> bool {
-        with_webgpu_exec_session(session, |session| {
-            session.runtime_identity() == self.runtime_identity()
-        })
-        .unwrap_or(false)
+impl Engine for WebGpuBackend {
+    fn native_engine(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
+        // SAFETY: `WebGpuEngineMarker` is private to this crate, and this is the only
+        // place a token carrying it is created; it always points to a
+        // `WebGpuBackend`, exclusively borrowed for the token lifetime.
+        Some(unsafe { tenferro_tensor::NativeSessionRef::new::<WebGpuEngineMarker, _>(self) })
     }
 }

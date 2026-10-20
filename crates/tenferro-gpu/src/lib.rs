@@ -41,13 +41,6 @@ mod event_retirement;
 mod kernels;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod native_permutation;
-// TODO(#2206 webgpu): the WebGPU backend and the Apple shared-allocation bridge
-// still use the removed session/backend contracts; they move to the engine
-// shape (one engine owning its queue, caches and pending runs) in their own unit.
-#[cfg(feature = "webgpu")]
-compile_error!(
-    "TODO(#2206 webgpu): the `webgpu` feature is disabled until WebGPU and the Apple bridge move to the engine model"
-);
 #[cfg(feature = "webgpu")]
 pub mod webgpu;
 

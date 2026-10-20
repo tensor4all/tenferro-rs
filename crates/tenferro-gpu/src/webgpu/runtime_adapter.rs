@@ -18,17 +18,23 @@ use tenferro_tensor::{
     AllocationDomainId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TensorRead, TensorView,
 };
 
-#[cfg(not(target_family = "wasm"))]
-use super::event_domain::WebGpuEventDomainDriver;
 use super::{prepared_webgpu_view, WebGpuBackend};
 #[cfg(target_family = "wasm")]
 use tenferro_runtime::{
     assemble_preparation_only_engine_registration, PreparationOnlyEngineRegistrationConfig,
 };
 
-const WEBGPU_ENGINE_ID: &str = "tenferro-webgpu.default.v1";
+pub(crate) const DEFAULT_WEBGPU_ENGINE_ID: &str = "tenferro-webgpu.default.v1";
 const WEBGPU_HARDWARE_CLASS_ID: &str = "tenferro-webgpu.device.v1";
 const WEBGPU_STORAGE_CLASS_ID: &str = "tenferro.storage.device.v1";
+
+/// The built-in WebGPU engine id, which is a valid identifier by construction.
+pub(crate) fn default_webgpu_engine_id() -> EngineId {
+    match EngineId::new(DEFAULT_WEBGPU_ENGINE_ID) {
+        Ok(id) => id,
+        Err(_) => unreachable!("the built-in WebGPU engine id is a valid identifier"),
+    }
+}
 
 /// Return the canonical WebGPU runtime engine identifier.
 ///
@@ -50,7 +56,7 @@ const WEBGPU_STORAGE_CLASS_ID: &str = "tenferro.storage.device.v1";
 /// Returns [`RuntimeConfigError`] if the built-in WebGPU engine identifier
 /// violates runtime identifier validation.
 pub fn webgpu_runtime_engine_id() -> Result<EngineId, RuntimeConfigError> {
-    EngineId::new(WEBGPU_ENGINE_ID).map_err(RuntimeConfigError::from)
+    EngineId::new(DEFAULT_WEBGPU_ENGINE_ID).map_err(RuntimeConfigError::from)
 }
 
 /// Return the canonical WebGPU runtime hardware class.
@@ -119,9 +125,8 @@ pub fn webgpu_runtime_engine_registration_with_id(
     backend: &WebGpuBackend,
     engine_id: EngineId,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
-    let backend = Arc::new(backend.clone());
-    let dot_general: Arc<dyn DotGeneralPreparation> = backend.clone();
-    let execution_backend = backend.as_ref().clone();
+    let preparer = Arc::new(WebGpuPreparer);
+    let dot_general: Arc<dyn DotGeneralPreparation> = preparer;
 
     let mut capabilities = CoreCapabilityBundle::builder();
     capabilities.dot_general(dot_general);
@@ -178,10 +183,8 @@ pub fn webgpu_runtime_engine_registration_with_id(
         );
         assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
             metadata,
-            execution_backend,
-            Arc::new(WebGpuEventDomainDriver::new(backend.runtime().clone())),
+            ExecutionContextIdentity::of::<WebGpuBackend>(),
             ingress,
-            None,
         ))
     }
     #[cfg(target_family = "wasm")]
@@ -325,7 +328,11 @@ impl PreparedOperation for WebGpuPreparedOperation {
     }
 }
 
-impl DotGeneralPreparation for WebGpuBackend {
+/// Stateless WebGPU preparation witness: preparation reads no engine state.
+#[derive(Debug, Clone, Copy, Default)]
+struct WebGpuPreparer;
+
+impl DotGeneralPreparation for WebGpuPreparer {
     fn prepare(
         &self,
         request: DotGeneralPrepareRequest<'_>,
