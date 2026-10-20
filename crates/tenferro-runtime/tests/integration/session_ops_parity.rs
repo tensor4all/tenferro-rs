@@ -3,11 +3,10 @@
 //! session form on the same inputs.
 
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt, TypedTensor, TypedTensorSessionOpsExt};
 use tenferro_tensor::{
-    BackendSessionHost, DotGeneralConfig, Engine, GatherConfig, PadConfig, ScatterConfig,
-    SliceConfig, TensorRead,
+    DotGeneralConfig, Engine, GatherConfig, PadConfig, ScatterConfig, SliceConfig, TensorRead,
 };
 
 fn t(shape: &[usize], data: Vec<f64>) -> Tensor {
@@ -23,8 +22,9 @@ fn same(receiver: &Tensor, session: &Tensor) {
     );
 }
 
-fn in_session<R: Send>(f: impl FnOnce(&mut dyn Engine) -> R + Send) -> R {
-    CpuBackend::new().with_backend_session(f).unwrap()
+fn in_session<R>(f: impl FnOnce(&mut dyn Engine) -> R) -> R {
+    let mut engine = CpuEngine::serial();
+    f(&mut engine)
 }
 
 #[test]

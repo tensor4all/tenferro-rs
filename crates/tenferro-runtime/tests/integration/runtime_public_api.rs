@@ -1,29 +1,89 @@
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::{
-    CompiledGraph, DType, DotGeneralConfig, Error, ErrorPhase, GatherConfig, GraphCompiler,
-    PadConfig, Runtime, ScatterConfig, SliceConfig, Tensor, TensorSessionOpsExt, TracedTensor,
+    CompiledGraph, DType, DotGeneralConfig, Error, ErrorPhase, ExecutionEngine, GatherConfig,
+    GraphCompiler, PadConfig, Prepared, Runtime, ScatterConfig, SliceConfig, Tensor,
+    TensorSessionOpsExt, TracedTensor,
 };
-use tenferro_tensor::{BackendSessionHost, Error as TensorError, ShapeMismatch, ValidationError};
+use tenferro_tensor::{Error as TensorError, ShapeMismatch, TensorRead, ValidationError};
 
-fn cpu_runtime() -> Runtime {
-    let backend = CpuBackend::new();
+fn cpu_runtime(engine: &CpuEngine) -> Runtime {
     let mut builder = Runtime::builder();
     builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .register_engine(tenferro_cpu::runtime_engine_registration(engine).unwrap())
         .unwrap();
     builder.build().unwrap()
 }
 
+/// A serial CPU engine with a runtime that registers it.
+fn cpu_engine_and_runtime() -> (CpuEngine, Runtime) {
+    let engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
+    (engine, runtime)
+}
+
+fn inputs_of<'a>(inputs: &[&'a Tensor]) -> Vec<TensorRead<'a>> {
+    inputs
+        .iter()
+        .map(|input| TensorRead::from_tensor(input))
+        .collect()
+}
+
+fn run_compiled(
+    engine: &mut CpuEngine,
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let reads = inputs_of(inputs);
+    let prepared = runtime.prepare(program, &reads, &[engine.target()])?;
+    let outputs = runtime.run(&mut [engine], &prepared, &reads)?;
+    let mut owned = Vec::with_capacity(outputs.len());
+    for output in outputs {
+        owned.push(output.into_tensor(engine).unwrap());
+    }
+    Ok(owned)
+}
+
+fn prepare(
+    engine: &CpuEngine,
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+) -> tenferro_runtime::Result<Prepared> {
+    let reads = inputs_of(inputs);
+    runtime.prepare(program, &reads, &[engine.target()])
+}
+
+fn run_prepared(
+    engine: &mut CpuEngine,
+    runtime: &Runtime,
+    prepared: &Prepared,
+    inputs: &[&Tensor],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let reads = inputs_of(inputs);
+    let outputs = {
+        let mut engines: [&mut dyn ExecutionEngine; 1] = [engine];
+        runtime.run(&mut engines, prepared, &reads)?
+    };
+    let mut owned = Vec::with_capacity(outputs.len());
+    for output in outputs {
+        owned.push(output.into_tensor(engine).unwrap());
+    }
+    Ok(owned)
+}
+
 fn run_compiled_one(program: &CompiledGraph, inputs: &[&Tensor]) -> Tensor {
-    let mut outputs = cpu_runtime().run_compiled(program, inputs).unwrap();
+    let (mut engine, runtime) = cpu_engine_and_runtime();
+    let mut outputs = run_compiled(&mut engine, &runtime, program, inputs).unwrap();
     assert_eq!(outputs.len(), 1);
     outputs.pop().unwrap()
 }
 
 #[test]
 fn runtime_prepared_compiled_graph_runs_repeated_inputs() {
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let x = TracedTensor::input_concrete_shape(DType::F64, &[2]).unwrap();
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
@@ -33,172 +93,22 @@ fn runtime_prepared_compiled_graph_runs_repeated_inputs() {
     let first = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let second = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
-    let prepared = runtime.prepare_compiled(&program, &[&first]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&first]).unwrap();
 
-    let mut outputs = runtime.run_prepared(&prepared, &[&first]).unwrap();
+    let mut outputs = run_prepared(&mut engine, &runtime, &prepared, &[&first]).unwrap();
     assert_eq!(
         outputs.pop().unwrap().as_slice::<f64>().unwrap(),
         &[2.0, 4.0]
     );
-    let mut outputs = runtime.run_prepared(&prepared, &[&second]).unwrap();
+    let mut outputs = run_prepared(&mut engine, &runtime, &prepared, &[&second]).unwrap();
     assert_eq!(
         outputs.pop().unwrap().as_slice::<f64>().unwrap(),
         &[6.0, 8.0]
     );
 
-    let other_runtime = cpu_runtime();
-    assert!(other_runtime.run_prepared(&prepared, &[&first]).is_err());
-}
-
-fn cpu_backend_and_runtime() -> (CpuBackend, Runtime) {
-    let backend = CpuBackend::new();
-    let mut builder = Runtime::builder();
-    builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
-        .unwrap();
-    (backend, builder.build().unwrap())
-}
-
-fn deferred_identity_runs_match_the_input<T>(
-    runtime: &Runtime,
-    backend: &mut CpuBackend,
-    dtype: DType,
-    host: Tensor,
-) where
-    T: tenferro_tensor::TensorScalar + PartialEq + std::fmt::Debug,
-{
-    let x = TracedTensor::input_symbolic_shape(dtype, 1).unwrap();
-    let program = GraphCompiler::new()
-        .compile_with_input_specs(&x, &[(&x, dtype, &[3])])
-        .unwrap();
-    let prepared = runtime.prepare_compiled(&program, &[&host]).unwrap();
-    let expected = host.as_slice::<T>().unwrap().to_vec();
-    let inputs: [&Tensor; 1] = [&host];
-
-    let runs = backend
-        .with_backend_session(|session| {
-            let mut deferred = runtime.begin_prepared_deferred(session, &prepared)?;
-            for _ in 0..3 {
-                deferred.run_prepared_deferred(&inputs)?;
-            }
-            deferred.finish_prepared()
-        })
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(runs.len(), 3);
-    for run in runs {
-        assert_eq!(run.len(), 1);
-        assert_eq!(run[0].dtype(), dtype);
-        assert_eq!(run[0].as_slice::<T>().unwrap(), expected.as_slice());
-    }
-}
-
-#[test]
-fn prepared_deferred_identity_runs_match_the_input_for_every_dtype() {
-    use num_complex::{Complex32, Complex64};
-
-    let (mut backend, runtime) = cpu_backend_and_runtime();
-    deferred_identity_runs_match_the_input::<f64>(
-        &runtime,
-        &mut backend,
-        DType::F64,
-        Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
-    );
-    deferred_identity_runs_match_the_input::<f32>(
-        &runtime,
-        &mut backend,
-        DType::F32,
-        Tensor::from_vec_col_major(vec![3], vec![1.0_f32, 2.0, 3.0]).unwrap(),
-    );
-    deferred_identity_runs_match_the_input::<i64>(
-        &runtime,
-        &mut backend,
-        DType::I64,
-        Tensor::from_vec_col_major(vec![3], vec![-1_i64, 2, 3]).unwrap(),
-    );
-    deferred_identity_runs_match_the_input::<i32>(
-        &runtime,
-        &mut backend,
-        DType::I32,
-        Tensor::from_vec_col_major(vec![3], vec![-1_i32, 2, 3]).unwrap(),
-    );
-    deferred_identity_runs_match_the_input::<bool>(
-        &runtime,
-        &mut backend,
-        DType::Bool,
-        Tensor::from_vec_col_major(vec![3], vec![true, false, true]).unwrap(),
-    );
-    deferred_identity_runs_match_the_input::<Complex32>(
-        &runtime,
-        &mut backend,
-        DType::C32,
-        Tensor::from_vec_col_major(
-            vec![3],
-            vec![
-                Complex32::new(1.0, 2.0),
-                Complex32::new(3.0, 4.0),
-                Complex32::new(5.0, 6.0),
-            ],
-        )
-        .unwrap(),
-    );
-    deferred_identity_runs_match_the_input::<Complex64>(
-        &runtime,
-        &mut backend,
-        DType::C64,
-        Tensor::from_vec_col_major(
-            vec![3],
-            vec![
-                Complex64::new(1.0, 2.0),
-                Complex64::new(3.0, 4.0),
-                Complex64::new(5.0, 6.0),
-            ],
-        )
-        .unwrap(),
-    );
-}
-
-#[test]
-fn prepared_deferred_host_error_retires_and_keeps_completed_runs() {
-    let (mut backend, runtime) = cpu_backend_and_runtime();
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let y = (&x + &x).unwrap();
-    let program = GraphCompiler::new()
-        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
-        .unwrap();
-    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let wrong_shape = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
-    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
-    let inputs: [&Tensor; 1] = [&input];
-    let bad_inputs: [&Tensor; 1] = [&wrong_shape];
-
-    let runs = backend
-        .with_backend_session(|session| {
-            let mut deferred = runtime.begin_prepared_deferred(session, &prepared)?;
-            deferred.run_prepared_deferred(&inputs)?;
-            let error = deferred
-                .run_prepared_deferred(&bad_inputs)
-                .expect_err("a wrong input shape must fail before enqueueing");
-            assert!(
-                error.to_string().contains("shape"),
-                "unexpected host error: {error}"
-            );
-            deferred.finish_prepared()
-        })
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(
-        runs.len(),
-        1,
-        "the failed run must not add an output package"
-    );
-    assert_eq!(
-        runs[0][0].as_slice::<f64>().unwrap(),
-        &[2.0, 4.0],
-        "the completed run remains valid after the host error retired the batch"
-    );
+    // Another runtime cannot run a handle prepared by this one.
+    let other_runtime = cpu_runtime(&engine);
+    assert!(run_prepared(&mut engine, &other_runtime, &prepared, &[&first]).is_err());
 }
 
 #[test]
@@ -237,24 +147,32 @@ fn prepared_execution_checks_retained_defaults_preparation_did_not_validate() {
         .compile_frozen_program(&frozen)
         .unwrap();
 
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     // Preparation replaces every input, so it validates the replacements and
     // never the retained defaults.
     let replacement_first = Tensor::from_vec_col_major(vec![3], vec![7.0_f64; 3]).unwrap();
     let replacement_second = Tensor::from_vec_col_major(vec![3], vec![8.0_f64; 3]).unwrap();
-    let prepared = runtime
-        .prepare_compiled(&program, &[&replacement_first, &replacement_second])
-        .unwrap();
+    let prepared = prepare(
+        &engine,
+        &runtime,
+        &program,
+        &[&replacement_first, &replacement_second],
+    )
+    .unwrap();
 
-    let outputs = runtime
-        .run_prepared(&prepared, &[&replacement_first, &replacement_second])
-        .expect("the validated replacements satisfy the declared shape relation");
+    let outputs = run_prepared(
+        &mut engine,
+        &runtime,
+        &prepared,
+        &[&replacement_first, &replacement_second],
+    )
+    .expect("the validated replacements satisfy the declared shape relation");
     assert_eq!(outputs.len(), 2);
 
     // Resolving the retained defaults must still apply the metadata check that
     // preparation never ran on them.
-    let error = runtime
-        .run_prepared(&prepared, &[])
+    let error = run_prepared(&mut engine, &runtime, &prepared, &[])
         .expect_err("the retained defaults violate the declared shape relation");
     assert!(
         matches!(error, Error::PlaceholderShapeMismatch { .. }),
@@ -319,23 +237,15 @@ fn runtime_program_api_is_public_read_only_and_bounded_debug() {
 
 #[test]
 fn tensor_extension_trait_covers_eager_runtime_paths() {
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
 
-    let (converted, casted, reshaped, transposed, summed) = backend
-        .with_backend_session(
-            |session| -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
-                let converted = f32_input.convert(DType::F64, session)?;
-                let casted = input.cast(DType::F32, session)?;
-                let reshaped = input.reshape(&[4], session)?;
-                let transposed = input.transpose(&[1, 0], session)?;
-                let summed = input.reduce_sum(Some(&[0]), session)?;
-                Ok((converted, casted, reshaped, transposed, summed))
-            },
-        )
-        .unwrap()
-        .unwrap();
+    let converted = f32_input.convert(DType::F64, &mut engine).unwrap();
+    let casted = input.cast(DType::F32, &mut engine).unwrap();
+    let reshaped = input.reshape(&[4], &mut engine).unwrap();
+    let transposed = input.transpose(&[1, 0], &mut engine).unwrap();
+    let summed = input.reduce_sum(Some(&[0]), &mut engine).unwrap();
     assert_eq!(converted.dtype(), DType::F64);
     assert_eq!(converted.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     assert_eq!(casted.dtype(), DType::F32);
@@ -350,14 +260,11 @@ fn tensor_extension_trait_covers_eager_runtime_paths() {
 
 #[test]
 fn concrete_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let scalar = Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     let vector = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
 
-    let err = backend
-        .with_backend_session(|session| scalar.matmul(&vector, session))
-        .unwrap()
-        .unwrap_err();
+    let err = scalar.matmul(&vector, &mut engine).unwrap_err();
 
     assert!(matches!(
         err,
@@ -563,6 +470,8 @@ fn traced_shape_packing_rejects_symbolic_shapes_as_graph_build_errors() {
 
 #[test]
 fn runtime_runs_elementwise_and_reduction_with_ordered_inputs() {
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let mut compiler = GraphCompiler::new();
@@ -571,7 +480,7 @@ fn runtime_runs_elementwise_and_reduction_with_ordered_inputs() {
         .unwrap();
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 
-    let out = cpu_runtime().run_compiled(&program, &[&input]).unwrap();
+    let out = run_compiled(&mut engine, &runtime, &program, &[&input]).unwrap();
 
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].as_slice::<f64>().unwrap(), &[6.0]);
@@ -607,6 +516,8 @@ fn traced_reduction_with_too_many_axes_returns_error_without_rank_underflow() {
 
 #[test]
 fn runtime_runs_dot_general_with_ordered_inputs() {
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let product = lhs
@@ -632,40 +543,11 @@ fn runtime_runs_dot_general_with_ordered_inputs() {
     let rhs_data =
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
 
-    let out = cpu_runtime()
-        .run_compiled(&program, &[&lhs_data, &rhs_data])
-        .unwrap();
+    let out = run_compiled(&mut engine, &runtime, &program, &[&lhs_data, &rhs_data]).unwrap();
 
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].shape(), &[2, 2]);
     assert_eq!(out[0].as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
-}
-
-#[test]
-fn runtime_can_return_final_transpose_as_lazy_value() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let y = (&x + &x).unwrap().transpose(&[1, 0]).unwrap();
-    let mut compiler = GraphCompiler::new();
-    let program = compiler
-        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 3])])
-        .unwrap();
-    let input =
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
-
-    let compact = cpu_runtime().run_compiled(&program, &[&input]).unwrap();
-    assert_eq!(
-        compact[0].as_slice::<f64>().unwrap(),
-        &[2.0, 6.0, 10.0, 4.0, 8.0, 12.0]
-    );
-
-    let values = cpu_runtime()
-        .run_compiled_values(&program, &[&input])
-        .unwrap();
-
-    assert_eq!(values.len(), 1);
-    assert_eq!(values[0].shape(), &[3, 2]);
-    assert!(values[0].is_view());
-    assert_eq!(values[0].strides(), &[2, 1]);
 }
 
 #[test]
@@ -677,29 +559,28 @@ fn runtime_ordered_input_errors_are_covered() {
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
         .unwrap();
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
 
     let out = run_compiled_one(&program, &[&input]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 
-    let unbound = runtime.run_compiled(&program, &[]).unwrap_err();
+    let unbound = run_compiled(&mut engine, &runtime, &program, &[]).unwrap_err();
     assert!(matches!(unbound, Error::UnboundPlaceholder { .. }));
 
-    let extra = runtime
-        .run_compiled(&program, &[&input, &input])
-        .unwrap_err();
+    let extra = run_compiled(&mut engine, &runtime, &program, &[&input, &input]).unwrap_err();
     assert!(matches!(extra, Error::GraphInputCountMismatch { .. }));
 
     let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-    let dtype = runtime.run_compiled(&program, &[&f32_input]).unwrap_err();
+    let dtype = run_compiled(&mut engine, &runtime, &program, &[&f32_input]).unwrap_err();
     assert!(matches!(dtype, Error::PlaceholderDtypeMismatch { .. }));
 
     let rank_input = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 2.0]).unwrap();
-    let rank = runtime.run_compiled(&program, &[&rank_input]).unwrap_err();
+    let rank = run_compiled(&mut engine, &runtime, &program, &[&rank_input]).unwrap_err();
     assert!(matches!(rank, Error::PlaceholderRankMismatch { .. }));
 
     let shape_input = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
-    let shape = runtime.run_compiled(&program, &[&shape_input]).unwrap_err();
+    let shape = run_compiled(&mut engine, &runtime, &program, &[&shape_input]).unwrap_err();
     assert!(matches!(shape, Error::PlaceholderShapeMismatch { .. }));
 }
 
@@ -709,6 +590,8 @@ fn runtime_ordered_input_errors_are_covered() {
 /// and a concrete non-axis mismatch is rejected on the public compiled path.
 #[test]
 fn runtime_concatenate_rejects_incompatible_concrete_shapes_without_input_specs() {
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     // Data-attached but shape-symbolic inputs: the compiled program keeps their
     // extents free, so `run_compiled` reaches the concatenate kernel.
     let a = TracedTensor::from_tensor_symbolic_shape(
@@ -732,9 +615,13 @@ fn runtime_concatenate_rejects_incompatible_concrete_shapes_without_input_specs(
     ordered[program.input_key_index(&a.input_key().unwrap()).unwrap()] = Some(&a_value);
     ordered[program.input_key_index(&b.input_key().unwrap()).unwrap()] = Some(&b_value);
 
-    let err = cpu_runtime()
-        .run_compiled(&program, &ordered.map(Option::unwrap))
-        .unwrap_err();
+    let err = run_compiled(
+        &mut engine,
+        &runtime,
+        &program,
+        &ordered.map(Option::unwrap),
+    )
+    .unwrap_err();
 
     assert!(
         matches!(
@@ -758,7 +645,8 @@ fn runtime_concatenate_rejects_incompatible_concrete_shapes_without_input_specs(
 /// number of commands today.
 #[test]
 fn runtime_prepared_matches_compiled_for_elementwise_chain() {
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let x = TracedTensor::input_concrete_shape(DType::F64, &[4]).unwrap();
     let doubled = (&x + &x).unwrap();
     let y = doubled
@@ -774,9 +662,9 @@ fn runtime_prepared_matches_compiled_for_elementwise_chain() {
         .unwrap();
     let input = Tensor::from_vec_col_major(vec![4], vec![0.5_f64, 1.0, 1.5, 2.0]).unwrap();
 
-    let mut compiled = runtime.run_compiled(&program, &[&input]).unwrap();
-    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
-    let mut prepared_out = runtime.run_prepared(&prepared, &[&input]).unwrap();
+    let mut compiled = run_compiled(&mut engine, &runtime, &program, &[&input]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
+    let mut prepared_out = run_prepared(&mut engine, &runtime, &prepared, &[&input]).unwrap();
 
     let compiled = compiled.pop().unwrap();
     let prepared_out = prepared_out.pop().unwrap();
@@ -799,7 +687,8 @@ fn runtime_prepared_matches_compiled_for_elementwise_chain() {
 /// is test-only.
 #[test]
 fn prepared_execution_command_count_fuses_elementwise_chains() {
-    let runtime = cpu_runtime();
+    let engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let n = 4usize;
 
     let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
@@ -816,7 +705,7 @@ fn prepared_execution_command_count_fuses_elementwise_chains() {
         .compile_with_input_specs(&chain, &[(&x, DType::F64, &[n])])
         .unwrap();
     let input = Tensor::from_vec_col_major(vec![n], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
     assert_eq!(
         prepared.execution_command_count(),
         1,
@@ -835,7 +724,7 @@ fn prepared_execution_command_count_fuses_elementwise_chains() {
         .compile_with_input_specs(&with_reduce, &[(&x2, DType::F64, &[n])])
         .unwrap();
     let input2 = Tensor::from_vec_col_major(vec![n], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    let prepared2 = runtime.prepare_compiled(&program2, &[&input2]).unwrap();
+    let prepared2 = prepare(&engine, &runtime, &program2, &[&input2]).unwrap();
     assert_eq!(
         prepared2.execution_command_count(),
         3,
@@ -847,7 +736,8 @@ fn prepared_execution_command_count_fuses_elementwise_chains() {
 /// elementwise chain once through the scheduled production executor.
 #[test]
 fn compiled_and_prepared_submission_counts_match() {
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let n = 4usize;
 
     let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
@@ -864,17 +754,17 @@ fn compiled_and_prepared_submission_counts_match() {
         .compile_with_input_specs(&chain, &[(&x, DType::F64, &[n])])
         .unwrap();
     let input = Tensor::from_vec_col_major(vec![n], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
     assert_eq!(prepared.execution_submission_count(), 0);
 
-    let _ = runtime.run_compiled(&program, &[&input]).unwrap();
+    let _ = run_compiled(&mut engine, &runtime, &program, &[&input]).unwrap();
     assert_eq!(
         prepared.execution_submission_count(),
         1,
         "compiled execution should submit the region once"
     );
 
-    let _ = runtime.run_prepared(&prepared, &[&input]).unwrap();
+    let _ = run_prepared(&mut engine, &runtime, &prepared, &[&input]).unwrap();
     assert_eq!(
         prepared.execution_submission_count(),
         2,
@@ -887,7 +777,8 @@ fn compiled_and_prepared_submission_counts_match() {
 #[test]
 fn compiled_and_prepared_submission_counts_match_shape_matrix() {
     for n in [4usize, 64, 1024] {
-        let runtime = cpu_runtime();
+        let mut engine = CpuEngine::serial();
+        let runtime = cpu_runtime(&engine);
         let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
         let chain = (&x + &x)
             .unwrap()
@@ -902,12 +793,12 @@ fn compiled_and_prepared_submission_counts_match_shape_matrix() {
             .compile_with_input_specs(&chain, &[(&x, DType::F64, &[n])])
             .unwrap();
         let input = Tensor::from_vec_col_major(vec![n], vec![1.0_f64; n]).unwrap();
-        let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
+        let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
         let baseline = prepared.execution_submission_count();
 
-        runtime.run_compiled(&program, &[&input]).unwrap();
+        run_compiled(&mut engine, &runtime, &program, &[&input]).unwrap();
         let after_compiled = prepared.execution_submission_count();
-        runtime.run_prepared(&prepared, &[&input]).unwrap();
+        run_prepared(&mut engine, &runtime, &prepared, &[&input]).unwrap();
         let after_prepared = prepared.execution_submission_count();
 
         assert_eq!(
@@ -927,7 +818,8 @@ fn compiled_and_prepared_submission_counts_match_shape_matrix() {
 /// all four instructions, while a run containing a reduction plans none.
 #[test]
 fn prepared_elementwise_regions_are_planned_at_prepare_time() {
-    let runtime = cpu_runtime();
+    let engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let n = 4usize;
 
     let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
@@ -944,7 +836,7 @@ fn prepared_elementwise_regions_are_planned_at_prepare_time() {
         .compile_with_input_specs(&chain, &[(&x, DType::F64, &[n])])
         .unwrap();
     let input = Tensor::from_vec_col_major(vec![n], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
     assert_eq!(
         prepared.elementwise_region_summary(),
         (1, 4),
@@ -963,7 +855,7 @@ fn prepared_elementwise_regions_are_planned_at_prepare_time() {
         .compile_with_input_specs(&with_reduce, &[(&x2, DType::F64, &[n])])
         .unwrap();
     let input2 = Tensor::from_vec_col_major(vec![n], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    let prepared2 = runtime.prepare_compiled(&program2, &[&input2]).unwrap();
+    let prepared2 = prepare(&engine, &runtime, &program2, &[&input2]).unwrap();
     assert_eq!(
         prepared2.elementwise_region_summary(),
         (0, 0),
@@ -976,7 +868,8 @@ fn prepared_elementwise_regions_are_planned_at_prepare_time() {
 /// containing a reduction plans and executes no region at all.
 #[test]
 fn prepared_elementwise_region_executes_as_one_fused_command() {
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let n = 16 * 1024usize;
 
     let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
@@ -994,9 +887,9 @@ fn prepared_elementwise_region_executes_as_one_fused_command() {
         .unwrap();
     let data: Vec<f64> = (0..n).map(|i| 0.25 + (i % 17) as f64 * 0.125).collect();
     let input = Tensor::from_vec_col_major(vec![n], data.clone()).unwrap();
-    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
 
-    let mut fused = runtime.run_prepared(&prepared, &[&input]).unwrap();
+    let mut fused = run_prepared(&mut engine, &runtime, &prepared, &[&input]).unwrap();
     assert_eq!(
         prepared.elementwise_region_execution_counts(),
         (1, 0),
@@ -1027,8 +920,8 @@ fn prepared_elementwise_region_executes_as_one_fused_command() {
         .unwrap();
     let data2: Vec<f64> = (0..n).map(|i| 0.5 + (i % 11) as f64 * 0.25).collect();
     let input2 = Tensor::from_vec_col_major(vec![n], data2).unwrap();
-    let prepared2 = runtime.prepare_compiled(&program2, &[&input2]).unwrap();
-    let _ = runtime.run_prepared(&prepared2, &[&input2]).unwrap();
+    let prepared2 = prepare(&engine, &runtime, &program2, &[&input2]).unwrap();
+    let _ = run_prepared(&mut engine, &runtime, &prepared2, &[&input2]).unwrap();
     assert_eq!(
         prepared2.elementwise_region_execution_counts(),
         (0, 0),
@@ -1046,7 +939,8 @@ fn prepared_elementwise_region_executes_as_one_fused_command() {
 #[test]
 fn prepared_ordered_region_fuses_and_propagates_nan() {
     for dtype in [DType::F32, DType::F64] {
-        let runtime = cpu_runtime();
+        let mut engine = CpuEngine::serial();
+        let runtime = cpu_runtime(&engine);
         let n = 16 * 1024usize;
 
         let x = TracedTensor::input_concrete_shape(dtype, &[n]).unwrap();
@@ -1076,17 +970,25 @@ fn prepared_ordered_region_fuses_and_propagates_nan() {
             _ => unreachable!(),
         };
 
-        let prepared = runtime
-            .prepare_compiled(&program, &[&nan_input, &finite_input, &one])
-            .unwrap();
+        let prepared = prepare(
+            &engine,
+            &runtime,
+            &program,
+            &[&nan_input, &finite_input, &one],
+        )
+        .unwrap();
         assert!(
             prepared.elementwise_region_summary().0 >= 1,
             "{dtype:?}: the ordered chain should still plan a region"
         );
 
-        let mut out = runtime
-            .run_prepared(&prepared, &[&nan_input, &finite_input, &one])
-            .unwrap();
+        let mut out = run_prepared(
+            &mut engine,
+            &runtime,
+            &prepared,
+            &[&nan_input, &finite_input, &one],
+        )
+        .unwrap();
         assert_eq!(
             prepared.elementwise_region_execution_counts(),
             (1, 0),
@@ -1121,7 +1023,8 @@ fn prepared_ordered_region_fuses_and_propagates_nan() {
 /// reference.
 #[test]
 fn prepared_non_f32_f64_region_is_declined() {
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let n = 16 * 1024usize;
 
     let x = TracedTensor::input_concrete_shape(DType::I64, &[n]).unwrap();
@@ -1132,13 +1035,13 @@ fn prepared_non_f32_f64_region_is_declined() {
         .unwrap();
     let data: Vec<i64> = (0..n).map(|i| (i % 100) as i64 + 1).collect();
     let input = Tensor::from_vec_col_major(vec![n], data.clone()).unwrap();
-    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
     assert!(
         prepared.elementwise_region_summary().0 >= 1,
         "the I64 chain should still plan a region"
     );
 
-    let mut out = runtime.run_prepared(&prepared, &[&input]).unwrap();
+    let mut out = run_prepared(&mut engine, &runtime, &prepared, &[&input]).unwrap();
     assert_eq!(
         prepared.elementwise_region_execution_counts(),
         (0, 1),
@@ -1161,7 +1064,8 @@ fn prepared_non_f32_f64_region_is_declined() {
 /// count is below the CPU fused kernel's floor, so this exercises the fallback.
 #[test]
 fn prepared_elementwise_region_falls_back_when_fusion_is_declined() {
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let n = 4usize;
 
     let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
@@ -1178,14 +1082,18 @@ fn prepared_elementwise_region_falls_back_when_fusion_is_declined() {
         .compile_with_input_specs(&chain, &[(&x, DType::F64, &[n])])
         .unwrap();
     let input = Tensor::from_vec_col_major(vec![n], vec![0.5_f64, 1.0, 1.5, 2.0]).unwrap();
-    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
 
-    let reference_runtime = cpu_runtime();
-    let mut compiled = reference_runtime.run_compiled(&program, &[&input]).unwrap();
-    let mut prepared_out = runtime.run_prepared(&prepared, &[&input]).unwrap();
+    let mut compiled = run_compiled(&mut engine, &runtime, &program, &[&input]).unwrap();
+    let mut prepared_out = run_prepared(&mut engine, &runtime, &prepared, &[&input]).unwrap();
+    // The two entry points share the prepared-plan cache, so the counters on the
+    // prepared handle count both runs: one fallback each.
     let (fused, fallbacks) = prepared.elementwise_region_execution_counts();
     assert_eq!(fused, 0, "the CPU backend declines fusion below its floor");
-    assert_eq!(fallbacks, 1, "the region should fall back exactly once");
+    assert_eq!(
+        fallbacks, 2,
+        "each run's region should fall back exactly once"
+    );
 
     let compiled = compiled.pop().unwrap();
     let prepared_out = prepared_out.pop().unwrap();
@@ -1205,7 +1113,8 @@ fn prepared_elementwise_region_falls_back_when_fusion_is_declined() {
 /// decline on every execution, and still matches the unprepared path.
 #[test]
 fn prepared_elementwise_region_above_cpu_input_limit_is_not_planned() {
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let n = 16 * 1024usize;
     let inputs = (0..5)
         .map(|_| TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap())
@@ -1232,14 +1141,14 @@ fn prepared_elementwise_region_above_cpu_input_limit_is_not_planned() {
         })
         .collect::<Vec<_>>();
     let refs = data.iter().collect::<Vec<_>>();
-    let prepared = runtime.prepare_compiled(&program, &refs).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &refs).unwrap();
     assert_eq!(
         prepared.elementwise_region_summary(),
         (0, 0),
         "a five-input region exceeds the CPU fused kernel's input limit"
     );
 
-    let mut prepared_out = runtime.run_prepared(&prepared, &refs).unwrap();
+    let mut prepared_out = run_prepared(&mut engine, &runtime, &prepared, &refs).unwrap();
     assert_eq!(prepared.elementwise_region_execution_counts(), (0, 0));
     let actual = prepared_out.pop().unwrap();
     let actual = actual.as_slice::<f64>().unwrap();
@@ -1254,7 +1163,8 @@ fn prepared_elementwise_region_above_cpu_input_limit_is_not_planned() {
 /// Both `y` and `z` are program outputs of one elementwise region.
 #[test]
 fn prepared_elementwise_region_publishes_multiple_live_outs() {
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let n = 16 * 1024usize;
 
     let data: Vec<f64> = (0..n).map(|i| 0.25 + (i % 13) as f64 * 0.125).collect();
@@ -1269,11 +1179,11 @@ fn prepared_elementwise_region_publishes_multiple_live_outs() {
         .compile_many(&[&y, &z])
         .expect("two-output constant graph should compile");
 
-    let prepared = runtime.prepare_compiled(&program, &[]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[]).unwrap();
     let (regions, covered) = prepared.elementwise_region_summary();
     assert_eq!((regions, covered), (1, 4), "one region covers the chain");
 
-    let mut prepared_out = runtime.run_prepared(&prepared, &[]).unwrap();
+    let mut prepared_out = run_prepared(&mut engine, &runtime, &prepared, &[]).unwrap();
     let (fused, fallbacks) = prepared.elementwise_region_execution_counts();
     assert_eq!(
         (fused, fallbacks),
@@ -1303,53 +1213,14 @@ fn prepared_elementwise_region_publishes_multiple_live_outs() {
     }
 }
 
-/// Stage 1: the value output mode keeps its per-instruction path and results.
-#[test]
-fn runtime_compiled_values_matches_prepared_for_elementwise_chain() {
-    let runtime = cpu_runtime();
-    let n = 1024usize;
-
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
-    let doubled = (&x + &x).unwrap();
-    let chain = doubled
-        .mul(&doubled)
-        .unwrap()
-        .exp()
-        .unwrap()
-        .tanh()
-        .unwrap();
-    let mut compiler = GraphCompiler::new();
-    let program = compiler
-        .compile_with_input_specs(&chain, &[(&x, DType::F64, &[n])])
-        .unwrap();
-    let data: Vec<f64> = (0..n).map(|i| 0.5 + (i % 7) as f64 * 0.25).collect();
-    let input = Tensor::from_vec_col_major(vec![n], data).unwrap();
-
-    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
-    let mut prepared_out = runtime.run_prepared(&prepared, &[&input]).unwrap();
-    let mut value_out = runtime.run_compiled_values(&program, &[&input]).unwrap();
-    assert_eq!(value_out.len(), 1);
-    let value = value_out.pop().unwrap();
-    let value = value.as_tensor().expect("value output should own a tensor");
-    let prepared_out = prepared_out.pop().unwrap();
-    assert_eq!(value.shape(), prepared_out.shape());
-    let value = value.as_slice::<f64>().unwrap();
-    let prepared_out = prepared_out.as_slice::<f64>().unwrap();
-    for (left, right) in value.iter().zip(prepared_out) {
-        assert!(
-            (left - right).abs() <= 1e-12,
-            "value mode diverged: {left} != {right}"
-        );
-    }
-}
-
 /// Stage 1: an elementwise region next to an FFI operation.
 ///
 /// The region covers only the elementwise chain; the matrix multiply stays its
 /// own command, and both outputs match a host reference.
 #[test]
 fn prepared_elementwise_region_stays_separate_from_ffi_op() {
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     // The CPU fused kernel only engages above its element floor, so the chain
     // runs over a vector large enough to fuse while the multiply stays small.
     let n = 8usize;
@@ -1374,7 +1245,7 @@ fn prepared_elementwise_region_stays_separate_from_ffi_op() {
         .compile_many(&[&m, &chain])
         .expect("mixed graph should compile");
 
-    let prepared = runtime.prepare_compiled(&program, &[]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[]).unwrap();
     let (regions, covered) = prepared.elementwise_region_summary();
     assert_eq!(
         (regions, covered),
@@ -1382,7 +1253,7 @@ fn prepared_elementwise_region_stays_separate_from_ffi_op() {
         "only the elementwise chain should form a region"
     );
 
-    let mut prepared_out = runtime.run_prepared(&prepared, &[]).unwrap();
+    let mut prepared_out = run_prepared(&mut engine, &runtime, &prepared, &[]).unwrap();
     let (fused, fallbacks) = prepared.elementwise_region_execution_counts();
     assert_eq!(
         (fused, fallbacks),
@@ -1418,7 +1289,8 @@ fn prepared_elementwise_region_stays_separate_from_ffi_op() {
 /// Stage 1: repeated prepared runs neither fall back nor accumulate state.
 #[test]
 fn prepared_elementwise_region_is_stable_across_repeated_runs() {
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let n = 16 * 1024usize;
 
     let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
@@ -1436,11 +1308,11 @@ fn prepared_elementwise_region_is_stable_across_repeated_runs() {
         .unwrap();
     let data: Vec<f64> = (0..n).map(|i| 0.25 + (i % 17) as f64 * 0.125).collect();
     let input = Tensor::from_vec_col_major(vec![n], data).unwrap();
-    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
 
     let mut first: Option<Vec<f64>> = None;
     for run in 1..=16 {
-        let mut out = runtime.run_prepared(&prepared, &[&input]).unwrap();
+        let mut out = run_prepared(&mut engine, &runtime, &prepared, &[&input]).unwrap();
         let out = out.pop().unwrap();
         let values = out.as_slice::<f64>().unwrap().to_vec();
         match &first {
@@ -1466,7 +1338,8 @@ fn prepared_elementwise_region_is_stable_across_repeated_runs() {
 /// reference, so interleaving regions with FFI work keeps its contract.
 #[test]
 fn prepared_regions_interleave_with_ffi_work() {
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let chain_len = 16 * 1024usize;
     let n = 8usize;
 
@@ -1501,11 +1374,11 @@ fn prepared_regions_interleave_with_ffi_work() {
         .compile_many(&[&before, &after])
         .expect("interleaved graph should compile");
 
-    let prepared = runtime.prepare_compiled(&program, &[]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[]).unwrap();
     let (regions, _) = prepared.elementwise_region_summary();
     assert!(regions >= 1, "the chains should plan at least one region");
 
-    let mut prepared_out = runtime.run_prepared(&prepared, &[]).unwrap();
+    let mut prepared_out = run_prepared(&mut engine, &runtime, &prepared, &[]).unwrap();
     let (fused, fallbacks) = prepared.elementwise_region_execution_counts();
     assert!(fused >= 1, "the large chain should fuse: {fused} fused");
     assert!(
@@ -1545,7 +1418,8 @@ fn prepared_regions_interleave_with_ffi_work() {
 /// Stage 1: the fallback path stays stable across repeated runs.
 #[test]
 fn prepared_elementwise_fallback_is_stable_across_repeated_runs() {
-    let runtime = cpu_runtime();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
     let n = 4usize;
 
     let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
@@ -1562,11 +1436,11 @@ fn prepared_elementwise_fallback_is_stable_across_repeated_runs() {
         .compile_with_input_specs(&chain, &[(&x, DType::F64, &[n])])
         .unwrap();
     let input = Tensor::from_vec_col_major(vec![n], vec![0.5_f64, 1.0, 1.5, 2.0]).unwrap();
-    let prepared = runtime.prepare_compiled(&program, &[&input]).unwrap();
+    let prepared = prepare(&engine, &runtime, &program, &[&input]).unwrap();
 
     let mut first: Option<Vec<f64>> = None;
     for run in 1..=8 {
-        let mut out = runtime.run_prepared(&prepared, &[&input]).unwrap();
+        let mut out = run_prepared(&mut engine, &runtime, &prepared, &[&input]).unwrap();
         let out = out.pop().unwrap();
         let values = out.as_slice::<f64>().unwrap().to_vec();
         match &first {

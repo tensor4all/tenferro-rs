@@ -1,21 +1,17 @@
-//! The cache-aware session route used by the scheduler.
+//! The cache-aware route used by the scheduler.
 //!
-//! `with_backend_session_cached` plus a session `_cached` contraction is how a
-//! runtime passes its prepared-plan cache to an execution region. It survives
-//! the unification of issue #1926, and after the one-shot deletion it is the
-//! only cached route: the owner-level `BackendCachedDot` spelling disappears.
+//! The engine owns its plan cache and its `_cached` contraction entry point;
+//! the operation is spelled directly on the engine, which is the route the
+//! scheduler uses.
 
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{
-    BackendRuntimeCache, BackendSessionHost, DotGeneralConfig, Tensor, TensorRead,
-};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{DotGeneralConfig, SessionCachedDot, Tensor, TensorRead};
 
 const NONE: &[usize] = &[];
 
 #[test]
 fn session_cached_route() {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
+    let mut engine = CpuEngine::serial();
     let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
     let config = DotGeneralConfig {
@@ -25,16 +21,13 @@ fn session_cached_route() {
         rhs_batch_dims: NONE.iter().copied().collect(),
     };
 
-    let out = backend
-        .with_backend_session_cached(&mut cache, |session| {
-            session.dot_general_read_cached(
-                None,
-                TensorRead::from_tensor(&lhs),
-                TensorRead::from_tensor(&rhs),
-                &config,
-            )
-        })
-        .unwrap()
+    let out = engine
+        .dot_general_read_cached(
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+        )
         .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);

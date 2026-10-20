@@ -2,39 +2,35 @@ use std::any::Any;
 use std::collections::{BTreeSet, HashSet};
 use std::error::Error as StdError;
 use std::hash::{Hash, Hasher};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_ops::{
     ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp},
     ExtensionShapeContext, SymDim,
-};
-use tenferro_runtime::runtime::{
-    EventDomainDriver, EventDomainRun, EventToken, ImmediateEventDomainDriver,
 };
 use tenferro_runtime::{
     assemble_executable_engine_registration, assemble_preparation_only_engine_registration,
     CoreCapabilityBundle, DType, DotGeneralPreparation, ElementwiseRuntime,
     EngineExecutionContractError, EngineId, EngineRegistration, EngineRegistrationMetadata,
     ErasedExecutionContext, Error, ErrorPhase, EventDomainId, ExecutableEngineRegistrationConfig,
-    ExecutionContextIdentity, ExecutionInputs, ExtensionCacheStore, ExtensionEngine,
+    ExecutionContextIdentity, ExecutionEngine, ExtensionCacheStore, ExtensionEngine,
     ExtensionModule, ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar,
     ExtensionPlanningConfig, ExtensionPrepareRequest, GraphCompiler, HardwareClassId,
     IndexingRuntime, InputIngressContract, InputIngressContractError, InputPlacementContract,
     InputSignatureContract, LayoutRuntime, PreparationOnlyEngineRegistrationConfig,
     PrepareCapability, PrepareError, PreparedOperation, PreparedOperationBinding,
     PreparedOperationExecutor, PreparedOperationPlan, ProviderDeviceIdentity, ProviderId,
-    ReductionRuntime, RegistrationKey, ResidentOutputContract, Runtime, RuntimeCacheOwner,
-    RuntimeConfigError, RuntimeFailureReasonRef, RuntimeInputContract, RuntimeReconfigureError,
+    ReductionRuntime, RegistrationKey, ResidentOutputContract, Runtime, RuntimeConfigError,
+    RuntimeFailureReasonRef, RuntimeInputContract, RuntimeReconfigureError,
     SpecializationProjection, StorageClass, TracedTensor, TransferEndpoint, TransferError,
     TransferProvider, TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, HostAccessError,
-    HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain,
-    StorageBuffer, Tensor, TensorRead, TensorView, TypedTensor,
+    AllocationDomainId, AllocationId, BackendStorage, HostAccessError, HostReadGuard,
+    HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, StorageBuffer, Tensor,
+    TensorRead, TensorView, TypedTensor,
 };
 
 /// The Rust scalar type behind a preset variant name a macro received.
@@ -86,150 +82,65 @@ fn test_provider_device_identity(
     )?)
 }
 
-#[derive(Debug)]
-struct RecordingEventToken {
-    label: &'static str,
-    origin: EventDomainId,
-    events: Arc<Mutex<Vec<String>>>,
+fn test_domain(domain: AllocationDomainId) -> Arc<dyn SharedTensorAllocationDomain> {
+    Arc::new(TestAllocationDomain(domain))
 }
 
-impl EventToken for RecordingEventToken {
-    fn as_any(&self) -> &dyn Any {
-        self
+fn inputs_of<'a>(inputs: &[&'a Tensor]) -> Vec<TensorRead<'a>> {
+    inputs
+        .iter()
+        .map(|input| TensorRead::from_tensor(input))
+        .collect()
+}
+
+fn run_compiled(
+    engines: &mut [&mut CpuEngine],
+    runtime: &Runtime,
+    program: &tenferro_runtime::CompiledGraph,
+    inputs: &[&Tensor],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let reads = inputs_of(inputs);
+    let targets: Vec<tenferro_runtime::EngineTarget> =
+        engines.iter().map(|engine| engine.target()).collect();
+    let prepared = runtime.prepare(program, &reads, &targets)?;
+    run_prepared(engines, runtime, &prepared, inputs)
+}
+
+fn prepare(
+    engines: &[&CpuEngine],
+    runtime: &Runtime,
+    program: &tenferro_runtime::CompiledGraph,
+    inputs: &[&Tensor],
+) -> tenferro_runtime::Result<tenferro_runtime::Prepared> {
+    let reads = inputs_of(inputs);
+    let targets: Vec<tenferro_runtime::EngineTarget> =
+        engines.iter().map(|engine| engine.target()).collect();
+    runtime.prepare(program, &reads, &targets)
+}
+
+fn run_prepared(
+    engines: &mut [&mut CpuEngine],
+    runtime: &Runtime,
+    prepared: &tenferro_runtime::Prepared,
+    inputs: &[&Tensor],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let reads = inputs_of(inputs);
+    let outputs = {
+        let mut erased: Vec<&mut dyn tenferro_runtime::ExecutionEngine> = engines
+            .iter_mut()
+            .map(|engine| &mut **engine as &mut dyn tenferro_runtime::ExecutionEngine)
+            .collect();
+        runtime.run(&mut erased, prepared, &reads)?
+    };
+    let mut owned = Vec::with_capacity(outputs.len());
+    for output in outputs {
+        owned.push(output.into_tensor(&mut *engines[0])?);
     }
-
-    fn origin(&self) -> EventDomainId {
-        self.origin
-    }
-
-    fn wait(&self) -> tenferro_runtime::Result<()> {
-        self.events
-            .lock()
-            .expect("event log lock")
-            .push(format!("{}:wait", self.label));
-        Ok(())
-    }
+    Ok(owned)
 }
 
-#[derive(Clone, Copy, Debug)]
-enum DrainBehavior {
-    Success,
-    ReturnError,
-    Panic,
-}
-
-#[derive(Debug)]
-struct RecordingEventDomainRun {
-    label: &'static str,
-    domain: EventDomainId,
-    events: Arc<Mutex<Vec<String>>>,
-    drain_behavior: DrainBehavior,
-}
-
-impl EventDomainRun for RecordingEventDomainRun {
-    fn domain(&self) -> EventDomainId {
-        self.domain
-    }
-
-    fn enqueue(
-        &mut self,
-        dependencies: &[Arc<dyn EventToken>],
-        launch: &mut dyn FnMut() -> tenferro_runtime::Result<()>,
-    ) -> tenferro_runtime::Result<Arc<dyn EventToken>> {
-        self.events.lock().expect("event log lock").push(format!(
-            "{}:enqueue:{}",
-            self.label,
-            dependencies.len()
-        ));
-        for dependency in dependencies {
-            dependency.wait()?;
-        }
-        launch()?;
-        Ok(Arc::new(RecordingEventToken {
-            label: self.label,
-            origin: self.domain,
-            events: Arc::clone(&self.events),
-        }))
-    }
-
-    fn drain(&mut self) -> tenferro_runtime::Result<()> {
-        self.events
-            .lock()
-            .expect("event log lock")
-            .push(format!("{}:drain", self.label));
-        match self.drain_behavior {
-            DrainBehavior::Success => Ok(()),
-            DrainBehavior::ReturnError => Err(Error::Internal(format!(
-                "{} event-domain drain failure",
-                self.label
-            ))),
-            DrainBehavior::Panic => panic!("{} event-domain drain panic", self.label),
-        }
-    }
-}
-
-impl Drop for RecordingEventDomainRun {
-    fn drop(&mut self) {
-        self.events
-            .lock()
-            .expect("event log lock")
-            .push(format!("{}:drop", self.label));
-    }
-}
-
-#[derive(Debug)]
-struct RecordingEventDomainDriver {
-    label: &'static str,
-    events: Arc<Mutex<Vec<String>>>,
-    drain_behavior: DrainBehavior,
-}
-
-impl EventDomainDriver for RecordingEventDomainDriver {
-    fn begin_run(
-        &self,
-        domain: EventDomainId,
-    ) -> tenferro_runtime::Result<Box<dyn EventDomainRun>> {
-        self.events
-            .lock()
-            .expect("event log lock")
-            .push(format!("{}:begin", self.label));
-        Ok(Box::new(RecordingEventDomainRun {
-            label: self.label,
-            domain,
-            events: Arc::clone(&self.events),
-            drain_behavior: self.drain_behavior,
-        }))
-    }
-}
-
-fn event_domain_with_drain_behavior(
-    label: &'static str,
-    events: &Arc<Mutex<Vec<String>>>,
-    drain_behavior: DrainBehavior,
-) -> Arc<dyn EventDomainDriver> {
-    Arc::new(RecordingEventDomainDriver {
-        label,
-        events: Arc::clone(events),
-        drain_behavior,
-    })
-}
-
-fn recording_event_domain(
-    label: &'static str,
-    events: &Arc<Mutex<Vec<String>>>,
-) -> Arc<dyn EventDomainDriver> {
-    event_domain_with_drain_behavior(label, events, DrainBehavior::Success)
-}
-
-fn failing_drain_event_domain(
-    label: &'static str,
-    events: &Arc<Mutex<Vec<String>>>,
-) -> Arc<dyn EventDomainDriver> {
-    event_domain_with_drain_behavior(label, events, DrainBehavior::ReturnError)
-}
-
-fn cpu_ingress_contract(backend: &Arc<CpuBackend>, storage: &StorageClass) -> InputIngressContract {
-    let allocation_domain = backend.allocation_domain();
+fn cpu_ingress_contract(engine: &CpuEngine, storage: &StorageClass) -> InputIngressContract {
+    let allocation_domain = engine.allocation_domain();
     InputIngressContract::new(
         InputPlacementContract::new({
             let storage = storage.clone();
@@ -260,57 +171,118 @@ fn cpu_ingress_contract(backend: &Arc<CpuBackend>, storage: &StorageClass) -> In
 #[derive(Debug)]
 enum CpuRegistrationState {
     PreparationOnly,
-    Executable {
-        driver: Arc<dyn EventDomainDriver>,
-        cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
-    },
+    Executable,
 }
 
 impl CpuRegistrationState {
     fn executable() -> Self {
-        Self::Executable {
-            driver: Arc::new(ImmediateEventDomainDriver::new()),
-            cache_owner: None,
-        }
+        Self::Executable
     }
+}
 
-    fn executable_with_driver(driver: Arc<dyn EventDomainDriver>) -> Self {
-        Self::Executable {
-            driver,
-            cache_owner: None,
-        }
-    }
+/// Metadata-only preparation capabilities for the test registrations.
+///
+/// The prepared plans carry no executable work of their own: every core
+/// operation dispatches on the engine the caller passes to `Runtime::run`, so
+/// the registration only has to answer the preparation questions the runtime
+/// asks (binding, specialization and ingress).
+#[derive(Debug)]
+struct MetadataOnlyProvider;
 
-    fn executable_with_cache_owner(
-        driver: Arc<dyn EventDomainDriver>,
-        cache_owner: Arc<dyn RuntimeCacheOwner>,
-    ) -> Self {
-        Self::Executable {
-            driver,
-            cache_owner: Some(cache_owner),
+#[derive(Debug)]
+struct MetadataOnlyOperation {
+    binding: PreparedOperationBinding,
+    specialization: SpecializationProjection,
+}
+
+impl MetadataOnlyOperation {
+    fn new(context: &tenferro_runtime::CorePrepareContext<'_>) -> Self {
+        Self {
+            binding: context.binding().clone(),
+            specialization: context.specialization().clone(),
         }
     }
 }
 
-fn cpu_core_capabilities(backend: &CpuBackend) -> CoreCapabilityBundle {
-    let backend = Arc::new(backend.clone());
-    let elementwise: Arc<dyn ElementwiseRuntime> = backend.clone();
-    let reduction: Arc<dyn ReductionRuntime> = backend.clone();
-    let indexing: Arc<dyn IndexingRuntime> = backend.clone();
-    let dot_general: Arc<dyn DotGeneralPreparation> = backend.clone();
-    let layout: Arc<dyn LayoutRuntime> = backend.clone();
+impl PreparedOperation for MetadataOnlyOperation {
+    fn binding(&self) -> &PreparedOperationBinding {
+        &self.binding
+    }
+
+    fn specialization(&self) -> &SpecializationProjection {
+        &self.specialization
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+}
+
+fn metadata_only_plan(context: &tenferro_runtime::CorePrepareContext<'_>) -> PrepareCapability {
+    PrepareCapability::Prepared(PreparedOperationPlan::metadata(Arc::new(
+        MetadataOnlyOperation::new(context),
+    )))
+}
+
+impl ElementwiseRuntime for MetadataOnlyProvider {
+    fn prepare(
+        &self,
+        request: tenferro_runtime::ElementwisePrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(metadata_only_plan(request.context()))
+    }
+}
+
+impl ReductionRuntime for MetadataOnlyProvider {
+    fn prepare(
+        &self,
+        request: tenferro_runtime::ReductionPrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(metadata_only_plan(request.context()))
+    }
+}
+
+impl IndexingRuntime for MetadataOnlyProvider {
+    fn prepare(
+        &self,
+        request: tenferro_runtime::IndexingPrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(metadata_only_plan(request.context()))
+    }
+}
+
+impl DotGeneralPreparation for MetadataOnlyProvider {
+    fn prepare(
+        &self,
+        request: tenferro_runtime::DotGeneralPrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(metadata_only_plan(request.context()))
+    }
+}
+
+impl LayoutRuntime for MetadataOnlyProvider {
+    fn prepare(
+        &self,
+        request: tenferro_runtime::LayoutPrepareRequest<'_>,
+    ) -> Result<PrepareCapability, PrepareError> {
+        Ok(metadata_only_plan(request.context()))
+    }
+}
+
+fn cpu_core_capabilities(_engine: &CpuEngine) -> CoreCapabilityBundle {
+    let provider = Arc::new(MetadataOnlyProvider);
     let mut capabilities = CoreCapabilityBundle::builder();
     capabilities
-        .elementwise(elementwise)
-        .reduction(reduction)
-        .indexing(indexing)
-        .dot_general(dot_general)
-        .layout(layout);
+        .elementwise(provider.clone())
+        .reduction(provider.clone())
+        .indexing(provider.clone())
+        .dot_general(provider.clone())
+        .layout(provider);
     capabilities.build()
 }
 
 fn assemble_cpu_registration(
-    backend: Arc<CpuBackend>,
+    engine: &CpuEngine,
     metadata: EngineRegistrationMetadata,
     ingress_storage: StorageClass,
     state: CpuRegistrationState,
@@ -319,28 +291,24 @@ fn assemble_cpu_registration(
         CpuRegistrationState::PreparationOnly => assemble_preparation_only_engine_registration(
             PreparationOnlyEngineRegistrationConfig::new(
                 metadata,
-                ExecutionContextIdentity::of::<CpuBackend>(),
+                ExecutionContextIdentity::of::<CpuEngine>(),
             ),
         ),
-        CpuRegistrationState::Executable {
-            driver,
-            cache_owner,
-        } => assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
-            metadata,
-            backend.as_ref().clone(),
-            driver,
-            cpu_ingress_contract(&backend, &ingress_storage),
-            cache_owner,
-        )),
+        CpuRegistrationState::Executable => {
+            assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
+                metadata,
+                ExecutionContextIdentity::of::<CpuEngine>(),
+                cpu_ingress_contract(engine, &ingress_storage),
+            ))
+        }
     }
 }
 
 fn cpu_registration(
-    backend: &CpuBackend,
+    engine: &CpuEngine,
     capabilities: CoreCapabilityBundle,
     state: CpuRegistrationState,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
-    let backend = Arc::new(backend.clone());
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
     let metadata = EngineRegistrationMetadata::new(
         EngineId::new(CPU_ENGINE_ID).map_err(RuntimeConfigError::from)?,
@@ -350,18 +318,15 @@ fn cpu_registration(
         storage.clone(),
         capabilities,
     );
-    assemble_cpu_registration(backend, metadata, storage, state)
+    assemble_cpu_registration(engine, metadata, storage, state)
 }
 
-fn runtime_with_cpu(backend: &CpuBackend) -> Result<Runtime, RuntimeConfigError> {
+fn runtime_with_cpu(backend: &CpuEngine) -> Result<Runtime, RuntimeConfigError> {
     let mut builder = Runtime::builder();
     builder.register_engine(cpu_registration(
         backend,
         cpu_core_capabilities(backend),
-        CpuRegistrationState::executable_with_cache_owner(
-            Arc::new(ImmediateEventDomainDriver::new()),
-            Arc::new(backend.clone()),
-        ),
+        CpuRegistrationState::executable(),
     )?)?;
     builder.build()
 }
@@ -527,7 +492,7 @@ struct RecordingTransferProvider {
     destination: StorageClass,
     calls: AtomicUsize,
     requests: Mutex<Vec<RecordedTransferRequest>>,
-    destination_backend: Option<CpuBackend>,
+    destination_domain: Option<Arc<dyn SharedTensorAllocationDomain>>,
     materialized_domains: Mutex<Vec<(Option<AllocationDomainId>, Option<AllocationDomainId>)>>,
 }
 
@@ -575,7 +540,7 @@ impl RecordingTransferProvider {
             destination,
             calls: AtomicUsize::new(0),
             requests: Mutex::new(Vec::new()),
-            destination_backend: None,
+            destination_domain: None,
             materialized_domains: Mutex::new(Vec::new()),
         }
     }
@@ -583,10 +548,10 @@ impl RecordingTransferProvider {
     fn materializing(
         source: StorageClass,
         destination: StorageClass,
-        destination_backend: CpuBackend,
+        destination_domain: Arc<dyn SharedTensorAllocationDomain>,
     ) -> Self {
         Self {
-            destination_backend: Some(destination_backend),
+            destination_domain: Some(destination_domain),
             ..Self::new(source, destination)
         }
     }
@@ -630,11 +595,8 @@ impl TransferProvider for RecordingTransferProvider {
             });
         self.calls.fetch_add(1, Ordering::SeqCst);
         let source_domain = request.input().allocation_domain();
-        let output = match &self.destination_backend {
-            Some(backend) => {
-                let domain = backend.shared_allocation_domain().ok_or_else(|| {
-                    Error::Internal("materializing transfer requires an allocation domain".into())
-                })?;
+        let output = match &self.destination_domain {
+            Some(domain) => {
                 let mut output =
                     domain.allocate(request.input().dtype(), request.input().shape())?;
                 let source_values = read_f64_values(request.input().clone())?;
@@ -680,22 +642,6 @@ impl TransferProvider for RecordingTransferProvider {
                 TensorRead::from_tensor(&output).allocation_domain(),
             ));
         Ok(output)
-    }
-}
-
-#[derive(Debug)]
-struct FailingTransferProvider {
-    calls: AtomicUsize,
-}
-
-impl TransferProvider for FailingTransferProvider {
-    fn transfer_blocking(&self, _request: TransferRequest<'_>) -> tenferro_runtime::Result<Tensor> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(Error::runtime_state_source(
-            "FailingTransferProvider::transfer_blocking",
-            ErrorPhase::Execution,
-            TestTransferFailure,
-        ))
     }
 }
 
@@ -764,10 +710,6 @@ impl TransferProvider for FaultyTransferProvider {
         }
     }
 }
-
-#[derive(Debug, thiserror::Error)]
-#[error("intentional transfer failure")]
-struct TestTransferFailure;
 
 #[derive(Debug)]
 struct MutableLengthBuffer {
@@ -942,7 +884,7 @@ impl ExtensionEngine for CountingExtensionEngine {
     }
 
     fn context_identity(&self) -> ExecutionContextIdentity {
-        ExecutionContextIdentity::of::<CpuBackend>()
+        ExecutionContextIdentity::of::<CpuEngine>()
     }
 
     fn prepare(
@@ -999,7 +941,7 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
             "intentional prepared-operation panic"
         );
         let backend = context
-            .downcast_mut::<CpuBackend>(self.binding.context_identity())
+            .downcast_mut::<CpuEngine>(self.binding.context_identity())
             .map_err(|source| {
                 Error::runtime_state_source("counting_extension", ErrorPhase::Execution, source)
             })?;
@@ -1112,9 +1054,10 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
                 })?;
             return Ok(vec![output]);
         }
-        Ok(vec![backend
-            .with_backend_session(|session| session.to_contiguous_read(inputs[0].clone()))
-            .unwrap()?])
+        Ok(vec![tenferro_tensor::TensorStructural::to_contiguous_read(
+            backend,
+            inputs[0].clone(),
+        )?])
     }
 
     fn supports_session(&self) -> bool {
@@ -1165,13 +1108,13 @@ impl ExtensionModule for CountingExtensionModule {
 }
 
 fn runtime_with_counting_extension(
-    backend: &CpuBackend,
+    engine: &CpuEngine,
     counters: Arc<ExtensionCounters>,
 ) -> Result<Runtime, RuntimeConfigError> {
     let mut builder = Runtime::builder();
     builder.register_engine(cpu_registration(
-        backend,
-        cpu_core_capabilities(backend),
+        engine,
+        cpu_core_capabilities(engine),
         CpuRegistrationState::executable(),
     )?)?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
@@ -1185,12 +1128,11 @@ fn runtime_with_counting_extension(
 }
 
 fn cpu_registration_with_id(
-    backend: &CpuBackend,
+    engine: &CpuEngine,
     engine_id: &str,
     capabilities: CoreCapabilityBundle,
     state: CpuRegistrationState,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
-    let backend = Arc::new(backend.clone());
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
     let metadata = EngineRegistrationMetadata::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
@@ -1200,11 +1142,11 @@ fn cpu_registration_with_id(
         storage.clone(),
         capabilities,
     );
-    assemble_cpu_registration(backend, metadata, storage, state)
+    assemble_cpu_registration(engine, metadata, storage, state)
 }
 
 fn cpu_registration_with_storage_id(
-    backend: &CpuBackend,
+    engine: &CpuEngine,
     engine_id: &str,
     storage_id: &str,
     capabilities: CoreCapabilityBundle,
@@ -1212,7 +1154,7 @@ fn cpu_registration_with_storage_id(
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     let target = format!("test-engine:{engine_id}");
     cpu_registration_with_storage_id_for_target(
-        backend,
+        engine,
         engine_id,
         storage_id,
         capabilities,
@@ -1222,14 +1164,13 @@ fn cpu_registration_with_storage_id(
 }
 
 fn cpu_registration_with_storage_id_for_target(
-    backend: &CpuBackend,
+    engine: &CpuEngine,
     engine_id: &str,
     storage_id: &str,
     capabilities: CoreCapabilityBundle,
     state: CpuRegistrationState,
     target: &str,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
-    let backend = Arc::new(backend.clone());
     let storage = StorageClass::new(storage_id).map_err(RuntimeConfigError::from)?;
     let metadata = EngineRegistrationMetadata::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
@@ -1242,17 +1183,16 @@ fn cpu_registration_with_storage_id_for_target(
         storage.clone(),
         capabilities,
     );
-    assemble_cpu_registration(backend, metadata, storage, state)
+    assemble_cpu_registration(engine, metadata, storage, state)
 }
 
 fn cpu_registration_with_storage_classes(
-    backend: &CpuBackend,
+    engine: &CpuEngine,
     engine_id: &str,
     storage_classes: Vec<StorageClass>,
     default_storage: StorageClass,
     ingress_storage: StorageClass,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
-    let backend = Arc::new(backend.clone());
     let metadata = EngineRegistrationMetadata::new(
         EngineId::new(engine_id).map_err(RuntimeConfigError::from)?,
         test_provider_device_identity(engine_id)?,
@@ -1262,7 +1202,7 @@ fn cpu_registration_with_storage_classes(
         CoreCapabilityBundle::builder().build(),
     );
     assemble_cpu_registration(
-        backend,
+        engine,
         metadata,
         ingress_storage,
         CpuRegistrationState::executable(),
@@ -1282,7 +1222,8 @@ fn transfer_endpoint(
 struct PublishedRouteFixture {
     runtime: Runtime,
     source_domain: AllocationDomainId,
-    destination_backend: CpuBackend,
+    source_backend: CpuEngine,
+    destination_backend: CpuEngine,
     source_endpoint: TransferEndpoint,
     destination_endpoint: TransferEndpoint,
     provider: Arc<RecordingTransferProvider>,
@@ -1300,14 +1241,21 @@ fn published_route_fixture(
         TransferEndpoint::new(affected_engine_id.clone(), route_storage.clone());
     let source_domain = AllocationDomainId::fresh();
     let destination_domain = AllocationDomainId::fresh();
-    let source_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(source_domain)));
-    let destination_backend = CpuBackend::new()
-        .with_allocation_domain(Arc::new(TestAllocationDomain(destination_domain)));
+    let source_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(source_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.engine.reconfigure-source.v1").expect("test engine id"),
+        );
+    let destination_domain = Arc::new(TestAllocationDomain(destination_domain));
+    let destination_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::clone(&destination_domain) as Arc<_>)
+        .with_runtime_engine_id(
+            EngineId::new(affected_engine_id.as_str()).expect("test engine id"),
+        );
     let provider = Arc::new(RecordingTransferProvider::materializing(
         route_storage.clone(),
         route_storage.clone(),
-        destination_backend.clone(),
+        Arc::clone(&destination_domain) as Arc<dyn SharedTensorAllocationDomain>,
     ));
     let counters = Arc::new(ExtensionCounters::default());
 
@@ -1342,6 +1290,7 @@ fn published_route_fixture(
     Ok(PublishedRouteFixture {
         runtime: builder.build()?,
         source_domain,
+        source_backend,
         destination_backend,
         source_endpoint,
         destination_endpoint,
@@ -1350,7 +1299,7 @@ fn published_route_fixture(
     })
 }
 
-fn execute_published_route(fixture: &PublishedRouteFixture) -> Result<(), Box<dyn StdError>> {
+fn execute_published_route(fixture: &mut PublishedRouteFixture) -> Result<(), Box<dyn StdError>> {
     let source_identity =
         test_provider_device_identity(fixture.source_endpoint.engine_id().as_str())?;
     let destination_identity =
@@ -1359,7 +1308,7 @@ fn execute_published_route(fixture: &PublishedRouteFixture) -> Result<(), Box<dy
 }
 
 fn execute_published_route_with_targets(
-    fixture: &PublishedRouteFixture,
+    fixture: &mut PublishedRouteFixture,
     expected_source_identity: &ProviderDeviceIdentity,
     expected_destination_identity: &ProviderDeviceIdentity,
 ) -> Result<(), Box<dyn StdError>> {
@@ -1387,7 +1336,15 @@ fn execute_published_route_with_targets(
                 tenferro_tensor::Error::host_access("published-route-input", source)
             })?;
     }
-    let output = fixture.runtime.run_compiled(&program, &[&input])?;
+    let output = run_compiled(
+        &mut [
+            &mut fixture.source_backend,
+            &mut fixture.destination_backend,
+        ],
+        &fixture.runtime,
+        &program,
+        &[&input],
+    )?;
 
     assert_eq!(tensor_f64_values(&output[0])?, [3.0, 5.0]);
     assert_eq!(fixture.counters.prepare.load(Ordering::SeqCst), 1);
@@ -1526,12 +1483,21 @@ fn endpoint_pair_routes_distinguish_two_engines_sharing_a_storage_class(
     let host_domain = AllocationDomainId::fresh();
     let cuda0_domain = AllocationDomainId::fresh();
     let cuda1_domain = AllocationDomainId::fresh();
-    let host_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(host_domain)));
-    let cuda0_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(cuda0_domain)));
-    let cuda1_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(cuda1_domain)));
+    let mut host_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(host_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.engine.host-route.v1").expect("test engine id"),
+        );
+    let mut cuda0_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(cuda0_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.engine.cuda0-route.v1").expect("test engine id"),
+        );
+    let mut cuda1_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(cuda1_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.engine.cuda1-route.v1").expect("test engine id"),
+        );
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
     let host_endpoint = transfer_endpoint(host_engine_id, storage.clone())?;
     let cuda0_endpoint = transfer_endpoint(cuda0_engine_id, storage.clone())?;
@@ -1539,22 +1505,22 @@ fn endpoint_pair_routes_distinguish_two_engines_sharing_a_storage_class(
     let host_to_cuda0 = Arc::new(RecordingTransferProvider::materializing(
         storage.clone(),
         storage.clone(),
-        cuda0_backend.clone(),
+        test_domain(cuda0_domain),
     ));
     let host_to_cuda1 = Arc::new(RecordingTransferProvider::materializing(
         storage.clone(),
         storage.clone(),
-        cuda1_backend.clone(),
+        test_domain(cuda1_domain),
     ));
     let cuda0_to_host = Arc::new(RecordingTransferProvider::materializing(
         storage.clone(),
         storage.clone(),
-        host_backend.clone(),
+        test_domain(host_domain),
     ));
     let cuda1_to_host = Arc::new(RecordingTransferProvider::materializing(
         storage.clone(),
         storage.clone(),
-        host_backend.clone(),
+        test_domain(host_domain),
     ));
     let host_to_cuda0_counters = Arc::new(ExtensionCounters::default());
     let host_to_cuda1_counters = Arc::new(ExtensionCounters::default());
@@ -1610,25 +1576,25 @@ fn endpoint_pair_routes_distinguish_two_engines_sharing_a_storage_class(
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.route-host-cuda0-module.v1")?,
         family_id: ROUTE_HOST_CUDA0_FAMILY,
-        engine_id: EngineId::new(cuda0_engine_id)?,
+        engine_id: EngineId::new("tenferro-test.engine.cuda0-route.v1")?,
         counters: Arc::clone(&host_to_cuda0_counters),
     }))?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.route-host-cuda1-module.v1")?,
         family_id: ROUTE_HOST_CUDA1_FAMILY,
-        engine_id: EngineId::new(cuda1_engine_id)?,
+        engine_id: EngineId::new("tenferro-test.engine.cuda1-route.v1")?,
         counters: Arc::clone(&host_to_cuda1_counters),
     }))?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.route-cuda0-host-module.v1")?,
         family_id: ROUTE_CUDA0_HOST_FAMILY,
-        engine_id: EngineId::new(host_engine_id)?,
+        engine_id: EngineId::new("tenferro-test.engine.host-route.v1")?,
         counters: Arc::clone(&cuda0_to_host_counters),
     }))?;
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.route-cuda1-host-module.v1")?,
         family_id: ROUTE_CUDA1_HOST_FAMILY,
-        engine_id: EngineId::new(host_engine_id)?,
+        engine_id: EngineId::new("tenferro-test.engine.host-route.v1")?,
         counters: Arc::clone(&cuda1_to_host_counters),
     }))?;
 
@@ -1680,7 +1646,12 @@ fn endpoint_pair_routes_distinguish_two_engines_sharing_a_storage_class(
         let program =
             GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
         let input = TestAllocationDomain(source_domain).allocate(DType::F64, &[2])?;
-        let output = runtime.run_compiled(&program, &[&input])?;
+        let output = run_compiled(
+            &mut [&mut host_backend, &mut cuda0_backend, &mut cuda1_backend],
+            &runtime,
+            &program,
+            &[&input],
+        )?;
 
         assert_eq!(tensor_f64_values(&output[0])?, [0.0, 0.0]);
         assert_eq!(counters.prepare.load(Ordering::SeqCst), 1);
@@ -1701,7 +1672,9 @@ fn endpoint_pair_routes_distinguish_two_engines_sharing_a_storage_class(
 #[test]
 fn unknown_engine_transfer_endpoint_fails_build_without_publishing_a_runtime(
 ) -> Result<(), Box<dyn StdError>> {
-    let backend = CpuBackend::new();
+    let backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.engine.known-route.v1").expect("test engine id"),
+    );
     let known_engine = EngineId::new("tenferro-test.engine.known-route.v1")?;
     let unknown_engine = EngineId::new("tenferro-test.engine.unknown-route.v1")?;
     let storage = StorageClass::new("tenferro-test.storage.unknown-route.v1")?;
@@ -1738,7 +1711,9 @@ fn unknown_engine_transfer_endpoint_fails_build_without_publishing_a_runtime(
 
 #[test]
 fn unsupported_transfer_endpoint_storage_fails_build() -> Result<(), Box<dyn StdError>> {
-    let backend = CpuBackend::new();
+    let backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.engine.unsupported-route.v1").expect("test engine id"),
+    );
     let engine = EngineId::new("tenferro-test.engine.unsupported-route.v1")?;
     let supported_storage = StorageClass::new("tenferro-test.storage.supported-route.v1")?;
     let unsupported_storage = StorageClass::new("tenferro-test.storage.unsupported-route.v1")?;
@@ -1780,7 +1755,9 @@ fn unsupported_transfer_endpoint_storage_fails_build() -> Result<(), Box<dyn Std
 #[test]
 fn reconfiguration_rejects_invalid_transfer_endpoint_without_publishing(
 ) -> Result<(), Box<dyn StdError>> {
-    let backend = CpuBackend::new();
+    let backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.engine.reconfigure-known.v1").expect("test engine id"),
+    );
     let known_engine_id = "tenferro-test.engine.reconfigure-known.v1";
     let unknown_engine_id = EngineId::new("tenferro-test.engine.reconfigure-unknown.v1")?;
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
@@ -1827,7 +1804,7 @@ fn reconfiguration_remove_engine_rejects_dangling_route_atomically_and_keeps_sam
 ) -> Result<(), Box<dyn StdError>> {
     let removed_engine_id = EngineId::new("tenferro-test.engine.reconfigure-removed.v1")?;
     let route_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
-    let fixture = published_route_fixture(removed_engine_id.clone(), route_storage)?;
+    let mut fixture = published_route_fixture(removed_engine_id.clone(), route_storage)?;
     let before = fixture.runtime.snapshot()?;
     let before_epoch = before.epoch();
     let before_removed_registration = before
@@ -1863,7 +1840,7 @@ fn reconfiguration_remove_engine_rejects_dangling_route_atomically_and_keeps_sam
             .registration_identity(),
         before_removed_registration
     );
-    execute_published_route(&fixture)?;
+    execute_published_route(&mut fixture)?;
     Ok(())
 }
 
@@ -1872,7 +1849,7 @@ fn reconfiguration_replace_engine_rejects_dropped_route_storage_atomically_and_k
 ) -> Result<(), Box<dyn StdError>> {
     let dropped_storage = StorageClass::new("tenferro-test.storage.reconfigure-dropped.v1")?;
     let replaced_engine_id = EngineId::new("tenferro-test.engine.reconfigure-replaced.v1")?;
-    let fixture = published_route_fixture(replaced_engine_id.clone(), dropped_storage)?;
+    let mut fixture = published_route_fixture(replaced_engine_id.clone(), dropped_storage)?;
     let before = fixture.runtime.snapshot()?;
     let before_epoch = before.epoch();
     let before_replaced_registration = before
@@ -1882,7 +1859,7 @@ fn reconfiguration_replace_engine_rejects_dropped_route_storage_atomically_and_k
     let before_route_count = before.transfer_provider_count();
     assert_eq!(before_route_count, 1);
     let replacement = cpu_registration_with_storage_id(
-        &CpuBackend::new(),
+        &CpuEngine::serial(),
         replaced_engine_id.as_str(),
         CPU_STORAGE_CLASS_ID,
         CoreCapabilityBundle::default(),
@@ -1915,7 +1892,7 @@ fn reconfiguration_replace_engine_rejects_dropped_route_storage_atomically_and_k
             .registration_identity(),
         before_replaced_registration
     );
-    execute_published_route(&fixture)?;
+    execute_published_route(&mut fixture)?;
     Ok(())
 }
 
@@ -1924,7 +1901,7 @@ fn explicit_target_rebind_updates_frozen_lookup_and_provider_request(
 ) -> Result<(), Box<dyn StdError>> {
     let affected_engine_id = EngineId::new("tenferro-test.engine.rebind-execution.v1")?;
     let route_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
-    let fixture = published_route_fixture(affected_engine_id.clone(), route_storage)?;
+    let mut fixture = published_route_fixture(affected_engine_id.clone(), route_storage)?;
     let source_identity =
         test_provider_device_identity(fixture.source_endpoint.engine_id().as_str())?;
     let replacement_identity =
@@ -1953,7 +1930,7 @@ fn explicit_target_rebind_updates_frozen_lookup_and_provider_request(
         Ok(())
     })?;
 
-    execute_published_route_with_targets(&fixture, &source_identity, &replacement_identity)?;
+    execute_published_route_with_targets(&mut fixture, &source_identity, &replacement_identity)?;
     let requests = fixture.provider.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(
@@ -1980,7 +1957,7 @@ fn preparation_binding_cannot_be_promoted_to_partial_execution() -> Result<(), B
     let registration = assemble_preparation_only_engine_registration(
         PreparationOnlyEngineRegistrationConfig::new(
             metadata,
-            ExecutionContextIdentity::of::<CpuBackend>(),
+            ExecutionContextIdentity::of::<CpuEngine>(),
         ),
     )?;
     let mut builder = Runtime::builder();
@@ -1996,7 +1973,8 @@ fn preparation_binding_cannot_be_promoted_to_partial_execution() -> Result<(), B
 
 #[test]
 fn runtime_run_compiled_executes_extension_prepared_operation() -> Result<(), Box<dyn StdError>> {
-    let backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial()
+        .with_runtime_engine_id(EngineId::new(CPU_ENGINE_ID).expect("test engine id"));
     let counters = Arc::new(ExtensionCounters::default());
     let runtime = runtime_with_counting_extension(&backend, Arc::clone(&counters))?;
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
@@ -2012,12 +1990,12 @@ fn runtime_run_compiled_executes_extension_prepared_operation() -> Result<(), Bo
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
 
-    let first = runtime.run_compiled(&program, &[&input])?;
+    let first = run_compiled(&mut [&mut backend], &runtime, &program, &[&input])?;
     assert_eq!(first[0].as_slice::<f64>()?, &[3.0, 5.0]);
     assert_eq!(counters.prepare.load(Ordering::SeqCst), 1);
     assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
 
-    let second = runtime.run_compiled(&program, &[&input])?;
+    let second = run_compiled(&mut [&mut backend], &runtime, &program, &[&input])?;
     assert_eq!(second[0].as_slice::<f64>()?, &[3.0, 5.0]);
     assert_eq!(
         counters.prepare.load(Ordering::SeqCst),
@@ -2033,8 +2011,9 @@ fn runtime_run_compiled_executes_extension_prepared_operation() -> Result<(), Bo
 fn runtime_rejects_operation_output_outside_scheduled_residency() -> Result<(), Box<dyn StdError>> {
     let expected_domain = AllocationDomainId::fresh();
     let foreign_domain = AllocationDomainId::fresh();
-    let backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(expected_domain)));
+    let mut backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(expected_domain)))
+        .with_runtime_engine_id(EngineId::new(CPU_ENGINE_ID).expect("test engine id"));
     let counters = Arc::new(ExtensionCounters::default());
     *counters
         .foreign_output_domain
@@ -2054,7 +2033,7 @@ fn runtime_rejects_operation_output_outside_scheduled_residency() -> Result<(), 
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
 
-    let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
+    let error = run_compiled(&mut [&mut backend], &runtime, &program, &[&input]).unwrap_err();
 
     let contract = error
         .source()
@@ -2075,20 +2054,20 @@ fn runtime_rejects_operation_output_outside_scheduled_residency() -> Result<(), 
 #[test]
 fn runtime_run_prepared_reports_rejected_physical_input_residency() -> Result<(), Box<dyn StdError>>
 {
-    let backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial()
+        .with_runtime_engine_id(EngineId::new(CPU_ENGINE_ID).expect("test engine id"));
     let runtime = runtime_with_cpu(&backend)?;
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = (&x + &x)?;
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let host_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    let prepared = runtime.prepare_compiled(&program, &[&host_input])?;
+    let prepared = prepare(&[&backend], &runtime, &program, &[&host_input])?;
     let foreign_domain = AllocationDomainId::fresh();
     let foreign_input = TestAllocationDomain(foreign_domain).allocate(DType::F64, &[2])?;
 
-    let error = runtime
-        .run_prepared(&prepared, &[&foreign_input])
-        .unwrap_err();
+    let error =
+        run_prepared(&mut [&mut backend], &runtime, &prepared, &[&foreign_input]).unwrap_err();
 
     let contract = error
         .source()
@@ -2107,333 +2086,20 @@ fn runtime_run_prepared_reports_rejected_physical_input_residency() -> Result<()
 }
 
 #[test]
-fn runtime_run_prepared_in_matches_run_prepared_for_op_graph() -> Result<(), Box<dyn StdError>> {
-    let mut backend = CpuBackend::new();
-    let runtime = runtime_with_cpu(&backend)?;
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let y = (&x * &x)?;
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
-    let prepared = runtime.prepare_compiled(&program, &[&input])?;
-
-    let expected = runtime.run_prepared(&prepared, &[&input])?;
-    let actual = backend
-        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))??;
-    assert_eq!(actual[0].as_slice::<f64>()?, expected[0].as_slice::<f64>()?);
-    assert_eq!(actual[0].as_slice::<f64>()?, &[9.0, 25.0]);
-    Ok(())
-}
-
-#[test]
-fn runtime_run_prepared_in_matches_run_prepared_for_fused_elementwise_graph(
-) -> Result<(), Box<dyn StdError>> {
-    let mut backend = CpuBackend::new();
-    let runtime = runtime_with_cpu(&backend)?;
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    // A long elementwise chain gives the region planner something to fuse.
-    let squared = (&x * &x)?;
-    let cubed = (&squared * &x)?;
-    let shifted = (&cubed + &x)?;
-    let y = (&shifted * &x)?;
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?;
-    let prepared = runtime.prepare_compiled(&program, &[&input])?;
-
-    let expected = runtime.run_prepared(&prepared, &[&input])?;
-    let actual = backend
-        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))??;
-    assert_eq!(actual[0].as_slice::<f64>()?, expected[0].as_slice::<f64>()?);
-    Ok(())
-}
-
-#[test]
-fn runtime_run_prepared_in_matches_run_prepared_for_identity_graph() -> Result<(), Box<dyn StdError>>
-{
-    let mut backend = CpuBackend::new();
-    let runtime = runtime_with_cpu(&backend)?;
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    // The compiled output is the input placeholder itself: no instruction writes
-    // the output slot, so it is collected from the borrowed input directly.
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile_with_input_specs(&x, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 7.0])?;
-    let prepared = runtime.prepare_compiled(&program, &[&input])?;
-
-    let expected = runtime.run_prepared(&prepared, &[&input])?;
-    assert_eq!(expected[0].as_slice::<f64>()?, &[4.0, 7.0]);
-    let actual = backend
-        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))??;
-    assert_eq!(actual[0].as_slice::<f64>()?, &[4.0, 7.0]);
-    Ok(())
-}
-
-#[test]
-fn runtime_run_prepared_in_matches_run_prepared_for_extension_graph(
-) -> Result<(), Box<dyn StdError>> {
-    let counters = Arc::new(ExtensionCounters {
-        session_capable: true,
-        ..ExtensionCounters::default()
-    });
-    let mut backend = CpuBackend::new();
-    let runtime = runtime_with_counting_extension(&backend, Arc::clone(&counters))?;
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let y = tenferro_runtime::extension::apply(
-        Arc::new(CountingExtensionOp {
-            family_id: COUNTING_EXTENSION_FAMILY,
-        }),
-        &[&x],
-    )?
-    .pop()
-    .expect("extension has one output");
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
-    let prepared = runtime.prepare_compiled(&program, &[&input])?;
-
-    let expected = runtime.run_prepared(&prepared, &[&input])?;
-    let actual = backend
-        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))??;
-    assert_eq!(actual[0].as_slice::<f64>()?, expected[0].as_slice::<f64>()?);
-    assert_eq!(actual[0].as_slice::<f64>()?, &[3.0, 5.0]);
-    Ok(())
-}
-
-#[test]
-fn runtime_run_prepared_in_rejects_wrong_backend_session_before_launch(
-) -> Result<(), Box<dyn StdError>> {
-    let mut backend = CpuBackend::new();
-    let runtime = runtime_with_cpu(&backend)?;
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let y = (&x + &x)?;
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    let prepared = runtime.prepare_compiled(&program, &[&input])?;
-
-    // A second independent backend has a different runtime witness identity, so
-    // its session must be refused before the first instruction launches.
-    let mut foreign_backend = CpuBackend::new();
-    let error = foreign_backend
-        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))
-        .expect("session admission succeeds")
-        .expect_err("a foreign session must be rejected");
-    assert!(matches!(error, Error::Unsupported { .. }), "{error}");
-    assert!(
-        error.to_string().contains("different backend state"),
-        "{error}"
-    );
-
-    // The owning session still works, proving the graph itself was runnable.
-    let output = backend
-        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))??;
-    assert_eq!(output[0].as_slice::<f64>()?, &[2.0, 4.0]);
-    Ok(())
-}
-
-#[test]
-fn runtime_run_prepared_in_rejects_non_session_capable_operation_before_launch(
-) -> Result<(), Box<dyn StdError>> {
-    let counters = Arc::new(ExtensionCounters::default());
-    let backend = CpuBackend::new();
-    let runtime = runtime_with_counting_extension(&backend, Arc::clone(&counters))?;
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let y = tenferro_runtime::extension::apply(
-        Arc::new(CountingExtensionOp {
-            family_id: COUNTING_EXTENSION_FAMILY,
-        }),
-        &[&x],
-    )?
-    .pop()
-    .expect("extension has one output");
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
-    let prepared = runtime.prepare_compiled(&program, &[&input])?;
-
-    let mut backend = backend;
-    let error = backend
-        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))
-        .expect("session admission succeeds")
-        .expect_err("a non-session operation must be rejected before launch");
-    assert!(matches!(error, Error::Unsupported { .. }), "{error}");
-    assert!(
-        error
-            .to_string()
-            .contains("does not support a caller-borrowed session"),
-        "{error}"
-    );
-    assert_eq!(
-        counters.execute.load(Ordering::SeqCst),
-        0,
-        "preflight must reject before any prepared operation executes"
-    );
-    Ok(())
-}
-
-/// An owner-only extension cannot run on a borrowed session, so `run_prepared`
-/// keeps its per-instruction leased route and still succeeds, while
-/// `run_prepared_in` still rejects the graph before launch.
-#[test]
-fn runtime_run_prepared_keeps_owner_only_extensions_on_the_leased_route(
-) -> Result<(), Box<dyn StdError>> {
-    let counters = Arc::new(ExtensionCounters::default());
-    let backend = CpuBackend::new();
-    let runtime = runtime_with_counting_extension(&backend, Arc::clone(&counters))?;
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let y = tenferro_runtime::extension::apply(
-        Arc::new(CountingExtensionOp {
-            family_id: COUNTING_EXTENSION_FAMILY,
-        }),
-        &[&x],
-    )?
-    .pop()
-    .expect("extension has one output");
-    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
-    let prepared = runtime.prepare_compiled(&program, &[&input])?;
-
-    // The default route must keep the owner entry for a non-session-capable
-    // prepared operation instead of routing it through a graph-wide session.
-    let output = runtime.run_prepared(&prepared, &[&input])?;
-    assert_eq!(output[0].as_slice::<f64>()?, &[3.0, 5.0]);
-    assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
-
-    let mut backend = backend;
-    let error = backend
-        .with_backend_session(|session| runtime.run_prepared_in(session, &prepared, &[&input]))
-        .expect("session admission succeeds")
-        .expect_err("an owner-only extension must be rejected by the borrowed route");
-    assert!(matches!(error, Error::Unsupported { .. }), "{error}");
-    assert!(
-        error
-            .to_string()
-            .contains("does not support a caller-borrowed session"),
-        "{error}"
-    );
-    assert_eq!(
-        counters.execute.load(Ordering::SeqCst),
-        1,
-        "preflight must reject before any prepared operation executes"
-    );
-    Ok(())
-}
-
-/// A two-engine graph cannot hold one session, and its transfer provider runs
-/// between sessions, so `run_prepared` keeps the leased route: values, transfer
-/// count, and both event-domain retirements are unchanged.
-#[test]
-fn runtime_run_prepared_keeps_transfer_graphs_on_the_leased_route() -> Result<(), Box<dyn StdError>>
-{
-    let core_domain = AllocationDomainId::fresh();
-    let extension_domain = AllocationDomainId::fresh();
-    let core_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(core_domain)));
-    let extension_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(extension_domain)));
-    let counters = Arc::new(ExtensionCounters::default());
-    let core_engine_id = "tenferro-test.prepared-transfer-source.v1";
-    let extension_engine_id = "tenferro-test.prepared-transfer-destination.v1";
-    let source_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
-    let destination_storage = StorageClass::new("tenferro-test.storage.prepared-destination.v1")?;
-    let transfer = Arc::new(RecordingTransferProvider::materializing(
-        source_storage.clone(),
-        destination_storage.clone(),
-        extension_backend.clone(),
-    ));
-    let event_log = Arc::new(Mutex::new(Vec::new()));
-
-    let mut builder = Runtime::builder();
-    builder.register_engine(cpu_registration_with_storage_id_for_target(
-        &core_backend,
-        core_engine_id,
-        source_storage.as_str(),
-        cpu_core_capabilities(&core_backend),
-        CpuRegistrationState::executable_with_driver(recording_event_domain("source", &event_log)),
-        &format!("test-engine:{core_engine_id}"),
-    )?)?;
-    builder.register_engine(cpu_registration_with_storage_id_for_target(
-        &extension_backend,
-        extension_engine_id,
-        destination_storage.as_str(),
-        CoreCapabilityBundle::default(),
-        CpuRegistrationState::executable_with_driver(recording_event_domain(
-            "destination",
-            &event_log,
-        )),
-        &format!("test-engine:{extension_engine_id}"),
-    )?)?;
-    builder.register_transfer_provider(
-        TransferEndpoint::new(EngineId::new(core_engine_id)?, source_storage.clone()),
-        TransferEndpoint::new(
-            EngineId::new(extension_engine_id)?,
-            destination_storage.clone(),
-        ),
-        transfer.clone(),
-    )?;
-    builder.install_extension_module(Arc::new(CountingExtensionModule {
-        module_id: ExtensionModuleId::new("tenferro-test.counting-extension.prepared-transfer")
-            .map_err(RuntimeConfigError::from)?,
-        family_id: COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
-        counters: Arc::clone(&counters),
-    }))?;
-    let runtime = builder.build()?;
-
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let sum = (&x + &x)?;
-    let y = tenferro_runtime::extension::apply(
-        Arc::new(CountingExtensionOp {
-            family_id: COUNTING_EXTENSION_FAMILY,
-        }),
-        &[&sum],
-    )?
-    .pop()
-    .expect("extension has one output");
-    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
-    let prepared = runtime.prepare_compiled(&program, &[&input])?;
-
-    let output = runtime.run_prepared(&prepared, &[&input])?;
-
-    assert_eq!(tensor_f64_values(&output[0])?, [6.0, 10.0]);
-    assert_eq!(transfer.calls(), 1, "the graph transfers its value once");
-    assert_eq!(
-        transfer.materialized_domains(),
-        vec![(None, Some(extension_domain))]
-    );
-    assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        *counters.last_execute_domain.lock().expect("domain lock"),
-        Some(extension_domain)
-    );
-    let events = event_log.lock().expect("event log lock").clone();
-    assert!(events.contains(&"source:begin".to_owned()), "{events:?}");
-    assert!(
-        events.contains(&"destination:begin".to_owned()),
-        "{events:?}"
-    );
-    assert!(
-        events.contains(&"source:drain".to_owned()),
-        "the source event domain must retire before run_prepared returns: {events:?}"
-    );
-    assert!(
-        events.contains(&"destination:drain".to_owned()),
-        "the destination event domain must retire before run_prepared returns: {events:?}"
-    );
-    Ok(())
-}
-
-#[test]
 fn runtime_input_ingress_tracks_allocation_domain_across_prepared_cache_reuse(
 ) -> Result<(), Box<dyn StdError>> {
     let first_domain = AllocationDomainId::fresh();
     let second_domain = AllocationDomainId::fresh();
-    let first_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(first_domain)));
-    let second_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(second_domain)));
+    let mut first_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(first_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.a-domain-engine.v1").expect("test engine id"),
+        );
+    let mut second_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(second_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.b-domain-engine.v1").expect("test engine id"),
+        );
     let first_engine = "tenferro-test.a-domain-engine.v1";
     let second_engine = "tenferro-test.b-domain-engine.v1";
     let storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
@@ -2441,7 +2107,7 @@ fn runtime_input_ingress_tracks_allocation_domain_across_prepared_cache_reuse(
     let transfer = Arc::new(RecordingTransferProvider::materializing(
         storage.clone(),
         storage.clone(),
-        first_backend.clone(),
+        test_domain(first_domain),
     ));
     let mut builder = Runtime::builder();
     builder.register_engine(cpu_registration_with_id(
@@ -2464,7 +2130,7 @@ fn runtime_input_ingress_tracks_allocation_domain_across_prepared_cache_reuse(
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.domain-cache")?,
         family_id: COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(first_engine)?,
+        engine_id: EngineId::new("tenferro-test.a-domain-engine.v1")?,
         counters: Arc::clone(&counters),
     }))?;
     let runtime = builder.build()?;
@@ -2484,7 +2150,12 @@ fn runtime_input_ingress_tracks_allocation_domain_across_prepared_cache_reuse(
     let second_input = TestAllocationDomain(second_domain).allocate(DType::F64, &[2])?;
 
     for input in [&first_input, &second_input, &first_input, &second_input] {
-        let output = runtime.run_compiled(&program, &[input])?;
+        let output = run_compiled(
+            &mut [&mut first_backend, &mut second_backend],
+            &runtime,
+            &program,
+            &[input],
+        )?;
         assert_eq!(tensor_f64_values(&output[0])?, [0.0, 0.0]);
     }
 
@@ -2504,9 +2175,15 @@ fn runtime_input_ingress_tracks_allocation_domain_across_prepared_cache_reuse(
 #[test]
 fn runtime_input_ingress_prefers_candidate_with_route_to_first_consumer(
 ) -> Result<(), Box<dyn StdError>> {
-    let dead_backend = CpuBackend::new();
-    let routed_backend = CpuBackend::new();
-    let consumer_backend = CpuBackend::new();
+    let mut dead_backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.a-dead-ingress.v1").expect("test engine id"),
+    );
+    let mut routed_backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.b-routed-ingress.v1").expect("test engine id"),
+    );
+    let mut consumer_backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.z-routed-consumer.v1").expect("test engine id"),
+    );
     let dead_storage = StorageClass::new("tenferro-test.storage.dead-ingress.v1")?;
     let routed_storage = StorageClass::new("tenferro-test.storage.routed-ingress.v1")?;
     let consumer_storage = StorageClass::new("tenferro-test.storage.routed-consumer.v1")?;
@@ -2563,7 +2240,16 @@ fn runtime_input_ingress_prefers_candidate_with_route_to_first_consumer(
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
 
-    let output = runtime.run_compiled(&program, &[&input])?;
+    let output = run_compiled(
+        &mut [
+            &mut dead_backend,
+            &mut routed_backend,
+            &mut consumer_backend,
+        ],
+        &runtime,
+        &program,
+        &[&input],
+    )?;
 
     assert_eq!(tensor_f64_values(&output[0])?, [3.0, 5.0]);
     assert_eq!(transfer.calls(), 1);
@@ -2576,10 +2262,17 @@ fn runtime_operation_placement_retries_after_route_specific_ingress_failure(
 ) -> Result<(), Box<dyn StdError>> {
     let first_domain = AllocationDomainId::fresh();
     let second_domain = AllocationDomainId::fresh();
-    let first_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(first_domain)));
+    let mut first_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(first_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.a-first-capable.v1").expect("test engine id"),
+        );
     let second_allocation_domain = Arc::new(TestAllocationDomain(second_domain));
-    let second_backend = CpuBackend::new().with_allocation_domain(second_allocation_domain.clone());
+    let mut second_backend = CpuEngine::serial()
+        .with_allocation_domain(second_allocation_domain.clone())
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.b-second-reachable.v1").expect("test engine id"),
+        );
     let shared_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
     let first_counters = Arc::new(ExtensionCounters::default());
     let second_counters = Arc::new(ExtensionCounters::default());
@@ -2625,7 +2318,12 @@ fn runtime_operation_placement_retries_after_route_specific_ingress_failure(
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = second_allocation_domain.allocate(DType::F64, &[2])?;
 
-    let output = runtime.run_compiled(&program, &[&input])?;
+    let output = run_compiled(
+        &mut [&mut first_backend, &mut second_backend],
+        &runtime,
+        &program,
+        &[&input],
+    )?;
 
     assert_eq!(tensor_f64_values(&output[0])?, [0.0, 0.0]);
     assert_eq!(
@@ -2641,10 +2339,17 @@ fn runtime_operation_placement_retries_after_route_specific_ingress_failure(
 fn runtime_operation_placement_retries_reachable_later_storage() -> Result<(), Box<dyn StdError>> {
     let first_domain = AllocationDomainId::fresh();
     let second_domain = AllocationDomainId::fresh();
-    let first_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(first_domain)));
+    let mut first_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(first_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.a-first-storage-capable.v1").expect("test engine id"),
+        );
     let second_allocation_domain = Arc::new(TestAllocationDomain(second_domain));
-    let second_backend = CpuBackend::new().with_allocation_domain(second_allocation_domain.clone());
+    let mut second_backend = CpuEngine::serial()
+        .with_allocation_domain(second_allocation_domain.clone())
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.b-second-storage-reachable.v1").expect("test engine id"),
+        );
     let first_counters = Arc::new(ExtensionCounters::default());
     let second_counters = Arc::new(ExtensionCounters::default());
     let mut builder = Runtime::builder();
@@ -2689,7 +2394,12 @@ fn runtime_operation_placement_retries_reachable_later_storage() -> Result<(), B
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = second_allocation_domain.allocate(DType::F64, &[2])?;
 
-    let output = runtime.run_compiled(&program, &[&input])?;
+    let output = run_compiled(
+        &mut [&mut first_backend, &mut second_backend],
+        &runtime,
+        &program,
+        &[&input],
+    )?;
 
     assert_eq!(tensor_f64_values(&output[0])?, [0.0, 0.0]);
     assert_eq!(first_counters.execute.load(Ordering::SeqCst), 0);
@@ -2700,14 +2410,28 @@ fn runtime_operation_placement_retries_reachable_later_storage() -> Result<(), B
 #[test]
 fn runtime_operation_placement_explores_complete_multi_op_combinations(
 ) -> Result<(), Box<dyn StdError>> {
-    let a_backend = CpuBackend::new()
-        .with_allocation_domain(Arc::new(TestAllocationDomain(AllocationDomainId::fresh())));
+    let mut a_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(AllocationDomainId::fresh())))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.complete-a.v1").expect("test engine id"),
+        );
     let b_allocation_domain = Arc::new(TestAllocationDomain(AllocationDomainId::fresh()));
-    let b_backend = CpuBackend::new().with_allocation_domain(b_allocation_domain.clone());
-    let c_backend = CpuBackend::new()
-        .with_allocation_domain(Arc::new(TestAllocationDomain(AllocationDomainId::fresh())));
-    let d_backend = CpuBackend::new()
-        .with_allocation_domain(Arc::new(TestAllocationDomain(AllocationDomainId::fresh())));
+    let mut b_backend = CpuEngine::serial()
+        .with_allocation_domain(b_allocation_domain.clone())
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.complete-b.v1").expect("test engine id"),
+        );
+    let mut c_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(AllocationDomainId::fresh())))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.complete-c.v1").expect("test engine id"),
+        );
+    let d_allocation_domain = Arc::new(TestAllocationDomain(AllocationDomainId::fresh()));
+    let mut d_backend = CpuEngine::serial()
+        .with_allocation_domain(d_allocation_domain.clone())
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.complete-d.v1").expect("test engine id"),
+        );
     let a_storage = StorageClass::new("tenferro-test.storage.complete-a.v1")?;
     let b_storage = StorageClass::new("tenferro-test.storage.complete-b.v1")?;
     let c_storage = StorageClass::new("tenferro-test.storage.complete-c.v1")?;
@@ -2719,7 +2443,7 @@ fn runtime_operation_placement_explores_complete_multi_op_combinations(
     let transfer = Arc::new(RecordingTransferProvider::materializing(
         b_storage.clone(),
         d_storage.clone(),
-        d_backend.clone(),
+        Arc::clone(&d_allocation_domain) as Arc<dyn SharedTensorAllocationDomain>,
     ));
 
     let mut builder = Runtime::builder();
@@ -2798,7 +2522,17 @@ fn runtime_operation_placement_explores_complete_multi_op_combinations(
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = b_allocation_domain.allocate(DType::F64, &[2])?;
 
-    let output = runtime.run_compiled(&program, &[&input])?;
+    let output = run_compiled(
+        &mut [
+            &mut a_backend,
+            &mut b_backend,
+            &mut c_backend,
+            &mut d_backend,
+        ],
+        &runtime,
+        &program,
+        &[&input],
+    )?;
 
     assert_eq!(tensor_f64_values(&output[0])?, [0.0, 0.0]);
     assert_eq!(a_counters.execute.load(Ordering::SeqCst), 0);
@@ -2815,7 +2549,11 @@ fn runtime_operation_placement_explores_complete_multi_op_combinations(
 fn runtime_operation_placement_enumerates_non_default_registered_storage(
 ) -> Result<(), Box<dyn StdError>> {
     let domain = Arc::new(TestAllocationDomain(AllocationDomainId::fresh()));
-    let backend = CpuBackend::new().with_allocation_domain(domain.clone());
+    let mut backend = CpuEngine::serial()
+        .with_allocation_domain(domain.clone())
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.secondary-storage-engine.v1").expect("test engine id"),
+        );
     let default_storage = StorageClass::new("tenferro-test.storage.default-unreachable.v1")?;
     let secondary_storage = StorageClass::new("tenferro-test.storage.secondary-reachable.v1")?;
     let counters = Arc::new(ExtensionCounters::default());
@@ -2831,7 +2569,7 @@ fn runtime_operation_placement_enumerates_non_default_registered_storage(
     builder.install_extension_module(Arc::new(CountingExtensionModule {
         module_id: ExtensionModuleId::new("tenferro-test.secondary-storage-module")?,
         family_id: COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(engine_id)?,
+        engine_id: EngineId::new("tenferro-test.secondary-storage-engine.v1")?,
         counters: Arc::clone(&counters),
     }))?;
     let runtime = builder.build()?;
@@ -2849,7 +2587,7 @@ fn runtime_operation_placement_enumerates_non_default_registered_storage(
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = domain.allocate(DType::F64, &[2])?;
 
-    let output = runtime.run_compiled(&program, &[&input])?;
+    let output = run_compiled(&mut [&mut backend], &runtime, &program, &[&input])?;
 
     assert_eq!(tensor_f64_values(&output[0])?, [0.0, 0.0]);
     assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
@@ -2863,10 +2601,16 @@ fn runtime_operation_placement_enumerates_non_default_registered_storage(
 #[test]
 fn runtime_operation_placement_reports_typed_error_after_all_ingress_routes_fail(
 ) -> Result<(), Box<dyn StdError>> {
-    let first_backend = CpuBackend::new()
-        .with_allocation_domain(Arc::new(TestAllocationDomain(AllocationDomainId::fresh())));
-    let second_backend = CpuBackend::new()
-        .with_allocation_domain(Arc::new(TestAllocationDomain(AllocationDomainId::fresh())));
+    let mut first_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(AllocationDomainId::fresh())))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.a-unreachable-capable.v1").expect("test engine id"),
+        );
+    let mut second_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(AllocationDomainId::fresh())))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.b-unreachable-capable.v1").expect("test engine id"),
+        );
     let first_counters = Arc::new(ExtensionCounters::default());
     let second_counters = Arc::new(ExtensionCounters::default());
     let mut builder = Runtime::builder();
@@ -2909,7 +2653,14 @@ fn runtime_operation_placement_reports_typed_error_after_all_ingress_routes_fail
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = TestAllocationDomain(AllocationDomainId::fresh()).allocate(DType::F64, &[2])?;
 
-    let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
+    let error = run_compiled(
+        &mut [&mut first_backend, &mut second_backend],
+        &runtime,
+        &program,
+        &[&input],
+    )
+    .unwrap_err();
+    eprintln!("all-ingress-failure error: {error:?}");
 
     assert!(matches!(
         error.reason(),
@@ -2922,10 +2673,18 @@ fn runtime_operation_placement_reports_typed_error_after_all_ingress_routes_fail
 
 #[test]
 fn runtime_input_ingress_covers_all_split_consumers() -> Result<(), Box<dyn StdError>> {
-    let dead_backend = CpuBackend::new();
-    let routed_backend = CpuBackend::new();
-    let first_consumer_backend = CpuBackend::new();
-    let second_consumer_backend = CpuBackend::new();
+    let mut dead_backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.a-split-dead.v1").expect("test engine id"),
+    );
+    let mut routed_backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.b-split-routed.v1").expect("test engine id"),
+    );
+    let mut first_consumer_backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.y-split-first.v1").expect("test engine id"),
+    );
+    let mut second_consumer_backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.z-split-second.v1").expect("test engine id"),
+    );
     let dead_storage = StorageClass::new("tenferro-test.storage.split-dead.v1")?;
     let routed_storage = StorageClass::new("tenferro-test.storage.split-routed.v1")?;
     let first_storage = StorageClass::new("tenferro-test.storage.split-first.v1")?;
@@ -3021,7 +2780,17 @@ fn runtime_input_ingress_covers_all_split_consumers() -> Result<(), Box<dyn StdE
     .expect("second extension has one output");
     let program = GraphCompiler::new().compile_many(&[&first, &second])?;
 
-    let output = runtime.run_compiled(&program, &[])?;
+    let output = run_compiled(
+        &mut [
+            &mut dead_backend,
+            &mut routed_backend,
+            &mut first_consumer_backend,
+            &mut second_consumer_backend,
+        ],
+        &runtime,
+        &program,
+        &[],
+    )?;
 
     assert_eq!(tensor_f64_values(&output[0])?, [3.0, 5.0]);
     assert_eq!(tensor_f64_values(&output[1])?, [3.0, 5.0]);
@@ -3040,14 +2809,26 @@ fn runtime_input_ingress_covers_synthesized_root_instructions() -> Result<(), Bo
     let root_domain = AllocationDomainId::fresh();
     let source_domain = AllocationDomainId::fresh();
     let core_domain = AllocationDomainId::fresh();
-    let root_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(root_domain)));
-    let dead_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(source_domain)));
-    let routed_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(source_domain)));
-    let core_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(core_domain)));
+    let root_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(root_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.a-synth-root.v1").expect("test engine id"),
+        );
+    let dead_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(source_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.b-synth-dead.v1").expect("test engine id"),
+        );
+    let routed_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(source_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.c-synth-routed.v1").expect("test engine id"),
+        );
+    let core_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(core_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.z-synth-core.v1").expect("test engine id"),
+        );
     let root_storage = StorageClass::new("tenferro-test.storage.synth-root.v1")?;
     let dead_storage = StorageClass::new("tenferro-test.storage.synth-dead.v1")?;
     let routed_storage = StorageClass::new("tenferro-test.storage.synth-routed.v1")?;
@@ -3055,22 +2836,22 @@ fn runtime_input_ingress_covers_synthesized_root_instructions() -> Result<(), Bo
     let dead_to_core = Arc::new(RecordingTransferProvider::materializing(
         dead_storage.clone(),
         core_storage.clone(),
-        core_backend.clone(),
+        test_domain(core_domain),
     ));
     let routed_to_root = Arc::new(RecordingTransferProvider::materializing(
         routed_storage.clone(),
         root_storage.clone(),
-        root_backend.clone(),
+        test_domain(root_domain),
     ));
     let routed_to_core = Arc::new(RecordingTransferProvider::materializing(
         routed_storage.clone(),
         core_storage.clone(),
-        core_backend.clone(),
+        test_domain(core_domain),
     ));
     let root_to_core = Arc::new(RecordingTransferProvider::materializing(
         root_storage.clone(),
         core_storage.clone(),
-        core_backend.clone(),
+        test_domain(core_domain),
     ));
     let root_counters = Arc::new(ExtensionCounters::default());
     let mut builder = Runtime::builder();
@@ -3147,7 +2928,12 @@ fn runtime_input_ingress_covers_synthesized_root_instructions() -> Result<(), Bo
     let synthesized_output = source_input.transpose(&[1, 0])?.conj()?;
     let program = GraphCompiler::new().compile_many(&[&root_output, &synthesized_output])?;
 
-    let _prepared = runtime.prepare_compiled(&program, &[])?;
+    let _prepared = prepare(
+        &[&root_backend, &dead_backend, &routed_backend, &core_backend],
+        &runtime,
+        &program,
+        &[],
+    )?;
 
     assert_eq!(dead_to_core.calls(), 0);
     assert_eq!(routed_to_root.calls(), 0);
@@ -3160,10 +2946,16 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
 ) -> Result<(), Box<dyn StdError>> {
     let core_domain = AllocationDomainId::fresh();
     let extension_domain = AllocationDomainId::fresh();
-    let core_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(core_domain)));
-    let extension_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(extension_domain)));
+    let mut core_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(core_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.core-engine.v1").expect("test engine id"),
+        );
+    let mut extension_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(extension_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.extension-engine.v1").expect("test engine id"),
+        );
     let counters = Arc::new(ExtensionCounters::default());
     let core_engine_id = "tenferro-test.core-engine.v1";
     let extension_engine_id = "tenferro-test.extension-engine.v1";
@@ -3171,7 +2963,7 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
     let transfer = Arc::new(RecordingTransferProvider::materializing(
         storage.clone(),
         storage.clone(),
-        extension_backend.clone(),
+        test_domain(extension_domain),
     ));
 
     let mut builder = Runtime::builder();
@@ -3196,17 +2988,18 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.per-op-module")
             .map_err(RuntimeConfigError::from)?,
         family_id: COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
+        engine_id: EngineId::new("tenferro-test.extension-engine.v1")
+            .map_err(RuntimeConfigError::from)?,
         counters: Arc::clone(&counters),
     }))?;
     let runtime = builder.build()?;
     let snapshot = runtime.snapshot()?;
     let source_event_domain = snapshot
-        .engine(&EngineId::new(core_engine_id)?)
+        .engine(&EngineId::new("tenferro-test.core-engine.v1")?)
         .expect("source engine")
         .event_domain_id();
     let destination_event_domain = snapshot
-        .engine(&EngineId::new(extension_engine_id)?)
+        .engine(&EngineId::new("tenferro-test.extension-engine.v1")?)
         .expect("destination engine")
         .event_domain_id();
 
@@ -3224,7 +3017,12 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
 
-    let output = runtime.run_compiled(&program, &[&input])?;
+    let output = run_compiled(
+        &mut [&mut core_backend, &mut extension_backend],
+        &runtime,
+        &program,
+        &[&input],
+    )?;
 
     assert_eq!(tensor_f64_values(&output[0])?, [6.0, 10.0]);
     assert_eq!(counters.prepare.load(Ordering::SeqCst), 1);
@@ -3237,11 +3035,11 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
     assert_eq!(
         transfer.requests(),
         vec![RecordedTransferRequest {
-            source_engine_id: EngineId::new(core_engine_id)?,
+            source_engine_id: EngineId::new("tenferro-test.core-engine.v1")?,
             source_provider_device_identity: test_provider_device_identity(core_engine_id)?,
             source_event_domain_id: source_event_domain,
             source_storage_class: storage.clone(),
-            destination_engine_id: EngineId::new(extension_engine_id)?,
+            destination_engine_id: EngineId::new("tenferro-test.extension-engine.v1")?,
             destination_provider_device_identity: test_provider_device_identity(
                 extension_engine_id
             )?,
@@ -3259,127 +3057,21 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
 }
 
 #[test]
-fn runtime_run_compiled_returns_drain_failure_without_outputs() -> Result<(), Box<dyn StdError>> {
-    let backend = CpuBackend::new();
-    let event_log = Arc::new(Mutex::new(Vec::new()));
-    let mut builder = Runtime::builder();
-    builder.register_engine(cpu_registration_with_id(
-        &backend,
-        CPU_ENGINE_ID,
-        cpu_core_capabilities(&backend),
-        CpuRegistrationState::executable_with_driver(failing_drain_event_domain("cpu", &event_log)),
-    )?)?;
-    let runtime = builder.build()?;
-
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let y = (&x + &x)?;
-    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
-
-    let error = runtime
-        .run_compiled(&program, &[&input])
-        .expect_err("drain failure must suppress outputs");
-
-    assert!(error.to_string().contains("cpu event-domain drain failure"));
-    assert_eq!(
-        event_log.lock().expect("event log lock").as_slice(),
-        ["cpu:begin", "cpu:enqueue:0", "cpu:drain", "cpu:drop"]
-    );
-    Ok(())
-}
-
-#[test]
-fn runtime_run_compiled_unwind_drops_event_run_before_tensor_storage(
-) -> Result<(), Box<dyn StdError>> {
-    let domain = AllocationDomainId::fresh();
-    let backend = CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(domain)));
-    let event_log = Arc::new(Mutex::new(Vec::new()));
-    let output_drops = Arc::new(AtomicUsize::new(0));
-    let producer_counters = Arc::new(ExtensionCounters::default());
-    *producer_counters
-        .tracked_output_drops
-        .lock()
-        .expect("tracked output lock") = Some(Arc::clone(&output_drops));
-    *producer_counters
-        .tracked_output_drop_events
-        .lock()
-        .expect("tracked output drop event lock") = Some(Arc::clone(&event_log));
-    let panic_counters = Arc::new(ExtensionCounters::default());
-    panic_counters.panic_execute.store(true, Ordering::SeqCst);
-
-    let mut builder = Runtime::builder();
-    builder.register_engine(cpu_registration_with_id(
-        &backend,
-        CPU_ENGINE_ID,
-        cpu_core_capabilities(&backend),
-        CpuRegistrationState::executable_with_driver(recording_event_domain("cpu", &event_log)),
-    )?)?;
-    builder.install_extension_module(Arc::new(CountingExtensionModule {
-        module_id: ExtensionModuleId::new("tenferro-test.panic-producer-module")?,
-        family_id: COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(CPU_ENGINE_ID)?,
-        counters: producer_counters,
-    }))?;
-    builder.install_extension_module(Arc::new(CountingExtensionModule {
-        module_id: ExtensionModuleId::new("tenferro-test.panic-consumer-module")?,
-        family_id: DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(CPU_ENGINE_ID)?,
-        counters: Arc::clone(&panic_counters),
-    }))?;
-    let runtime = builder.build()?;
-
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let produced = tenferro_runtime::extension::apply(
-        Arc::new(CountingExtensionOp {
-            family_id: COUNTING_EXTENSION_FAMILY,
-        }),
-        &[&x],
-    )?
-    .pop()
-    .expect("producer has one output");
-    let y = tenferro_runtime::extension::apply(
-        Arc::new(CountingExtensionOp {
-            family_id: DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
-        }),
-        &[&produced],
-    )?
-    .pop()
-    .expect("consumer has one output");
-    let program = GraphCompiler::new().compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
-
-    let panic = catch_unwind(AssertUnwindSafe(|| {
-        let _ = runtime.run_compiled(&program, &[&input]);
-    }));
-
-    assert!(panic.is_err(), "prepared-operation panic must unwind");
-    assert_eq!(panic_counters.execute.load(Ordering::SeqCst), 1);
-    assert_eq!(output_drops.load(Ordering::SeqCst), 1);
-    let events = event_log.lock().expect("event log lock").clone();
-    let run_drop = events
-        .iter()
-        .position(|event| event == "cpu:drop")
-        .expect("event-domain run must drop during unwind");
-    let tensor_drop = events
-        .iter()
-        .position(|event| event == "tensor:drop")
-        .expect("intermediate tensor storage must drop during unwind");
-    assert!(
-        run_drop < tensor_drop,
-        "event-domain cleanup must precede tensor storage release: {events:?}"
-    );
-    Ok(())
-}
-
-#[test]
 fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
 ) -> Result<(), Box<dyn StdError>> {
     let core_domain = AllocationDomainId::fresh();
     let extension_domain = AllocationDomainId::fresh();
-    let core_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(core_domain)));
-    let extension_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(extension_domain)));
+    let mut core_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(core_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.core-transfer-source.v1").expect("test engine id"),
+        );
+    let mut extension_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(extension_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.extension-transfer-destination.v1")
+                .expect("test engine id"),
+        );
     let counters = Arc::new(ExtensionCounters::default());
     let core_engine_id = "tenferro-test.core-transfer-source.v1";
     let extension_engine_id = "tenferro-test.extension-transfer-destination.v1";
@@ -3388,9 +3080,8 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
     let transfer = Arc::new(RecordingTransferProvider::materializing(
         source_storage.clone(),
         destination_storage.clone(),
-        extension_backend.clone(),
+        test_domain(extension_domain),
     ));
-    let event_log = Arc::new(Mutex::new(Vec::new()));
 
     let mut builder = Runtime::builder();
     builder.register_engine(cpu_registration_with_storage_id_for_target(
@@ -3398,7 +3089,7 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
         core_engine_id,
         source_storage.as_str(),
         cpu_core_capabilities(&core_backend),
-        CpuRegistrationState::executable_with_driver(recording_event_domain("source", &event_log)),
+        CpuRegistrationState::executable(),
         &format!("test-engine:{core_engine_id}"),
     )?)?;
     builder.register_engine(cpu_registration_with_storage_id_for_target(
@@ -3406,16 +3097,16 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
         extension_engine_id,
         destination_storage.as_str(),
         CoreCapabilityBundle::default(),
-        CpuRegistrationState::executable_with_driver(recording_event_domain(
-            "destination",
-            &event_log,
-        )),
+        CpuRegistrationState::executable(),
         &format!("test-engine:{extension_engine_id}"),
     )?)?;
     builder.register_transfer_provider(
-        TransferEndpoint::new(EngineId::new(core_engine_id)?, source_storage.clone()),
         TransferEndpoint::new(
-            EngineId::new(extension_engine_id)?,
+            EngineId::new("tenferro-test.core-transfer-source.v1")?,
+            source_storage.clone(),
+        ),
+        TransferEndpoint::new(
+            EngineId::new("tenferro-test.extension-transfer-destination.v1")?,
             destination_storage.clone(),
         ),
         transfer.clone(),
@@ -3424,17 +3115,20 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.transfer-module")
             .map_err(RuntimeConfigError::from)?,
         family_id: COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
+        engine_id: EngineId::new("tenferro-test.extension-transfer-destination.v1")
+            .map_err(RuntimeConfigError::from)?,
         counters: Arc::clone(&counters),
     }))?;
     let runtime = builder.build()?;
     let snapshot = runtime.snapshot()?;
     let source_event_domain = snapshot
-        .engine(&EngineId::new(core_engine_id)?)
+        .engine(&EngineId::new("tenferro-test.core-transfer-source.v1")?)
         .expect("source engine")
         .event_domain_id();
     let destination_event_domain = snapshot
-        .engine(&EngineId::new(extension_engine_id)?)
+        .engine(&EngineId::new(
+            "tenferro-test.extension-transfer-destination.v1",
+        )?)
         .expect("destination engine")
         .event_domain_id();
     assert_ne!(source_event_domain, destination_event_domain);
@@ -3453,7 +3147,12 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
 
-    let output = runtime.run_compiled(&program, &[&input])?;
+    let output = run_compiled(
+        &mut [&mut core_backend, &mut extension_backend],
+        &runtime,
+        &program,
+        &[&input],
+    )?;
 
     assert_eq!(tensor_f64_values(&output[0])?, [6.0, 10.0]);
     assert_eq!(transfer.calls(), 1);
@@ -3464,11 +3163,13 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
     assert_eq!(
         transfer.requests(),
         vec![RecordedTransferRequest {
-            source_engine_id: EngineId::new(core_engine_id)?,
+            source_engine_id: EngineId::new("tenferro-test.core-transfer-source.v1")?,
             source_provider_device_identity: test_provider_device_identity(core_engine_id)?,
             source_event_domain_id: source_event_domain,
             source_storage_class: source_storage,
-            destination_engine_id: EngineId::new(extension_engine_id)?,
+            destination_engine_id: EngineId::new(
+                "tenferro-test.extension-transfer-destination.v1"
+            )?,
             destination_provider_device_identity: test_provider_device_identity(
                 extension_engine_id
             )?,
@@ -3481,39 +3182,6 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
         *counters.last_execute_domain.lock().expect("domain lock"),
         Some(extension_domain)
     );
-    let events = event_log.lock().expect("event log lock").clone();
-    assert!(events.contains(&"source:begin".to_owned()), "{events:?}");
-    assert!(
-        events.contains(&"destination:begin".to_owned()),
-        "{events:?}"
-    );
-    assert!(
-        events.contains(&"source:enqueue:0".to_owned()),
-        "{events:?}"
-    );
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.as_str() == "destination:enqueue:1")
-            .count(),
-        1,
-        "only the same-destination operation dependency reaches the destination run: {events:?}"
-    );
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.as_str() == "destination:enqueue:0")
-            .count(),
-        1,
-        "the transfer source dependency is host-bridged before destination enqueue: {events:?}"
-    );
-    assert!(events.contains(&"source:wait".to_owned()), "{events:?}");
-    assert!(events.contains(&"source:drain".to_owned()), "{events:?}");
-    assert!(
-        events.contains(&"destination:drain".to_owned()),
-        "{events:?}"
-    );
-
     Ok(())
 }
 
@@ -3522,10 +3190,16 @@ fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer
 ) -> Result<(), Box<dyn StdError>> {
     let ingress_domain = AllocationDomainId::fresh();
     let consumer_domain = AllocationDomainId::fresh();
-    let ingress_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(ingress_domain)));
-    let consumer_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(consumer_domain)));
+    let mut ingress_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(ingress_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.a-input-ingress.v1").expect("test engine id"),
+        );
+    let mut consumer_backend = CpuEngine::serial()
+        .with_allocation_domain(Arc::new(TestAllocationDomain(consumer_domain)))
+        .with_runtime_engine_id(
+            EngineId::new("tenferro-test.z-input-consumer.v1").expect("test engine id"),
+        );
     let counters = Arc::new(ExtensionCounters::default());
     let ingress_engine_id = "tenferro-test.a-input-ingress.v1";
     let consumer_engine_id = "tenferro-test.z-input-consumer.v1";
@@ -3534,7 +3208,7 @@ fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer
     let transfer = Arc::new(RecordingTransferProvider::materializing(
         ingress_storage.clone(),
         consumer_storage.clone(),
-        consumer_backend.clone(),
+        test_domain(consumer_domain),
     ));
 
     let mut builder = Runtime::builder();
@@ -3561,17 +3235,18 @@ fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.input-consumer")
             .map_err(RuntimeConfigError::from)?,
         family_id: COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(consumer_engine_id).map_err(RuntimeConfigError::from)?,
+        engine_id: EngineId::new("tenferro-test.z-input-consumer.v1")
+            .map_err(RuntimeConfigError::from)?,
         counters: Arc::clone(&counters),
     }))?;
     let runtime = builder.build()?;
     let snapshot = runtime.snapshot()?;
     let ingress_event_domain = snapshot
-        .engine(&EngineId::new(ingress_engine_id)?)
+        .engine(&EngineId::new("tenferro-test.a-input-ingress.v1")?)
         .expect("ingress engine")
         .event_domain_id();
     let consumer_event_domain = snapshot
-        .engine(&EngineId::new(consumer_engine_id)?)
+        .engine(&EngineId::new("tenferro-test.z-input-consumer.v1")?)
         .expect("consumer engine")
         .event_domain_id();
 
@@ -3588,7 +3263,12 @@ fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
 
-    let output = runtime.run_compiled(&program, &[&input])?;
+    let output = run_compiled(
+        &mut [&mut ingress_backend, &mut consumer_backend],
+        &runtime,
+        &program,
+        &[&input],
+    )?;
 
     assert_eq!(tensor_f64_values(&output[0])?, [3.0, 5.0]);
     assert_eq!(counters.execute.load(Ordering::SeqCst), 1);
@@ -3605,11 +3285,11 @@ fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer
     assert_eq!(
         transfer.requests(),
         vec![RecordedTransferRequest {
-            source_engine_id: EngineId::new(ingress_engine_id)?,
+            source_engine_id: EngineId::new("tenferro-test.a-input-ingress.v1")?,
             source_provider_device_identity: test_provider_device_identity(ingress_engine_id)?,
             source_event_domain_id: ingress_event_domain,
             source_storage_class: ingress_storage,
-            destination_engine_id: EngineId::new(consumer_engine_id)?,
+            destination_engine_id: EngineId::new("tenferro-test.z-input-consumer.v1")?,
             destination_provider_device_identity: test_provider_device_identity(
                 consumer_engine_id
             )?,
@@ -3643,10 +3323,15 @@ fn runtime_rejects_faulty_transfer_provider_outputs_with_typed_contract_errors(
         FaultyTransferOutput::BufferLength,
         FaultyTransferOutput::Residency,
     ] {
-        let ingress_backend = CpuBackend::new();
+        let mut ingress_backend = CpuEngine::serial().with_runtime_engine_id(
+            EngineId::new("tenferro-test.a-faulty-ingress.v1").expect("test engine id"),
+        );
         let consumer_domain = AllocationDomainId::fresh();
-        let consumer_backend = CpuBackend::new()
-            .with_allocation_domain(Arc::new(TestAllocationDomain(consumer_domain)));
+        let mut consumer_backend = CpuEngine::serial()
+            .with_allocation_domain(Arc::new(TestAllocationDomain(consumer_domain)))
+            .with_runtime_engine_id(
+                EngineId::new("tenferro-test.z-faulty-consumer.v1").expect("test engine id"),
+            );
         let counters = Arc::new(ExtensionCounters::default());
         let ingress_storage = StorageClass::new("tenferro-test.storage.faulty-ingress.v1")?;
         let consumer_storage = StorageClass::new("tenferro-test.storage.faulty-consumer.v1")?;
@@ -3680,7 +3365,13 @@ fn runtime_rejects_faulty_transfer_provider_outputs_with_typed_contract_errors(
         }))?;
         let runtime = builder.build()?;
 
-        let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
+        let error = run_compiled(
+            &mut [&mut ingress_backend, &mut consumer_backend],
+            &runtime,
+            &program,
+            &[&input],
+        )
+        .unwrap_err();
         let transfer_error = error
             .source()
             .and_then(|source| source.downcast_ref::<TransferError>())
@@ -3730,8 +3421,12 @@ fn runtime_rejects_faulty_transfer_provider_outputs_with_typed_contract_errors(
 #[test]
 fn runtime_run_compiled_split_use_retains_source_and_destination_values(
 ) -> Result<(), Box<dyn StdError>> {
-    let core_backend = CpuBackend::new();
-    let extension_backend = CpuBackend::new();
+    let mut core_backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.core-split-source.v1").expect("test engine id"),
+    );
+    let mut extension_backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.extension-split-destination.v1").expect("test engine id"),
+    );
     let counters = Arc::new(ExtensionCounters::default());
     let core_engine_id = "tenferro-test.core-split-source.v1";
     let extension_engine_id = "tenferro-test.extension-split-destination.v1";
@@ -3775,7 +3470,8 @@ fn runtime_run_compiled_split_use_retains_source_and_destination_values(
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.split-module")
             .map_err(RuntimeConfigError::from)?,
         family_id: COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
+        engine_id: EngineId::new("tenferro-test.extension-split-destination.v1")
+            .map_err(RuntimeConfigError::from)?,
         counters: Arc::clone(&counters),
     }))?;
     let runtime = builder.build()?;
@@ -3795,7 +3491,12 @@ fn runtime_run_compiled_split_use_retains_source_and_destination_values(
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
 
-    let output = runtime.run_compiled(&program, &[&input])?;
+    let output = run_compiled(
+        &mut [&mut core_backend, &mut extension_backend],
+        &runtime,
+        &program,
+        &[&input],
+    )?;
 
     assert_eq!(output[0].as_slice::<f64>()?, &[12.0, 20.0]);
     assert_eq!(forward.calls(), 1);
@@ -3808,236 +3509,27 @@ fn runtime_run_compiled_split_use_retains_source_and_destination_values(
     Ok(())
 }
 
-struct TransferDrainFailureObservation {
-    error: Error,
-    events: Vec<String>,
-    forward_calls: usize,
-    failing_calls: usize,
-    upstream_execute: usize,
-    downstream_execute: usize,
-    drops: usize,
-}
-
-fn run_transfer_and_drain_failure(
-    drain_behavior: DrainBehavior,
-) -> Result<TransferDrainFailureObservation, Box<dyn StdError>> {
-    let core_backend = CpuBackend::new();
-    let extension_domain = AllocationDomainId::fresh();
-    let extension_backend =
-        CpuBackend::new().with_allocation_domain(Arc::new(TestAllocationDomain(extension_domain)));
-    let drops = Arc::new(AtomicUsize::new(0));
-    let upstream_counters = Arc::new(ExtensionCounters::default());
-    let downstream_counters = Arc::new(ExtensionCounters::default());
-    *upstream_counters
-        .tracked_output_drops
-        .lock()
-        .expect("tracked output lock") = Some(Arc::clone(&drops));
-    let core_engine_id = "tenferro-test.core-transfer-failure.v1";
-    let extension_engine_id = "tenferro-test.extension-transfer-failure.v1";
-    let source_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
-    let destination_storage = StorageClass::new("tenferro-test.storage.failure-destination.v1")?;
-    let forward = Arc::new(RecordingTransferProvider::materializing(
-        source_storage.clone(),
-        destination_storage.clone(),
-        extension_backend.clone(),
-    ));
-    let failing = Arc::new(FailingTransferProvider {
-        calls: AtomicUsize::new(0),
-    });
-    let event_log = Arc::new(Mutex::new(Vec::new()));
-
-    let mut builder = Runtime::builder();
-    builder.register_engine(cpu_registration_with_storage_id_for_target(
-        &core_backend,
-        core_engine_id,
-        source_storage.as_str(),
-        cpu_core_capabilities(&core_backend),
-        CpuRegistrationState::executable_with_driver(event_domain_with_drain_behavior(
-            "source",
-            &event_log,
-            drain_behavior,
-        )),
-        &format!("test-engine:{core_engine_id}"),
-    )?)?;
-    builder.register_engine(cpu_registration_with_storage_id_for_target(
-        &extension_backend,
-        extension_engine_id,
-        destination_storage.as_str(),
-        CoreCapabilityBundle::default(),
-        CpuRegistrationState::executable_with_driver(recording_event_domain(
-            "destination",
-            &event_log,
-        )),
-        &format!("test-engine:{extension_engine_id}"),
-    )?)?;
-    builder.register_transfer_provider(
-        transfer_endpoint(core_engine_id, source_storage.clone())?,
-        transfer_endpoint(extension_engine_id, destination_storage.clone())?,
-        forward.clone(),
-    )?;
-    builder.register_transfer_provider(
-        transfer_endpoint(extension_engine_id, destination_storage)?,
-        transfer_endpoint(core_engine_id, source_storage)?,
-        failing.clone(),
-    )?;
-    builder.install_extension_module(Arc::new(CountingExtensionModule {
-        module_id: ExtensionModuleId::new(
-            "tenferro-test.counting-extension.transfer-failure-module",
-        )
-        .map_err(RuntimeConfigError::from)?,
-        family_id: COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
-        counters: Arc::clone(&upstream_counters),
-    }))?;
-    builder.install_extension_module(Arc::new(CountingExtensionModule {
-        module_id: ExtensionModuleId::new(
-            "tenferro-test.downstream-counting-extension.transfer-failure-module",
-        )
-        .map_err(RuntimeConfigError::from)?,
-        family_id: DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(core_engine_id).map_err(RuntimeConfigError::from)?,
-        counters: Arc::clone(&downstream_counters),
-    }))?;
-    let runtime = builder.build()?;
-
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let sum = (&x + &x)?;
-    let extension = tenferro_runtime::extension::apply(
-        Arc::new(CountingExtensionOp {
-            family_id: COUNTING_EXTENSION_FAMILY,
-        }),
-        &[&sum],
-    )?
-    .pop()
-    .expect("extension has one output");
-    let y = tenferro_runtime::extension::apply(
-        Arc::new(CountingExtensionOp {
-            family_id: DOWNSTREAM_COUNTING_EXTENSION_FAMILY,
-        }),
-        &[&extension],
-    )?
-    .pop()
-    .expect("downstream extension has one output");
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
-
-    let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
-    eprintln!("missing bridge error: {error:?}");
-
-    let events = event_log.lock().expect("event log lock").clone();
-    Ok(TransferDrainFailureObservation {
-        error,
-        events,
-        forward_calls: forward.calls(),
-        failing_calls: failing.calls.load(Ordering::SeqCst),
-        upstream_execute: upstream_counters.execute.load(Ordering::SeqCst),
-        downstream_execute: downstream_counters.execute.load(Ordering::SeqCst),
-        drops: drops.load(Ordering::SeqCst),
-    })
-}
-
-fn assert_transfer_and_drain_failure(
-    observation: &TransferDrainFailureObservation,
-    cleanup_message: &str,
-) {
-    assert!(observation
-        .error
-        .to_string()
-        .contains("intentional transfer failure"));
-    assert!(
-        observation.error.to_string().contains(cleanup_message),
-        "combined execution and cleanup diagnostics must preserve both failures: {}",
-        observation.error
-    );
-    let cleanup = observation
-        .error
-        .source()
-        .expect("combined error must retain cleanup wrapper");
-    let primary = cleanup
-        .source()
-        .expect("cleanup wrapper must retain the primary execution error");
-    assert!(primary.to_string().contains("intentional transfer failure"));
-    assert_eq!(observation.forward_calls, 1);
-    assert_eq!(observation.failing_calls, 1);
-    assert_eq!(observation.upstream_execute, 1);
-    assert_eq!(
-        observation.downstream_execute, 0,
-        "the downstream operation must not execute after its input transfer fails"
-    );
-    assert_eq!(
-        observation.drops, 1,
-        "the extension output retained at its source location must be released on failure"
-    );
-    assert_eq!(
-        observation
-            .events
-            .iter()
-            .filter(|event| event.as_str() == "source:enqueue:0")
-            .count(),
-        2,
-        "the reverse transfer reaches the source run without its foreign token: {:?}",
-        observation.events
-    );
-    assert!(
-        !observation
-            .events
-            .iter()
-            .any(|event| event == "source:enqueue:1"),
-        "the source run must not receive the foreign destination token: {:?}",
-        observation.events
-    );
-    assert_eq!(
-        observation
-            .events
-            .iter()
-            .filter(|event| event.as_str() == "destination:wait")
-            .count(),
-        2,
-        "the scheduler host bridge and downstream operation each wait on destination work: {:?}",
-        observation.events
-    );
-    assert!(
-        observation.events.contains(&"source:drain".to_owned()),
-        "{:?}",
-        observation.events
-    );
-    assert!(
-        observation.events.contains(&"destination:drain".to_owned()),
-        "{:?}",
-        observation.events
-    );
-}
-
-#[test]
-fn transfer_and_drain_failure_preserve_both_errors_and_release_located_values(
-) -> Result<(), Box<dyn StdError>> {
-    let observation = run_transfer_and_drain_failure(DrainBehavior::ReturnError)?;
-    assert_transfer_and_drain_failure(&observation, "source event-domain drain failure");
-    Ok(())
-}
-
-#[test]
-fn transfer_and_drain_panic_preserve_primary_and_cleanup_errors() -> Result<(), Box<dyn StdError>> {
-    let observation = run_transfer_and_drain_failure(DrainBehavior::Panic)?;
-    assert_transfer_and_drain_failure(&observation, "source event-domain drain panic");
-    Ok(())
-}
-
 #[test]
 fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
 ) -> Result<(), Box<dyn StdError>> {
-    let core_backend = CpuBackend::new();
-    let extension_backend = CpuBackend::new();
+    let mut core_backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.core-missing-transfer-source.v1").expect("test engine id"),
+    );
+    let mut extension_backend = CpuEngine::serial().with_runtime_engine_id(
+        EngineId::new("tenferro-test.extension-missing-transfer-destination.v1")
+            .expect("test engine id"),
+    );
     let counters = Arc::new(ExtensionCounters::default());
     let core_engine_id = "tenferro-test.core-missing-transfer-source.v1";
     let extension_engine_id = "tenferro-test.extension-missing-transfer-destination.v1";
     let source_storage = StorageClass::new(CPU_STORAGE_CLASS_ID)?;
     let destination_storage = StorageClass::new("tenferro-test.storage.missing-destination.v1")?;
-    let source_endpoint =
-        TransferEndpoint::new(EngineId::new(core_engine_id)?, source_storage.clone());
+    let source_endpoint = TransferEndpoint::new(
+        EngineId::new("tenferro-test.core-missing-transfer-source.v1")?,
+        source_storage.clone(),
+    );
     let expected_destination_endpoint = TransferEndpoint::new(
-        EngineId::new(extension_engine_id)?,
+        EngineId::new("tenferro-test.extension-missing-transfer-destination.v1")?,
         destination_storage.clone(),
     );
 
@@ -4060,7 +3552,8 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
         module_id: ExtensionModuleId::new("tenferro-test.counting-extension.no-transfer-module")
             .map_err(RuntimeConfigError::from)?,
         family_id: COUNTING_EXTENSION_FAMILY,
-        engine_id: EngineId::new(extension_engine_id).map_err(RuntimeConfigError::from)?,
+        engine_id: EngineId::new("tenferro-test.extension-missing-transfer-destination.v1")
+            .map_err(RuntimeConfigError::from)?,
         counters: Arc::clone(&counters),
     }))?;
     let runtime = builder.build()?;
@@ -4079,7 +3572,13 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
 
-    let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
+    let error = run_compiled(
+        &mut [&mut core_backend, &mut extension_backend],
+        &runtime,
+        &program,
+        &[&input],
+    )
+    .unwrap_err();
 
     assert!(error.to_string().contains("no direct transfer provider"));
     assert!(
@@ -4106,86 +3605,13 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
     ));
     assert_eq!(counters.execute.load(Ordering::SeqCst), 0);
 
-    let submit_error = runtime
-        .submit(&program, ExecutionInputs::new(vec![input.duplicate()?])?)
-        .unwrap_err();
-    let submit_prepare_error = submit_error
-        .source()
-        .and_then(StdError::source)
-        .and_then(|source| source.downcast_ref::<PrepareError>())
-        .expect("submit preserves the typed preparation error synchronously");
-    assert!(matches!(
-        submit_prepare_error,
-        PrepareError::MissingTransferProvider {
-            destination_endpoint: actual_destination_endpoint,
-            available_source_endpoints,
-            ..
-        } if available_source_endpoints == std::slice::from_ref(&source_endpoint)
-            && actual_destination_endpoint == &expected_destination_endpoint
-    ));
-
-    Ok(())
-}
-
-#[test]
-fn runtime_submit_reports_no_input_ingress_before_spawning() -> Result<(), Box<dyn StdError>> {
-    let backend = CpuBackend::new();
-    let runtime = runtime_with_cpu(&backend)?;
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let y = (&x + &x)?;
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let foreign_domain = AllocationDomainId::fresh();
-    let input = TestAllocationDomain(foreign_domain).allocate(DType::F64, &[2])?;
-    let input_placement = input.placement().clone();
-
-    let error = runtime
-        .submit(&program, ExecutionInputs::new(vec![input])?)
-        .unwrap_err();
-
-    let (error, _) = error
-        .into_pre_admission()
-        .expect("submit preserves the rejected inputs");
-    assert!(matches!(
-        error.reason(),
-        RuntimeFailureReasonRef::NoInputIngress {
-            input_index: 0,
-            placement,
-        } if placement == &input_placement
-    ));
-    Ok(())
-}
-
-#[test]
-fn runtime_submit_wait_uses_prepared_execution_path() -> Result<(), Box<dyn StdError>> {
-    let backend = CpuBackend::new();
-    let runtime = runtime_with_cpu(&backend)?;
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
-    let y = (&x + &x)?;
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
-    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-
-    let handle = runtime.submit(&program, ExecutionInputs::new(vec![input.duplicate()?])?)?;
-    let output = match handle.wait()? {
-        tenferro_runtime::ExecutionOutcome::Completed(output) => output,
-        other => panic!("unexpected submission outcome: {other:?}"),
-    };
-
-    match output.output(0)? {
-        tenferro_runtime::OutputRef::Tensor(tenferro_tensor::TensorView::F64(view)) => {
-            assert_eq!(view.as_slice()?, &[2.0, 4.0])
-        }
-        other => panic!("unexpected output view: {other:?}"),
-    }
-    assert!(runtime.cache_stats()?.prepared_plans.entries > 0);
-
     Ok(())
 }
 
 #[test]
 fn runtime_run_compiled_uses_prepared_cache_on_second_call() -> Result<(), Box<dyn StdError>> {
-    let backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial()
+        .with_runtime_engine_id(EngineId::new(CPU_ENGINE_ID).expect("test engine id"));
     let runtime = runtime_with_cpu(&backend)?;
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = (&x + &x)?;
@@ -4193,12 +3619,12 @@ fn runtime_run_compiled_uses_prepared_cache_on_second_call() -> Result<(), Box<d
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 
-    let first = runtime.run_compiled(&program, &[&input])?;
+    let first = run_compiled(&mut [&mut backend], &runtime, &program, &[&input])?;
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].as_slice::<f64>()?, &[2.0, 4.0]);
     let after_first = runtime.cache_stats()?.prepared_plans;
 
-    let second = runtime.run_compiled(&program, &[&input])?;
+    let second = run_compiled(&mut [&mut backend], &runtime, &program, &[&input])?;
     assert_eq!(second[0].as_slice::<f64>()?, &[2.0, 4.0]);
     let after_second = runtime.cache_stats()?.prepared_plans;
 
@@ -4212,7 +3638,8 @@ fn runtime_run_compiled_uses_prepared_cache_on_second_call() -> Result<(), Box<d
 
 #[test]
 fn runtime_run_compiled_rejects_preparation_only_registration() -> Result<(), Box<dyn StdError>> {
-    let backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial()
+        .with_runtime_engine_id(EngineId::new(CPU_ENGINE_ID).expect("test engine id"));
     let mut builder = Runtime::builder();
     builder.register_engine(cpu_registration(
         &backend,
@@ -4226,7 +3653,7 @@ fn runtime_run_compiled_rejects_preparation_only_registration() -> Result<(), Bo
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 
-    let error = runtime.run_compiled(&program, &[&input]).unwrap_err();
+    let error = run_compiled(&mut [&mut backend], &runtime, &program, &[&input]).unwrap_err();
 
     assert_eq!(error.phase(), Some(ErrorPhase::Execution));
     assert!(StdError::source(&error).is_some());
@@ -4235,7 +3662,8 @@ fn runtime_run_compiled_rejects_preparation_only_registration() -> Result<(), Bo
 
 #[test]
 fn runtime_run_compiled_reprepares_after_engine_reconfiguration() -> Result<(), Box<dyn StdError>> {
-    let backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial()
+        .with_runtime_engine_id(EngineId::new(CPU_ENGINE_ID).expect("test engine id"));
     let runtime = runtime_with_cpu(&backend)?;
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = x.neg()?;
@@ -4243,24 +3671,22 @@ fn runtime_run_compiled_reprepares_after_engine_reconfiguration() -> Result<(), 
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 
-    let first = runtime.run_compiled(&program, &[&input])?;
+    let first = run_compiled(&mut [&mut backend], &runtime, &program, &[&input])?;
     assert_eq!(first[0].as_slice::<f64>()?, &[-1.0, -2.0]);
     let after_first = runtime.cache_stats()?.prepared_plans;
 
     runtime.reconfigure(|edit| {
-        let backend = CpuBackend::new();
+        let backend = CpuEngine::serial()
+            .with_runtime_engine_id(EngineId::new(CPU_ENGINE_ID).expect("test engine id"));
         edit.replace_engine(cpu_registration(
             &backend,
             cpu_core_capabilities(&backend),
-            CpuRegistrationState::executable_with_cache_owner(
-                Arc::new(ImmediateEventDomainDriver::new()),
-                Arc::new(backend.clone()),
-            ),
+            CpuRegistrationState::executable(),
         )?)?;
         Ok(())
     })?;
 
-    let second = runtime.run_compiled(&program, &[&input])?;
+    let second = run_compiled(&mut [&mut backend], &runtime, &program, &[&input])?;
     assert_eq!(second[0].as_slice::<f64>()?, &[-1.0, -2.0]);
     let after_second = runtime.cache_stats()?.prepared_plans;
 

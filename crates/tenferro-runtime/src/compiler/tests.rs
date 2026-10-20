@@ -1129,10 +1129,10 @@ fn test_eliminate_dead_code_removes_unused_transpose() {
 #[test]
 fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
     // End-to-end: build a traced graph with multiple free dims, compile,
-    // and run it through the CPU backend. Compare the output to the
+    // and run it through the CPU engine. Compare the output to the
     // equivalent matmul result.
     use crate::{Tensor, TypedTensor};
-    use tenferro_cpu::CpuBackend;
+    use tenferro_cpu::CpuEngine;
 
     // LHS [M1, M2, K] * RHS [K, N] => [M1, M2, N]. The compile pipeline
     // should emit a canonical DotGeneral + output Reshape. Run end-to-end
@@ -1172,10 +1172,9 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
         TypedTensor::<f64>::from_vec_col_major(vec![4, 5], rhs_data.clone()).unwrap(),
     );
 
-    let mut backend = CpuBackend::default();
-    let mut outputs =
-        exec::eval_exec_ir_unsegmented_with_cache(&mut backend, &exec_program, vec![lhs, rhs])
-            .expect("executing decomposed program must not fail");
+    let mut engine = CpuEngine::serial();
+    let mut outputs = exec::run_exec_program_for_test(&mut engine, &exec_program, vec![lhs, rhs])
+        .expect("executing decomposed program must not fail");
     let out = outputs.remove(0);
     let typed = &out
         .as_typed::<f64>()

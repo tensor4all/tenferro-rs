@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use tenferro_runtime::{
     CoreCapabilityBundle, EngineId, EngineRegistrationMetadata, ExecutableEngineRegistrationConfig,
-    ExecutionContextIdentity, HardwareClassId, ImmediateEventDomainDriver, InputIngressContract,
-    InputPlacementContract, InputSignatureContract, PreparationOnlyEngineRegistrationConfig,
-    ProviderDeviceIdentity, ProviderId, ResidentOutputContract, RuntimeInputContract, StorageClass,
+    ExecutionContextIdentity, HardwareClassId, InputIngressContract, InputPlacementContract,
+    InputSignatureContract, PreparationOnlyEngineRegistrationConfig, ProviderDeviceIdentity,
+    ProviderId, ResidentOutputContract, RuntimeInputContract, StorageClass,
 };
 
 struct NonDebugBackend;
@@ -46,7 +46,7 @@ fn engine_registration_descriptors_have_public_debug_bounds() {
 
     assert_debug::<EngineRegistrationMetadata>();
     assert_debug::<PreparationOnlyEngineRegistrationConfig>();
-    assert_debug::<ExecutableEngineRegistrationConfig<NonDebugBackend>>();
+    assert_debug::<ExecutableEngineRegistrationConfig>();
 }
 
 #[test]
@@ -69,19 +69,16 @@ fn engine_registration_descriptor_debug_output_is_bounded_and_useful() {
 
     let executable = ExecutableEngineRegistrationConfig::new(
         metadata,
-        NonDebugBackend,
-        Arc::new(ImmediateEventDomainDriver::new()),
+        ExecutionContextIdentity::of::<NonDebugBackend>(),
         debug_contract_ingress(),
-        None,
     );
     let executable_debug = format!("{executable:?}");
     assert!(executable_debug.contains("ExecutableEngineRegistrationConfig"));
     assert!(executable_debug.contains("metadata"));
-    assert!(executable_debug.contains("backend_type"));
-    assert!(executable_debug.contains(std::any::type_name::<NonDebugBackend>()));
-    assert!(executable_debug.contains("event_domain_driver_present: true"));
+    assert!(executable_debug.contains("context_identity"));
     assert!(executable_debug.contains("ingress_present: true"));
-    assert!(executable_debug.contains("cache_owner_present: false"));
+    // The descriptor owns no engine and no driver: it is metadata plus the
+    // context identity the run-time engine must report.
     assert!(!executable_debug.contains("backend:"));
     assert!(!executable_debug.contains("cache_owner:"));
 }

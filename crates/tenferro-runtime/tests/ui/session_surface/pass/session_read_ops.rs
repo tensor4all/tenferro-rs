@@ -1,10 +1,11 @@
-//! The borrowed-session read surface: `_read` operations on one session entry.
+//! The engine read surface: `_read` operations on one engine.
 //!
-//! This is the spelling that survives the unification of issue #1926. It must
-//! compile before and after the one-shot idiom is deleted.
+//! Every tensor operation is spelled on the engine the caller holds.
 
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{
+    DotGeneralConfig, Tensor, TensorDot, TensorElementwise, TensorRead, TensorReduction,
+};
 
 const NONE: &[usize] = &[];
 
@@ -19,22 +20,22 @@ fn dot_config() -> DotGeneralConfig {
 
 #[test]
 fn session_read_ops() {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut engine = CpuEngine::serial();
     let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
-    let (total, dot) = backend
-        .with_backend_session(|session| {
-            let sum = session.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))?;
-            let total = session.reduce_sum_read(TensorRead::from_tensor(&sum), &[0])?;
-            let dot = session.dot_general_read(
-                TensorRead::from_tensor(&a),
-                TensorRead::from_tensor(&b),
-                &dot_config(),
-            )?;
-            Ok::<_, tenferro_tensor::Error>((total, dot))
-        })
-        .unwrap()
+    let sum = engine
+        .add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        .unwrap();
+    let total = engine
+        .reduce_sum_read(TensorRead::from_tensor(&sum), &[0])
+        .unwrap();
+    let dot = engine
+        .dot_general_read(
+            TensorRead::from_tensor(&a),
+            TensorRead::from_tensor(&b),
+            &dot_config(),
+        )
         .unwrap();
 
     assert_eq!(total.as_slice::<f64>().unwrap(), &[10.0]);

@@ -5,8 +5,6 @@ use std::sync::{Arc, Barrier, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
-use tenferro_cpu::CpuBackend;
-
 use super::super::cache::{
     CacheLookup, CacheProduced, PreparedCacheKey, PreparedPlanCache, PreparedValue,
     RuntimeCacheSet, SharedRetention,
@@ -1226,37 +1224,6 @@ fn owner(
     (Arc::clone(&owner), owner)
 }
 
-fn engine_with_owner(id: &str, owner: Arc<dyn RuntimeCacheOwner>) -> EngineRegistration {
-    let storage = StorageClass::new("tenferro.storage.host").unwrap();
-    let provider_device_identity = ProviderDeviceIdentity::new(
-        ProviderId::new("tenferro.test.cache").unwrap(),
-        format!("engine:{id}"),
-    )
-    .unwrap();
-    EngineRegistration::executable(
-        ProviderExecutableBinding::new(
-            EngineId::new(id).unwrap(),
-            HardwareClassId::new("tenferro.hardware.host").unwrap(),
-            Arc::from(vec![storage.clone()]),
-            storage.clone(),
-            ExecutableEngineContract::new(
-                provider_device_identity,
-                CoreCapabilityBundle::builder().build(),
-                CpuBackend::new(),
-                Arc::new(ImmediateEventDomainDriver::new()),
-                InputIngressContract::new(
-                    InputPlacementContract::new(|_, _| true),
-                    InputSignatureContract::new(|_, _, _, _| true),
-                    RuntimeInputContract::new(|_, _| true),
-                    ResidentOutputContract::new(|_, _| true),
-                ),
-                Some(owner),
-            ),
-        )
-        .unwrap(),
-    )
-}
-
 fn cache_stats(
     entries: usize,
     retained_bytes: usize,
@@ -1275,10 +1242,6 @@ fn cache_stats(
     }
 }
 
-fn canonical_engine_owner_id(engine_id: &str) -> String {
-    format!("engine[{}]:{engine_id}", engine_id.len())
-}
-
 fn canonical_extension_owner_id(module_id: &str, local_id: &str) -> String {
     format!(
         "extension[{}]:{module_id}[{}]:{local_id}",
@@ -1290,20 +1253,6 @@ fn canonical_extension_owner_id(module_id: &str, local_id: &str) -> String {
 #[test]
 fn runtime_cache_set_aggregates_owner_stats_and_clear_failures_in_snapshot_order() {
     let order = Arc::new(Mutex::new(Vec::new()));
-    let (engine_b_record, engine_b) = owner(
-        "engine_b",
-        cache_stats(1, 10, 100, 1, 2, 3),
-        false,
-        false,
-        &order,
-    );
-    let (engine_a_record, engine_a) = owner(
-        "engine_a",
-        cache_stats(2, 20, u64::MAX - 1, 4, 5, 6),
-        false,
-        true,
-        &order,
-    );
     let (ext_b_record, ext_b) = owner(
         "ext_b",
         cache_stats(3, 30, 7, 8, 9, 10),
@@ -1321,10 +1270,6 @@ fn runtime_cache_set_aggregates_owner_stats_and_clear_failures_in_snapshot_order
 
     let mut builder = RuntimeConfigBuilder::new();
     builder
-        .register_engine(engine_with_owner("tenferro.engine.b", engine_b))
-        .unwrap()
-        .register_engine(engine_with_owner("tenferro.engine.a", engine_a))
-        .unwrap()
         .install_extension_module(Arc::new(OwnerOnlyModule {
             id: ExtensionModuleId::new("tenferro.module.b").unwrap(),
             owners: vec![(
@@ -1356,17 +1301,7 @@ fn runtime_cache_set_aggregates_owner_stats_and_clear_failures_in_snapshot_order
         canonical_extension_owner_id("tenferro.module.b", "tenferro.owner.b")
     );
     assert_eq!(owners[0].source.to_string(), "owner ext_b failed");
-    assert_eq!(
-        *order.lock().unwrap(),
-        vec![
-            "stats:engine_a",
-            "stats:engine_b",
-            "stats:ext_a",
-            "stats:ext_b",
-        ]
-    );
-    assert_eq!(engine_a_record.stats_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(engine_b_record.stats_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(*order.lock().unwrap(), vec!["stats:ext_a", "stats:ext_b"]);
     assert_eq!(ext_a_record.stats_calls.load(Ordering::SeqCst), 1);
     assert_eq!(ext_b_record.stats_calls.load(Ordering::SeqCst), 1);
 
@@ -1376,26 +1311,12 @@ fn runtime_cache_set_aggregates_owner_stats_and_clear_failures_in_snapshot_order
         .unwrap_err();
     let RuntimeCacheError::Aggregate { runtime, owners } = clear_error;
     assert!(runtime.is_none());
-    assert_eq!(owners.len(), 2);
+    assert_eq!(owners.len(), 1);
     assert_eq!(
         owners[0].owner.as_str(),
-        canonical_engine_owner_id("tenferro.engine.a")
-    );
-    assert_eq!(
-        owners[1].owner.as_str(),
         canonical_extension_owner_id("tenferro.module.a", "tenferro.owner.a")
     );
-    assert_eq!(
-        *order.lock().unwrap(),
-        vec![
-            "clear:engine_a",
-            "clear:engine_b",
-            "clear:ext_a",
-            "clear:ext_b",
-        ]
-    );
-    assert_eq!(engine_a_record.clear_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(engine_b_record.clear_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(*order.lock().unwrap(), vec!["clear:ext_a", "clear:ext_b"]);
     assert_eq!(ext_a_record.clear_calls.load(Ordering::SeqCst), 1);
     assert_eq!(ext_b_record.clear_calls.load(Ordering::SeqCst), 1);
 }

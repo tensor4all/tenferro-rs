@@ -17,7 +17,5 @@ mod session_cached_route;
 mod session_dyn_erased;
 #[path = "ui/session_surface/pass/session_read_ops.rs"]
 mod session_read_ops;
-#[path = "ui/session_surface/pass/session_scope_nesting.rs"]
-mod session_scope_nesting;
 #[path = "ui/session_surface/pass/session_tensor_extension.rs"]
 mod session_tensor_extension;

@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use super::super::engine_registration::EngineRegistrationState;
+use super::super::engine_registration::{EngineRegistrationState, ExecutableEngineContract};
 use super::super::{
-    CoreCapabilityBundle, EngineId, EngineRegistration, ExecutableEngineContract,
-    ExecutionContextIdentity, HardwareClassId, ImmediateEventDomainDriver, InputIngressContract,
-    InputPlacementContract, InputSignatureContract, ProviderDeviceIdentity,
+    CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity, HardwareClassId,
+    InputIngressContract, InputPlacementContract, InputSignatureContract, ProviderDeviceIdentity,
     ProviderExecutableBinding, ProviderId, ProviderPreparationBinding, ResidentOutputContract,
     RuntimeConfigError, RuntimeInputContract, StorageClass,
 };
@@ -29,7 +28,7 @@ fn registration_metadata(engine_name: &str) -> Result<RegistrationMetadata, Runt
             "device:0",
         )
         .map_err(RuntimeConfigError::from)?,
-        context_identity: ExecutionContextIdentity::of::<tenferro_cpu::CpuBackend>(),
+        context_identity: ExecutionContextIdentity::of::<tenferro_cpu::CpuEngine>(),
         hardware_class: HardwareClassId::new("tenferro.test.remediation.host")
             .map_err(RuntimeConfigError::from)?,
         storage_classes: Arc::from(vec![storage.clone()]),
@@ -76,7 +75,7 @@ fn registration_state_is_a_single_preparation_or_executable_witness() {
     let RegistrationMetadata {
         engine_id,
         provider_device_identity,
-        context_identity: _context_identity,
+        context_identity,
         hardware_class,
         storage_classes,
         default_storage_class,
@@ -89,11 +88,9 @@ fn registration_state_is_a_single_preparation_or_executable_witness() {
             default_storage_class,
             ExecutableEngineContract::new(
                 provider_device_identity,
+                context_identity,
                 CoreCapabilityBundle::default(),
-                tenferro_cpu::CpuBackend::new(),
-                Arc::new(ImmediateEventDomainDriver::new()),
                 ingress_contract(),
-                None,
             ),
         )
         .unwrap(),
@@ -122,11 +119,9 @@ fn frozen_executable_selection_returns_one_complete_witness(
         default_storage_class,
         ExecutableEngineContract::new(
             provider_device_identity.clone(),
+            context_identity,
             CoreCapabilityBundle::default(),
-            tenferro_cpu::CpuBackend::new(),
-            Arc::new(ImmediateEventDomainDriver::new()),
             ingress_contract(),
-            None,
         ),
     )?);
     let mut builder = super::super::Runtime::builder();
@@ -150,8 +145,6 @@ fn frozen_executable_selection_returns_one_complete_witness(
         witness.provider_device_identity()
     );
     assert_eq!(engine.context_identity(), witness.context_identity());
-    assert!(witness.has_executor());
-    assert!(witness.has_event_domain_driver());
     Ok(())
 }
 
