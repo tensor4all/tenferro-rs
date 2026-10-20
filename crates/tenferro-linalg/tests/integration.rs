@@ -44,6 +44,8 @@ mod linalg_internal_path_contract;
 mod oracle_replay;
 #[path = "integration/small_append_performance_contract.rs"]
 mod small_append_performance_contract;
+#[path = "integration/small_cpu_operations.rs"]
+mod small_cpu_operations;
 #[path = "integration/solve_residuals.rs"]
 mod solve_residuals;
 #[path = "integration/support.rs"]

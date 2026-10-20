@@ -11,7 +11,7 @@ fn compact_real_reads_roundtrip_on_all_axes_and_thread_counts() {
             let data: Vec<$real> = (0..65536).map(|i| (i % 17) as $real).collect();
             let read = TensorRead::from_view(TensorView::$variant(
                 TypedTensorView::from_slice(shape, [1, 64, 2048], 0, &data).unwrap()));
-            for threads in [1, 8] {
+            for threads in [1, 2, 4, 8] {
                 let mut backend = CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(threads).build().unwrap());
                 // Managed backends clamp the request to the process CPU set.
                 assert!((1..=threads).contains(&backend.num_threads()));

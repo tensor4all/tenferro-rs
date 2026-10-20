@@ -13,6 +13,7 @@ use cpueinsum::tcontract::{
 use cpueinsum::{ArenaProvider, Exec, Pool, SliceAccumulationSource};
 use std::any::Any;
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tenferro_cpu_basic::PooledUninitOutput;
 use tenferro_tensor::{
@@ -155,6 +156,9 @@ pub(crate) struct ExecutionResources {
     pool: Option<Pool<'static>>,
     serial: ArenaProvider,
     pub(crate) nary: ContractionWorkspaces,
+    /// Entries into the raw Rayon pool made directly by the faer lane. The
+    /// tcontract wrapper counts its own entries through [`Pool::stats`].
+    faer_entries: AtomicU64,
 }
 impl fmt::Debug for ExecutionResources {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -170,7 +174,22 @@ impl ExecutionResources {
             pool: pool.map(Pool::owned),
             serial: ArenaProvider::new(),
             nary: ContractionWorkspaces::default(),
+            faer_entries: AtomicU64::new(0),
         }
+    }
+    /// Entry counters of the provider pool this engine owns.
+    pub(crate) fn pool_stats(&self) -> crate::CpuPoolStats {
+        let provider = self.pool.as_ref().map(Pool::stats).unwrap_or_default();
+        crate::CpuPoolStats {
+            entries: provider
+                .entries
+                .saturating_add(self.faer_entries.load(Ordering::Relaxed)),
+            broadcasts: provider.broadcasts,
+            inline_runs: provider.inline_runs,
+        }
+    }
+    pub(crate) fn count_faer_entry(&self) {
+        self.faer_entries.fetch_add(1, Ordering::Relaxed);
     }
     pub(crate) fn retained_bytes(&self) -> usize {
         self.workspace().retained_bytes()

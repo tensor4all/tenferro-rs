@@ -127,3 +127,168 @@ fn batch_policy_setter_returns_previous() {
         crate::CpuBatchStrategy::Sequential
     );
 }
+
+#[test]
+fn nested_engines_keep_their_pools_independent_and_match_the_serial_result() {
+    use std::collections::HashSet;
+    use std::sync::Barrier;
+
+    const LARGE: usize = 1 << 17;
+    let mut serial = CpuEngine::serial();
+    let (_, expected) = serial
+        .with_linalg_pool(|context, _| {
+            Ok(context.with_native_parallelism(|| {
+                crate::tests::native_participants::run_native_map_of_len(LARGE, false)
+            }))
+        })
+        .expect("serial map");
+
+    for k in [2_usize, 3] {
+        for m in [2_usize, 4] {
+            let barrier = std::sync::Arc::new(Barrier::new(k));
+            let handles: Vec<_> = (0..k)
+                .map(|_| {
+                    let barrier = std::sync::Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        let mut engine = CpuEngine::new(pool(m));
+                        barrier.wait();
+                        let (participants, output) = engine
+                            .with_linalg_pool(|context, _| {
+                                Ok(context.with_native_parallelism(|| {
+                                    crate::tests::native_participants::run_native_map_of_len(
+                                        LARGE, true,
+                                    )
+                                }))
+                            })
+                            .expect("nested map");
+                        assert_eq!(engine.pool_stats().entries, 0);
+                        (participants, output)
+                    })
+                })
+                .collect();
+
+            let mut workers = HashSet::new();
+            for handle in handles {
+                let (participants, output) = handle.join().expect("nested caller");
+                assert_eq!(output, expected, "k={k} m={m}");
+                assert!(
+                    participants.max_active() <= m,
+                    "k={k} m={m}: {} workers ran at once",
+                    participants.max_active()
+                );
+                assert!(
+                    participants.thread_count() <= m,
+                    "k={k} m={m}: {} workers participated",
+                    participants.thread_count()
+                );
+                workers.extend(participants.thread_ids());
+            }
+            assert!(
+                workers.len() <= k * m,
+                "k={k} m={m}: {} tenferro-controlled workers across {k} engines",
+                workers.len()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_small_strided_operation_stays_on_the_calling_thread_without_a_pool_entry() {
+    const SMALL: usize = 64;
+    let mut serial = CpuEngine::serial();
+    let (_, expected) = serial
+        .with_linalg_pool(|context, _| {
+            Ok(context.with_native_parallelism(|| {
+                crate::tests::native_participants::run_native_map_of_len(SMALL, false)
+            }))
+        })
+        .expect("serial map");
+    assert_eq!(serial.pool_stats().entries, 0);
+
+    let mut engine = CpuEngine::new(pool(4));
+    let caller = std::thread::current().id();
+    let (participants, actual) = engine
+        .with_linalg_pool(|context, _| {
+            Ok(context.with_native_parallelism(|| {
+                crate::tests::native_participants::run_native_map_of_len(SMALL, false)
+            }))
+        })
+        .expect("pooled map");
+    assert_eq!(actual, expected);
+    assert_eq!(participants.thread_ids(), vec![caller]);
+    assert_eq!(participants.max_active(), 1);
+    assert_eq!(participants.thread_count(), 1);
+    assert_eq!(engine.pool_stats().entries, 0);
+    assert_eq!(std::thread::current().id(), caller);
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn a_small_direct_faer_call_stays_on_the_calling_thread_without_a_pool_entry() {
+    let mut engine = CpuEngine::new(pool(4));
+    let caller = std::thread::current().id();
+    let (same_thread, sequential, width) = engine
+        .with_linalg_pool(|context, _| {
+            let width = context
+                .contraction_exec()?
+                .batch_decision(&cpueinsum::BatchQuery::new(1, 8.0))
+                .map_err(|error| crate::Error::backend_source("test_faer_width", error))?
+                .item_threads;
+            let observed = context.with_faer_width(width, |parallel| {
+                (
+                    std::thread::current().id() == caller,
+                    parallel == crate::faer::Par::Seq,
+                )
+            });
+            Ok((observed.0, observed.1, width))
+        })
+        .expect("direct faer decision");
+    assert!(same_thread);
+    assert!(sequential);
+    assert_eq!(width, 1);
+    assert_eq!(engine.pool_stats().entries, 0);
+}
+
+#[test]
+fn elementwise_families_match_serial_on_pooled_engines_at_one_two_and_four_threads() {
+    let a = Tensor::from_vec_col_major(
+        vec![4096],
+        (0..4096)
+            .map(|index| index as f64 * 0.25 - 7.0)
+            .collect::<Vec<_>>(),
+    )
+    .expect("a");
+    let b = Tensor::from_vec_col_major(
+        vec![4096],
+        (0..4096)
+            .map(|index| (index % 13) as f64 + 1.5)
+            .collect::<Vec<_>>(),
+    )
+    .expect("b");
+
+    let mut serial = CpuEngine::serial();
+    let serial_add = serial
+        .add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        .expect("serial add");
+    let serial_mul = serial
+        .mul_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        .expect("serial mul");
+
+    for threads in [1, 2, 4] {
+        let mut engine = CpuEngine::new(pool(threads));
+        let add = engine
+            .add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+            .expect("pooled add");
+        let mul = engine
+            .mul_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+            .expect("pooled mul");
+        assert_eq!(
+            add.as_slice::<f64>().unwrap(),
+            serial_add.as_slice::<f64>().unwrap()
+        );
+        assert_eq!(
+            mul.as_slice::<f64>().unwrap(),
+            serial_mul.as_slice::<f64>().unwrap()
+        );
+    }
+}

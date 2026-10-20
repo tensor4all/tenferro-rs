@@ -172,7 +172,7 @@ pub use capability::cpu_capabilities;
 #[doc(hidden)]
 pub use dot_runtime::{validate_cpu_host_read, validate_cpu_host_write};
 pub use engine::{
-    thread_pool_builder, CpuEngine, CpuEngineError, DEFAULT_WORKER_STACK_BYTES,
+    thread_pool_builder, CpuEngine, CpuEngineError, CpuPoolStats, DEFAULT_WORKER_STACK_BYTES,
     MIN_WORKER_STACK_BYTES,
 };
 #[doc(hidden)]
