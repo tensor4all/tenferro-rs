@@ -2358,6 +2358,28 @@ pub trait TensorStructural {
         axis_a: usize,
         axis_b: usize,
     ) -> crate::Result<Tensor>;
+    /// Extract the diagonal with the input taken as a read.
+    ///
+    /// The default stages each read into compact storage and delegates to the
+    /// owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn extract_diagonal_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<Tensor> {
+        let input = self.to_contiguous_read(input)?;
+        self.extract_diagonal(&input, axis_a, axis_b)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2370,6 +2392,28 @@ pub trait TensorStructural {
         axis_a: usize,
         axis_b: usize,
     ) -> crate::Result<Tensor>;
+    /// Embed the input as a diagonal with the input taken as a read.
+    ///
+    /// The default stages each read into compact storage and delegates to the
+    /// owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn embed_diagonal_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<Tensor> {
+        let input = self.to_contiguous_read(input)?;
+        self.embed_diagonal(&input, axis_a, axis_b)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2377,6 +2421,23 @@ pub trait TensorStructural {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn tril(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor>;
+    /// Lower-triangular mask with the input taken as a read.
+    ///
+    /// The default stages each read into compact storage and delegates to the
+    /// owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn tril_read(&mut self, input: TensorRead<'_>, k: i64) -> crate::Result<Tensor> {
+        let input = self.to_contiguous_read(input)?;
+        self.tril(&input, k)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2384,6 +2445,22 @@ pub trait TensorStructural {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn triu(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor>;
+    /// Upper-triangular mask with the input taken as a read.
+    ///
+    /// The default stages each read into compact storage and delegates to the
+    /// owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn triu_read(&mut self, input: TensorRead<'_>, k: i64) -> crate::Result<Tensor> {
+        let input = self.to_contiguous_read(input)?;
+        self.triu(&input, k)
+    }
 }
 
 /// Reduction operations.
@@ -2840,7 +2917,7 @@ pub trait SessionCachedDot: TensorDot {
 ///
 /// fn accepts_indexing<B: TensorIndexing>(_backend: &mut B) {}
 /// ```
-pub trait TensorIndexing {
+pub trait TensorIndexing: TensorStructural {
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2866,6 +2943,31 @@ pub trait TensorIndexing {
         updates: &Tensor,
         config: &ScatterConfig,
     ) -> crate::Result<Tensor>;
+    /// Scatter with every input taken as a read.
+    ///
+    /// The default stages each read into compact storage and delegates to the
+    /// owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn scatter_read(
+        &mut self,
+        operand: TensorRead<'_>,
+        scatter_indices: TensorRead<'_>,
+        updates: TensorRead<'_>,
+        config: &ScatterConfig,
+    ) -> crate::Result<Tensor> {
+        let operand = self.to_contiguous_read(operand)?;
+        let scatter_indices = self.to_contiguous_read(scatter_indices)?;
+        let updates = self.to_contiguous_read(updates)?;
+        self.scatter(&operand, &scatter_indices, &updates, config)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2876,6 +2978,23 @@ pub trait TensorIndexing {
     /// or [`crate::Error::BackendSource`] when backend execution or storage
     /// access cannot provide the requested result.
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
+    /// Slice with the input taken as a read.
+    ///
+    /// The default stages each read into compact storage and delegates to the
+    /// owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn slice_read(&mut self, input: TensorRead<'_>, config: &SliceConfig) -> crate::Result<Tensor> {
+        let input = self.to_contiguous_read(input)?;
+        self.slice(&input, config)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2888,6 +3007,29 @@ pub trait TensorIndexing {
         starts: &Tensor,
         slice_sizes: &[usize],
     ) -> crate::Result<Tensor>;
+    /// Dynamic slice with every input taken as a read.
+    ///
+    /// The default stages each read into compact storage and delegates to the
+    /// owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn dynamic_slice_read(
+        &mut self,
+        input: TensorRead<'_>,
+        starts: TensorRead<'_>,
+        slice_sizes: &[usize],
+    ) -> crate::Result<Tensor> {
+        let input = self.to_contiguous_read(input)?;
+        let starts = self.to_contiguous_read(starts)?;
+        self.dynamic_slice(&input, &starts, slice_sizes)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2907,6 +3049,23 @@ pub trait TensorIndexing {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
+    /// Pad with the input taken as a read.
+    ///
+    /// The default stages each read into compact storage and delegates to the
+    /// owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn pad_read(&mut self, input: TensorRead<'_>, config: &PadConfig) -> crate::Result<Tensor> {
+        let input = self.to_contiguous_read(input)?;
+        self.pad(&input, config)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2914,6 +3073,31 @@ pub trait TensorIndexing {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
+    /// Concatenate with every input taken as a read.
+    ///
+    /// The default stages each read into compact storage and delegates to the
+    /// owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn concatenate_read(
+        &mut self,
+        inputs: &[TensorRead<'_>],
+        axis: usize,
+    ) -> crate::Result<Tensor> {
+        let staged = inputs
+            .iter()
+            .map(|input| self.to_contiguous_read(input.clone()))
+            .collect::<crate::Result<Vec<_>>>()?;
+        let refs: Vec<&Tensor> = staged.iter().collect();
+        self.concatenate(&refs, axis)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2921,6 +3105,22 @@ pub trait TensorIndexing {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+    /// Reverse with the input taken as a read.
+    ///
+    /// The default stages each read into compact storage and delegates to the
+    /// owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn reverse_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let input = self.to_contiguous_read(input)?;
+        self.reverse(&input, axes)
+    }
 }
 
 /// Backend-owned canonicalization for typed tensor views.
