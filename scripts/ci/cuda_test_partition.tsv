@@ -1501,7 +1501,6 @@ host	tenferro-fft::fft_ops	webgpu_fft_adapter_uses_opaque_session_scoped_provide
 host	tenferro-fft::prelude	prelude_calls_concrete_fft_operation
 two-gpu	tenferro-gpu	cubecl::runtime_adapter::tests::cuda_registration_preserves_two_caller_selected_engine_ids_and_devices
 host	tenferro-linalg	cpu::tests::batch_policy::forced_outer_reaches_the_faer_exec
-host	tenferro-linalg	cpu::tests::batch_policy::forced_whole_batch_vendor_on_native_empty_inputs_is_refused
 host	tenferro-linalg::small_linalg_allocation	small_batched_qr_svd_packed_lu_have_batch_independent_provider_scratch
 gpu	tenferro-gpu	cubecl::tests::memoized_addr_tests::resolved_address_keeps_the_allocation_bound_across_writes_and_cleanup
 gpu	tenferro-gpu	cubecl::tests::runtime_tests::engine_drop_retires_pending_runs
