@@ -186,9 +186,10 @@ const QR_CEILING_2T: (usize, usize) = (9, 9);
 const SVD_CEILING_1T: (usize, usize) = (13, 13);
 #[cfg(feature = "blas")]
 const SVD_CEILING_2T: (usize, usize) = (13, 13);
-// Measured: batch 1 = 7, batch 64 = 8. The packed-LU route keeps one
-// batch-sized scratch vector outside the hoisted workspace; recorded as a
-// finding rather than hidden.
+// Measured on the pooled-lease route: batch 1 = 3, batch 64 = 3. The earlier
+// measurement (batch 1 = 7, batch 64 = 8) recorded a packed-LU output that never
+// returned its pooled storage, so the ceiling keeps the slack that finding left
+// while the growth budget below is back to zero.
 #[cfg(feature = "blas")]
 const PACKED_LU_CEILING_1T: (usize, usize) = (7, 8);
 #[cfg(feature = "blas")]
@@ -201,10 +202,13 @@ const QR_BATCH_GROWTH_2T: usize = 0;
 const SVD_BATCH_GROWTH_1T: usize = 0;
 #[cfg(feature = "blas")]
 const SVD_BATCH_GROWTH_2T: usize = 0;
+// Measured: batch 1 = 3, batch 64 = 3.
 #[cfg(feature = "blas")]
-const PACKED_LU_BATCH_GROWTH_1T: usize = 1;
+const PACKED_LU_BATCH_GROWTH_1T: usize = 0;
+// Measured: batch 1 = 3, batch 64 = 3; the BLAS lane runs its batch loop on the
+// coordinator thread, so it has no second-lane spawn to pay for.
 #[cfg(feature = "blas")]
-const PACKED_LU_BATCH_GROWTH_2T: usize = 1;
+const PACKED_LU_BATCH_GROWTH_2T: usize = 0;
 
 fn check_lane(
     threads: usize,
