@@ -319,10 +319,30 @@ fn webgpu_runtime_run_compiled_rank2_f32_matmul_when_adapter_available() -> Test
     let gpu_lhs = backend.upload_host_tensor(tenferro_tensor::TensorRead::from_tensor(&lhs))?;
     let gpu_rhs = backend.upload_host_tensor(tenferro_tensor::TensorRead::from_tensor(&rhs))?;
 
-    let outputs = runtime.run_compiled(&program, &[&gpu_lhs, &gpu_rhs])?;
+    let prepared = runtime.prepare(
+        &program,
+        &[
+            TensorRead::from_tensor(&gpu_lhs),
+            TensorRead::from_tensor(&gpu_rhs),
+        ],
+        &[tenferro_runtime::ExecutionEngine::target(&backend)],
+    )?;
+    let outputs = runtime.run(
+        &mut [&mut backend],
+        &prepared,
+        &[
+            TensorRead::from_tensor(&gpu_lhs),
+            TensorRead::from_tensor(&gpu_rhs),
+        ],
+    )?;
 
     assert_eq!(outputs.len(), 1);
-    let output = backend.download_to_host(tenferro_tensor::TensorRead::from_tensor(&outputs[0]))?;
+    let prepared_output = outputs
+        .into_iter()
+        .next()
+        .and_then(tenferro_runtime::Output::into_owned)
+        .expect("prepared WebGPU graph output");
+    let output = backend.download_to_host(TensorRead::from_tensor(&prepared_output))?;
     assert_eq!(output.shape(), &[2, 2]);
     let expected = [58.0_f32, 139.0, 64.0, 154.0];
     assert_f32_close(output.as_slice::<f32>()?, &expected);

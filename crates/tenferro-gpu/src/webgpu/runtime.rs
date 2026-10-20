@@ -250,15 +250,13 @@ mod identity_tests {
         }
 
         let first = WebGpuBackend::new_default().expect("WebGPU backend should initialize");
-        let clone = first.clone();
+        // Engines are not Clone. A second engine over the same runtime is the
+        // engine-model equivalent of a clone and must keep the identity.
+        let shared = WebGpuBackend::from_runtime(first.runtime().clone());
         let independent =
             WebGpuBackend::new_default().expect("second WebGPU backend should initialize");
 
-        assert_eq!(first.runtime_identity(), clone.runtime_identity());
+        assert_eq!(first.runtime_identity(), shared.runtime_identity());
         assert_ne!(first.runtime_identity(), independent.runtime_identity());
-        assert_eq!(
-            first.runtime_identity(),
-            WebGpuBackend::from_runtime(first.runtime().clone()).runtime_identity()
-        );
     }
 }
