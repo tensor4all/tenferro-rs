@@ -59,11 +59,11 @@ pub mod cuda {
         cuda_runtime_hardware_class, download_pending, download_tensor, download_tensor_into,
         gpu_available, upload_pending, upload_tensor, with_cuda_engine, CompletionUnproven,
         CudaComputeCapability, CudaDeviceError, CudaDeviceId, CudaDeviceInfo, CudaDeviceUuid,
-        CudaEngine, CudaExtensionCache, CudaExtensionCacheGuard, CudaRuntime, CudaRuntimeIdentity,
-        CutensorWorkspaceStats, DownloadIntoError, GpuExtensionCapability, PendingDownload,
-        PendingRead, PendingUpload, PinnedHostBuffer, PublicationAdmissionError, PublicationError,
-        PublicationRejected, SourcePublication, TransferRejected, TransferSubmitError,
-        WorkspaceRetirementStats,
+        CudaEngine, CudaEngineError, CudaExtensionCache, CudaExtensionCacheGuard, CudaRuntime,
+        CudaRuntimeIdentity, CutensorWorkspaceStats, DownloadIntoError, GpuExtensionCapability,
+        PendingDownload, PendingRead, PendingUpload, PinnedHostBuffer, PublicationAdmissionError,
+        PublicationError, PublicationRejected, SourcePublication, TransferRejected,
+        TransferSubmitError, WorkspaceRetirementStats,
     };
 
     /// Public tenferro-wide CubeCL session (issue #1597), behind the

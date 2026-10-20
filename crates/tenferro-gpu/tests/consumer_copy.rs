@@ -180,3 +180,54 @@ fn a_forgotten_transfer_leaks_instead_of_releasing_memory_in_use() {
     assert_eq!(host.as_slice::<f64>().expect("values"), expected.as_slice());
     consumer.synchronize().expect("consumer synchronize");
 }
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn a_cross_engine_copy_orders_the_source_write_and_the_destination_read() {
+    let mut producer = backend();
+    let producer_runtime = runtime_of(&producer);
+    let mut consumer = backend();
+    let consumer_runtime = runtime_of(&consumer);
+    let data = values(CHAINED_ELEMENTS);
+    let seed = upload_tensor(&producer_runtime, &vector(&data)).expect("seed");
+
+    // The source is still being written when the copy is published and submitted.
+    let mut value = produced_value(&mut producer, &seed);
+    for _ in 1..CHAINED_STEPS {
+        value = produced_value(&mut producer, &value);
+    }
+    let mut publication = producer.publish(value).expect("publish");
+    assert!(
+        !publication.frontier_ready().expect("frontier query"),
+        "the source is still being written when the cross-engine copy is submitted"
+    );
+    let pending = publication
+        .copy_into(&mut consumer)
+        .expect("cross-engine copy");
+
+    // The producer reuses its source memory at once. The copy owns the source until its completion,
+    // so this overwrite cannot race the destination write.
+    drop(seed);
+    let scratch_seed =
+        upload_tensor(&producer_runtime, &vector(&values(CHAINED_ELEMENTS))).expect("scratch seed");
+    for _ in 0..8 {
+        drop(produced_value(&mut producer, &scratch_seed));
+    }
+
+    // Only `wait` hands out the destination, after the copy has written it; the consumer then reads
+    // it on its own stream, ordered behind the copy's completion event.
+    let received = pending.wait().expect("wait");
+    let doubled = consumer
+        .add_read(
+            TensorRead::from_tensor(&received),
+            TensorRead::from_tensor(&received),
+        )
+        .expect("consumer reads the destination");
+
+    let host = download_tensor(&consumer_runtime, &doubled).expect("read back");
+    let expected: Vec<f64> = data
+        .iter()
+        .map(|value| value * 2f64.powi(CHAINED_STEPS as i32 + 1))
+        .collect();
+    assert_eq!(host.as_slice::<f64>().expect("values"), expected.as_slice());
+}

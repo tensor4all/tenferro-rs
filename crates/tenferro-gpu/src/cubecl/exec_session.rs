@@ -298,8 +298,10 @@ impl CudaEngine {
         op: &'static str,
         f: impl for<'s> FnOnce(&mut raw::Session<'s>) -> crate::Result<R>,
     ) -> crate::Result<R> {
-        let stream = self.stream;
-        stream.executes(|| self.with_raw_on_stream(op, f))
+        self.guarded(op, |engine| {
+            let stream = engine.stream;
+            stream.executes(|| engine.with_raw_on_stream(op, f))
+        })
     }
 
     fn with_raw_on_stream<R>(
@@ -382,9 +384,11 @@ impl CudaEngine {
         op: &'static str,
         f: impl for<'s> FnOnce(&session_cubecl::Session<'s>) -> crate::Result<R>,
     ) -> crate::Result<R> {
-        let stream = self.stream;
-        let runtime = self.runtime().clone();
-        stream.executes(|| Self::with_cubecl_on_stream(runtime, op, f))
+        self.guarded(op, |engine| {
+            let stream = engine.stream;
+            let runtime = engine.runtime().clone();
+            stream.executes(|| Self::with_cubecl_on_stream(runtime, op, f))
+        })
     }
 
     #[cfg(feature = "cubecl-interop")]
@@ -423,8 +427,10 @@ macro_rules! impl_session_view_canonicalization {
                     &mut self,
                     view: &TypedTensorView<'_, $ty, R>,
                 ) -> crate::Result<TypedTensor<$ty, R>> {
-                    let stream = self.stream;
-                    stream.executes(|| CudaEngine::$to_contiguous(self, view, "CudaEngine::to_contiguous"))
+                    self.guarded("CudaEngine::to_contiguous", |engine| {
+                        let stream = engine.stream;
+                        stream.executes(|| CudaEngine::$to_contiguous(engine, view, "CudaEngine::to_contiguous"))
+                    })
                 }
 
                 fn copy_into(
@@ -432,9 +438,11 @@ macro_rules! impl_session_view_canonicalization {
                     src: &TypedTensorView<'_, $ty, R>,
                     dst: &mut TypedTensorViewMut<'_, $ty, R>,
                 ) -> crate::Result<()> {
-                    let stream = self.stream;
-                    stream.executes(|| {
-                        CudaEngine::copy_view_to_view_typed(self, src, dst, "CudaEngine::copy_into")
+                    self.guarded("CudaEngine::copy_into", |engine| {
+                        let stream = engine.stream;
+                        stream.executes(|| {
+                            CudaEngine::copy_view_to_view_typed(engine, src, dst, "CudaEngine::copy_into")
+                        })
                     })
                 }
             }
@@ -508,8 +516,10 @@ macro_rules! delegate_ops {
         impl $trait for CudaEngine {
             $(
                 fn $method(&mut self, $($arg: $arg_ty),*) -> $ret {
-                    let stream = self.stream;
-                    stream.executes(|| ops::$method(self, $($arg),*))
+                    self.guarded(stringify!($method), |engine| {
+                        let stream = engine.stream;
+                        stream.executes(|| ops::$method(engine, $($arg),*))
+                    })
                 }
             )*
             $($($custom)*)?
@@ -552,8 +562,10 @@ delegate_ops!(TensorElementwise {
             ));
         }
         tenferro_tensor::backend::validate_read_into_destination(op.label(), inputs, &out)?;
-        let stream = self.stream;
-        let native = stream.executes(|| self.elementwise_read_into_native(op, inputs, &mut out));
+        let native = self.guarded(op.label(), |engine| {
+            let stream = engine.stream;
+            Ok(stream.executes(|| engine.elementwise_read_into_native(op, inputs, &mut out)))
+        })?;
         if let Some(result) = native {
             return result;
         }
@@ -675,8 +687,12 @@ impl SessionCachedDot for CudaEngine {
         rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        let stream = self.stream;
-        stream.executes(|| gemm::dot_general_read_allocating(self, lhs, rhs, config, false, false))
+        self.guarded("dot_general", |engine| {
+            let stream = engine.stream;
+            stream.executes(|| {
+                gemm::dot_general_read_allocating(engine, lhs, rhs, config, false, false)
+            })
+        })
     }
 
     fn dot_general_with_conj_read_cached(
@@ -688,22 +704,28 @@ impl SessionCachedDot for CudaEngine {
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
-        let stream = self.stream;
-        stream.executes(|| {
-            gemm::dot_general_read_allocating(self, lhs, rhs, config, lhs_conj, rhs_conj)
+        self.guarded("dot_general", |engine| {
+            let stream = engine.stream;
+            stream.executes(|| {
+                gemm::dot_general_read_allocating(engine, lhs, rhs, config, lhs_conj, rhs_conj)
+            })
         })
     }
 }
 
 impl Engine for CudaEngine {
     fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        let stream = self.stream;
-        stream.executes(|| ops::vdot_read(self, lhs, rhs))
+        self.guarded("vdot", |engine| {
+            let stream = engine.stream;
+            stream.executes(|| ops::vdot_read(engine, lhs, rhs))
+        })
     }
 
     fn norm_squared_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        let stream = self.stream;
-        stream.executes(|| ops::norm_squared_read(self, input))
+        self.guarded("norm_squared", |engine| {
+            let stream = engine.stream;
+            stream.executes(|| ops::norm_squared_read(engine, input))
+        })
     }
 
     fn axpby_read_into_accum(
@@ -713,8 +735,10 @@ impl Engine for CudaEngine {
         beta: tenferro_tensor::ContractionScalar,
         y: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        let stream = self.stream;
-        stream.executes(|| ops::axpby_read_into_accum(self, alpha, x, beta, y))
+        self.guarded("axpby", |engine| {
+            let stream = engine.stream;
+            stream.executes(|| ops::axpby_read_into_accum(engine, alpha, x, beta, y))
+        })
     }
 
     fn gather_read(
@@ -726,9 +750,10 @@ impl Engine for CudaEngine {
         // The operand is the large one: bind it where it is when the device can
         // read it through its own strides, instead of materializing the table
         // on every call.
-        let stream = self.stream;
-        let native =
-            stream.executes(|| ops::gather_read(self, &operand, &start_indices, config))?;
+        let native = self.guarded("gather", |engine| {
+            let stream = engine.stream;
+            stream.executes(|| ops::gather_read(engine, &operand, &start_indices, config))
+        })?;
         if let Some(output) = native {
             return Ok(output);
         }

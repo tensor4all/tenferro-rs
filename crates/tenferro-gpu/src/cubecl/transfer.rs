@@ -247,6 +247,18 @@ pub(crate) struct TransferRetirement {
 }
 
 impl TransferRetirement {
+    /// Device bytes this record keeps alive: the source value and, for a device copy, its
+    /// destination. Pinned host staging is host memory and is not counted.
+    fn device_bytes(&self) -> u64 {
+        let value = self.value.as_ref().map_or(0, tensor_device_bytes);
+        let resource = self
+            .resource
+            .as_ref()
+            .and_then(|resource| resource.downcast_ref::<Tensor>())
+            .map_or(0, tensor_device_bytes);
+        value + resource
+    }
+
     /// Release the record once, after its event completed.
     fn release(mut self, runtime: &CudaRuntimeState) {
         let _ = runtime.set_current_cuda_context(OP);
@@ -408,6 +420,16 @@ impl TransferRetirementQueue {
     /// so no later query may be trusted to release it.
     pub(crate) fn retain_for_soundness(&mut self, record: TransferRetirement) {
         self.leaked.push(record);
+    }
+
+    /// Device bytes kept alive by records still waiting for completion, including the permanently
+    /// retained ones.
+    pub(crate) fn retained_bytes(&self) -> u64 {
+        self.entries
+            .iter()
+            .chain(self.leaked.iter())
+            .map(TransferRetirement::device_bytes)
+            .sum()
     }
 
     /// Number of records still waiting for completion, including the permanently retained ones.
@@ -885,6 +907,10 @@ pub fn download_pending(
                 buffer,
             ));
         }
+        // The pending download keeps the source alive until it completes.
+        if let Err(error) = runtime.admit_unfinished(OP, byte_len as u64) {
+            return Err(rejected(error, source, buffer));
+        }
         let resource = match runtime
             .client()
             .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
@@ -972,6 +998,19 @@ pub fn download_pending(
 /// This is the destination of the device-side consumer copy: an owned tensor (not a session-bound
 /// `DeviceBytes`), so it can live in the package, be erased into the retirement record, and be
 /// returned by [`PendingRead::wait`].
+/// Device bytes of a tensor's elements (0 for a dtype this route does not serve).
+pub(crate) fn tensor_device_bytes(tensor: &Tensor) -> u64 {
+    let element = match tensor.dtype() {
+        DType::F64 | DType::I64 | DType::C32 => 8,
+        DType::F32 | DType::I32 => 4,
+        DType::C64 => 16,
+        DType::Bool => 1,
+        _ => 0,
+    };
+    let elements: usize = tensor.shape().iter().product();
+    (elements as u64).saturating_mul(element)
+}
+
 fn allocate_like(runtime: &CudaRuntime, source: &Tensor) -> crate::Result<Tensor> {
     let shape = source.shape().to_vec();
     match source.dtype() {
@@ -1295,6 +1334,10 @@ pub fn upload_pending(
                 destination,
                 source,
             ));
+        }
+        // The pending upload keeps the destination alive until it completes.
+        if let Err(error) = runtime.admit_unfinished(OP, byte_len as u64) {
+            return Err(rejected(error, destination, source));
         }
         let resource = match runtime
             .client()
@@ -1838,6 +1881,12 @@ impl SourcePublication {
             ));
         }
         let published_bytes = self.bytes;
+        // The copy keeps the source and its destination alive until it completes.
+        if let Err(error) =
+            consumer_runtime.admit_unfinished(PUBLICATION_OP, 2 * published_bytes as u64)
+        {
+            return Err(copy_refused(self, error));
+        }
         #[cfg(test)]
         if let Some(message) = copy_fault_injection::take_preparation() {
             return Err(copy_refused(

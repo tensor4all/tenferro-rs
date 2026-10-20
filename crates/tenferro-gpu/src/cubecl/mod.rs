@@ -159,6 +159,7 @@ mod capability;
 mod device;
 pub(crate) mod dispatch;
 mod engine;
+pub use engine::CudaEngineError;
 mod error;
 mod event_domain;
 mod exec_session;
@@ -398,6 +399,13 @@ pub struct CudaEngine {
     /// retired at the next `flush`/`synchronize`, when the queue grows past
     /// [`MAX_PENDING_RUNS`], or when the engine drops.
     pending_runs: Vec<Box<dyn tenferro_runtime::EventDomainRun>>,
+    /// Set when an operation panicked: later operations are refused, cleanup still runs.
+    broken: bool,
+    /// Set when the device reported a fault CUDA makes sticky; the reason it reported.
+    device_poisoned: Option<String>,
+    /// Test-only device key, so a synthetic poison test cannot poison the real test GPU.
+    #[cfg(test)]
+    test_device_uuid: Option<[u8; 16]>,
 }
 
 /// Bound on prepared-program runs kept unretired by one engine.
@@ -864,6 +872,10 @@ impl CudaEngine {
             runtime_engine_id: runtime_adapter::default_cuda_engine_id(),
             extension_caches: tenferro_runtime::ExtensionCacheStore::default(),
             pending_runs: Vec::new(),
+            broken: false,
+            device_poisoned: None,
+            #[cfg(test)]
+            test_device_uuid: None,
             inner: CudaEngineState {
                 cutensor: OnceLock::new(),
                 extension_cache: CudaExtensionCache::new(),
