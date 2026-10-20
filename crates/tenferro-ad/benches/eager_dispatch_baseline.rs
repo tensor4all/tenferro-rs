@@ -2,11 +2,11 @@
 //!
 //! Each benchmark group reuses one caller-owned [`CpuEngine`], the supported
 //! caller pattern. Do not construct an engine inside `b.iter`: an engine owns
-//! its contraction workspace and plan cache, and a fresh workspace first enters
-//! the provider arena, which records a per-provider worker handle in a
-//! thread-local list that outlives the dropped owner. Re-creating an engine per
-//! iteration therefore measures cold workspace/plan turnover and an
-//! ever-growing thread-local scan, not eager dispatch.
+//! its contraction workspace and plan cache, so re-creating one per iteration
+//! measures cold workspace/plan turnover, not eager dispatch. (The per-provider
+//! worker-handle registry that used to grow with every dropped engine was fixed
+//! in tcontract-rs#134, so the cold cost no longer accumulates; it is still
+//! cold.)
 //!
 //! [`CpuEngine`]: tenferro_cpu::CpuEngine
 

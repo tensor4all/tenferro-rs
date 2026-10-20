@@ -1495,8 +1495,6 @@ fn rank_revealing_qr_impl<T: FaerLinalg>(
     let q_shape = matrix_with_batch_shape(m, k, batch_shape);
     let r_shape = matrix_with_batch_shape(k, n, batch_shape);
     let p_shape = vector_with_batch_shape(n, batch_shape);
-    if has_zero_dim(view.shape()) {
-    }
     super::rank_revealing_qr::screen_non_finite(OP, view, batch, |value: T| value.is_finite())?;
 
     let mut q = pooled_output::<T>(buffers, OP, "Q", &q_shape)?;

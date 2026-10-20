@@ -88,6 +88,24 @@ called directly on an engine come from that engine's `PlanCache`; a lookup hands
 out an immutable plan and releases the cache before the computation, so engines
 that share a cache never wait for each other's work.
 
+### Warm-up
+
+Engines create vendor handles lazily and compile a kernel on its first launch, so
+a caller that measures latency or has a first-use deadline must pay that cost at
+a moment it chooses. Two explicit entries cover it, both owned by the caller:
+
+- `CudaEngine::warm_up()` creates the backend state the engine defers (the
+  cuTENSOR handle) and synchronizes. It compiles no kernel, because a kernel
+  belongs to the program that uses it.
+- `Runtime::warm_up(prepared, engines, reads)` performs one ordinary run of a
+  prepared program and then synchronizes every engine. A prepared program is
+  specialized to its input signature, so that single execution compiles exactly
+  the kernels it will use — fused regions, reduction strategies, vendor plans —
+  and nothing has to be guessed about the backend's dispatch.
+
+`prepare` deliberately compiles nothing: it holds engine *targets*, not engines
+(#1885). A warm-up is therefore an explicit call, and its outputs are discarded.
+
 ## 4. Threads and pools
 
 - The caller builds the pool and hands it over. tenferro never starts a hidden

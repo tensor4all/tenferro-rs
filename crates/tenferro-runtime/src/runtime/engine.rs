@@ -196,6 +196,22 @@ pub trait ExecutionEngine: Engine {
         run.drain()
     }
 
+    /// Block until the work this engine queued has completed.
+    ///
+    /// [`crate::Runtime::run`] returns as soon as an asynchronous engine has
+    /// queued the work; [`crate::Runtime::warm_up`] calls this afterwards, so a
+    /// caller can pay a program's first execution at a moment it chooses. Host
+    /// engines complete every launch before it returns, which the default
+    /// describes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::TensorRuntime`] when the engine reports that
+    /// queued work failed or that the device cannot be synchronized.
+    fn synchronize(&mut self) -> crate::Result<()> {
+        Ok(())
+    }
+
     /// Typed access for prepared operations that execute against the concrete
     /// engine type instead of the [`Engine`] operations.
     fn as_any_mut(&mut self) -> &mut dyn Any;

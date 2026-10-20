@@ -931,12 +931,46 @@ impl CudaEngine {
         self.inner.rt.runtime_identity()
     }
 
+    /// Create the backend state this engine defers, and wait for its stream.
+    ///
+    /// The cuTENSOR handle is created on first use; a caller that wants that
+    /// cost outside a measured region calls this at a moment of its choosing.
+    /// Kernels are not compiled here: they belong to the program that uses
+    /// them, and [`tenferro_runtime::Runtime::warm_up`] compiles exactly those
+    /// by running the prepared program once.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::CudaEngine;
+    ///
+    /// let _warm: fn(&mut CudaEngine) -> tenferro_tensor::Result<()> = CudaEngine::warm_up;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of the first cuTENSOR use (an I/O error when the
+    /// vendor library cannot be loaded, a typed backend failure when the handle
+    /// cannot be created, and [`crate::Error::RuntimeState`] when the current
+    /// context cannot be entered), and the engine's synchronization error when
+    /// the stream cannot be synchronized.
+    pub fn warm_up(&mut self) -> crate::Result<()> {
+        let _ = self.cutensor_handle()?;
+        CudaEngine::synchronize(self)
+    }
+
     fn cutensor_handle(&self) -> crate::Result<&ffi::cutensor::CutensorHandle> {
         if let Some(handle) = self.inner.cutensor.get() {
             return Ok(handle);
         }
-        let handle =
-            ffi::cutensor::CutensorHandle::load(self.inner.rt.device_info().compute_capability())?;
+        // cuTENSOR binds the handle to the *current* CUDA device, so create
+        // it inside this engine's own primary context: another engine opened
+        // earlier on the same thread could otherwise leave a different device
+        // current and this engine would cache that device's handle.
+        let compute_capability = self.inner.rt.device_info().compute_capability();
+        let handle = self.inner.rt.with_current_context("cuda_cutensor", || {
+            ffi::cutensor::CutensorHandle::load(compute_capability)
+        })??;
         let _ = self.inner.cutensor.set(handle);
         self.inner.cutensor.get().ok_or_else(|| {
             crate::Error::runtime_state(

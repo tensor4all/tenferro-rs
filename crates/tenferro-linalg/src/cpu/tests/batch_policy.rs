@@ -146,4 +146,3 @@ fn forced_strategy_on_blas_solve_read_into_is_refused_before_writes() {
         );
     }
 }
-

@@ -10,8 +10,8 @@
 /// Rebuild tenferro's error from one provider's error enum.
 ///
 /// The variants shared by both providers are mapped identically; every provider-specific variant
-/// (`Internal` exists only in `tlinalg-blas`, `InsufficientWorkspace` and `StrategyUnavailable` only
-/// in `tlinalg`) is passed as an extra arm.
+/// (`Internal` exists only in `tlinalg-blas`, `InsufficientWorkspace` only in `tlinalg`) is passed
+/// as an extra arm.
 macro_rules! map_provider_error {
     ($op:expr, $error:expr, $provider:ident $(, $extra_pat:pat => $extra_arm:expr)*) => {{
         use $provider::Error as ProviderError;
