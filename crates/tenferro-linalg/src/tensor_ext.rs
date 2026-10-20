@@ -9,9 +9,9 @@
 //! built-in-session only.
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::with_cpu_exec_session;
+use tenferro_cpu::with_cpu_engine;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::with_cuda_exec_session;
+use tenferro_gpu::cuda::with_cuda_engine;
 use tenferro_tensor::{
     Engine, CompareDir, DType, DotGeneralConfig, Tensor, TensorRead, TensorScalar,
     TensorWrite, TypedTensor,
@@ -2488,13 +2488,13 @@ pub(crate) fn with_linalg_backend<X>(
     // once. Probe the marker first, then re-extract the same exec session and
     // run the composite body on it (FnOnce cannot be captured by several
     // branch closures).
-    if with_cpu_exec_session(session, |_| ()).is_some() {
-        return with_cpu_exec_session(session, |exec| f(exec as &mut dyn LinalgBackend))
+    if with_cpu_engine(session, |_| ()).is_some() {
+        return with_cpu_engine(session, |exec| f(exec as &mut dyn LinalgBackend))
             .expect("marker probe matched a CPU execution session");
     }
     #[cfg(feature = "cuda")]
-    if with_cuda_exec_session(session, |_| ()).is_some() {
-        return with_cuda_exec_session(session, |exec| f(exec as &mut dyn LinalgBackend))
+    if with_cuda_engine(session, |_| ()).is_some() {
+        return with_cuda_engine(session, |exec| f(exec as &mut dyn LinalgBackend))
             .expect("marker probe matched a CUDA execution session");
     }
     Err(tenferro_tensor::Error::unsupported(

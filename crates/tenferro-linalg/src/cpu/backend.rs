@@ -14,7 +14,7 @@ use tenferro_cpu::same_variant_pair;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::linalg_interop::BufferPool;
-use tenferro_cpu::{CpuExecSession, CpuExecutionContext};
+use tenferro_cpu::{CpuEngine, CpuExecutionContext};
 use tenferro_tensor::{
     validate::validate_nonsingular_u, AllocationDomainId, DType, Error, HostAccessError,
     MemoryKind, SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorStructural,
@@ -45,52 +45,6 @@ macro_rules! preset_scalar {
         num_complex::Complex64
     };
 }
-trait FreshLinalgOutput {
-    fn tag_fresh(&mut self, domain: tenferro_tensor::CpuDomainId);
-}
-
-impl FreshLinalgOutput for Tensor {
-    fn tag_fresh(&mut self, domain: tenferro_tensor::CpuDomainId) {
-        match self.dtype() {
-            DType::F32 => tag_fresh_typed::<f32>(self, domain),
-            DType::F64 => tag_fresh_typed::<f64>(self, domain),
-            DType::I32 => tag_fresh_typed::<i32>(self, domain),
-            DType::I64 => tag_fresh_typed::<i64>(self, domain),
-            DType::Bool => tag_fresh_typed::<bool>(self, domain),
-            DType::C32 => tag_fresh_typed::<Complex32>(self, domain),
-            DType::C64 => tag_fresh_typed::<Complex64>(self, domain),
-            // A caller-owned payload has no pooled storage to tag, and a tag the accessor cannot
-            // recover leaves the placement untouched, which is the same outcome.
-            DType::External(_) => {}
-        }
-    }
-}
-
-/// Mark a freshly allocated output with the CPU domain its pool belongs to.
-fn tag_fresh_typed<T: tenferro_tensor::TensorScalar>(
-    output: &mut Tensor,
-    domain: tenferro_tensor::CpuDomainId,
-) {
-    if let Some(tensor) = output.as_typed_mut::<T>() {
-        tensor.set_cpu_affinity(Some(domain));
-    }
-}
-
-impl FreshLinalgOutput for Vec<Tensor> {
-    fn tag_fresh(&mut self, domain: tenferro_tensor::CpuDomainId) {
-        for output in self {
-            output.tag_fresh(domain);
-        }
-    }
-}
-
-impl FreshLinalgOutput for CompactQrResult {
-    fn tag_fresh(&mut self, domain: tenferro_tensor::CpuDomainId) {
-        self.packed.tag_fresh(domain);
-        self.coeff.tag_fresh(domain);
-    }
-}
-
 trait CpuBackendLinalgAffinityExt {
     /// Every BLAS linalg entry passes here, including the direct caller-output
     /// path that does not allocate a fresh result.
@@ -99,13 +53,9 @@ trait CpuBackendLinalgAffinityExt {
         op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
     ) -> tenferro_tensor::Result<R>;
 
-    fn with_linalg_pool_fresh<R: FreshLinalgOutput + Send>(
-        &mut self,
-        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
-    ) -> tenferro_tensor::Result<R>;
 }
 
-impl CpuBackendLinalgAffinityExt for CpuExecSession<'_> {
+impl CpuBackendLinalgAffinityExt for CpuEngine {
     fn with_linalg_pool_checked<R>(
         &mut self,
         op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
@@ -117,22 +67,12 @@ impl CpuBackendLinalgAffinityExt for CpuExecSession<'_> {
         })
     }
 
-    fn with_linalg_pool_fresh<R: FreshLinalgOutput + Send>(
-        &mut self,
-        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
-    ) -> tenferro_tensor::Result<R> {
-        self.with_linalg_pool_checked(move |context, buffers| {
-            let mut output = op(context, buffers)?;
-            output.tag_fresh(context.domain_id());
-            Ok(output)
-        })
-    }
 }
 
-impl LinalgBackend for CpuExecSession<'_> {
+impl LinalgBackend for CpuEngine {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        let domain = self.shared_allocation_domain();
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        let domain = self.shared_allocation_domain().cloned();
+        self.with_linalg_pool_checked(move |context, buffers| {
             if tensor_uses_backend_storage(input)
                 && let Some(domain) = domain.as_deref()
             {
@@ -160,7 +100,7 @@ impl LinalgBackend for CpuExecSession<'_> {
             transpose_a,
             unit_diagonal,
         };
-        self.with_linalg_pool_fresh(|context, buffers| {
+        self.with_linalg_pool_checked(|context, buffers| {
             triangular_solve_entered(context, buffers, a, b, options)
         })
     }
@@ -183,7 +123,7 @@ impl LinalgBackend for CpuExecSession<'_> {
             transpose_a,
             unit_diagonal,
         };
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             // Both operands must be faer-eligible for the direct path: `a`
             // reaches faer as a strided `MatRef` and `b` is gathered straight
             // into the destructible right-hand side. If either is ineligible,
@@ -211,7 +151,7 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("lu", input)?;
-        self.with_linalg_pool_fresh(|context, buffers| lu_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| lu_entered(context, buffers, input))
     }
 
     fn lu_factor(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -221,7 +161,7 @@ impl LinalgBackend for CpuExecSession<'_> {
             {
                 #[cfg(feature = "native")]
                 {
-                    self.with_linalg_pool_fresh(|ctx, buffers| match input.dtype() {
+                    self.with_linalg_pool_checked(|ctx, buffers| match input.dtype() {
                         DType::F32 => {
                             let t = input
                                 .as_typed::<f32>()
@@ -278,7 +218,7 @@ impl LinalgBackend for CpuExecSession<'_> {
             {
                 #[cfg(feature = "blas")]
                 {
-                    self.with_linalg_pool_fresh(|ctx, buffers| match input.dtype() {
+                    self.with_linalg_pool_checked(|ctx, buffers| match input.dtype() {
                         DType::F32 => {
                             let t = input
                                 .as_typed::<f32>()
@@ -336,7 +276,7 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("full_piv_lu", input)?;
-        self.with_linalg_pool_fresh(|context, buffers| full_piv_lu_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| full_piv_lu_entered(context, buffers, input))
     }
 
     fn full_piv_lu_solve(
@@ -349,7 +289,7 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_host_tensor("full_piv_lu_solve", b)?;
         ensure_supported_linalg_pair("full_piv_lu_solve", a, b)?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return self.with_linalg_pool_fresh(|_, _| zeros_like_tensor(b));
+            return self.with_linalg_pool_checked(|_, _| zeros_like_tensor(b));
         }
 
         let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
@@ -366,7 +306,7 @@ impl LinalgBackend for CpuExecSession<'_> {
             {
                 #[cfg(feature = "native")]
                 {
-                    self.with_linalg_pool_fresh(|ctx, buffers| {
+                    self.with_linalg_pool_checked(|ctx, buffers| {
                         same_variant_pair!(
                             a,
                             &rhs,
@@ -382,7 +322,7 @@ impl LinalgBackend for CpuExecSession<'_> {
             {
                 #[cfg(feature = "blas")]
                 {
-                    self.with_linalg_pool_fresh(|_, buffers| {
+                    self.with_linalg_pool_checked(|_, buffers| {
                         same_variant_pair!(
                             a,
                             &rhs,
@@ -403,18 +343,18 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("svd", input)?;
-        self.with_linalg_pool_fresh(|context, buffers| svd_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| svd_entered(context, buffers, input))
     }
 
     fn svd_full(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("svd_full", input)?;
-        self.with_linalg_pool_fresh(|context, buffers| svd_full_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| svd_full_entered(context, buffers, input))
     }
 
     fn svd_full_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("svd_full", &input)?;
         ensure_supported_linalg_dtype("svd_full", input.dtype())?;
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
                 return svd_full_faer_view_entered(context, buffers, input.tensor_view());
@@ -427,13 +367,13 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("svd_values", input)?;
-        self.with_linalg_pool_fresh(|context, buffers| svd_values_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| svd_values_entered(context, buffers, input))
     }
 
     fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("svd", &input)?;
         ensure_supported_linalg_dtype("svd", input.dtype())?;
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
                 return svd_faer_view_entered(context, buffers, input.tensor_view());
@@ -447,7 +387,7 @@ impl LinalgBackend for CpuExecSession<'_> {
     fn svd_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor_read("svd_values", &input)?;
         ensure_supported_linalg_dtype("svd_values", input.dtype())?;
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
                 return svd_values_faer_view_entered(context, buffers, input.tensor_view());
@@ -460,13 +400,13 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("qr", input)?;
-        self.with_linalg_pool_fresh(|context, buffers| qr_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| qr_entered(context, buffers, input))
     }
 
     fn qr_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("qr", &input)?;
         ensure_supported_linalg_dtype("qr", input.dtype())?;
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
                 return qr_faer_view_entered(context, buffers, input.tensor_view());
@@ -485,7 +425,7 @@ impl LinalgBackend for CpuExecSession<'_> {
         validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
         ensure_host_tensor("rank_revealing_qr", input)?;
         ensure_supported_linalg_dtype("rank_revealing_qr", input.dtype())?;
-        self.with_linalg_pool_fresh(|context, buffers| {
+        self.with_linalg_pool_checked(|context, buffers| {
             rank_revealing_qr_entered(context, buffers, input, options)
         })
     }
@@ -498,7 +438,7 @@ impl LinalgBackend for CpuExecSession<'_> {
         validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
         ensure_host_tensor_read("rank_revealing_qr", &input)?;
         ensure_supported_linalg_dtype("rank_revealing_qr", input.dtype())?;
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
                 return rank_revealing_qr_faer_view_entered(
@@ -519,7 +459,7 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn householder_qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<CompactQrResult> {
         ensure_host_tensor("householder_qr", input)?;
-        self.with_linalg_pool_fresh(|context, buffers| {
+        self.with_linalg_pool_checked(|context, buffers| {
             householder_qr_entered(context, buffers, input)
         })
     }
@@ -531,7 +471,7 @@ impl LinalgBackend for CpuExecSession<'_> {
     ) -> tenferro_tensor::Result<CompactQrResult> {
         ensure_host_tensor("householder_qr_from_factors", q)?;
         ensure_host_tensor("householder_qr_from_factors", r)?;
-        self.with_linalg_pool_fresh(|context, buffers| {
+        self.with_linalg_pool_checked(|context, buffers| {
             householder_qr_from_factors_entered(context, buffers, q, r)
         })
     }
@@ -545,7 +485,7 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_host_tensor("householder_qr_append", packed)?;
         ensure_host_tensor("householder_qr_append", coeff)?;
         ensure_host_tensor("householder_qr_append", block)?;
-        self.with_linalg_pool_fresh(|context, buffers| {
+        self.with_linalg_pool_checked(|context, buffers| {
             householder_qr_append_entered(context, buffers, packed, coeff, block)
         })
     }
@@ -558,7 +498,7 @@ impl LinalgBackend for CpuExecSession<'_> {
     ) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("householder_qr_r", packed)?;
         ensure_host_tensor("householder_qr_r", coeff)?;
-        self.with_linalg_pool_fresh(|context, buffers| {
+        self.with_linalg_pool_checked(|context, buffers| {
             householder_qr_r_entered(context, buffers, packed, coeff, options)
         })
     }
@@ -572,20 +512,20 @@ impl LinalgBackend for CpuExecSession<'_> {
     ) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("householder_qr_q_columns", packed)?;
         ensure_host_tensor("householder_qr_q_columns", coeff)?;
-        self.with_linalg_pool_fresh(|context, buffers| {
+        self.with_linalg_pool_checked(|context, buffers| {
             householder_qr_q_columns_entered(context, buffers, packed, coeff, columns, options)
         })
     }
 
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("eigh", input)?;
-        self.with_linalg_pool_fresh(|context, buffers| eigh_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| eigh_entered(context, buffers, input))
     }
 
     fn eigh_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("eigh", &input)?;
         ensure_supported_linalg_dtype("eigh", input.dtype())?;
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
                 return eigh_faer_view_entered(context, buffers, input.tensor_view());
@@ -599,7 +539,7 @@ impl LinalgBackend for CpuExecSession<'_> {
     fn eigh_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor_read("eigh_values", &input)?;
         ensure_supported_linalg_dtype("eigh_values", input.dtype())?;
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
                 return eigh_values_faer_view_entered(context, buffers, input.tensor_view());
@@ -614,8 +554,8 @@ impl LinalgBackend for CpuExecSession<'_> {
     }
 
     fn cholesky_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-        let domain = self.shared_allocation_domain();
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        let domain = self.shared_allocation_domain().cloned();
+        self.with_linalg_pool_checked(move |context, buffers| {
             if let Some(domain) = domain.as_deref()
                 && input.backend_family().is_some()
             {
@@ -636,7 +576,7 @@ impl LinalgBackend for CpuExecSession<'_> {
     fn lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("lu", &input)?;
         ensure_supported_linalg_dtype("lu", input.dtype())?;
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
                 return lu_faer_view_entered(context, buffers, input.tensor_view());
@@ -650,7 +590,7 @@ impl LinalgBackend for CpuExecSession<'_> {
     fn full_piv_lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("full_piv_lu", &input)?;
         ensure_supported_linalg_dtype("full_piv_lu", input.dtype())?;
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
                 return full_piv_lu_faer_view_entered(context, buffers, input.tensor_view());
@@ -667,7 +607,7 @@ impl LinalgBackend for CpuExecSession<'_> {
     fn eig_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("eig", &input)?;
         ensure_supported_linalg_dtype("eig", input.dtype())?;
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
                 return linalg::faer::eig_view(context, buffers, input.tensor_view());
@@ -681,7 +621,7 @@ impl LinalgBackend for CpuExecSession<'_> {
     fn eig_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor_read("eig_values", &input)?;
         ensure_supported_linalg_dtype("eig_values", input.dtype())?;
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
                 return linalg::faer::eig_values_view(context, buffers, input.tensor_view());
@@ -694,19 +634,19 @@ impl LinalgBackend for CpuExecSession<'_> {
 
     fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("eigh_values", input)?;
-        self.with_linalg_pool_fresh(|context, buffers| eigh_values_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| eigh_values_entered(context, buffers, input))
     }
 
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("eig", input)?;
         ensure_supported_linalg_dtype("eig", input.dtype())?;
-        self.with_linalg_pool_fresh(|context, buffers| eig_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| eig_entered(context, buffers, input))
     }
 
     fn eig_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("eig_values", input)?;
         ensure_supported_linalg_dtype("eig_values", input.dtype())?;
-        self.with_linalg_pool_fresh(|context, buffers| eig_values_entered(context, buffers, input))
+        self.with_linalg_pool_checked(|context, buffers| eig_values_entered(context, buffers, input))
     }
 
     fn lu_solve_prepared(
@@ -730,7 +670,7 @@ impl LinalgBackend for CpuExecSession<'_> {
             return Err(Error::dtype_mismatch(OP, DType::I32, pivots.dtype()));
         }
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return self.with_linalg_pool_fresh(|_, _| zeros_like_tensor(b));
+            return self.with_linalg_pool_checked(|_, _| zeros_like_tensor(b));
         }
 
         validate_lu_solve_prepared_shapes(
@@ -741,7 +681,7 @@ impl LinalgBackend for CpuExecSession<'_> {
         validate_nonsingular_u(packed_lu)?;
         // One pooled RHS copy becomes the output; the provider kernel applies
         // the stored pivots and both triangular solves per matrix in place.
-        self.with_linalg_pool_fresh(|ctx, buffers| {
+        self.with_linalg_pool_checked(|ctx, buffers| {
             packed_lu::lu_solve_prepared_entered(
                 ctx,
                 buffers,
@@ -761,7 +701,7 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_host_tensor(OP, a)?;
         ensure_host_tensor(OP, b)?;
         ensure_supported_linalg_pair(OP, a, b)?;
-        self.with_linalg_pool_fresh(|ctx, buffers| {
+        self.with_linalg_pool_checked(|ctx, buffers| {
             packed_lu::lu_factor_solve_entered(ctx, buffers, a, b)
         })
     }
@@ -770,7 +710,7 @@ impl LinalgBackend for CpuExecSession<'_> {
         ensure_host_tensor("solve", a)?;
         ensure_host_tensor("solve", b)?;
         ensure_supported_linalg_pair("solve", a, b)?;
-        self.with_linalg_pool_fresh(|context, buffers| solve_entered(context, buffers, a, b))
+        self.with_linalg_pool_checked(|context, buffers| solve_entered(context, buffers, a, b))
     }
 
     fn solve_read(
@@ -784,7 +724,7 @@ impl LinalgBackend for CpuExecSession<'_> {
         let direct = !has_zero_dim(a.shape())
             && !has_zero_dim(b.shape())
             && solve_shape_direct_eligible(a.shape(), b.shape());
-        self.with_linalg_pool_fresh(move |context, buffers| {
+        self.with_linalg_pool_checked(move |context, buffers| {
             if direct {
                 solve_from_views_entered(context, buffers, a.tensor_view(), b.tensor_view())
             } else {

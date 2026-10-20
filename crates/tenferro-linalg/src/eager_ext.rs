@@ -10,9 +10,9 @@ use tenferro_ad::extension::{
     EagerExtensionBackendKind, EagerExtensionTarget,
 };
 use tenferro_ad::{EagerSession, EagerTensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::CudaBackend;
+use tenferro_gpu::cuda::CudaEngine;
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::webgpu::WebGpuBackend;
 use tenferro_runtime::{ErrorPhase, ExtensionModule};
@@ -59,7 +59,7 @@ pub trait EagerTensorLinalgExt {
     ///
     /// ```rust
     /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_cpu::CpuEngine;
     /// # use tenferro_linalg::EagerTensorLinalgExt;
     /// # let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// # let a = EagerTensor::from_tensor_in(
@@ -982,11 +982,11 @@ fn eager_extension_module(target: EagerExtensionTarget) -> Result<Arc<dyn Extens
     } = target;
     match backend_kind {
         EagerExtensionBackendKind::Cpu => {
-            extension_module::<CpuBackend>(engine_id).map_err(eager_runtime_config_error)
+            extension_module::<CpuEngine>(engine_id).map_err(eager_runtime_config_error)
         }
         #[cfg(feature = "cuda")]
         EagerExtensionBackendKind::Cuda => {
-            extension_module::<CudaBackend>(engine_id).map_err(eager_runtime_config_error)
+            extension_module::<CudaEngine>(engine_id).map_err(eager_runtime_config_error)
         }
         #[cfg(feature = "webgpu")]
         EagerExtensionBackendKind::WebGpu => {

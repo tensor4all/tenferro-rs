@@ -117,7 +117,7 @@ fn session_support_admits_every_cpu_linear_algebra_op() {
 
 #[test]
 fn extension_reads_preserve_strided_inputs() {
-    use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    use tenferro_cpu::{with_cpu_engine, CpuBackend};
     use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
 
     // Owned, compact, transposed and offset reads describe the same spectrum.
@@ -138,7 +138,7 @@ fn extension_reads_preserve_strided_inputs() {
     for read in reads {
         let outputs = backend
             .with_backend_session(|session| {
-                with_cpu_exec_session(session, |session| {
+                with_cpu_engine(session, |session| {
                     super::execute_linalg_extension_reads_in_session(
                         &LinalgExtensionOp::new(LinalgOp::SvdVals {
                             derivative_eps: 0.0,

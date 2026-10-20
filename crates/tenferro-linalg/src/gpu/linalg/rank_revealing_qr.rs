@@ -35,7 +35,7 @@ type CudaTensorBinding = TensorBinding;
 
 trait CudaRrqrScalar: LinalgScalar + TensorScalar {
     fn device_imaginary_unit(
-        backend: &mut CudaExecSession<'_>,
+        backend: &mut CudaEngine,
     ) -> Result<Option<TypedTensor<Self>>>;
 
     fn launch_norms(
@@ -113,7 +113,7 @@ macro_rules! impl_cuda_rrqr_real {
     ($scalar:ty, $variant:ident) => {
         impl CudaRrqrScalar for $scalar {
             fn device_imaginary_unit(
-                _backend: &mut CudaExecSession<'_>,
+                _backend: &mut CudaEngine,
             ) -> Result<Option<TypedTensor<Self>>> {
                 Ok(None)
             }
@@ -320,7 +320,7 @@ macro_rules! impl_cuda_rrqr_complex {
     ($scalar:ty, $variant:ident, $real:ty, $norms:ident, $reflector:ident, $apply:ident, $rank_kernel:ident) => {
         impl CudaRrqrScalar for $scalar {
             fn device_imaginary_unit(
-                backend: &mut CudaExecSession<'_>,
+                backend: &mut CudaEngine,
             ) -> Result<Option<TypedTensor<Self>>> {
                 let host = Tensor::from_typed::<preset_scalar!($variant)>(
                     TypedTensor::from_vec_col_major(
@@ -512,7 +512,7 @@ impl_cuda_rrqr_complex!(
 );
 
 pub(super) fn rank_revealing_qr(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &Tensor,
     options: RankRevealingQrOptions,
 ) -> Result<Vec<Tensor>> {
@@ -583,7 +583,7 @@ fn gpu_linalg_typed<'a, T: tenferro_tensor::TensorScalar>(
 
 #[allow(clippy::type_complexity)]
 fn rank_revealing_qr_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     options: RankRevealingQrOptions,
 ) -> Result<(

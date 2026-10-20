@@ -18,7 +18,7 @@ fn forced_outer_reaches_the_faer_exec() {
             session,
             CpuBatchPolicy::new(CpuBatchStrategy::Outer),
             |session| {
-                with_cpu_exec_session(session, |cpu| {
+                with_cpu_engine(session, |cpu| {
                     cpu.with_linalg_pool(|context, _| {
                         let exec = exec_from(context)?;
                         assert_eq!(exec.batch_policy().strategy, CpuBatchStrategy::Outer);
@@ -66,7 +66,7 @@ fn forced_strategy_on_the_blas_linalg_lane_is_refused_before_writes() {
         for strategy in strategies {
             let result = with_cpu_linalg(&mut backend, |session| {
                 with_batch_policy(session, CpuBatchPolicy::new(strategy), |session| {
-                    with_cpu_exec_session(session, |cpu| cpu.lu_factor(&input))
+                    with_cpu_engine(session, |cpu| cpu.lu_factor(&input))
                         .expect("a CPU session")
                 })
                 .expect("the CPU session accepts the policy")
@@ -112,7 +112,7 @@ fn forced_strategy_on_blas_solve_read_into_is_refused_before_writes() {
         let mut out = Tensor::from_vec_col_major([2, 1], vec![-41.0_f64; 2]).unwrap();
         let result = with_cpu_linalg(&mut backend, |session| {
             with_batch_policy(session, CpuBatchPolicy::new(strategy), |session| {
-                with_cpu_exec_session(session, |cpu| {
+                with_cpu_engine(session, |cpu| {
                     cpu.solve_read_into(
                         TensorRead::from_tensor(&a),
                         TensorRead::from_tensor(&b),
@@ -152,7 +152,7 @@ fn forced_whole_batch_vendor_on_native_empty_inputs_is_refused() {
                 session,
                 CpuBatchPolicy::new(CpuBatchStrategy::WholeBatchVendor),
                 |session| {
-                    with_cpu_exec_session(session, |cpu| cpu.cholesky(&input))
+                    with_cpu_engine(session, |cpu| cpu.cholesky(&input))
                         .expect("a CPU session")
                 },
             )

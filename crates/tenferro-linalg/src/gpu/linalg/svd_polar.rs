@@ -13,7 +13,7 @@ type PolarFactors<T> = (
 /// Nonempty, validated SVD input. The caller converts V to Vᴴ when requested.
 /// No-vector calls leave U/V as scratch, never exposed to the caller.
 pub(super) fn svd_polar_typed<T>(
-    backend: &mut CudaExecSession<'_>,
+    backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     full: bool,
     vectors: bool,

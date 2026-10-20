@@ -9,7 +9,7 @@ use num_complex::{Complex32, Complex64};
 #[cfg(feature = "native")]
 use super::linalg::faer_linalg;
 use crate::LinalgBackend;
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuExecSession};
+use tenferro_cpu::{with_cpu_engine, CpuBackend, CpuExecSession};
 use tenferro_tensor::backend::{BackendSessionHost, TensorBackend};
 use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -25,7 +25,7 @@ where
 {
     backend
         .with_backend_session(|session| {
-            with_cpu_exec_session(session, f).expect("CpuBackend must expose CpuExecSession")
+            with_cpu_engine(session, f).expect("CpuBackend must expose CpuExecSession")
         })
         .unwrap()
 }

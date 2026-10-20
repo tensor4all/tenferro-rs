@@ -1,5 +1,5 @@
 use crate::extension::{execute_linalg_extension_reads_in_session, LinalgExtensionOp, LinalgOp};
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+use tenferro_cpu::{with_cpu_engine, CpuBackend};
 use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorView, TypedTensorView};
 
 #[test]
@@ -8,7 +8,7 @@ fn prepared_solve_preserves_mixed_owned_and_strided_inputs() {
     let a = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
     let factors = backend
         .with_backend_session(|session| {
-            with_cpu_exec_session(session, |session| {
+            with_cpu_engine(session, |session| {
                 execute_linalg_extension_reads_in_session(
                     &LinalgExtensionOp::new(LinalgOp::LuFactor),
                     &[TensorRead::from_tensor(&a)],
@@ -51,7 +51,7 @@ fn prepared_solve_preserves_mixed_owned_and_strided_inputs() {
             });
             let result = backend
                 .with_backend_session(|session| {
-                    with_cpu_exec_session(session, |session| {
+                    with_cpu_engine(session, |session| {
                         execute_linalg_extension_reads_in_session(&op, &reads, session)
                     })
                     .unwrap()

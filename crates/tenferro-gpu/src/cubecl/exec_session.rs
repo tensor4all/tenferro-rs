@@ -13,6 +13,8 @@ use tenferro_tensor::{
     TensorRank, TensorScalar, TensorViewCanonicalization, TypedTensorView, TypedTensorViewMut,
 };
 
+use cubecl::prelude::{CubeElement, CubePrimitive, Scalar};
+
 use super::identity::GpuExtensionCapability;
 #[cfg(feature = "cubecl-interop")]
 use super::session_cubecl;
@@ -385,6 +387,43 @@ impl CudaEngine {
         let stream = self.stream;
         let runtime = self.runtime().clone();
         stream.executes(|| Self::with_cubecl_on_stream(runtime, op, f))
+    }
+
+    /// Lower-triangular part of `input` (diagonal offset `k`) on this engine's
+    /// stream; used by first-party linalg kernels.
+    #[doc(hidden)]
+    pub fn linalg_tril_typed<T>(&mut self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
+    where
+        T: CubeElement + TensorScalar + CubePrimitive + Scalar + Clone,
+    {
+        let stream = self.stream;
+        stream.executes(|| self.tril_typed(input, k))
+    }
+
+    /// Upper-triangular part of `input` (diagonal offset `k`) on this engine's
+    /// stream; used by first-party linalg kernels.
+    #[doc(hidden)]
+    pub fn linalg_triu_typed<T>(&mut self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
+    where
+        T: CubeElement + TensorScalar + CubePrimitive + Scalar + Clone,
+    {
+        let stream = self.stream;
+        stream.executes(|| self.triu_typed(input, k))
+    }
+
+    /// Slice of `input` on this engine's stream; used by first-party linalg
+    /// kernels.
+    #[doc(hidden)]
+    pub fn linalg_slice_typed<T>(
+        &mut self,
+        input: &TypedTensor<T>,
+        config: &SliceConfig,
+    ) -> crate::Result<TypedTensor<T>>
+    where
+        T: CubeElement + TensorScalar + CubePrimitive + Scalar + Clone,
+    {
+        let stream = self.stream;
+        stream.executes(|| self.slice_typed(input, config))
     }
 
     #[cfg(feature = "cubecl-interop")]

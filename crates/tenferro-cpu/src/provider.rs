@@ -232,6 +232,7 @@ impl<'a> CpuExecutionContext<'a> {
     /// faer's `Par::rayon` schedules on the pool of the calling thread, so a
     /// parallel faer call must run inside the engine's pool; a serial context
     /// runs on the caller with `Par::Seq`.
+    #[cfg(feature = "native")]
     pub(crate) fn with_faer_pool<R: Send>(&self, operation: impl FnOnce(faer::Par) -> R + Send) -> R {
         let par = self.faer_parallelism();
         match (par, self.rayon_pool()) {
@@ -239,6 +240,41 @@ impl<'a> CpuExecutionContext<'a> {
                 pool.install(|| operation(par))
             }
             _ => operation(par),
+        }
+    }
+
+    /// Run a faer computation at `width` workers, decided by the caller from the
+    /// shared work model before any pool is entered.
+    ///
+    /// A width of one runs on the calling thread with `Par::Seq`; a larger width
+    /// enters the engine's pool once (faer's `Par::rayon` schedules on the
+    /// pool of the calling thread), capped by this context's budget.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{with_cpu_engine, CpuEngine};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let seq = engine
+    ///     .with_linalg_pool(|context, _| Ok(context.with_faer_width(4, |par| par == tenferro_cpu::faer::Par::Seq)))
+    ///     .unwrap();
+    /// assert!(seq);
+    /// # let _ = with_cpu_engine::<CpuEngine, ()>;
+    /// ```
+    #[cfg(feature = "native")]
+    pub fn with_faer_width<R: Send>(&self, width: usize, operation: impl FnOnce(faer::Par) -> R + Send) -> R {
+        let width = width.min(self.native_thread_count());
+        match self.rayon_pool() {
+            Some(pool) if width > 1 => {
+                let par = faer::Par::rayon(width);
+                if pool.current_thread_index().is_some() {
+                    operation(par)
+                } else {
+                    pool.install(|| operation(par))
+                }
+            }
+            _ => operation(faer::Par::Seq),
         }
     }
 
