@@ -95,16 +95,16 @@ strided-basic = { version = "=0.6.2", default-features = false }
 strided-fused = { version = "=0.6.0", default-features = false, features = ["parallel"] }
 strided-kernel = { version = "=0.6.0", features = ["parallel"] }
 libloading = "0.8"
-# One faer identity for the whole CPU stack (#1939): the pinned `tlinalg 0.4.0`
-# resolves `t4a-faer =0.24.6` (its own manifest renames it via
+# One faer identity for the whole CPU stack (#1939): the pinned `tlinalg 0.4.1`
+# resolves `t4a-faer =0.24.7` (its own manifest renames it via
 # `package = "t4a-faer"`), and a second, crates.io `faer` would hand a different
 # `Par`/`Mat` type to a downstream direct call than the one
-# `with_faer_parallelism` passes. `t4a-faer 0.24.6` is the fork commit 04542fae
-# that tlinalg 0.4.0 pins: it carries the evd eigenvector-normalization fix
-# (#2131) on top of the 0.24.5 tag. tenferro-cpu re-exports this build as
+# `with_faer_parallelism` passes. `t4a-faer 0.24.7` is the fork's release from
+# main: it carries the evd eigenvector-normalization fix (#2131) and the
+# householder row-split gate for tensor4all/faer#12. tenferro-cpu re-exports this build as
 # `tenferro_cpu::faer` under `native`. The fork keeps the 0.24 API and the
 # `faer` library name.
-faer = { package = "t4a-faer", version = "=0.24.6", default-features = false, features = ["std", "rayon"] }
+faer = { package = "t4a-faer", version = "=0.24.7", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"
 cblas-inject = "0.1.1"
 blas-src = { version = "0.14", default-features = false }
