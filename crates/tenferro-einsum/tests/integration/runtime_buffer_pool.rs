@@ -1,4 +1,4 @@
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
@@ -49,28 +49,30 @@ fn cpu_backend_nary_einsum_leaves_no_host_pool_growth() {
     let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
 
     let mut compiler = GraphCompiler::new();
-    let backend = CpuBackend::new();
+    let mut backend = CpuEngine::serial();
     let runtime = support::cpu_runtime_with_einsum(&backend).unwrap();
 
     let program1 = compile_nary(&mut compiler, &a, &b, &c);
 
-    let mut outputs1 = runtime.run_compiled(&program1, &[]).unwrap();
+    let mut outputs1 =
+        support::run_on_cpu_with_engine(&runtime, &mut backend, &program1, &[]).unwrap();
     assert_eq!(outputs1.len(), 1);
     let result1 = outputs1.remove(0);
     assert_eq!(get_f64_data(&result1), &[517.0, 766.0, 625.0, 926.0]);
 
     // The N-ary intermediates are owned by the lower library's execution
     // workspace, so the host buffer pool retains no per-run growth.
-    let retained_after_first = backend.buffer_pool_stats().unwrap().capacity_bytes;
+    let retained_after_first = backend.buffer_pool_stats().capacity_bytes;
 
     let program2 = compile_nary(&mut compiler, &a, &b, &c);
 
-    let mut outputs2 = runtime.run_compiled(&program2, &[]).unwrap();
+    let mut outputs2 =
+        support::run_on_cpu_with_engine(&runtime, &mut backend, &program2, &[]).unwrap();
     assert_eq!(outputs2.len(), 1);
     let result2 = outputs2.remove(0);
     assert_eq!(get_f64_data(&result2), &[517.0, 766.0, 625.0, 926.0]);
     assert_eq!(
-        backend.buffer_pool_stats().unwrap().capacity_bytes,
+        backend.buffer_pool_stats().capacity_bytes,
         retained_after_first,
         "repeated N-ary runs must not grow the host buffer pool"
     );

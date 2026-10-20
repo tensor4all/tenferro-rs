@@ -1,10 +1,13 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{CoreSemanticOp, ProgramInputSpec};
-use tenferro_runtime::{CompiledGraph, GraphCompiler, Runtime, Tensor, TraceContext, TypedTensor};
+use tenferro_runtime::{
+    CompiledGraph, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TraceContext,
+    TypedTensor,
+};
 
 const L: usize = 32;
 const PHYS_DIM: usize = 2;
@@ -106,20 +109,44 @@ fn compile_mps_inner_product(fixture: &MpsFixture) -> CompiledGraph {
 }
 
 fn cpu_runtime_with_einsum_one_thread() -> Runtime {
-    let backend = CpuBackend::with_threads(1).unwrap();
+    let backend = CpuEngine::new(
+        tenferro_cpu::thread_pool_builder()
+            .num_threads(1)
+            .build()
+            .unwrap(),
+    );
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
         .unwrap();
     builder
         .install_extension_module(
-            tenferro_einsum::extension_module::<CpuBackend>(
+            tenferro_einsum::extension_module::<CpuEngine>(
                 tenferro_cpu::runtime_engine_id().unwrap(),
             )
             .unwrap(),
         )
         .unwrap();
     builder.build().unwrap()
+}
+
+fn run_program(
+    runtime: &Runtime,
+    engine: &mut CpuEngine,
+    program: &CompiledGraph,
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let reads: &[TensorRead<'_>] = &[];
+    let target = engine.target();
+    let prepared = runtime.prepare(program, reads, std::slice::from_ref(&target))?;
+    let outputs = runtime.run(&mut [engine], &prepared, reads)?;
+    outputs
+        .into_iter()
+        .map(|output| {
+            output
+                .into_tensor(engine)
+                .map_err(tenferro_runtime::Error::from)
+        })
+        .collect()
 }
 
 fn bench_mps_inner_product(c: &mut Criterion) {
@@ -130,8 +157,13 @@ fn bench_mps_inner_product(c: &mut Criterion) {
         let runtime = cpu_runtime_with_einsum_one_thread();
         let params = format!("L_{L}_chi_{chi}_d_{PHYS_DIM}");
 
-        let warmup_outputs = runtime
-            .run_compiled(&compiled, &[])
+        let mut engine = CpuEngine::new(
+            tenferro_cpu::thread_pool_builder()
+                .num_threads(1)
+                .build()
+                .unwrap(),
+        );
+        let warmup_outputs = run_program(&runtime, &mut engine, &compiled)
             .expect("warmup evaluation should succeed");
         black_box(warmup_outputs);
 
@@ -139,8 +171,7 @@ fn bench_mps_inner_product(c: &mut Criterion) {
             b.iter_batched(
                 || compiled.clone(),
                 |program| {
-                    let outputs = runtime
-                        .run_compiled(black_box(&program), &[])
+                    let outputs = run_program(&runtime, &mut engine, black_box(&program))
                         .expect("MPS inner-product evaluation should succeed");
                     black_box(outputs);
                 },
@@ -154,8 +185,13 @@ fn bench_mps_inner_product(c: &mut Criterion) {
                 b.iter(|| {
                     let compiled = compile_mps_inner_product(black_box(&fixture));
                     let runtime = cpu_runtime_with_einsum_one_thread();
-                    let outputs = runtime
-                        .run_compiled(black_box(&compiled), &[])
+                    let mut engine = CpuEngine::new(
+                        tenferro_cpu::thread_pool_builder()
+                            .num_threads(1)
+                            .build()
+                            .unwrap(),
+                    );
+                    let outputs = run_program(&runtime, &mut engine, black_box(&compiled))
                         .expect("MPS inner-product compile+eval should succeed");
                     black_box(outputs);
                 });
