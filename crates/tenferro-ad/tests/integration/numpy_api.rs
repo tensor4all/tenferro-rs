@@ -419,8 +419,11 @@ fn tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
     let lhs = Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
 
-    let out =
-        (|session: &mut dyn tenferro_tensor::Engine| lhs.add(&rhs, session))(&mut backend).unwrap();
+    let out = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        lhs.add(&rhs, session)
+    }
+    .unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
@@ -493,8 +496,11 @@ fn typed_tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
     let rhs =
         TypedTensor::<f64>::from_vec_col_major(vec![1, 4], vec![10.0, 20.0, 30.0, 40.0]).unwrap();
 
-    let out =
-        (|session: &mut dyn tenferro_tensor::Engine| lhs.add(&rhs, session))(&mut backend).unwrap();
+    let out = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        lhs.add(&rhs, session)
+    }
+    .unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(

@@ -1058,7 +1058,7 @@ fn einsum_session_supported<B: tenferro_tensor::Engine + 'static>(_op: &EinsumEx
     type_id == std::any::TypeId::of::<tenferro_cpu::CpuEngine>() || {
         #[cfg(feature = "cuda")]
         {
-            type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>()
+            type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaEngine>()
         }
         #[cfg(not(feature = "cuda"))]
         {

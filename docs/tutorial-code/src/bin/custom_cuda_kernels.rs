@@ -88,64 +88,56 @@ extern "C" __global__ void add_kernel(
 "#;
 
     // snippet-start:custom_cuda_launch
-    use tenferro_gpu::cuda::{raw, with_cuda_exec_session, CudaBackend};
-    use tenferro_tensor::{BackendSessionHost, Error, TypedTensor};
+    use tenferro_gpu::cuda::{raw, CudaEngine};
+    use tenferro_tensor::TypedTensor;
 
     fn launch_add(
-        backend: &mut CudaBackend,
+        engine: &mut CudaEngine,
         lhs: &TypedTensor<f32>,
         rhs: &TypedTensor<f32>,
     ) -> tenferro_tensor::Result<TypedTensor<f32>> {
-        backend.with_backend_session(|backend_session| {
-            with_cuda_exec_session(backend_session, |cuda| {
-                cuda.with_raw("custom_cuda.add", |session| {
-                    let lhs = session.tensor(lhs)?;
-                    let rhs = session.tensor(rhs)?;
-                    let mut output = session.alloc_output::<f32>(&[8])?;
-                    let output_ref = session.tensor_mut(&mut output)?;
+        engine.with_raw("custom_cuda.add", |session| {
+            let lhs = session.tensor(lhs)?;
+            let rhs = session.tensor(rhs)?;
+            let mut output = session.alloc_output::<f32>(&[8])?;
+            let output_ref = session.tensor_mut(&mut output)?;
 
-                    let module =
-                        session.compile_nvrtc(CUDA_SOURCE, &raw::NvrtcOptions::default())?;
-                    let function = module.function("add_kernel")?;
-                    let config = raw::LaunchConfig::flat(8, 128, 0)?;
+            let module = session.compile_nvrtc(CUDA_SOURCE, &raw::NvrtcOptions::default())?;
+            let function = module.function("add_kernel")?;
+            let config = raw::LaunchConfig::flat(8, 128, 0)?;
 
-                    // SAFETY: the kernel ABI is (float*, const float*, const float*,
-                    // int); all three tensors contain at least 8 f32 values; output
-                    // is exclusively borrowed and does not alias either input; the
-                    // kernel bounds-checks i < n; module and tensor borrows remain
-                    // live until the explicit synchronization below.
-                    unsafe {
-                        session.launch(
-                            &function,
-                            config,
-                            &[
-                                raw::KernelArg::tensor_mut(&output_ref),
-                                raw::KernelArg::tensor(&lhs),
-                                raw::KernelArg::tensor(&rhs),
-                                raw::KernelArg::i32(8),
-                            ],
-                        )?;
-                    }
+            // SAFETY: the kernel ABI is (float*, const float*, const float*,
+            // int); all three tensors contain at least 8 f32 values; output
+            // is exclusively borrowed and does not alias either input; the
+            // kernel bounds-checks i < n; module and tensor borrows remain
+            // live until the explicit synchronization below.
+            unsafe {
+                session.launch(
+                    &function,
+                    config,
+                    &[
+                        raw::KernelArg::tensor_mut(&output_ref),
+                        raw::KernelArg::tensor(&lhs),
+                        raw::KernelArg::tensor(&rhs),
+                        raw::KernelArg::i32(8),
+                    ],
+                )?;
+            }
 
-                    session.synchronize()?;
-                    Ok(output)
-                })
-            })
-            .ok_or_else(|| Error::runtime_state("custom_cuda.add", "backend session is not CUDA"))?
-        })?
+            session.synchronize()?;
+            Ok(output)
+        })
     }
     // snippet-end:custom_cuda_launch
 }
 
 mod smem_limit {
     // snippet-start:custom_cuda_smem_limit
-    use tenferro_gpu::cuda::CudaExecSession;
+    use tenferro_gpu::cuda::CudaEngine;
 
     /// Dynamic shared memory a raw launch may opt into on this device, from
     /// `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`.
-    fn max_shared_memory_bytes(
-        session: &mut CudaExecSession<'_>,
-    ) -> tenferro_tensor::Result<usize> {
+    fn max_shared_memory_bytes(session: &mut CudaEngine) -> tenferro_tensor::Result<usize> {
         session.with_cubecl("custom_cuda.smem_limit", |cubecl| {
             Ok(cubecl.client().properties().hardware.max_shared_memory_size)
         })

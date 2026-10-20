@@ -66,6 +66,9 @@ cuda = [
     "dep:tenferro-tensor",
     "tenferro-fft/cuda",
     "tenferro-gpu/cuda",
+    # `custom_cuda_kernels` launches a downstream `#[cube]` kernel through the
+    # public CubeCL session, which is only exposed under `cubecl-interop`.
+    "tenferro-gpu/cubecl-interop",
 ]
 
 [dependencies]

@@ -14,7 +14,7 @@ resolver = "2"
 # type tenferro-gpu does, because tenferro-gpu resolves the same registry release.
 cubecl = { package = "t4a-cubecl", version = "=0.11.0", features = ["cuda"] }
 cubecl-cuda = { package = "t4a-cubecl-cuda", version = "=0.11.0" }
-tenferro-gpu = { path = "../../crates/tenferro-gpu", features = ["cuda"] }
+tenferro-gpu = { path = "../../crates/tenferro-gpu", features = ["cuda", "cubecl-interop"] }
 tenferro-tensor = { path = "../../crates/tenferro-tensor" }
 
 # Match workspace [profile.ci] used by scripts/ci/run_profile.py extensions.
