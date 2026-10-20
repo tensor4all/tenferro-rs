@@ -160,6 +160,10 @@ pub(crate) struct ExecutionResources {
     /// Entries into the raw Rayon pool made directly by the faer lane. The
     /// tcontract wrapper counts its own entries through [`Pool::stats`].
     faer_entries: AtomicU64,
+    /// Reads canonicalized out of a view through `to_contiguous_read`, which is
+    /// the operand staging copy a read hook must not make. Counted so a
+    /// regression test can assert that a read hook stages nothing.
+    read_stagings: AtomicU64,
 }
 impl fmt::Debug for ExecutionResources {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -191,7 +195,18 @@ impl ExecutionResources {
             serial: ArenaProvider::new(),
             nary: ContractionWorkspaces::default(),
             faer_entries: AtomicU64::new(0),
+            read_stagings: AtomicU64::new(0),
         }
+    }
+
+    pub(crate) fn count_read_staging(&self) {
+        self.read_stagings.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Views canonicalized by `to_contiguous_read` since construction.
+    #[cfg(test)]
+    pub(crate) fn read_stagings(&self) -> u64 {
+        self.read_stagings.load(Ordering::Relaxed)
     }
 
     /// Test handle to the owned raw pool, so a test can enter that exact pool
