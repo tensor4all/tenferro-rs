@@ -314,16 +314,13 @@ def is_library_source(path: Path) -> bool:
 
 def defined_mechanisms(text: str) -> set[str]:
     """Mechanisms whose entry is defined (`fn name`, impl header) in this source."""
-    source = strip_comments_and_strings(text)
+    source = strip_cfg_test_items(strip_comments_and_strings(text))
     defined: set[str] = set()
     for mechanism, pattern in DEFINITIONS.items():
         if re.search(pattern, source):
             defined.add(mechanism)
     for mechanism, (pattern, _) in MECHANISMS.items():
-        if mechanism not in IMPL_MECHANISMS:
-            continue
-        source_without_tests = strip_cfg_test_items(source)
-        if re.search(pattern, source_without_tests):
+        if mechanism in IMPL_MECHANISMS and re.search(pattern, source):
             defined.add(mechanism)
     return defined
 
