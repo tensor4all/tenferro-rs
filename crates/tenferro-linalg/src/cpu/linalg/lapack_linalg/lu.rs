@@ -1,12 +1,12 @@
-use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::TypedTensor;
 use tlinalg_blas::Op;
 
 use super::helpers::{
-    batch_element_count, checked_product, has_zero_dim, matrix_core_and_batch_result,
-    matrix_with_batch_shape, pooled_output, provider, tensor_from_vec_with_template,
-    vector_with_batch_shape, LapackLinalg,
+    batch_element_count, has_zero_dim, matrix_core_and_batch_result, matrix_with_batch_shape,
+    pooled_output, provider, tensor_from_vec_with_template, vector_with_batch_shape, LapackLinalg,
 };
+use crate::cpu::linalg::{pooled_copy, pooled_zeroed};
 
 /// Explicit partial-pivot LU, `P A = L U`, of every matrix of a batch.
 pub(crate) fn lu<T: LapackLinalg>(
@@ -28,6 +28,10 @@ pub(crate) fn lu<T: LapackLinalg>(
             tensor_from_vec_with_template(batch_shape.to_vec(), vec![T::unit(); batch], input)?,
         ]);
     }
+    // ponytail: these four outputs are still raw pooled vectors, so their storage is freed with
+    // the tensor instead of returning to the pool, and a batch that outgrows the pool's leftover
+    // small bins re-acquires its capacities on every call. `lu_factor` below takes recycling
+    // leases instead. No allocation ceiling covers `lu` yet, so it stays recorded here.
     let mut p = pooled_output::<T>(buffers, OP, "permutation matrix", &p_shape)?;
     let mut l = pooled_output::<T>(buffers, OP, "lower factor", &l_shape)?;
     let mut u = pooled_output::<T>(buffers, OP, "upper factor", &u_shape)?;
@@ -76,25 +80,35 @@ pub(crate) fn lu_factor<T: LapackLinalg>(
         ));
     }
 
-    let pivot_len = checked_product("lu_factor", "pivot output", &[k, batch_total])?;
-    let mut lu_data = buffers.acquire_with_capacity::<T>(input.n_elements());
-    lu_data.extend_from_slice(input.host_data()?);
-    let mut pivot_data = <i32 as PoolScalar>::pool_acquire_zeroed(buffers, pivot_len);
-    let mut parity_data = buffers.acquire_with_capacity::<T>(batch_total);
-    parity_data.resize(batch_total, T::unit());
+    // The three outputs are the provider's in-place destination, so they are taken as pool
+    // leases rather than raw pooled vectors: a lease carries the pool recycler, so the buffers
+    // come back when the caller drops the tensors and the next call's acquire is a pool hit at
+    // any batch size. Raw vectors were dropped with the tensors they became, which left the
+    // pool without a buffer for any capacity a batch needs and re-allocated that capacity per
+    // call once the batch outgrew the leftover small bins (#2206).
+    let pivot_shape = vector_with_batch_shape(k, batch_shape);
+    let mut lu_data = pooled_copy::<T>(
+        buffers,
+        "lu_factor",
+        "matrix",
+        input.shape(),
+        input.host_data()?,
+    )?;
+    let mut pivot_data = pooled_zeroed::<i32>(buffers, "lu_factor", "pivots", &pivot_shape)?;
+    let mut parity_data = pooled_zeroed::<T>(buffers, "lu_factor", "parity", batch_shape)?;
     crate::cpu::tlinalg_blas::factor_batch::<T>(
         ctx,
         Op::LuFactor,
         m,
         n,
-        &mut lu_data,
-        &mut pivot_data,
-        &mut parity_data,
+        lu_data.host_data_mut()?,
+        pivot_data.host_data_mut()?,
+        parity_data.host_data_mut()?,
     )?;
 
-    Ok((
-        tensor_from_vec_with_template(input.shape().to_vec(), lu_data, input)?,
-        tensor_from_vec_with_template(vector_with_batch_shape(k, batch_shape), pivot_data, input)?,
-        tensor_from_vec_with_template(batch_shape.to_vec(), parity_data, input)?,
-    ))
+    let placement = input.placement();
+    lu_data.set_placement(placement.clone());
+    pivot_data.set_placement(placement.clone());
+    parity_data.set_placement(placement.clone());
+    Ok((lu_data, pivot_data, parity_data))
 }
