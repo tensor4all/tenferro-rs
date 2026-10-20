@@ -24,9 +24,9 @@
 //! graph operations:
 //!
 //! ```
-//! use tenferro_cpu::CpuBackend;
+//! use tenferro_cpu::CpuEngine;
 //! use tenferro_ext_tropical::traced::tropical_dot_general;
-//! use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+//! use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 //!
 //! let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 //! let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
@@ -34,13 +34,21 @@
 //!
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&out).unwrap();
-//! let backend = CpuBackend::new();
+//! let mut engine = CpuEngine::serial();
 //! let mut builder = Runtime::builder();
 //! builder
-//!     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+//!     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 //!     .unwrap();
 //! let runtime = builder.build().unwrap();
-//! let value = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+//! let target = engine.target();
+//! let prepared = runtime.prepare(&program, &[], std::slice::from_ref(&target)).unwrap();
+//! let value = runtime
+//!     .run(&mut [&mut engine], &prepared, &[])
+//!     .unwrap()
+//!     .pop()
+//!     .unwrap()
+//!     .into_tensor(&mut engine)
+//!     .unwrap();
 //! assert_eq!(value.as_slice::<f64>().unwrap(), &[23.0, 24.0, 43.0, 44.0]);
 //! ```
 

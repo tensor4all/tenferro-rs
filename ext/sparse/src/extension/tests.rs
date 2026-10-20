@@ -2,11 +2,11 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::SymDim;
 use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
-use tenferro_runtime::{GraphCompiler, Runtime};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TensorRead};
 use tenferro_tensor::{
     core::DType as CoreDType, DType, Error, ErrorKind, ShapeMismatch, Tensor, ValidationError,
     ValidationKind,
@@ -46,14 +46,13 @@ fn semantic_sparse_program() -> tenferro_runtime::program::FrozenProgram {
     builder.finish(&[output]).unwrap()
 }
 
-fn cpu_runtime_with_sparse() -> Runtime {
-    let backend = CpuBackend::new();
+fn cpu_runtime_with_sparse(engine: &CpuEngine) -> Runtime {
     let mut builder = Runtime::builder();
     builder
-        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .register_engine(tenferro_cpu::runtime_engine_registration(engine).unwrap())
         .unwrap();
     for module in
-        extension_modules::<CpuBackend>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap()
+        extension_modules::<CpuEngine>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap()
     {
         builder.install_extension_module(module).unwrap();
     }
@@ -62,12 +61,46 @@ fn cpu_runtime_with_sparse() -> Runtime {
 
 fn run_one(
     runtime: &Runtime,
+    engine: &mut CpuEngine,
     program: &tenferro_runtime::CompiledGraph,
     inputs: &[&Tensor],
 ) -> tenferro_runtime::Result<Tensor> {
-    let mut outputs = runtime.run_compiled(program, inputs)?;
+    let reads: Vec<TensorRead<'_>> = inputs
+        .iter()
+        .map(|tensor| TensorRead::from_tensor(tensor))
+        .collect();
+    let target = engine.target();
+    let prepared = runtime.prepare(program, &reads, std::slice::from_ref(&target))?;
+    let mut outputs = runtime.run(&mut [engine], &prepared, &reads)?;
     assert_eq!(outputs.len(), 1);
-    Ok(outputs.remove(0))
+    outputs
+        .pop()
+        .expect("one output was asserted above")
+        .into_tensor(engine)
+        .map_err(tenferro_runtime::Error::from)
+}
+
+fn run_all(
+    runtime: &Runtime,
+    engine: &mut CpuEngine,
+    program: &tenferro_runtime::CompiledGraph,
+    inputs: &[&Tensor],
+) -> tenferro_runtime::Result<Vec<Tensor>> {
+    let reads: Vec<TensorRead<'_>> = inputs
+        .iter()
+        .map(|tensor| TensorRead::from_tensor(tensor))
+        .collect();
+    let target = engine.target();
+    let prepared = runtime.prepare(program, &reads, std::slice::from_ref(&target))?;
+    runtime
+        .run(&mut [engine], &prepared, &reads)?
+        .into_iter()
+        .map(|output| {
+            output
+                .into_tensor(engine)
+                .map_err(tenferro_runtime::Error::from)
+        })
+        .collect()
 }
 
 fn host_error(result: std::thread::Result<tenferro_tensor::Result<Vec<Tensor>>>) -> Error {
@@ -250,9 +283,11 @@ fn sparse_semantic_rules_execute_jvp_and_vjp_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let runtime = cpu_runtime_with_sparse();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime_with_sparse(&engine);
     let tangent = run_one(
         &runtime,
+        &mut engine,
         &compiled,
         &[&lhs, &rhs, &lhs_tangent, &rhs_tangent],
     )
@@ -265,9 +300,13 @@ fn sparse_semantic_rules_execute_jvp_and_vjp_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let cotangents = runtime
-        .run_compiled(&compiled, &[&lhs, &rhs, &output_cotangent])
-        .unwrap();
+    let cotangents = run_all(
+        &runtime,
+        &mut engine,
+        &compiled,
+        &[&lhs, &rhs, &output_cotangent],
+    )
+    .unwrap();
     assert_eq!(
         cotangents[0].as_slice::<f64>().unwrap(),
         &[30.0, 70.0, 30.0]

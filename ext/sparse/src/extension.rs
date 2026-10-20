@@ -26,7 +26,7 @@ use tenferro_runtime::{
     UnsupportedReason,
 };
 use tenferro_runtime::{Error as RuntimeError, Result as RuntimeResult};
-use tenferro_tensor::{DType, Error, Result, Tensor, TensorBackend, TensorRead};
+use tenferro_tensor::{DType, Engine, Error, Result, Tensor, TensorRead};
 
 use crate::sparse::{
     coordinates_tensor, validate_traced_values, validate_value_tensor, SparseCooTracedTensor,
@@ -140,13 +140,13 @@ impl SparseMatmulPlan {
     }
 }
 
-struct SparseReferenceEngine<B: TensorBackend + 'static> {
+struct SparseReferenceEngine<B: Engine + 'static> {
     family_id: &'static str,
     engine_id: EngineId,
     _backend: PhantomData<fn() -> B>,
 }
 
-struct SparseReferenceModule<B: TensorBackend + 'static> {
+struct SparseReferenceModule<B: Engine + 'static> {
     family_id: &'static str,
     module_id: ExtensionModuleId,
     engine_id: EngineId,
@@ -158,7 +158,7 @@ struct SparseReferencePlanningConfig {
     family_id: &'static str,
 }
 
-struct SparseReferencePreparedOperation<B: TensorBackend + 'static> {
+struct SparseReferencePreparedOperation<B: Engine + 'static> {
     family_id: &'static str,
     binding: PreparedOperationBinding,
     specialization: SpecializationProjection,
@@ -220,7 +220,7 @@ fn execute_sparse_reference_payload(
     }
 }
 
-impl<B: TensorBackend + 'static> fmt::Debug for SparseReferenceEngine<B> {
+impl<B: Engine + 'static> fmt::Debug for SparseReferenceEngine<B> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("SparseReferenceEngine")
@@ -231,7 +231,7 @@ impl<B: TensorBackend + 'static> fmt::Debug for SparseReferenceEngine<B> {
     }
 }
 
-impl<B: TensorBackend + 'static> fmt::Debug for SparseReferenceModule<B> {
+impl<B: Engine + 'static> fmt::Debug for SparseReferenceModule<B> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("SparseReferenceModule")
@@ -243,7 +243,7 @@ impl<B: TensorBackend + 'static> fmt::Debug for SparseReferenceModule<B> {
     }
 }
 
-impl<B: TensorBackend + 'static> fmt::Debug for SparseReferencePreparedOperation<B> {
+impl<B: Engine + 'static> fmt::Debug for SparseReferencePreparedOperation<B> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("SparseReferencePreparedOperation")
@@ -255,7 +255,7 @@ impl<B: TensorBackend + 'static> fmt::Debug for SparseReferencePreparedOperation
     }
 }
 
-impl<B: TensorBackend + 'static> ExtensionEngine for SparseReferenceEngine<B> {
+impl<B: Engine + 'static> ExtensionEngine for SparseReferenceEngine<B> {
     fn family_id(&self) -> &'static str {
         self.family_id
     }
@@ -325,7 +325,7 @@ impl ExtensionPlanningConfig for SparseReferencePlanningConfig {
     }
 }
 
-impl<B: TensorBackend + 'static> PreparedOperation for SparseReferencePreparedOperation<B> {
+impl<B: Engine + 'static> PreparedOperation for SparseReferencePreparedOperation<B> {
     fn binding(&self) -> &PreparedOperationBinding {
         &self.binding
     }
@@ -339,26 +339,38 @@ impl<B: TensorBackend + 'static> PreparedOperation for SparseReferencePreparedOp
     }
 }
 
-impl<B: TensorBackend + 'static> PreparedOperationExecutor for SparseReferencePreparedOperation<B> {
+impl<B: Engine + 'static> PreparedOperationExecutor for SparseReferencePreparedOperation<B> {
     fn execute(
         &self,
         context: &mut ErasedExecutionContext<'_>,
         extension_caches: &mut ExtensionCacheStore,
         inputs: &[TensorRead<'_>],
     ) -> RuntimeResult<Vec<Tensor>> {
-        let backend = context
+        let engine = context
             .downcast_mut::<B>(self.binding.context_identity())
             .map_err(|source| {
                 RuntimeError::runtime_state_source("extension", ErrorPhase::Execution, source)
             })?;
+        let engine: &mut dyn Engine = engine;
+        self.execute_in_session(engine, extension_caches, inputs)
+    }
+
+    fn supports_session(&self) -> bool {
+        true
+    }
+
+    fn execute_in_session(
+        &self,
+        session: &mut dyn Engine,
+        extension_caches: &mut ExtensionCacheStore,
+        inputs: &[TensorRead<'_>],
+    ) -> RuntimeResult<Vec<Tensor>> {
         let _ = extension_caches;
-        let materialized_inputs = backend.with_backend_session(|exec| {
-            inputs
-                .iter()
-                .cloned()
-                .map(|input| exec.to_contiguous_read(input))
-                .collect::<Result<Vec<_>>>()
-        })??;
+        let materialized_inputs = inputs
+            .iter()
+            .cloned()
+            .map(|input| session.to_contiguous_read(input))
+            .collect::<Result<Vec<_>>>()?;
         let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
         Ok(execute_sparse_reference_payload(
             self.family_id,
@@ -368,7 +380,7 @@ impl<B: TensorBackend + 'static> PreparedOperationExecutor for SparseReferencePr
     }
 }
 
-impl<B: TensorBackend + 'static> ExtensionModule for SparseReferenceModule<B> {
+impl<B: Engine + 'static> ExtensionModule for SparseReferenceModule<B> {
     fn module_id(&self) -> &ExtensionModuleId {
         &self.module_id
     }
@@ -392,7 +404,7 @@ impl<B: TensorBackend + 'static> ExtensionModule for SparseReferenceModule<B> {
     }
 }
 
-fn reference_module<B: TensorBackend + 'static>(
+fn reference_module<B: Engine + 'static>(
     family_id: &'static str,
     engine_id: EngineId,
 ) -> std::result::Result<Arc<dyn ExtensionModule>, RuntimeConfigError> {
@@ -409,7 +421,7 @@ fn reference_module<B: TensorBackend + 'static>(
 /// # Errors
 ///
 /// Returns [`RuntimeConfigError`] when a generated module id is invalid.
-pub fn extension_modules<B: TensorBackend + 'static>(
+pub fn extension_modules<B: Engine + 'static>(
     engine_id: EngineId,
 ) -> std::result::Result<Vec<Arc<dyn ExtensionModule>>, RuntimeConfigError> {
     #[cfg(feature = "autodiff")]
