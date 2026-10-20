@@ -273,44 +273,42 @@ fn run_concrete(
     blocks: &[Tensor],
 ) -> Result<(Vec<f64>, Tensor, Tensor), String> {
     let mut backend = tenferro_cpu::CpuEngine::serial();
-    (|session: &mut dyn tenferro_tensor::Engine| {
-            with_cpu_engine(session, |session| {
-                let total = config.warmups + config.repetitions;
-                let mut timings = Vec::with_capacity(config.repetitions);
-                for iteration in 0..total {
-                    let states = (0..SAMPLE_BATCH)
-                        .map(|_| initial.householder_qr(session).map_err(to_string))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    warm_cpu_clock();
-                    let elapsed = if matches!(lane, Lane::Complete) {
-                        let start = Instant::now();
-                        for state in states {
-                            black_box(complete_concrete(state, blocks, session)?);
-                        }
-                        start.elapsed()
-                    } else {
-                        let mut elapsed = std::time::Duration::ZERO;
-                        for state in states {
-                            elapsed += attributed_concrete(state, blocks, session, lane)?;
-                        }
-                        elapsed
-                    }
-                    .as_secs_f64()
-                        * 1.0e3;
-                    if iteration >= config.warmups {
-                        timings.push(elapsed);
-                    }
+    with_cpu_engine(&mut backend, |session| {
+        let total = config.warmups + config.repetitions;
+        let mut timings = Vec::with_capacity(config.repetitions);
+        for iteration in 0..total {
+            let states = (0..SAMPLE_BATCH)
+                .map(|_| initial.householder_qr(session).map_err(to_string))
+                .collect::<Result<Vec<_>, _>>()?;
+            warm_cpu_clock();
+            let elapsed = if matches!(lane, Lane::Complete) {
+                let start = Instant::now();
+                for state in states {
+                    black_box(complete_concrete(state, blocks, session)?);
                 }
-                let state = initial.householder_qr(session).map_err(to_string)?;
-                let final_state = append_sequence(state, blocks, session)?;
-                let q = final_state
-                    .q_columns(0..FINAL_RANK, raw_options(), session)
-                    .map_err(to_string)?;
-                let r = final_state.r(raw_options(), session).map_err(to_string)?;
-                Ok((timings, q, r))
-            })
-            .ok_or_else(|| "CPU execution session unavailable".to_string())?
-        })(&mut backend)
+                start.elapsed()
+            } else {
+                let mut elapsed = std::time::Duration::ZERO;
+                for state in states {
+                    elapsed += attributed_concrete(state, blocks, session, lane)?;
+                }
+                elapsed
+            }
+            .as_secs_f64()
+                * 1.0e3;
+            if iteration >= config.warmups {
+                timings.push(elapsed);
+            }
+        }
+        let state = initial.householder_qr(session).map_err(to_string)?;
+        let final_state = append_sequence(state, blocks, session)?;
+        let q = final_state
+            .q_columns(0..FINAL_RANK, raw_options(), session)
+            .map_err(to_string)?;
+        let r = final_state.r(raw_options(), session).map_err(to_string)?;
+        Ok((timings, q, r))
+    })
+    .ok_or_else(|| "CPU execution session unavailable".to_string())?
 }
 
 fn append_sequence(
@@ -387,26 +385,20 @@ fn run_fresh_session(
     let mut timings = Vec::with_capacity(config.repetitions);
     for iteration in 0..total {
         let states = (0..SAMPLE_BATCH)
-            .map(|_| {
-                (|session: &mut dyn tenferro_tensor::Engine| initial.householder_qr(session))(&mut backend)
-            })
+            .map(|_| initial.householder_qr(&mut backend))
             .collect::<Result<Vec<_>, _>>()
             .map_err(to_string)?;
         warm_cpu_clock();
         let start = Instant::now();
         for mut state in states {
             for (append, block) in blocks.iter().enumerate() {
-                state = (|session: &mut dyn tenferro_tensor::Engine| state.append_columns(block, session))(&mut backend)
+                state = state
+                    .append_columns(block, &mut backend)
                     .map_err(to_string)?;
-                black_box(
-                    (|session: &mut dyn tenferro_tensor::Engine| state.r(raw_options(), session))(&mut backend)
-                        .map_err(to_string)?,
-                );
+                black_box(state.r(raw_options(), &mut backend).map_err(to_string)?);
                 let start = INITIAL_RANK + append * BLOCK_WIDTH;
                 black_box(
-                    (|session: &mut dyn tenferro_tensor::Engine| {
-                            state.q_columns(start..start + BLOCK_WIDTH, raw_options(), session)
-                        })(&mut backend)
+                    { state.q_columns(start..start + BLOCK_WIDTH, raw_options(), &mut backend) }
                         .map_err(to_string)?,
                 );
             }
@@ -416,16 +408,16 @@ fn run_fresh_session(
             timings.push(elapsed);
         }
     }
-    let mut state = (|session: &mut dyn tenferro_tensor::Engine| initial.householder_qr(session))(&mut backend)
-        .map_err(to_string)?;
+    let mut state = initial.householder_qr(&mut backend).map_err(to_string)?;
     for block in blocks {
-        state = (|session: &mut dyn tenferro_tensor::Engine| state.append_columns(block, session))(&mut backend)
+        state = state
+            .append_columns(block, &mut backend)
             .map_err(to_string)?;
     }
-    let q = (|session: &mut dyn tenferro_tensor::Engine| state.q_columns(0..FINAL_RANK, raw_options(), session))(&mut backend)
+    let q = state
+        .q_columns(0..FINAL_RANK, raw_options(), &mut backend)
         .map_err(to_string)?;
-    let r = (|session: &mut dyn tenferro_tensor::Engine| state.r(raw_options(), session))(&mut backend)
-        .map_err(to_string)?;
+    let r = state.r(raw_options(), &mut backend).map_err(to_string)?;
     Ok((timings, q, r))
 }
 
@@ -434,15 +426,16 @@ fn run_eager(
     initial: Tensor,
     blocks: Vec<Tensor>,
 ) -> Result<(Vec<f64>, Tensor, Tensor), String> {
-    let runtime = EagerRuntime::new()
-        .map_err(to_string)?;
+    let runtime = EagerRuntime::new().map_err(to_string)?;
     let initial = EagerTensor::from_tensor_in(initial, Arc::clone(&runtime)).map_err(to_string)?;
     let blocks = blocks
         .into_iter()
         .map(|block| EagerTensor::from_tensor_in(block, Arc::clone(&runtime)).map_err(to_string))
         .collect::<Result<Vec<_>, _>>()?;
     let initial_state = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.householder_qr(&initial))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.householder_qr(&initial)
+        })
         .map_err(to_string)?;
     let total = config.warmups + config.repetitions;
     let mut timings = Vec::with_capacity(config.repetitions);
@@ -456,7 +449,9 @@ fn run_eager(
         for state in states {
             black_box(
                 runtime
-                    .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| complete_eager(state, &blocks, session))
+                    .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                        complete_eager(state, &blocks, session)
+                    })
                     .map_err(to_string)?,
             );
         }
@@ -466,7 +461,9 @@ fn run_eager(
         }
     }
     let state = runtime
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| complete_eager(initial_state, &blocks, session))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            complete_eager(initial_state, &blocks, session)
+        })
         .map_err(to_string)?;
     let (q, r) = runtime
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
@@ -478,8 +475,10 @@ fn run_eager(
         .map_err(to_string)?;
     Ok((
         timings,
-        q.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).map_err(to_string)?,
-        r.to_tensor(&mut tenferro_cpu::CpuEngine::serial()).map_err(to_string)?,
+        q.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+            .map_err(to_string)?,
+        r.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+            .map_err(to_string)?,
     ))
 }
 

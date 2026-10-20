@@ -6,7 +6,7 @@ use std::time::Instant;
 use serde::Serialize;
 use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, with_cuda_exec_session, CudaBackend, CudaDeviceId, CudaExecSession};
+use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_linalg::{HouseholderQr, LinalgBackend, QrGauge, QrOptions, TensorLinalgExt};
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorRead};
 
@@ -70,7 +70,7 @@ impl BenchSession for CpuEngine {
 }
 
 #[cfg(feature = "cuda")]
-impl BenchSession for CudaExecSession<'_> {
+impl BenchSession for CudaEngine {
     fn benchmark_synchronize(&mut self) -> tenferro_tensor::Result<()> {
         self.runtime().synchronize()
     }
@@ -238,7 +238,7 @@ fn run_cuda(
         return Err("CUDA backend requested but no GPU is available".into());
     }
     let mut backend =
-        CudaBackend::new(CudaDeviceId::from_ordinal(0)).map_err(|error| error.to_string())?;
+        CudaEngine::open(CudaDeviceId::from_ordinal(0)).map_err(|error| error.to_string())?;
     let initial = upload_tensor(backend.runtime(), initial).map_err(|error| error.to_string())?;
     let blocks = blocks
         .iter()
@@ -246,12 +246,8 @@ fn run_cuda(
         .collect::<Result<Vec<_>, _>>()?;
     let accumulated_device =
         upload_tensor(backend.runtime(), accumulated).map_err(|error| error.to_string())?;
-    let (mut record, q, r, reference_r) = (|session: &mut dyn tenferro_tensor::Engine| {
-            with_cuda_exec_session(session, |session| {
-                run_session_outputs(config, session, &initial, &blocks, &accumulated_device)
-            })
-            .ok_or_else(|| "CUDA execution session unavailable".to_string())?
-        })(&mut backend)?;
+    let (mut record, q, r, reference_r) =
+        run_session_outputs(config, &mut backend, &initial, &blocks, &accumulated_device)?;
     let q = download_tensor(backend.runtime(), &q).map_err(|error| error.to_string())?;
     let r = download_tensor(backend.runtime(), &r).map_err(|error| error.to_string())?;
     let reference_r =

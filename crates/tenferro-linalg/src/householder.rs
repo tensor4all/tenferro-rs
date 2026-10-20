@@ -23,10 +23,8 @@ use crate::QrOptions;
 ///     vec![1.0_f64, 0.0, 1.0, 0.0, 1.0, 1.0],
 /// )?;
 /// let mut host = tenferro_cpu::CpuEngine::serial();
-/// let r = (|session: &mut dyn tenferro_tensor::Engine| {
-///     let qr = a.householder_qr(session)?;
-///     qr.r(QrOptions::default(), session)
-/// })(&mut host)?;
+/// let qr = a.householder_qr(&mut host)?;
+/// let r = qr.r(QrOptions::default(), &mut host)?;
 /// assert_eq!(r.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```

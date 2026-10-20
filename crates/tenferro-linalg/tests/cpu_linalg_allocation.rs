@@ -81,7 +81,9 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn serial_test() -> std::sync::MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -329,7 +331,7 @@ fn cpu_linalg_routes_take_their_scratch_from_the_session_buffer_pool() {
 
     let mut faer = faer_backend();
     let a = f64_matrix(48);
-    let packed = (|session: &mut dyn tenferro_tensor::Engine| with_session(session, |cpu| cpu.lu_factor(&a).unwrap()))(&mut faer);
+    let packed = with_session(&mut faer, |cpu| cpu.lu_factor(&a).unwrap());
     check(&mut faer, &mut failures, "faer/lu_factor/48", |session| {
         with_session(session, |cpu| {
             cpu.lu_factor(&a).unwrap();
@@ -372,7 +374,7 @@ fn cpu_linalg_routes_take_their_scratch_from_the_session_buffer_pool() {
     #[cfg(feature = "blas")]
     {
         let mut blas = blas_backend();
-        let packed = (|session: &mut dyn tenferro_tensor::Engine| with_session(session, |cpu| cpu.lu_factor(&a).unwrap()))(&mut blas);
+        let packed = with_session(&mut blas, |cpu| cpu.lu_factor(&a).unwrap());
         check(&mut blas, &mut failures, "blas/lu_factor/48", |session| {
             with_session(session, |cpu| {
                 cpu.lu_factor(&a).unwrap();

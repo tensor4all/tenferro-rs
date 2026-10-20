@@ -11,13 +11,14 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{TensorLinalgExt, TensorReadLinalgExt};
-use tenferro_tensor::{DType, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorView, TypedTensor};
+use tenferro_tensor::{
+    DType, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorView, TypedTensor,
+};
 
 /// The compile-time CPU linalg provider this build selected.
 fn providers() -> Vec<(&'static str, CpuEngine)> {
     let name = tenferro_cpu::cpu_provider_id();
-    let backend =
-        tenferro_cpu::CpuEngine::serial();
+    let backend = tenferro_cpu::CpuEngine::serial();
     vec![(name, backend)]
 }
 
@@ -130,10 +131,10 @@ fn borrowed_eig_and_eigvals_match_the_owned_call_for_every_dtype() {
             let input = tensor_of(dtype, &[n, n], &sample_real(n), &sample_imag(n));
             let tol = tolerance(dtype);
 
-            (|session: &mut dyn tenferro_tensor::Engine| {
-                let (owned_values, owned_vectors) = input.eig(session).unwrap();
+            {
+                let (owned_values, owned_vectors) = input.eig(&mut host).unwrap();
                 let (read_values, read_vectors) =
-                    TensorRead::from_tensor(&input).eig_read(session).unwrap();
+                    TensorRead::from_tensor(&input).eig_read(&mut host).unwrap();
                 assert_eq!(read_values.shape(), owned_values.shape());
                 assert_eq!(read_vectors.shape(), owned_vectors.shape());
                 assert_same_spectrum(
@@ -143,9 +144,9 @@ fn borrowed_eig_and_eigvals_match_the_owned_call_for_every_dtype() {
                     &format!("{provider}/{dtype:?} eig_read"),
                 );
 
-                let owned_only = input.eigvals(session).unwrap();
+                let owned_only = input.eigvals(&mut host).unwrap();
                 let read_only = TensorRead::from_tensor(&input)
-                    .eigvals_read(session)
+                    .eigvals_read(&mut host)
                     .unwrap();
                 assert_eq!(read_only.shape(), owned_only.shape());
                 assert_same_spectrum(
@@ -154,7 +155,7 @@ fn borrowed_eig_and_eigvals_match_the_owned_call_for_every_dtype() {
                     tol,
                     &format!("{provider}/{dtype:?} eigvals_read"),
                 );
-            })(&mut host);
+            }
         }
     }
 }
@@ -189,10 +190,10 @@ fn borrowed_eig_consumes_strided_and_reversed_views_without_touching_the_source(
                 TypedTensor::from_vec_col_major(vec![n, n], expected_data).unwrap(),
             );
 
-            (|session: &mut dyn tenferro_tensor::Engine| {
-                let owned = expected.eigvals(session).unwrap();
+            {
+                let owned = expected.eigvals(&mut host).unwrap();
                 let borrowed = TensorRead::from_view(TensorView::F64(view.clone()))
-                    .eigvals_read(session)
+                    .eigvals_read(&mut host)
                     .unwrap();
                 assert_same_spectrum(
                     &complex_values(&borrowed),
@@ -202,7 +203,7 @@ fn borrowed_eig_consumes_strided_and_reversed_views_without_touching_the_source(
                 );
 
                 let (values, vectors) = TensorRead::from_view(TensorView::F64(view.clone()))
-                    .eig_read(session)
+                    .eig_read(&mut host)
                     .unwrap();
                 assert_eq!(vectors.shape(), &[n, n]);
                 assert_same_spectrum(
@@ -211,7 +212,7 @@ fn borrowed_eig_consumes_strided_and_reversed_views_without_touching_the_source(
                     1.0e-9,
                     &format!("{provider}/{label} eig_read"),
                 );
-            })(&mut host);
+            };
         }
 
         assert_eq!(
@@ -232,10 +233,10 @@ fn borrowed_eig_falls_back_for_batched_views_and_keeps_batch_shapes() {
         let input = Tensor::from_typed::<f64>(
             TypedTensor::from_vec_col_major(vec![n, n, batch], data).unwrap(),
         );
-        (|session: &mut dyn tenferro_tensor::Engine| {
-            let owned = input.eigvals(session).unwrap();
+        {
+            let owned = input.eigvals(&mut host).unwrap();
             let borrowed = TensorRead::from_tensor(&input)
-                .eigvals_read(session)
+                .eigvals_read(&mut host)
                 .unwrap();
             assert_eq!(owned.shape(), &[n, batch]);
             assert_eq!(borrowed.shape(), owned.shape());
@@ -245,7 +246,7 @@ fn borrowed_eig_falls_back_for_batched_views_and_keeps_batch_shapes() {
                 1.0e-9,
                 provider,
             );
-        })(&mut host);
+        };
     }
 }
 
@@ -255,16 +256,16 @@ fn borrowed_eig_keeps_empty_shapes() {
         let input = Tensor::from_typed::<f64>(
             TypedTensor::from_vec_col_major(vec![0, 0], Vec::new()).unwrap(),
         );
-        (|session: &mut dyn tenferro_tensor::Engine| {
+        {
             let values = TensorRead::from_tensor(&input)
-                .eigvals_read(session)
+                .eigvals_read(&mut host)
                 .unwrap();
             assert_eq!(values.shape(), &[0], "{provider}: empty eigenvalue shape");
             assert_eq!(values.dtype(), DType::C64);
-            let (values, vectors) = TensorRead::from_tensor(&input).eig_read(session).unwrap();
+            let (values, vectors) = TensorRead::from_tensor(&input).eig_read(&mut host).unwrap();
             assert_eq!(values.shape(), &[0]);
             assert_eq!(vectors.shape(), &[0, 0]);
-        })(&mut host);
+        };
     }
 }
 
@@ -273,16 +274,16 @@ fn borrowed_eigvals_rejects_unsupported_dtypes_before_provider_entry() {
     for (provider, mut host) in providers() {
         let input =
             TypedTensor::<i64>::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
-        (|session: &mut dyn tenferro_tensor::Engine| {
+        {
             let error = TensorRead::from_view(TensorView::I64(input.as_view()))
-                .eigvals_read(session)
+                .eigvals_read(&mut host)
                 .unwrap_err();
             assert_eq!(
                 error.kind(),
                 ErrorKind::Unsupported,
                 "{provider}: integer eigenvalues must be refused"
             );
-        })(&mut host);
+        };
     }
 }
 
@@ -300,23 +301,23 @@ fn faer_eig_view_path_does_not_pool_an_input_copy() {
     );
 
     let mut view_host = tenferro_cpu::CpuEngine::serial();
-    (|session: &mut dyn tenferro_tensor::Engine| {
-            TensorRead::from_tensor(&owned)
-                .eigvals_read(session)
-                .unwrap();
-        })(&mut view_host);
+    {
+        TensorRead::from_tensor(&owned)
+            .eigvals_read(&mut view_host)
+            .unwrap();
+    };
     let view_stats = view_host.buffer_pool_stats();
 
     let mut packed_host = tenferro_cpu::CpuEngine::serial();
-    (|session: &mut dyn tenferro_tensor::Engine| {
-            let reversed = base
-                .as_view()
-                .slice_view(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
-                .unwrap();
-            TensorRead::from_view(TensorView::F64(reversed))
-                .eigvals_read(session)
-                .unwrap();
-        })(&mut packed_host);
+    {
+        let reversed = base
+            .as_view()
+            .slice_view(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
+            .unwrap();
+        TensorRead::from_view(TensorView::F64(reversed))
+            .eigvals_read(&mut packed_host)
+            .unwrap();
+    };
     let packed_stats = packed_host.buffer_pool_stats();
 
     let input_copy_bytes = n * n * std::mem::size_of::<f64>();
@@ -365,11 +366,11 @@ fn borrowed_rank_revealing_qr_matches_the_owned_call() {
 
     for (provider, mut host) in providers() {
         let options = RankRevealingQrOptions::default().rtol(1.0e-12);
-        (|session: &mut dyn tenferro_tensor::Engine| {
-            let owned = expected.rank_revealing_qr(options, session).unwrap();
+        {
+            let owned = expected.rank_revealing_qr(options, &mut host).unwrap();
             let view = base.as_view().transpose_view([1, 0]).unwrap();
             let borrowed = TensorRead::from_view(TensorView::F64(view))
-                .rank_revealing_qr_read(options, session)
+                .rank_revealing_qr_read(options, &mut host)
                 .unwrap();
 
             assert_eq!(borrowed.q.shape(), owned.q.shape(), "{provider}: Q shape");
@@ -414,7 +415,7 @@ fn borrowed_rank_revealing_qr_matches_the_owned_call() {
                     );
                 }
             }
-        })(&mut host);
+        };
     }
 
     assert_eq!(
@@ -430,30 +431,30 @@ fn borrowed_rank_revealing_qr_keeps_the_zero_and_non_finite_guards() {
 
     for (provider, mut host) in providers() {
         let zeros = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
-        (|session: &mut dyn tenferro_tensor::Engine| {
+        {
             let view = zeros.as_view().transpose_view([1, 0]).unwrap();
             let result = TensorRead::from_view(TensorView::F64(view))
-                .rank_revealing_qr_read(RankRevealingQrOptions::default(), session)
+                .rank_revealing_qr_read(RankRevealingQrOptions::default(), &mut host)
                 .unwrap();
             assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[0], "{provider}");
             assert_eq!(result.q.shape(), &[3, 2]);
             assert_eq!(result.r.shape(), &[2, 2]);
-        })(&mut host);
+        };
 
         let non_finite =
             TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, f64::NAN, 0.0, 1.0])
                 .unwrap();
-        (|session: &mut dyn tenferro_tensor::Engine| {
+        {
             let view = non_finite.as_view().transpose_view([1, 0]).unwrap();
             let error = TensorRead::from_view(TensorView::F64(view))
-                .rank_revealing_qr_read(RankRevealingQrOptions::default(), session)
+                .rank_revealing_qr_read(RankRevealingQrOptions::default(), &mut host)
                 .unwrap_err();
             assert_eq!(
                 error.kind(),
                 ErrorKind::NumericalFailure,
                 "{provider}: non-finite input must be refused"
             );
-        })(&mut host);
+        };
     }
 }
 
@@ -486,9 +487,9 @@ fn borrowed_triangular_solve_matches_the_owned_call_on_both_sides() {
             (false, false, false),
             (true, false, true),
         ] {
-            (|session: &mut dyn tenferro_tensor::Engine| {
+            {
                 let owned = a_owned
-                    .triangular_solve(&b_owned, true, lower, transpose_a, unit_diagonal, session)
+                    .triangular_solve(&b_owned, true, lower, transpose_a, unit_diagonal, &mut host)
                     .unwrap();
                 let b_view = b_base.as_view().transpose_view([1, 0]).unwrap();
                 let borrowed = TensorRead::from_tensor(&a_owned)
@@ -498,7 +499,7 @@ fn borrowed_triangular_solve_matches_the_owned_call_on_both_sides() {
                         lower,
                         transpose_a,
                         unit_diagonal,
-                        session,
+                        &mut host,
                     )
                     .unwrap();
                 assert_eq!(borrowed.shape(), owned.shape());
@@ -513,17 +514,17 @@ fn borrowed_triangular_solve_matches_the_owned_call_on_both_sides() {
                         "{provider}: borrowed and owned triangular solve disagree"
                     );
                 }
-            })(&mut host);
+            };
         }
 
         // Right-side solve `X A = B` with a strided `A` view.
-        (|session: &mut dyn tenferro_tensor::Engine| {
+        {
             let rhs = Tensor::from_typed::<f64>(
                 TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, -2.0, 0.5, 3.0, 1.5])
                     .unwrap(),
             );
             let owned = a_owned
-                .triangular_solve(&rhs, false, true, false, false, session)
+                .triangular_solve(&rhs, false, true, false, false, &mut host)
                 .unwrap();
             let a_view = a_base.as_view().transpose_view([1, 0]).unwrap();
             let borrowed = TensorRead::from_view(TensorView::F64(a_view))
@@ -535,7 +536,7 @@ fn borrowed_triangular_solve_matches_the_owned_call_on_both_sides() {
                     false,
                     true,
                     false,
-                    session,
+                    &mut host,
                 )
                 .unwrap();
             assert_eq!(borrowed.shape(), owned.shape(), "{provider}");
@@ -550,7 +551,7 @@ fn borrowed_triangular_solve_matches_the_owned_call_on_both_sides() {
                     "{provider}: right-side borrowed solve disagrees"
                 );
             }
-        })(&mut host);
+        };
     }
 
     assert_eq!(a_base.host_data().unwrap(), a_original.as_slice());
@@ -568,9 +569,9 @@ fn borrowed_triangular_solve_rejects_a_vector_right_hand_side_like_the_owned_cal
         TypedTensor::from_vec_col_major(vec![2], vec![2.0, 8.0]).unwrap(),
     );
     for (provider, mut host) in providers() {
-        (|session: &mut dyn tenferro_tensor::Engine| {
+        {
             let owned = a
-                .triangular_solve(&b_owned, true, true, false, false, session)
+                .triangular_solve(&b_owned, true, true, false, false, &mut host)
                 .unwrap_err();
             let borrowed = TensorRead::from_tensor(&a)
                 .triangular_solve_read(
@@ -579,7 +580,7 @@ fn borrowed_triangular_solve_rejects_a_vector_right_hand_side_like_the_owned_cal
                     true,
                     false,
                     false,
-                    session,
+                    &mut host,
                 )
                 .unwrap_err();
             assert_eq!(
@@ -587,6 +588,6 @@ fn borrowed_triangular_solve_rejects_a_vector_right_hand_side_like_the_owned_cal
                 borrowed.kind(),
                 "{provider}: owned and borrowed triangular solve must refuse alike"
             );
-        })(&mut host);
+        };
     }
 }

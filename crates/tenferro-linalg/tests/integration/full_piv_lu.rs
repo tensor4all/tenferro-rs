@@ -1,7 +1,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TypedTensor};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorDot, TensorStructural, TypedTensor};
 
 use super::support;
 use tenferro_tensor::TensorRead;
@@ -27,18 +27,17 @@ fn c32_data(tensor: &Tensor) -> &[Complex32] {
 }
 
 fn matmul(backend: &mut CpuEngine, lhs: &Tensor, rhs: &Tensor) -> Tensor {
-    (|__s: &mut dyn tenferro_tensor::Engine| {
-            __s.dot_general_read(
-                TensorRead::from_tensor(lhs),
-                TensorRead::from_tensor(rhs),
-                &DotGeneralConfig {
-                    lhs_contracting_dims: [1].as_slice().into(),
-                    rhs_contracting_dims: [0].as_slice().into(),
-                    lhs_batch_dims: [].as_slice().into(),
-                    rhs_batch_dims: [].as_slice().into(),
-                },
-            )
-        })(&mut *backend)
+    backend
+        .dot_general_read(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            &DotGeneralConfig {
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
+            },
+        )
         .unwrap()
 }
 
@@ -61,7 +60,8 @@ fn full_piv_lu_reconstructs_permuted_matrix() {
         support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap();
     let [p, l, u, q, parity]: [Tensor; 5] = outputs.try_into().unwrap();
     let pa = matmul(&mut backend, &p, &a);
-    let qt = (|__s: &mut dyn tenferro_tensor::Engine| __s.transpose_read(TensorRead::from_tensor(&q), &[1, 0]))(&mut backend)
+    let qt = backend
+        .transpose_read(TensorRead::from_tensor(&q), &[1, 0])
         .unwrap();
     let paqt = matmul(&mut backend, &pa, &qt);
     let lu = matmul(&mut backend, &l, &u);

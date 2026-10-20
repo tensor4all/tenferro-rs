@@ -6,7 +6,11 @@ use std::sync::{Arc, Mutex};
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
-use tenferro_tensor::{AllocationDomainId, AllocationId, BackendStorage, DType, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, StorageBuffer, Tensor, TensorRead, TensorScalar, TypedTensor};
+use tenferro_tensor::{
+    AllocationDomainId, AllocationId, BackendStorage, DType, Engine, HostAccessError,
+    HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain,
+    StorageBuffer, Tensor, TensorRead, TensorScalar, TypedTensor,
+};
 
 use super::with_cpu_linalg;
 use crate::LinalgBackend;
@@ -488,7 +492,8 @@ fn managed_snapshot_is_independent_and_rejects_foreign_storage() {
     let other = FakeDomain::new();
     let foreign = Tensor::from_typed(other.tensor(&[1], vec![2.0_f64]));
     let before = domain.counts.allocations.load(Ordering::Relaxed);
-    let error = (|__s: &mut dyn tenferro_tensor::Engine| __s.to_contiguous_read(TensorRead::from_tensor(&foreign)))(&mut cpu)
+    let error = cpu
+        .to_contiguous_read(TensorRead::from_tensor(&foreign))
         .unwrap_err();
     assert!(matches!(
         error,
@@ -508,13 +513,14 @@ fn managed_snapshot_is_independent_and_rejects_foreign_storage() {
             memory_kind,
         ));
         assert!(matches!(
-            (|__s: &mut dyn tenferro_tensor::Engine| __s.to_contiguous_read(TensorRead::from_tensor(&invalid)))(&mut cpu),
+            cpu.to_contiguous_read(TensorRead::from_tensor(&invalid)),
             Err(tenferro_tensor::Error::HostAccess { .. })
         ));
         assert_eq!(domain.counts.allocations.load(Ordering::Relaxed), before);
     }
     let transposed = input.as_view().transpose_view([1, 0]).unwrap();
-    assert!((|__s: &mut dyn tenferro_tensor::Engine| __s.to_contiguous_read(TensorRead::from_view(TensorView::F64(transposed))))(&mut cpu)
+    assert!(cpu
+        .to_contiguous_read(TensorRead::from_view(TensorView::F64(transposed)))
         .is_err());
     assert_eq!(domain.counts.allocations.load(Ordering::Relaxed), before);
 }
@@ -595,7 +601,11 @@ fn managed_traced_cholesky_preserves_domain_and_values() {
     let runtime = builder.build().unwrap();
     let mut engine = backend(&domain);
     let prepared = runtime
-        .prepare(&program, &[], &[tenferro_runtime::ExecutionEngine::target(&engine)])
+        .prepare(
+            &program,
+            &[],
+            &[tenferro_runtime::ExecutionEngine::target(&engine)],
+        )
         .unwrap();
     let output = {
         let mut engines: [&mut dyn tenferro_runtime::ExecutionEngine; 1] = [&mut engine];
