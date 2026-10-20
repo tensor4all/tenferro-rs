@@ -8,7 +8,7 @@ pub(crate) mod plan;
 #[cfg(test)]
 mod tests;
 
-use tenferro_gpu::cuda::CudaExecSession;
+use tenferro_gpu::cuda::CudaEngine;
 use tenferro_tensor::{
     DType, SliceConfig, Tensor, TensorIndexing, TensorRead, TensorStructural, TensorWrite,
 };
@@ -46,7 +46,7 @@ struct CanonicalCudaFft {
     direction: CufftDirection,
 }
 
-impl FftBackend for CudaExecSession<'_> {
+impl FftBackend for CudaEngine {
     fn execute_fft(
         &mut self,
         input: &Tensor,
@@ -100,22 +100,35 @@ impl FftBackend for CudaExecSession<'_> {
                 odist: descriptor.odist,
             };
             let cache_key = extension_plan_key_for_runtime(&key);
-            let mut cached = false;
-            {
-                let store = cache.store_mut();
+            // A cuFFT plan is device-bound: it lives only in a store owned by
+            // this engine, and an engine owns exactly one logical stream, so
+            // that store keys the plan per engine and stream. A caller-owned
+            // `FftPlanCache` may outlive the engine and be shared by several
+            // engines, so device-bound plans never go there: with a
+            // caller-owned cache the plan goes into the engine's own extension
+            // caches instead, and those are released with the engine (#2206).
+            let mut own_store = (!cache.is_engine_owned())
+                .then(|| tenferro_runtime::ExecutionEngine::take_extension_caches(self));
+            let result = (|| {
+                let store = match own_store.as_mut() {
+                    Some(store) => store,
+                    None => cache.store_mut(),
+                };
                 if let Some(entry) = store.get_mut::<CufftPlanEntry>(&cache_key) {
                     if entry.matches_key(&key) {
-                        entry.execute(self, canonical_input, &mut canonical_output)?;
-                        cached = true;
+                        return entry.execute(self, canonical_input, &mut canonical_output);
                     }
                 }
-                if !cached {
-                    let mut entry = CufftPlanEntry::create(self, key, descriptor)?;
-                    entry.execute(self, canonical_input, &mut canonical_output)?;
-                    let retained_bytes = entry.retained_bytes();
-                    store.put(cache_key, entry, retained_bytes);
-                }
+                let mut entry = CufftPlanEntry::create(self, key, descriptor)?;
+                entry.execute(self, canonical_input, &mut canonical_output)?;
+                let retained_bytes = entry.retained_bytes();
+                store.put(cache_key, entry, retained_bytes);
+                Ok(())
+            })();
+            if let Some(store) = own_store {
+                tenferro_runtime::ExecutionEngine::restore_extension_caches(self, store);
             }
+            result?;
 
             let inverse = matches!(
                 spec.operation(),
@@ -164,7 +177,7 @@ impl FftBackend for CudaExecSession<'_> {
 }
 
 fn validate_cuda_input(
-    session: &CudaExecSession<'_>,
+    session: &CudaEngine,
     input: &Tensor,
     spec: &FftPlanSpec,
 ) -> tenferro_tensor::Result<()> {
@@ -209,7 +222,7 @@ fn validate_cuda_input(
 }
 
 fn ensure_cuda_tensor_resident(
-    session: &CudaExecSession<'_>,
+    session: &CudaEngine,
     input: &Tensor,
 ) -> tenferro_tensor::Result<()> {
     session.ensure_gpu_resident(input, OP).map_err(|source| {
@@ -391,7 +404,7 @@ fn canonical_metadata(
 }
 
 fn canonicalize_input(
-    session: &mut CudaExecSession<'_>,
+    session: &mut CudaEngine,
     input: &Tensor,
     spec: &FftPlanSpec,
     canonical: &CanonicalCudaFft,
@@ -481,7 +494,7 @@ fn canonical_output_shape(
 }
 
 fn allocate_cuda_output(
-    session: &mut CudaExecSession<'_>,
+    session: &mut CudaEngine,
     dtype: DType,
     shape: &[usize],
 ) -> tenferro_tensor::Result<Tensor> {
@@ -511,7 +524,7 @@ fn allocate_cuda_output(
 }
 
 fn allocate_cuda_zero_output(
-    session: &mut CudaExecSession<'_>,
+    session: &mut CudaEngine,
     dtype: DType,
     shape: &[usize],
 ) -> tenferro_tensor::Result<Tensor> {

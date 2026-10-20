@@ -42,7 +42,7 @@ fn impulse_reference_covers_borrowed_and_consuming_lane_modes() {
                     &mut plans,
                     &mut buffers,
                     &mut output,
-                    1,
+                    super::LaneThreads::new(1, None),
                     std::convert::identity,
                 )
                 .unwrap();
@@ -96,7 +96,7 @@ fn checked_lane_boundary_rejects_mismatched_spans_and_overflow_before_writes() {
                 &mut plans,
                 &mut buffers,
                 &mut output,
-                8,
+                super::LaneThreads::new(8, None),
                 |value| value,
             )
         };

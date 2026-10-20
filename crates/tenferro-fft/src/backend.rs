@@ -8,16 +8,24 @@ use crate::{FftPlanCache, FftPlanSpec};
 #[derive(Clone, Copy, Debug)]
 enum FftCacheOwner {
     CallerOwned,
-    RuntimeOwned,
+    EngineOwned,
 }
 
 /// Execution-cache state supplied to an [`FftBackend`].
 ///
 /// Direct repeated calls use a caller-owned [`FftPlanCache`], while traced
-/// execution uses the owning runtime's [`ExtensionCacheStore`]. Both ownership
-/// paths expose the same bounded typed store to a backend, so CPU, Metal, CUDA,
-/// and future implementations can retain private plans or workspaces in their
-/// own cache namespace. Constructors keep the owner representation closed.
+/// and eager execution use the executing engine's own [`ExtensionCacheStore`]
+/// (lent by the runtime for the run). The two differ in what they may hold:
+///
+/// * a caller-owned cache may outlive the engine and be used with several
+///   engines, so it holds only engine-independent plans (the CPU's rustfft
+///   plans);
+/// * an engine-owned store dies with its engine, so a device backend keeps
+///   device-bound plans and workspaces (cuFFT plans) only there. Given a
+///   caller-owned cache, a device backend keeps its device-bound plans in its
+///   own engine instead.
+///
+/// Constructors keep the owner representation closed.
 ///
 /// # Examples
 ///
@@ -56,12 +64,39 @@ impl<'a> FftExecutionCache<'a> {
         }
     }
 
-    /// Build a context backed by an extension runtime cache store.
-    pub fn runtime_owned(cache: &'a mut ExtensionCacheStore) -> Self {
+    /// Build a context backed by the executing engine's own extension cache
+    /// store, which may hold device-bound plans.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_fft::FftExecutionCache;
+    /// use tenferro_runtime::ExtensionCacheStore;
+    ///
+    /// let mut store = ExtensionCacheStore::default();
+    /// let cache = FftExecutionCache::engine_owned(&mut store);
+    /// assert!(cache.is_engine_owned());
+    /// ```
+    pub fn engine_owned(cache: &'a mut ExtensionCacheStore) -> Self {
         Self {
-            owner: FftCacheOwner::RuntimeOwned,
+            owner: FftCacheOwner::EngineOwned,
             store: cache,
         }
+    }
+
+    /// Whether this store belongs to the executing engine, so device-bound
+    /// entries may be retained in it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_fft::{FftExecutionCache, FftPlanCache};
+    ///
+    /// let mut plans = FftPlanCache::default();
+    /// assert!(!FftExecutionCache::caller_owned(&mut plans).is_engine_owned());
+    /// ```
+    pub fn is_engine_owned(&self) -> bool {
+        matches!(self.owner, FftCacheOwner::EngineOwned)
     }
 
     /// Borrow the bounded typed store owned by the caller or extension runtime.
@@ -96,23 +131,22 @@ impl<'a> FftExecutionCache<'a> {
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::CpuExecSession;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_fft::FftBackend;
 ///
 /// fn accepts_fft_backend<B: FftBackend>() {}
 ///
-/// accepts_fft_backend::<CpuExecSession<'static>>();
+/// accepts_fft_backend::<CpuEngine>();
 /// ```
 ///
-/// A generic tensor backend does not expose the FFT capability at the SPI
-/// level:
+/// A generic engine does not expose the FFT capability at the SPI level:
 ///
 /// ```compile_fail
-/// use tenferro_tensor::{Tensor, TensorBackend};
+/// use tenferro_tensor::Engine;
 /// use tenferro_fft::FftBackend;
 ///
-/// fn requires_fft_backend<B: TensorBackend>(backend: &mut B) {
-///     let _: &mut dyn FftBackend = backend;
+/// fn requires_fft_backend<B: Engine>(engine: &mut B) {
+///     let _: &mut dyn FftBackend = engine;
 /// }
 /// ```
 pub trait FftBackend: Engine {
@@ -144,14 +178,13 @@ pub trait FftBackend: Engine {
     /// The borrowed public surface dispatches through this backend hook:
     /// ```
     /// use num_complex::Complex64;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_fft::{FftNorm, TensorReadFftExt};
-    /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
+    /// use tenferro_tensor::{Tensor, TensorRead};
     /// let input = Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2])?;
-    /// let mut backend = CpuBackend::with_threads(1)?;
-    /// let output = backend.with_backend_session(|session| {
-    ///     TensorRead::Tensor(&input).fft_read(None, 0, FftNorm::Backward, session)
-    /// })??;
+    /// let mut engine = CpuEngine::serial();
+    /// let output =
+    ///     TensorRead::Tensor(&input).fft_read(None, 0, FftNorm::Backward, &mut engine)?;
     /// assert_eq!(output.as_slice::<Complex64>()?, &[Complex64::new(2., 0.), Complex64::new(0., 0.)]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```

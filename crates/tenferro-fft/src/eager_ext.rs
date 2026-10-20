@@ -5,12 +5,12 @@ use tenferro_ad::extension::{
     apply_eager_with_targeted_extension_in_session, EagerExtensionBackendKind, EagerExtensionTarget,
 };
 use tenferro_ad::{EagerSession, EagerTensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::CudaBackend;
+use tenferro_gpu::cuda::CudaEngine;
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::webgpu::WebGpuBackend;
-use tenferro_runtime::{ErrorPhase, ExtensionModule};
+use tenferro_runtime::{ErrorPhase, ExecutionEngine, ExtensionModule};
 use tenferro_tensor::DType;
 
 use crate::{
@@ -42,17 +42,19 @@ pub trait EagerTensorFftExt {
     /// ```
     /// use num_complex::Complex64;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_fft::{EagerTensorFftExt, FftNorm};
-    /// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1)?)?;
+    /// let mut engine = CpuEngine::serial();
+    /// let runtime = EagerRuntime::new()?;
     /// let input = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.), Complex64::new(2., 0.)])?, runtime)?;
-    /// let output = input.fft_in_place(0, FftNorm::Backward)?;
+    /// let output = input.fft_in_place(&mut engine, 0, FftNorm::Backward)?;
     /// assert_eq!(output.value()?.as_slice::<Complex64>()?, &[Complex64::new(3., 0.), Complex64::new(-1., 0.)]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn fft_in_place(
         self,
+        engine: &mut dyn ExecutionEngine,
         axis: isize,
         norm: FftNorm,
     ) -> std::result::Result<EagerTensor, crate::EagerFftInPlaceError>;
@@ -69,17 +71,19 @@ pub trait EagerTensorFftExt {
     /// ```
     /// use num_complex::Complex64;
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::CpuEngine;
     /// use tenferro_fft::{EagerTensorFftExt, FftNorm};
-    /// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1)?)?;
+    /// let mut engine = CpuEngine::serial();
+    /// let runtime = EagerRuntime::new()?;
     /// let input = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec_col_major([2], vec![Complex64::new(3., 0.), Complex64::new(-1., 0.)])?, runtime)?;
-    /// let output = input.ifft_in_place(0, FftNorm::Backward)?;
+    /// let output = input.ifft_in_place(&mut engine, 0, FftNorm::Backward)?;
     /// assert_eq!(output.value()?.as_slice::<Complex64>()?, &[Complex64::new(1., 0.), Complex64::new(2., 0.)]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn ifft_in_place(
         self,
+        engine: &mut dyn ExecutionEngine,
         axis: isize,
         norm: FftNorm,
     ) -> std::result::Result<EagerTensor, crate::EagerFftInPlaceError>;
@@ -88,18 +92,20 @@ pub trait EagerTensorFftExt {
 impl EagerTensorFftExt for EagerTensor {
     fn fft_in_place(
         self,
+        engine: &mut dyn ExecutionEngine,
         axis: isize,
         norm: FftNorm,
     ) -> std::result::Result<EagerTensor, crate::EagerFftInPlaceError> {
-        crate::eager_in_place::apply(self, FftOperation::C2cForward, axis, norm)
+        crate::eager_in_place::apply(self, engine, FftOperation::C2cForward, axis, norm)
     }
 
     fn ifft_in_place(
         self,
+        engine: &mut dyn ExecutionEngine,
         axis: isize,
         norm: FftNorm,
     ) -> std::result::Result<EagerTensor, crate::EagerFftInPlaceError> {
-        crate::eager_in_place::apply(self, FftOperation::C2cInverse, axis, norm)
+        crate::eager_in_place::apply(self, engine, FftOperation::C2cInverse, axis, norm)
     }
 }
 
@@ -110,8 +116,9 @@ impl EagerTensorFftExt for EagerTensor {
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, Tensor};
 /// use tenferro_fft::{EagerSessionFftExt, FftNorm};
+/// let mut engine = tenferro_cpu::CpuEngine::serial();
 /// let ctx = EagerRuntime::new()?;
-/// let result = ctx.with_eager_session(|session| {
+/// let result = ctx.with_eager_session(&mut engine, |session| {
 ///     let input = session.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
 ///     session.fft(&input, None, -1, FftNorm::Backward)
 /// })?;
@@ -128,8 +135,9 @@ pub trait EagerSessionFftExt {
     /// use num_complex::Complex64;
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_fft::{EagerSessionFftExt, FftNorm};
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
     /// let ctx = EagerRuntime::new()?;
-    /// let result = ctx.with_eager_session(|session| {
+    /// let result = ctx.with_eager_session(&mut engine, |session| {
     ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     ///     session.fft(&x, None, -1, FftNorm::Backward)
     /// })?;
@@ -157,8 +165,9 @@ pub trait EagerSessionFftExt {
     /// use num_complex::Complex64;
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_fft::{EagerSessionFftExt, FftNorm};
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
     /// let ctx = EagerRuntime::new()?;
-    /// let result = ctx.with_eager_session(|session| {
+    /// let result = ctx.with_eager_session(&mut engine, |session| {
     ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)])?)?;
     ///     session.ifft(&x, None, -1, FftNorm::Backward)
     /// })?;
@@ -182,8 +191,9 @@ pub trait EagerSessionFftExt {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_fft::{EagerSessionFftExt, FftNorm};
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
     /// let ctx = EagerRuntime::new()?;
-    /// let result = ctx.with_eager_session(|session| {
+    /// let result = ctx.with_eager_session(&mut engine, |session| {
     ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
     ///     session.rfft(&x, None, -1, FftNorm::Backward)
     /// })?;
@@ -208,8 +218,9 @@ pub trait EagerSessionFftExt {
     /// use num_complex::Complex64;
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// use tenferro_fft::{EagerSessionFftExt, FftNorm};
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
     /// let ctx = EagerRuntime::new()?;
-    /// let result = ctx.with_eager_session(|session| {
+    /// let result = ctx.with_eager_session(&mut engine, |session| {
     ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![3], vec![Complex64::new(10.0, 0.0), Complex64::new(-2.0, 2.0), Complex64::new(-2.0, 0.0)])?)?;
     ///     session.irfft(&x, Some(4), -1, FftNorm::Backward)
     /// })?;
@@ -338,12 +349,13 @@ pub(crate) fn eager_extension_module(
     } = target;
     match backend_kind {
         EagerExtensionBackendKind::Cpu => {
-            extension_module::<CpuBackend>(engine_id).map_err(eager_runtime_config_error)
+            extension_module::<CpuEngine>(engine_id).map_err(eager_runtime_config_error)
         }
         #[cfg(feature = "cuda")]
         EagerExtensionBackendKind::Cuda => {
-            extension_module::<CudaBackend>(engine_id).map_err(eager_runtime_config_error)
+            extension_module::<CudaEngine>(engine_id).map_err(eager_runtime_config_error)
         }
+        // TODO(#2206 webgpu): the WebGPU engine is migrated in a later unit.
         #[cfg(feature = "webgpu")]
         EagerExtensionBackendKind::WebGpu => {
             extension_module::<WebGpuBackend>(engine_id).map_err(eager_runtime_config_error)

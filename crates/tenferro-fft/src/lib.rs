@@ -1,13 +1,13 @@
 //! FFT extension operations for tenferro.
 //!
 //! This crate is an out-of-tree `ExtensionOp` package with an explicit
-//! [`FftBackend`] capability. [`tenferro_cpu::CpuBackend`] implements the
+//! [`FftBackend`] capability. [`tenferro_cpu::CpuEngine`] implements the
 //! capability through RustFFT. With the `webgpu` feature,
 //! `tenferro_gpu::webgpu::WebGpuBackend` executes C32 CFFT, F32 one-sided RFFT, and
 //! C32-to-F32 IRFFT through CubeK on its existing WebGPU placement. That first
 //! GPU path supports power-of-two lengths only; unsupported operations and
 //! dtypes return an error and never fall back to CPU or transfer tensor data.
-//! With the `cuda` feature, `tenferro_gpu::cuda::CudaBackend` executes the
+//! With the `cuda` feature, `tenferro_gpu::cuda::CudaEngine` executes the
 //! supported one-dimensional F32/F64/C32/C64 operations through dynamically
 //! loaded cuFFT without implicit transfers or CPU fallback. The vendor call
 //! synchronizes at the cuFFT FFI boundary; subsequent CUDA postprocessing and
@@ -38,8 +38,8 @@
 //!
 //! ```
 //! use num_complex::Complex64;
-//! use tenferro_cpu::CpuBackend;
-//! use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+//! use tenferro_cpu::CpuEngine;
+//! use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 //! use tenferro_fft::{FftNorm, TracedTensorFftExt};
 //!
 //! let x = TracedTensor::from_vec_col_major(
@@ -56,17 +56,24 @@
 //!
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
-//! let backend = CpuBackend::new();
+//! let mut engine = CpuEngine::serial();
 //! let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
 //! let mut builder = Runtime::builder();
 //! builder
-//!     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+//!     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 //!     .unwrap();
 //! builder
-//!     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+//!     .install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id).unwrap())
 //!     .unwrap();
 //! let runtime = builder.build().unwrap();
-//! let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+//! let prepared = runtime.prepare(&program, &[], &[engine.target()]).unwrap();
+//! let out = runtime
+//!     .run(&mut [&mut engine], &prepared, &[])
+//!     .unwrap()
+//!     .pop()
+//!     .unwrap()
+//!     .into_tensor(&mut engine)
+//!     .unwrap();
 //! assert_eq!(out.shape(), &[4]);
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
 //! ```
@@ -75,10 +82,10 @@
 //! # #[cfg(all(feature = "webgpu", target_os = "macos"))]
 //! # {
 //! use num_complex::Complex32;
-//! use tenferro_cpu::CpuBackend;
+//! // TODO(#2206 webgpu): rewritten with the Apple/WebGPU engine migration.
 //! use tenferro_fft::{FftNorm, TensorFftExt};
 //! use tenferro_gpu::apple::AppleContext;
-//! use tenferro_tensor::{BackendSessionHost, Tensor};
+//! use tenferro_tensor::Tensor;
 //!
 //! if let Ok(context) = AppleContext::new() {
 //!     let host = Tensor::from_vec_col_major(
@@ -88,13 +95,9 @@
 //!     let input = context.upload_tensor(&host).unwrap();
 //!     let after_creation = context.transfer_stats();
 //!     let mut cpu = context.cpu_backend().clone();
-//!     let cpu_output = cpu
-//!         .with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))?
-//!         .unwrap();
+//!     let cpu_output = input.fft(None, 0, FftNorm::Backward, &mut cpu).unwrap();
 //!     let mut metal = context.metal_backend().clone();
-//!     let output = metal
-//!         .with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))?
-//!         .unwrap();
+//!     let output = input.fft(None, 0, FftNorm::Backward, &mut metal).unwrap();
 //!     metal.synchronize().unwrap();
 //!     assert_eq!(output.shape(), &[4]);
 //!     assert_eq!(cpu_output.shape(), output.shape());
@@ -106,15 +109,13 @@
 //!
 //! ```
 //! use num_complex::Complex64;
-//! use tenferro_cpu::CpuBackend;
+//! use tenferro_cpu::CpuEngine;
 //! use tenferro_fft::{FftNorm, TensorFftExt};
-//! use tenferro_tensor::{BackendSessionHost, Tensor};
+//! use tenferro_tensor::Tensor;
 //!
 //! let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-//! let mut backend = CpuBackend::new();
-//! let out = backend
-//!     .with_backend_session(|session| x.fft(None, -1, FftNorm::Backward, session))?
-//!     .unwrap();
+//! let mut engine = CpuEngine::serial();
+//! let out = x.fft(None, -1, FftNorm::Backward, &mut engine).unwrap();
 //!
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
 //! # Ok::<(), Box<dyn std::error::Error>>(())
@@ -133,10 +134,10 @@ use tenferro_ad::semantic_extension::{
     SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
     SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
 };
-use tenferro_cpu::with_cpu_exec_session;
+use tenferro_cpu::with_cpu_engine;
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::{with_cuda_exec_session, CudaBackend};
+use tenferro_gpu::cuda::{with_cuda_engine, CudaEngine};
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::webgpu::with_webgpu_exec_session;
 use tenferro_ops::SymDim;
@@ -146,10 +147,7 @@ use tenferro_runtime::extension::{
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
 use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
-use tenferro_tensor::{
-    Engine, CacheStats, DType, ErrorKind, Tensor, TensorBackend, TensorRead,
-    ValidationError,
-};
+use tenferro_tensor::{CacheStats, DType, Engine, ErrorKind, Tensor, TensorRead, ValidationError};
 
 mod backend;
 mod cache;
@@ -468,15 +466,14 @@ impl TracedTensorFftExt for TracedTensor {
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_fft::{FftNorm, TensorFftExt};
-/// use tenferro_tensor::{BackendSessionHost, Tensor};
+/// use tenferro_tensor::Tensor;
 ///
 /// let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-/// let mut backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 ///
-/// let spectrum = backend
-///     .with_backend_session(|session| input.fft(None, -1, FftNorm::Backward, session))??;
+/// let spectrum = input.fft(None, -1, FftNorm::Backward, &mut engine)?;
 /// assert_eq!(spectrum.shape(), &[4]);
 /// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -650,17 +647,16 @@ impl TensorFftExt for Tensor {
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_cpu::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 /// use tenferro_fft::{FftNorm, TensorReadFftExt};
-/// use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
+/// use tenferro_tensor::{TensorRead, TensorView};
 ///
 /// let shape = [4usize];
 /// let data = [1.0_f64, 2.0, 3.0, 4.0];
 /// let input = TensorRead::from_view(TensorView::f64(&shape, &data)?);
-/// let mut backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 ///
-/// let spectrum = backend
-///     .with_backend_session(|session| input.fft_read(None, -1, FftNorm::Backward, session))??;
+/// let spectrum = input.fft_read(None, -1, FftNorm::Backward, &mut engine)?;
 /// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -1011,13 +1007,13 @@ fn with_fft_exec_session<X>(
     // once. Probe the marker first, then re-extract the same exec session and
     // run the concrete body on it (FnOnce cannot be captured by several
     // branch closures).
-    if with_cpu_exec_session(session, |_| ()).is_some() {
-        return with_cpu_exec_session(session, |exec| f(exec as &mut dyn FftBackend))
+    if with_cpu_engine(session, |_| ()).is_some() {
+        return with_cpu_engine(session, |exec| f(exec as &mut dyn FftBackend))
             .expect("marker probe matched a CPU execution session");
     }
     #[cfg(feature = "cuda")]
-    if with_cuda_exec_session(session, |_| ()).is_some() {
-        return with_cuda_exec_session(session, |exec| f(exec as &mut dyn FftBackend))
+    if with_cuda_engine(session, |_| ()).is_some() {
+        return with_cuda_engine(session, |exec| f(exec as &mut dyn FftBackend))
             .expect("marker probe matched a CUDA execution session");
     }
     #[cfg(feature = "webgpu")]
@@ -1514,7 +1510,7 @@ fn execute_fft_extension_reads_for_capability<B: FftBackend + ?Sized>(
     let output = session.execute_fft_read(
         input.clone(),
         &spec,
-        FftExecutionCache::runtime_owned(caches),
+        FftExecutionCache::engine_owned(caches),
     )?;
     Ok(vec![output])
 }
@@ -1525,13 +1521,13 @@ fn execute_fft_extension_reads_on_session(
     session: &mut dyn Engine,
     caches: &mut ExtensionCacheStore,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    if let Some(result) = with_cpu_exec_session(session, |session| {
+    if let Some(result) = with_cpu_engine(session, |session| {
         execute_fft_extension_reads_for_capability(op, inputs, session, caches)
     }) {
         return result;
     }
     #[cfg(feature = "cuda")]
-    if let Some(result) = with_cuda_exec_session(session, |session| {
+    if let Some(result) = with_cuda_engine(session, |session| {
         execute_fft_extension_reads_for_capability(op, inputs, session, caches)
     }) {
         return result;
@@ -1554,7 +1550,6 @@ define_extension_runtime! {
     op_type = FftOp,
     execute_in_session = execute_fft_extension_reads_in_session,
     session_supported = fft_session_supported,
-    backend_bound = TensorBackend,
 }
 
 /// Adapter from the scheduler/`apply_eager` borrowed-session shape to the
@@ -1570,15 +1565,15 @@ fn execute_fft_extension_reads_in_session(
     execute_fft_extension_reads_session(op, inputs, &mut ctx)
 }
 
-fn fft_session_supported<B: tenferro_tensor::TensorBackend + 'static>(_op: &FftOp) -> bool {
+fn fft_session_supported<B: Engine + 'static>(_op: &FftOp) -> bool {
     // The session executor routes CPU/CUDA/WebGPU through their FftBackend exec
     // sessions; keep scheduler-session admission consistent with the backends
     // that `execute_fft_extension_reads_on_session` actually handles.
     let type_id = std::any::TypeId::of::<B>();
-    type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() || {
+    type_id == std::any::TypeId::of::<tenferro_cpu::CpuEngine>() || {
         #[cfg(feature = "cuda")]
         {
-            type_id == std::any::TypeId::of::<CudaBackend>()
+            type_id == std::any::TypeId::of::<CudaEngine>()
         }
         #[cfg(not(feature = "cuda"))]
         {
@@ -1596,8 +1591,8 @@ fn fft_session_supported<B: tenferro_tensor::TensorBackend + 'static>(_op: &FftO
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+/// use tenferro_cpu::CpuEngine;
+/// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]).unwrap();
@@ -1605,17 +1600,24 @@ fn fft_session_supported<B: tenferro_tensor::TensorBackend + 'static>(_op: &FftO
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
 /// let mut builder = Runtime::builder();
 /// builder
-///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 ///     .unwrap();
 /// builder
-///     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+///     .install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id).unwrap())
 ///     .unwrap();
 /// let runtime = builder.build().unwrap();
-/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+/// let prepared = runtime.prepare(&program, &[], &[engine.target()]).unwrap();
+/// let out = runtime
+///     .run(&mut [&mut engine], &prepared, &[])
+///     .unwrap()
+///     .pop()
+///     .unwrap()
+///     .into_tensor(&mut engine)
+///     .unwrap();
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
 fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor> {
@@ -1629,8 +1631,8 @@ fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> Re
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+/// use tenferro_cpu::CpuEngine;
+/// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)]).unwrap();
@@ -1638,17 +1640,24 @@ fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> Re
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
 /// let mut builder = Runtime::builder();
 /// builder
-///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 ///     .unwrap();
 /// builder
-///     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+///     .install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id).unwrap())
 ///     .unwrap();
 /// let runtime = builder.build().unwrap();
-/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+/// let prepared = runtime.prepare(&program, &[], &[engine.target()]).unwrap();
+/// let out = runtime
+///     .run(&mut [&mut engine], &prepared, &[])
+///     .unwrap()
+///     .pop()
+///     .unwrap()
+///     .into_tensor(&mut engine)
+///     .unwrap();
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(1.0, 0.0));
 /// ```
 fn ifft(
@@ -1670,8 +1679,8 @@ fn ifft(
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+/// use tenferro_cpu::CpuEngine;
+/// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
@@ -1679,17 +1688,24 @@ fn ifft(
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
 /// let mut builder = Runtime::builder();
 /// builder
-///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 ///     .unwrap();
 /// builder
-///     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+///     .install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id).unwrap())
 ///     .unwrap();
 /// let runtime = builder.build().unwrap();
-/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+/// let prepared = runtime.prepare(&program, &[], &[engine.target()]).unwrap();
+/// let out = runtime
+///     .run(&mut [&mut engine], &prepared, &[])
+///     .unwrap()
+///     .pop()
+///     .unwrap()
+///     .into_tensor(&mut engine)
+///     .unwrap();
 /// assert_eq!(out.shape(), &[2]);
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
@@ -1712,8 +1728,8 @@ fn rfft(
 ///
 /// ```
 /// use num_complex::Complex64;
-/// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+/// use tenferro_cpu::CpuEngine;
+/// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(
@@ -1725,17 +1741,24 @@ fn rfft(
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let backend = CpuBackend::new();
+/// let mut engine = CpuEngine::serial();
 /// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
 /// let mut builder = Runtime::builder();
 /// builder
-///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
 ///     .unwrap();
 /// builder
-///     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+///     .install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id).unwrap())
 ///     .unwrap();
 /// let runtime = builder.build().unwrap();
-/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
+/// let prepared = runtime.prepare(&program, &[], &[engine.target()]).unwrap();
+/// let out = runtime
+///     .run(&mut [&mut engine], &prepared, &[])
+///     .unwrap()
+///     .pop()
+///     .unwrap()
+///     .into_tensor(&mut engine)
+///     .unwrap();
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 /// ```
 fn irfft(

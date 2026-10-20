@@ -77,7 +77,7 @@ fn cuda_validation_rejects_host_foreign_integer_bool_and_invalid_lengths() {
         return;
     }
 
-    let mut cuda = support::cuda_backend();
+    let mut cuda = support::cuda_engine();
     let mut executor = FftExecutor::default();
     let host = real_f64(&[4], 0.5);
     assert_placement_error(Operation::Fft.execute_executor(
@@ -88,7 +88,7 @@ fn cuda_validation_rejects_host_foreign_integer_bool_and_invalid_lengths() {
         -1,
         FftNorm::Backward,
     ));
-    let rejected_host_stats = executor.cache_stats();
+    let rejected_host_stats = support::engine_cache_stats(&mut cuda);
     assert_eq!(rejected_host_stats.entries, 0);
     assert_eq!(rejected_host_stats.retained_bytes, 0);
     assert_eq!(rejected_host_stats.hits, 0);
@@ -96,8 +96,8 @@ fn cuda_validation_rejects_host_foreign_integer_bool_and_invalid_lengths() {
     assert_eq!(rejected_host_stats.evictions, 0);
     assert_eq!(rejected_host_stats.clears, 0);
 
-    let other = support::cuda_backend();
-    let gpu_input = support::upload_cuda(other.runtime(), &host);
+    let other = support::cuda_engine();
+    let gpu_input = support::upload_cuda(&other, &host);
     assert_placement_error(Operation::Fft.execute_executor(
         &mut executor,
         &mut cuda,
@@ -106,7 +106,7 @@ fn cuda_validation_rejects_host_foreign_integer_bool_and_invalid_lengths() {
         -1,
         FftNorm::Backward,
     ));
-    let rejected_foreign_stats = executor.cache_stats();
+    let rejected_foreign_stats = support::engine_cache_stats(&mut cuda);
     assert_eq!(rejected_foreign_stats.entries, 0);
     assert_eq!(rejected_foreign_stats.retained_bytes, 0);
     assert_eq!(rejected_foreign_stats.hits, 0);

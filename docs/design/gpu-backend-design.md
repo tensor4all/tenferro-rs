@@ -207,7 +207,9 @@ enqueue.
 cuTENSOR, cuSOLVER, and cuBLAS are CUDA-only and are loaded lazily through the
 CUDA FFI layer. cuFFT follows a different ownership boundary: `tenferro-fft`
 loads it and owns its opaque plans and `cufft-plans` cache entries;
-`tenferro-gpu` must not load or cache cuFFT handles. The cuFFT work area is a
+`tenferro-gpu` must not load or cache cuFFT handles. Those entries live in the
+executing engine's own extension-cache store, because a cuFFT plan is
+device-bound; a caller-owned `FftExecutionCache` never receives one. The cuFFT work area is a
 session-scoped CubeCL allocation created fresh inside each raw execution
 session, so it is not owned by the cached plan entry. The CUDA provider first
 uses default soname/path candidates and allows explicit override with these
@@ -256,23 +258,24 @@ does not provide an integer or bool permutation compute descriptor.
 
 ## Runtime Cache Ownership
 
-`CudaBackend` owns CUDA extension backend-state caches. Extension crates may
+`CudaEngine` owns CUDA extension backend-state caches. Extension crates may
 store type-indexed CUDA handles or plans through
-`CudaBackend::cuda_extension_cache()`, but the backend remains the lifetime
+`CudaEngine::cuda_extension_cache()`, but the engine remains the lifetime
 and resource owner. The `cufft-plans` cache is an intentional exception to
-that generic provider cache: `tenferro-fft` stores cuFFT plans in its existing
-caller- or runtime-owned `FftExecutionCache`, not in a hidden `CudaBackend`
-cache. The cuFFT work area is **not** cached: it is a session-scoped CubeCL
+that generic provider cache: `tenferro-fft` stores cuFFT plans in the engine's
+own extension-cache store (lent to a runtime run, taken for a direct call) and
+never in a caller-owned `FftExecutionCache` or a hidden `CudaEngine` cache.
+The cuFFT work area is **not** cached: it is a session-scoped CubeCL
 allocation created fresh inside each raw execution session, so the cached plan
 entry charges only its host-side metadata toward the cache byte limit.
 
 The CUDA extension cache has bounded defaults for type entries and logical
 retained bytes. Applications can configure it with
-`CudaBackend::set_cuda_extension_cache_max_entries` and
-`CudaBackend::set_cuda_extension_cache_max_retained_bytes`, clear it with
-`CudaBackend::clear_cuda_extension_cache`, and inspect retained entries,
+`CudaEngine::set_cuda_extension_cache_max_entries` and
+`CudaEngine::set_cuda_extension_cache_max_retained_bytes`, clear it with
+`CudaEngine::clear_cuda_extension_cache`, and inspect retained entries,
 logical retained bytes, and event counters with
-`CudaBackend::cuda_extension_cache_stats`.
+`CudaEngine::cuda_extension_cache_stats`.
 Retained bytes are estimates of cache-owned payloads, not process RSS or
 allocator arena usage.
 

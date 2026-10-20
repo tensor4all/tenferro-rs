@@ -10,6 +10,27 @@ use rayon::prelude::*;
 use std::{marker::PhantomData, mem::MaybeUninit};
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 
+/// Worker budget for one lane execution, and the engine pool to run fan-out on.
+///
+/// The lane count is decided on the calling thread first; only a fan-out of
+/// more than one job enters `pool`, so small transforms never leave the caller
+/// (#2206).
+#[derive(Clone, Copy)]
+pub(super) struct LaneThreads<'p> {
+    count: usize,
+    pool: Option<&'p rayon::ThreadPool>,
+}
+
+impl<'p> LaneThreads<'p> {
+    pub(super) fn new(count: usize, pool: Option<&'p rayon::ThreadPool>) -> Self {
+        Self { count, pool }
+    }
+
+    pub(super) fn from_context(context: &tenferro_cpu::CpuExecutionContext<'p>) -> Self {
+        Self::new(context.native_thread_count(), context.rayon_pool())
+    }
+}
+
 pub(super) enum Input<'a, T> {
     Complex(&'a [Complex<T>]),
     Real(&'a [T]),
@@ -62,7 +83,7 @@ pub(super) unsafe fn execute<T, O>(
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
     output: &mut [MaybeUninit<O>],
-    threads: usize,
+    threads: LaneThreads<'_>,
     project: impl Fn(Complex<T>) -> O + Sync,
 ) -> tenferro_tensor::Result<()>
 where
@@ -99,7 +120,7 @@ where
     let jobs = if output_len < MIN_PARALLEL_ELEMENTS {
         1
     } else {
-        threads.max(1).min(lanes)
+        threads.count.max(1).min(lanes)
     };
     let per_job = lanes.div_ceil(jobs);
     let out = Output {
@@ -201,10 +222,16 @@ where
     if jobs == 1 {
         run(0, &mut lane_buffers[0]);
     } else {
-        (0..jobs)
-            .into_par_iter()
-            .zip(lane_buffers.par_iter_mut())
-            .for_each(|(job, lane)| run(job, lane));
+        let mut fan_out = || {
+            (0..jobs)
+                .into_par_iter()
+                .zip(lane_buffers.par_iter_mut())
+                .for_each(|(job, lane)| run(job, lane));
+        };
+        match threads.pool {
+            Some(pool) if pool.current_thread_index().is_none() => pool.install(fan_out),
+            _ => fan_out(),
+        }
     }
     for lane in lane_buffers {
         Complex::<T>::pool_release(buffers, lane);

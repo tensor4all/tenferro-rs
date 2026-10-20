@@ -1,8 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftExecutor, FftNorm, TensorFftExt};
-use tenferro_tensor::{BackendSessionHost, Tensor};
+use tenferro_tensor::Tensor;
 
 const CASES: &[(usize, usize)] = &[(256, 1), (1024, 16)];
 
@@ -34,34 +34,31 @@ fn bench_c64_fft_plan_cache(c: &mut Criterion) {
         group.throughput(Throughput::Elements((fft_len * lanes) as u64));
 
         group.bench_function(BenchmarkId::new("direct_one_shot", &id), |bench| {
-            let mut backend = CpuBackend::new();
+            let mut backend = CpuEngine::serial();
             bench.iter(|| {
-                let output = backend
-                    .with_backend_session(|session| {
-                        black_box(&input).fft(None, 0, FftNorm::Backward, session)
-                    })
-                    .unwrap();
+                let output = {
+                    let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+                    black_box(&input).fft(None, 0, FftNorm::Backward, session)
+                };
                 black_box(output.unwrap());
             });
         });
 
         group.bench_function(BenchmarkId::new("executor_warm_cache", &id), |bench| {
-            let mut backend = CpuBackend::new();
+            let mut backend = CpuEngine::serial();
             let mut executor = FftExecutor::default();
-            backend
-                .with_backend_session(|session| {
-                    executor.fft(&input, None, 0, FftNorm::Backward, session)
-                })
-                .unwrap()
-                .unwrap();
+            {
+                let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+                executor.fft(&input, None, 0, FftNorm::Backward, session)
+            }
+            .unwrap();
             assert_eq!(executor.cache_stats().entries, 1);
 
             bench.iter(|| {
-                let output = backend
-                    .with_backend_session(|session| {
-                        executor.fft(black_box(&input), None, 0, FftNorm::Backward, session)
-                    })
-                    .unwrap();
+                let output = {
+                    let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+                    executor.fft(black_box(&input), None, 0, FftNorm::Backward, session)
+                };
                 black_box(output.unwrap());
             });
         });
@@ -77,34 +74,31 @@ fn bench_f64_rfft_plan_cache(c: &mut Criterion) {
         group.throughput(Throughput::Elements((fft_len * lanes) as u64));
 
         group.bench_function(BenchmarkId::new("direct_one_shot", &id), |bench| {
-            let mut backend = CpuBackend::new();
+            let mut backend = CpuEngine::serial();
             bench.iter(|| {
-                let output = backend
-                    .with_backend_session(|session| {
-                        black_box(&input).rfft(None, 0, FftNorm::Backward, session)
-                    })
-                    .unwrap();
+                let output = {
+                    let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+                    black_box(&input).rfft(None, 0, FftNorm::Backward, session)
+                };
                 black_box(output.unwrap());
             });
         });
 
         group.bench_function(BenchmarkId::new("executor_warm_cache", &id), |bench| {
-            let mut backend = CpuBackend::new();
+            let mut backend = CpuEngine::serial();
             let mut executor = FftExecutor::default();
-            backend
-                .with_backend_session(|session| {
-                    executor.rfft(&input, None, 0, FftNorm::Backward, session)
-                })
-                .unwrap()
-                .unwrap();
+            {
+                let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+                executor.rfft(&input, None, 0, FftNorm::Backward, session)
+            }
+            .unwrap();
             assert_eq!(executor.cache_stats().entries, 1);
 
             bench.iter(|| {
-                let output = backend
-                    .with_backend_session(|session| {
-                        executor.rfft(black_box(&input), None, 0, FftNorm::Backward, session)
-                    })
-                    .unwrap();
+                let output = {
+                    let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+                    executor.rfft(black_box(&input), None, 0, FftNorm::Backward, session)
+                };
                 black_box(output.unwrap());
             });
         });

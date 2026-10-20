@@ -1,6 +1,6 @@
 use super::common::*;
 use super::support;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftExecutor, FftNorm};
 use tenferro_gpu::cuda::gpu_available;
 use tenferro_tensor::{Tensor, TensorRead};
@@ -12,8 +12,8 @@ fn cuda_c2c_f32_f64_forward_inverse() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     for (input, tolerance) in [
         (complex_f32(&[4], 0.5), 1.0e-5),
         (complex_f64(&[4], 0.5), 1.0e-11),
@@ -21,7 +21,7 @@ fn cuda_c2c_f32_f64_forward_inverse() {
         let cpu_forward = Operation::Fft
             .execute_cpu(&mut cpu, &input, None, -1, FftNorm::Backward)
             .unwrap();
-        let gpu_input = support::upload_cuda(cuda.runtime(), &input);
+        let gpu_input = support::upload_cuda(&cuda, &input);
         let gpu_domain = TensorRead::from_tensor(&gpu_input)
             .allocation_domain()
             .unwrap();
@@ -29,7 +29,7 @@ fn cuda_c2c_f32_f64_forward_inverse() {
             .execute_cuda(&mut cuda, &gpu_input, None, -1, FftNorm::Backward)
             .unwrap();
         support::assert_cuda_resident(&gpu_forward, gpu_domain);
-        let forward = support::download_cuda(cuda.runtime(), &gpu_forward).unwrap();
+        let forward = support::download_cuda(&cuda, &gpu_forward).unwrap();
         assert_host_close(&forward, &cpu_forward, tolerance);
 
         let cpu_inverse = Operation::Ifft
@@ -39,7 +39,7 @@ fn cuda_c2c_f32_f64_forward_inverse() {
             .execute_cuda(&mut cuda, &gpu_forward, None, -1, FftNorm::Backward)
             .unwrap();
         support::assert_cuda_resident(&gpu_inverse, gpu_domain);
-        let inverse = support::download_cuda(cuda.runtime(), &gpu_inverse).unwrap();
+        let inverse = support::download_cuda(&cuda, &gpu_inverse).unwrap();
         assert_host_close(&inverse, &cpu_inverse, tolerance);
     }
 }
@@ -51,8 +51,8 @@ fn cuda_c2c_explicit_three_by_four_case() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     for (input, tolerance) in [
         (complex_f32(&[3, 4], 0.5), 1.0e-5),
         (complex_f64(&[3, 4], 0.5), 1.0e-11),
@@ -77,8 +77,8 @@ fn cuda_r2c_c2r_f32_f64() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     for (input, tolerance) in [
         (real_f32(&[8], 0.25), 1.0e-5),
         (real_f64(&[8], 0.25), 1.0e-11),
@@ -86,7 +86,7 @@ fn cuda_r2c_c2r_f32_f64() {
         let cpu_spectrum = Operation::Rfft
             .execute_cpu(&mut cpu, &input, None, -1, FftNorm::Backward)
             .unwrap();
-        let gpu_input = support::upload_cuda(cuda.runtime(), &input);
+        let gpu_input = support::upload_cuda(&cuda, &input);
         let gpu_domain = TensorRead::from_tensor(&gpu_input)
             .allocation_domain()
             .unwrap();
@@ -94,7 +94,7 @@ fn cuda_r2c_c2r_f32_f64() {
             .execute_cuda(&mut cuda, &gpu_input, None, -1, FftNorm::Backward)
             .unwrap();
         support::assert_cuda_resident(&gpu_spectrum, gpu_domain);
-        let spectrum = support::download_cuda(cuda.runtime(), &gpu_spectrum).unwrap();
+        let spectrum = support::download_cuda(&cuda, &gpu_spectrum).unwrap();
         assert_host_close(&spectrum, &cpu_spectrum, tolerance);
 
         let cpu_signal = Operation::Irfft
@@ -104,7 +104,7 @@ fn cuda_r2c_c2r_f32_f64() {
             .execute_cuda(&mut cuda, &gpu_spectrum, None, -1, FftNorm::Backward)
             .unwrap();
         support::assert_cuda_resident(&gpu_signal, gpu_domain);
-        let signal = support::download_cuda(cuda.runtime(), &gpu_signal).unwrap();
+        let signal = support::download_cuda(&cuda, &gpu_signal).unwrap();
         assert_host_close(&signal, &cpu_signal, tolerance);
     }
 }
@@ -116,8 +116,8 @@ fn cuda_real_fft_completes_even_and_odd_hermitian_spectrum() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     for n in [8usize, 7, 2, 1] {
         for (input, tolerance) in [
             (real_f32(&[n], 0.25), 1.0e-5),
@@ -146,8 +146,8 @@ fn cuda_irfft_explicit_even_and_odd_lengths_c32_c64() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     for (input, n, tolerance) in [
         (real_f32(&[8], 0.25), Some(8), 1.0e-5),
         (real_f32(&[7], 0.25), Some(7), 1.0e-5),
@@ -184,8 +184,8 @@ fn cuda_zero_padding_preserves_nonfinite_cpu_oracle_real_and_complex() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     let cases = [
         (
             Tensor::from_vec_col_major(vec![1], vec![f32::NAN]).unwrap(),
@@ -213,11 +213,11 @@ fn cuda_zero_padding_preserves_nonfinite_cpu_oracle_real_and_complex() {
         let expected = Operation::Fft
             .execute_cpu(&mut cpu, &input, Some(2), -1, FftNorm::Backward)
             .unwrap();
-        let gpu_input = support::upload_cuda(cuda.runtime(), &input);
+        let gpu_input = support::upload_cuda(&cuda, &input);
         let actual = Operation::Fft
             .execute_cuda(&mut cuda, &gpu_input, Some(2), -1, FftNorm::Backward)
             .unwrap();
-        let actual = support::download_cuda(cuda.runtime(), &actual).unwrap();
+        let actual = support::download_cuda(&cuda, &actual).unwrap();
         assert_host_close_allow_nonfinite(&actual, &expected, tolerance);
     }
 }
@@ -229,8 +229,8 @@ fn cuda_axes_final_middle_and_negative() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     let input = complex_f64(&[2, 3, 5], 0.125);
     for (axis, label) in [(2isize, "final"), (1, "middle"), (-1, "negative-final")] {
         let _ = label;
@@ -254,8 +254,8 @@ fn cuda_multiple_interleaved_column_major_batches() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     let input = complex_f64(&[2, 3, 5], -0.75);
     run_case(
         &mut cpu,
@@ -276,8 +276,8 @@ fn cuda_zero_transform_axis_with_nonzero_batch_is_padded_on_device() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     let mut executor = FftExecutor::default();
     let complex = complex_f32(&[2, 0], 0.5);
     let actual = run_executor_case(
@@ -292,8 +292,9 @@ fn cuda_zero_transform_axis_with_nonzero_batch_is_padded_on_device() {
         1.0e-5,
     );
     assert_eq!(actual.shape(), &[2, 4]);
-    assert_eq!(executor.cache_stats().entries, 1);
-    assert!(executor.cache_stats().retained_bytes > 0);
+    let stats = support::engine_cache_stats(&mut cuda);
+    assert_eq!(stats.entries, 1, "engine cache stats: {stats:?}");
+    assert!(stats.retained_bytes > 0, "engine cache stats: {stats:?}");
 
     let real = real_f64(&[2, 0], 0.5);
     let actual = run_executor_case(
@@ -331,8 +332,8 @@ fn cuda_lengths_equal_truncated_and_zero_padded() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     let input = complex_f32(&[5], 0.5);
     for n in [None, Some(5), Some(3), Some(8)] {
         run_case(
@@ -369,8 +370,8 @@ fn cuda_backward_forward_and_ortho_norms() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     let input = complex_f64(&[4], 0.5);
     let real_input = real_f64(&[8], 0.25);
     for norm in [FftNorm::Backward, FftNorm::Forward, FftNorm::Ortho] {

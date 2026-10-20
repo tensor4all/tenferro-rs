@@ -14,8 +14,9 @@ fn execution_cache_debug_identifies_both_owners_and_exposes_the_store() {
     );
 
     let mut runtime = ExtensionCacheStore::default();
-    let mut runtime_cache = FftExecutionCache::runtime_owned(&mut runtime);
-    assert!(format!("{runtime_cache:?}").contains("RuntimeOwned"));
+    let mut runtime_cache = FftExecutionCache::engine_owned(&mut runtime);
+    assert!(format!("{runtime_cache:?}").contains("EngineOwned"));
+    assert!(runtime_cache.is_engine_owned());
     assert_eq!(
         runtime_cache
             .store_mut()
@@ -48,23 +49,21 @@ fn default_read_execution_preserves_owned_input_and_canonicalizes_a_view() {
         FftNorm::Backward,
     )
     .unwrap();
-    use tenferro_tensor::BackendSessionHost;
-    let mut backend = tenferro_cpu::CpuBackend::with_threads(1).unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     let mut cache = FftPlanCache::default();
     for (read, expected) in [
         (TensorRead::from_tensor(&input), [3., -1., 7., -1.]),
         (view, [4., -2., 6., -2.]),
     ] {
-        let output = backend
-            .with_backend_session(|session| {
-                tenferro_cpu::with_cpu_exec_session(session, |cpu| {
-                    cpu.validate_fft_read_input("fft", &read).unwrap();
-                    cpu.execute_fft_read(read, &spec, FftExecutionCache::caller_owned(&mut cache))
-                })
-                .expect("the CPU session exposes the FFT capability")
+        let output = {
+            let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+            tenferro_cpu::with_cpu_engine(session, |cpu| {
+                cpu.validate_fft_read_input("fft", &read).unwrap();
+                cpu.execute_fft_read(read, &spec, FftExecutionCache::caller_owned(&mut cache))
             })
-            .unwrap()
-            .unwrap();
+            .expect("the CPU session exposes the FFT capability")
+        }
+        .unwrap();
         assert_eq!(
             output.as_slice::<Complex64>().unwrap(),
             expected.map(|x| Complex64::new(x, 0.))
@@ -106,18 +105,13 @@ macro_rules! unreachable_methods {
 mod default_session_impls {
     use super::DefaultFftSession;
     use tenferro_tensor::{
-        BackendCachedDot, BackendRuntimeCache, Engine, BackendSessionHost, CompareDir,
-        DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig, ScatterConfig,
-        SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
-        TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction,
-        TensorStructural, TensorWrite,
+        CompareDir, DType, DotGeneralConfig, ElementwiseReadOp, Engine, GatherConfig, PadConfig,
+        ScatterConfig, SessionCachedDot, SliceConfig, Tensor, TensorAnalytic, TensorBuffer,
+        TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+        TensorRead, TensorReduction, TensorStructural, TensorWrite,
     };
 
     type Result<T> = tenferro_tensor::Result<T>;
-
-    impl BackendRuntimeCache for DefaultFftSession {
-        type RuntimeCache = ();
-    }
 
     impl TensorElementwise for DefaultFftSession {
         unreachable_methods! {
@@ -204,19 +198,8 @@ mod default_session_impls {
         }
     }
 
-    impl BackendCachedDot for DefaultFftSession {}
+    impl SessionCachedDot for DefaultFftSession {}
     impl Engine for DefaultFftSession {}
-
-    impl BackendSessionHost for DefaultFftSession {
-        fn with_backend_session<R>(
-            &mut self,
-            f: impl FnOnce(&mut dyn Engine) -> R,
-        ) -> std::result::Result<R, tenferro_tensor::SessionEntryError> {
-            tenferro_tensor::with_session_entry_guard("default FFT test session", || f(self))
-        }
-    }
-
-    impl TensorBackend for DefaultFftSession {}
 }
 
 impl FftBackend for DefaultFftSession {

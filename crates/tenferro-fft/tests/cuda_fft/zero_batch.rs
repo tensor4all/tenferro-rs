@@ -1,6 +1,6 @@
 use super::common::*;
 use super::support;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftExecutor, FftNorm};
 use tenferro_gpu::cuda::gpu_available;
 use tenferro_tensor::TensorRead;
@@ -12,8 +12,8 @@ fn cuda_zero_batch_returns_empty_resident_outputs_without_cache_entries() {
         return;
     }
 
-    let mut cpu = CpuBackend::new();
-    let mut cuda = support::cuda_backend();
+    let mut cpu = CpuEngine::serial();
+    let mut cuda = support::cuda_engine();
     let mut executor = FftExecutor::default();
     for (input, operation, axis, tolerance, expected_shape) in [
         (
@@ -35,7 +35,7 @@ fn cuda_zero_batch_returns_empty_resident_outputs_without_cache_entries() {
             .execute_cpu(&mut cpu, &input, None, axis, FftNorm::Backward)
             .expect("CPU FFT oracle");
         assert_eq!(expected.shape(), expected_shape);
-        let gpu_input = support::upload_cuda(cuda.runtime(), &input);
+        let gpu_input = support::upload_cuda(&cuda, &input);
         let domain = TensorRead::from_tensor(&gpu_input)
             .allocation_domain()
             .expect("uploaded input allocation domain");
@@ -52,12 +52,11 @@ fn cuda_zero_batch_returns_empty_resident_outputs_without_cache_entries() {
         support::assert_cuda_resident(&actual, domain);
         assert_eq!(actual.shape(), expected_shape);
         assert_eq!(actual.dtype(), expected.dtype());
-        let actual =
-            support::download_cuda(cuda.runtime(), &actual).expect("explicit CUDA download");
+        let actual = support::download_cuda(&cuda, &actual).expect("explicit CUDA download");
         assert_host_close(&actual, &expected, tolerance);
         assert_eq!(actual.shape(), expected_shape);
         assert_eq!(element_count(actual.shape()), 0);
-        let stats = executor.cache_stats();
+        let stats = support::engine_cache_stats(&mut cuda);
         assert_eq!(stats.entries, 0);
         assert_eq!(stats.retained_bytes, 0);
         assert_eq!(stats.hits, 0);
