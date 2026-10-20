@@ -6,15 +6,11 @@ use tenferro_ops::SymDim;
 use tenferro_runtime::extension::ExtensionOp;
 use tenferro_tensor::{DType, Error, Tensor, TypedTensor};
 
-use super::{
-    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, canonical_svd_gauge_layout, promote_dtypes,
-    EighDriver, EighGauge, LinalgExtensionOp, LinalgOp, QrGauge, SvdDriver, SvdGauge,
-    LINALG_EXTENSION_FAMILY_ID,
-};
+use super::{apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, canonical_svd_gauge_layout, promote_dtypes, EighDriver, EighGauge, LinalgExtensionOp, LinalgOp, QrGauge, SvdDriver, SvdGauge, LINALG_EXTENSION_FAMILY_ID};
 
 #[test]
 fn session_support_admits_every_cpu_linear_algebra_op() {
-    use tenferro_cpu::CpuBackend;
+    use tenferro_cpu::CpuEngine;
 
     // The CPU exec session runs every linalg kernel; admission must never be
     // narrowed below the session executor's real support (issue #1665), or
@@ -99,7 +95,7 @@ fn session_support_admits_every_cpu_linear_algebra_op() {
         LinalgOp::HouseholderQrSplitTangent { right: true },
     ];
     for op in ops {
-        let admitted = super::linalg_session_supported::<CpuBackend>(&LinalgExtensionOp::new(op));
+        let admitted = super::linalg_session_supported::<CpuEngine>(&LinalgExtensionOp::new(op));
         assert!(
             admitted,
             "the CPU linalg session executor runs every op; admission must not narrow: {op:?}"
@@ -110,15 +106,15 @@ fn session_support_admits_every_cpu_linear_algebra_op() {
     // type-only seam admits it like every other CPU linalg kernel.
     let svd_full = LinalgExtensionOp::new(LinalgOp::SvdFull);
     assert!(
-        super::linalg_session_supported::<CpuBackend>(&svd_full),
+        super::linalg_session_supported::<CpuEngine>(&svd_full),
         "SvdFull must be admitted on CPU: faer and BLAS both execute it in-session"
     );
 }
 
 #[test]
 fn extension_reads_preserve_strided_inputs() {
-    use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
-    use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
+    use tenferro_cpu::{with_cpu_engine, CpuEngine};
+    use tenferro_tensor::{TensorRead, TensorView};
 
     // Owned, compact, transposed and offset reads describe the same spectrum.
     let input = Tensor::from_vec_col_major([2, 3], vec![3., 0., 0., 2., 0., 0.]).unwrap();
@@ -134,11 +130,10 @@ fn extension_reads_preserve_strided_inputs() {
         )),
         TensorRead::from_view(TensorView::F64(offset)),
     ];
-    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
     for read in reads {
-        let outputs = backend
-            .with_backend_session(|session| {
-                with_cpu_exec_session(session, |session| {
+        let outputs = (|session: &mut dyn tenferro_tensor::Engine| {
+                with_cpu_engine(session, |session| {
                     super::execute_linalg_extension_reads_in_session(
                         &LinalgExtensionOp::new(LinalgOp::SvdVals {
                             derivative_eps: 0.0,
@@ -149,8 +144,7 @@ fn extension_reads_preserve_strided_inputs() {
                     )
                 })
                 .unwrap()
-            })
-            .unwrap()
+            })(&mut backend)
             .unwrap();
         let values = outputs[0].as_slice::<f64>().unwrap();
         assert_eq!(values.len(), 2);

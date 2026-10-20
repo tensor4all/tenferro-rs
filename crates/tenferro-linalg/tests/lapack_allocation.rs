@@ -16,9 +16,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TensorLinalgExt;
-use tenferro_tensor::{BackendSessionHost, Tensor, TypedTensor};
+use tenferro_tensor::{Tensor, TypedTensor};
 
 /// Counts allocations and live bytes while armed.
 ///
@@ -101,8 +101,8 @@ fn measure(operation: impl FnOnce()) -> AllocationReport {
     }
 }
 
-fn blas_backend() -> CpuBackend {
-    CpuBackend::with_threads(1).expect("BLAS CPU backend")
+fn blas_backend() -> CpuEngine {
+    tenferro_cpu::CpuEngine::serial()
 }
 
 fn sample_real(m: usize, n: usize) -> Vec<f64> {
@@ -138,18 +138,15 @@ fn c64_matrix(n: usize) -> Tensor {
 /// repeats removes that additive noise without weakening the ceiling: the
 /// quiet sample is the one the kernels actually cost.
 fn steady_state(
-    host: &mut CpuBackend,
+    host: &mut CpuEngine,
     operation: impl Fn(&mut dyn tenferro_tensor::Engine) + Send + Sync,
 ) -> AllocationReport {
     for _ in 0..4 {
-        host.with_backend_session(|session| operation(session))
-            .unwrap();
+        (|session: &mut dyn tenferro_tensor::Engine| operation(session))(&mut host);
     }
     let mut best: Option<AllocationReport> = None;
     for _ in 0..5 {
-        let report = host
-            .with_backend_session(|session| measure(|| operation(session)))
-            .unwrap();
+        let report = (|session: &mut dyn tenferro_tensor::Engine| measure(|| operation(session)))(&mut host);
         if best.is_none_or(|best| report.allocations < best.allocations) {
             best = Some(report);
         }

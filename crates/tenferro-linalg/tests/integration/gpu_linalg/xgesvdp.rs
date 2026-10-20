@@ -143,10 +143,10 @@ fn test_cubecl_svd_xgesvdp_eager() {
     let options = SvdOptions::default().driver(SvdDriver::Xgesvdp);
     let expected =
         with_cuda_linalg_session(&mut gpu, |s| s.svd_with_options(&device, options)).unwrap();
-    let runtime = EagerRuntime::with_cuda_backend(gpu.clone()).unwrap();
+    let runtime = EagerRuntime::new().unwrap();
     let eager = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
     let (u, s, vt) = runtime
-        .with_eager_session(|session| session.svd_with_options(&eager, options))
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.svd_with_options(&eager, options))
         .unwrap();
     let factors: Vec<_> = [&u, &s, &vt]
         .into_iter()

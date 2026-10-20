@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use num_complex::{Complex32, Complex64};
 use serde_json::Value;
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{HouseholderQr, QrGauge, QrOptions, TracedTensorLinalgExt};
 use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, Runtime, Tensor, TracedTensor};
 
@@ -460,14 +460,14 @@ fn ad_context_with_linalg() -> Result<AdContext, String> {
 }
 
 fn cpu_runtime_with_linalg() -> Result<Runtime, String> {
-    let backend = CpuBackend::new();
+    let backend = tenferro_cpu::CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).map_err(to_string)?)
         .map_err(to_string)?;
     builder
         .install_extension_module(
-            tenferro_linalg::extension_module::<CpuBackend>(
+            tenferro_linalg::extension_module::<CpuEngine>(
                 tenferro_cpu::runtime_engine_id().map_err(to_string)?,
             )
             .map_err(to_string)?,
@@ -1176,6 +1176,27 @@ fn cotangent_scalar(
     Ok(scalar)
 }
 
+/// Prepare and run `program` on a fresh serial CPU engine, returning owned outputs.
+fn run_compiled_cpu(
+    runtime: &tenferro_runtime::Runtime,
+    program: &tenferro_runtime::CompiledGraph,
+    inputs: &[&tenferro_tensor::Tensor],
+) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
+    use tenferro_runtime::ExecutionEngine;
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+    let reads: Vec<tenferro_tensor::TensorRead<'_>> =
+        inputs.iter().map(|tensor| tenferro_tensor::TensorRead::from_tensor(tensor)).collect();
+    let prepared = runtime.prepare(program, &reads, &[engine.target()])?;
+    let outputs = {
+        let mut engines: [&mut dyn ExecutionEngine; 1] = [&mut engine];
+        runtime.run(&mut engines, &prepared, &reads)?
+    };
+    outputs
+        .into_iter()
+        .map(|output| Ok(output.into_tensor(&mut engine)?))
+        .collect()
+}
+
 fn eval_named_tensors(runtime: &Runtime, outputs: &[NamedTensor]) -> Result<Vec<Tensor>, String> {
     let traced = outputs
         .iter()
@@ -1183,7 +1204,7 @@ fn eval_named_tensors(runtime: &Runtime, outputs: &[NamedTensor]) -> Result<Vec<
         .collect::<Vec<_>>();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&traced).map_err(to_string)?;
-    runtime.run_compiled(&program, &[]).map_err(to_string)
+    run_compiled_cpu(&runtime, &program, &[]).map_err(to_string)
 }
 
 fn compare_named_results(

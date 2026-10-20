@@ -354,8 +354,8 @@ fn linalg_rustdoc_reuses_backend_in_read_examples() {
     let source = linalg_backend_trait_source();
 
     assert!(
-        !source.contains("CpuBackend::new()."),
-        "LinalgBackend rustdoc examples should bind and reuse CpuBackend instead of constructing it inline"
+        !source.contains("tenferro_cpu::CpuEngine::serial()."),
+        "LinalgBackend rustdoc examples should bind and reuse CpuEngine instead of constructing it inline"
     );
 }
 
@@ -367,7 +367,7 @@ fn cpu_backend_overrides_solve_read_into_hook() {
         override_section.contains("validate_solve_read_into")
             && override_section.contains("with_linalg_pool")
             && override_section.contains("solve_read_into_entered"),
-        "CpuBackend must override solve_read_into and inject its entered pool/context"
+        "CpuEngine must override solve_read_into and inject its entered pool/context"
     );
 
     let trait_source = linalg_backend_trait_source();
@@ -456,7 +456,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
     for (read, entered) in methods {
         let section = rust_function_section(&source, read);
         assert_eq!(
-            section.matches("self.with_linalg_pool_fresh(").count(),
+            section.matches("self.with_linalg_pool_checked(").count(),
             1,
             "{read} must enter CPU resources exactly once"
         );
@@ -499,7 +499,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
 
     let cholesky = rust_function_section(&source, "cholesky_read");
     let entry = cholesky
-        .find("self.with_linalg_pool_fresh(")
+        .find("self.with_linalg_pool_checked(")
         .expect("cholesky_read must have one operation entry");
     let managed_dispatch = cholesky
         .find("input.backend_family().is_some()")
@@ -522,7 +522,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
         managed.contains("context: &CpuExecutionContext")
             && managed.contains("buffers: &mut BufferPool")
             && !managed.contains("with_linalg_pool")
-            && !managed.contains("&mut CpuBackend"),
+            && !managed.contains("&mut CpuEngine"),
         "managed Cholesky must consume an already-entered context and pool without recursively entering"
     );
     let managed_typed = rust_function_section(&source, "managed_cholesky_typed");
@@ -579,7 +579,8 @@ fn cpu_linalg_materialization_requires_an_entered_context_token() {
         rust_function_section(&provider, "reshape_tensor").contains("&self"),
         "metadata-only reshape must also require the entered context receiver"
     );
-    let entered = rust_function_section(&provider, "entered");
+    // `CpuExecutionContext::new` is the only constructor of the context token.
+    let entered = rust_function_section(&provider, "new");
     assert!(
         !entered.trim_start().starts_with("pub "),
         "external crates must not be able to construct an entered execution-context token"

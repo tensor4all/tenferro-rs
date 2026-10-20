@@ -3,14 +3,14 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::with_cpu_exec_session;
+use tenferro_cpu::with_cpu_engine;
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::ExtensionOp;
-use tenferro_tensor::{Engine, DType, Error, ErrorKind, Tensor, TensorBackend, TensorRead};
+use tenferro_tensor::{DType, Engine, Error, ErrorKind, Tensor, TensorRead};
 
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::with_cuda_exec_session;
+use tenferro_gpu::cuda::with_cuda_engine;
 
 use crate::backend::LinalgBackend;
 use crate::RankRevealingQrOptions;
@@ -912,13 +912,13 @@ fn execute_linalg_extension_reads_on_session<B: Engine + ?Sized>(
     inputs: &[TensorRead<'_>],
     session: &mut B,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    if let Some(result) = with_cpu_exec_session(session, |session| {
+    if let Some(result) = with_cpu_engine(session, |session| {
         execute_linalg_extension_reads_in_session(op, inputs, session)
     }) {
         return result;
     }
     #[cfg(feature = "cuda")]
-    if let Some(result) = with_cuda_exec_session(session, |session| {
+    if let Some(result) = with_cuda_engine(session, |session| {
         execute_linalg_extension_reads_in_session(op, inputs, session)
     }) {
         return result;
@@ -1051,7 +1051,7 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
     execute_linalg(op.op(), &input_refs, session)
 }
 
-fn linalg_session_supported<B: tenferro_tensor::TensorBackend + 'static>(
+fn linalg_session_supported<B: Engine + 'static>(
     #[cfg_attr(not(feature = "cuda"), allow(unused_variables))] op: &LinalgExtensionOp,
 ) -> bool {
     // The `supports_session` contract (capability.rs) requires that an op is
@@ -1060,7 +1060,7 @@ fn linalg_session_supported<B: tenferro_tensor::TensorBackend + 'static>(
     // per-op/per-backend so `apply_eager` keeps the native prepared path for
     // every op the session can actually run (issue #1665).
     let type_id = std::any::TypeId::of::<B>();
-    if type_id == std::any::TypeId::of::<tenferro_cpu::CpuBackend>() {
+    if type_id == std::any::TypeId::of::<tenferro_cpu::CpuEngine>() {
         // Every CPU linalg kernel, including full-matrices SVD, runs in-session
         // on both the faer and the BLAS provider, so the type-only seam can
         // admit the whole family without inspecting the provider kind.
@@ -1068,7 +1068,7 @@ fn linalg_session_supported<B: tenferro_tensor::TensorBackend + 'static>(
     }
     #[cfg(feature = "cuda")]
     {
-        if type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaBackend>() {
+        if type_id == std::any::TypeId::of::<tenferro_gpu::cuda::CudaEngine>() {
             return match op.op() {
                 // Complete-pivoting LU and general eig have no CUDA kernels.
                 LinalgOp::FullPivLu | LinalgOp::FullPivLuSolve { .. } => false,
@@ -1111,7 +1111,7 @@ define_extension_runtime! {
     op_type = LinalgExtensionOp,
     execute_in_session = execute_linalg_extension_in_session,
     session_supported = linalg_session_supported,
-    backend_bound = TensorBackend,
+    backend_bound = Engine,
 }
 
 fn execute_linalg<B: LinalgBackend>(

@@ -10,7 +10,7 @@
 //! A buffer that is dropped rather than released stays checked out to the caller, which is what the
 //! pool's own capacity path does today: it takes an allocation and discards the checkout token. The
 //! host clears outstanding accounting at the end of a session, and replenishes on unwind
-//! (`CpuBackend::with_execution_resources`), so nothing here has to be tidy on an error path.
+//! (`CpuEngine::with_execution_resources`), so nothing here has to be tidy on an error path.
 
 #![cfg(feature = "blas")]
 

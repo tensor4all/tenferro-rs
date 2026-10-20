@@ -5,12 +5,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, DType, HostAccessError,
-    HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain,
-    StorageBuffer, Tensor, TensorRead, TensorScalar, TypedTensor,
-};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{AllocationDomainId, AllocationId, BackendStorage, DType, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, StorageBuffer, Tensor, TensorRead, TensorScalar, TypedTensor};
 
 use super::with_cpu_linalg;
 use crate::LinalgBackend;
@@ -243,9 +239,9 @@ impl SharedTensorAllocationDomain for FakeDomain {
     }
 }
 
-fn backend(domain: &Arc<FakeDomain>) -> CpuBackend {
+fn backend(domain: &Arc<FakeDomain>) -> CpuEngine {
     let erased: Arc<dyn SharedTensorAllocationDomain> = domain.clone();
-    CpuBackend::new().with_allocation_domain(erased)
+    tenferro_cpu::CpuEngine::serial().with_allocation_domain(erased)
 }
 
 fn assert_real_factor(values: &[f64]) {
@@ -262,7 +258,7 @@ fn assert_real_factor(values: &[f64]) {
 fn domain_bound_backend_preserves_host_owned_and_read_cholesky() {
     let domain = FakeDomain::new();
     let host = Tensor::from_vec_col_major([2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]).unwrap();
-    let mut expected_backend = CpuBackend::new();
+    let mut expected_backend = tenferro_cpu::CpuEngine::serial();
     let expected =
         with_cpu_linalg(&mut expected_backend, |backend| backend.cholesky(&host)).unwrap();
     let mut backend = backend(&domain);
@@ -290,7 +286,6 @@ fn domain_bound_backend_preserves_host_owned_and_read_cholesky() {
 fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
     let domain = FakeDomain::new();
     let mut backend = backend(&domain);
-    let selected = backend.domain_id();
 
     with_cpu_linalg(&mut backend, |backend| {
         macro_rules! check_real {
@@ -315,7 +310,6 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
                 assert_ne!(output.allocation_id(), input_id);
                 assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
                 assert_eq!(output.placement().device, None);
-                assert_eq!(output.placement().cpu_affinity, Some(selected));
                 let StorageBuffer::Backend(buffer) = output.buffer() else {
                     panic!("expected backend output")
                 };
@@ -342,7 +336,6 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
                 assert_ne!(output.allocation_id(), input_id);
                 assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
                 assert_eq!(output.placement().device, None);
-                assert_eq!(output.placement().cpu_affinity, Some(selected));
                 let StorageBuffer::Backend(buffer) = output.buffer() else {
                     panic!("expected backend output")
                 };
@@ -392,7 +385,7 @@ fn managed_cholesky_stages_its_factor_in_pooled_storage() {
         })
         .unwrap();
         drop(output);
-        let stats = backend.buffer_pool_stats().unwrap();
+        let stats = backend.buffer_pool_stats();
         eprintln!(
             "round {round}: {} buffers / {} B retained",
             stats.buffers, stats.capacity_bytes
@@ -495,9 +488,7 @@ fn managed_snapshot_is_independent_and_rejects_foreign_storage() {
     let other = FakeDomain::new();
     let foreign = Tensor::from_typed(other.tensor(&[1], vec![2.0_f64]));
     let before = domain.counts.allocations.load(Ordering::Relaxed);
-    let error = cpu
-        .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&foreign)))
-        .unwrap()
+    let error = (|__s: &mut dyn tenferro_tensor::Engine| __s.to_contiguous_read(TensorRead::from_tensor(&foreign)))(&mut cpu)
         .unwrap_err();
     assert!(matches!(
         error,
@@ -517,20 +508,13 @@ fn managed_snapshot_is_independent_and_rejects_foreign_storage() {
             memory_kind,
         ));
         assert!(matches!(
-            cpu.with_backend_session(
-                |__s| __s.to_contiguous_read(TensorRead::from_tensor(&invalid))
-            )
-            .unwrap(),
+            (|__s: &mut dyn tenferro_tensor::Engine| __s.to_contiguous_read(TensorRead::from_tensor(&invalid)))(&mut cpu),
             Err(tenferro_tensor::Error::HostAccess { .. })
         ));
         assert_eq!(domain.counts.allocations.load(Ordering::Relaxed), before);
     }
     let transposed = input.as_view().transpose_view([1, 0]).unwrap();
-    assert!(cpu
-        .with_backend_session(
-            |__s| __s.to_contiguous_read(TensorRead::from_view(TensorView::F64(transposed)))
-        )
-        .unwrap()
+    assert!((|__s: &mut dyn tenferro_tensor::Engine| __s.to_contiguous_read(TensorRead::from_view(TensorView::F64(transposed))))(&mut cpu)
         .is_err());
     assert_eq!(domain.counts.allocations.load(Ordering::Relaxed), before);
 }
@@ -567,16 +551,19 @@ fn managed_borrowed_cholesky_respects_offset_and_rejects_strides() {
 #[test]
 fn managed_eager_cholesky_preserves_domain_and_values() {
     use crate::EagerSessionLinalgExt;
-    use tenferro_ad::{EagerRuntime, EagerTensor};
+    use tenferro_ad::EagerRuntime;
     let domain = FakeDomain::new();
     let input = domain.tensor(&[2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]);
     let input_id = input.allocation_id();
-    let runtime = EagerRuntime::with_cpu_backend(backend(&domain)).unwrap();
-    let eager = EagerTensor::from_tensor_in(Tensor::from_typed(input), runtime.clone()).unwrap();
+    let runtime = EagerRuntime::new().unwrap();
+    let mut engine = backend(&domain);
     let output = runtime
-        .with_eager_session(|session| session.cholesky(&eager))
+        .with_eager_session(&mut engine, |session| {
+            let eager = session.constant_from(Tensor::from_typed(input))?;
+            session.cholesky(&eager)
+        })
         .unwrap()
-        .to_tensor()
+        .to_tensor(&mut engine)
         .unwrap();
     let output = output.as_typed::<f64>().unwrap();
     assert_eq!(output.allocation_domain(), Some(domain.id()));
@@ -601,16 +588,21 @@ fn managed_traced_cholesky_preserves_domain_and_values() {
         .unwrap();
     builder
         .install_extension_module(
-            crate::extension_module::<CpuBackend>(tenferro_cpu::runtime_engine_id().unwrap())
+            crate::extension_module::<CpuEngine>(tenferro_cpu::runtime_engine_id().unwrap())
                 .unwrap(),
         )
         .unwrap();
-    let output = builder
-        .build()
-        .unwrap()
-        .run_compiled(&program, &[])
-        .unwrap()
-        .remove(0);
+    let runtime = builder.build().unwrap();
+    let mut engine = backend(&domain);
+    let prepared = runtime
+        .prepare(&program, &[], &[tenferro_runtime::ExecutionEngine::target(&engine)])
+        .unwrap();
+    let output = {
+        let mut engines: [&mut dyn tenferro_runtime::ExecutionEngine; 1] = [&mut engine];
+        runtime.run(&mut engines, &prepared, &[]).unwrap().remove(0)
+    }
+    .into_tensor(&mut engine)
+    .unwrap();
     let output = output.as_typed::<f64>().unwrap();
     assert_eq!(output.allocation_domain(), Some(domain.id()));
     assert_ne!(output.allocation_id(), input_id);

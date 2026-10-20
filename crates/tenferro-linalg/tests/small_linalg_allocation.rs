@@ -15,9 +15,9 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+use tenferro_cpu::{with_cpu_engine, CpuEngine};
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{Engine, BackendSessionHost, Tensor, TypedTensor};
+use tenferro_tensor::{Engine, Tensor, TypedTensor};
 
 struct CountingAllocator;
 
@@ -81,28 +81,26 @@ fn batched_matrix(n: usize, batch: usize) -> Tensor {
 
 fn with_cpu<T>(
     session: &mut dyn Engine,
-    operation: impl FnOnce(&mut tenferro_cpu::CpuExecSession<'_>) -> T,
+    operation: impl FnOnce(&mut tenferro_cpu::CpuEngine) -> T,
 ) -> T {
-    with_cpu_exec_session(session, operation).expect("host exposes a CPU exec session")
+    with_cpu_engine(session, operation).expect("host exposes a CPU exec session")
 }
 
 /// Steady-state count for one operation, pooling warmed by four rounds.
 fn steady_state(
-    backend: &mut CpuBackend,
+    backend: &mut CpuEngine,
     operation: impl Fn(&mut dyn Engine) + Send + Sync,
 ) -> usize {
     let mut best = usize::MAX;
     for _ in 0..8 {
-        let count = backend
-            .with_backend_session(|session| measure(|| operation(session)))
-            .unwrap();
+        let count = measure(|| operation(&mut *backend));
         best = best.min(count);
     }
     best
 }
 
 fn check_family(
-    backend: &mut CpuBackend,
+    backend: &mut CpuEngine,
     name: &str,
     single_ceiling: usize,
     batch_ceiling: usize,
@@ -217,7 +215,7 @@ fn check_lane(
     svd_growth: usize,
     packed_lu_growth: usize,
 ) {
-    let mut backend = CpuBackend::with_threads(threads).expect("CPU backend");
+    let mut backend = tenferro_cpu::CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(threads).build().unwrap());
     let suffix = format!("{threads}T");
     check_family(
         &mut backend,
