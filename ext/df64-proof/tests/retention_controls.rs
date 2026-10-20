@@ -21,7 +21,7 @@ use tenferro_tensor::Tensor;
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 mod support;
-use support::run_compiled_on;
+use support::run_on_engine;
 
 fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
@@ -91,7 +91,7 @@ fn clearing_the_accounted_cache_leaves_a_live_value_unchanged() {
 
     // The first execution leaves scratch behind; the second reuses it.
     drop(
-        run_compiled_on(
+        run_on_engine(
             &runtime,
             &mut engine,
             &program,
@@ -99,7 +99,7 @@ fn clearing_the_accounted_cache_leaves_a_live_value_unchanged() {
         )
         .expect("first adjoint"),
     );
-    let live = run_compiled_on(
+    let live = run_on_engine(
         &runtime,
         &mut engine,
         &program,
@@ -137,7 +137,7 @@ fn clearing_the_accounted_cache_leaves_a_live_value_unchanged() {
         live_payload,
         "clearing the cache changed a value that was live across it"
     );
-    let after = run_compiled_on(
+    let after = run_on_engine(
         &runtime,
         &mut engine,
         &program,

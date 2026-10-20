@@ -212,7 +212,7 @@ fn registered_runtime_rejects_gpu_input_without_ingress() {
     let runtime = support::cpu_runtime_with_fft(&engine).unwrap();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        support::run_compiled(&runtime, &mut engine, &program, &[&gpu_input])
+        support::run_on_engine(&runtime, &mut engine, &program, &[&gpu_input])
     }));
     assert!(
         result.is_ok(),
@@ -318,8 +318,8 @@ fn graph_runs_keep_fft_plans_in_the_engine() {
     let mut engine = CpuEngine::serial();
     let runtime = support::cpu_runtime_with_fft(&engine).unwrap();
 
-    support::run_compiled(&runtime, &mut engine, &program, &[]).unwrap();
-    support::run_compiled(&runtime, &mut engine, &program, &[]).unwrap();
+    support::run_on_engine(&runtime, &mut engine, &program, &[]).unwrap();
+    support::run_on_engine(&runtime, &mut engine, &program, &[]).unwrap();
     // The runtime lends the engine's extension caches to each run and returns
     // them, so the plan stays with the engine across runs (#2206).
     let mut caches = engine.take_extension_caches();

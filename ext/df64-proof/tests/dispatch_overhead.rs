@@ -31,7 +31,7 @@ use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 mod support;
-use support::{prepare_on, run_prepared_on};
+use support::{prepare_for_engine, run_prepared};
 
 /// Counts every allocation the test process makes.
 struct Counting;
@@ -131,8 +131,9 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
         .expect("compiled preset program");
     let ordinary_value =
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("shape matches data");
-    let prepared_ordinary = prepare_on(&runtime, &engine, &ordinary_program, &[&ordinary_value])
-        .expect("prepared preset program");
+    let prepared_ordinary =
+        prepare_for_engine(&runtime, &engine, &ordinary_program, &[&ordinary_value])
+            .expect("prepared preset program");
 
     // (b) The contribution's program through the same path.
     let values = vec![Df64::from_f64(1.0), Df64::from_f64(2.0)];
@@ -146,7 +147,7 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
         .compile(&outputs[0])
         .expect("compiled contribution program");
     let contribution_value = external(values.clone(), vec![2]);
-    let prepared_contribution = prepare_on(
+    let prepared_contribution = prepare_for_engine(
         &runtime,
         &engine,
         &contribution_program,
@@ -162,7 +163,7 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
     let ordinary_prepare = {
         let start = Instant::now();
         drop(
-            prepare_on(&runtime, &engine, &ordinary_program, &[&ordinary_value])
+            prepare_for_engine(&runtime, &engine, &ordinary_program, &[&ordinary_value])
                 .expect("prepared preset program"),
         );
         start.elapsed().as_secs_f64() * 1e9
@@ -170,7 +171,7 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
     let contribution_prepare = {
         let start = Instant::now();
         drop(
-            prepare_on(
+            prepare_for_engine(
                 &runtime,
                 &engine,
                 &contribution_program,
@@ -185,7 +186,7 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
     // the warm condition. The protocol requires both to be recorded.
     let cold_start = Instant::now();
     drop(
-        run_prepared_on(
+        run_prepared(
             &runtime,
             &mut engine,
             &prepared_ordinary,
@@ -196,7 +197,7 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
     let ordinary_cold_ns = cold_start.elapsed().as_secs_f64() * 1e9;
     let cold_start = Instant::now();
     drop(
-        run_prepared_on(
+        run_prepared(
             &runtime,
             &mut engine,
             &prepared_contribution,
@@ -208,7 +209,7 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
 
     let (ordinary_allocations, ordinary_ns) = measure(iterations, || {
         drop(
-            run_prepared_on(
+            run_prepared(
                 &runtime,
                 &mut engine,
                 &prepared_ordinary,
@@ -219,7 +220,7 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
     });
     let (contribution_allocations, contribution_ns) = measure(iterations, || {
         drop(
-            run_prepared_on(
+            run_prepared(
                 &runtime,
                 &mut engine,
                 &prepared_contribution,
@@ -254,7 +255,7 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
     // double the allocations but must not do more.
     let (ordinary_twice, _) = measure(iterations * 2, || {
         drop(
-            run_prepared_on(
+            run_prepared(
                 &runtime,
                 &mut engine,
                 &prepared_ordinary,
@@ -265,7 +266,7 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
     });
     let (contribution_twice, _) = measure(iterations * 2, || {
         drop(
-            run_prepared_on(
+            run_prepared(
                 &runtime,
                 &mut engine,
                 &prepared_contribution,

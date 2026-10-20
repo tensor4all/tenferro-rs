@@ -21,7 +21,7 @@ mod support;
 
 use std::sync::Arc;
 
-use support::run_compiled;
+use support::run_on_fresh_engine;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
@@ -106,7 +106,7 @@ fn factorize(values: &[Df64], rows: usize, columns: usize) -> (Vec<Df64>, Vec<Df
     let program = compiler
         .compile_many(&[&outputs[0], &outputs[1]])
         .expect("compiled QR");
-    let results = run_compiled(
+    let results = run_on_fresh_engine(
         &runtime_with_module(),
         &program,
         &[&external(values.to_vec(), vec![rows, columns])],
@@ -180,15 +180,15 @@ fn the_jvp_and_vjp_satisfy_the_duality_identity() {
     let input_value = external(values.clone(), vec![rows, columns]);
     let tangent_value = external(tangent_values.clone(), vec![rows, columns]);
     let q_dot_value = payload(
-        &run_compiled(&runtime, &q_dot_program, &[&input_value, &tangent_value])
+        &run_on_fresh_engine(&runtime, &q_dot_program, &[&input_value, &tangent_value])
             .expect("factor tangent execution")[0],
     );
     let r_dot_value = payload(
-        &run_compiled(&runtime, &r_dot_program, &[&input_value, &tangent_value])
+        &run_on_fresh_engine(&runtime, &r_dot_program, &[&input_value, &tangent_value])
             .expect("triangular-factor tangent execution")[0],
     );
     let q_bar_value = payload(
-        &run_compiled(
+        &run_on_fresh_engine(
             &runtime,
             &q_bar_program,
             &[
@@ -199,7 +199,7 @@ fn the_jvp_and_vjp_satisfy_the_duality_identity() {
         .expect("factor cotangent execution")[0],
     );
     let r_bar_value = payload(
-        &run_compiled(
+        &run_on_fresh_engine(
             &runtime,
             &r_bar_program,
             &[
@@ -262,7 +262,7 @@ fn the_factor_gradient_matches_a_central_difference_of_the_loss() {
         .compile(&gradient)
         .expect("compiled input cotangent");
     let gradient_values = payload(
-        &run_compiled(
+        &run_on_fresh_engine(
             &runtime,
             &program,
             &[

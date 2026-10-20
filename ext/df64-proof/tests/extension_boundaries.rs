@@ -7,7 +7,7 @@ mod support;
 
 use std::sync::Arc;
 
-use support::run_compiled;
+use support::run_on_fresh_engine;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
@@ -62,7 +62,7 @@ fn execute(graph: &TracedTensor) -> tenferro_runtime::Result<Vec<Tensor>> {
     let runtime = runtime_with_module();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(graph).expect("compiled program");
-    run_compiled(&runtime, &program, &[])
+    run_on_fresh_engine(&runtime, &program, &[])
 }
 
 #[test]

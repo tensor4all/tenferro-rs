@@ -25,7 +25,7 @@ use tenferro_tensor::Tensor;
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 mod support;
-use support::run_compiled_on;
+use support::run_on_engine;
 
 /// Counts every allocation the test process makes.
 struct Counting;
@@ -134,14 +134,14 @@ fn report_scratch_allocation_per_execution() {
 
     // The first execution pays for the runtime's own setup as well as the body's scratch.
     let (first_qr_allocations, first_qr_bytes) = measure(|| {
-        drop(run_compiled_on(&runtime, &mut engine, &qr_program, &[&runtime_value]).expect("QR"))
+        drop(run_on_engine(&runtime, &mut engine, &qr_program, &[&runtime_value]).expect("QR"))
     });
     let (next_qr_allocations, next_qr_bytes) = measure(|| {
-        drop(run_compiled_on(&runtime, &mut engine, &qr_program, &[&runtime_value]).expect("QR"))
+        drop(run_on_engine(&runtime, &mut engine, &qr_program, &[&runtime_value]).expect("QR"))
     });
     let (adjoint_allocations, adjoint_bytes) = measure(|| {
         drop(
-            run_compiled_on(
+            run_on_engine(
                 &runtime,
                 &mut engine,
                 &adjoint_program,
@@ -154,7 +154,7 @@ fn report_scratch_allocation_per_execution() {
     // accounted extension cache.
     let (steady_adjoint_allocations, steady_adjoint_bytes) = measure(|| {
         drop(
-            run_compiled_on(
+            run_on_engine(
                 &runtime,
                 &mut engine,
                 &adjoint_program,

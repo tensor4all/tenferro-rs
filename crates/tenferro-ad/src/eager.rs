@@ -3138,8 +3138,11 @@ impl EagerRuntime {
     ///
     /// # Errors
     ///
-    /// Returns the callback's error unchanged, or `E::from` a runtime error
-    /// when the engine kind cannot be registered with this runtime.
+    /// Returns [`Error::Unsupported`] when the engine kind cannot be registered
+    /// with this runtime or its context identity conflicts with the existing
+    /// registration, [`Error::RuntimeStateSource`] when the runtime snapshot or
+    /// engine registration state is unavailable, and the callback's own error
+    /// unchanged.
     pub fn with_eager_session<T, E: From<Error>>(
         self: &Arc<Self>,
         engine: &mut dyn ExecutionEngine,
@@ -4746,8 +4749,11 @@ impl EagerTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when the value cannot be duplicated on `engine` or when
-    /// it cannot be represented with a symbolic shape for the detached record.
+    /// Returns [`Error::TensorRuntime`] when `engine` cannot materialize the
+    /// retained value, [`Error::RuntimeStateSource`] when the value has no
+    /// readable tensor or symbolic graph metadata registration is unavailable,
+    /// and [`Error::RuntimeState`] when the detached record's allocation-group
+    /// descriptor is invalid.
     ///
     /// # Examples
     ///

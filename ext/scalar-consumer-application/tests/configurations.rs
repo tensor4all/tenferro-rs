@@ -29,7 +29,7 @@ use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 mod support;
-use support::run_compiled_on;
+use support::run_on_engine;
 
 /// Canonical standard support.
 struct Standard;
@@ -122,7 +122,7 @@ fn run<S: ScalarSupport>(
     let gradient = factor_norm_gradient(ad, &input, &seed, support).expect("the program runs");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&gradient).expect("compiled program");
-    let mut results = run_compiled_on(runtime, engine, &program, &[])
+    let mut results = run_on_engine(runtime, engine, &program, &[])
         .expect("executed the program")
         .into_iter();
     results.next().expect("one result")
@@ -360,7 +360,7 @@ fn a_value_from_one_owner_reaches_the_other_owner_explicitly() {
     let (q, _r) = standard_input.qr().expect("traced QR");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&q).expect("compiled the standard program");
-    let produced = run_compiled_on(&runtime, &mut standard_engine, &program, &[])
+    let produced = run_on_engine(&runtime, &mut standard_engine, &program, &[])
         .expect("executed the standard program")
         .into_iter()
         .next()
@@ -373,7 +373,7 @@ fn a_value_from_one_owner_reaches_the_other_owner_explicitly() {
     let program = compiler
         .compile(&widened[0])
         .expect("compiled the contribution program");
-    let outcome = run_compiled_on(&runtime, &mut contribution_engine, &program, &[]);
+    let outcome = run_on_engine(&runtime, &mut contribution_engine, &program, &[]);
 
     match outcome {
         Ok(results) => {

@@ -20,7 +20,7 @@ use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 mod support;
-use support::run_compiled_on;
+use support::run_on_engine;
 
 /// Canonical standard support: the linalg factorization, with values already `f64`.
 struct Standard;
@@ -105,7 +105,7 @@ fn run<S: ScalarSupport>(
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&gradient).expect("compiled program");
     let results =
-        run_compiled_on(&runtime, &mut engine, &program, &[]).expect("executed the program");
+        run_on_engine(&runtime, &mut engine, &program, &[]).expect("executed the program");
     assert_eq!(results.len(), 1);
     results.into_iter().next().expect("one result")
 }

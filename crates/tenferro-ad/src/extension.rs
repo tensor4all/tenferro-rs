@@ -129,7 +129,8 @@ pub fn prepare_eager_in_place_input(
 ///
 /// # Errors
 ///
-/// Returns a runtime-state error when the value cannot be registered.
+/// Returns [`Error::RuntimeState`] when the [`TensorValue`] cannot be
+/// transferred into its allocation group.
 #[must_use = "the adopted eager tensor carries the runtime value"]
 pub fn adopt_untracked_eager_value(
     ctx: Arc<EagerRuntime>,

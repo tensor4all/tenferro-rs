@@ -9,7 +9,7 @@ mod support;
 
 use std::sync::Arc;
 
-use support::run_compiled;
+use support::run_on_fresh_engine;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
@@ -113,7 +113,7 @@ fn the_connected_qr_program_gives_the_expected_gradient() {
     let program = compiler
         .compile(gradient)
         .expect("compiled reverse program");
-    let results = run_compiled(&runtime, &program, &[]).expect("executed reverse program");
+    let results = run_on_fresh_engine(&runtime, &program, &[]).expect("executed reverse program");
 
     // #1790's orientation case: A = [[3], [4]] has R = [[5]] and L = R^2 = 25, so
     // dL/dA = 2 R A / |A| = [[6], [8]].
@@ -157,7 +157,7 @@ fn the_connected_qr_program_forward_tangent_matches_an_independent_derivative() 
     let program = compiler
         .compile(&forward)
         .expect("compiled forward program");
-    let results = run_compiled(&runtime, &program, &[]).expect("executed forward program");
+    let results = run_on_fresh_engine(&runtime, &program, &[]).expect("executed forward program");
 
     // R = |A|, so the tangent of R is Q^T A_dot = 3/5 for the first unit direction; the graph
     // narrows it to f64 on the way out. This assertion previously read 3.0, which was the
@@ -207,7 +207,7 @@ fn the_second_connected_graph_returns_a_gradient_in_the_input_dtype() {
     let program = compiler
         .compile(gradient)
         .expect("compiled reverse program");
-    let results = run_compiled(&runtime, &program, &[]).expect("executed reverse program");
+    let results = run_on_fresh_engine(&runtime, &program, &[]).expect("executed reverse program");
 
     // The gradient crosses the widening and lands in the input's own dtype.
     assert_eq!(results[0].dtype(), DType::F64);

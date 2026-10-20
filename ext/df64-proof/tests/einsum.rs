@@ -10,7 +10,7 @@ mod support;
 
 use std::sync::Arc;
 
-use support::run_compiled;
+use support::run_on_fresh_engine;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
@@ -74,7 +74,7 @@ fn contract(
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output[0]).expect("compiled contraction");
-    let results = run_compiled(
+    let results = run_on_fresh_engine(
         &runtime_with_module(),
         &program,
         &[
@@ -158,7 +158,7 @@ fn the_body_refuses_disagreeing_contracted_dimensions() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output[0]).expect("compiled contraction");
-    let error = run_compiled(
+    let error = run_on_fresh_engine(
         &runtime_with_module(),
         &program,
         &[
@@ -234,7 +234,7 @@ fn contract_with(
         apply(std::sync::Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output[0]).expect("compiled contraction");
-    let results = run_compiled(
+    let results = run_on_fresh_engine(
         &runtime_with_module(),
         &program,
         &[&external(lhs, lhs_shape), &external(rhs, rhs_shape)],
@@ -339,8 +339,8 @@ fn contract_nary(
         .map(|(values, shape)| external(values.clone(), shape.clone()))
         .collect();
     let borrowed: Vec<&Tensor> = values.iter().collect();
-    let results =
-        run_compiled(&runtime_with_module(), &program, &borrowed).expect("contraction execution");
+    let results = run_on_fresh_engine(&runtime_with_module(), &program, &borrowed)
+        .expect("contraction execution");
     payload(&results[0])
 }
 

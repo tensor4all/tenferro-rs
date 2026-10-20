@@ -18,7 +18,7 @@ use tenferro_tensor::{DType, Tensor, TensorStructural};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 mod support;
-use support::run_compiled_on;
+use support::run_on_engine;
 
 fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
@@ -79,7 +79,7 @@ fn the_factors_outlive_the_forward_runtime_and_still_serve_a_later_program() {
     let forward = compiler
         .compile_many(&[&outputs[0], &outputs[1]])
         .expect("compiled QR");
-    let mut factors = run_compiled_on(&forward_runtime, &mut forward_engine, &forward, &[])
+    let mut factors = run_on_engine(&forward_runtime, &mut forward_engine, &forward, &[])
         .expect("executed QR")
         .into_iter();
     let mut q = factors.next().expect("the factor");
@@ -117,7 +117,7 @@ fn the_factors_outlive_the_forward_runtime_and_still_serve_a_later_program() {
     let program = compiler
         .compile(&adjoint[0])
         .expect("compiled the later program");
-    let results = run_compiled_on(&later_runtime, &mut later_engine, &program, &[])
+    let results = run_on_engine(&later_runtime, &mut later_engine, &program, &[])
         .expect("executed the later program");
     let gradient = payload(&results[0]);
     assert_eq!(gradient.len(), 2);

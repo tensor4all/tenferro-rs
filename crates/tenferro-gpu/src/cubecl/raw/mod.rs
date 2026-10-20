@@ -534,7 +534,9 @@ impl<'s> Session<'s> {
     ///
     /// # Errors
     ///
-    /// Returns the callback's error.
+    /// Returns the callback's error unchanged; this method adds no failure of
+    /// its own, so the variant is whatever the callback's operations report
+    /// (for example [`crate::Error::BackendFailure`]).
     ///
     /// # Examples
     ///

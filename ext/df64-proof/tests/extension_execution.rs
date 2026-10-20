@@ -12,7 +12,7 @@ use tenferro_tensor::{AllocationGroup, GroupError, Tensor, TensorElementwise, Te
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 mod support;
-use support::run_compiled;
+use support::run_on_fresh_engine;
 
 fn external(values: Vec<Df64>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
@@ -162,7 +162,7 @@ fn the_module_installs_and_plans_the_declared_scalar() {
         .compile_traced_graph(&graph)
         .expect("compiled program");
     let values = external(vec![Df64::from_f64(1.0), Df64::from_f64(2.0)]);
-    let results = run_compiled(&runtime, &program, &[&values]).expect("prepared execution");
+    let results = run_on_fresh_engine(&runtime, &program, &[&values]).expect("prepared execution");
     assert_eq!(results.len(), 1);
     assert_eq!(payload(&results[0]), vec![Df64::from_f64(3.0)]);
 }

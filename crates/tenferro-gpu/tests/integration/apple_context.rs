@@ -1,8 +1,7 @@
 #![cfg(all(feature = "webgpu", target_os = "macos"))]
 
-use crate::engine_run::EngineRun;
 use tenferro_gpu::{apple::AppleContext, apple::AppleTransferStats};
-use tenferro_tensor::{HostAccessError, Tensor, TensorRead, TypedTensor};
+use tenferro_tensor::{HostAccessError, Tensor, TensorDot, TensorRead, TypedTensor};
 
 fn apple_context() -> Option<AppleContext> {
     match AppleContext::new() {
@@ -95,7 +94,7 @@ fn cpu_domain_allocator_produces_write_only_managed_outputs_without_transfers() 
 
 #[test]
 fn metal_output_stays_in_the_context_domain_without_host_transfers() {
-    let Some(context) = apple_context() else {
+    let Some(mut context) = apple_context() else {
         return;
     };
     let lhs = Tensor::from_typed::<f32>(

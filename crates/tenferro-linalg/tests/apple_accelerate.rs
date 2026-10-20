@@ -6,7 +6,6 @@ mod apple_shared;
 #[path = "integration/support.rs"]
 pub mod support;
 
-use tenferro_cpu::CpuEngine;
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TensorRead};
 
