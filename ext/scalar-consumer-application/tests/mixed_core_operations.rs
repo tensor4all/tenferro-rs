@@ -18,7 +18,7 @@ use tenferro_tensor::Tensor;
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 mod support;
-use support::run_compiled_on;
+use support::run_on_engine;
 
 /// A runtime carrying the standard engine and the contribution's module together.
 fn mixed_runtime() -> (Runtime, CpuEngine) {
@@ -74,7 +74,7 @@ fn the_core_operations_run_in_the_mixed_configuration() {
     let total = apply(Arc::new(Df64Total), &[&input]).expect("traced total");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&total[0]).expect("compiled total");
-    let produced = run_compiled_on(
+    let produced = run_on_engine(
         &runtime,
         &mut engine,
         &program,

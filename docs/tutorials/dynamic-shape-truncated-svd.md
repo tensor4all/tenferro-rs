@@ -49,6 +49,7 @@ fn truncated_expected(diagonal: &[f64], threshold: f64) -> Vec<f64> {
     values
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_case(
     runtime: &Runtime,
     engine: &mut CpuEngine,
@@ -64,16 +65,17 @@ fn run_case(
         tenferro_runtime::TensorRead::from_tensor(threshold),
     ];
     let target = engine.target();
-    let reconstructed_prepared = runtime.prepare(reconstructed_program, &reads, &[target.clone()])?;
+    let reconstructed_prepared =
+        runtime.prepare(reconstructed_program, &reads, std::slice::from_ref(&target))?;
     let mut reconstructed_outputs = runtime.run(&mut [engine], &reconstructed_prepared, &reads)?;
     assert_eq!(reconstructed_outputs.len(), 1);
     let reconstructed = reconstructed_outputs
         .remove(0)
         .into_tensor(engine)
         .map_err(tenferro_runtime::Error::from)?;
-    let singular_values_prepared =
-        runtime.prepare(singular_values_program, &reads, &[target])?;
-    let mut singular_value_outputs = runtime.run(&mut [engine], &singular_values_prepared, &reads)?;
+    let singular_values_prepared = runtime.prepare(singular_values_program, &reads, &[target])?;
+    let mut singular_value_outputs =
+        runtime.run(&mut [engine], &singular_values_prepared, &reads)?;
     assert_eq!(singular_value_outputs.len(), 1);
     let singular_values = singular_value_outputs
         .remove(0)
@@ -99,8 +101,7 @@ fn cpu_runtime_with_linalg_and_einsum(
     builder.install_extension_module(tenferro_linalg::extension_module::<CpuEngine>(
         engine_id.clone(),
     )?)?;
-    builder
-        .install_extension_module(tenferro_einsum::extension_module::<CpuEngine>(engine_id)?)?;
+    builder.install_extension_module(tenferro_einsum::extension_module::<CpuEngine>(engine_id)?)?;
     Ok(builder.build()?)
 }
 

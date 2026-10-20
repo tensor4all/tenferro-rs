@@ -14,8 +14,14 @@ use tenferro_tensor::{Tensor, TensorRead};
 ///
 /// # Errors
 ///
-/// Propagates preparation, execution, and output-copying errors.
-pub fn run_compiled_on(
+/// Returns [`tenferro_runtime::Error::RuntimeState`] when the target is not
+/// registered or the prepared run belongs to another runtime,
+/// [`tenferro_runtime::Error::Unsupported`] when no installed module or
+/// provider serves the program, [`tenferro_runtime::Error::TensorRuntime`]
+/// when the engine fails or an output cannot be copied, and
+/// [`tenferro_runtime::Error::Extension`] for an extension kernel's typed
+/// failure.
+pub fn run_on_engine(
     runtime: &Runtime,
     engine: &mut CpuEngine,
     program: &CompiledGraph,

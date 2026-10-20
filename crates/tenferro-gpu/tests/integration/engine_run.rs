@@ -4,6 +4,13 @@
 #![allow(dead_code)]
 
 pub trait EngineRun {
+    /// Run `f` on `self`.
+    ///
+    /// # Errors
+    ///
+    /// This helper is infallible: it returns [`Ok`] unconditionally and never
+    /// constructs a [`tenferro_tensor::Error`], so its error side is
+    /// effectively [`std::convert::Infallible`].
     fn run<R>(
         &mut self,
         f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,

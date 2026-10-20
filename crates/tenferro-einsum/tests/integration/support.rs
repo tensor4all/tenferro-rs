@@ -34,7 +34,13 @@ pub fn extension_cache_stats(engine: &mut CpuEngine) -> CacheStats {
 ///
 /// # Errors
 ///
-/// Propagates preparation and execution errors from the runtime.
+/// Returns [`tenferro_runtime::Error::RuntimeState`] when the target is not
+/// registered or the prepared run belongs to another runtime,
+/// [`tenferro_runtime::Error::Unsupported`] when no installed module or
+/// provider serves the program, [`tenferro_runtime::Error::TensorRuntime`]
+/// when the engine fails or an output cannot be copied, and
+/// [`tenferro_runtime::Error::Extension`] for an extension kernel's typed
+/// failure.
 pub fn run_on_cpu_with_engine(
     runtime: &Runtime,
     engine: &mut CpuEngine,

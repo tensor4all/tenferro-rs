@@ -28,6 +28,8 @@ fn source_error<T: std::error::Error + 'static>(error: &crate::Error) -> Option<
 }
 
 #[test]
+#[cfg(feature = "cuda")]
+#[ignore = "requires a CUDA driver to format synthetic driver errors"]
 fn the_sticky_status_classification_covers_context_losing_driver_errors() {
     use cudarc::driver::sys::CUresult;
 

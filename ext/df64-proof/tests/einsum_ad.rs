@@ -11,7 +11,7 @@ mod support;
 
 use std::sync::Arc;
 
-use support::run_compiled;
+use support::run_on_fresh_engine;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
@@ -112,8 +112,8 @@ fn tangent(
         (None, None) => panic!("a tangent needs one operand's tangent"),
     }
     let borrowed: Vec<&Tensor> = inputs.iter().collect();
-    let results =
-        run_compiled(&runtime_with_module(), &program, &borrowed).expect("tangent execution");
+    let results = run_on_fresh_engine(&runtime_with_module(), &program, &borrowed)
+        .expect("tangent execution");
     payload(&results[0])
 }
 
@@ -142,7 +142,7 @@ fn contract(
     let output = apply(Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output[0]).expect("compiled contraction");
-    let results = run_compiled(
+    let results = run_on_fresh_engine(
         &runtime_with_module(),
         &program,
         &[
@@ -175,7 +175,7 @@ fn adjoint(
         .expect("traced adjoint");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&gradient).expect("compiled adjoint");
-    let results = run_compiled(
+    let results = run_on_fresh_engine(
         &runtime_with_module(),
         &program,
         &[
@@ -398,7 +398,7 @@ fn the_adjoint_of_a_three_operand_contraction_matches_the_hand_written_products(
         .expect("the adjoint is defined for any operand count");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&gradient).expect("compiled adjoint");
-    let results = run_compiled(
+    let results = run_on_fresh_engine(
         &runtime_with_module(),
         &program,
         &[
@@ -443,8 +443,8 @@ fn nary_tangent(
         .collect();
     values.push(external(tangent, operands[tangent_at].1.clone()));
     let borrowed: Vec<&Tensor> = values.iter().collect();
-    let results =
-        run_compiled(&runtime_with_module(), &program, &borrowed).expect("tangent execution");
+    let results = run_on_fresh_engine(&runtime_with_module(), &program, &borrowed)
+        .expect("tangent execution");
     payload(&results[0])
 }
 
@@ -498,8 +498,8 @@ fn the_three_operand_tangent_and_adjoint_satisfy_duality() {
         .collect();
     values.push(external(cotangent.clone(), vec![2, 2]));
     let borrowed: Vec<&Tensor> = values.iter().collect();
-    let results =
-        run_compiled(&runtime_with_module(), &program, &borrowed).expect("adjoint execution");
+    let results = run_on_fresh_engine(&runtime_with_module(), &program, &borrowed)
+        .expect("adjoint execution");
     let backward = payload(&results[0]);
     let backward_side = tangent_values
         .iter()

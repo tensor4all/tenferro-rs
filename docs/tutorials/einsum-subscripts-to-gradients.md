@@ -96,8 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = CpuEngine::serial();
     let a = runtime.variable_from(a_tensor.duplicate()?)?;
     let b = runtime.variable_from(b_tensor.duplicate()?)?;
-    let product =
-        runtime.with_eager_session(&mut engine, |s| s.einsum(&[&a, &b], "ij,jk->ik"))?;
+    let product = runtime.with_eager_session(&mut engine, |s| s.einsum(&[&a, &b], "ij,jk->ik"))?;
 
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(

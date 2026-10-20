@@ -7,7 +7,7 @@ mod support;
 
 use std::sync::Arc;
 
-use support::run_compiled;
+use support::run_on_fresh_engine;
 use tenferro_ad::extension::ExtensionOp;
 use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::extension::{Df64Qr, DF64_SCALAR_IDENTITY};
@@ -69,7 +69,7 @@ fn factor(values: Vec<Df64>, rows: usize, columns: usize) -> (Vec<Df64>, Vec<Df6
         .compile_many(&[&outputs[0], &outputs[1]])
         .expect("compiled QR");
     let input = external(values, vec![rows, columns]);
-    let results = run_compiled(&runtime, &program, &[&input]).expect("executed QR");
+    let results = run_on_fresh_engine(&runtime, &program, &[&input]).expect("executed QR");
     assert_eq!(results.len(), 2);
     let q = payload(&results[0]);
     let r = payload(&results[1]);
@@ -235,7 +235,7 @@ fn the_adjoint_of_the_factorization_matches_the_analytic_gradient() {
     .expect("traced adjoint");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&adjoint[0]).expect("compiled adjoint");
-    let results = run_compiled(&runtime, &program, &[]).expect("executed adjoint");
+    let results = run_on_fresh_engine(&runtime, &program, &[]).expect("executed adjoint");
     let gradient = payload(&results[0]);
     assert_eq!(gradient.len(), 2);
     assert!(

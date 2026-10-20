@@ -189,7 +189,9 @@ pub trait ExecutionEngine: Engine {
     ///
     /// # Errors
     ///
-    /// Returns the error the run reports while it is retired.
+    /// Returns the run's typed [`crate::Error::Internal`] (or another
+    /// driver-defined event-domain error) when queued work reports a completion
+    /// failure or the native queue cannot be synchronized while it is retired.
     fn retire_run(&mut self, mut run: Box<dyn EventDomainRun>) -> crate::Result<()> {
         run.drain()
     }
@@ -280,7 +282,9 @@ impl<'a> Output<'a> {
     ///
     /// # Errors
     ///
-    /// Returns the engine's error when copying a borrowed output fails.
+    /// Returns [`tenferro_tensor::Error::BackendFailure`] or
+    /// [`tenferro_tensor::Error::BackendSource`] when copying a borrowed output
+    /// through the engine fails; an owned output never fails.
     pub fn into_tensor(self, engine: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
         match self {
             Self::Owned(tensor) => Ok(tensor),

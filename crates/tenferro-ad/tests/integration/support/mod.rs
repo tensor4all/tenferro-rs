@@ -22,7 +22,11 @@ pub fn cpu_runtime() -> Runtime {
 ///
 /// # Errors
 ///
-/// Propagates preparation and execution errors from the runtime.
+/// Returns [`Error::RuntimeState`] when the target is not registered or a
+/// prepared run belongs to another runtime, [`Error::Unsupported`] when no
+/// installed module or provider serves the program, [`Error::TensorRuntime`]
+/// when the engine fails or an output cannot be copied, and
+/// [`Error::Extension`] for an extension kernel's typed failure.
 pub fn run_on_cpu(
     runtime: &Runtime,
     program: &CompiledGraph,
@@ -40,7 +44,11 @@ pub fn run_on_cpu(
 ///
 /// # Errors
 ///
-/// Propagates preparation and execution errors from the runtime.
+/// Returns [`Error::RuntimeState`] when the target is not registered or a
+/// prepared run belongs to another runtime, [`Error::Unsupported`] when no
+/// installed module or provider serves the program, [`Error::TensorRuntime`]
+/// when the engine fails or an output cannot be copied, and
+/// [`Error::Extension`] for an extension kernel's typed failure.
 pub fn run_on(
     engine: &mut dyn ExecutionEngine,
     runtime: &Runtime,

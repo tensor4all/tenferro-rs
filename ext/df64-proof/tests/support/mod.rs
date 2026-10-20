@@ -14,8 +14,14 @@ use tenferro_tensor::{Tensor, TensorRead};
 ///
 /// # Errors
 ///
-/// Propagates preparation, execution, and output-copying errors.
-pub fn run_compiled_on(
+/// Returns [`tenferro_runtime::Error::RuntimeState`] when the target is not
+/// registered or the prepared run belongs to another runtime,
+/// [`tenferro_runtime::Error::Unsupported`] when no installed module or
+/// provider serves the program, [`tenferro_runtime::Error::TensorRuntime`]
+/// when the engine fails or an output cannot be copied, and
+/// [`tenferro_runtime::Error::Extension`] for an extension kernel's typed
+/// failure.
+pub fn run_on_engine(
     runtime: &Runtime,
     engine: &mut CpuEngine,
     program: &CompiledGraph,
@@ -39,8 +45,11 @@ pub fn run_compiled_on(
 ///
 /// # Errors
 ///
-/// Propagates the runtime's preparation errors.
-pub fn prepare_on(
+/// Returns [`tenferro_runtime::Error::RuntimeState`] when the target is not
+/// registered, [`tenferro_runtime::Error::Unsupported`] when no eligible
+/// engine or ingress serves an input, and the typed preparation failure with
+/// its [`tenferro_runtime::PrepareError`] source.
+pub fn prepare_for_engine(
     runtime: &Runtime,
     engine: &CpuEngine,
     program: &CompiledGraph,
@@ -55,8 +64,12 @@ pub fn prepare_on(
 ///
 /// # Errors
 ///
-/// Propagates execution and output-copying errors.
-pub fn run_prepared_on(
+/// Returns [`tenferro_runtime::Error::RuntimeState`] when the prepared run
+/// belongs to another runtime or its target does not match the engine,
+/// [`tenferro_runtime::Error::TensorRuntime`] when the engine fails or an
+/// output cannot be copied, and [`tenferro_runtime::Error::Extension`] for an
+/// extension kernel's typed failure.
+pub fn run_prepared(
     runtime: &Runtime,
     engine: &mut CpuEngine,
     prepared: &Prepared,
@@ -76,17 +89,22 @@ pub fn run_prepared_on(
 
 /// Run `program` on a fresh serial CPU engine.
 ///
-/// Use [`run_compiled_on`] instead when a test observes engine- or runtime-owned
+/// Use [`run_on_engine`] instead when a test observes engine- or runtime-owned
 /// caches across calls.
 ///
 /// # Errors
 ///
-/// Propagates preparation, execution, and output-copying errors.
-pub fn run_compiled(
+/// Returns the same [`tenferro_runtime::Error`] variants as [`run_on_engine`]:
+/// [`tenferro_runtime::Error::RuntimeState`] for an unregistered target,
+/// [`tenferro_runtime::Error::Unsupported`] for an unserved operation,
+/// [`tenferro_runtime::Error::TensorRuntime`] for an engine or output-copy
+/// failure, and [`tenferro_runtime::Error::Extension`] for an extension
+/// kernel's typed failure.
+pub fn run_on_fresh_engine(
     runtime: &Runtime,
     program: &CompiledGraph,
     inputs: &[&Tensor],
 ) -> tenferro_runtime::Result<Vec<Tensor>> {
     let mut engine = CpuEngine::serial();
-    run_compiled_on(runtime, &mut engine, program, inputs)
+    run_on_engine(runtime, &mut engine, program, inputs)
 }

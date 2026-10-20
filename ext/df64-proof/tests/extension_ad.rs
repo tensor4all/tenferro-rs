@@ -8,7 +8,7 @@ mod support;
 
 use std::sync::Arc;
 
-use support::run_compiled;
+use support::run_on_fresh_engine;
 use tenferro_ad::semantic_extension::SemanticExtensionRuleSet;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
@@ -88,7 +88,8 @@ fn the_total_sum_adjoint_broadcasts_the_cotangent() {
     let program = compiler
         .compile(input_gradient)
         .expect("compiled backward program");
-    let results = run_compiled(&runtime, &program, &[&cotangent_input]).expect("executed adjoint");
+    let results =
+        run_on_fresh_engine(&runtime, &program, &[&cotangent_input]).expect("executed adjoint");
     assert_eq!(results.len(), 1);
     assert_eq!(
         payload(&results[0]),
@@ -132,7 +133,8 @@ fn the_adjoint_retains_low_order_information() {
     let program = compiler
         .compile(input_gradient)
         .expect("compiled backward program");
-    let results = run_compiled(&runtime, &program, &[&cotangent_input]).expect("executed adjoint");
+    let results =
+        run_on_fresh_engine(&runtime, &program, &[&cotangent_input]).expect("executed adjoint");
     let expected = Df64::from_f64(1.0) + Df64::from_f64(low);
     assert_eq!(payload(&results[0]), vec![expected, expected]);
     assert_eq!(expected.lo, low, "the low component survives the adjoint");
@@ -174,7 +176,7 @@ fn the_total_sum_linearization_sums_the_tangents() {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&jvp).expect("compiled forward program");
     let results =
-        run_compiled(&runtime, &program, &[&tangent_input]).expect("executed linearization");
+        run_on_fresh_engine(&runtime, &program, &[&tangent_input]).expect("executed linearization");
     assert_eq!(results.len(), 1);
     assert_eq!(
         payload(&results[0]),

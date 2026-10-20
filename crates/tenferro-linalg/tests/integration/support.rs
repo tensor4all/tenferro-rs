@@ -56,7 +56,12 @@ pub fn run_all(
 ///
 /// # Errors
 ///
-/// Propagates preparation, input validation and execution errors.
+/// Returns [`tenferro_runtime::Error::RuntimeState`] when the target is not
+/// registered or the prepared run belongs to another runtime,
+/// [`tenferro_runtime::Error::Unsupported`] when the linalg provider declines
+/// an operation, [`tenferro_runtime::Error::TensorRuntime`] when the engine
+/// fails or an output cannot be copied, and
+/// [`tenferro_runtime::Error::Extension`] for a linalg kernel's typed failure.
 pub fn run_program(
     runtime: &Runtime,
     engine: &mut CpuEngine,

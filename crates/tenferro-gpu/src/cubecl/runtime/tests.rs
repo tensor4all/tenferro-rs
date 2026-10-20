@@ -6,6 +6,7 @@ use crate::cuda::CudaEngine;
 use cudarc::driver::{result::DriverError, sys::CUresult};
 
 #[test]
+#[cfg(feature = "cuda")]
 fn selected_device_lookup_classifies_only_cuda_invalid_device() {
     assert!(is_invalid_device_lookup(DriverError(
         CUresult::CUDA_ERROR_INVALID_DEVICE

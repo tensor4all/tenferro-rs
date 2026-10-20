@@ -21,9 +21,13 @@ pub fn cpu_runtime_with_fft(engine: &CpuEngine) -> Result<Runtime, RuntimeConfig
 ///
 /// # Errors
 ///
-/// Propagates preparation, binding, validation and execution errors from
-/// [`Runtime::prepare`] and [`Runtime::run`].
-pub fn run_compiled(
+/// Returns [`tenferro_runtime::Error::RuntimeState`] when the target is not
+/// registered or the prepared run belongs to another runtime,
+/// [`tenferro_runtime::Error::Unsupported`] when the FFT provider declines an
+/// operation, [`tenferro_runtime::Error::TensorRuntime`] when the engine fails
+/// or an output cannot be copied, and [`tenferro_runtime::Error::Extension`]
+/// for an FFT kernel's typed failure.
+pub fn run_on_engine(
     runtime: &Runtime,
     engine: &mut CpuEngine,
     program: &CompiledGraph,
@@ -46,7 +50,7 @@ pub fn run_compiled(
 /// Returns [`tenferro_runtime::Error::RuntimeState`] when constructing the test
 /// runtime fails or when the compiled program returns any output count other
 /// than one. Propagates typed input binding, validation, and backend execution
-/// errors from [`run_compiled`].
+/// errors from [`run_on_engine`].
 pub fn run_one(program: &CompiledGraph, inputs: &[&Tensor]) -> tenferro_runtime::Result<Tensor> {
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime_with_fft(&engine).map_err(|source| {
@@ -56,7 +60,7 @@ pub fn run_one(program: &CompiledGraph, inputs: &[&Tensor]) -> tenferro_runtime:
             source,
         )
     })?;
-    let mut outputs = run_compiled(&runtime, &mut engine, program, inputs)?;
+    let mut outputs = run_on_engine(&runtime, &mut engine, program, inputs)?;
     let actual = outputs.len();
     if actual != 1 {
         return Err(tenferro_runtime::Error::runtime_state(
