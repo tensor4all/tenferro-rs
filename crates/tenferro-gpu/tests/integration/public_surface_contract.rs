@@ -341,12 +341,14 @@ fn webgpu_provider_keeps_runtime_transfer_and_gemm_boundaries_split() {
 
 #[test]
 fn webgpu_materialization_does_not_inherit_host_defaults() {
-    // The operation implementations live on the execution session now.
+    // The operation implementations live on the engine (`exec_session.rs`); the
+    // engine *is* the device-native backend, so it hands itself to the
+    // structural module instead of projecting an owned `backend` field.
     let session = repo_file("crates/tenferro-gpu/src/webgpu/exec_session.rs");
     let structural = repo_file("crates/tenferro-gpu/src/webgpu/structural.rs");
     assert!(
         session.contains("fn to_contiguous_read")
-            && session.contains("structural::to_contiguous_read(self.backend, input)"),
+            && session.contains("structural::to_contiguous_read(self, input)"),
         "WebGPU materialization must delegate to its device-native structural module"
     );
     assert!(

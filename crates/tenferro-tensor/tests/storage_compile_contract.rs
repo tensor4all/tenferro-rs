@@ -75,13 +75,31 @@ fn p9_final_surface_has_no_parallel_tensor_owner_or_vec_result_path() {
         !execution.contains("Completed(Vec<Tensor>)"),
         "detached results must retain alias-safe group ownership"
     );
-    let submit_error = execution
-        .split("pub enum SubmitError")
+    // The engine model is synchronous and caller-owned: `Runtime::run` borrows
+    // the engines and the inputs and returns outputs tied to that borrow, so
+    // nothing can own a caller input behind its back. A detached submission
+    // would have to reintroduce the removed handle/handle-error surface (and
+    // with it the pre-admission input-recovery dance that `SubmitError` carried
+    // for a failed worker spawn).
+    for detached in [
+        "SubmitError",
+        "ExecutionHandle",
+        "SubmissionSpawner",
+        "InFlightSubmission",
+        "ExecutionOutcome",
+    ] {
+        assert!(
+            !execution.contains(detached),
+            "detached submission must not return: `{detached}` implies a worker owning caller inputs"
+        );
+    }
+    let run = execution
+        .split("fn run<'a>(")
         .nth(1)
-        .and_then(|rest| rest.split("impl SubmitError").next())
-        .expect("SubmitError declaration must be present");
+        .and_then(|rest| rest.split('{').next())
+        .expect("the engine-run entry point must be present");
     assert!(
-        !submit_error.contains("WorkerSpawn"),
-        "worker-spawn failure must recover unchanged inputs before admission"
+        run.contains("&mut [&mut dyn ExecutionEngine]") && run.contains("Vec<Output<'a>>"),
+        "runtime execution must borrow caller-held engines and return outputs tied to the input borrow"
     );
 }

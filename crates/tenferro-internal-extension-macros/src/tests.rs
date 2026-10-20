@@ -81,7 +81,7 @@ fn extension_runtime_macro_generates_module_engine_and_prepared_op_without_regis
     assert!(source.contains("struct TinyRuntimeModule"));
     assert!(source.contains("struct TinyRuntimePlanningConfig"));
     assert!(source.contains("struct TinyRuntimePreparedOperation"));
-    assert!(source.contains("impl < B : tenferro_tensor :: TensorBackend + 'static >"));
+    assert!(source.contains("impl < B : tenferro_tensor :: Engine + 'static >"));
     assert!(source.contains("ExtensionEngine for TinyRuntime < B >"));
     assert!(source.contains("ExtensionModule for TinyRuntimeModule < B >"));
     assert!(source.contains("PreparedOperation for TinyRuntimePreparedOperation < B >"));
