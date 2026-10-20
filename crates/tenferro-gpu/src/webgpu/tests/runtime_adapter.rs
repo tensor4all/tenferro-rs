@@ -4,7 +4,7 @@ use std::sync::Arc;
 use cubecl_environment::stream::StreamId;
 
 #[cfg(not(target_family = "wasm"))]
-use tenferro_runtime::runtime::{EventDomainDriver, EventToken};
+use tenferro_runtime::runtime::EventToken;
 #[cfg(not(target_family = "wasm"))]
 use tenferro_runtime::{
     assemble_preparation_only_engine_registration, CoreCapabilityBundle, EngineId,
@@ -15,7 +15,7 @@ use tenferro_runtime::{
 #[cfg(not(target_family = "wasm"))]
 use tenferro_tensor::{
     AllocationId, BackendAllocation, BackendStorage, DeviceId, StorageBuffer, Tensor, TensorRead,
-    TypedTensor,
+    TensorStructural, TypedTensor,
 };
 
 use super::super::WebGpuBuffer;
@@ -321,7 +321,7 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]).expect("host input");
     let input = upload_webgpu_tensor(&runtime, &host).expect("WebGPU upload");
     let input_for_first = upload_webgpu_tensor(&runtime, &host).expect("WebGPU upload");
-    let driver = WebGpuEventDomainDriver::new(runtime.clone());
+    let driver = tenferro_runtime::ExecutionEngine::event_domain_driver(&backend);
     let domain = test_event_domain("native");
     let run = driver.begin_run(domain).expect("WebGPU event-domain run");
 
@@ -336,10 +336,7 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
                 first_launches += 1;
                 first_output = Some(
                     backend
-                        .run(|__s| {
-                            __s.transpose_read(TensorRead::from_tensor(&input_for_first), &[1, 0])
-                        })
-                        .unwrap()
+                        .transpose_read(TensorRead::from_tensor(&input_for_first), &[1, 0])
                         .map_err(tenferro_runtime::Error::from)?,
                 );
                 Ok(())
@@ -363,8 +360,7 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         second_launches += 1;
         second_output = Some(
             backend
-                .run(|__s| __s.transpose_read(TensorRead::from_tensor(&first_output), &[1, 0]))
-                .unwrap()
+                .transpose_read(TensorRead::from_tensor(&first_output), &[1, 0])
                 .map_err(tenferro_runtime::Error::from)?,
         );
         Ok(())
@@ -383,8 +379,7 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         let mut panicking = || -> tenferro_runtime::Result<()> {
             panic_output = Some(
                 backend
-                    .run(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
-                    .unwrap()
+                    .transpose_read(TensorRead::from_tensor(&input), &[1, 0])
                     .map_err(tenferro_runtime::Error::from)?,
             );
             panic!("injected post-launch panic");
@@ -414,48 +409,6 @@ fn webgpu_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
         output.as_slice().expect("host slice"),
         &[1.0, 2.0, 3.0, 4.0]
     );
-}
-
-#[test]
-fn webgpu_with_backend_session_rejects_nested_entry() {
-    if !webgpu_available() {
-        // Skipped on hosts without a WebGPU adapter: the nested-entry
-        // contract is exercised on the shared helper + default adapter here.
-        return;
-    }
-    let mut backend = WebGpuBackend::new_default().expect("WebGPU backend");
-    let nested = backend
-        .run(|_session| {
-            // The backend override wraps its closure in the portable in-session
-            // guard, so re-entering any session-entry point on this thread
-            // (here the shared helper directly) is rejected before its callback
-            // runs (issue #1680 Phase 3).
-            tenferro_tensor::with_session_entry_guard("nested", || ())
-        })
-        .unwrap();
-    assert!(
-        matches!(
-            nested,
-            Err(tenferro_tensor::SessionEntryError::Reentered { backend: "nested" })
-        ),
-        "nested session entry must be rejected with a typed error: {nested:?}"
-    );
-}
-
-#[cfg(debug_assertions)]
-#[test]
-fn webgpu_with_backend_session_restores_the_in_session_flag_after_panic() {
-    if !webgpu_available() {
-        return;
-    }
-    let mut backend = WebGpuBackend::new_default().expect("WebGPU backend");
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.run(|_session| panic!("boom")).unwrap()
-    }));
-    assert!(outcome.is_err());
-    // The flag is usable again on the same thread.
-    let value = backend.run(|_session| 7usize).unwrap();
-    assert_eq!(value, 7);
 }
 
 /// A service id for handles that carry only tenferro's own bookkeeping.
