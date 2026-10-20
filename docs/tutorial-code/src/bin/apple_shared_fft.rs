@@ -7,9 +7,7 @@ use tenferro_fft::{FftNorm, TensorFftExt};
 #[cfg(target_os = "macos")]
 use tenferro_gpu::apple::AppleContext;
 #[cfg(target_os = "macos")]
-use tenferro_tensor::{
-    AllocationDomainId, AllocationId, Error, Tensor, TensorScalar, TypedTensor,
-};
+use tenferro_tensor::{AllocationDomainId, AllocationId, Error, Tensor, TensorScalar, TypedTensor};
 
 #[cfg(target_os = "macos")]
 fn managed_values<T: TensorScalar + Copy + Send + Sync + 'static>(
