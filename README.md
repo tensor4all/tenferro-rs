@@ -68,7 +68,7 @@ tenferro-linalg = "0.7"
 
 <!-- snippet-source: docs/tutorial-code/src/bin/direct_linalg_quickstart.rs -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_linalg::prelude::*;
 use tenferro_runtime::prelude::*;
 
@@ -84,18 +84,17 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
 
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 1.0])?;
     let identity = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0])?;
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![6.0, 2.0])?;
 
-    let (product, solution, singular_values) = backend.with_backend_session(|session| {
-        let product = a.matmul(&identity, session)?;
-        let solution = product.solve(&rhs, session)?;
-        let singular_values = product.svdvals(session)?;
-        Ok::<_, tenferro_runtime::Error>((product, solution, singular_values))
-    })??;
+    // One borrowed engine carries every operation, the plan cache and the
+    // buffer pool.
+    let product = a.matmul(&identity, &mut engine)?;
+    let solution = product.solve(&rhs, &mut engine)?;
+    let singular_values = product.svdvals(&mut engine)?;
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(product.host_data()?, &[3.0, 0.0, 0.0, 1.0]);
     assert_close(solution.as_slice()?, &[2.0, 2.0]);
@@ -121,8 +120,8 @@ tenferro-ad = "0.7"
 <!-- snippet-source: docs/tutorial-code/src/bin/traced_autodiff_jax_style.rs -->
 ```rust
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -138,13 +137,14 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 fn run(tensor: &TracedTensor) -> Result<tenferro_runtime::Tensor, Box<dyn std::error::Error>> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(tensor)?;
-    let backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let mut builder = Runtime::builder();
-    builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
     let runtime = builder.build()?;
-    let mut outputs = runtime.run_compiled(&program, &[])?;
+    let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+    let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
     assert_eq!(outputs.len(), 1);
-    Ok(outputs.remove(0))
+    Ok(outputs.remove(0).into_tensor(&mut engine)?)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -223,7 +223,7 @@ tenferro-rs is for projects that want this kind of stack natively in Rust.
 | Fixed scalar type, ordinary tensor computation, no autodiff | `TypedTensor<T, R>` |
 | Runtime dtype selection or direct backend dispatch | `Tensor` with an explicit backend |
 | Immediate execution in one runtime, optionally with `backward()`, VJP, or JVP | `EagerTensor` and `EagerRuntime` |
-| Reusable graph transforms, including `grad`, VJP/JVP, and HVP-style composition | `TracedTensor`, `GraphCompiler`, and `Runtime::run_compiled` |
+| Reusable graph transforms, including `grad`, VJP/JVP, and HVP-style composition | `TracedTensor`, `GraphCompiler`, and `Runtime::prepare` / `Runtime::run` |
 | CUDA or experimental WebGPU execution | The same tensor API plus explicit GPU upload/download and supported provider backend features |
 | Static-shaped StableHLO and PJRT plugin experiments | `GraphCompiler` plus `tenferro-xla` |
 
@@ -286,8 +286,9 @@ recipes) are one fetch away.
 
 Selected deep dives:
 
-- [CPU session entry and Rayon dispatch cost](docs/guides/session-entry-cost.md)
-  — measured overhead, reproducible probes, and supported ways to amortize it.
+- [Dispatch and engine cost](docs/guides/dispatch-and-engine-cost.md)
+  — what one call costs with a caller-held engine, and the supported ways to
+  amortize it.
 
 - [Storage ownership](https://tensor4all.org/tenferro-rs/storage-ownership.html)
   — one physical owner, borrowed views, explicit copies/transfers, and prepared

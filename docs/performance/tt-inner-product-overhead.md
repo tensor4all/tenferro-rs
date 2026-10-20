@@ -2,6 +2,15 @@
 
 Date: 2026-05-20
 
+> **Historical record (#2206).** These measurements were taken on the
+> pre-#2206 CPU execution model, where a backend-owned context entered a Rayon
+> pool per operation. That context, its `install` entry and the benchmark that
+> measured it are gone: a `CpuEngine` now computes on the pool the caller built,
+> and a small operation never enters that pool. The numbers below are kept as
+> provenance for the design decision they supported, not as current tenferro
+> costs. For the current dispatch model see
+> [Dispatch and engine cost](../guides/dispatch-and-engine-cost.md).
+
 This note summarizes the investigation of small-bond-dimension Tensor Train
 inner-product overhead in `tenferro-rs`, compared with ITensors.jl.
 
@@ -19,10 +28,10 @@ inner-product overhead in `tenferro-rs`, compared with ITensors.jl.
 - `tenferro-cpu/benches/pairwise_contraction.rs`
   - Measures `first_site`, `env_bra`, `tmp_ket`, and `site_update`.
   - Compares normal per-call execution with cached GEMM analysis.
-- `tenferro-cpu/benches/cpu_install_overhead.rs`
-  - Measures `CpuContext::install` and the surrounding buffer-pool wrapper.
-    Current `install` runs inline; older results in this note measured a
-    tenferro-owned Rayon pool entry.
+- `tenferro-cpu/benches/cpu_install_overhead.rs` (removed with the CPU context)
+  - Measured the old CPU context `install` entry and the surrounding
+    buffer-pool wrapper. Those results measured a tenferro-owned Rayon pool
+    entry that no longer exists.
 - `tenferro-cpu/benches/openblas_direct_overhead.rs`
   - Measures direct `cblas_zgemm` calls for the same small pairwise shapes.
   - Requires the `blas` feature and is intended for `blas-openblas` runs.
@@ -196,20 +205,21 @@ cannot represent the requested conjugation as a transpose flag.
 
 ## Historical Install Overhead
 
-Measured on one thread before `CpuContext::install` was changed to run inline:
+Measured on one thread before the CPU context `install` was changed to run
+inline:
 
 | Case | Time |
 |---|---:|
-| `CpuContext::install(|| {})` | 5.47 us |
-| `CpuBackend::install(|| {})` | 5.37 us |
+| old CPU context `install` (empty closure) | 5.47 us |
+| old CPU backend `install` (empty closure) | 5.37 us |
 | `BufferPool` `mem::take` / restore only | 0.21 us |
 | `ctx.install` + `BufferPool` take/restore | 5.71 us |
 | `ctx.install` + `BufferPool` + GEMM cache borrow | 5.97 us |
 
 The bottleneck was mostly `rayon::ThreadPool::install`. Buffer-pool movement is
-only about 0.2 us. Current CPU execution no longer owns or enters a Rayon pool
-in `CpuContext::install`; the benchmark is retained to measure the remaining
-caller-thread wrapper cost.
+only about 0.2 us. The CPU context no longer owned or entered a Rayon pool, and
+the CPU engine does not enter one either; the benchmark was retained to measure
+the remaining caller-thread wrapper cost until the context was removed.
 
 For `site_update`, which performs two GEMMs, this adds roughly 11-12 us of
 fixed cost when each GEMM enters the backend separately.
@@ -240,11 +250,12 @@ and spindle rely on the current or global Rayon context through
 `rayon::current_num_threads`, `rayon::scope`, `into_par_iter`, and
 `spindle::for_each`.
 
-The current faer backend runs GEMM work inside `CpuContext::install`.
-`CpuContext` stores the requested thread count, maps one thread to `Par::Seq`,
-and maps multi-threaded execution to explicit `Par::rayon(n)`. The explicit
-degree keeps `CpuContext::with_threads(n)` authoritative even when a Faer plan
-or policy is created before entering the context-owned Rayon pool.
+The faer backend at the time ran GEMM work inside the CPU context's `install`.
+The context stored the requested thread count, mapped one thread to `Par::Seq`,
+and mapped multi-threaded execution to explicit `Par::rayon(n)`. The explicit
+degree kept the context's thread count authoritative even when a Faer plan or
+policy was created before entering the context-owned Rayon pool. Today the
+engine's pool width plays that role.
 
 The benchmark below is cached `site_update`, `Complex64`, `d = 2`, with all
 known BLAS/OpenMP thread pools set to one thread. Times are Criterion means in
@@ -266,16 +277,16 @@ increasing faer thread count does not help; it usually adds parallel dispatch
 overhead. The important optimization is removing per-GEMM `install`, not making
 each tiny GEMM parallel.
 
-The production policy keeps `CpuContext` as the owner of CPU execution scope.
-This preserves pool isolation for backends that enter through
-`CpuContext::install`; Faer receives the same explicit configured degree both
+The production policy at the time kept the CPU context as the owner of CPU
+execution scope. This preserved pool isolation for backends that entered
+through its `install`; Faer received the same explicit configured degree both
 inside and outside that scope.
 
 Design implications:
 
 - For one-thread faer, `Par::Seq` avoids Rayon dispatch.
-- For multi-thread Faer, pass the configured context degree explicitly and run
-  faer-backed kernels from within `CpuContext::install` for pool isolation.
+- For multi-thread Faer, pass the configured degree explicitly and run
+  faer-backed kernels inside the same pool for pool isolation.
 - Add a small-shape policy that keeps tiny faer GEMMs sequential even when the
   backend context has more than one thread.
 - A true pool-handle patch would need changes across faer, spindle, and the
@@ -311,9 +322,9 @@ This preserves Rayon pool semantics, but it is expensive for tiny GEMMs.
 - For the `blas` backend, LAPACK-backed linalg methods now use the same
   caller-thread pool wrapper. This covers `cholesky`, `triangular_solve`, `lu`,
   `full_piv_lu`, `full_piv_lu_solve`, `svd`, `qr`, `eigh`, and `eig`. The
-  `native` backend uses `CpuContext::install`; one-thread contexts pass
-  `Par::Seq`, and multi-thread contexts pass explicit `Par::rayon(n)` using the
-  configured context degree.
+  `native` backend used the CPU context's `install`; one-thread contexts passed
+  `Par::Seq`, and multi-thread contexts passed explicit `Par::rayon(n)` using the
+  configured degree.
 - The BLAS conjugation path now detects row-contiguous conjugated operands before
   acquiring an output buffer for a direct BLAS attempt that cannot succeed.
 
@@ -381,8 +392,7 @@ entry point without making normal eager contractions context-dependent.
 
 ## Optimization Candidates
 
-1. Keep `CpuContext` as the thread-count source for faer `Par`, not as an owned
-   worker-pool handle.
+1. Keep one thread-count source for faer `Par`, not an owned worker-pool handle.
 2. Add a small-shape policy that keeps tiny faer GEMMs sequential even when the
    backend context has more than one thread.
 3. Improve segmented execution so FFI GEMMs can run through an existing

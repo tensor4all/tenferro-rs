@@ -1,199 +1,59 @@
-# CPU Session Entry and Rayon Dispatch Cost
+# Dispatch and Engine Cost
 
-Keep a session around a related sequence of operations. Reusing a backend
-preserves its pool and caches; reusing one entered session additionally
-amortizes the cost of reaching its workers. These are different optimizations.
-A session is an execution scope, not merely a tensor wrapper.
+There is no session entry to amortize any more. An engine is a value the caller
+holds, and every operation borrows it through `&mut`: no admission permit, no
+entry protocol, no nested-entry rejection. What remains per operation is
+argument validation, a plan-cache lookup, the output buffer (pooled when the
+engine has one to reuse) and the provider dispatch itself.
 
-## Holding a session across calls
+This page separates the costs that still exist and shows how to avoid paying
+them more often than necessary. It replaces the older "session entry" guidance:
+the mechanisms described there (held sessions, phase leases, child execution
+tickets) are gone with the caller-held engine (#2206).
 
-`CpuBackend::open_session` opens a session that stays open across calls instead of
-being scoped to one callback. It owns the CPU admission reservation and the engine's
-reusable plan caches, buffer pool and entered execution, so a sequence of operations
-pays one entry instead of one per operation:
+## What one call costs
 
-```text
-let mut session = backend.open_session()?;
-for work in batch {
-    session.with_session(|view| op(view, work))?;
-}
-session.close()?;
-```
+| Component | When it is paid | How to avoid repeating it |
+| --- | --- | --- |
+| Argument validation and shape/dtype checks | Every call | Nothing to remove; it is the error contract |
+| Plan-cache lookup | Every call that has a plan | Share one `CpuPlanCache` across engines with `CpuEngine::with_plan_cache` |
+| Output allocation | Every call that returns a tensor | Use the `_into` variants with a caller-owned, reused output buffer |
+| Buffer-pool recycle | Every call that returns a tensor, when the pool has a spare buffer | Reuse one engine so the pool stays warm |
+| Provider dispatch | Every call | Nothing to remove; a small operation stays on the calling thread |
+| Rayon pool entry | Only when a provider chose more than one worker | A `CpuEngine::serial` engine never enters a pool |
 
-The session is `!Send + !Sync`, there is one root session per engine, and it is closed
-on the thread that opened it. Reentry from inside a `with_session` callback is rejected
-with a typed error rather than waited for. Use
-`BackendSessionHost::with_backend_session` when the work is a single callback, or when
-it must run inside a shared execution scope; that route is unchanged.
+The last row is the important one: a small operation on a pooled `CpuEngine`
+runs on the calling thread and never touches the pool. The pool entry that used
+to dominate microbenchmarks is now conditional on the provider actually
+splitting work.
 
-`crates/tenferro-cpu/benches/held_session_dispatch.rs` compares the two routes on a
-one-worker, CPU-pinned backend, and `docs/design/held-cpu-session-1945-u2-concrete.md`
-records the numbers with their harness and hardware.
+## Amortizing a stage
 
-## What costs time?
-
-For the managed CPU path inspected at tenferro revision
-`8e3f8b945ba6605ef23d80143592d7437484d3bb`, session entry obtains execution
-permission, enters the selected executor, borrows buffers/caches, and calls
-the user closure. A multi-thread CpuContext uses Rayon `ThreadPool::install`;
-the one-thread CpuContext executes inline without constructing a one-worker
-Rayon pool. Pool creation is not repeated on every session entry.
-
-Rayon 1.12.0 / rayon-core 1.13.0 distinguishes three callers:
-
-- Outside Rayon: put a stack job in the pool's injection queue, notify workers
-  as needed, and wait on a mutex/condition-variable latch for completion.
-- Already in the same pool: execute the closure directly.
-- In another pool: inject into the target pool and let the current worker
-  process work while waiting. This is not the same-pool fast path.
-
-Thus an empty external `install` measures a synchronous cross-thread round
-trip, not just construction of a session or a configuration change. Worker
-wakeups, queue synchronization and OS scheduling can dominate tiny kernels.
-See [Rayon registry implementation](https://github.com/rayon-rs/rayon/blob/rayon-core-1.13.0/rayon-core/src/registry.rs#L496)
-and [tenferro CpuContext](https://github.com/tensor4all/tenferro-rs/blob/8e3f8b945ba6605ef23d80143592d7437484d3bb/crates/tenferro-cpu/src/context.rs#L524).
-
-## Measurements: do not treat these as universal constants
-
-Measured 2026-09-27 on Apple M5 Max, macOS 26.5.1, Rust 1.96.0, release build,
-Rayon 1.12.0 / rayon-core 1.13.0. Available parallelism was 18. Each result
-is the median of 15 batch means, with 10,000 calls per batch after 1,000
-warmup calls. Pool construction and an initial worker broadcast are excluded.
-The closure returns a black-boxed integer; this is a dispatch microbenchmark,
-not GEMM or session throughput. Concurrent machine load was not controlled.
-
-| Rayon workers | Install from outside, us/call | Install from same pool, ns/call |
-|---|---:|---:|
-| 1 | 3.037 | 1.54 |
-| 2 | 4.121 | 1.36 |
-| 8 | 14.398 | 1.31 |
-| 18 | 26.380 | 1.52 |
-
-A same-day reproduction during documentation verification gave about 21.9 us
-for the 18-worker install sweep and 10.1 us in the subsequent scope comparison
-(whose one-job scope measured 24.3 us). This variation reinforces that these
-are observations, not a fixed 26 us constant or a performance threshold.
-
-The same-pool numbers include compiler optimization of a minimal closure;
-they are not the cost of a real operation. The observed worker-count trend
-is not proof of a particular bottleneck or a portable scaling law.
-
-A second 18-worker run compared entry strategies:
-
-| Operation | Median, us/call |
-|---|---:|
-| External install | 26.128 |
-| In-place scope, no spawned work | 0.056 |
-| In-place scope, one spawned job and completion wait | 26.379 |
-
-An in-place scope can avoid transferring its body to a worker, but does not
-eliminate the cost of jobs it actually dispatches. Nor does it automatically
-redirect ordinary Rayon calls in the caller's body to the specified pool.
-It is not a drop-in replacement for tenferro session entry.
-
-Separately, [issue #1904](https://github.com/tensor4all/tenferro-rs/issues/1904)
-reported an empty tenferro session at **25.592 us** with the default
-multi-thread backend and **0.118 us** with `with_threads(1)`, on an M5 Max at
-revision `aebc3148`. That measurement includes session work and is historical,
-not a fresh session benchmark at the revision inspected above. Its agreement
-with the standalone Rayon magnitude supports the dispatch explanation; it
-is not a measured subtraction of tenferro's other costs. The 3.037 us
-one-worker Rayon result is not comparable to tenferro's inline one-thread
-path.
-
-The older [CPU session-open breakdown](../design/cpu-session-open-cost.md)
-uses a different Linux machine, revision context, instrumentation and workload.
-Do not combine its component timings with these numbers.
-
-## How to avoid or amortize the overhead
-
-1. Construct the backend once, then keep several related operations inside
-   one explicit session callback. Use the borrowed session for each operation;
-   do not open a backend/session again inside the callback or a spawned task.
-   See the public examples in [session-oriented concrete APIs](../design/session-oriented-concrete-apis.md)
-   and the [typed non-AD tutorial](../tutorials/typed-tensor-non-ad.md). For a
-   stage, hold one session instead of opening one per operation: see
-   [Holding one session across a stage](#holding-one-session-across-a-stage)
-   and `crates/tenferro-cpu/examples/held_session_driver.rs`.
-2. For many tiny matrices, prefer a batched operation or a sequence in one
-   session. One 26 us entry spread over 100 operations contributes about
-   0.26 us per operation; over 1,000, about 0.026 us. These are amortization
-   calculations, not additional benchmarks. Do not hold an execution scope
-   across unrelated waits: it retains execution resources/permission.
-3. For an unavoidable tiny single call, measure the one-thread CPU backend.
-   It avoids the worker handoff; it does not make tensor validation, allocation,
-   or the numerical kernel free. Keep backend reuse even in this case.
-4. For a large operation, compare total time: a 26 us entry adds about 2.6%
-   to 1 ms of useful work, or 0.26% to 10 ms. Actual crossover points depend
-   on the workload and provider.
-5. A downstream non-AD kernel may use tensor/view storage directly. Follow
+1. **Hold one engine for the stage.** The engine owns the plan cache, the
+   buffer pool and the extension caches, so a fit loop, a sweep or a batched
+   driver should construct it once and pass `&mut engine` to every call. See
+   the [typed non-AD tutorial](../tutorials/typed-tensor-non-ad.md).
+2. **Reuse the output buffer.** The `_into` operation forms write into caller
+   storage and allocate nothing for it; that is the caller-output route the
+   allocation-returning form cannot offer.
+3. **Prepare a traced program once.** `Runtime::prepare` resolves engines,
+   plans and buffers for a program; `Runtime::run` replays it. Compile and
+   prepare outside the loop, not per iteration
+   ([ordinary and prepared execution](ordinary-and-prepared-execution.md)).
+4. **Choose a serial engine for unavoidable tiny calls.** `CpuEngine::serial()`
+   cannot enter a pool at all, so it cannot oversubscribe an outer pool either.
+   It does not make validation, allocation or the numerical kernel free.
+5. **A downstream non-AD kernel may use tensor/view storage directly.** Follow
    [external linalg interop](external-linalg-interop.md) for layout, borrowing
-   and provider obligations. Direct faer calls can remove tenferro dispatch,
-   but do not remove Rayon handoff if they still enter a pool. Direct external
-   parallel calls must respect the documented nesting and resource contracts.
+   and provider obligations. Direct faer calls can remove tenferro dispatch, but
+   they do not remove a Rayon handoff if they still enter a pool.
 
-The [faer re-export proposal #1939](https://github.com/tensor4all/tenferro-rs/issues/1939)
-and [CUDA vendor-call contract #1940](https://github.com/tensor4all/tenferro-rs/issues/1940)
-track downstream access work; an issue link is not a claim that an API has
-shipped. CPU timings here say nothing about CUDA launch or synchronization cost.
+## Reproduce the Rayon measurements
 
-**Do not remove sessions, switch to an ambient global pool, bypass resource
-admission, or add nested backend entry to fix this measurement.** Sessions
-amortize the round trip while retaining configured execution resources. A
-hypothetical faer API accepting a pool would save the initial handoff only if
-its scheduling implementation changed, not if it merely wrapped `install`.
-Parallel work has coordination costs, but there is no universal 20–26 us tax
-on every parallel operation.
-
-## Holding one session across a stage
-
-`with_backend_session` opens one session for one callback. A stage that keeps
-its execution domain open - a fit loop, a sweep, a batched driver - can hold a
-session instead: `CpuBackend::open_session` returns a `CpuHeldSession` that
-hands out the same borrowed view through `with_session`, so routes do not
-change with the entry shape and the entry is paid once. It is `!Send + !Sync`,
-opens and closes on its opening thread, and closing restores that thread's
-affinity. `CpuHeldSession::phase` lends the session's own pool to a phase
-driver: each lane runs on a worker of the context's pool with its own child
-session over the same routes, lanes are joined before the call returns on the
-success, error and panic paths, and the phase is opened from a thread that is
-not a worker of that pool. `CpuPhase::run_with_coordinator` keeps the opening
-thread free for a caller-owned coordinator (a downstream queue or MPI loop)
-that runs concurrently with the lanes; it rejects a one-lane phase with
-`PhaseRunError::SingleLane` so the caller can fall back explicitly. A runnable
-driver is `crates/tenferro-cpu/examples/held_session_driver.rs`.
-
-Measured with the same protocol as the tables above, on AMD EPYC 7713P,
-Linux 6.8.0, rustc 1.97.1, faer 0.24.4, **one worker**
-(`CpuBackend::with_threads(1)`) pinned with `taskset -c 0`, release build,
-100 samples, 2 s warm-up and 5 s measurement per case:
-
-| case | median |
-| --- | ---: |
-| entry, scoped empty callback | 537.7 ns |
-| entry, held open and close | 321.1 ns |
-| `size x size` by `size x 1` f64 contraction, `size = 95`, scoped | 13.52 us |
-| the same contraction, held | 12.70 us |
-| the same contraction into a reused output buffer, held | 6.74 us |
-
-Holding removes the per-operation session entry, and passing an output buffer
-removes the result allocation independently of it: at `size = 256`, a held
-contraction into a reused buffer is 17.08 us against 54.34 us for the scoped
-allocation-returning call. Neither number is a claim about kernel time - both
-are dispatch, allocation and zero-fill.
-[held-cpu-session-1945-u2-concrete.md](../design/held-cpu-session-1945-u2-concrete.md)
-records the full table, its `chain16` arms, and the fixed cost that remains in
-the in-session dispatch path ([#1904](https://github.com/tensor4all/tenferro-rs/issues/1904),
-[#2033-#2038](https://github.com/tensor4all/tenferro-rs/issues/2033)).
-
-Do not hold a session across an unrelated wait: the hold retains execution
-resources and permission for its whole duration, and a phase lends the same
-pool to work the caller controls.
-
-## Reproduce the dispatch measurements
-
-The two source snapshots and locked dependency graph used for these runs are
-available as [install source](../performance/rayon-install-probe/install.rs.txt),
+The standalone probes that measure a Rayon pool entry from outside and from
+inside a pool are still useful when your own code, not tenferro, enters a pool.
+They are available as
+[install source](../performance/rayon-install-probe/install.rs.txt),
 [scope source](../performance/rayon-install-probe/scope.rs.txt),
 [manifest](../performance/rayon-install-probe/Cargo.toml.txt),
 [lockfile](../performance/rayon-install-probe/Cargo.lock.txt), and raw
@@ -214,6 +74,15 @@ cargo run --release --locked --manifest-path "$probe_dir/Cargo.toml"
 ```
 
 Record compiler, OS/CPU, worker count, revisions, timing scope and load when
-comparing results. Measure empty session entry, kernel work inside an already
-entered session, and end-to-end calls separately when locating a regression.
-Do not infer a session's cost from a benchmark that also constructs a backend.
+comparing results. Measure an empty pool entry, kernel work inside an already
+entered pool, and end-to-end tenferro calls separately when locating a
+regression; they are three different costs.
+
+Do not infer tenferro's dispatch cost from a benchmark that also constructs a
+pool, and do not generalize a Rayon `install` measurement into a fixed per-call
+tenferro constant.
+
+The historical measurements taken on the removed session-entry model are
+preserved in [CPU session open cost](../design/cpu-session-open-cost.md); they
+describe code that no longer exists and are not comparable with current
+results.

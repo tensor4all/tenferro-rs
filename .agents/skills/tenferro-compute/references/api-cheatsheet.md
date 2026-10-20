@@ -1,23 +1,21 @@
 # API cheatsheet
 
-Choose the tier before choosing the method. Direct operations run inside an explicit
-`with_backend_session` entry; eager operations run through an `EagerRuntime`;
-traced operations build a graph and execute it later. If an older example refers
+Choose the tier before choosing the method. Direct operations take the caller's
+`&mut dyn Engine`; eager operations run through an `EagerRuntime` that borrows
+that same engine; traced operations build a graph and execute it later. If an older example refers
 to a removed module, free function, or fallible-constructor change, start with
 the [API migration guide](../../../../docs/getting-started/api-migration.md).
 
 ## Direct concrete tensors
 
-Import the backend, `BackendSessionHost`, and the extension trait that owns
-the session method:
+Import the engine type and the extension trait that owns the operation method:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#concrete-operation -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
-use tenferro_tensor::BackendSessionHost;
 
-let mut backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 // The leftmost dimension varies fastest: this is a 2 x 3 column-major tensor.
 let x = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
@@ -27,40 +25,42 @@ let weights = TypedTensor::<f64>::from_vec_col_major(
     vec![3, 2],
     vec![0.5, -1.0, 1.5, 1.0, 2.0, -0.5],
 )?;
-let projected = backend.with_backend_session(|session| x.matmul(&weights, session))??;
+let projected = x.matmul(&weights, &mut engine)?;
 assert_eq!(projected.shape(), &[2, 2]);
 assert_eq!(projected.host_data()?, &[3.0, 6.0, 3.5, 11.0]);
 ```
 <!-- end-snippet-source -->
 
-The important shape is
-`backend.with_backend_session(|session| x.matmul(&weights, session))`. For
+The important shape is `x.matmul(&weights, &mut engine)`. For
 dynamic dtypes use `TensorSessionOpsExt`; for static scalar types use
 `TypedTensorSessionOpsExt`. The receiver methods mirror the eager session
-methods with the session last (`x.gather(&idx, config, session)`,
-`x.reduce_max(None, session)`, `x.dot_general(&y, config, session)`);
+methods with the engine last (`x.gather(&idx, config, &mut engine)`,
+`x.reduce_max(None, &mut engine)`, `x.dot_general(&y, config, &mut engine)`);
 indexing, padding, concatenation and triangular/diagonal ops are on `Tensor`
 only (`Tensor::from_typed` moves a typed tensor there without a copy).
 
 ## Eager tensors
 
-`EagerRuntime::with_eager_session` borrows execution for eager operations.
-Tracked values support `backward()` and functional eager transforms:
+`EagerRuntime::with_eager_session` borrows the caller's engine for eager
+operations. Tracked values support `backward(&mut engine)` and functional eager
+transforms (`grad`, `vjp`, `jvp`, each taking `&mut engine`):
 
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#eager-operation -->
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
+use tenferro_cpu::CpuEngine;
 
 let runtime = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let x = runtime.variable_from(Tensor::from_vec_col_major(
     vec![3],
     vec![1.0_f64, 2.0, 3.0],
 )?)?;
-let loss = runtime.with_eager_session(|s| {
+let loss = runtime.with_eager_session(&mut engine, |s| {
     let prediction = s.mul(&x, &x)?;
     s.reduce_sum(&prediction, Some(&[0]))
 })?;
-loss.backward()?;
+loss.backward(&mut engine)?;
 assert_eq!(
     x.grad()?.expect("tracked variable should receive a gradient").as_slice::<f64>()?,
     &[2.0, 4.0, 6.0],
@@ -70,7 +70,7 @@ assert_eq!(
 
 Common import recipes:
 
-- `tenferro_einsum::EagerSessionEinsumExt` for borrowed eager einsum and `tensordot` (`runtime.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))?`).
+- `tenferro_einsum::EagerSessionEinsumExt` for borrowed eager einsum and `tensordot` (`runtime.with_eager_session(&mut engine, |s| s.einsum(&[&a, &b], "ij,jk->ik"))?`).
 - `tenferro_linalg::EagerSessionLinalgExt` for borrowed eager linear algebra (`EagerTensorLinalgExt::solve` remains a calling-thread `no_grad` exception).
 - `tenferro_ad::{EagerRuntime, Tensor}` for eager values and runtime AD.
 
@@ -82,7 +82,7 @@ Common import recipes:
 `rms_norm` (optional rank-1 `weight` / `bias`, `eps`) and NumPy-style
 `take_along_axis` have one name on every tier: `s.softmax(&x, axis)` on an
 `EagerSession`, `x.softmax(axis)` on a `TracedTensor`, and
-`x.softmax(axis, session)` through `TensorSessionOpsExt`. They are stable
+`x.softmax(axis, &mut engine)` through `TensorSessionOpsExt`. They are stable
 compositions (no overflow, max-subtracted softmax, all-masked slices give 0 /
 `-inf` with a zero gradient) and differentiate through eager and traced AD; do
 not hand-roll them. The edge-case policy is in
@@ -98,10 +98,10 @@ module into the runtime that owns the registered backend engine.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#traced-extension-operation -->
 ```rust
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TraceContext};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext};
 
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
@@ -118,15 +118,20 @@ let product = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
 let graph = trace.finish(&[product])?;
 let program = GraphCompiler::new().compile_traced_graph(&graph)?;
 
-let backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
-builder.register_engine(runtime_engine_registration(&backend)?)?;
-builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+builder.register_engine(runtime_engine_registration(&engine)?)?;
+builder.install_extension_module(tenferro_einsum::extension_module::<CpuEngine>(
     runtime_engine_id()?,
 )?)?;
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[&a, &b])?;
-let result = outputs.remove(0);
+let reads = [
+    tenferro_runtime::TensorRead::from_tensor(&a),
+    tenferro_runtime::TensorRead::from_tensor(&b),
+];
+let prepared = runtime.prepare(&program, &reads, &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &reads)?;
+let result = outputs.remove(0).into_tensor(&mut engine)?;
 assert_eq!(result.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 ```
 <!-- end-snippet-source -->
@@ -144,15 +149,15 @@ crate's root re-exports and bring its `*Ext` trait into the local module.
 
 ## Repeated CPU eager/AD and prepared trace calls
 
-Build the runtimes from clones of one configured `CpuBackend`, then call their
-ordinary eager/AD or `run_prepared` APIs inside `CpuBackend::with_execution_scope`.
-Only Tenferro-managed CPU domains are supported. This retains executor admission,
-not a mutable backend session. Backend re-entry from an active session, nested
-scopes, and other-worker backend re-entry remain invalid. Compile/prepare, enter,
-and warm up outside steady-state timing; allocation-returning calls still allocate
-outputs. Run the tested example
-with `cargo run -p tenferro-ad --example cpu_execution_scope`; see the
-[scope contract](../../../../docs/guides/ordinary-and-prepared-execution.md#cpu-execution-scopes).
+Hold one engine and one runtime and reuse both: register the engine once
+(`runtime_engine_registration(&engine)`), prepare the traced program once
+(`Runtime::prepare`), and replay it with `Runtime::run` while passing
+`&mut engine` to ordinary and eager calls. There is no scope to enter and no
+admission to amortize; the engine owns the pool, plan cache and buffer pool.
+Compile and prepare, and warm up, outside steady-state timing;
+allocation-returning calls still allocate outputs (the `_into` forms do not).
+See the
+[engine and prepared-execution contract](../../../../docs/guides/ordinary-and-prepared-execution.md#one-engine-across-ordinary-eager-and-prepared-work).
 
 ## Borrowing external memory
 

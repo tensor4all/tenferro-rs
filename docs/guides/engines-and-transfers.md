@@ -1,149 +1,97 @@
-# CUDA sessions and pinned transfers
+# CUDA engines and pinned transfers
 
-Two things make a CUDA stage cheap: entering the backend once instead of once per operation, and
-moving host data without making the host wait for the device. This guide covers the entry shapes and
-the transfer routes that provide them, the rules each one keeps, and what is deliberately not
-supported yet. The runnable driver is
-`crates/tenferro-gpu/examples/cuda_session_transfer.rs`; the reasoning and the measurements are in
-[the held-session record](../design/held-cuda-session-1945-u3.md) and
-[the transfer record](../design/asynchronous-transfer-1945-u4.md).
+Two things make a CUDA stage cheap: holding one engine instead of opening a
+device per operation, and moving host data without making the host wait for the
+device. This guide covers the engine shape, the prepared-run route on that
+engine, the pinned transfer routes, the rules each one keeps, and what is
+deliberately not supported yet. The runnable driver is
+`crates/tenferro-gpu/examples/cuda_session_transfer.rs`; the transfer reasoning
+and measurements are in
+[the transfer record](../design/asynchronous-transfer-1945-u4.md) and the
+[explicit-transfer work log](../worklogs/2026-07-29-issue-1471-explicit-transfers.md).
 
-## Two entry shapes
+## One engine, one device, one stream
 
-| Entry | Use it for | Notes |
-| --- | --- | --- |
-| `CudaBackend::with_backend_session(\|session\| ...)` | one operation or one unrelated burst | unchanged; one callback, one entry |
-| `CudaBackend::open_session()` | a stage that keeps its execution binding open | one entry for the whole stage; the session is closed explicitly |
+`CudaEngine::open(ordinal)` opens the device and returns a value you hold. It
+owns the CubeCL runtime, the device's stream, the cuTENSOR/cuBLAS/cuSOLVER
+handles and the engine's caches. Every operation borrows it through `&mut`, so
+there is no entry protocol: a chain of dependent operations is just a chain of
+calls, and one `flush` or `synchronize` covers them.
 
 <!-- snippet-source: crates/tenferro-gpu/examples/cuda_session_transfer.rs#cuda_held_session -->
 ```rust
-    let mut session = backend.open_session()?;
-    let mut state = session.with_session(|view| {
-        view.add_read(
-            TensorRead::from_tensor(&seed),
-            TensorRead::from_tensor(&seed),
-        )
-    })??;
+    let mut state = backend.add_read(
+        TensorRead::from_tensor(&seed),
+        TensorRead::from_tensor(&seed),
+    )?;
     for _ in 0..2 {
-        state = session.with_session(|view| {
-            view.add_read(
-                TensorRead::from_tensor(&state),
-                TensorRead::from_tensor(&state),
-            )
-        })??;
+        state = backend.add_read(
+            TensorRead::from_tensor(&state),
+            TensorRead::from_tensor(&state),
+        )?;
     }
-    session.submit()?;
-    let stats = session.close()?;
+    backend.flush()?;
 ```
 <!-- end-snippet-source -->
 
-`with_session` hands out the same `&mut dyn Engine` view the scoped entry hands out, so every
-concrete route and the extension path (`with_cuda_exec_session`) work unchanged; the difference is
-only when the backend is entered. `submit` dispatches pending work at a boundary the caller chooses,
-`synchronize` adds an explicit host barrier, and `close` performs a final submission and returns the
-counters.
+`flush` dispatches pending work at a boundary the caller chooses; `synchronize`
+adds an explicit host barrier. Neither is implicit: entering a raw scope is not
+a host barrier either, so raw kernels and vendor calls can be interleaved with
+eager operations without stalling the pipeline.
 
-### Prepared graphs inside a held session
+## Prepared graphs on the same engine
 
-`CudaHeldSession::with_session` can run a `PreparedCompiledGraph` directly through
-`Runtime::run_prepared_in`, so a steady-state loop keeps one held session instead of paying a scoped
-entry per `Runtime::run_prepared` call:
+A compiled graph prepared for this engine runs on it, so steady-state replay
+reuses its stream, handles and caches:
 
 <!-- snippet-source: crates/tenferro-gpu/examples/cuda_session_transfer.rs#cuda_prepared_in_held -->
 ```rust
     let mut prepared_builder = tenferro_runtime::Runtime::builder();
     prepared_builder.register_engine(tenferro_gpu::cuda::cuda_runtime_engine_registration(
         &backend,
-        tenferro_runtime::EngineId::new("tenferro.example.held-prepared.v1")?,
     )?)?;
     let prepared_runtime = prepared_builder.build()?;
     let x = tenferro_runtime::TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 1)?;
     let y = (&x * &x)?;
     let program = tenferro_runtime::GraphCompiler::new()
         .compile_with_input_specs(&y, &[(&x, tenferro_runtime::DType::F64, &[4])])?;
-    let prepared = prepared_runtime.prepare_compiled(&program, &[&seed])?;
-    let prepared_inputs: [&Tensor; 1] = [&seed];
-    let mut prepared_session = backend.open_session()?;
-    let outputs = prepared_session.with_session(|view| {
-        prepared_runtime.run_prepared_in(view, &prepared, &prepared_inputs)
-    })??;
-    prepared_session.close()?;
-    assert_eq!(outputs[0].shape(), &[4]);
+    let prepared = prepared_runtime.prepare(
+        &program,
+        &[TensorRead::from_tensor(&seed)],
+        &[backend.target()],
+    )?;
+    let outputs = prepared_runtime.run(
+        &mut [&mut backend],
+        &prepared,
+        &[TensorRead::from_tensor(&seed)],
+    )?;
+    assert_eq!(outputs.len(), 1);
+    drop(outputs);
+    backend.synchronize()?;
 ```
 <!-- end-snippet-source -->
 
-`run_prepared_in` runs every graph node on the borrowed session, leases the runtime executor state
-once without waiting, and retires its device work before returning. Before any launch it rejects a
-multi-engine graph, a session that belongs to a different backend state, and a prepared operation
-that does not support a borrowed session, each with a typed error that names `Runtime::run_prepared`
-as the alternative. The scoped form `with_backend_session(|view| runtime.run_prepared_in(view, ...))`
-works on CPU and CUDA; the eager/AD adapter is still not part of this route.
-
-### Deferred completion for a batch of prepared runs
-
-When a loop runs the same prepared graph several times and only needs completion
-before reading the batch's results, defer retirement instead of paying one stream
-barrier per call:
-
-```text
-let mut session = backend.open_session()?;
-let inputs: [&Tensor; 1] = [&input];
-let batches = session.with_session(|view| {
-    let mut deferred = runtime.begin_prepared_deferred(view, &prepared)?;
-    for _ in 0..64 {
-        deferred.run_prepared_deferred(&inputs)?;
-    }
-    deferred.finish_prepared()
-})??;
-// Every tensor in `batches` is now valid; `batches[i]` is run i's output package.
-```
-
-`run_prepared_deferred` enqueues a run and returns its index without the
-retirement barrier. `finish_prepared` retires all runs since the previous finish
-(one dispatch fence plus one stream barrier for a coalesced single-domain graph)
-and returns their outputs in enqueue order. The outputs are **not** valid before
-`finish_prepared`; the guard owns them internally, and the inputs it borrows must
-outlive the guard, so neither can be released while device work is pending. The
-guard also borrows the session and holds the executor-state lease, so unrelated
-work cannot use that session between deferred runs. A device-side retirement
-failure is returned by `finish_prepared`; dropping an unfinished guard retires
-best-effort and cannot report an error. A host-side validation failure still
-comes from the deferred call itself, after it retires earlier work in that
-batch.
-
-Use `run_prepared_in` when each individual call must return retired outputs. A
-graph that spans more than one engine is outside both caller-borrowed routes;
-use `run_prepared` outside a session instead. The deferred guard supports the
-same single-engine graphs as `run_prepared_in`.
-
-## Rules the session keeps
-
-- **One owner, one thread.** The session is `!Send + !Sync` and captures the logical CubeCL stream of
-  the thread that opened it, so its operations run on that binding even if other code changes the
-  ambient stream. Closing restores nothing global because nothing global was taken.
-- **One root per backend state.** While a session is live, a second `open_session` — on the same handle
-  or through a clone, which shares the state — and a new scoped `with_backend_session` are rejected
-  with a typed `SessionEntryError`. Extension *visitation* is not a root and keeps working; that
-  distinction is what lets linalg and runtime extension dispatch run inside a held session.
-- **The reservation is visible for its whole lifetime.** A thread holding a session carries a
-  lifetime marker that the eager runtime's owner-lock path and the runtime executor's lease consult
-  before blocking, so a session holder never waits for a lock its own session may need.
-- **`Drop` never panics and never reports.** Dropping a session releases the reservation; submission
-  errors are reported by `submit`/`close`, which is why `close` exists next to `Drop`.
+`Runtime::run` returns once the work is queued and no longer reads caller memory
+that could change; later work on the same engine runs after it in stream order.
+An output that is one of the inputs, or a view of one, comes back borrowed;
+every other output is a new compact tensor. `backend.synchronize()` is the
+explicit host barrier before a download or a host read.
 
 ## Where the host waits
 
-`submit` and `close` call the submission boundary, which reports a producer's failures and dispatches
-the host task queue without retiring staged bytes; that is why the boundary itself does not wait for
-device progress. Host waits still happen at: the explicit `synchronize`, readbacks and host exports,
-CubeCL's own staging-policy retirement when a preceding kernel trips it, cross-stream resource
-resolution under GC backpressure, and documented destruction/error-recovery paths. `submit` is a
-submission boundary, not a synchronization.
+`flush` reports a producer's failures and dispatches the host task queue without
+retiring staged bytes; that is why the boundary itself does not wait for device
+progress. Host waits still happen at: the explicit `synchronize`, readbacks and
+host exports, CubeCL's own staging-policy retirement when a preceding kernel
+trips it, cross-stream resource resolution under GC backpressure, and documented
+destruction/error-recovery paths. `flush` is a submission boundary, not a
+synchronization.
 
 ## Pinned transfers
 
-`upload_tensor`/`download_tensor` remain the blocking convenience routes. When a stage wants to keep
-the data in memory it controls, or to decide *when* to wait, use the pending routes:
+`upload_tensor`/`download_tensor` remain the blocking convenience routes. When a
+stage wants to keep the data in memory it controls, or to decide *when* to wait,
+use the pending routes:
 
 <!-- snippet-source: crates/tenferro-gpu/examples/cuda_session_transfer.rs#cuda_pinned_transfer -->
 ```rust
@@ -212,6 +160,16 @@ keep `download_tensor` for a one-off download, and use the pending routes when t
 decide *when* to wait. A `bool` destination is rejected with a typed error because raw device bytes
 are not guaranteed to be 0/1; `download_tensor` decodes them.
 
+## Rules the engine keeps
+
+- **One device per engine.** `CudaEngine::open` selects one device and captures its stream; the
+  engine's operations run on that stream even if other code changes the ambient one.
+- **Raw scopes restore what they touched.** `with_raw` and `with_cubecl` save the calling thread's
+  device/context, activate this engine's primary context for the callback, and restore the previous
+  one on return, on `Err` and on unwind. Entering a scope is not a host barrier.
+- **`Drop` never panics and never reports.** Dropping the engine releases its resources; submission
+  errors are reported by `flush`, `synchronize` or the operation that hit them.
+
 ## What is not supported
 
 - **No dependent-device-consumer handoff.** A device consumer cannot yet receive authorized access to
@@ -220,14 +178,13 @@ are not guaranteed to be 0/1; `download_tensor` decodes them.
   not have fails typed rather than falling back.
 - **No differentiated transfer.** Plain copies create no tape; a tracked transfer is a separate
   package.
-- **No CUDA held session for the eager/AD runtime.** The session is concrete-only.
 
 Unsupported combinations return a typed error; nothing falls back to the global/default route or to a
 CPU numerical implementation.
 
 ## See also
 
-- [Devices and GPU](devices-and-gpu.md) for placement and the CUDA compatibility matrix.
-- [Custom CUDA kernels](custom-cuda-kernels.md) for raw/CubeCL interop inside a session.
-- [CPU session entry and Rayon dispatch cost](session-entry-cost.md) for the CPU counterpart and the
-  measured entry/transfer costs.
+- [Devices and GPU](devices-and-gpu.md) for device selection and the CUDA compatibility matrix.
+- [Custom CUDA kernels](custom-cuda-kernels.md) for raw/CubeCL interop inside an engine.
+- [Dispatch and engine cost](dispatch-and-engine-cost.md) for the CPU counterpart and the
+  measured per-call costs.

@@ -46,7 +46,7 @@ outside those slices.
 | Capability | State | Evidence | Downstream milestone |
 | --- | --- | --- | --- |
 | **Held CPU session (U1)** — caller-owned concrete session, ownership/entry proof, no hidden session entry | released | #2053, held-session tests | tensor4all-rs CPU backend/coexistence milestone (#866, #873) |
-| **Concrete non-AD fast path (U2-concrete)** — public session entry, per-op submission, phase lease, paired measurements | released | #2054, #2055, #2056, guide #2057 (`docs/guides/session-entry-cost.md`) | same milestone; the explicit frontend's dispatch route |
+| **Concrete non-AD fast path (U2-concrete)** — public session entry, per-op submission, phase lease, paired measurements | released | #2054, #2055, #2056, guide #2057 (`docs/guides/dispatch-and-engine-cost.md`) | same milestone; the explicit frontend's dispatch route |
 | **Held CUDA session (U3)** — held reservation, typed reentry/contention, logical `StreamId` capture, no per-op flush, `Drop` does not flush | released | #2059, 7 A100 tests, 3 compile-fail fixtures, `docs/design/held-cuda-session-1945-u3.md`, guide #2071 | tensor4all-rs CUDA/async milestone |
 | **Owning pending transfers (U4 items 2–3)** — `download_pending` / `upload_pending`, admission that returns the package on refusal and retains on unproven enqueue, bounded retirement queue, no wait in `Drop` | released | #2061, #2065, #2073, #2076, `docs/design/{asynchronous-transfer,owning-pending-transfers}-1945-u4.md`, transfer bench #2066 | CUDA/async milestone; the only route that moves a value without host export/import |
 | **Source publication (U4 item 1, source half)** — a produced value published with its producer frontier; the session, backend handle and source tensor may go away; the publication owns the value, its allocation address and readiness | released | #2101, `crates/tenferro-gpu/tests/source_publication.rs` (7 A100 tests), 2 compile-fail fixtures, `docs/design/source-publication-1945-u4.md` (revision 5) | CUDA/async milestone |
@@ -64,8 +64,8 @@ outside those slices.
 
 | Document | Names |
 | --- | --- |
-| `docs/guides/session-entry-cost.md` | scoped vs held CPU entry, what holding a session across a stage costs, when to hold |
-| `docs/guides/cuda-sessions-and-transfers.md` | held CUDA sessions, the pending transfer routes, what is not claimed (no fake async, no hidden waits) |
+| `docs/guides/dispatch-and-engine-cost.md` | scoped vs held CPU entry, what holding a session across a stage costs, when to hold |
+| `docs/guides/engines-and-transfers.md` | held CUDA sessions, the pending transfer routes, what is not claimed (no fake async, no hidden waits) |
 | `docs/design/held-cuda-session-1945-u3.md` | what the held CUDA session does and does not submit |
 | `docs/design/{asynchronous-transfer,owning-pending-transfers}-1945-u4.md` | admission, refusal, retention and teardown contracts for transfers |
 | `docs/design/source-publication-1945-u4.md` | the publication contract and every claim it declines to make |

@@ -11,8 +11,8 @@ The example below evaluates `sum(x * x)`, builds its gradient with respect to
 <!-- snippet-source: docs/tutorial-code/src/bin/traced_autodiff_jax_style.rs -->
 ```rust
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_cpu::CpuEngine;
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -28,13 +28,14 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 fn run(tensor: &TracedTensor) -> Result<tenferro_runtime::Tensor, Box<dyn std::error::Error>> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(tensor)?;
-    let backend = CpuBackend::new();
+    let mut engine = CpuEngine::serial();
     let mut builder = Runtime::builder();
-    builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
     let runtime = builder.build()?;
-    let mut outputs = runtime.run_compiled(&program, &[])?;
+    let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+    let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
     assert_eq!(outputs.len(), 1);
-    Ok(outputs.remove(0))
+    Ok(outputs.remove(0).into_tensor(&mut engine)?)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

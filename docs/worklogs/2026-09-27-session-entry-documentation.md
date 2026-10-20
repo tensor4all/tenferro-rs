@@ -6,7 +6,7 @@
   entered-session reuse separately; neither direct faer access nor a pool
   argument automatically eliminates worker handoff.
 - Route README, llms.txt, the CPU guides and bundled skill mirrors to one
-  [measurement and mitigation guide](../guides/session-entry-cost.md).
+  [measurement and mitigation guide](../guides/dispatch-and-engine-cost.md).
 - Retain the older Linux design note as historical evidence, with a link to
   the guide. Its timings and #1904's session timings are not directly
   interchangeable with the standalone Rayon measurements.

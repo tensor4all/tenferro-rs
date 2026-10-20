@@ -65,9 +65,9 @@ extension modules before executing the compiled graph:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/extension_snippets.rs#sparse_extension_3 -->
 ```rust
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_ext_sparse::{extension_modules, sparse_matmul, SparseCooTracedTensor};
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
 
 let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?;
@@ -85,15 +85,16 @@ let out = sparse_matmul(&left, &right)?;
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(out.values())?;
-let backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
-builder.register_engine(runtime_engine_registration(&backend)?)?;
-for module in extension_modules::<CpuBackend>(runtime_engine_id()?)? {
+builder.register_engine(runtime_engine_registration(&engine)?)?;
+for module in extension_modules::<CpuEngine>(runtime_engine_id()?)? {
     builder.install_extension_module(module)?;
 }
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[])?;
-let values = outputs.remove(0);
+let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+let values = outputs.remove(0).into_tensor(&mut engine)?;
 ```
 <!-- end-snippet-source -->
 

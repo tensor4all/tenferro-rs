@@ -22,7 +22,7 @@ Quick reference:
 | No autodiff, scalar type known at compile time | `TypedTensor<T, R>` |
 | No autodiff, dtype selected at runtime | `Tensor` |
 | Immediate forward execution in one runtime, optionally `backward()` or functional `grad`/`vjp`/`jvp` | `EagerTensor` + `EagerRuntime` |
-| `grad`, `vjp`, `jvp`, HVP via composition, graph reuse | `TracedTensor` + `GraphCompiler` + `Runtime::run_compiled` |
+| `grad`, `vjp`, `jvp`, HVP via composition, graph reuse | `TracedTensor` + `GraphCompiler` + `Runtime::prepare` / `Runtime::run` |
 
 ## Import Style
 
@@ -103,7 +103,7 @@ operations.
 | Einsum | `[&a, &b].einsum(...)` via `TensorEinsumExt` / `TypedTensorEinsumExt`; `TensorReadEinsumExt` / `TypedTensorReadEinsumExt` for views; `ConcreteEinsumPlan` for repeated fixed metadata | `session.einsum(&[&a, &b], ...)` via `EagerSessionEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus `extension_module` |
 | FFT | `x.fft(...)` via `TensorFftExt`; `read.fft_read(...)` via `TensorReadFftExt` | `session.fft(&x, ...)` via `EagerSessionFftExt` with `autodiff` (`EagerTensorFftExt` only for consuming in-place FFT) | `x.fft(...)` via `TracedTensorFftExt` plus `extension_module` |
 | Tensordot sugar | Use `matmul` or `dot_general` directly | `session.tensordot(&a, &b, axes)` via `EagerSessionEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |
-| Linear algebra | `TensorLinalgExt` session methods via `with_backend_session` | `EagerTensorLinalgExt` methods with `autodiff` | `TracedTensorLinalgExt` methods |
+| Linear algebra | `TensorLinalgExt` methods on a caller-held `&mut dyn Engine` | `EagerTensorLinalgExt` methods with `autodiff` | `TracedTensorLinalgExt` methods |
 | Automatic differentiation | Not applicable | `backward()` plus `EagerRuntime` functional `grad`, `vjp`, `jvp`, HVP via composition | `grad`, `vjp`, `jvp`, HVP via composition |
 | External operations | Extension-defined concrete hooks | Extension-defined eager hooks and optional AD rules | Extension-defined graph hooks and optional AD rules |
 

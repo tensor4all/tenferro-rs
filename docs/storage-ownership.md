@@ -62,7 +62,7 @@ and layout proofs allow it. Neither operation is a disguised transfer.
 
 The provider namespaces are deliberate:
 
-- CUDA: `tenferro_gpu::cuda::{CudaBackend, upload_tensor, download_tensor}`;
+- CUDA: `tenferro_gpu::cuda::{CudaEngine, upload_tensor, download_tensor}`;
 - WebGPU: `tenferro_gpu::webgpu::{WebGpuBackend, upload_webgpu_tensor,
   download_webgpu_tensor}`;
 - Apple shared CPU/Metal: `tenferro_gpu::apple::AppleContext`.

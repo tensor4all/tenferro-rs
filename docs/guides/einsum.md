@@ -68,13 +68,13 @@ receiver type is the fixed-size array of borrowed tensor references.
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_12 -->
 ```rust
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::{
     TensorEinsumExt, TensorEinsumIntoExt, TypedTensorEinsumExt,
     TypedTensorEinsumIntoExt, TypedTensorReadEinsumIntoExt,
 };
 use tenferro_tensor::{
-    BackendSessionHost, Tensor, TensorWrite, TypedTensor, TypedTensorView,
+    Tensor, TensorWrite, TypedTensor, TypedTensorView,
     TypedTensorViewMut, TypedTensorWrite,
 };
 
@@ -86,20 +86,16 @@ let rhs = Tensor::from_vec_col_major(
     vec![3, 2],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let mut backend = CpuBackend::new();
-let product = backend.with_backend_session(|session| {
-    [&lhs, &rhs].einsum("ij,jk->ik", session)
-})??;
+let mut engine = CpuEngine::serial();
+let product = [&lhs, &rhs].einsum("ij,jk->ik", &mut engine)?;
 assert_eq!(product.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let mut product_out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4])?;
-backend.with_backend_session(|session| {
-    [&lhs, &rhs].einsum_into(
-        "ij,jk->ik",
-        session,
-        TensorWrite::from_tensor(&mut product_out),
-    )
-})??;
+[&lhs, &rhs].einsum_into(
+    "ij,jk->ik",
+    &mut engine,
+    TensorWrite::from_tensor(&mut product_out),
+)?;
 assert_eq!(product_out.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let complex_lhs = TypedTensor::<Complex64>::from_vec_col_major(
@@ -115,9 +111,7 @@ let complex_rhs = TypedTensor::<Complex64>::from_vec_col_major(
     vec![2, 1],
     vec![Complex64::new(5.0, 0.0), Complex64::new(6.0, -1.0)],
 )?;
-let complex = backend.with_backend_session(|session| {
-    [&complex_lhs, &complex_rhs].einsum("ij,jk->ik", session)
-})??;
+let complex = [&complex_lhs, &complex_rhs].einsum("ij,jk->ik", &mut engine)?;
 assert_eq!(
     complex.as_slice()?,
     &[Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
@@ -128,13 +122,11 @@ let borrowed_rhs = complex_rhs.as_view();
 let mut borrowed_storage = [Complex64::new(0.0, 0.0); 4];
 let borrowed_out =
     TypedTensorViewMut::from_slice([2, 1], [2, 4], 1, &mut borrowed_storage)?;
-backend.with_backend_session(|session| {
-    [borrowed, borrowed_rhs].einsum_read_into(
-        "ij,jk->ik",
-        session,
-        TypedTensorWrite::from_view(borrowed_out),
-    )
-})??;
+[borrowed, borrowed_rhs].einsum_read_into(
+    "ij,jk->ik",
+    &mut engine,
+    TypedTensorWrite::from_view(borrowed_out),
+)?;
 assert_eq!(
     [borrowed_storage[1], borrowed_storage[3]],
     [Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
@@ -155,9 +147,9 @@ axes right-align and broadcast dimensions of size one. The programmatic
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_20 -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::{EinsumAxis, EinsumNotation, TensorEinsumExt};
-use tenferro_tensor::{BackendSessionHost, Tensor};
+use tenferro_tensor::Tensor;
 
 let lhs = Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12])?;
 let rhs = Tensor::from_vec_col_major(vec![1, 3, 2], vec![1.0_f64; 6])?;
@@ -168,13 +160,9 @@ let notation = EinsumNotation::new(
     ],
     &[EinsumAxis::Ellipsis, EinsumAxis::Label(0), EinsumAxis::Label(2)],
 );
-let mut backend = CpuBackend::new();
-let string_result = backend.with_backend_session(|session| {
-    [&lhs, &rhs].einsum("...ij,...jk->...ik", session)
-})??;
-let programmatic_result = backend.with_backend_session(|session| {
-    [&lhs, &rhs].einsum_notation(&notation, session)
-})??;
+let mut engine = CpuEngine::serial();
+let string_result = [&lhs, &rhs].einsum("...ij,...jk->...ik", &mut engine)?;
+let programmatic_result = [&lhs, &rhs].einsum_notation(&notation, &mut engine)?;
 assert_eq!(string_result.shape(), &[2, 2, 2]);
 assert_eq!(string_result.as_slice::<f64>()?, &[3.0; 8]);
 assert_eq!(programmatic_result.as_slice::<f64>()?, &[3.0; 8]);
@@ -197,9 +185,9 @@ running the stored tree.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_13 -->
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::{ConcreteEinsumPlan, TensorReadEinsumExt, TensorReadEinsumIntoExt};
-use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead, TensorView, TensorWrite, TypedTensorView};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TensorWrite, TypedTensorView};
 
 let matrix_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
 let matrix = TypedTensorView::from_slice([2, 3], [3, 1], 0, &matrix_data)?;
@@ -209,15 +197,12 @@ let inputs = [
     TensorRead::from_tensor(&vector),
 ];
 
-let mut backend = CpuBackend::new();
-let result = backend.with_backend_session(|session| {
-    inputs.einsum_read("ij,j->i", session)
-})??;
+let mut engine = CpuEngine::serial();
+let result = inputs.einsum_read("ij,j->i", &mut engine)?;
 assert_eq!(result.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let plan = ConcreteEinsumPlan::prepare_read(inputs.clone(), "ij,j->i")?;
-let planned = backend
-    .with_backend_session(|session| plan.execute_read(inputs, session))??;
+let planned = plan.execute_read(inputs, &mut engine)?;
 assert_eq!(planned.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let mut planned_out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2])?;
@@ -226,13 +211,11 @@ let inputs = [
     TensorRead::from_view(TensorView::F64(matrix)),
     TensorRead::from_tensor(&vector),
 ];
-backend.with_backend_session(|session| {
-    plan.execute_read_into(
-        inputs,
-        session,
-        TensorWrite::from_tensor(&mut planned_out),
-    )
-})??;
+plan.execute_read_into(
+    inputs,
+    &mut engine,
+    TensorWrite::from_tensor(&mut planned_out),
+)?;
 assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
 ```
 <!-- end-snippet-source -->
@@ -240,14 +223,14 @@ assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
 ## Traced Matrix Multiply
 
 Use the traced route when einsum should be part of a graph compiled by
-`GraphCompiler` and executed by `Runtime::run_compiled`.
+`GraphCompiler`, prepared by `Runtime::prepare` and executed by `Runtime::run`.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_14 -->
 ```rust
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TraceContext};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext};
 
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
@@ -265,15 +248,20 @@ let c = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
 let graph = trace.finish(&[c])?;
 let program = GraphCompiler::new().compile_traced_graph(&graph)?;
 
-let backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
-builder.register_engine(runtime_engine_registration(&backend)?)?;
-builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+builder.register_engine(runtime_engine_registration(&engine)?)?;
+builder.install_extension_module(tenferro_einsum::extension_module::<CpuEngine>(
     runtime_engine_id()?,
 )?)?;
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[&a, &b])?;
-let result = outputs.remove(0);
+let reads = [
+    tenferro_runtime::TensorRead::from_tensor(&a),
+    tenferro_runtime::TensorRead::from_tensor(&b),
+];
+let prepared = runtime.prepare(&program, &reads, &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &reads)?;
+let result = outputs.remove(0).into_tensor(&mut engine)?;
 
 assert_eq!(result.shape(), &[2, 2]);
 assert_eq!(result.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
@@ -292,9 +280,11 @@ labels in that form.
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_15 -->
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::EagerSessionEinsumExt;
 
 let ctx = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let u = ctx.variable_from(Tensor::from_vec_col_major(
     vec![2],
     vec![1.0_f64, 2.0],
@@ -304,20 +294,20 @@ let v = ctx.variable_from(Tensor::from_vec_col_major(
     vec![3.0_f64, 4.0, 5.0],
 )?)?;
 
-let (outer, diag) = ctx.with_eager_session(|s| {
+let (outer, diag) = ctx.with_eager_session(&mut engine, |s| {
     let outer = s.einsum(&[&u, &v], "i,j->ij")?;
     let diag = s.einsum(&[&v], "i->ii")?;
     Ok::<_, tenferro_einsum::Error>((outer, diag))
 })?;
 
 assert_eq!(outer.shape(), &[2, 3]);
-let outer_tensor = outer.to_tensor()?;
+let outer_tensor = outer.to_tensor(&mut engine)?;
 assert_eq!(
     outer_tensor.as_slice::<f64>()?,
     &[3.0, 6.0, 4.0, 8.0, 5.0, 10.0],
 );
 assert_eq!(diag.shape(), &[3, 3]);
-let diag_tensor = diag.to_tensor()?;
+let diag_tensor = diag.to_tensor(&mut engine)?;
 assert_eq!(
     diag_tensor.as_slice::<f64>()?,
     &[3.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 5.0],
@@ -335,9 +325,9 @@ negative axes.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_16 -->
 ```rust
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_einsum::{TensorDotAxes, TracedTensorEinsumExt};
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 let lhs = TracedTensor::from_vec_col_major(
     vec![2, 3],
@@ -357,15 +347,16 @@ let out = lhs.tensordot(&rhs, TensorDotAxes::Count(1))?;
 assert_eq!(out.concrete_shape()?, vec![2, 4]);
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&out)?;
-let backend = CpuBackend::new();
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
-builder.register_engine(runtime_engine_registration(&backend)?)?;
-builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+builder.register_engine(runtime_engine_registration(&engine)?)?;
+builder.install_extension_module(tenferro_einsum::extension_module::<CpuEngine>(
     runtime_engine_id()?,
 )?)?;
 let runtime = builder.build()?;
-let mut outputs = runtime.run_compiled(&program, &[])?;
-let result = outputs.remove(0);
+let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+let result = outputs.remove(0).into_tensor(&mut engine)?;
 
 assert_eq!(result.shape(), &[2, 4]);
 assert_eq!(

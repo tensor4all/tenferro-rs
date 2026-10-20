@@ -128,10 +128,7 @@ example is the source of truth for this guide:
 
 use num_complex::Complex32;
 use tenferro_fft::{FftNorm, TensorFftExt};
-use tenferro_gpu::cuda::{
-    cuda_devices, download_tensor, gpu_available, upload_tensor, CudaBackend,
-};
-use tenferro_runtime::BackendSessionHost;
+use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaEngine};
 use tenferro_tensor::{DType, MemoryKind, Tensor, TensorRead};
 
 const TUTORIAL_SKIP_MARKER: &str = "TENFERRO_TUTORIAL_SKIP:";
@@ -176,10 +173,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     };
 
-    // Keep one backend/runtime for the upload, FFT, synchronization, and download.
-    let mut backend = CudaBackend::new(device.id())?;
+    // Keep one engine for the upload, FFT, synchronization, and download.
+    let mut engine = CudaEngine::open(device.id())?;
     let host = Tensor::from_vec_col_major([4], vec![1.0_f32, 2.0, 3.0, 4.0])?;
-    let gpu_input = upload_tensor(backend.runtime(), &host)?;
+    let gpu_input = upload_tensor(engine.runtime(), &host)?;
 
     let input_read = TensorRead::from_tensor(&gpu_input);
     assert_eq!(input_read.backend_family(), Some("cuda"));
@@ -189,8 +186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("uploaded tensor has no CUDA allocation domain")?;
 
     // FFT execution consumes the already uploaded tensor; it does not transfer it.
-    let spectrum = backend
-        .with_backend_session(|session| gpu_input.rfft(None, 0, FftNorm::Backward, session))??;
+    let spectrum = gpu_input.rfft(None, 0, FftNorm::Backward, &mut engine)?;
 
     // Check residency before crossing the explicit device-to-host boundary.
     let spectrum_read = TensorRead::from_tensor(&spectrum);
@@ -200,13 +196,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(spectrum.dtype(), DType::C32);
     assert_eq!(spectrum.shape(), &[3]);
 
-    // The cuFFT execution runs inside the credentialed raw session: the bound
-    // stream is synchronized before the session returns, while a fresh
-    // session-scoped work area and the input/output retention guards pin the
+    // The cuFFT execution runs inside the engine's raw scope: the bound
+    // stream is synchronized before the scope returns, while a fresh
+    // scope-scoped work area and the input/output retention guards pin the
     // allocations. The explicit download below synchronizes stream-managed
     // postprocessing and is the visible device-to-host boundary for the final
     // output.
-    let host_spectrum = download_tensor(backend.runtime(), &spectrum)?;
+    let host_spectrum = download_tensor(engine.runtime(), &spectrum)?;
     assert_eq!(host_spectrum.dtype(), DType::C32);
     assert_eq!(host_spectrum.shape(), &[3]);
     let values = host_spectrum.as_slice::<Complex32>()?;
@@ -290,29 +286,25 @@ names.
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_22 -->
 ```rust
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftNorm, TensorFftExt, TensorReadFftExt};
-use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
-let mut backend = CpuBackend::new();
-backend.with_backend_session(|session| -> Result<(), tenferro_tensor::Error> {
-    let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-    let full = x.fft(None, -1, FftNorm::Backward, session)?;
-    let one_sided = x.rfft(None, -1, FftNorm::Backward, session)?;
-    assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
-    assert_eq!(one_sided.shape(), &[3]);
+let mut engine = CpuEngine::serial();
+let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+let full = x.fft(None, -1, FftNorm::Backward, &mut engine)?;
+let one_sided = x.rfft(None, -1, FftNorm::Backward, &mut engine)?;
+assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
+assert_eq!(one_sided.shape(), &[3]);
 
-    let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
-    let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
-    let read = TensorRead::from_view(TensorView::F64(view));
-    let read_full = read.fft_read(None, -1, FftNorm::Backward, session)?;
-    assert_eq!(
-        read_full.as_slice::<Complex64>()?[0],
-        Complex64::new(10.0, 0.0),
-    );
-    Ok(())
-})??;
+let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
+let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
+let read = TensorRead::from_view(TensorView::F64(view));
+let read_full = read.fft_read(None, -1, FftNorm::Backward, &mut engine)?;
+assert_eq!(
+    read_full.as_slice::<Complex64>()?[0],
+    Complex64::new(10.0, 0.0),
+);
 ```
 <!-- end-snippet-source -->
 
@@ -332,21 +324,26 @@ These methods do not modify their input.
 ```rust
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::{EagerSessionFftExt, FftNorm};
 
 let runtime = EagerRuntime::new()?;
+let mut engine = CpuEngine::serial();
 let x = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?,
     runtime.clone(),
 )?;
-let (spectrum, restored) = runtime.with_eager_session(|session| {
+let (spectrum, restored) = runtime.with_eager_session(&mut engine, |session| {
     let spectrum = session.rfft(&x, None, -1, FftNorm::Backward)?;
     let restored = session.irfft(&spectrum, Some(4), -1, FftNorm::Backward)?;
     Ok::<_, tenferro_ad::Error>((spectrum, restored))
 })?;
 
 assert_eq!(spectrum.shape(), &[3]);
-assert_eq!(restored.to_tensor()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
+assert_eq!(
+    restored.to_tensor(&mut engine)?.as_slice::<f64>()?,
+    &[1.0, 2.0, 3.0, 4.0]
+);
 ```
 <!-- end-snippet-source -->
 
@@ -378,8 +375,14 @@ The `EagerTensorFftExt` rustdoc includes executable consuming-FFT examples.
 ### Apple shared CPU and Metal execution
 
 `AppleContext` makes allocation ownership shared, not backend selection
-implicit. Clone its mutable backend handles and pass the desired backend to
-each FFT call:
+implicit: one upload serves the paired CPU and Metal backends, and each FFT call
+names the backend that should execute it.
+
+<!-- ponytail: this Apple/Metal example is behind the not-yet-migrated WebGPU
+backend (TODO(#2206 webgpu)), and `AppleContext` still hands out immutable
+engine references, so there is no engine-model form to show yet. The fence below
+is the last pre-migration shape in the guides; replace it when the Apple bridge
+moves to caller-held engines. -->
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_24 -->
 ```rust
@@ -438,18 +441,17 @@ Source: `docs/tutorial-code/src/bin/apple_shared_fft.rs`.
 
 ### Traced Graphs
 
-<!-- snippet-source: crates/tenferro-fft/examples/traced_fft.rs -->
+<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_traced -->
 ```rust
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
-fn cpu_runtime_with_fft() -> Result<Runtime, Box<dyn std::error::Error>> {
-    let backend = CpuBackend::new();
+fn cpu_runtime_with_fft(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>> {
     let mut builder = Runtime::builder();
-    builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
-    builder.install_extension_module(tenferro_fft::extension_module::<CpuBackend>(
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(engine)?)?;
+    builder.install_extension_module(tenferro_fft::extension_module::<CpuEngine>(
         tenferro_cpu::runtime_engine_id()?,
     )?)?;
     Ok(builder.build()?)
@@ -470,10 +472,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y)?;
-    let runtime = cpu_runtime_with_fft()?;
-    let mut outputs = runtime.run_compiled(&program, &[])?;
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime_with_fft(&engine)?;
+    let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+    let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
     assert_eq!(outputs.len(), 1);
-    let out = outputs.remove(0);
+    let out = outputs.remove(0).into_tensor(&mut engine)?;
     assert_eq!(out.shape(), &[4]);
     assert_eq!(
         out.as_slice::<Complex64>().unwrap(),

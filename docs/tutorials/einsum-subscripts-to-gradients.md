@@ -12,11 +12,11 @@ planning choices for a three-operand contraction, then differentiates
 <!-- snippet-source: docs/tutorial-code/src/bin/einsum_subscripts_to_gradients.rs -->
 ```rust
 use tenferro_ad::EagerRuntime;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tenferro_einsum::{EagerSessionEinsumExt, EinsumOptimize, TraceContextEinsumExt};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TraceContext};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -50,11 +50,10 @@ fn matrix_c() -> Result<Tensor, Box<dyn std::error::Error>> {
     )?)
 }
 
-fn cpu_runtime_with_einsum() -> Result<Runtime, Box<dyn std::error::Error>> {
-    let backend = CpuBackend::new();
+fn cpu_runtime_with_einsum(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>> {
     let mut builder = Runtime::builder();
-    builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
-    builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(engine)?)?;
+    builder.install_extension_module(tenferro_einsum::extension_module::<CpuEngine>(
         tenferro_cpu::runtime_engine_id()?,
     )?)?;
     Ok(builder.build()?)
@@ -81,10 +80,12 @@ fn trace_and_run(
     let output = trace.einsum_with(&values, "ij,jk,kl->il", optimize)?;
     let graph = trace.finish(&[output])?;
     let program = GraphCompiler::new().compile_traced_graph(&graph)?;
-    let runtime = cpu_runtime_with_einsum()?;
-    let mut outputs = runtime.run_compiled(&program, &[])?;
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime_with_einsum(&engine)?;
+    let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+    let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
     assert_eq!(outputs.len(), 1);
-    Ok(outputs.remove(0))
+    Ok(outputs.remove(0).into_tensor(&mut engine)?)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -92,9 +93,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let b_tensor = matrix_b()?;
     let c_tensor = matrix_c()?;
     let runtime = EagerRuntime::new()?;
+    let mut engine = CpuEngine::serial();
     let a = runtime.variable_from(a_tensor.duplicate()?)?;
     let b = runtime.variable_from(b_tensor.duplicate()?)?;
-    let product = runtime.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))?;
+    let product =
+        runtime.with_eager_session(&mut engine, |s| s.einsum(&[&a, &b], "ij,jk->ik"))?;
 
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(
@@ -114,8 +117,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[250.0, 601.0, 372.0, 894.0],
     );
 
-    let loss = runtime.with_eager_session(|s| s.reduce_sum(&product, Some(&[0, 1])))?;
-    let grad_a = runtime.grad(&loss, &a)?;
+    let loss =
+        runtime.with_eager_session(&mut engine, |s| s.reduce_sum(&product, Some(&[0, 1])))?;
+    let grad_a = runtime.grad(&mut engine, &loss, &a)?;
     let grad_value = grad_a.value()?;
 
     assert_eq!(grad_value.shape(), &[2, 3]);
