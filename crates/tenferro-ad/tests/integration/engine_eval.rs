@@ -1,4 +1,4 @@
-use tenferro_runtime::{DType, GraphCompiler, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Tensor, TracedTensor, TypedTensor};
 
 use crate::support::{run_compiled_one, runtime_from_cpu_backend};
 
@@ -26,4 +26,49 @@ fn graph_execution_with_borrowed_inputs_preserves_caller_tensors() {
     assert_eq!(output.as_slice::<f64>().unwrap(), &[5.0]);
     assert_eq!(lhs.as_slice::<f64>().unwrap(), &[2.0]);
     assert_eq!(rhs.as_slice::<f64>().unwrap(), &[3.0]);
+}
+
+#[test]
+fn warm_up_runs_the_prepared_program_and_leaves_it_runnable() {
+    // Warm-up is one ordinary run whose outputs are dropped, followed by an
+    // engine synchronize: on a CPU engine that is a no-op, and the following
+    // identical run must still produce the same value.
+    use tenferro_runtime::TensorRead;
+
+    let lhs_value = TracedTensor::input_symbolic_shape(DType::F64, 0).unwrap();
+    let rhs_value = TracedTensor::input_symbolic_shape(DType::F64, 0).unwrap();
+    let sum = (&lhs_value + &rhs_value).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(
+            &sum,
+            &[(&lhs_value, DType::F64, &[]), (&rhs_value, DType::F64, &[])],
+        )
+        .unwrap();
+    let lhs =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
+    let rhs =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![3.0]).unwrap());
+
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+    let runtime = runtime_from_cpu_backend(&engine);
+    let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
+    let prepared = runtime
+        .prepare(&program, &reads, std::slice::from_ref(&engine.target()))
+        .unwrap();
+
+    runtime
+        .warm_up(&mut [&mut engine], &prepared, &reads)
+        .expect("warm-up should succeed");
+
+    let outputs = runtime
+        .run(&mut [&mut engine], &prepared, &reads)
+        .expect("the program must still run after warm-up");
+    let value = outputs
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_tensor(&mut engine)
+        .unwrap();
+    assert_eq!(value.as_slice::<f64>().unwrap(), &[5.0]);
 }

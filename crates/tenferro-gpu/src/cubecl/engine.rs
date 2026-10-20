@@ -383,6 +383,10 @@ impl tenferro_runtime::ExecutionEngine for CudaEngine {
         Ok(())
     }
 
+    fn synchronize(&mut self) -> tenferro_runtime::Result<()> {
+        CudaEngine::synchronize(self).map_err(Into::into)
+    }
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }

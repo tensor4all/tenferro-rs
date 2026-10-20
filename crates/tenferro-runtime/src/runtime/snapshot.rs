@@ -1016,6 +1016,53 @@ impl Runtime {
         super::execution::run(self, engines, prepared, inputs)
     }
 
+    /// Pay `prepared`'s first execution now: run it once and wait for it.
+    ///
+    /// A prepared program is specialized to its input signature, so one
+    /// execution compiles exactly the kernels it will use — fused regions,
+    /// reduction strategies and any vendor plan — and initializes whatever the
+    /// engine creates lazily. [`Self::run`] is otherwise unchanged: this is one
+    /// ordinary run whose outputs are dropped, followed by
+    /// [`ExecutionEngine::synchronize`], so the cost is not still queued when
+    /// the caller's measured region starts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{ExecutionEngine, Prepared, Runtime};
+    /// use tenferro_tensor::TensorRead;
+    ///
+    /// fn warm_up<'a>(
+    ///     runtime: &Runtime,
+    ///     engine: &mut dyn ExecutionEngine,
+    ///     prepared: &'a Prepared,
+    ///     inputs: &[TensorRead<'a>],
+    /// ) -> tenferro_runtime::Result<()> {
+    ///     runtime.warm_up(&mut [engine], prepared, inputs)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when `prepared` belongs to another runtime
+    /// or a stale epoch, [`crate::Error::InvalidArgument`] when the engines do
+    /// not match the prepared targets or the input metadata does not match the
+    /// program, and [`crate::Error::TensorRuntime`] when an engine fails the run
+    /// or cannot synchronize.
+    pub fn warm_up<'a>(
+        &self,
+        engines: &mut [&mut dyn super::ExecutionEngine],
+        prepared: &'a super::Prepared,
+        inputs: &[TensorRead<'a>],
+    ) -> crate::Result<()> {
+        let outputs = self.run(engines, prepared, inputs)?;
+        drop(outputs);
+        for engine in engines.iter_mut() {
+            engine.synchronize()?;
+        }
+        Ok(())
+    }
+
     /// Transactionally edit and publish runtime configuration.
     ///
     /// No user callback runs while the publication lock is held. If another

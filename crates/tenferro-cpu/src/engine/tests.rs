@@ -232,7 +232,6 @@ fn a_small_direct_faer_call_stays_on_the_calling_thread_without_a_pool_entry() {
             let width = context
                 .contraction_exec()?
                 .batch_decision(&cpueinsum::BatchQuery::new(1, 8.0))
-                .map_err(|error| crate::Error::backend_source("test_faer_width", error))?
                 .item_threads;
             let observed = context.with_faer_width(width, |parallel| {
                 (

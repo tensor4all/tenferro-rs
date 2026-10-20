@@ -130,7 +130,6 @@ impl LowerContractionError for cpueinsum_blas::BlasError {
             return crate::Error::runtime_state_source(op, self);
         }
         let declined = match &self {
-            cpueinsum_blas::BlasError::StrategyUnavailable => true,
             cpueinsum_blas::BlasError::Prepare { source }
             | cpueinsum_blas::BlasError::Native { source } => matches!(
                 source,

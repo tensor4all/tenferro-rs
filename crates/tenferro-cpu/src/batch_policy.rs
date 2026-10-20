@@ -13,10 +13,9 @@
 //!
 //! Two variants were renamed when the vocabulary moved into `tcontract-exec`:
 //! the old `OuterParallel` is [`CpuBatchStrategy::Outer`], and the old
-//! `ProviderItems` is [`CpuBatchStrategy::Inner`]. `Sequential`, `Auto` and
-//! `WholeBatchVendor` kept their names. The old vendor-dimension cutoff is
-//! deliberately not restored: it was an inert knob once the decision moved into
-//! the lower library.
+//! `ProviderItems` is [`CpuBatchStrategy::Inner`]. `Sequential` and `Auto` kept
+//! their names. The old vendor-dimension cutoff is deliberately not restored: it
+//! was an inert knob once the decision moved into the lower library.
 //!
 //! # Precedence
 //!
@@ -46,8 +45,7 @@
 //!
 //! `tlinalg-blas` takes no `Exec` and has no tenferro lanes, so the BLAS linalg
 //! lane refuses a forced [`CpuBatchStrategy::Outer`],
-//! [`CpuBatchStrategy::Inner`], `Split` or
-//! [`CpuBatchStrategy::WholeBatchVendor`] before any write with a typed
+//! [`CpuBatchStrategy::Inner`] or `Split` before any write with a typed
 //! unsupported error. `Auto` and `Sequential` are accepted; the lane is already
 //! serial and the vendor call owns its own threading.
 
@@ -55,8 +53,7 @@
 ///
 /// This is `tcontract_exec::BatchStrategy`. The old `OuterParallel` variant is
 /// [`CpuBatchStrategy::Outer`] and the old `ProviderItems` variant is
-/// [`CpuBatchStrategy::Inner`]; `Sequential`, `Auto` and `WholeBatchVendor` kept
-/// their names.
+/// [`CpuBatchStrategy::Inner`]; `Sequential` and `Auto` kept their names.
 ///
 /// # Examples
 ///
