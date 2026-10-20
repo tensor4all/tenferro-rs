@@ -3,7 +3,6 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use cubecl::prelude::{CubeElement, CubePrimitive};
-use cubecl_environment::stream::StreamId;
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
@@ -21,7 +20,7 @@ use super::ffi::cutensor::{
 };
 use super::interop::cuda_device_ptr_from_addr;
 use super::plan_cache::LruPlanCache;
-use super::{CudaBackend, CudaRuntime};
+use super::{CudaEngine, CudaRuntime};
 use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
 use crate::{col_major_strides, CubeclBuffer, Error, Tensor, TypedTensor};
@@ -361,6 +360,10 @@ struct Workspace {
     // used it before releasing this handle.
     _handle: Option<cubecl_runtime::server::Handle>,
     ptr: *mut c_void,
+    // Keeps the allocation bound, so `ptr` stays valid while the workspace is
+    // cached (#2207); dropped with the workspace, after its handle is retired.
+    _binding:
+        Option<cubecl_runtime::storage::ManagedResource<cubecl_cuda::ffi_interop::GpuResource>>,
     size: u64,
     runtime: Option<CudaRuntime>,
     stream: u64,
@@ -371,6 +374,7 @@ impl Workspace {
         Self {
             _handle: None,
             ptr: std::ptr::null_mut(),
+            _binding: None,
             size: 0,
             runtime: None,
             stream: 0,
@@ -500,7 +504,7 @@ struct CachedCutensorContraction {
     _lhs_descriptor: TensorDescriptor,
 }
 
-// SAFETY: cached cuTENSOR state is tied to one `CudaBackend` and is only used
+// SAFETY: cached cuTENSOR state is tied to one `CudaEngine` and is only used
 // while holding the enclosing plan-cache mutex. The opaque cuTENSOR handles are
 // created and destroyed through the same loaded cuTENSOR library.
 unsafe impl Send for CachedCutensorContraction {}
@@ -634,7 +638,7 @@ fn gemm_pair_operands<'a, T: TensorScalar + Scalar>(
 }
 
 pub(super) fn dot_general_with_conj(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &Tensor,
     rhs: &Tensor,
     config: &DotGeneralConfig,
@@ -825,7 +829,7 @@ fn write_operand<'a, 'b, T: CutensorScalar + Scalar>(
 /// so a direct session call does not pay the contraction machinery either
 /// (invariant I4). Falls through to the cuTENSOR path for everything else.
 fn rewrite_degenerate_read(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
     config: &DotGeneralConfig,
@@ -844,7 +848,7 @@ fn rewrite_degenerate_read(
 }
 
 pub(super) fn dot_general_read_allocating(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
     config: &DotGeneralConfig,
@@ -886,7 +890,7 @@ pub(super) fn dot_general_read_allocating(
 }
 
 pub(super) fn dot_general_read_into_accum(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &TensorRead<'_>,
     rhs: &TensorRead<'_>,
     config: &DotGeneralConfig,
@@ -903,7 +907,7 @@ pub(super) fn dot_general_read_into_accum(
 }
 
 fn accum_erased<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &TensorRead<'_>,
     rhs: &TensorRead<'_>,
     config: &DotGeneralConfig,
@@ -941,7 +945,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn dot_general_typed_into_accum<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: ReadOperand<'_, '_, T>,
     rhs: ReadOperand<'_, '_, T>,
     config: &DotGeneralConfig,
@@ -1057,7 +1061,7 @@ where
             let prepared = prepared_view_access(view, OP)?;
             // A read shares the root buffer's memoized address, like an
             // owned operand, instead of a blocking round trip per view (#1925).
-            let base = memoized_device_addr(rt, cubecl_view_buffer(view, OP)?, prepared, OP)?;
+            let base = pinned_buffer_addr(rt, cubecl_view_buffer(view, OP)?, prepared, OP)?;
             resolve_prepared_device_region::<T>(base, view.strides(), view.offset())
         }
     }
@@ -1081,13 +1085,14 @@ where
             ensure_view_mut_resident_on_runtime(rt, view, OP)?;
             let prepared = prepared_view_mut_access(view, OP)?;
             // A borrowed destination keeps the blocking round trip, which
-            // orders the vendor write after queued CubeCL work on the stream.
-            let base = rt
-                .client()
-                .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())
-                .map_err(|err| Error::backend_source(OP, err))?
-                .resource()
-                .ptr;
+            // orders the vendor write after queued CubeCL work on the stream;
+            // the root buffer's pin keeps the address valid (#2207).
+            let base = cubecl_view_mut_buffer(view, OP)?.pinned_device_addr(
+                rt.client(),
+                prepared.into_handle(),
+                true,
+                OP,
+            )?;
             resolve_prepared_device_region::<T>(base, view.strides(), view.offset())
         }
     }
@@ -1161,7 +1166,7 @@ where
 }
 
 fn dot_general_typed_with_conj<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
     config: &DotGeneralConfig,
@@ -1282,7 +1287,7 @@ fn new_cutensor_plan_cache_state(
     )))
 }
 
-fn get_or_init_cutensor_plan_cache(backend: &CudaBackend) -> crate::Result<CutensorPlanCacheState> {
+fn get_or_init_cutensor_plan_cache(backend: &CudaEngine) -> crate::Result<CutensorPlanCacheState> {
     let guard = backend
         .cuda_extension_cache()
         .get_or_try_init::<CutensorPlanCacheState>(|| {
@@ -1302,7 +1307,7 @@ fn lock_cutensor_plan_cache(
         .map_err(|_| Error::runtime_state("cutensor_plan_cache", "plan cache lock poisoned"))
 }
 
-pub(super) fn cutensor_plan_cache_stats(backend: &CudaBackend) -> crate::Result<CacheStats> {
+pub(super) fn cutensor_plan_cache_stats(backend: &CudaEngine) -> crate::Result<CacheStats> {
     let Some(plan_cache) = backend
         .cuda_extension_cache()
         .get_cloned::<CutensorPlanCacheState>()?
@@ -1315,7 +1320,7 @@ pub(super) fn cutensor_plan_cache_stats(backend: &CudaBackend) -> crate::Result<
 
 /// Retained shared scratch and its occupancy, without creating cache state.
 pub(super) fn cutensor_workspace_stats(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
 ) -> crate::Result<CutensorWorkspaceStats> {
     let Some(plan_cache) = backend
         .cuda_extension_cache()
@@ -1333,7 +1338,7 @@ pub(super) fn cutensor_workspace_stats(
 /// retires it through the event queue, so this does not force a stream barrier
 /// and does not reclaim device memory synchronously.
 pub(super) fn set_cutensor_workspace_max_retained_bytes(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     limit: u64,
 ) -> crate::Result<()> {
     let Some(plan_cache) = backend
@@ -1351,7 +1356,7 @@ pub(super) fn set_cutensor_workspace_max_retained_bytes(
 
 /// Deferred workspace retirement counters for tests and diagnostics.
 pub(crate) fn cutensor_workspace_retirement_stats(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
 ) -> crate::Result<super::workspace_retirement::WorkspaceRetirementStats> {
     Ok(backend
         .runtime()
@@ -1366,9 +1371,7 @@ pub(crate) fn cutensor_workspace_retirement_stats(
         .stats())
 }
 
-pub(super) fn cutensor_plan_cache_max_entries(
-    backend: &CudaBackend,
-) -> crate::Result<NonZeroUsize> {
+pub(super) fn cutensor_plan_cache_max_entries(backend: &CudaEngine) -> crate::Result<NonZeroUsize> {
     let Some(plan_cache) = backend
         .cuda_extension_cache()
         .get_cloned::<CutensorPlanCacheState>()?
@@ -1380,7 +1383,7 @@ pub(super) fn cutensor_plan_cache_max_entries(
 }
 
 pub(super) fn set_cutensor_plan_cache_max_entries(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     max_entries: NonZeroUsize,
 ) -> crate::Result<()> {
     let plan_cache = get_or_init_cutensor_plan_cache(backend)?;
@@ -1393,7 +1396,7 @@ pub(super) fn set_cutensor_plan_cache_max_entries(
 }
 
 fn cached_cutensor_contraction<T, R>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     spec: &CutensorContractionSpec<'_>,
     cross_stream_handles: Vec<cubecl_runtime::server::Handle>,
     execute: impl FnOnce(&CutensorHandle, &Plan, &Workspace) -> crate::Result<R>,
@@ -1538,6 +1541,8 @@ fn alloc_workspace(rt: &CudaRuntime, workspace_size: u64) -> crate::Result<Works
     Ok(Workspace {
         _handle: Some(handle),
         ptr: cuda_device_ptr_from_addr(resource.resource().ptr, OP)?,
+        // The workspace pointer is valid only while this binding is held (#2207).
+        _binding: Some(resource),
         size: workspace_size,
         runtime: Some(rt.clone()),
         stream,
@@ -1552,7 +1557,7 @@ pub(super) fn typed_device_ptr<T: TensorScalar + 'static + Scalar>(
     ensure_resident_on_runtime(rt, tensor, op)?;
     let prepared = prepared_tensor_access(tensor, op)?;
     let buffer = cubecl_buffer(tensor, op)?;
-    let addr = memoized_device_addr(rt, buffer, prepared, op)?;
+    let addr = pinned_buffer_addr(rt, buffer, prepared, op)?;
     // The residency check above ties this raw FFI pointer to the caller's runtime/device.
     cuda_device_ptr_from_addr(addr, op)
 }
@@ -1570,7 +1575,7 @@ pub(super) fn typed_device_ptr<T: TensorScalar + 'static + Scalar>(
 /// this barrier; cross-stream reader ordering is tracked separately.
 ///
 /// The read-only fast path is unchanged: [`typed_device_ptr`] and
-/// [`memoized_device_addr`] still consult the memo, which is only ever
+/// [`pinned_buffer_addr`] still consult the memo, which is only ever
 /// resolved from a read or from this write path after the round trip. The
 /// resolved address is memoized so a later raw read can reuse it (reads need
 /// no ordering against queued reads, and any intervening queued write
@@ -1582,53 +1587,36 @@ pub(super) fn write_device_ptr<T: TensorScalar + 'static + Scalar>(
 ) -> crate::Result<*mut c_void> {
     ensure_resident_on_runtime(rt, tensor, op)?;
     let prepared = prepared_tensor_access(tensor, op)?;
-    let resource = rt
-        .client()
-        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())
-        .map_err(|err| crate::Error::backend_source(op, err))?;
-    let addr = resource.resource().ptr;
-    // See `CubeclBuffer::device_addr` for the address-stability invariant.
-    cubecl_buffer(tensor, op)?.memoize_device_addr(addr);
+    let addr = cubecl_buffer(tensor, op)?.pinned_device_addr(
+        rt.client(),
+        prepared.into_handle(),
+        true,
+        op,
+    )?;
     // The residency check above ties this raw FFI pointer to the caller's runtime/device.
     cuda_device_ptr_from_addr(addr, op)
 }
 
-/// The device base address of `buffer` for a raw vendor call, without a
-/// blocking server round trip when it is already known.
+/// The pinned device base address of `buffer` for a raw vendor call.
 ///
-/// Fast path: reuse the buffer's memoized device address when executing on
-/// the stream that created the allocation. In that case `get_resource` is
-/// only a pointer lookup — CubeCL's cross-stream alignment pass skips
-/// bindings whose creation stream equals the current stream — so no
-/// synchronization is lost. Any other stream takes the full `get_resource`
-/// round trip, preserving CubeCL's cross-stream alignment. A queued CubeCL
-/// write drops the memoized address (#1868), so a raw call never reads ahead
-/// of it. Borrowed views share their root buffer's memo (#1925).
+/// Reuses the buffer's pin when it is ordered after every queued CubeCL write
+/// and the current stream created the allocation; otherwise resolves through
+/// the blocking `get_resource` round trip (#1868), which keeps CubeCL's
+/// cross-stream alignment. The address stays valid while the buffer lives,
+/// because the pin holds the allocation's binding (#2207). Borrowed views share
+/// their root buffer's pin (#1925).
 ///
-/// This memoized path is for read-only operands and for fresh internal
-/// outputs, whose memo is empty. An owned *caller-provided destination* is
-/// resolved by [`write_device_ptr`], which always takes the round trip so a
-/// vendor write cannot overtake a queued CubeCL read (#1949).
-pub(super) fn memoized_device_addr(
+/// This path is for read-only operands and for fresh internal outputs. An
+/// owned *caller-provided destination* is resolved by [`write_device_ptr`],
+/// which always takes the round trip so a vendor write cannot overtake a
+/// queued CubeCL read (#1949).
+pub(super) fn pinned_buffer_addr(
     rt: &CudaRuntime,
     buffer: &CubeclBuffer,
     prepared: CubeclPreparedAccess,
     op: &'static str,
 ) -> crate::Result<u64> {
-    let same_stream = StreamId::current() == buffer.handle().stream;
-    if same_stream {
-        if let Some(addr) = buffer.cached_device_addr() {
-            return Ok(addr);
-        }
-    }
-    let resource = rt
-        .client()
-        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())
-        .map_err(|err| crate::Error::backend_source(op, err))?;
-    let addr = resource.resource().ptr;
-    // See `CubeclBuffer::device_addr` for the address-stability invariant.
-    buffer.memoize_device_addr(addr);
-    Ok(addr)
+    buffer.pinned_device_addr(rt.client(), prepared.into_handle(), false, op)
 }
 
 fn build_layout(

@@ -1,7 +1,7 @@
 use super::super::blas1::blas1_len;
+use crate::cubecl::tests::EngineRun;
 use cudarc::cublas::sys as cublas;
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::BackendSessionHost;
 
 #[test]
 fn blas1_length_stays_within_the_portable_cublas_interface() {
@@ -53,7 +53,7 @@ fn cuda_axpby_reads_an_offset_strided_source_in_place() {
             }
         }
         let host_x = tensor_c64(vec![2, 3], host_region);
-        cpu.with_backend_session(|__s| {
+        cpu.run(|__s| {
             __s.axpby_read_into_accum(
                 alpha,
                 TensorRead::from_tensor(&host_x),
@@ -75,7 +75,7 @@ fn cuda_axpby_reads_an_offset_strided_source_in_place() {
         .unwrap();
 
     reset_strided_source_passes_for_test();
-    gpu.with_backend_session(|__s| {
+    gpu.run(|__s| {
         __s.axpby_read_into_accum(
             alpha,
             TensorRead::from_view(TensorView::C64(source_region)),
@@ -122,7 +122,7 @@ fn cuda_axpby_keeps_compact_operands_on_cublas() {
     let mut gpu_y = upload(&gpu, &host_y);
 
     reset_strided_source_passes_for_test();
-    gpu.with_backend_session(|__s| {
+    gpu.run(|__s| {
         __s.axpby_read_into_accum(
             ContractionScalar::C64(Complex64::new(1.0, 0.0)),
             TensorRead::from_tensor(&gpu_x),

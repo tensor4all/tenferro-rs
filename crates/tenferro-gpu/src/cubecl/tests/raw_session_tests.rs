@@ -2,17 +2,18 @@
 //!
 //! These tests require CUDA hardware and are therefore ignored by default,
 //! matching the regular CUDA test convention in this crate.
+use crate::cubecl::tests::EngineRun;
 
 use crate::cubecl::CudaRuntime;
 use crate::cuda::raw;
-use crate::cuda::{gpu_available, CudaBackend, GpuExtensionCapability};
+use crate::cuda::{gpu_available, CudaEngine, GpuExtensionCapability};
 
 use super::*;
 
-fn first_cuda_backend() -> Option<CudaBackend> {
+fn first_cuda_backend() -> Option<CudaEngine> {
     let devices = crate::cuda::cuda_devices().ok()?;
     let device = devices.first()?;
-    CudaBackend::new(device.id()).ok()
+    CudaEngine::open(device.id()).ok()
 }
 
 #[test]
@@ -36,8 +37,8 @@ fn raw_session_exposes_stream_and_runtime_identity() {
     assert!(session_after_raw_still_runs(&mut backend));
 }
 
-fn session_after_raw_still_runs(backend: &mut CudaBackend) -> bool {
-    backend.runtime().synchronize().is_ok()
+fn session_after_raw_still_runs(backend: &mut CudaEngine) -> bool {
+    backend.synchronize().is_ok()
 }
 
 #[test]
@@ -255,7 +256,7 @@ fn raw_session_entry_is_not_a_host_barrier() {
     let mut queued = Vec::new();
     for _ in 0..8 {
         let out = backend
-            .with_backend_session(|session| {
+            .run(|session| {
                 session.dot_general_read(
                     TensorRead::from_tensor(&lhs),
                     TensorRead::from_tensor(&rhs),
@@ -323,17 +324,21 @@ fn raw_session_reuses_the_runtime_cublas_handle() {
         "two raw scopes of one runtime must use the same cached cuBLAS handle"
     );
 
-    // The handle really is the runtime's own: a vendor enqueue that does not go
-    // through a raw session reaches the same cached handle.
+    // The handle really is the runtime's own for the engine's stream: a vendor
+    // enqueue on that stream that does not go through a raw session reaches the
+    // same cached handle.
     let runtime = backend.runtime().clone();
-    let runtime_handle = runtime
-        .with_current_context("test.raw_cublas_runtime", || {
-            runtime.with_cublas_handle(
-                "test.raw_cublas_runtime",
-                cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
-                Vec::new(),
-                |handle| Ok(handle as usize),
-            )
+    let runtime_handle = backend
+        .stream
+        .executes(|| {
+            runtime.with_current_context("test.raw_cublas_runtime", || {
+                runtime.with_cublas_handle(
+                    "test.raw_cublas_runtime",
+                    cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
+                    Vec::new(),
+                    |handle| Ok(handle as usize),
+                )
+            })
         })
         .expect("primary context")
         .expect("runtime cuBLAS handle");

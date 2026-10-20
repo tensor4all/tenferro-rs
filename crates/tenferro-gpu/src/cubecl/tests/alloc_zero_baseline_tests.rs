@@ -20,7 +20,7 @@
 //! The host-enqueue column times the operation as it is issued, including the
 //! `with_cubecl` exit dispatch, and excludes the final device drain. The
 //! synchronized column times each operation followed by
-//! [`CudaExecSession::synchronize`], so it is the per-operation round trip.
+//! [`CudaEngine::synchronize`], so it is the per-operation round trip.
 //! Warmups run before either measurement.
 //!
 //! `flush` counts `CudaRuntime::flush_cubecl` hand-offs (the only interaction
@@ -35,7 +35,7 @@ use std::time::Instant;
 use tenferro_tensor::{CacheStats, Tensor, TensorWrite};
 
 use crate::cubecl::runtime::{blocking_flush_handoffs, reset_blocking_flush_handoffs};
-use crate::cubecl::{upload_tensor, CudaExecSession, CudaRuntime};
+use crate::cubecl::{upload_tensor, CudaEngine, CudaRuntime};
 
 use super::{gpu_backend, with_cuda_exec};
 
@@ -60,15 +60,11 @@ fn iterations(bytes: usize) -> usize {
     }
 }
 
-fn empty_callback(session: &mut CudaExecSession<'_>) -> crate::Result<()> {
+fn empty_callback(session: &mut CudaEngine) -> crate::Result<()> {
     session.with_cubecl("bench.alloc_zero.empty", |_| Ok(()))
 }
 
-fn alloc_batch(
-    session: &mut CudaExecSession<'_>,
-    shape: &[usize],
-    count: usize,
-) -> crate::Result<()> {
+fn alloc_batch(session: &mut CudaEngine, shape: &[usize], count: usize) -> crate::Result<()> {
     session.with_cubecl("bench.alloc_zero.alloc", |cubecl| {
         let mut batch = Vec::with_capacity(count);
         for _ in 0..count {
@@ -78,11 +74,7 @@ fn alloc_batch(
     })
 }
 
-fn alloc_zero_batch(
-    session: &mut CudaExecSession<'_>,
-    shape: &[usize],
-    count: usize,
-) -> crate::Result<()> {
+fn alloc_zero_batch(session: &mut CudaEngine, shape: &[usize], count: usize) -> crate::Result<()> {
     session.with_cubecl("bench.alloc_zero.native", |cubecl| {
         let mut batch = Vec::with_capacity(count);
         for _ in 0..count {
@@ -93,7 +85,7 @@ fn alloc_zero_batch(
 }
 
 fn fill_zero_reuse_batch(
-    session: &mut CudaExecSession<'_>,
+    session: &mut CudaEngine,
     destination: &mut Tensor,
     count: usize,
 ) -> crate::Result<()> {
@@ -106,7 +98,7 @@ fn fill_zero_reuse_batch(
 }
 
 fn fill_zero_alloc_batch(
-    session: &mut CudaExecSession<'_>,
+    session: &mut CudaEngine,
     shape: &[usize],
     count: usize,
 ) -> crate::Result<()> {
@@ -122,7 +114,7 @@ fn fill_zero_alloc_batch(
 }
 
 fn upload_zero_batch(
-    session: &mut CudaExecSession<'_>,
+    session: &mut CudaEngine,
     runtime: &CudaRuntime,
     host_zero: &Tensor,
     count: usize,
@@ -136,7 +128,7 @@ fn upload_zero_batch(
     })
 }
 
-fn pool_stats(session: &CudaExecSession<'_>) -> CacheStats {
+fn pool_stats(session: &CudaEngine) -> CacheStats {
     session
         .runtime()
         .output_pool()
@@ -147,14 +139,14 @@ fn pool_stats(session: &CudaExecSession<'_>) -> CacheStats {
 
 #[allow(clippy::too_many_arguments)]
 fn report(
-    session: &mut CudaExecSession<'_>,
+    session: &mut CudaEngine,
     bytes: usize,
     elements: usize,
     operation: &str,
     batch: usize,
     warmup: usize,
     iters: usize,
-    mut op: impl FnMut(&mut CudaExecSession<'_>) -> crate::Result<()>,
+    mut op: impl FnMut(&mut CudaEngine) -> crate::Result<()>,
 ) {
     for _ in 0..warmup {
         op(session).expect("warmup operation");

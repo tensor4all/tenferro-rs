@@ -96,7 +96,7 @@ pub struct CudaComputeCapability {
 
 /// Capability a GPU extension may query before using a provider-specific path.
 ///
-/// [`CudaExecSession::supports`](crate::cuda::CudaExecSession::supports) reports
+/// [`CudaEngine::supports`](crate::cuda::CudaEngine::supports) reports
 /// whether the capability is plausibly available on the current session. This is
 /// orthogonal to the primitive [`OperationCapability`](tenferro_tensor::OperationCapability)
 /// matrix: extension capabilities describe what the extension seam itself can

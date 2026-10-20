@@ -20,7 +20,7 @@ use super::ffi::cutensor::{
     OperationDescriptor, Plan, PlanPreference, TensorDescriptor,
 };
 use super::interop::cuda_device_ptr_from_addr;
-use super::{CudaBackend, CudaRuntime};
+use super::{CudaEngine, CudaRuntime};
 use crate::{col_major_strides, Error, TypedTensor};
 use cubecl::frontend::Scalar;
 
@@ -244,7 +244,7 @@ struct CachedCutensorPermutation {
     _input_descriptor: TensorDescriptor,
 }
 
-// SAFETY: cached cuTENSOR state is tied to one `CudaBackend` and is only used
+// SAFETY: cached cuTENSOR state is tied to one `CudaEngine` and is only used
 // while holding the enclosing plan-cache mutex. The opaque cuTENSOR handles are
 // created and destroyed through the same loaded cuTENSOR library.
 unsafe impl Send for CachedCutensorPermutation {}
@@ -406,7 +406,7 @@ struct ResolvedPermutationOperand {
 }
 
 pub(super) fn transpose<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     input: &TypedTensor<T>,
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>>
@@ -460,7 +460,7 @@ where
 }
 
 pub(super) fn to_contiguous_view<T, R>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     view: &TypedTensorView<'_, T, R>,
     op: &'static str,
 ) -> crate::Result<TypedTensor<T, R>>
@@ -520,7 +520,7 @@ where
 /// fall back when cuTENSOR loading or plan creation fails: supported CUDA
 /// permutation paths require the NVIDIA library stack.
 pub(super) fn copy_view_into<T, R>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     src: &TypedTensorView<'_, T, R>,
     dst: &mut TypedTensorViewMut<'_, T, R>,
     op: &'static str,
@@ -654,7 +654,7 @@ fn physical_output_descriptor(
 }
 
 fn execute_permutation<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     input_res: ResolvedPermutationOperand,
     output_res: ResolvedPermutationOperand,
     spec: CutensorPermutationSpec<'_>,
@@ -708,7 +708,7 @@ fn new_cutensor_permutation_plan_cache_state(
 }
 
 fn get_or_init_cutensor_permutation_plan_cache(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
 ) -> crate::Result<CutensorPermutationPlanCacheState> {
     let guard = backend
         .cuda_extension_cache()
@@ -732,7 +732,7 @@ fn lock_cutensor_permutation_plan_cache(
 }
 
 pub(super) fn cutensor_permutation_plan_cache_stats(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
 ) -> crate::Result<CacheStats> {
     let Some(plan_cache) = backend
         .cuda_extension_cache()
@@ -745,7 +745,7 @@ pub(super) fn cutensor_permutation_plan_cache_stats(
 }
 
 pub(super) fn cutensor_permutation_plan_cache_max_entries(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
 ) -> crate::Result<NonZeroUsize> {
     let Some(plan_cache) = backend
         .cuda_extension_cache()
@@ -758,7 +758,7 @@ pub(super) fn cutensor_permutation_plan_cache_max_entries(
 }
 
 pub(super) fn set_cutensor_permutation_plan_cache_max_entries(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     max_entries: NonZeroUsize,
 ) -> crate::Result<()> {
     let plan_cache = get_or_init_cutensor_permutation_plan_cache(backend)?;
@@ -771,7 +771,7 @@ pub(super) fn set_cutensor_permutation_plan_cache_max_entries(
 }
 
 fn cached_cutensor_permutation<T, R>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     spec: &CutensorPermutationSpec<'_>,
     op: &'static str,
     execute: impl FnOnce(&CutensorHandle, &Plan) -> crate::Result<R>,
@@ -829,7 +829,7 @@ where
     T: TensorScalar + 'static + Scalar,
     R: TensorRank,
 {
-    super::gemm::memoized_device_addr(
+    super::gemm::pinned_buffer_addr(
         rt,
         cubecl_view_buffer(view, op)?,
         prepared_view_access(view, op)?,
@@ -848,13 +848,14 @@ where
     T: TensorScalar + 'static + Scalar,
     R: TensorRank,
 {
-    let resource = rt
-        .client()
-        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(
-            prepared_view_mut_access(view, op)?.into_handle(),
-        )
-        .map_err(|err| Error::backend_source(op, err))?;
-    Ok(resource.resource().ptr)
+    let prepared = prepared_view_mut_access(view, op)?;
+    // The root buffer's pin keeps the address valid while the buffer lives (#2207).
+    super::dispatch::cubecl_view_mut_buffer(view, op)?.pinned_device_addr(
+        rt.client(),
+        prepared.into_handle(),
+        true,
+        op,
+    )
 }
 
 fn typed_device_ptr<T, R>(
@@ -867,11 +868,14 @@ where
     R: TensorRank,
 {
     let prepared = prepared_tensor_access(tensor, op)?;
-    let resource = rt
-        .client()
-        .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(prepared.into_handle())
-        .map_err(|err| Error::backend_source(op, err))?;
-    cuda_device_ptr_from_addr(resource.resource().ptr, op)
+    // Always a round trip, as before; the pin keeps the address valid (#2207).
+    let addr = super::dispatch::cubecl_buffer(tensor, op)?.pinned_device_addr(
+        rt.client(),
+        prepared.into_handle(),
+        true,
+        op,
+    )?;
+    cuda_device_ptr_from_addr(addr, op)
 }
 
 fn resolve_prepared_device_region<T: TensorScalar + 'static + Scalar>(

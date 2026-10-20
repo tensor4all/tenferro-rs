@@ -64,17 +64,17 @@
 //! convention).
 //!
 //! ```rust
-//! use tenferro_gpu::{cuda::cuda_devices, cuda::CudaBackend, cuda::CudaDeviceError};
+//! use tenferro_gpu::{cuda::cuda_devices, cuda::CudaEngine, cuda::CudaDeviceError};
 //!
-//! fn first_cuda_backend() -> Result<Option<CudaBackend>, CudaDeviceError> {
+//! fn first_cuda_backend() -> Result<Option<CudaEngine>, CudaDeviceError> {
 //!     let devices = cuda_devices()?;
 //!     let Some(device) = devices.first() else {
 //!         return Ok(None);
 //!     };
-//!     Ok(Some(CudaBackend::new(device.id())?))
+//!     Ok(Some(CudaEngine::open(device.id())?))
 //! }
 //!
-//! let _example: fn() -> Result<Option<CudaBackend>, CudaDeviceError> = first_cuda_backend;
+//! let _example: fn() -> Result<Option<CudaEngine>, CudaDeviceError> = first_cuda_backend;
 //! ```
 //!
 //! # Running GPU tests
@@ -88,6 +88,7 @@
 //! cargo test -p tenferro-gpu --features cuda -- --ignored
 //! ```
 
+use cubecl_environment::stream::StreamId;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -95,7 +96,7 @@ use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use cubecl::client::Client;
 use cubecl::features::AtomicUsage;
@@ -114,7 +115,7 @@ use tenferro_tensor::{
     ContractionScalar, DType, DotGeneralAccumulation, ElementwiseReadOp, TensorRead, TensorWrite,
 };
 
-use crate::backend::{BackendRuntimeCache, TensorBackend, TensorDeviceTransfer};
+use crate::backend::TensorDeviceTransfer;
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -157,6 +158,7 @@ mod blas1;
 mod capability;
 mod device;
 pub(crate) mod dispatch;
+mod engine;
 mod error;
 mod event_domain;
 mod exec_session;
@@ -172,6 +174,7 @@ mod plan_cache;
 pub(crate) mod raw;
 mod runtime;
 mod runtime_adapter;
+#[cfg(feature = "cubecl-interop")]
 pub(crate) mod session_cubecl;
 mod transfer;
 mod workspace_retirement;
@@ -196,10 +199,7 @@ use error::{unsupported_dtype, unsupported_operation};
 
 pub use capability::cuda_capabilities;
 pub use device::{cuda_devices, CudaDeviceError, CudaDeviceId, CudaDeviceInfo};
-#[doc(hidden)]
-pub use exec_session::{
-    with_cuda_exec_session, CudaExecSession, CudaHeldSession, CudaSessionStats,
-};
+pub use exec_session::with_cuda_engine;
 pub use identity::{CudaComputeCapability, CudaDeviceUuid, GpuExtensionCapability};
 pub use memory::{download_tensor, download_tensor_into, upload_tensor, DownloadIntoError};
 pub use runtime::{gpu_available, CudaRuntime, CudaRuntimeIdentity};
@@ -279,7 +279,7 @@ fn view_offset_i64(offset: isize, op: &'static str) -> crate::Result<i64> {
 }
 
 fn launch_native_materialization<E: CubePrimitive + Scalar>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     output: BufferArg,
     input: BufferArg,
     plan: &NativePermutationPlan,
@@ -371,12 +371,39 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
 
 mod ops;
 
-#[derive(Clone)]
-pub struct CudaBackend {
-    inner: Arc<CudaBackendState>,
+/// A caller-held CUDA execution engine: one opened GPU with its own stream and
+/// workspace.
+///
+/// Every operation takes the engine as `&mut` and is queued on the engine's
+/// stream, so work on its memory runs in program order. Engines never share
+/// memory: a tensor of one engine is rejected by another, and data moves
+/// between engines only through explicit transfers.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::cuda::{CudaDeviceError, CudaDeviceId, CudaEngine};
+///
+/// let _open: fn(CudaDeviceId) -> Result<CudaEngine, CudaDeviceError> = CudaEngine::open;
+/// ```
+pub struct CudaEngine {
+    inner: CudaEngineState,
+    /// Logical CubeCL stream every operation of this engine is queued on.
+    stream: StreamId,
+    /// Runtime engine id this engine runs prepared programs as.
+    runtime_engine_id: tenferro_runtime::EngineId,
+    /// Extension caches the runtime lends to extension executors during a run.
+    extension_caches: tenferro_runtime::ExtensionCacheStore,
+    /// Prepared-program runs whose device work may still be in flight; they are
+    /// retired at the next `flush`/`synchronize`, when the queue grows past
+    /// [`MAX_PENDING_RUNS`], or when the engine drops.
+    pending_runs: Vec<Box<dyn tenferro_runtime::EventDomainRun>>,
 }
 
-struct CudaBackendState {
+/// Bound on prepared-program runs kept unretired by one engine.
+pub(crate) const MAX_PENDING_RUNS: usize = 16;
+
+struct CudaEngineState {
     // CUDA library handles are dropped before `rt`; Rust drops fields in
     // declaration order, so cache-owned handles release while the CUDA primary
     // context is still retained by `CudaRuntime`.
@@ -389,17 +416,17 @@ struct CudaBackendState {
     // it is a diagnostic for whether the cap is set below the workload's real
     // requirement, not a per-cache statistic.
     cutensor_workspace_temporary_uses: AtomicU64,
-    /// The one held session of this backend state (#1945 U3). Shared by every clone.
-    held_session: exec_session::CudaHeldSessionSlot,
     rt: CudaRuntime,
 }
 
-impl fmt::Debug for CudaBackend {
+impl fmt::Debug for CudaEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CudaBackend")
+        f.debug_struct("CudaEngine")
             .field("runtime", &self.inner.rt)
             .field("cuda_extension_cache", &self.inner.extension_cache)
             .field("cutensor_initialized", &self.inner.cutensor.get().is_some())
+            .field("stream", &self.stream)
+            .field("pending_runs", &self.pending_runs.len())
             .finish_non_exhaustive()
     }
 }
@@ -779,7 +806,7 @@ impl<T: 'static> Deref for CudaExtensionCacheGuard<'_, T> {
     }
 }
 
-impl CudaBackend {
+impl CudaEngine {
     fn duplicate_typed<T>(&self, input: &TypedTensor<T>) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + TensorScalar + CubePrimitive + Clone + Scalar + Send + Sync + 'static,
@@ -812,14 +839,17 @@ impl CudaBackend {
         )
     }
 
-    /// Create a new CubeCL backend for the caller-selected CUDA device.
+    /// Open the caller-selected CUDA device as a new engine.
+    ///
+    /// Each call creates an independent engine with its own memory domain and
+    /// stream; tensors of two engines never mix without an explicit transfer.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{cuda::CudaBackend, cuda::CudaDeviceError, cuda::CudaDeviceId};
+    /// use tenferro_gpu::{cuda::CudaEngine, cuda::CudaDeviceError, cuda::CudaDeviceId};
     ///
-    /// let _ctor: fn(CudaDeviceId) -> Result<CudaBackend, CudaDeviceError> = CudaBackend::new;
+    /// let _ctor: fn(CudaDeviceId) -> Result<CudaEngine, CudaDeviceError> = CudaEngine::open;
     /// ```
     /// # Errors
     ///
@@ -827,18 +857,22 @@ impl CudaBackend {
     /// [`CudaDeviceError::Unavailable`] when the selected device is not
     /// discovered, or [`CudaDeviceError::Initialization`] when CUDA runtime,
     /// context, or CubeCL client initialization fails.
-    pub fn new(device_id: CudaDeviceId) -> Result<Self, CudaDeviceError> {
+    pub fn open(device_id: CudaDeviceId) -> Result<Self, CudaDeviceError> {
+        let rt = CudaRuntime::new(device_id)?;
         Ok(Self {
-            inner: Arc::new(CudaBackendState {
+            stream: rt.stream(),
+            runtime_engine_id: runtime_adapter::default_cuda_engine_id(),
+            extension_caches: tenferro_runtime::ExtensionCacheStore::default(),
+            pending_runs: Vec::new(),
+            inner: CudaEngineState {
                 cutensor: OnceLock::new(),
                 extension_cache: CudaExtensionCache::new(),
                 cutensor_workspace_max_retained_bytes: AtomicU64::new(
                     DEFAULT_CUTENSOR_WORKSPACE_MAX_RETAINED_BYTES,
                 ),
                 cutensor_workspace_temporary_uses: AtomicU64::new(0),
-                held_session: exec_session::CudaHeldSessionSlot::new(),
-                rt: CudaRuntime::new(device_id)?,
-            }),
+                rt,
+            },
         })
     }
 
@@ -847,9 +881,9 @@ impl CudaBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{cuda::CudaBackend, cuda::CudaRuntime};
+    /// use tenferro_gpu::{cuda::CudaEngine, cuda::CudaRuntime};
     ///
-    /// let _runtime: fn(&CudaBackend) -> &CudaRuntime = CudaBackend::runtime;
+    /// let _runtime: fn(&CudaEngine) -> &CudaRuntime = CudaEngine::runtime;
     /// ```
     pub fn runtime(&self) -> &CudaRuntime {
         &self.inner.rt
@@ -860,9 +894,9 @@ impl CudaBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::{cuda::CudaBackend, cuda::CudaDeviceId};
+    /// use tenferro_gpu::{cuda::CudaEngine, cuda::CudaDeviceId};
     ///
-    /// let _device_id: fn(&CudaBackend) -> CudaDeviceId = CudaBackend::device_id;
+    /// let _device_id: fn(&CudaEngine) -> CudaDeviceId = CudaEngine::device_id;
     /// ```
     pub fn device_id(&self) -> CudaDeviceId {
         self.inner.rt.device_id()
@@ -877,9 +911,9 @@ impl CudaBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::CudaBackend;
+    /// use tenferro_gpu::cuda::CudaEngine;
     ///
-    /// let _identity = CudaBackend::runtime_identity;
+    /// let _identity = CudaEngine::runtime_identity;
     /// ```
     pub fn runtime_identity(&self) -> CudaRuntimeIdentity {
         self.inner.rt.runtime_identity()
@@ -1031,7 +1065,7 @@ impl CudaBackend {
     /// The returned entry count is the number of retained cuTENSOR contraction
     /// plans inside the CUDA backend's extension cache entry. Logical retained
     /// bytes cover plan metadata, not the shared per-stream device scratch;
-    /// [`CudaBackend::cutensor_workspace_stats`] reports that separately. The
+    /// [`CudaEngine::cutensor_workspace_stats`] reports that separately. The
     /// cache byte limit is therefore not a total device-memory limit.
     /// # Errors
     ///
@@ -1045,7 +1079,7 @@ impl CudaBackend {
     /// All cached cuTENSOR contraction plans share one lazily grown workspace
     /// per physical stream slot, so this is the sum over slots of the capacity
     /// each slot currently holds. It is bounded by
-    /// [`CudaBackend::set_cutensor_workspace_max_retained_bytes`], reported
+    /// [`CudaEngine::set_cutensor_workspace_max_retained_bytes`], reported
     /// separately from the extension-cache byte statistics, and released by
     /// clearing the extension cache or dropping the backend. This is retained
     /// scratch, not total device memory: a workspace in use by a queued
@@ -1058,14 +1092,14 @@ impl CudaBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaBackend};
+    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaEngine};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// // `gpu_available` never panics without a CUDA driver, so this
     /// // example also runs in CPU-only doctest environments.
     /// if gpu_available() {
     ///     let device = cuda_devices()?.remove(0);
-    ///     let backend = CudaBackend::new(device.id())?;
+    ///     let backend = CudaEngine::open(device.id())?;
     ///     let stats = backend.cutensor_workspace_stats()?;
     ///     println!("{:?}", (stats.retained_entries, stats.retained_bytes));
     /// }
@@ -1081,19 +1115,19 @@ impl CudaBackend {
 
     /// Return the device bytes retained by the shared cuTENSOR contraction
     /// scratch. Equal to
-    /// [`CudaBackend::cutensor_workspace_stats`]`().retained_bytes`.
+    /// [`CudaEngine::cutensor_workspace_stats`]`().retained_bytes`.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaBackend};
+    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaEngine};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// // `gpu_available` never panics without a CUDA driver, so this
     /// // example also runs in CPU-only doctest environments.
     /// if gpu_available() {
     ///     let device = cuda_devices()?.remove(0);
-    ///     let backend = CudaBackend::new(device.id())?;
+    ///     let backend = CudaEngine::open(device.id())?;
     ///     println!("{} bytes retained", backend.cutensor_workspace_bytes()?);
     /// }
     /// # Ok(())
@@ -1110,7 +1144,7 @@ impl CudaBackend {
     /// scratch, in bytes.
     ///
     /// The default is 10 GiB. See
-    /// [`CudaBackend::set_cutensor_workspace_max_retained_bytes`] for the
+    /// [`CudaEngine::set_cutensor_workspace_max_retained_bytes`] for the
     /// contract; this value is not a device-memory reservation. The cap is
     /// plain backend state, so reading it cannot fail and never creates cache
     /// state.
@@ -1118,14 +1152,14 @@ impl CudaBackend {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaBackend};
+    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaEngine};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// // `gpu_available` never panics without a CUDA driver, so this
     /// // example also runs in CPU-only doctest environments.
     /// if gpu_available() {
     ///     let device = cuda_devices()?.remove(0);
-    ///     let backend = CudaBackend::new(device.id())?;
+    ///     let backend = CudaEngine::open(device.id())?;
     ///     println!("cap {} bytes", backend.cutensor_workspace_max_retained_bytes());
     /// }
     /// # Ok(())
@@ -1152,25 +1186,25 @@ impl CudaBackend {
     /// contractions allocate and retire their scratch on every call, which can
     /// increase workspace-retirement stream barrier fallbacks. To choose a
     /// value, run the workload and read the
-    /// [`CudaBackend::cutensor_workspace_bytes`] high-water: retaining every
+    /// [`CudaEngine::cutensor_workspace_bytes`] high-water: retaining every
     /// slot's rounded high-water needs a cap of at least the sum of
     /// `next_power_of_two(max(request, 1 MiB))` over the stream slots.
     ///
     /// The setting is stored on the backend, so it survives
-    /// `CudaBackend::clear_cuda_extension_cache` and extension-cache eviction,
+    /// `CudaEngine::clear_cuda_extension_cache` and extension-cache eviction,
     /// and is shared by clones of this backend.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaBackend};
+    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaEngine};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// // `gpu_available` never panics without a CUDA driver, so this
     /// // example also runs in CPU-only doctest environments.
     /// if gpu_available() {
     ///     let device = cuda_devices()?.remove(0);
-    ///     let backend = CudaBackend::new(device.id())?;
+    ///     let backend = CudaEngine::open(device.id())?;
     ///     backend.set_cutensor_workspace_max_retained_bytes(4 << 30)?;
     /// }
     /// # Ok(())
@@ -1200,27 +1234,27 @@ impl CudaBackend {
     /// This is the direct signal that the cap is binding. A nonzero value means
     /// the matching contractions allocated and retired their scratch on every
     /// call instead of reusing a retained buffer; the high-water from
-    /// [`CudaBackend::cutensor_workspace_bytes`] then under-reports the real
+    /// [`CudaEngine::cutensor_workspace_bytes`] then under-reports the real
     /// requirement. Raise
-    /// [`CudaBackend::set_cutensor_workspace_max_retained_bytes`] until this
+    /// [`CudaEngine::set_cutensor_workspace_max_retained_bytes`] until this
     /// stops increasing, or accept the churn deliberately.
     ///
     /// The count is cumulative for the backend, shared by clones, and is not
-    /// reset by `CudaBackend::clear_cuda_extension_cache`; diff two reads to
+    /// reset by `CudaEngine::clear_cuda_extension_cache`; diff two reads to
     /// measure an interval. Reading it cannot fail and never creates cache
     /// state.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaBackend};
+    /// use tenferro_gpu::cuda::{cuda_devices, gpu_available, CudaEngine};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// // `gpu_available` never panics without a CUDA driver, so this
     /// // example also runs in CPU-only doctest environments.
     /// if gpu_available() {
     ///     let device = cuda_devices()?.remove(0);
-    ///     let backend = CudaBackend::new(device.id())?;
+    ///     let backend = CudaEngine::open(device.id())?;
     ///     println!("{} temporary uses", backend.cutensor_workspace_temporary_uses());
     /// }
     /// # Ok(())
@@ -3913,10 +3947,6 @@ impl CudaBackend {
     }
 }
 
-impl BackendRuntimeCache for CudaBackend {
-    type RuntimeCache = ();
-}
-
 #[derive(Clone, Copy, Debug)]
 enum CheckedIntegerDomain {
     DivisionByZero,
@@ -3943,7 +3973,7 @@ trait CudaCastFloat:
     + 'static
 {
     fn bounds(target: CastIntegerTarget) -> (Self, Self, bool);
-    fn read_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self>;
+    fn read_flag(backend: &CudaEngine, flag: &TypedTensor<Self>) -> crate::Result<Self>;
     fn invalid_error(self, target: CastIntegerTarget) -> crate::Error;
     fn is_nonfinite(self) -> bool;
     fn cpu_real_display(self) -> String;
@@ -3970,7 +4000,7 @@ macro_rules! impl_cuda_cast_float {
                     ),
                 }
             }
-            fn read_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+            fn read_flag(backend: &CudaEngine, flag: &TypedTensor<Self>) -> crate::Result<Self> {
                 let host = interop::download_typed_tensor(backend.runtime(), flag, "cast")?;
                 host.as_slice()?.get(1).copied().ok_or_else(|| {
                     crate::Error::invalid_argument(
@@ -4011,7 +4041,7 @@ impl_cuda_cast_float!(f32, F32, false, |value: f32| format!("{}", value as f64))
 impl_cuda_cast_float!(f64, F64, true, |value: f64| format!("{value}"));
 
 fn validate_cuda_real_cast<S, F>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     input: &TypedTensor<S>,
     stride: usize,
     target: CastIntegerTarget,
@@ -4105,7 +4135,7 @@ fn checked_integer_domain_error(
 }
 
 fn read_checked_integer_flag(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     flag: &TypedTensor<i32>,
     op: &'static str,
 ) -> crate::Result<i32> {
@@ -4128,7 +4158,7 @@ trait CudaFloatIndex:
 {
     const MAX_EXACT_INTEGER: Self;
     fn is_invalid_index(self) -> bool;
-    fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self>;
+    fn read_invalid_flag(backend: &CudaEngine, flag: &TypedTensor<Self>) -> crate::Result<Self>;
 }
 
 trait CudaIndexValidation: Sized {
@@ -4136,13 +4166,13 @@ trait CudaIndexValidation: Sized {
     /// caller then has to hand over a tensor, not a borrowed view).
     const VALIDATES_VALUES: bool = false;
 
-    fn validate(backend: &CudaBackend, indices: &TypedTensor<Self>) -> crate::Result<()>;
+    fn validate(backend: &CudaEngine, indices: &TypedTensor<Self>) -> crate::Result<()>;
 }
 
 impl CudaIndexValidation for f32 {
     const VALIDATES_VALUES: bool = true;
 
-    fn validate(backend: &CudaBackend, indices: &TypedTensor<Self>) -> crate::Result<()> {
+    fn validate(backend: &CudaEngine, indices: &TypedTensor<Self>) -> crate::Result<()> {
         validate_float_index_tensor(backend, indices)
     }
 }
@@ -4150,19 +4180,19 @@ impl CudaIndexValidation for f32 {
 impl CudaIndexValidation for f64 {
     const VALIDATES_VALUES: bool = true;
 
-    fn validate(backend: &CudaBackend, indices: &TypedTensor<Self>) -> crate::Result<()> {
+    fn validate(backend: &CudaEngine, indices: &TypedTensor<Self>) -> crate::Result<()> {
         validate_float_index_tensor(backend, indices)
     }
 }
 
 impl CudaIndexValidation for i32 {
-    fn validate(_backend: &CudaBackend, _indices: &TypedTensor<Self>) -> crate::Result<()> {
+    fn validate(_backend: &CudaEngine, _indices: &TypedTensor<Self>) -> crate::Result<()> {
         Ok(())
     }
 }
 
 impl CudaIndexValidation for i64 {
-    fn validate(_backend: &CudaBackend, _indices: &TypedTensor<Self>) -> crate::Result<()> {
+    fn validate(_backend: &CudaEngine, _indices: &TypedTensor<Self>) -> crate::Result<()> {
         Ok(())
     }
 }
@@ -4174,7 +4204,7 @@ impl CudaFloatIndex for f32 {
         !self.is_finite() || self.fract() != 0.0 || self.abs() > 16_777_216.0
     }
 
-    fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+    fn read_invalid_flag(backend: &CudaEngine, flag: &TypedTensor<Self>) -> crate::Result<Self> {
         let host = interop::download_typed_tensor(backend.runtime(), flag, "index_tensor")?;
         host.as_slice()?.get(1).copied().ok_or_else(|| {
             crate::Error::invalid_argument(
@@ -4193,7 +4223,7 @@ impl CudaFloatIndex for f64 {
         !self.is_finite() || self.fract() != 0.0 || self.abs() > 9_007_199_254_740_992.0
     }
 
-    fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+    fn read_invalid_flag(backend: &CudaEngine, flag: &TypedTensor<Self>) -> crate::Result<Self> {
         let host = interop::download_typed_tensor(backend.runtime(), flag, "index_tensor")?;
         host.as_slice()?.get(1).copied().ok_or_else(|| {
             crate::Error::invalid_argument(
@@ -4206,7 +4236,7 @@ impl CudaFloatIndex for f64 {
 }
 
 fn validate_float_index_tensor<F>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     indices: &TypedTensor<F>,
 ) -> crate::Result<()>
 where
@@ -4286,7 +4316,7 @@ where
 }
 
 fn launch_checked_integer_binary<I>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &TypedTensor<I>,
     rhs: &TypedTensor<I>,
     op: &'static str,
@@ -4339,7 +4369,7 @@ where
 }
 
 fn launch_scalar_binary<I>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &TypedTensor<I>,
     rhs: &TypedTensor<I>,
     op: &'static str,
@@ -4380,7 +4410,7 @@ where
 }
 
 fn launch_real_complex_scalar_binary<R, C>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     real: &TypedTensor<R>,
     complex: &TypedTensor<C>,
     op: &'static str,
@@ -4460,7 +4490,7 @@ fn typed_or_unsupported<'a, T: tenferro_tensor::TensorScalar>(
 }
 
 fn promoted_real_complex_scalar_binary(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &Tensor,
     rhs: &Tensor,
     op: &'static str,
@@ -4498,7 +4528,7 @@ fn promoted_real_complex_scalar_binary(
 }
 
 fn launch_checked_integer_scalar_binary<I>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &TypedTensor<I>,
     rhs: &TypedTensor<I>,
     op: &'static str,
@@ -4594,7 +4624,7 @@ impl CudaReadInput<'_> {
 }
 
 fn launch_elementwise_binary_into<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &Tensor,
     rhs: &Tensor,
     out: &mut Tensor,
@@ -4635,7 +4665,7 @@ where
 }
 
 fn launch_elementwise_unary_into<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     input: &Tensor,
     out: &mut Tensor,
     op: &'static str,
@@ -4668,7 +4698,7 @@ where
     Ok(())
 }
 
-impl CudaBackend {
+impl CudaEngine {
     /// Run the common same-shape elementwise cases directly into the caller's
     /// owned CUDA output. Views and broadcast/scalar cases retain the existing
     /// allocating fallback so their layout and ownership contracts are unchanged.
@@ -4997,7 +5027,7 @@ fn contiguous_read_typed<T: TensorScalar + Scalar>(
 ) -> crate::Result<&TypedTensor<T>> {
     tensor.as_typed::<T>().ok_or_else(|| {
         crate::Error::unsupported(
-            "CudaBackend::to_contiguous_read",
+            "CudaEngine::to_contiguous_read",
             "an externally defined payload is not supported by this GPU operation",
         )
     })
@@ -5013,25 +5043,27 @@ fn copy_read_typed<T: TensorScalar + Scalar>(tensor: &Tensor) -> crate::Result<&
     })
 }
 
-impl TensorDeviceTransfer for CudaBackend {
+impl TensorDeviceTransfer for CudaEngine {
     fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
         let tensor = tensor.as_tensor().ok_or_else(|| {
             crate::Error::unsupported(
-                "CudaBackend::download_to_host",
+                "CudaEngine::download_to_host",
                 "CUDA transfer currently requires an owned tensor; materialize a view explicitly first",
             )
         })?;
-        download_tensor(self.runtime(), tensor)
+        let stream = self.stream;
+        stream.executes(|| download_tensor(self.runtime(), tensor))
     }
 
     fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
         let tensor = tensor.as_tensor().ok_or_else(|| {
             crate::Error::unsupported(
-                "CudaBackend::upload_host_tensor",
+                "CudaEngine::upload_host_tensor",
                 "CUDA transfer currently requires an owned tensor; materialize a view explicitly first",
             )
         })?;
-        upload_tensor(self.runtime(), tensor)
+        let stream = self.stream;
+        stream.executes(|| upload_tensor(self.runtime(), tensor))
     }
 }
 
@@ -5072,7 +5104,7 @@ impl<T: TensorScalar + Clone + 'static + Scalar> CompactOperand<'_, T> {
 }
 
 /// Dtype-erased borrowed view of the operands accepted by
-/// [`CudaBackend::execute_broadcast_multiply`].
+/// [`CudaEngine::execute_broadcast_multiply`].
 enum BroadcastMultiplyView<'a> {
     F32(TypedTensorView<'a, f32>),
     F64(TypedTensorView<'a, f64>),
@@ -5105,8 +5137,6 @@ fn compact_view(view: TensorView<'_>) -> crate::Result<Option<BroadcastMultiplyV
     })
 }
 
-impl TensorBackend for CudaBackend {}
-
 fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate::Result<()> {
     ensure_rank(op, rank, perm.len())?;
     ensure_axes_unique(op, "perm", perm, rank)
@@ -5127,7 +5157,7 @@ fn ensure_same_shape_for_broadcast_multiply(
 }
 
 fn launch_broadcast_multiply_typed<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &CompactOperand<'_, T>,
     lhs_shape: &[usize],
     lhs_dims: &[usize],
@@ -5166,7 +5196,7 @@ where
 }
 
 fn launch_broadcast_multiply_int_typed<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &CompactOperand<'_, T>,
     lhs_shape: &[usize],
     lhs_dims: &[usize],
@@ -5205,7 +5235,7 @@ where
 }
 
 fn launch_broadcast_multiply_complex_typed<T>(
-    backend: &CudaBackend,
+    backend: &CudaEngine,
     lhs: &CompactOperand<'_, T>,
     lhs_shape: &[usize],
     lhs_dims: &[usize],

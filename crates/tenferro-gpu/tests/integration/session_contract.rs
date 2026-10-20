@@ -1,6 +1,3 @@
-#[cfg(any(feature = "cuda", feature = "webgpu"))]
-use std::any::type_name;
-
 #[cfg(feature = "webgpu")]
 #[test]
 fn webgpu_session_type_is_distinct_from_owner() {
@@ -30,26 +27,15 @@ fn webgpu_session_exposes_backend_session_operations() {
 
 #[cfg(feature = "cuda")]
 #[test]
-fn cuda_session_type_is_distinct_from_owner() {
-    use tenferro_gpu::{cuda::CudaBackend, cuda::CudaExecSession};
-
-    assert_ne!(
-        type_name::<CudaBackend>(),
-        type_name::<CudaExecSession<'static>>()
-    );
-}
-
-#[cfg(feature = "cuda")]
-#[test]
-fn cuda_session_exposes_backend_session_operations() {
-    use tenferro_gpu::cuda::CudaExecSession;
+fn cuda_engine_exposes_engine_operations() {
+    use tenferro_gpu::cuda::CudaEngine;
     use tenferro_tensor::{Engine, Tensor, TensorElementwise, TensorRead};
 
     fn assert_backend_session<S: Engine + ?Sized>() {}
 
-    assert_backend_session::<CudaExecSession<'static>>();
+    assert_backend_session::<CudaEngine>();
     let _add: fn(
-        &mut CudaExecSession<'static>,
+        &mut CudaEngine,
         TensorRead<'_>,
         TensorRead<'_>,
     ) -> tenferro_tensor::Result<Tensor> = TensorElementwise::add_read;
@@ -73,17 +59,12 @@ fn execution_session_capability_cannot_project_or_escape_owner_borrow() {
 
     #[cfg(feature = "cuda")]
     {
-        tests.compile_fail("tests/ui/cuda_session_borrow_escape.rs");
-        tests.compile_fail("tests/ui/cuda_session_owner_projection.rs");
+        tests.compile_fail("tests/ui/cuda_engine_is_not_clone.rs");
         tests.compile_fail("tests/ui/cuda_removed_runtime_engine_id.rs");
         tests.compile_fail("tests/ui/cuda_removed_runtime_engine_registration_with_id.rs");
         tests.compile_fail("tests/ui/cuda_backend_rejects_bare_integer.rs");
-        tests.compile_fail("tests/ui/cuda_held_session_is_not_send.rs");
-        tests.compile_fail("tests/ui/cuda_held_session_is_not_sync.rs");
-        tests.compile_fail("tests/ui/cuda_held_session_borrow_escape.rs");
         tests.compile_fail("tests/ui/cuda_pending_upload_moves_the_destination.rs");
         tests.compile_fail("tests/ui/cuda_pending_download_moves_the_source.rs");
-        tests.compile_fail("tests/ui/cuda_source_publication_requires_unsafe.rs");
         tests.compile_fail("tests/ui/cuda_source_publication_moves_the_value.rs");
         tests.compile_fail("tests/ui/cuda_publication_copy_consumes_the_publication.rs");
     }

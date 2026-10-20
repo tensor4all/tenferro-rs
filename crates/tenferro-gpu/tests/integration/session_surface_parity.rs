@@ -35,14 +35,14 @@ where
 }
 
 #[test]
-fn cpu_session_exposes_the_common_surface() {
-    assert_common_session_surface::<tenferro_cpu::CpuExecSession<'static>>();
+fn cpu_engine_exposes_the_common_surface() {
+    assert_common_session_surface::<tenferro_cpu::CpuEngine>();
 }
 
 #[cfg(feature = "cuda")]
 #[test]
-fn cuda_session_exposes_the_common_surface() {
-    assert_common_session_surface::<tenferro_gpu::cuda::CudaExecSession<'static>>();
+fn cuda_engine_exposes_the_common_surface() {
+    assert_common_session_surface::<tenferro_gpu::cuda::CudaEngine>();
 }
 
 #[cfg(feature = "webgpu")]

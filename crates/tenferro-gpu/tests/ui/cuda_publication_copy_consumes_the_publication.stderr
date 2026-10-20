@@ -1,7 +1,7 @@
 error[E0382]: borrow of moved value: `publication`
  --> tests/ui/cuda_publication_copy_consumes_the_publication.rs:7:23
   |
-5 | fn use_after_copy(publication: SourcePublication, consumer: &mut CudaHeldSession<'_>) {
+5 | fn use_after_copy(publication: SourcePublication, consumer: &mut CudaEngine) {
   |                   ----------- move occurs because `publication` has type `SourcePublication`, which does not implement the `Copy` trait
 6 |     let pending = publication.copy_into(consumer).expect("submitted");
   |                               ------------------- `publication` moved due to this method call
@@ -9,7 +9,7 @@ error[E0382]: borrow of moved value: `publication`
   |                       ^^^^^^^^^^^ value borrowed here after move
   |
 note: `SourcePublication::copy_into` takes ownership of the receiver `self`, which moves `publication`
- --> src/cubecl/transfer.rs:1788:12
+ --> src/cubecl/transfer.rs:1788:25
 
 error[E0382]: use of moved value: `publication`
   --> tests/ui/cuda_publication_copy_consumes_the_publication.rs:18:19
@@ -23,4 +23,4 @@ error[E0382]: use of moved value: `publication`
    |                   ^^^^^^^^^^^ value used here after move
    |
 note: `SourcePublication::copy_into` takes ownership of the receiver `self`, which moves `publication`
-  --> src/cubecl/transfer.rs:1788:12
+  --> src/cubecl/transfer.rs:1788:25

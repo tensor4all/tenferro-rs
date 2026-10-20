@@ -1,7 +1,10 @@
 #![cfg(feature = "webgpu")]
 
+#[path = "integration/engine_run.rs"]
+mod engine_run;
+use engine_run::EngineRun;
 use tenferro_gpu::{webgpu::upload_webgpu_tensor, webgpu::WebGpuBackend};
-use tenferro_tensor::{AllocationId, BackendSessionHost, DType, Tensor, TensorRead};
+use tenferro_tensor::{AllocationId, DType, Tensor, TensorRead};
 
 fn allocation_id(tensor: &Tensor) -> Option<AllocationId> {
     fn typed<T: tenferro_tensor::TensorScalar>(tensor: &Tensor) -> Option<AllocationId> {
@@ -50,9 +53,7 @@ fn uploaded_storage_is_root_owned_and_prepares_once_at_the_descriptor_boundary()
         .expect("root preparation should accept the checked descriptor");
 
     let duplicate = backend
-        .with_backend_session(|session| {
-            session.to_contiguous_read(TensorRead::from_tensor(&tensor))
-        })
+        .run(|session| session.to_contiguous_read(TensorRead::from_tensor(&tensor)))
         .unwrap()
         .unwrap();
     assert_eq!(duplicate.dtype(), DType::F32);

@@ -12,15 +12,15 @@
 //! exposes no way to enumerate compiled kernels or ask whether a kernel type
 //! was loaded. See docs/design/cubecl-011-compile-count-hook.md; the assertion
 //! returns when that hook exists upstream.
+use crate::cubecl::tests::EngineRun;
 
 use num_complex::Complex64;
 use tenferro_tensor::{
-    backend::BackendSessionHost, ContractionScalar, TensorRead, TensorView, TensorViewMut,
-    TensorWrite,
+    backend::ContractionScalar, TensorRead, TensorView, TensorViewMut, TensorWrite,
 };
 
 use super::super::interop::fill_zero_write;
-use super::super::CudaBackend;
+use super::super::CudaEngine;
 use super::{cpu_backend, download, gpu_backend, tensor_f64, tensor_i64, upload};
 use crate::config::{GatherConfig, PadConfig, SliceConfig};
 use crate::{Tensor, TypedTensor};
@@ -31,10 +31,10 @@ use crate::{Tensor, TypedTensor};
 /// hook described in docs/design/cubecl-011-compile-count-hook.md; until it
 /// exists, the launches still run and each test checks its own result.
 fn assert_one_module_for_all_layouts(
-    backend: &mut CudaBackend,
+    backend: &mut CudaEngine,
     kernel: &str,
     layouts: usize,
-    mut launch: impl FnMut(&mut CudaBackend, usize),
+    mut launch: impl FnMut(&mut CudaEngine, usize),
 ) {
     assert!(layouts >= 4, "use several distinct layouts");
     let _ = kernel;
@@ -89,7 +89,7 @@ fn assert_bits_eq(actual: &[f64], expected: &[f64], what: &str) {
     }
 }
 
-fn host_f64(backend: &CudaBackend, tensor: &Tensor) -> Vec<f64> {
+fn host_f64(backend: &CudaEngine, tensor: &Tensor) -> Vec<f64> {
     download(backend, tensor)
         .as_slice::<f64>()
         .unwrap()
@@ -127,8 +127,9 @@ fn materialize_strided_kernel_compiles_once_per_rank() {
             let view = typed_f64(&source)
                 .backend_region_view(shape.to_vec(), strides.to_vec(), offset)
                 .unwrap();
-            let out = gpu
-                .to_contiguous_view_typed(&view, "kernel_specialization_test")
+            let stream = gpu.stream;
+            let out = stream
+                .executes(|| gpu.to_contiguous_view_typed(&view, "kernel_specialization_test"))
                 .unwrap();
             let actual = host_f64(gpu, &Tensor::from_typed(out));
             assert_bits_eq(
@@ -159,8 +160,9 @@ fn tiled_transpose_kernel_compiles_once_per_tile_configuration() {
             let view = typed_f64(&source)
                 .backend_region_view(vec![rows, cols], strides.to_vec(), 0)
                 .unwrap();
-            let out = gpu
-                .to_contiguous_view_typed(&view, "kernel_specialization_test")
+            let stream = gpu.stream;
+            let out = stream
+                .executes(|| gpu.to_contiguous_view_typed(&view, "kernel_specialization_test"))
                 .unwrap();
             let actual = host_f64(gpu, &Tensor::from_typed(out));
             assert_bits_eq(
@@ -208,7 +210,10 @@ fn strided_copy_kernels_compile_once_per_rank() {
                     .unwrap()
                     .backend_region_view_mut(shape.to_vec(), dst_strides.to_vec(), dst_offset)
                     .unwrap();
-                gpu.copy_view_to_view_typed(&src, &mut dst, "kernel_specialization_test")
+                gpu.stream
+                    .executes(|| {
+                        gpu.copy_view_to_view_typed(&src, &mut dst, "kernel_specialization_test")
+                    })
                     .unwrap();
             }
             let mut expected = dst_init;
@@ -245,7 +250,10 @@ fn strided_copy_kernels_compile_once_per_rank() {
                     .unwrap()
                     .backend_region_view_mut(shape.to_vec(), dst_strides.to_vec(), dst_offset)
                     .unwrap();
-                gpu.copy_view_to_view_typed(&src, &mut dst, "kernel_specialization_test")
+                gpu.stream
+                    .executes(|| {
+                        gpu.copy_view_to_view_typed(&src, &mut dst, "kernel_specialization_test")
+                    })
                     .unwrap();
             }
             let mut expected = dst_init;
@@ -318,7 +326,7 @@ fn axpby_strided_source_kernel_compiles_once_per_rank() {
             let x = typed_f64(&source)
                 .backend_region_view(shape.to_vec(), strides.to_vec(), offset)
                 .unwrap();
-            gpu.with_backend_session(|session| {
+            gpu.run(|session| {
                 session.axpby_read_into_accum(
                     ContractionScalar::F64(2.0),
                     TensorRead::from_view(TensorView::F64(x)),
@@ -363,7 +371,7 @@ fn axpby_strided_source_kernel_compiles_once_per_rank() {
                 .unwrap()
                 .backend_region_view(shape.to_vec(), strides.to_vec(), offset)
                 .unwrap();
-            gpu.with_backend_session(|session| {
+            gpu.run(|session| {
                 session.axpby_read_into_accum(
                     ContractionScalar::C64(Complex64::new(1.0, 0.0)),
                     TensorRead::from_view(TensorView::C64(x)),
@@ -390,18 +398,14 @@ fn axpby_strided_source_kernel_compiles_once_per_rank() {
 
 /// Run the same session op on the CPU and CUDA backends and compare bit for bit.
 fn assert_cpu_parity(
-    gpu: &mut CudaBackend,
+    gpu: &mut CudaEngine,
     inputs: &[&Tensor],
     op: impl Fn(&mut dyn tenferro_tensor::backend::Engine, &[&Tensor]) -> Tensor + Sync,
 ) {
-    let expected = cpu_backend()
-        .with_backend_session(|session| op(session, inputs))
-        .unwrap();
+    let expected = cpu_backend().run(|session| op(session, inputs)).unwrap();
     let device_inputs: Vec<Tensor> = inputs.iter().map(|input| upload(gpu, input)).collect();
     let device_refs: Vec<&Tensor> = device_inputs.iter().collect();
-    let actual = gpu
-        .with_backend_session(|session| op(session, &device_refs))
-        .unwrap();
+    let actual = gpu.run(|session| op(session, &device_refs)).unwrap();
     let actual = download(gpu, &actual);
     assert_eq!(actual.shape(), expected.shape());
     assert_bits_eq(

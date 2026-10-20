@@ -5,25 +5,24 @@ use std::sync::Arc;
 use num_complex::{Complex32, Complex64};
 use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef, SemanticOperationView};
 use tenferro_runtime::{
-    assemble_executable_engine_registration, CacheOwnerError, CoreCapabilityBundle,
-    CoreCapabilityKind, CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest,
-    ElementwisePrepareRequest, ElementwiseRuntime, EngineId, EngineRegistration,
-    EngineRegistrationMetadata, ExecutableEngineRegistrationConfig, ExecutionContextIdentity,
-    HardwareClassId, IndexingPrepareRequest, IndexingRuntime, InputIngressContract,
-    InputPlacementContract, InputSignature, InputSignatureContract, InputSpecializationProjection,
+    assemble_executable_engine_registration, CoreCapabilityBundle, CoreCapabilityKind,
+    CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest,
+    ElementwiseRuntime, EngineId, EngineRegistration, EngineRegistrationMetadata,
+    ExecutableEngineRegistrationConfig, ExecutionContextIdentity, HardwareClassId,
+    IndexingPrepareRequest, IndexingRuntime, InputIngressContract, InputPlacementContract,
+    InputSignature, InputSignatureContract, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
     LayoutSpecialization, PrepareCapability, PrepareError, PreparedOperation,
     PreparedOperationBinding, PreparedOperationPlan, ProviderContractError, ProviderDeviceIdentity,
     ProviderId, ReductionPrepareRequest, ReductionRuntime, ResidentOutputContract,
-    RuntimeCacheOwner, RuntimeConfigError, RuntimeInputContract, SpecializationError,
-    SpecializationProjection, SpecializationRequirements, StorageClass, UnsupportedReason,
+    RuntimeConfigError, RuntimeInputContract, SpecializationError, SpecializationProjection,
+    SpecializationRequirements, StorageClass, UnsupportedReason,
 };
 use tenferro_tensor::{
     DType, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor, TensorRead, TensorView,
 };
 
-use super::event_domain::CudaEventDomainDriver;
-use super::CudaBackend;
+use super::CudaEngine;
 
 const CUDA_HARDWARE_CLASS_ID: &str = "tenferro-cuda.device.v1";
 const CUDA_STORAGE_CLASS_ID: &str = "tenferro.storage.device.v1";
@@ -55,32 +54,50 @@ pub fn cuda_runtime_hardware_class() -> Result<HardwareClassId, RuntimeConfigErr
     HardwareClassId::new(CUDA_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)
 }
 
-/// Build a runtime engine registration for a [`CudaBackend`] and caller-selected
-/// [`EngineId`].
+/// The runtime engine id a [`CudaEngine`] uses unless the caller picks another
+/// one with [`CudaEngine::with_runtime_engine_id`].
+pub(crate) const DEFAULT_CUDA_ENGINE_ID: &str = "tenferro.cuda.default.v1";
+
+/// The built-in CUDA engine id, which is a valid identifier by construction.
+pub(crate) fn default_cuda_engine_id() -> EngineId {
+    match EngineId::new(DEFAULT_CUDA_ENGINE_ID) {
+        Ok(id) => id,
+        Err(_) => unreachable!("the built-in CUDA engine id is a valid identifier"),
+    }
+}
+
+/// Build the runtime engine registration for a [`CudaEngine`].
 ///
-/// The registration exposes CUDA direct core preparation capabilities, CUDA
-/// extension-cache ownership hooks, and the runtime-owned tensor backend
-/// execution bridge. The caller owns the engine namespace and identity; CUDA
-/// does not provide a process-global engine ID.
+/// The registration holds only immutable metadata: stateless preparation
+/// witnesses and the input contract of the engine's device and memory domain.
+/// It is registered under the engine's runtime engine id
+/// ([`CudaEngine::runtime_engine_id`]); executing a prepared program needs the
+/// engine itself, passed to `Runtime::run`.
 ///
 /// # Errors
 ///
 /// Returns [`RuntimeConfigError`] if the CUDA hardware/storage identifiers or
 /// provider/device identity fail validation, or if the registration is
 /// internally invalid.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::cuda::{cuda_runtime_engine_registration, CudaEngine};
+///
+/// let _register = cuda_runtime_engine_registration;
+/// ```
 pub fn cuda_runtime_engine_registration(
-    backend: &CudaBackend,
-    engine_id: EngineId,
+    engine: &CudaEngine,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
-    let prepared_identity = prepare_cuda_registration_identity(engine_id, backend.device_id())?;
-    let backend = Arc::new(backend.clone());
-    let elementwise: Arc<dyn ElementwiseRuntime> = backend.clone();
-    let reduction: Arc<dyn ReductionRuntime> = backend.clone();
-    let indexing: Arc<dyn IndexingRuntime> = backend.clone();
-    let dot_general: Arc<dyn DotGeneralPreparation> = backend.clone();
-    let layout: Arc<dyn LayoutRuntime> = backend.clone();
-    let cache_owner: Arc<dyn RuntimeCacheOwner> = backend.clone();
-    let execution_backend = backend.as_ref().clone();
+    let prepared_identity =
+        prepare_cuda_registration_identity(engine.runtime_engine_id().clone(), engine.device_id())?;
+    let preparer = Arc::new(CudaPreparer);
+    let elementwise: Arc<dyn ElementwiseRuntime> = preparer.clone();
+    let reduction: Arc<dyn ReductionRuntime> = preparer.clone();
+    let indexing: Arc<dyn IndexingRuntime> = preparer.clone();
+    let dot_general: Arc<dyn DotGeneralPreparation> = preparer.clone();
+    let layout: Arc<dyn LayoutRuntime> = preparer;
 
     let mut capabilities = CoreCapabilityBundle::builder();
     capabilities
@@ -96,8 +113,8 @@ pub fn cuda_runtime_engine_registration(
     let signature_storage = storage.clone();
     let runtime_storage = storage.clone();
     let resident_storage = storage.clone();
-    let device_ordinal = backend.device_id().ordinal() as usize;
-    let allocation_domain = backend.runtime().allocation_domain_id();
+    let device_ordinal = engine.device_id().ordinal() as usize;
+    let allocation_domain = engine.runtime().allocation_domain_id();
     let ingress = InputIngressContract::new(
         InputPlacementContract::new(move |placement, candidate| {
             candidate == &placement_storage && cuda_input_placement(placement, device_ordinal)
@@ -131,12 +148,14 @@ pub fn cuda_runtime_engine_registration(
     );
     assemble_executable_engine_registration(ExecutableEngineRegistrationConfig::new(
         metadata,
-        execution_backend,
-        Arc::new(CudaEventDomainDriver::new(backend.runtime().clone())),
+        ExecutionContextIdentity::of::<CudaEngine>(),
         ingress,
-        Some(cache_owner),
     ))
 }
+
+/// Stateless CUDA preparation witness: preparation reads no engine state.
+#[derive(Debug, Clone, Copy, Default)]
+struct CudaPreparer;
 
 fn cuda_provider_device_identity(
     device_id: super::CudaDeviceId,
@@ -318,7 +337,7 @@ impl PreparedOperation for CudaPreparedOperation {
     }
 }
 
-impl ElementwiseRuntime for CudaBackend {
+impl ElementwiseRuntime for CudaPreparer {
     fn prepare(
         &self,
         request: ElementwisePrepareRequest<'_>,
@@ -331,7 +350,7 @@ impl ElementwiseRuntime for CudaBackend {
     }
 }
 
-impl ReductionRuntime for CudaBackend {
+impl ReductionRuntime for CudaPreparer {
     fn prepare(
         &self,
         request: ReductionPrepareRequest<'_>,
@@ -344,7 +363,7 @@ impl ReductionRuntime for CudaBackend {
     }
 }
 
-impl IndexingRuntime for CudaBackend {
+impl IndexingRuntime for CudaPreparer {
     fn prepare(
         &self,
         request: IndexingPrepareRequest<'_>,
@@ -357,7 +376,7 @@ impl IndexingRuntime for CudaBackend {
     }
 }
 
-impl DotGeneralPreparation for CudaBackend {
+impl DotGeneralPreparation for CudaPreparer {
     fn prepare(
         &self,
         request: DotGeneralPrepareRequest<'_>,
@@ -370,7 +389,7 @@ impl DotGeneralPreparation for CudaBackend {
     }
 }
 
-impl LayoutRuntime for CudaBackend {
+impl LayoutRuntime for CudaPreparer {
     fn prepare(
         &self,
         request: LayoutPrepareRequest<'_>,
@@ -380,26 +399,6 @@ impl LayoutRuntime for CudaBackend {
             request.context(),
             CudaPreparedKind::Layout,
         )
-    }
-}
-
-impl RuntimeCacheOwner for CudaBackend {
-    fn cache_stats(&self) -> Result<tenferro_runtime::runtime::CacheStats, CacheOwnerError> {
-        let stats = self
-            .cuda_extension_cache_stats()
-            .map_err(cache_owner_error)?;
-        Ok(tenferro_runtime::runtime::CacheStats {
-            entries: stats.entries,
-            retained_bytes: stats.retained_bytes,
-            hits: stats.hits,
-            misses: stats.misses,
-            evictions: stats.evictions,
-            clears: stats.clears,
-        })
-    }
-
-    fn clear_caches(&self) -> Result<(), CacheOwnerError> {
-        self.clear_cuda_extension_cache().map_err(cache_owner_error)
     }
 }
 
@@ -440,7 +439,7 @@ fn prepare_cuda(
 }
 
 fn validate_cuda_runtime_context(context: &CorePrepareContext<'_>) -> Result<(), PrepareError> {
-    let expected_context = ExecutionContextIdentity::of::<CudaBackend>();
+    let expected_context = ExecutionContextIdentity::of::<CudaEngine>();
     if context.binding().context_identity() != expected_context {
         return Err(PrepareError::ProviderContract {
             source: ProviderContractError::WrongOperationFamily {
@@ -739,10 +738,6 @@ fn checked_sum_options(values: impl IntoIterator<Item = Option<usize>>) -> Optio
     values
         .into_iter()
         .try_fold(0usize, |sum, value| sum.checked_add(value?))
-}
-
-fn cache_owner_error(source: crate::Error) -> CacheOwnerError {
-    CacheOwnerError::new(Arc::new(source))
 }
 
 impl fmt::Display for CudaPreparedKind {

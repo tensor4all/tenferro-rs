@@ -6,9 +6,10 @@
 //! every dtype and size class, allocations that do not start at offset zero,
 //! the caller's buffer being free to change as soon as the upload returns, and
 //! downloads observing earlier device writes without an explicit barrier.
+use crate::cubecl::tests::EngineRun;
 
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::{backend::BackendSessionHost, ErrorKind, TensorRead, ValidationKind};
+use tenferro_tensor::{ErrorKind, TensorRead, ValidationKind};
 
 use super::super::interop::upload_typed_tensor;
 use super::{download, gpu_backend, tensor_bool, tensor_c32, tensor_c64, tensor_f32, tensor_f64};
@@ -143,11 +144,11 @@ fn owned_upload_and_offset_allocations_round_trip() {
     };
     let mut gpu = gpu;
     let sliced = gpu
-        .with_backend_session(|session| session.slice(&device, &config))
+        .run(|session| session.slice(&device, &config))
         .unwrap()
         .unwrap();
-    let expected = tenferro_cpu::CpuBackend::new()
-        .with_backend_session(|session| session.slice(&host, &config))
+    let expected = tenferro_cpu::CpuEngine::serial()
+        .run(|session| session.slice(&host, &config))
         .unwrap()
         .unwrap();
     assert_same_bits(&download(&gpu, &sliced), &expected);
@@ -189,7 +190,7 @@ fn download_observes_queued_device_writes_on_this_and_other_streams() {
     // Same thread (same CubeCL stream): the add is only queued when the
     // download starts.
     let doubled = gpu
-        .with_backend_session(|session| {
+        .run(|session| {
             session.add_read(
                 TensorRead::from_tensor(&device),
                 TensorRead::from_tensor(&device),
@@ -202,14 +203,14 @@ fn download_observes_queued_device_writes_on_this_and_other_streams() {
         expected.as_slice()
     );
 
-    // Another thread uses another CubeCL stream: produce there, download here
-    // without any explicit synchronization in between.
-    let mut worker = gpu.clone();
+    // Another thread drives the same engine (and so its stream): produce there,
+    // download here without any explicit synchronization in between.
+    let worker = &mut gpu;
     let produced = std::thread::scope(|scope| {
         scope
             .spawn(|| {
                 worker
-                    .with_backend_session(|session| {
+                    .run(|session| {
                         session.add_read(
                             TensorRead::from_tensor(&device),
                             TensorRead::from_tensor(&device),

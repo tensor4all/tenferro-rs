@@ -198,6 +198,8 @@ pub struct CudaRuntime {
 
 pub(crate) struct CudaRuntimeState {
     client: Client,
+    // The home stream: one runtime, one engine, one logical stream (#2206).
+    stream: cubecl_environment::stream::StreamId,
     device_id: CudaDeviceId,
     device_ordinal: usize,
     device_info: CudaDeviceInfo,
@@ -556,6 +558,7 @@ impl CudaRuntime {
         Ok(Self {
             inner: Arc::new(CudaRuntimeState {
                 client,
+                stream: cubecl_environment::stream::StreamId::allocate(),
                 device_id,
                 device_ordinal,
                 device_info,
@@ -944,11 +947,16 @@ impl CudaRuntime {
     /// raw vendor enqueue relies on is unchanged; it only saves the second
     /// blocking round trip (#1887). It does not publish a write (that remains
     /// tensor4all/cubecl#16).
+    ///
+    /// Returns the resolved resource: its address is valid only while the
+    /// returned binding is held (#2207).
     pub(crate) fn resolve_and_flush(
         &self,
         handle: cubecl_runtime::server::Handle,
         op: &'static str,
-    ) -> crate::Result<u64> {
+    ) -> crate::Result<
+        cubecl_runtime::storage::ManagedResource<cubecl_cuda::ffi_interop::GpuResource>,
+    > {
         use cubecl::server::Server;
 
         let stream_id = StreamId::current();
@@ -963,7 +971,7 @@ impl CudaRuntime {
             .ok_or_else(|| crate::Error::runtime_state(op, "CubeCL server is unavailable"))?
             .map_err(|err| crate::Error::backend_source(op, err))?
             .map_err(|err| crate::Error::backend_source(op, err))?;
-        Ok(resolved.resource().ptr)
+        Ok(resolved)
     }
 
     /// Copy `len` bytes of a CubeCL allocation into caller-owned host memory.
@@ -1004,7 +1012,17 @@ impl CudaRuntime {
     /// current stream, or [`crate::Error::BackendSource`] when CUDA context or
     /// stream synchronization fails.
     pub fn synchronize(&self) -> crate::Result<()> {
-        self.inner.synchronize()
+        let inner = &self.inner;
+        self.stream().executes(|| inner.synchronize())
+    }
+
+    /// The logical CubeCL stream this runtime and the engine that owns it issue work on.
+    ///
+    /// Every public entry point that takes a runtime runs on this stream, so a free-function
+    /// upload, download or synchronize is ordered with the engine's operations on the same
+    /// runtime instead of running on the calling thread's ambient stream.
+    pub(crate) fn stream(&self) -> cubecl_environment::stream::StreamId {
+        self.inner.stream
     }
 
     /// Ask the allocator to release device memory it can release.

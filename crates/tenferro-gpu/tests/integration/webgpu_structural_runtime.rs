@@ -1,10 +1,9 @@
 #![cfg(feature = "webgpu")]
 
+use crate::engine_run::EngineRun;
 use num_complex::Complex32;
 use tenferro_gpu::{webgpu::webgpu_available, webgpu::WebGpuBackend};
-use tenferro_tensor::{
-    BackendSessionHost, Error, ErrorKind, Tensor, TensorDeviceTransfer, TensorRead, TensorView,
-};
+use tenferro_tensor::{Error, ErrorKind, Tensor, TensorDeviceTransfer, TensorRead, TensorView};
 
 #[test]
 fn webgpu_transpose_f32_stays_on_device_and_matches_column_major_reference() {
@@ -20,7 +19,7 @@ fn webgpu_transpose_f32_stays_on_device_and_matches_column_major_reference() {
         .unwrap();
 
     let transposed = backend
-        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
+        .run(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
         .unwrap()
         .unwrap();
 
@@ -61,7 +60,7 @@ fn webgpu_batched_partial_tile_transpose_matches_column_major_reference() {
         .unwrap();
 
     let transposed = backend
-        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0, 2]))
+        .run(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0, 2]))
         .unwrap()
         .unwrap();
 
@@ -89,9 +88,7 @@ fn webgpu_to_contiguous_f32_materializes_a_noncompact_resident_view() {
     let view = input.backend_region_view(vec![3], vec![2], 0).unwrap();
 
     let materialized = backend
-        .with_backend_session(|__s| {
-            __s.to_contiguous_read(TensorRead::from_view(TensorView::F32(view)))
-        })
+        .run(|__s| __s.to_contiguous_read(TensorRead::from_view(TensorView::F32(view))))
         .unwrap()
         .unwrap();
 
@@ -115,9 +112,7 @@ fn webgpu_transpose_supports_i32_and_rejects_wgsl_unsupported_complex() {
         .upload_host_tensor(tenferro_tensor::TensorRead::from_tensor(&i32_host))
         .unwrap();
     let i32_output = backend
-        .with_backend_session(|__s| {
-            __s.transpose_read(TensorRead::from_tensor(&i32_input), &[1, 0])
-        })
+        .run(|__s| __s.transpose_read(TensorRead::from_tensor(&i32_input), &[1, 0]))
         .unwrap()
         .unwrap();
     let i32_actual = backend
@@ -139,9 +134,7 @@ fn webgpu_transpose_supports_i32_and_rejects_wgsl_unsupported_complex() {
         .upload_host_tensor(tenferro_tensor::TensorRead::from_tensor(&c32_host))
         .unwrap();
     let error = backend
-        .with_backend_session(|__s| {
-            __s.transpose_read(TensorRead::from_tensor(&c32_input), &[1, 0])
-        })
+        .run(|__s| __s.transpose_read(TensorRead::from_tensor(&c32_input), &[1, 0]))
         .unwrap()
         .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Unsupported);
@@ -160,7 +153,7 @@ fn webgpu_transpose_rejects_invalid_permutations_before_launch() {
         .unwrap();
 
     let error = backend
-        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[0, 0]))
+        .run(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[0, 0]))
         .unwrap()
         .unwrap_err();
 
@@ -180,7 +173,7 @@ fn webgpu_structural_kernels_preserve_zero_length_shapes_without_launching() {
         .unwrap();
 
     let output = backend
-        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
+        .run(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
         .unwrap()
         .unwrap();
 

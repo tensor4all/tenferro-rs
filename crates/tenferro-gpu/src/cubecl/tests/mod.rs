@@ -3,18 +3,33 @@ use std::error::Error as _;
 use num_complex::{Complex32, Complex64};
 
 use crate::config::{GatherConfig, ScatterConfig};
-use crate::cubecl::{
-    download_tensor, upload_tensor, with_cuda_exec_session, CudaBackend, CudaDeviceId,
-    CudaExecSession,
-};
+use crate::cubecl::{download_tensor, upload_tensor, CudaDeviceId, CudaEngine};
 use crate::{DType, Error, Tensor, TypedTensor};
-use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{backend::BackendSessionHost, ErrorKind, ValidationError, ValidationKind};
+use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{ErrorKind, ValidationError, ValidationKind};
 
+/// Run a closure on an engine through the backend-neutral [`tenferro_tensor::Engine`]
+/// surface, the way generic callers reach it.
+pub(crate) trait EngineRun {
+    fn run<R>(&mut self, f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R)
+        -> crate::Result<R>;
+}
+
+impl<E: tenferro_tensor::Engine> EngineRun for E {
+    fn run<R>(
+        &mut self,
+        f: impl FnOnce(&mut dyn tenferro_tensor::Engine) -> R,
+    ) -> crate::Result<R> {
+        Ok(f(self))
+    }
+}
+
+#[cfg(feature = "cubecl-interop")]
 mod alloc_zero_baseline_tests;
 mod blas1_tests;
 mod capability_tests;
 mod copy_fault_tests;
+#[cfg(feature = "cubecl-interop")]
 mod cubecl_session_tests;
 mod device_tests;
 mod elementwise_tests;
@@ -37,32 +52,29 @@ mod shared_workspace_tests;
 mod structural_tests;
 mod transfer_tests;
 
-/// Enter a CUDA execution session through the erased backend-session surface.
-///
-/// Mirrors the downstream pattern: `with_cuda_exec_session` must receive the
-/// session reconstructed by `with_backend_session`, not the raw backend.
-pub(crate) fn with_cuda_exec<R: Send>(
-    backend: &mut CudaBackend,
-    f: impl FnOnce(&mut CudaExecSession<'_>) -> R + Send,
+/// Run `f` on a CUDA engine reached through the backend-neutral surface, as
+/// downstream code does with `with_cuda_engine`.
+pub(crate) fn with_cuda_exec<R>(
+    backend: &mut CudaEngine,
+    f: impl FnOnce(&mut CudaEngine) -> R,
 ) -> R {
-    backend
-        .with_backend_session(|session| with_cuda_exec_session(session, f).expect("CUDA session"))
-        .unwrap()
+    let engine: &mut dyn tenferro_tensor::Engine = backend;
+    crate::cubecl::with_cuda_engine(engine, f).expect("CUDA engine")
 }
 
-fn cpu_backend() -> CpuBackend {
-    CpuBackend::new()
+fn cpu_backend() -> CpuEngine {
+    CpuEngine::serial()
 }
 
-fn gpu_backend() -> CudaBackend {
-    CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap()
+fn gpu_backend() -> CudaEngine {
+    CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap()
 }
 
-fn upload(backend: &CudaBackend, tensor: &Tensor) -> Tensor {
+fn upload(backend: &CudaEngine, tensor: &Tensor) -> Tensor {
     upload_tensor(backend.runtime(), tensor).unwrap()
 }
 
-fn download(backend: &CudaBackend, tensor: &Tensor) -> Tensor {
+fn download(backend: &CudaEngine, tensor: &Tensor) -> Tensor {
     download_tensor(backend.runtime(), tensor).unwrap()
 }
 
