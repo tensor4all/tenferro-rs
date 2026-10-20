@@ -75,3 +75,6 @@ impl tenferro_tensor::RuntimeCacheControl for GemmAnalysisCache {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

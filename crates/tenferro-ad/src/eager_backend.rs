@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::Arc;
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{EngineRegistration, ExecutionEngine, RuntimeConfigError};
+use tenferro_runtime::{EngineId, EngineRegistration, ExecutionEngine, RuntimeConfigError};
 #[cfg(test)]
 use tenferro_tensor::{
     CompareDir, DotGeneralConfig, ElementwiseReadOp, Engine, GatherConfig, PadConfig,
@@ -67,8 +67,20 @@ pub(crate) fn engine_kind_registration(
             webgpu,
         ));
     }
-    let _ = engine_id;
     None
+}
+
+/// The typed rejection for an engine kind the eager runtime cannot register.
+///
+/// The engine id is part of the message because the decision is made from the
+/// concrete engine type, not from the id: a foreign engine can report any id it
+/// likes, and the diagnostic must say which engine was refused.
+pub(crate) fn unregisterable_engine_error(engine_id: &EngineId) -> crate::Error {
+    crate::Error::unsupported(
+        "EagerRuntime::ensure_engine",
+        crate::ErrorPhase::Execution,
+        format!("engine id {engine_id:?} is not a registerable eager engine kind"),
+    )
 }
 
 #[cfg(test)]
@@ -93,14 +105,6 @@ impl RecordingEngine {
 impl ExecutionEngine for RecordingEngine {
     fn target(&self) -> tenferro_runtime::EngineTarget {
         self.inner.target()
-    }
-
-    fn take_extension_caches(&mut self) -> tenferro_runtime::ExtensionCacheStore {
-        self.inner.take_extension_caches()
-    }
-
-    fn restore_extension_caches(&mut self, caches: tenferro_runtime::ExtensionCacheStore) {
-        self.inner.restore_extension_caches(caches);
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
@@ -140,16 +144,8 @@ impl Engine for RecordingEngine {}
 
 #[cfg(test)]
 impl TensorElementwise for RecordingEngine {
-    fn elementwise_read_into(
-        &mut self,
-        op: ElementwiseReadOp,
-        inputs: &[TensorRead<'_>],
-        out: TensorWrite<'_>,
-    ) -> TensorResult<()> {
-        self.inner.elementwise_read_into(op, inputs, out)
-    }
-
     delegate_recording_backend_methods! {
+        fn elementwise_read_into(op: ElementwiseReadOp, inputs: &[TensorRead<'_>], out: TensorWrite<'_>) -> TensorResult<()>;
         fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
     }
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -216,15 +212,7 @@ impl TensorStructural for RecordingEngine {
         fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
         fn tril(input: &Tensor, k: i64) -> TensorResult<Tensor>;
         fn triu(input: &Tensor, k: i64) -> TensorResult<Tensor>;
-    }
-
-    // The previous read-half default delegated owned tensors to the one-shot
-    // method and rejected borrowed views. Reproduce it explicitly rather than
-    // forwarding a view, which would widen the accepted input surface.
-    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
-        self.inner
-            .transpose_read(TensorRead::from_tensor(input), perm)
+        fn transpose_read(input: TensorRead<'_>, perm: &[usize]) -> TensorResult<Tensor>;
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -281,33 +269,8 @@ impl TensorIndexing for RecordingEngine {
 
 #[cfg(test)]
 impl TensorDot for RecordingEngine {
-    // The previous read-half default delegated an owned pair to the one-shot
-    // method and materialized borrowed views through to_contiguous_read before
-    // contracting. Reproduce that exactly rather than forwarding a view.
-    fn dot_general_read(
-        &mut self,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
-    ) -> TensorResult<Tensor> {
-        match (lhs.as_tensor(), rhs.as_tensor()) {
-            (Some(lhs), Some(rhs)) => self.inner.dot_general_read(
-                TensorRead::from_tensor(lhs),
-                TensorRead::from_tensor(rhs),
-                config,
-            ),
-            _ => {
-                let lhs = self.to_contiguous_read(lhs)?;
-                let rhs = self.to_contiguous_read(rhs)?;
-                {
-                    self.inner.dot_general_read(
-                        TensorRead::from_tensor(&lhs),
-                        TensorRead::from_tensor(&rhs),
-                        config,
-                    )
-                }
-            }
-        }
+    delegate_recording_backend_methods! {
+        fn dot_general_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, config: &DotGeneralConfig) -> TensorResult<Tensor>;
     }
 }
 
@@ -319,11 +282,11 @@ impl tenferro_tensor::SessionCachedDot for RecordingEngine {}
 impl TensorBuffer for RecordingEngine {}
 #[cfg(test)]
 impl TensorDeviceTransfer for RecordingEngine {
-    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> TensorResult<Tensor> {
-        self.inner.download_to_host(tensor)
-    }
-
-    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> TensorResult<Tensor> {
-        self.inner.upload_host_tensor(tensor)
+    delegate_recording_backend_methods! {
+        fn download_to_host(tensor: TensorRead<'_>) -> TensorResult<Tensor>;
+        fn upload_host_tensor(tensor: TensorRead<'_>) -> TensorResult<Tensor>;
     }
 }
+
+#[cfg(test)]
+mod tests;
