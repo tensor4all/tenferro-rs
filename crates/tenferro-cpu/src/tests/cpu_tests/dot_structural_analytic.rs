@@ -1877,6 +1877,65 @@ fn read_entries_consume_views_without_staging() {
     assert_eq!(engine.resources.read_stagings(), before);
     assert_eq!(sliced.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
 
+    // The remaining indexing reads take the same descriptor, so a strided view
+    // reaches each kernel unreduced.
+    let view = || TypedTensorView::from_slice(vec![3, 2], vec![2, 1], 0, &transposed_data).unwrap();
+
+    let before = engine.resources.read_stagings();
+    let reversed = engine
+        .reverse_read(TensorRead::from_view(TensorView::F64(view())), &[0])
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(
+        reversed.as_slice::<f64>().unwrap(),
+        &[5.0, 3.0, 1.0, 6.0, 4.0, 2.0]
+    );
+
+    let before = engine.resources.read_stagings();
+    let padded = engine
+        .pad_read(
+            TensorRead::from_view(TensorView::F64(view())),
+            &PadConfig {
+                edge_padding_low: vec![1, 0],
+                edge_padding_high: vec![0, 0],
+                interior_padding: vec![0, 0],
+            },
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(padded.shape(), &[4, 2]);
+
+    let before = engine.resources.read_stagings();
+    let joined = engine
+        .concatenate_read(
+            &[
+                TensorRead::from_view(TensorView::F64(view())),
+                TensorRead::from_view(TensorView::F64(view())),
+            ],
+            0,
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(joined.shape(), &[6, 2]);
+
+    let indices = Tensor::from_vec_col_major(vec![1, 1], vec![1_i64]).unwrap();
+    let before = engine.resources.read_stagings();
+    let gathered = engine
+        .gather_read(
+            TensorRead::from_view(TensorView::F64(view())),
+            TensorRead::from_tensor(&indices),
+            &GatherConfig {
+                offset_dims: vec![1],
+                collapsed_slice_dims: vec![0],
+                start_index_map: vec![0],
+                index_vector_dim: 1,
+                slice_sizes: vec![1, 2],
+            },
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(gathered.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+
     // `to_contiguous_read` is the canonicalization itself: copying a view is its
     // contract, so it is the live positive control for the counter.
     let before = engine.resources.read_stagings();

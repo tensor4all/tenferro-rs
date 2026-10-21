@@ -786,6 +786,24 @@ impl TensorIndexing for CpuEngine {
             indexing::slice_read_with_pool(buffers, &exec_context, input, config)
         })
     }
+    fn dynamic_slice_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+        starts: tenferro_tensor::TensorRead<'_>,
+        slice_sizes: &[usize],
+    ) -> crate::Result<Tensor> {
+        self.run_native_with_plans(|context, buffers, cache| {
+            let exec_context = context.strided_exec_context();
+            indexing::dynamic_slice_read_with_pool(
+                buffers,
+                cache,
+                &exec_context,
+                input,
+                starts,
+                slice_sizes,
+            )
+        })
+    }
     fn dynamic_slice(
         &mut self,
         input: &Tensor,
@@ -828,16 +846,46 @@ impl TensorIndexing for CpuEngine {
             indexing::try_pad_with_pool(buffers, &exec_context, input, config)
         })
     }
+    fn pad_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+        config: &PadConfig,
+    ) -> crate::Result<Tensor> {
+        self.run_native_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::pad_read_with_pool(buffers, &exec_context, input, config)
+        })
+    }
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
         self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             indexing::try_concatenate_with_pool(buffers, &exec_context, inputs, axis)
         })
     }
+    fn concatenate_read(
+        &mut self,
+        inputs: &[tenferro_tensor::TensorRead<'_>],
+        axis: usize,
+    ) -> crate::Result<Tensor> {
+        self.run_native_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::concatenate_read_with_pool(buffers, &exec_context, inputs, axis)
+        })
+    }
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             indexing::reverse_with_pool(buffers, &exec_context, input, axes)
+        })
+    }
+    fn reverse_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+        axes: &[usize],
+    ) -> crate::Result<Tensor> {
+        self.run_native_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::reverse_read_with_pool(buffers, &exec_context, input, axes)
         })
     }
 }
@@ -941,6 +989,24 @@ impl TensorFusion for CpuEngine {
 }
 
 impl Engine for CpuEngine {
+    fn gather_read(
+        &mut self,
+        operand: tenferro_tensor::TensorRead<'_>,
+        start_indices: tenferro_tensor::TensorRead<'_>,
+        config: &GatherConfig,
+    ) -> crate::Result<Tensor> {
+        self.run_native_with_plans(|context, buffers, cache| {
+            let exec_context = context.strided_exec_context();
+            indexing::gather_read_with_pool(
+                buffers,
+                cache,
+                &exec_context,
+                operand,
+                start_indices,
+                config,
+            )
+        })
+    }
     fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         tenferro_tensor::backend::validate_vdot_read(&lhs, &rhs)?;
         crate::blas1::validate_cpu_read("Engine::vdot_read", &lhs)?;
