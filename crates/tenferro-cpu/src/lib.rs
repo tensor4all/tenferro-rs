@@ -113,6 +113,7 @@ mod indexed_plan_cache;
 mod indexing;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
+mod operand;
 pub mod provider;
 mod reduction;
 mod runtime_adapter;

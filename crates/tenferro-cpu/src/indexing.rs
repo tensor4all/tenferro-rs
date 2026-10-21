@@ -9,13 +9,14 @@ use strided_kernel::{
 use tinyvec::TinyVec;
 
 use super::indexed_plan_cache::{IndexedPlanFamily, IndexedPlanKey};
+use super::operand::{operand_from_view, Operand};
 use super::typed_host_data;
 use super::PooledUninitOutput;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::CpuPlanCache;
 use tenferro_tensor::TensorScalar;
 use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
-use tenferro_tensor::{Tensor, TypedTensor};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensor, TypedTensorView};
 
 type InlineStrides = TinyVec<[isize; 8]>;
 
@@ -127,6 +128,20 @@ fn indexed_plan_key(
     config: &[&[usize]],
 ) -> IndexedPlanKey {
     IndexedPlanKey::from_slices(family, dtype, index_dtype, dims, strides, config)
+}
+
+macro_rules! dispatch_tensor_view_result {
+    ($view:expr, |$v:ident| $body:expr) => {
+        match $view {
+            TensorView::F32($v) => Ok(Tensor::from_typed::<f32>($body?)),
+            TensorView::F64($v) => Ok(Tensor::from_typed::<f64>($body?)),
+            TensorView::I32($v) => Ok(Tensor::from_typed::<i32>($body?)),
+            TensorView::I64($v) => Ok(Tensor::from_typed::<i64>($body?)),
+            TensorView::Bool($v) => Ok(Tensor::from_typed::<bool>($body?)),
+            TensorView::C32($v) => Ok(Tensor::from_typed::<tenferro_tensor::Complex32>($body?)),
+            TensorView::C64($v) => Ok(Tensor::from_typed::<tenferro_tensor::Complex64>($body?)),
+        }
+    };
 }
 
 macro_rules! dispatch_tensor_unary_result {
@@ -258,6 +273,32 @@ macro_rules! dispatch_same_dtype_without_bool_result {
     }};
 }
 
+/// Descriptors for a same-dtype pair of reads, passed to `$body` as typed operands.
+///
+/// The caller has already matched both dtypes to `$ty`, so a mismatch here is a
+/// tag/payload disagreement and reports the pair's dtypes.
+macro_rules! read_pair_operands {
+    ($op:literal, $ty:ty, $variant:ident, $lhs:expr, $rhs:expr, |$a:ident, $b:ident| $body:expr) => {{
+        let (lhs, rhs): (&TensorRead<'_>, &TensorRead<'_>) = ($lhs, $rhs);
+        let mismatch = || crate::Error::dtype_mismatch($op, lhs.dtype(), rhs.dtype());
+        macro_rules! descriptor {
+            ($read:expr) => {
+                match $read {
+                    TensorRead::Tensor(tensor) => {
+                        let typed = TensorAsTyped::<$ty>::as_typed(*tensor).ok_or_else(mismatch)?;
+                        Operand::from_typed($op, typed)
+                    }
+                    TensorRead::View(TensorView::$variant(view)) => operand_from_view(view),
+                    TensorRead::View(_) => Err(mismatch()),
+                }
+            };
+        }
+        let $a = descriptor!(lhs)?;
+        let $b = descriptor!(rhs)?;
+        Ok(Tensor::from_typed::<$ty>($body?))
+    }};
+}
+
 /// The typed operands behind a same-dtype pair, or the refusal a mismatched pair reports.
 ///
 /// Callers reach this from a match on the pair of dtypes, so `None` means the tags and the runtime
@@ -320,6 +361,44 @@ pub(crate) fn gather_with_pool(
     ))
 }
 
+/// Gather a read, keeping a borrowed operand view's layout instead of staging it.
+///
+/// The index tensor is converted to a compact `i64` index buffer before the
+/// plan runs, so a borrowed index view is materialized here explicitly; the
+/// operand view is not copied.
+pub(crate) fn gather_read_with_pool(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    operand: TensorRead<'_>,
+    start_indices: TensorRead<'_>,
+    config: &GatherConfig,
+) -> crate::Result<Tensor> {
+    let mut staged_start_indices = None;
+    let start_indices =
+        index_tensor_read(buffers, "gather", start_indices, &mut staged_start_indices)?;
+    match operand {
+        TensorRead::Tensor(operand) => dispatch_tensor_unary_result!(operand, |t| typed_gather(
+            buffers,
+            cache,
+            exec_context,
+            t,
+            &start_indices,
+            config
+        )),
+        TensorRead::View(view) => {
+            dispatch_tensor_view_result!(view, |v| typed_gather_view(
+                buffers,
+                cache,
+                exec_context,
+                &v,
+                &start_indices,
+                config
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn scatter(
     operand: &Tensor,
@@ -368,6 +447,62 @@ pub(crate) fn scatter_with_pool(
     )
 }
 
+/// Scatter reads, keeping borrowed operand and update views instead of staging them.
+///
+/// The index tensor is converted to a compact `i64` index buffer before the
+/// plan runs, so a borrowed index view is materialized here explicitly; the
+/// operand and update views are not copied.
+pub(crate) fn scatter_read_with_pool(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    operand: TensorRead<'_>,
+    scatter_indices: TensorRead<'_>,
+    updates: TensorRead<'_>,
+    config: &ScatterConfig,
+) -> crate::Result<Tensor> {
+    let mut staged_scatter_indices = None;
+    let scatter_indices = index_tensor_read(
+        buffers,
+        "scatter",
+        scatter_indices,
+        &mut staged_scatter_indices,
+    )?;
+    let (operand_dtype, update_dtype) = (operand.dtype(), updates.dtype());
+    macro_rules! scatter_pair {
+        ($ty:ty, $variant:ident) => {
+            read_pair_operands!("scatter", $ty, $variant, &operand, &updates, |op, upd| {
+                typed_scatter_at(
+                    buffers,
+                    cache,
+                    exec_context,
+                    op,
+                    &scatter_indices,
+                    upd,
+                    config,
+                )
+            })
+        };
+    }
+    match (operand_dtype, update_dtype) {
+        (DType::F32, DType::F32) => scatter_pair!(f32, F32),
+        (DType::F64, DType::F64) => scatter_pair!(f64, F64),
+        (DType::I32, DType::I32) => scatter_pair!(i32, I32),
+        (DType::I64, DType::I64) => scatter_pair!(i64, I64),
+        (DType::C32, DType::C32) => scatter_pair!(tenferro_tensor::Complex32, C32),
+        (DType::C64, DType::C64) => scatter_pair!(tenferro_tensor::Complex64, C64),
+        (DType::Bool, DType::Bool) => Err(crate::Error::unsupported(
+            "scatter",
+            "Bool data tensors are not supported by additive scatter; supported data dtypes: F32/F64/I32/I64/C32/C64",
+        )),
+        _ => Err(crate::Error::dtype_mismatch(
+            "scatter",
+            operand_dtype,
+            update_dtype,
+        )),
+    }
+}
+
 pub(crate) fn try_slice_with_pool(
     buffers: &mut BufferPool,
     exec_context: &ExecContext,
@@ -375,6 +510,26 @@ pub(crate) fn try_slice_with_pool(
     config: &SliceConfig,
 ) -> crate::Result<Tensor> {
     dispatch_tensor_unary_result!(input, |t| typed_slice(buffers, exec_context, t, config))
+}
+
+/// Slice a read, keeping a borrowed view's layout instead of staging it.
+pub(crate) fn slice_read_with_pool(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    input: TensorRead<'_>,
+    config: &SliceConfig,
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(input) => try_slice_with_pool(buffers, exec_context, input, config),
+        TensorRead::View(view) => {
+            dispatch_tensor_view_result!(view, |v| typed_slice_view(
+                buffers,
+                exec_context,
+                &v,
+                config
+            ))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -413,6 +568,43 @@ pub(crate) fn dynamic_slice_with_pool(
         &starts,
         slice_sizes
     ))
+}
+
+/// Dynamic-slice a read, keeping a borrowed operand view instead of staging it.
+///
+/// The `starts` vector becomes a compact `i64` index buffer, so a borrowed
+/// `starts` view is materialized here explicitly; the operand view is not
+/// copied.
+pub(crate) fn dynamic_slice_read_with_pool(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    input: TensorRead<'_>,
+    starts: TensorRead<'_>,
+    slice_sizes: &[usize],
+) -> crate::Result<Tensor> {
+    let mut staged_starts = None;
+    let starts = index_tensor_read(buffers, "dynamic_slice", starts, &mut staged_starts)?;
+    match input {
+        TensorRead::Tensor(input) => dispatch_tensor_unary_result!(input, |t| typed_dynamic_slice(
+            buffers,
+            cache,
+            exec_context,
+            t,
+            &starts,
+            slice_sizes
+        )),
+        TensorRead::View(view) => {
+            dispatch_tensor_view_result!(view, |v| typed_dynamic_slice_view(
+                buffers,
+                cache,
+                exec_context,
+                &v,
+                &starts,
+                slice_sizes
+            ))
+        }
+    }
 }
 
 /// Return `operand` with `update` written at dynamic `starts`.
@@ -467,6 +659,57 @@ pub(crate) fn dynamic_update_slice_with_pool(
     })
 }
 
+/// Dynamic-update-slice reads, keeping borrowed operand and update views
+/// instead of staging them.
+///
+/// The `starts` vector becomes a compact `i64` index buffer, so a borrowed
+/// `starts` view is materialized here explicitly; the operand and update views
+/// are not copied.
+pub(crate) fn dynamic_update_slice_read_with_pool(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    operand: TensorRead<'_>,
+    update: TensorRead<'_>,
+    starts: TensorRead<'_>,
+) -> crate::Result<Tensor> {
+    let mut staged_starts = None;
+    let starts = index_tensor_read(buffers, "dynamic_update_slice", starts, &mut staged_starts)?;
+    macro_rules! update_pair {
+        ($ty:ty, $variant:ident) => {
+            read_pair_operands!(
+                "dynamic_update_slice",
+                $ty,
+                $variant,
+                &operand,
+                &update,
+                |op, upd| typed_dynamic_update_slice_at(
+                    buffers,
+                    cache,
+                    exec_context,
+                    op,
+                    upd,
+                    &starts
+                )
+            )
+        };
+    }
+    match (operand.dtype(), update.dtype()) {
+        (DType::F32, DType::F32) => update_pair!(f32, F32),
+        (DType::F64, DType::F64) => update_pair!(f64, F64),
+        (DType::I32, DType::I32) => update_pair!(i32, I32),
+        (DType::I64, DType::I64) => update_pair!(i64, I64),
+        (DType::Bool, DType::Bool) => update_pair!(bool, Bool),
+        (DType::C32, DType::C32) => update_pair!(tenferro_tensor::Complex32, C32),
+        (DType::C64, DType::C64) => update_pair!(tenferro_tensor::Complex64, C64),
+        (lhs, rhs) => Err(crate::Error::dtype_mismatch(
+            "dynamic_update_slice",
+            lhs,
+            rhs,
+        )),
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
     try_pad(input, config)
@@ -484,6 +727,85 @@ pub(crate) fn try_pad_with_pool(
     config: &PadConfig,
 ) -> crate::Result<Tensor> {
     dispatch_tensor_unary_result!(input, |t| typed_pad(buffers, exec_context, t, config))
+}
+
+/// Pad a read, keeping a borrowed view's layout instead of staging it.
+pub(crate) fn pad_read_with_pool(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    input: TensorRead<'_>,
+    config: &PadConfig,
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(input) => try_pad_with_pool(buffers, exec_context, input, config),
+        TensorRead::View(view) => {
+            dispatch_tensor_view_result!(view, |v| typed_pad_view(
+                buffers,
+                exec_context,
+                &v,
+                config
+            ))
+        }
+    }
+}
+
+/// Concatenate reads, keeping each borrowed view's layout instead of staging it.
+pub(crate) fn concatenate_read_with_pool(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    inputs: &[TensorRead<'_>],
+    axis: usize,
+) -> crate::Result<Tensor> {
+    let first = inputs.first().ok_or_else(|| {
+        crate::Error::invalid_argument(
+            "concatenate",
+            "configuration",
+            "concatenate requires at least one input",
+        )
+    })?;
+    let dtype = first.dtype();
+    macro_rules! concatenate_operands {
+        ($ty:ty, $variant:ident) => {{
+            let operands: SmallVec<[Operand<'_, $ty>; 4]> = inputs
+                .iter()
+                .map(|input| match input {
+                    TensorRead::Tensor(tensor) => {
+                        let typed = TensorAsTyped::<$ty>::as_typed(*tensor).ok_or_else(|| {
+                            crate::Error::dtype_mismatch("concatenate", dtype, tensor.dtype())
+                        })?;
+                        Operand::from_typed("concatenate", typed)
+                    }
+                    TensorRead::View(TensorView::$variant(view)) => operand_from_view(view),
+                    TensorRead::View(view) => Err(crate::Error::dtype_mismatch(
+                        "concatenate",
+                        dtype,
+                        view.dtype(),
+                    )),
+                })
+                .collect::<crate::Result<_>>()?;
+            Ok(Tensor::from_typed::<$ty>(typed_concatenate_operands(
+                buffers,
+                exec_context,
+                &operands,
+                axis,
+            )?))
+        }};
+    }
+    match dtype {
+        DType::F32 => concatenate_operands!(f32, F32),
+        DType::F64 => concatenate_operands!(f64, F64),
+        DType::I32 => concatenate_operands!(i32, I32),
+        DType::I64 => concatenate_operands!(i64, I64),
+        DType::Bool => concatenate_operands!(bool, Bool),
+        DType::C32 => concatenate_operands!(tenferro_tensor::Complex32, C32),
+        DType::C64 => concatenate_operands!(tenferro_tensor::Complex64, C64),
+        // A caller-owned payload has no CPU operation implementation.
+        DType::External(type_id) => Err(crate::Error::unsupported_dtype(
+            "cpu",
+            tenferro_tensor::DType::External(type_id),
+            "an externally defined payload is not supported by this CPU operation",
+        )),
+    }
 }
 
 pub(crate) fn try_concatenate_with_pool(
@@ -517,13 +839,65 @@ pub(crate) fn reverse_with_pool(
     dispatch_tensor_unary_result!(input, |t| typed_reverse(buffers, exec_context, t, axes))
 }
 
+/// Reverse a read, keeping a borrowed view's layout instead of staging it.
+pub(crate) fn reverse_read_with_pool(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    input: TensorRead<'_>,
+    axes: &[usize],
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(input) => reverse_with_pool(buffers, exec_context, input, axes),
+        TensorRead::View(view) => {
+            dispatch_tensor_view_result!(view, |v| typed_reverse_view(
+                buffers,
+                exec_context,
+                &v,
+                axes
+            ))
+        }
+    }
+}
+
 fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     buffers: &mut BufferPool,
     exec_context: &ExecContext,
     input: &TypedTensor<T>,
     config: &SliceConfig,
 ) -> crate::Result<TypedTensor<T>> {
-    let input_shape = input.shape();
+    typed_slice_at(
+        buffers,
+        exec_context,
+        Operand::from_typed("slice", input)?,
+        config,
+    )
+}
+
+fn typed_slice_view<T, R>(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    view: &TypedTensorView<'_, T, R>,
+    config: &SliceConfig,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + TensorScalar + 'static,
+    R: tenferro_tensor::TensorRank,
+{
+    typed_slice_at(buffers, exec_context, operand_from_view(view)?, config)
+}
+
+fn typed_slice_at<T: Copy + Clone + PoolScalar + TensorScalar>(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    operand: Operand<'_, T>,
+    config: &SliceConfig,
+) -> crate::Result<TypedTensor<T>> {
+    let Operand {
+        data,
+        shape: input_shape,
+        strides: input_strides,
+        offset: input_offset,
+    } = operand;
     let rank = input_shape.len();
     if config.starts.len() != rank {
         return Err(crate::Error::rank_mismatch(
@@ -547,8 +921,7 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         ));
     }
 
-    let out_shape: Vec<usize> = input
-        .shape()
+    let out_shape: Vec<usize> = input_shape
         .iter()
         .enumerate()
         .map(|(axis, &dim)| {
@@ -586,12 +959,11 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         .collect::<crate::Result<Vec<_>>>()?;
 
     let dtype = kernel_dtype(T::dtype());
-    let input_strides = inline_col_major_strides("slice", input_shape)?;
     let out_strides = inline_col_major_strides("slice", &out_shape)?;
     let plan = ErasedSlicePlan::compile(
         dtype,
         input_shape,
-        &input_strides,
+        input_strides,
         &out_shape,
         &out_strides,
         &config.starts,
@@ -608,10 +980,10 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("slice", input)?),
+            typed_bytes(data),
             input_shape,
-            &input_strides,
-            0,
+            input_strides,
+            input_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("slice", err))?;
@@ -687,14 +1059,27 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
     inputs: &[&TypedTensor<T>],
     axis: usize,
 ) -> crate::Result<TypedTensor<T>> {
-    let first = inputs.first().copied().ok_or_else(|| {
+    let operands: SmallVec<[Operand<'_, T>; 4]> = inputs
+        .iter()
+        .map(|input| Operand::from_typed("concatenate", input))
+        .collect::<crate::Result<_>>()?;
+    typed_concatenate_operands(buffers, exec_context, &operands, axis)
+}
+
+fn typed_concatenate_operands<T: Copy + Clone + PoolScalar + TensorScalar>(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    inputs: &[Operand<'_, T>],
+    axis: usize,
+) -> crate::Result<TypedTensor<T>> {
+    let first = inputs.first().ok_or_else(|| {
         crate::Error::invalid_argument(
             "concatenate",
             "configuration",
             "concatenate requires at least one input",
         )
     })?;
-    let first_shape = first.shape();
+    let first_shape = first.shape;
     let rank = first_shape.len();
     if axis >= rank {
         return Err(crate::Error::axis_out_of_bounds("concatenate", axis, rank));
@@ -703,7 +1088,7 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
     let mut out_shape = tenferro_tensor::ShapeVec::from(first_shape);
     let mut axis_extent = 0usize;
     for input in inputs {
-        let input_shape = input.shape();
+        let input_shape = input.shape;
         if input_shape.len() != rank {
             return Err(crate::Error::rank_mismatch(
                 "concatenate",
@@ -732,13 +1117,9 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
     out_shape[axis] = axis_extent;
 
     let dtype = kernel_dtype(T::dtype());
-    let input_dims: TinyVec<[&[usize]; 4]> = inputs.iter().map(|input| input.shape()).collect();
-    let input_strides: TinyVec<[InlineStrides; 4]> = input_dims
-        .iter()
-        .map(|dims| inline_col_major_strides("concatenate", dims))
-        .collect::<crate::Result<_>>()?;
+    let input_dims: TinyVec<[&[usize]; 4]> = inputs.iter().map(|input| input.shape).collect();
     let input_stride_refs: TinyVec<[&[isize]; 4]> =
-        input_strides.iter().map(TinyVec::as_slice).collect();
+        inputs.iter().map(|input| input.strides).collect();
     let out_strides = inline_col_major_strides("concatenate", &out_shape)?;
     let plan = ErasedConcatenatePlan::compile(
         dtype,
@@ -755,8 +1136,7 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
     // it; `SmallVec` keeps the four-operand descriptor list inline.
     let input_refs: SmallVec<[ErasedRawStridedRef<'_>; 4]> = inputs
         .iter()
-        .zip(input_strides.iter())
-        .map(|(input, strides)| {
+        .map(|input| {
             unsafe {
                 // SAFETY: this operation supplies initialized typed bytes with
                 // alignment and dtype matching the descriptor; validated dimensions,
@@ -764,10 +1144,10 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
                 // for the retained borrow.
                 crate::erased_raw_strided_ref(
                     dtype,
-                    typed_bytes(typed_host_data("concatenate", input)?),
-                    input.shape(),
-                    strides,
-                    0,
+                    typed_bytes(input.data),
+                    input.shape,
+                    input.strides,
+                    input.offset,
                 )
             }
             .map_err(|err| crate::Error::backend_source("concatenate", err))
@@ -808,7 +1188,39 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
     input: &TypedTensor<T>,
     axes: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    let input_shape = input.shape();
+    typed_reverse_at(
+        buffers,
+        exec_context,
+        Operand::from_typed("reverse", input)?,
+        axes,
+    )
+}
+
+fn typed_reverse_view<T, R>(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    view: &TypedTensorView<'_, T, R>,
+    axes: &[usize],
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + TensorScalar + 'static,
+    R: tenferro_tensor::TensorRank,
+{
+    typed_reverse_at(buffers, exec_context, operand_from_view(view)?, axes)
+}
+
+fn typed_reverse_at<T: Copy + Clone + PoolScalar + TensorScalar>(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    operand: Operand<'_, T>,
+    axes: &[usize],
+) -> crate::Result<TypedTensor<T>> {
+    let Operand {
+        data,
+        shape: input_shape,
+        strides: input_strides,
+        offset: input_offset,
+    } = operand;
     let rank = input_shape.len();
     for &axis in axes {
         if axis >= rank {
@@ -817,9 +1229,8 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
     }
 
     let dtype = kernel_dtype(T::dtype());
-    let input_strides = inline_col_major_strides("reverse", input_shape)?;
     let out_strides = inline_col_major_strides("reverse", input_shape)?;
-    let plan = ErasedReversePlan::compile(dtype, input_shape, &input_strides, &out_strides, axes)
+    let plan = ErasedReversePlan::compile(dtype, input_shape, input_strides, &out_strides, axes)
         .map_err(|err| crate::Error::backend_source("reverse", err))?;
 
     let mut out = PooledUninitOutput::new(buffers, input_shape)?;
@@ -830,10 +1241,10 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("reverse", input)?),
+            typed_bytes(data),
             input_shape,
-            &input_strides,
-            0,
+            input_strides,
+            input_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("reverse", err))?;
@@ -926,6 +1337,21 @@ fn unsupported_index_dtype(complex: bool) -> crate::Error {
             "bool index tensors are not supported; supported index dtypes: I32/I64/F32/F64"
         },
     )
+}
+
+/// Index values from a read: an owned tensor is used in place, and only a view
+/// is materialized (into `staged`), because the plans read compact indices.
+fn index_tensor_read<'a>(
+    buffers: &mut BufferPool,
+    op: &'static str,
+    read: TensorRead<'a>,
+    staged: &'a mut Option<Tensor>,
+) -> crate::Result<IndexTensor<'a>> {
+    let tensor = match read {
+        TensorRead::Tensor(tensor) => tensor,
+        view => staged.insert(crate::materialize_tensor_read(buffers, op, view)?),
+    };
+    try_index_tensor(tensor)
 }
 
 fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor<'_>> {
@@ -1052,7 +1478,9 @@ fn clamp_window_start(
             format!("window size {window_size} exceeds dimension size {dim_size}"),
         ));
     }
-    let max_start = dim_size.saturating_sub(window_size) as i64;
+    // An empty axis can be longer than `i64::MAX`, so the bound saturates
+    // rather than wrapping negative.
+    let max_start = i64::try_from(dim_size - window_size).unwrap_or(i64::MAX);
     Ok(start.clamp(0, max_start) as usize)
 }
 
@@ -1070,7 +1498,52 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
     start_indices: &IndexTensor,
     config: &GatherConfig,
 ) -> crate::Result<TypedTensor<T>> {
-    let operand_shape = operand.shape();
+    typed_gather_at(
+        buffers,
+        cache,
+        exec_context,
+        Operand::from_typed("gather", operand)?,
+        start_indices,
+        config,
+    )
+}
+
+fn typed_gather_view<T, R>(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    operand: &TypedTensorView<'_, T, R>,
+    start_indices: &IndexTensor,
+    config: &GatherConfig,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + TensorScalar + 'static,
+    R: tenferro_tensor::TensorRank,
+{
+    typed_gather_at(
+        buffers,
+        cache,
+        exec_context,
+        operand_from_view(operand)?,
+        start_indices,
+        config,
+    )
+}
+
+fn typed_gather_at<T: Copy + Clone + PoolScalar + TensorScalar>(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    operand: Operand<'_, T>,
+    start_indices: &IndexTensor,
+    config: &GatherConfig,
+) -> crate::Result<TypedTensor<T>> {
+    let Operand {
+        data,
+        shape: operand_shape,
+        strides: operand_strides,
+        offset: operand_offset,
+    } = operand;
     let rank = operand_shape.len();
     if config.slice_sizes.len() != rank {
         return Err(crate::Error::rank_mismatch(
@@ -1207,7 +1680,6 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
     let mut out = PooledUninitOutput::<T>::new(buffers, &out_shape)?;
 
     let dtype = kernel_dtype(T::dtype());
-    let operand_strides = col_major_strides(operand_shape);
     let index_strides = col_major_strides(&start_indices.shape);
     let out_strides = col_major_strides(&out_shape);
     let index_dtype = KernelDType::I64;
@@ -1216,7 +1688,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
         dtype,
         index_dtype,
         &[operand_shape, &start_indices.shape, &out_shape],
-        &[&operand_strides, &index_strides, &out_strides],
+        &[operand_strides, &index_strides, &out_strides],
         &[
             &config.offset_dims,
             &config.collapsed_slice_dims,
@@ -1231,7 +1703,7 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
                 dtype,
                 index_dtype,
                 operand_shape,
-                &operand_strides,
+                operand_strides,
                 &start_indices.shape,
                 &index_strides,
                 &out_shape,
@@ -1248,10 +1720,10 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("gather", operand)?),
+            typed_bytes(data),
             operand_shape,
-            &operand_strides,
-            0,
+            operand_strides,
+            operand_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("gather", err))?;
@@ -1304,8 +1776,41 @@ fn typed_scatter<T>(
 where
     T: Copy + Clone + PoolScalar + TensorScalar,
 {
-    let operand_shape = operand.shape();
-    let updates_shape = updates.shape();
+    typed_scatter_at(
+        buffers,
+        cache,
+        exec_context,
+        Operand::from_typed("scatter", operand)?,
+        scatter_indices,
+        Operand::from_typed("scatter", updates)?,
+        config,
+    )
+}
+
+fn typed_scatter_at<T>(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    operand: Operand<'_, T>,
+    scatter_indices: &IndexTensor,
+    updates: Operand<'_, T>,
+    config: &ScatterConfig,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + TensorScalar,
+{
+    let Operand {
+        data: operand_data,
+        shape: operand_shape,
+        strides: operand_strides,
+        offset: operand_offset,
+    } = operand;
+    let Operand {
+        data: update_data,
+        shape: updates_shape,
+        strides: update_strides,
+        offset: update_offset,
+    } = updates;
     let op_rank = operand_shape.len();
     for &dim in &config.inserted_window_dims {
         if dim >= op_rank {
@@ -1465,9 +1970,7 @@ where
 
     let dtype = kernel_dtype(T::dtype());
     let index_dtype = KernelDType::I64;
-    let operand_strides = col_major_strides(operand_shape);
     let index_strides = col_major_strides(&scatter_indices.shape);
-    let update_strides = col_major_strides(updates_shape);
     let out_strides = col_major_strides(operand_shape);
     let key = indexed_plan_key(
         IndexedPlanFamily::Scatter,
@@ -1480,9 +1983,9 @@ where
             operand_shape,
         ],
         &[
-            &operand_strides,
+            operand_strides,
             &index_strides,
-            &update_strides,
+            update_strides,
             &out_strides,
         ],
         &[
@@ -1498,11 +2001,11 @@ where
                 dtype,
                 index_dtype,
                 operand_shape,
-                &operand_strides,
+                operand_strides,
                 &scatter_indices.shape,
                 &index_strides,
                 updates_shape,
-                &update_strides,
+                update_strides,
                 operand_shape,
                 &out_strides,
                 scatter_spec(config),
@@ -1520,10 +2023,10 @@ where
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("scatter", operand)?),
+            typed_bytes(operand_data),
             operand_shape,
-            &operand_strides,
-            0,
+            operand_strides,
+            operand_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
@@ -1548,10 +2051,10 @@ where
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("scatter", updates)?),
+            typed_bytes(update_data),
             updates_shape,
-            &update_strides,
-            0,
+            update_strides,
+            update_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
@@ -1594,7 +2097,52 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     starts: &IndexTensor,
     slice_sizes: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    let input_shape = input.shape();
+    typed_dynamic_slice_at(
+        buffers,
+        cache,
+        exec_context,
+        Operand::from_typed("dynamic_slice", input)?,
+        starts,
+        slice_sizes,
+    )
+}
+
+fn typed_dynamic_slice_view<T, R>(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    input: &TypedTensorView<'_, T, R>,
+    starts: &IndexTensor,
+    slice_sizes: &[usize],
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + TensorScalar + 'static,
+    R: tenferro_tensor::TensorRank,
+{
+    typed_dynamic_slice_at(
+        buffers,
+        cache,
+        exec_context,
+        operand_from_view(input)?,
+        starts,
+        slice_sizes,
+    )
+}
+
+fn typed_dynamic_slice_at<T: Copy + Clone + PoolScalar + TensorScalar>(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    input: Operand<'_, T>,
+    starts: &IndexTensor,
+    slice_sizes: &[usize],
+) -> crate::Result<TypedTensor<T>> {
+    let Operand {
+        data,
+        shape: input_shape,
+        strides: input_strides,
+        offset: input_offset,
+    } = input;
     if slice_sizes.len() != input_shape.len() {
         return Err(crate::Error::rank_mismatch(
             "dynamic_slice",
@@ -1632,7 +2180,6 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
 
     let out_shape = slice_sizes.to_vec();
     let dtype = kernel_dtype(T::dtype());
-    let input_strides = col_major_strides(input_shape);
     let start_strides = col_major_strides(&starts.shape);
     let out_strides = col_major_strides(&out_shape);
     let index_dtype = KernelDType::I64;
@@ -1641,7 +2188,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         dtype,
         index_dtype,
         &[input_shape, &starts.shape, &out_shape],
-        &[&input_strides, &start_strides, &out_strides],
+        &[input_strides, &start_strides, &out_strides],
         &[slice_sizes],
     );
     let plan = cache
@@ -1650,7 +2197,7 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
                 dtype,
                 index_dtype,
                 input_shape,
-                &input_strides,
+                input_strides,
                 &starts.shape,
                 &start_strides,
                 &out_shape,
@@ -1668,10 +2215,10 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("dynamic_slice", input)?),
+            typed_bytes(data),
             input_shape,
-            &input_strides,
-            0,
+            input_strides,
+            input_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("dynamic_slice", err))?;
@@ -1720,8 +2267,36 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     update: &TypedTensor<T>,
     starts: &IndexTensor,
 ) -> crate::Result<TypedTensor<T>> {
-    let operand_shape = operand.shape();
-    let update_shape = update.shape();
+    typed_dynamic_update_slice_at(
+        buffers,
+        cache,
+        exec_context,
+        Operand::from_typed("dynamic_update_slice", operand)?,
+        Operand::from_typed("dynamic_update_slice", update)?,
+        starts,
+    )
+}
+
+fn typed_dynamic_update_slice_at<T: Copy + Clone + PoolScalar + TensorScalar>(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    operand: Operand<'_, T>,
+    update: Operand<'_, T>,
+    starts: &IndexTensor,
+) -> crate::Result<TypedTensor<T>> {
+    let Operand {
+        data: operand_data,
+        shape: operand_shape,
+        strides: operand_strides,
+        offset: operand_offset,
+    } = operand;
+    let Operand {
+        data: update_data,
+        shape: update_shape,
+        strides: update_strides,
+        offset: update_offset,
+    } = update;
     if update_shape.len() != operand_shape.len() {
         return Err(crate::Error::rank_mismatch(
             "dynamic_update_slice",
@@ -1758,9 +2333,7 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     }
 
     let dtype = kernel_dtype(T::dtype());
-    let operand_strides = col_major_strides(operand_shape);
     let start_strides = col_major_strides(&starts.shape);
-    let update_strides = col_major_strides(update_shape);
     let out_strides = col_major_strides(operand_shape);
     let index_dtype = KernelDType::I64;
     let key = indexed_plan_key(
@@ -1769,9 +2342,9 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         index_dtype,
         &[operand_shape, &starts.shape, update_shape, operand_shape],
         &[
-            &operand_strides,
+            operand_strides,
             &start_strides,
-            &update_strides,
+            update_strides,
             &out_strides,
         ],
         &[],
@@ -1782,11 +2355,11 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
                 dtype,
                 index_dtype,
                 operand_shape,
-                &operand_strides,
+                operand_strides,
                 &starts.shape,
                 &start_strides,
                 update_shape,
-                &update_strides,
+                update_strides,
                 operand_shape,
                 &out_strides,
             )
@@ -1802,10 +2375,10 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("dynamic_update_slice", operand)?),
+            typed_bytes(operand_data),
             operand_shape,
-            &operand_strides,
-            0,
+            operand_strides,
+            operand_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
@@ -1816,10 +2389,10 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("dynamic_update_slice", update)?),
+            typed_bytes(update_data),
             update_shape,
-            &update_strides,
-            0,
+            update_strides,
+            update_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
@@ -1874,7 +2447,39 @@ fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
     input: &TypedTensor<T>,
     config: &PadConfig,
 ) -> crate::Result<TypedTensor<T>> {
-    let input_shape = input.shape();
+    typed_pad_at(
+        buffers,
+        exec_context,
+        Operand::from_typed("pad", input)?,
+        config,
+    )
+}
+
+fn typed_pad_view<T, R>(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    view: &TypedTensorView<'_, T, R>,
+    config: &PadConfig,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + TensorScalar + 'static,
+    R: tenferro_tensor::TensorRank,
+{
+    typed_pad_at(buffers, exec_context, operand_from_view(view)?, config)
+}
+
+fn typed_pad_at<T: Copy + Clone + PoolScalar + TensorScalar>(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    operand: Operand<'_, T>,
+    config: &PadConfig,
+) -> crate::Result<TypedTensor<T>> {
+    let Operand {
+        data,
+        shape: input_shape,
+        strides: input_strides,
+        offset: input_offset,
+    } = operand;
     let rank = input_shape.len();
     if config.edge_padding_low.len() != rank {
         return Err(crate::Error::rank_mismatch(
@@ -1958,12 +2563,11 @@ fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
     }
 
     let dtype = kernel_dtype(T::dtype());
-    let input_strides = inline_col_major_strides("pad", input_shape)?;
     let out_strides = inline_col_major_strides("pad", &out_shape)?;
     let plan = ErasedPadPlan::compile(
         dtype,
         input_shape,
-        &input_strides,
+        input_strides,
         &out_shape,
         &out_strides,
         &config.edge_padding_low,
@@ -1980,10 +2584,10 @@ fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("pad", input)?),
+            typed_bytes(data),
             input_shape,
-            &input_strides,
-            0,
+            input_strides,
+            input_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("pad", err))?;

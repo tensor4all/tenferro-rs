@@ -4,7 +4,10 @@
 
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt, TypedTensor, TypedTensorSessionOpsExt};
+use tenferro_runtime::{
+    Tensor, TensorSessionOpsExt, TypedTensor, TypedTensorMaskSessionOpsExt,
+    TypedTensorSessionOpsExt,
+};
 use tenferro_tensor::{
     DotGeneralConfig, Engine, GatherConfig, PadConfig, ScatterConfig, SliceConfig, TensorRead,
 };
@@ -79,6 +82,38 @@ fn indexing_family_matches_the_session_form() {
             &s.concatenate(&[&x, &x], 0).unwrap(),
         );
         same(&x.reverse(&[0], s).unwrap(), &s.reverse(&x, &[0]).unwrap());
+
+        // The typed receivers borrow the typed tensor and must agree too.
+        let tx = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        let typed = |out: TypedTensor<f64>| Tensor::from_typed(out);
+        same(
+            &typed(tx.gather(&idx, gather.clone(), s).unwrap()),
+            &s.gather(&x, &idx, &gather).unwrap(),
+        );
+        same(
+            &typed(tx.scatter(&idx, &updates, scatter.clone(), s).unwrap()),
+            &s.scatter(&x, &idx, &updates, &scatter).unwrap(),
+        );
+        same(
+            &typed(tx.slice(slice.clone(), s).unwrap()),
+            &s.slice(&x, &slice).unwrap(),
+        );
+        same(
+            &typed(tx.dynamic_slice(&starts, &[2], s).unwrap()),
+            &s.dynamic_slice(&x, &starts, &[2]).unwrap(),
+        );
+        same(
+            &typed(tx.pad(pad.clone(), s).unwrap()),
+            &s.pad(&x, &pad).unwrap(),
+        );
+        same(
+            &typed(TypedTensor::concatenate(&[&tx, &tx], 0, s).unwrap()),
+            &s.concatenate(&[&x, &x], 0).unwrap(),
+        );
+        same(
+            &typed(tx.reverse(&[0], s).unwrap()),
+            &s.reverse(&x, &[0]).unwrap(),
+        );
     });
 }
 
@@ -155,6 +190,139 @@ fn structural_family_matches_the_session_form() {
         same(
             &v.embed_diag(0, 1, s).unwrap(),
             &s.embed_diagonal(&v, 0, 1).unwrap(),
+        );
+
+        let tm =
+            TypedTensor::<f64>::from_vec_col_major(vec![3, 3], (1..=9).map(f64::from).collect())
+                .unwrap();
+        let tv = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
+        for k in [-1, 0, 1] {
+            same(
+                &Tensor::from_typed(tm.tril(k, s).unwrap()),
+                &s.tril(&m, k).unwrap(),
+            );
+            same(
+                &Tensor::from_typed(tm.triu(k, s).unwrap()),
+                &s.triu(&m, k).unwrap(),
+            );
+        }
+        same(
+            &Tensor::from_typed(tm.extract_diag(0, 1, s).unwrap()),
+            &s.extract_diagonal(&m, 0, 1).unwrap(),
+        );
+        same(
+            &Tensor::from_typed(tv.embed_diag(0, 1, s).unwrap()),
+            &s.embed_diagonal(&v, 0, 1).unwrap(),
+        );
+    });
+}
+
+/// #2214: the typed `take_along_axis` reads the typed tensor through the same
+/// composite as the erased form, for batch-varying and broadcast index shapes.
+#[test]
+fn typed_take_along_axis_matches_the_erased_form() {
+    let data: Vec<f64> = (0..12).map(f64::from).collect();
+    let x = t(&[3, 2, 2], data.clone());
+    let tx = TypedTensor::<f64>::from_vec_col_major(vec![3, 2, 2], data).unwrap();
+    let batch_varying =
+        Tensor::from_vec_col_major(vec![2, 2, 2], vec![2_i64, 0, 1, 1, 0, 2, 2, 2]).unwrap();
+    let broadcast = Tensor::from_vec_col_major(vec![2, 1, 2], vec![1_i32, 0, 2, 2]).unwrap();
+    in_session(|s| {
+        for (indices, axis) in [(&batch_varying, 0), (&broadcast, 0)] {
+            same(
+                &Tensor::from_typed(tx.take_along_axis(indices, axis, s).unwrap()),
+                &x.take_along_axis(indices, axis, s).unwrap(),
+            );
+        }
+        let along_last = Tensor::from_vec_col_major(vec![3, 2, 1], vec![1_i64; 6]).unwrap();
+        same(
+            &Tensor::from_typed(tx.take_along_axis(&along_last, 2, s).unwrap()),
+            &x.take_along_axis(&along_last, 2, s).unwrap(),
+        );
+    });
+}
+
+/// #2214: `dynamic_update_slice` has one spelling on the erased and typed
+/// sugar, and both match the engine method.
+#[test]
+fn dynamic_update_slice_matches_the_session_form() {
+    let data: Vec<f64> = (0..6).map(f64::from).collect();
+    let x = t(&[3, 2], data.clone());
+    let tx = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], data).unwrap();
+    let update = t(&[2, 1], vec![10.0, 20.0]);
+    let typed_update =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![10.0, 20.0]).unwrap();
+    in_session(|s| {
+        for start in [[0_i64, 1], [2, 1], [-1, 0]] {
+            let starts = Tensor::from_vec_col_major(vec![2], start.to_vec()).unwrap();
+            let expected = s.dynamic_update_slice(&x, &update, &starts).unwrap();
+            same(
+                &x.dynamic_update_slice(&update, &starts, s).unwrap(),
+                &expected,
+            );
+            same(
+                &Tensor::from_typed(tx.dynamic_update_slice(&typed_update, &starts, s).unwrap()),
+                &expected,
+            );
+        }
+    });
+}
+
+/// The typed composites (activations, normalizations, masked softmax,
+/// `where_select`) are the erased composites on a borrowed typed tensor.
+#[test]
+fn typed_composites_match_the_erased_form() {
+    let data = vec![-1.5, -0.25, 0.0, 0.5, 1.25, 2.0];
+    let x = t(&[2, 3], data.clone());
+    let tx = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data).unwrap();
+    let y = t(&[2, 3], vec![0.75; 6]);
+    let ty = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.75; 6]).unwrap();
+    let flags = vec![true, false, true, true, false, true];
+    let mask = Tensor::from_vec_col_major(vec![2, 3], flags.clone()).unwrap();
+    let tmask = TypedTensor::<bool>::from_vec_col_major(vec![2, 3], flags).unwrap();
+    let weight = t(&[3], vec![1.0, 2.0, 0.5]);
+    let tweight = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 0.5]).unwrap();
+    let bias = t(&[3], vec![0.0, -1.0, 1.0]);
+    let tbias = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![0.0, -1.0, 1.0]).unwrap();
+    let typed = |out: TypedTensor<f64>| Tensor::from_typed(out);
+    in_session(|s| {
+        same(&typed(tx.rem(&ty, s).unwrap()), &x.rem(&y, s).unwrap());
+        same(&typed(tx.erf(s).unwrap()), &x.erf(s).unwrap());
+        same(&typed(tx.sigmoid(s).unwrap()), &x.sigmoid(s).unwrap());
+        same(&typed(tx.silu(s).unwrap()), &x.silu(s).unwrap());
+        same(&typed(tx.softplus(s).unwrap()), &x.softplus(s).unwrap());
+        same(&typed(tx.gelu(s).unwrap()), &x.gelu(s).unwrap());
+        same(&typed(tx.gelu_tanh(s).unwrap()), &x.gelu_tanh(s).unwrap());
+        same(
+            &typed(tx.reduce_mean(Some(&[1]), s).unwrap()),
+            &x.reduce_mean(Some(&[1]), s).unwrap(),
+        );
+        same(
+            &typed(tx.log_softmax(1, s).unwrap()),
+            &x.log_softmax(1, s).unwrap(),
+        );
+        same(
+            &typed(tx.masked_log_softmax(&tmask, 1, s).unwrap()),
+            &x.masked_log_softmax(&mask, 1, s).unwrap(),
+        );
+        same(
+            &typed(
+                tx.layer_norm(1, Some(&tweight), Some(&tbias), 1e-5, s)
+                    .unwrap(),
+            ),
+            &x.layer_norm(1, Some(&weight), Some(&bias), 1e-5, s)
+                .unwrap(),
+        );
+        same(
+            &typed(
+                tx.rms_norm(1, Some(&tweight), Some(&tbias), 1e-5, s)
+                    .unwrap(),
+            ),
+            &x.rms_norm(1, Some(&weight), Some(&bias), 1e-5, s).unwrap(),
+        );
+        same(
+            &typed(tmask.where_select(&tx, &ty, s).unwrap()),
+            &mask.where_select(&x, &y, s).unwrap(),
         );
     });
 }

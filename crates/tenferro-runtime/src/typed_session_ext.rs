@@ -7,12 +7,11 @@ use crate::{CompareDir, DotGeneralConfig, Engine, TensorScalar, TypedTensor};
 /// AD-free tensor operations on [`TypedTensor`], run on a borrowed engine.
 ///
 /// The methods mirror [`crate::TensorSessionOpsExt`] for a statically known
-/// scalar type, with the engine last. Operations whose backend hooks take
-/// owned dtype-erased tensors (indexing, padding, concatenation, triangular
-/// and diagonal masks) are offered on [`crate::Tensor`] only: a typed form
-/// would have to copy the input first. Move a typed tensor into that surface
-/// with `Tensor::from_typed`, which does not copy. Selection with a bool mask
-/// is [`crate::TypedTensorMaskSessionOpsExt::where_select`].
+/// scalar type, with the engine last. Indexing, padding, concatenation and the
+/// triangular/diagonal masks are included: they go through the `*_read` hooks,
+/// so a typed tensor is borrowed rather than copied before the kernel.
+/// Selection with a bool mask is
+/// [`crate::TypedTensorMaskSessionOpsExt::where_select`].
 ///
 /// # Examples
 ///
@@ -1412,6 +1411,385 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
         eps: f64,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
+
+    /// Gather windows of this tensor at `indices` on an engine (StableHLO `gather`).
+    ///
+    /// Mirrors [`crate::TensorSessionOpsExt::gather`]; the index tensor stays
+    /// dtype-erased, as on that surface.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{GatherConfig, Tensor, TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+    /// // Row 1 of a 3x2 matrix.
+    /// let idx = Tensor::from_vec_col_major(vec![1, 1], vec![1_i64])?;
+    /// let config = GatherConfig {
+    ///     offset_dims: vec![1],
+    ///     collapsed_slice_dims: vec![0],
+    ///     start_index_map: vec![0],
+    ///     index_vector_dim: 1,
+    ///     slice_sizes: vec![1, 2],
+    /// };
+    /// let row = x.gather(&idx, config, &mut engine)?;
+    /// assert_eq!(row.host_data()?, &[2.0, 5.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn gather(
+        &self,
+        indices: &tenferro_tensor::Tensor,
+        config: crate::GatherConfig,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Scatter `updates` into a copy of this tensor at `indices` on an engine.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{ScatterConfig, Tensor, TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6])?;
+    /// // Add `[10, 20]` into row 1.
+    /// let idx = Tensor::from_vec_col_major(vec![1, 1], vec![1_i64])?;
+    /// let updates = Tensor::from_vec_col_major(vec![1, 2], vec![10.0_f64, 20.0])?;
+    /// let config = ScatterConfig {
+    ///     update_window_dims: vec![1],
+    ///     inserted_window_dims: vec![0],
+    ///     scatter_dims_to_operand_dims: vec![0],
+    ///     index_vector_dim: 1,
+    /// };
+    /// let y = x.scatter(&idx, &updates, config, &mut engine)?;
+    /// assert_eq!(y.host_data()?, &[0.0, 10.0, 0.0, 0.0, 20.0, 0.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn scatter(
+        &self,
+        indices: &tenferro_tensor::Tensor,
+        updates: &tenferro_tensor::Tensor,
+        config: crate::ScatterConfig,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Slice this tensor with start, limit and stride per axis on an engine.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{SliceConfig, TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+    /// let config = SliceConfig {
+    ///     starts: vec![1, 0],
+    ///     limits: vec![3, 2],
+    ///     strides: vec![1, 1],
+    /// };
+    /// let y = x.slice(config, &mut engine)?;
+    /// assert_eq!(y.shape(), &[2, 2]);
+    /// assert_eq!(y.host_data()?, &[2.0, 3.0, 5.0, 6.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn slice(
+        &self,
+        config: crate::SliceConfig,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Slice at runtime `starts` with static `sizes` on an engine.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{Tensor, TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![5], vec![0.0, 1.0, 2.0, 3.0, 4.0])?;
+    /// // A start of 4 is clamped so the window of 2 fits.
+    /// let starts = Tensor::from_vec_col_major(vec![1], vec![4_i64])?;
+    /// let y = x.dynamic_slice(&starts, &[2], &mut engine)?;
+    /// assert_eq!(y.host_data()?, &[3.0, 4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn dynamic_slice(
+        &self,
+        starts: &tenferro_tensor::Tensor,
+        sizes: &[usize],
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Return this tensor with `update` written at runtime `starts` on an engine.
+    ///
+    /// Mirrors [`crate::TensorSessionOpsExt::dynamic_update_slice`]; `starts`
+    /// stays dtype-erased, as on that surface.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{Tensor, TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![5], vec![0.0; 5])?;
+    /// let update = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0])?;
+    /// let starts = Tensor::from_vec_col_major(vec![1], vec![1_i64])?;
+    /// let y = x.dynamic_update_slice(&update, &starts, &mut engine)?;
+    /// assert_eq!(y.host_data()?, &[0.0, 3.0, 4.0, 0.0, 0.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn dynamic_update_slice(
+        &self,
+        update: &TypedTensor<T>,
+        starts: &tenferro_tensor::Tensor,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Pad this tensor with zeros on an engine.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{PadConfig, TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+    /// let config = PadConfig {
+    ///     edge_padding_low: vec![1],
+    ///     edge_padding_high: vec![0],
+    ///     interior_padding: vec![0],
+    /// };
+    /// let y = x.pad(config, &mut engine)?;
+    /// assert_eq!(y.host_data()?, &[0.0, 1.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn pad(
+        &self,
+        config: crate::PadConfig,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Concatenate typed tensors along `axis` on an engine.
+    ///
+    /// N-ary, so it stays an associated function, matching the erased surface.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+    /// let b = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![3.0])?;
+    /// let y = TypedTensor::concatenate(&[&a, &b], 0, &mut engine)?;
+    /// assert_eq!(y.host_data()?, &[1.0, 2.0, 3.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn concatenate(
+        inputs: &[&TypedTensor<T>],
+        axis: usize,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>
+    where
+        Self: Sized;
+    /// Reverse the elements along `axes` on an engine.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0])?;
+    /// let y = x.reverse(&[0], &mut engine)?;
+    /// assert_eq!(y.host_data()?, &[3.0, 2.0, 1.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn reverse(
+        &self,
+        axes: &[usize],
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Zero the elements above the `k`-th diagonal on an engine (keep the lower triangle).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])?;
+    /// let lower = x.tril(0, &mut engine)?;
+    /// assert_eq!(lower.host_data()?, &[1.0, 2.0, 0.0, 4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn tril(&self, k: i64, session: &mut dyn Engine) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Zero the elements below the `k`-th diagonal on an engine (keep the upper triangle).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])?;
+    /// let upper = x.triu(0, &mut engine)?;
+    /// assert_eq!(upper.host_data()?, &[1.0, 0.0, 3.0, 4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn triu(&self, k: i64, session: &mut dyn Engine) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Extract the diagonal over `axis_a` and `axis_b` on an engine.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])?;
+    /// let diagonal = x.extract_diag(0, 1, &mut engine)?;
+    /// assert_eq!(diagonal.host_data()?, &[1.0, 4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn extract_diag(
+        &self,
+        axis_a: usize,
+        axis_b: usize,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Embed this tensor along the diagonal of `axis_a` and `axis_b` on an engine.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+    /// let y = x.embed_diag(0, 1, &mut engine)?;
+    /// assert_eq!(y.shape(), &[2, 2]);
+    /// assert_eq!(y.host_data()?, &[1.0, 0.0, 0.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn embed_diag(
+        &self,
+        axis_a: usize,
+        axis_b: usize,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// NumPy-style `take_along_axis` over `gather`, on an engine.
+    ///
+    /// Mirrors [`crate::TensorSessionOpsExt::take_along_axis`]; the index
+    /// tensor stays dtype-erased, as on that surface.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{Tensor, TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// // Per-batch row gather: out[i, j, b] = x[idx[i, b], j, b].
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 2, 2], (0..8).map(f64::from).collect())?;
+    /// let idx = Tensor::from_vec_col_major(vec![2, 1, 2], vec![1_i64, 0, 0, 0])?;
+    /// let y = x.take_along_axis(&idx, 0, &mut engine)?;
+    /// assert_eq!(y.host_data()?, &[1.0, 0.0, 3.0, 2.0, 4.0, 4.0, 6.0, 6.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `RankMismatch` or
+    /// `ShapeMismatch` for incompatible index shapes, `AxisOutOfBounds` for an
+    /// invalid axis, or `InvalidArgument` when taking from a zero-length axis;
+    /// [`tenferro_tensor::Error::UnsupportedDType`] for a non-integer index
+    /// dtype; or [`tenferro_tensor::Error::BackendSource`] for a typed backend
+    /// failure.
+    fn take_along_axis(
+        &self,
+        indices: &tenferro_tensor::Tensor,
+        axis: usize,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
 }
 
 /// Engine-explicit bool-mask operations for typed tensors.
@@ -1470,3 +1848,6 @@ pub trait TypedTensorMaskSessionOpsExt {
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<TypedTensor<U>>;
 }
+
+#[cfg(test)]
+mod tests;
