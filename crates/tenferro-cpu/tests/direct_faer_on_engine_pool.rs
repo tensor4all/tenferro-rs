@@ -58,5 +58,18 @@ fn a_serial_engine_has_no_pool_and_direct_faer_stays_sequential() -> tenferro_te
     let backend = engine(1);
     assert!(backend.pool().is_none());
     assert_eq!(backend.num_threads(), 1);
+
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0])?;
+    let identity = [1.0_f64, 0.0, 0.0, 1.0];
+    let mut product = Mat::<f64>::zeros(2, 2);
+    matmul(
+        product.as_mut(),
+        Accum::Replace,
+        MatRef::from_column_major_slice(&identity, 2, 2),
+        MatRef::from_column_major_slice(a.as_slice()?, 2, 2),
+        1.0,
+        Par::Seq,
+    );
+    assert_eq!(*product.as_ref().get(1, 0), 3.0);
     Ok(())
 }

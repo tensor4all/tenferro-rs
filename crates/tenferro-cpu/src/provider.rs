@@ -115,10 +115,11 @@ impl<'a> CpuExecutionContext<'a> {
 
     /// Return the faer policy selected by this operation context.
     ///
-    /// This hidden public method is the engine-scoped extension contract used
-    /// by operation-family crates such as `tenferro-linalg`, so sibling crates
-    /// do not derive a second CPU threading policy. A `Par::rayon` value must
-    /// be used inside [`CpuExecutionContext::rayon_pool`]'s `install`.
+    /// This hidden accessor is part of the engine-scoped provider contract: it
+    /// reports the context's policy so a sibling crate does not derive a second
+    /// CPU threading policy. Prefer [`CpuExecutionContext::with_faer_width`]
+    /// when the width follows the work model; a `Par::rayon` value must be used
+    /// inside [`CpuExecutionContext::rayon_pool`]'s `install`.
     #[cfg(feature = "native")]
     #[doc(hidden)]
     pub fn faer_parallelism(self) -> faer::Par {
