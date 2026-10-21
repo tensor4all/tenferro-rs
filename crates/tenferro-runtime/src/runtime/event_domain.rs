@@ -268,14 +268,15 @@ pub trait EventDomainRun: fmt::Debug + Send {
     /// The scheduler calls this at most once per run, before any launch, and
     /// only after it has proven that every scheduled location and node of the
     /// run uses this exact domain and that the schedule contains no transfer
-    /// node. The default no-op keeps the per-node completion contract, so an
-    /// unknown provider behaves exactly as before.
+    /// node. Returning `true` promises that same-stream submission order alone
+    /// orders this run's nodes: the scheduler then submits each launch through
+    /// this run without dependency tokens and records no per-node completion,
+    /// keeping only the run's own [`Self::drain`] retirement.
     ///
-    /// A run that accepts keeps only the run's final [`Self::drain`] retirement
-    /// between its nodes. It must not rely on per-node completion events for
-    /// ordering when this is called, because same-stream submission order
-    /// already orders its nodes; it must still dispatch and synchronize all
-    /// submitted work, success or failure, before [`Self::drain`] returns.
+    /// Returning `false` (the default) keeps the per-node completion contract,
+    /// so an unknown provider behaves exactly as before. A run must not return
+    /// `true` unless it really keeps only submission order for ordering, because
+    /// a node would otherwise be allowed to run before the node it depends on.
     /// Operation-level barriers that a launch needs for raw or vendor work are
     /// unaffected.
     ///
@@ -284,11 +285,13 @@ pub trait EventDomainRun: fmt::Debug + Send {
     /// ```
     /// use tenferro_runtime::EventDomainRun;
     ///
-    /// fn request_coalescing(run: &mut dyn EventDomainRun) {
-    ///     run.enable_single_domain_coalescing();
+    /// fn keeps_per_node_completions(run: &mut dyn EventDomainRun) -> bool {
+    ///     !run.enable_single_domain_coalescing()
     /// }
     /// ```
-    fn enable_single_domain_coalescing(&mut self) {}
+    fn enable_single_domain_coalescing(&mut self) -> bool {
+        false
+    }
 
     /// Enqueue one launch after its dependency tokens.
     ///
@@ -436,18 +439,37 @@ impl EventDomainDriver for ImmediateEventDomainDriver {
     }
 
     fn begin_run(&self, domain: EventDomainId) -> crate::Result<Box<dyn EventDomainRun>> {
-        Ok(Box::new(ImmediateEventDomainRun { domain }))
+        Ok(Box::new(ImmediateEventDomainRun {
+            domain,
+            coalesced: false,
+            shared_token: None,
+        }))
     }
 }
 
 #[derive(Debug)]
 struct ImmediateEventDomainRun {
     domain: EventDomainId,
+    /// Set when the scheduler proved that this run is the only domain and has
+    /// no transfer node. Every launch retires before `enqueue` returns here, so
+    /// submission order alone already orders the run's nodes and the per-node
+    /// completion tokens carry no information.
+    coalesced: bool,
+    /// The token every coalesced completion reports, created on first use.
+    ///
+    /// A coalesced run's token only carries the domain, so one shared token
+    /// answers every node instead of one allocation per node.
+    shared_token: Option<Arc<dyn EventToken>>,
 }
 
 impl EventDomainRun for ImmediateEventDomainRun {
     fn domain(&self) -> EventDomainId {
         self.domain
+    }
+
+    fn enable_single_domain_coalescing(&mut self) -> bool {
+        self.coalesced = true;
+        true
     }
 
     fn enqueue(
@@ -470,6 +492,14 @@ impl EventDomainRun for ImmediateEventDomainRun {
             dependency.wait()?;
         }
         launch()?;
+        if self.coalesced {
+            let token = self.shared_token.get_or_insert_with(|| {
+                Arc::new(ReadyEventToken {
+                    origin: self.domain,
+                }) as Arc<dyn EventToken>
+            });
+            return Ok(Arc::clone(token));
+        }
         Ok(Arc::new(ReadyEventToken {
             origin: self.domain,
         }))

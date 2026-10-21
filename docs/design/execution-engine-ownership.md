@@ -80,6 +80,14 @@ by the input signature plus the target requirements. `Runtime::run` binds the
 supplied engines to the slots, validates the input signature once, and launches.
 `Output<'a>` is either an owned compact tensor or a borrowed view of an input.
 
+A run whose input signature is the one the handle was prepared for skips the
+specialization projection: preparation already validated that signature, and any
+other signature takes the full validation path. A schedule whose every location
+is the same place — one engine, one storage class, one event domain, no transfer
+node — keeps each slot's value in the command array itself, so a command neither
+stages its inputs nor publishes its results into a per-location list. Transfers
+and several engines keep the per-location form.
+
 On CPU, `run` returns when the work is done. On GPU, it returns once the work is
 queued and it no longer reads caller-mutable host or external memory;
 same-engine reads and later operations are stream-ordered, and
