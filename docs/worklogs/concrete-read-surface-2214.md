@@ -9,8 +9,8 @@
   copy for nothing, and the host default refuses device-placed tensors.
 - The session composite (`take_along_axis`, the softmax family) calls the read hooks rather than
   materializing its inputs, which is what lets the typed `take_along_axis` borrow its tensor.
-- No typed `dynamic_update_slice`: the erased `TensorSessionOpsExt` has none either, so a
-  typed-only method would break the one-spelling rule the parity test enforces.
+- `dynamic_update_slice` (issue item 9) is added to both sugar surfaces at once, with its own
+  read hook, rather than typed-only: the parity test enforces one spelling across both.
 - Published crates in the CPU stack depend on each other with caret requirements (workspace
   `CODING_RULES.md`). Exact pins forced a release of the whole chain for every strided patch.
 

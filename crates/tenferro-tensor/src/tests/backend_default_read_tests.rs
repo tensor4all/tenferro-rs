@@ -878,6 +878,9 @@ fn materializing_read_defaults_stage_views_only() {
             backend.scatter_read($read, idx(), $read, &scatter).unwrap();
             backend.slice_read($read, &slice).unwrap();
             backend.dynamic_slice_read($read, idx(), &[1, 2]).unwrap();
+            backend
+                .dynamic_update_slice_read($read, $read, idx())
+                .unwrap();
             backend.pad_read($read, &pad).unwrap();
             backend.concatenate_read(&[$read, $read], 0).unwrap();
             backend.reverse_read($read, &[0]).unwrap();
@@ -885,7 +888,7 @@ fn materializing_read_defaults_stage_views_only() {
             backend.triu_read($read, 0).unwrap();
             backend.extract_diagonal_read($read, 0, 1).unwrap();
             backend.embed_diagonal_read($read, 0, 1).unwrap();
-            13
+            15
         }};
     }
 

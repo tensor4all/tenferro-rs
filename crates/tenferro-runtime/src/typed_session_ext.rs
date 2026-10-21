@@ -1545,6 +1545,37 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
         sizes: &[usize],
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Return this tensor with `update` written at runtime `starts` on an engine.
+    ///
+    /// Mirrors [`crate::TensorSessionOpsExt::dynamic_update_slice`]; `starts`
+    /// stays dtype-erased, as on that surface.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{Tensor, TypedTensor, TypedTensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![5], vec![0.0; 5])?;
+    /// let update = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0])?;
+    /// let starts = Tensor::from_vec_col_major(vec![1], vec![1_i64])?;
+    /// let y = x.dynamic_update_slice(&update, &starts, &mut engine)?;
+    /// assert_eq!(y.host_data()?, &[0.0, 3.0, 4.0, 0.0, 0.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn dynamic_update_slice(
+        &self,
+        update: &TypedTensor<T>,
+        starts: &tenferro_tensor::Tensor,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// Pad this tensor with zeros on an engine.
     ///
     /// # Examples

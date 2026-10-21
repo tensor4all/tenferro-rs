@@ -273,6 +273,32 @@ macro_rules! dispatch_same_dtype_without_bool_result {
     }};
 }
 
+/// Descriptors for a same-dtype pair of reads, passed to `$body` as typed operands.
+///
+/// The caller has already matched both dtypes to `$ty`, so a mismatch here is a
+/// tag/payload disagreement and reports the pair's dtypes.
+macro_rules! read_pair_operands {
+    ($op:literal, $ty:ty, $variant:ident, $lhs:expr, $rhs:expr, |$a:ident, $b:ident| $body:expr) => {{
+        let (lhs, rhs): (&TensorRead<'_>, &TensorRead<'_>) = ($lhs, $rhs);
+        let mismatch = || crate::Error::dtype_mismatch($op, lhs.dtype(), rhs.dtype());
+        macro_rules! descriptor {
+            ($read:expr) => {
+                match $read {
+                    TensorRead::Tensor(tensor) => {
+                        let typed = TensorAsTyped::<$ty>::as_typed(*tensor).ok_or_else(mismatch)?;
+                        Operand::from_typed($op, typed)
+                    }
+                    TensorRead::View(TensorView::$variant(view)) => operand_from_view(view),
+                    TensorRead::View(_) => Err(mismatch()),
+                }
+            };
+        }
+        let $a = descriptor!(lhs)?;
+        let $b = descriptor!(rhs)?;
+        Ok(Tensor::from_typed::<$ty>($body?))
+    }};
+}
+
 /// The typed operands behind a same-dtype pair, or the refusal a mismatched pair reports.
 ///
 /// Callers reach this from a match on the pair of dtypes, so `None` means the tags and the runtime
@@ -443,49 +469,28 @@ pub(crate) fn scatter_read_with_pool(
         &mut staged_scatter_indices,
     )?;
     let (operand_dtype, update_dtype) = (operand.dtype(), updates.dtype());
-    macro_rules! scatter_operands {
-        ($ty:ty, $variant:ident) => {{
-            macro_rules! descriptor {
-                ($read:expr) => {
-                    match $read {
-                        TensorRead::Tensor(tensor) => {
-                            let typed =
-                                TensorAsTyped::<$ty>::as_typed(*tensor).ok_or_else(|| {
-                                    crate::Error::dtype_mismatch(
-                                        "scatter",
-                                        operand_dtype,
-                                        update_dtype,
-                                    )
-                                })?;
-                            Operand::from_typed("scatter", typed)
-                        }
-                        TensorRead::View(TensorView::$variant(view)) => operand_from_view(view),
-                        TensorRead::View(_) => Err(crate::Error::dtype_mismatch(
-                            "scatter",
-                            operand_dtype,
-                            update_dtype,
-                        )),
-                    }
-                };
-            }
-            Ok(Tensor::from_typed::<$ty>(typed_scatter_at(
-                buffers,
-                cache,
-                exec_context,
-                descriptor!(&operand)?,
-                &scatter_indices,
-                descriptor!(&updates)?,
-                config,
-            )?))
-        }};
+    macro_rules! scatter_pair {
+        ($ty:ty, $variant:ident) => {
+            read_pair_operands!("scatter", $ty, $variant, &operand, &updates, |op, upd| {
+                typed_scatter_at(
+                    buffers,
+                    cache,
+                    exec_context,
+                    op,
+                    &scatter_indices,
+                    upd,
+                    config,
+                )
+            })
+        };
     }
     match (operand_dtype, update_dtype) {
-        (DType::F32, DType::F32) => scatter_operands!(f32, F32),
-        (DType::F64, DType::F64) => scatter_operands!(f64, F64),
-        (DType::I32, DType::I32) => scatter_operands!(i32, I32),
-        (DType::I64, DType::I64) => scatter_operands!(i64, I64),
-        (DType::C32, DType::C32) => scatter_operands!(tenferro_tensor::Complex32, C32),
-        (DType::C64, DType::C64) => scatter_operands!(tenferro_tensor::Complex64, C64),
+        (DType::F32, DType::F32) => scatter_pair!(f32, F32),
+        (DType::F64, DType::F64) => scatter_pair!(f64, F64),
+        (DType::I32, DType::I32) => scatter_pair!(i32, I32),
+        (DType::I64, DType::I64) => scatter_pair!(i64, I64),
+        (DType::C32, DType::C32) => scatter_pair!(tenferro_tensor::Complex32, C32),
+        (DType::C64, DType::C64) => scatter_pair!(tenferro_tensor::Complex64, C64),
         (DType::Bool, DType::Bool) => Err(crate::Error::unsupported(
             "scatter",
             "Bool data tensors are not supported by additive scatter; supported data dtypes: F32/F64/I32/I64/C32/C64",
@@ -652,6 +657,57 @@ pub(crate) fn dynamic_update_slice_with_pool(
     dispatch_same_dtype_result!("dynamic_update_slice", operand, update, |op, upd| {
         typed_dynamic_update_slice(buffers, cache, exec_context, op, upd, &starts)
     })
+}
+
+/// Dynamic-update-slice reads, keeping borrowed operand and update views
+/// instead of staging them.
+///
+/// The `starts` vector becomes a compact `i64` index buffer, so a borrowed
+/// `starts` view is materialized here explicitly; the operand and update views
+/// are not copied.
+pub(crate) fn dynamic_update_slice_read_with_pool(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    operand: TensorRead<'_>,
+    update: TensorRead<'_>,
+    starts: TensorRead<'_>,
+) -> crate::Result<Tensor> {
+    let mut staged_starts = None;
+    let starts = index_tensor_read(buffers, "dynamic_update_slice", starts, &mut staged_starts)?;
+    macro_rules! update_pair {
+        ($ty:ty, $variant:ident) => {
+            read_pair_operands!(
+                "dynamic_update_slice",
+                $ty,
+                $variant,
+                &operand,
+                &update,
+                |op, upd| typed_dynamic_update_slice_at(
+                    buffers,
+                    cache,
+                    exec_context,
+                    op,
+                    upd,
+                    &starts
+                )
+            )
+        };
+    }
+    match (operand.dtype(), update.dtype()) {
+        (DType::F32, DType::F32) => update_pair!(f32, F32),
+        (DType::F64, DType::F64) => update_pair!(f64, F64),
+        (DType::I32, DType::I32) => update_pair!(i32, I32),
+        (DType::I64, DType::I64) => update_pair!(i64, I64),
+        (DType::Bool, DType::Bool) => update_pair!(bool, Bool),
+        (DType::C32, DType::C32) => update_pair!(tenferro_tensor::Complex32, C32),
+        (DType::C64, DType::C64) => update_pair!(tenferro_tensor::Complex64, C64),
+        (lhs, rhs) => Err(crate::Error::dtype_mismatch(
+            "dynamic_update_slice",
+            lhs,
+            rhs,
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -2209,8 +2265,36 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     update: &TypedTensor<T>,
     starts: &IndexTensor,
 ) -> crate::Result<TypedTensor<T>> {
-    let operand_shape = operand.shape();
-    let update_shape = update.shape();
+    typed_dynamic_update_slice_at(
+        buffers,
+        cache,
+        exec_context,
+        Operand::from_typed("dynamic_update_slice", operand)?,
+        Operand::from_typed("dynamic_update_slice", update)?,
+        starts,
+    )
+}
+
+fn typed_dynamic_update_slice_at<T: Copy + Clone + PoolScalar + TensorScalar>(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    operand: Operand<'_, T>,
+    update: Operand<'_, T>,
+    starts: &IndexTensor,
+) -> crate::Result<TypedTensor<T>> {
+    let Operand {
+        data: operand_data,
+        shape: operand_shape,
+        strides: operand_strides,
+        offset: operand_offset,
+    } = operand;
+    let Operand {
+        data: update_data,
+        shape: update_shape,
+        strides: update_strides,
+        offset: update_offset,
+    } = update;
     if update_shape.len() != operand_shape.len() {
         return Err(crate::Error::rank_mismatch(
             "dynamic_update_slice",
@@ -2247,9 +2331,7 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     }
 
     let dtype = kernel_dtype(T::dtype());
-    let operand_strides = col_major_strides(operand_shape);
     let start_strides = col_major_strides(&starts.shape);
-    let update_strides = col_major_strides(update_shape);
     let out_strides = col_major_strides(operand_shape);
     let index_dtype = KernelDType::I64;
     let key = indexed_plan_key(
@@ -2258,9 +2340,9 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         index_dtype,
         &[operand_shape, &starts.shape, update_shape, operand_shape],
         &[
-            &operand_strides,
+            operand_strides,
             &start_strides,
-            &update_strides,
+            update_strides,
             &out_strides,
         ],
         &[],
@@ -2271,11 +2353,11 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
                 dtype,
                 index_dtype,
                 operand_shape,
-                &operand_strides,
+                operand_strides,
                 &starts.shape,
                 &start_strides,
                 update_shape,
-                &update_strides,
+                update_strides,
                 operand_shape,
                 &out_strides,
             )
@@ -2291,10 +2373,10 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("dynamic_update_slice", operand)?),
+            typed_bytes(operand_data),
             operand_shape,
-            &operand_strides,
-            0,
+            operand_strides,
+            operand_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;
@@ -2305,10 +2387,10 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("dynamic_update_slice", update)?),
+            typed_bytes(update_data),
             update_shape,
-            &update_strides,
-            0,
+            update_strides,
+            update_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("dynamic_update_slice", err))?;

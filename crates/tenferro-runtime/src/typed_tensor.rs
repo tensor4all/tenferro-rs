@@ -498,6 +498,20 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("dynamic_slice", out)
     }
 
+    fn dynamic_update_slice(
+        &self,
+        update: &TypedTensor<T>,
+        starts: &Tensor,
+        session: &mut dyn Engine,
+    ) -> Result<TypedTensor<T>> {
+        let out = session.dynamic_update_slice_read(
+            T::tensor_read(self),
+            T::tensor_read(update),
+            TensorRead::from_tensor(starts),
+        )?;
+        into_typed_result("dynamic_update_slice", out)
+    }
+
     fn pad(&self, config: crate::PadConfig, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
         let out = session.pad_read(T::tensor_read(self), &config)?;
         into_typed_result("pad", out)

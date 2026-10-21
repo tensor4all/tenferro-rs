@@ -1976,6 +1976,20 @@ fn read_entries_consume_views_without_staging() {
         scattered.as_slice::<f64>().unwrap(),
         &[0.0, 10.0, 0.0, 0.0, 20.0, 0.0]
     );
+    let starts = Tensor::from_vec_col_major(vec![2], vec![1_i64, 0]).unwrap();
+    let before = engine.resources.read_stagings();
+    let updated = engine
+        .dynamic_update_slice_read(
+            TensorRead::from_view(TensorView::F64(view())),
+            TensorRead::from_view(TensorView::F64(updates())),
+            TensorRead::from_tensor(&starts),
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(
+        updated.as_slice::<f64>().unwrap(),
+        &[1.0, 10.0, 5.0, 2.0, 20.0, 6.0]
+    );
 
     // The structural reads share the same descriptor path.
     let before = engine.resources.read_stagings();
@@ -2032,16 +2046,42 @@ fn read_entries_follow_view_strides_and_offsets() {
         Engine, SliceConfig, TensorIndexing, TensorStructural, TensorView, TypedTensorView,
     };
 
-    // (backing data, strides, offset, logical values in column-major order)
+    struct Layout<'a> {
+        data: &'a [f64],
+        strides: [isize; 2],
+        offset: isize,
+        /// Logical values in column-major order.
+        logical: [f64; 6],
+    }
     let reversed = [0.0_f64, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let shifted = [9.0_f64, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let transposed = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
     let broadcast = [7.0_f64, 8.0];
-    let layouts: [(&[f64], [isize; 2], isize, [f64; 6]); 4] = [
-        (&transposed, [2, 1], 0, [1.0, 3.0, 5.0, 2.0, 4.0, 6.0]),
-        (&reversed, [-2, -1], 6, [6.0, 4.0, 2.0, 5.0, 3.0, 1.0]),
-        (&shifted, [-2, -1], 7, [6.0, 4.0, 2.0, 5.0, 3.0, 1.0]),
-        (&broadcast, [0, 1], 0, [7.0, 7.0, 7.0, 8.0, 8.0, 8.0]),
+    let layouts = [
+        Layout {
+            data: &transposed,
+            strides: [2, 1],
+            offset: 0,
+            logical: [1.0, 3.0, 5.0, 2.0, 4.0, 6.0],
+        },
+        Layout {
+            data: &reversed,
+            strides: [-2, -1],
+            offset: 6,
+            logical: [6.0, 4.0, 2.0, 5.0, 3.0, 1.0],
+        },
+        Layout {
+            data: &shifted,
+            strides: [-2, -1],
+            offset: 7,
+            logical: [6.0, 4.0, 2.0, 5.0, 3.0, 1.0],
+        },
+        Layout {
+            data: &broadcast,
+            strides: [0, 1],
+            offset: 0,
+            logical: [7.0, 7.0, 7.0, 8.0, 8.0, 8.0],
+        },
     ];
     // Updates [10, 20] read backwards from an offset.
     let update_data = [99.0_f64, 20.0, 99.0, 10.0];
@@ -2053,6 +2093,7 @@ fn read_entries_follow_view_strides_and_offsets() {
     let updates = Tensor::from_vec_col_major(vec![1, 2], vec![10.0_f64, 20.0]).unwrap();
     let indices = Tensor::from_vec_col_major(vec![1, 1], vec![1_i64]).unwrap();
     let starts = Tensor::from_vec_col_major(vec![2], vec![1_i64, 1]).unwrap();
+    let update_starts = Tensor::from_vec_col_major(vec![2], vec![2_i64, 0]).unwrap();
     let gather = GatherConfig {
         offset_dims: vec![1],
         collapsed_slice_dims: vec![0],
@@ -2079,10 +2120,16 @@ fn read_entries_follow_view_strides_and_offsets() {
     let values = |tensor: Tensor| tensor.as_slice::<f64>().unwrap().to_vec();
 
     let mut engine = crate::CpuEngine::serial();
-    for (data, strides, offset, logical) in layouts {
+    for Layout {
+        data,
+        strides,
+        offset,
+        logical,
+    } in layouts
+    {
         let view = || {
             TensorRead::from_view(TensorView::F64(
-                TypedTensorView::from_slice(vec![3, 2], strides.to_vec(), offset, data).unwrap(),
+                TypedTensorView::from_slice(vec![3, 2], strides, offset, data).unwrap(),
             ))
         };
         let owned = Tensor::from_vec_col_major(vec![3, 2], logical.to_vec()).unwrap();
@@ -2109,6 +2156,15 @@ fn read_entries_follow_view_strides_and_offsets() {
             "scatter",
             engine.scatter_read(view(), idx(), update_view(), &scatter),
             engine.scatter(&owned, &indices, &updates, &scatter)
+        );
+        same!(
+            "dynamic_update_slice",
+            engine.dynamic_update_slice_read(
+                view(),
+                update_view(),
+                TensorRead::from_tensor(&update_starts)
+            ),
+            engine.dynamic_update_slice(&owned, &updates, &update_starts)
         );
         same!(
             "slice",

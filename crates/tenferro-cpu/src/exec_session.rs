@@ -370,7 +370,8 @@ impl TensorStructural for CpuEngine {
         // the configured execution scope for provider mapping and allocation,
         // just as views enter it for strided materialization.
         if input.as_tensor().is_none() {
-            // Only a view is actually copied here; an owned read passes through.
+            // Only a view counts as staging: an owned read is already compact,
+            // and the copy below is this method's contract, not a hidden one.
             self.resources.count_read_staging();
         }
         let domain = self.shared_allocation_domain().cloned();
@@ -805,6 +806,24 @@ impl TensorIndexing for CpuEngine {
                 indices,
                 updates,
                 config,
+            )
+        })
+    }
+    fn dynamic_update_slice_read(
+        &mut self,
+        operand: tenferro_tensor::TensorRead<'_>,
+        update: tenferro_tensor::TensorRead<'_>,
+        starts: tenferro_tensor::TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        self.run_native_with_plans(|context, buffers, cache| {
+            let exec_context = context.strided_exec_context();
+            indexing::dynamic_update_slice_read_with_pool(
+                buffers,
+                cache,
+                &exec_context,
+                operand,
+                update,
+                starts,
             )
         })
     }

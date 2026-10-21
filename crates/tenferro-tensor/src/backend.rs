@@ -3126,6 +3126,45 @@ pub trait TensorIndexing: TensorStructural {
         update: &Tensor,
         starts: &Tensor,
     ) -> crate::Result<Tensor>;
+    /// Dynamic-update-slice with every input taken as a read.
+    ///
+    /// The default stages each borrowed view into compact storage (an owned
+    /// tensor is passed through) and delegates to the owned-input method; a
+    /// backend whose kernel consumes a borrowed operand should override this so
+    /// a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, TensorRead};
+    ///
+    /// fn run(
+    ///     session: &mut dyn TensorIndexing,
+    ///     x: TensorRead<'_>,
+    ///     update: TensorRead<'_>,
+    ///     starts: TensorRead<'_>,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     session.dynamic_update_slice_read(x, update, starts)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn dynamic_update_slice_read(
+        &mut self,
+        operand: TensorRead<'_>,
+        update: TensorRead<'_>,
+        starts: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        let operand = stage_view(self, operand)?;
+        let update = stage_view(self, update)?;
+        let starts = stage_view(self, starts)?;
+        self.dynamic_update_slice(&operand, &update, &starts)
+    }
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -3578,7 +3617,7 @@ pub trait Engine: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     /// The default implementation stages a view first, so it also returns
-    /// whatever [`Self::to_contiguous_read`] reports for a view the backend
+    /// whatever [`TensorStructural::to_contiguous_read`] reports for a view the backend
     /// cannot materialize.
     fn gather_read(
         &mut self,

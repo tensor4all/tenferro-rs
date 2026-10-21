@@ -184,6 +184,32 @@ fn typed_take_along_axis_matches_the_erased_form() {
     });
 }
 
+/// #2214: `dynamic_update_slice` has one spelling on the erased and typed
+/// sugar, and both match the engine method.
+#[test]
+fn dynamic_update_slice_matches_the_session_form() {
+    let data: Vec<f64> = (0..6).map(f64::from).collect();
+    let x = t(&[3, 2], data.clone());
+    let tx = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], data).unwrap();
+    let update = t(&[2, 1], vec![10.0, 20.0]);
+    let typed_update =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![10.0, 20.0]).unwrap();
+    in_session(|s| {
+        for start in [[0_i64, 1], [2, 1], [-1, 0]] {
+            let starts = Tensor::from_vec_col_major(vec![2], start.to_vec()).unwrap();
+            let expected = s.dynamic_update_slice(&x, &update, &starts).unwrap();
+            same(
+                &x.dynamic_update_slice(&update, &starts, s).unwrap(),
+                &expected,
+            );
+            same(
+                &Tensor::from_typed(tx.dynamic_update_slice(&typed_update, &starts, s).unwrap()),
+                &expected,
+            );
+        }
+    });
+}
+
 #[test]
 fn dot_family_matches_the_session_form() {
     let config = DotGeneralConfig {
