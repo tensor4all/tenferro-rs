@@ -74,7 +74,17 @@ class ArchiveTransferTests(unittest.TestCase):
         part.write_bytes(content)
         result = self.run_step(CHILD, "Reconstruct and verify archive transfer")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("FAILED", result.stdout)
+        # The checker localizes its status words ("FAILED" is "失敗" under a
+        # Japanese locale), so compare per-archive statuses instead: the
+        # corrupted first archive must not report what an intact one does.
+        statuses = dict(
+            line.split(": ", 1)
+            for line in result.stdout.splitlines()
+            if ".tar.zst: " in line
+        )
+        self.assertIn("cuda-tests.tar.zst", statuses)
+        self.assertIn("pjrt-tests.tar.zst", statuses)
+        self.assertNotEqual(statuses["cuda-tests.tar.zst"], statuses["pjrt-tests.tar.zst"])
 
     def test_five_named_uploads_and_parallel_download_retry(self) -> None:
         parent, child = text(PARENT), text(CHILD)
