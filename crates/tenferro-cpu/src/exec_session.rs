@@ -16,7 +16,7 @@ use super::backend::elementwise_read_into_fallback_with_pool;
 use super::provider::CpuExecutionContext;
 use super::{
     analytic, copy_tensor_read_into, elementwise, indexing, materialize_tensor_read_in_domain,
-    reduction, structural,
+    reduction, softmax, structural,
 };
 
 /// Native-engine marker for [`CpuEngine`]; private to this crate so no other
@@ -1110,6 +1110,15 @@ impl Engine for CpuEngine {
         tenferro_tensor::backend::validate_norm_squared_read(&input)?;
         crate::blas1::validate_cpu_read("Engine::norm_squared_read", &input)?;
         self.run_native(|buffers| reduction::norm_squared_read(buffers, input))
+    }
+
+    fn softmax_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axis: usize,
+    ) -> crate::Result<Option<Tensor>> {
+        crate::blas1::validate_cpu_read("softmax", &input)?;
+        self.run_native(|buffers| softmax::softmax_read_with_pool(buffers, input, axis))
     }
 
     fn axpby_read_into_accum(

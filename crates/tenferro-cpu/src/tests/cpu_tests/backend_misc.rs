@@ -2206,3 +2206,73 @@ fn fused_activation_read_declines_dtypes_without_a_fused_kernel() {
         assert!(out.is_none(), "{:?} must decline", input.dtype());
     }
 }
+
+#[test]
+fn softmax_read_matches_a_scalar_oracle() {
+    let xs: Vec<f32> = (0..12).map(|i| i as f32 * 0.75 - 4.0).collect();
+    let input = Tensor::from_vec_col_major(vec![4, 3], xs.clone()).unwrap();
+    let mut backend = crate::test_support::cpu_engine(2).unwrap();
+    let out = crate::test_support::on_engine(&mut backend, |session| {
+        session.softmax_read(TensorRead::from_tensor(&input), 0)
+    })
+    .unwrap()
+    .unwrap()
+    .expect("axis 0 has a fused kernel");
+    let got = out.as_slice::<f32>().unwrap();
+    for j in 0..3 {
+        let column: Vec<f64> = (0..4).map(|i| xs[i + j * 4] as f64).collect();
+        let max = column.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let denominator: f64 = column.iter().map(|value| (value - max).exp()).sum();
+        for (i, &value) in column.iter().enumerate() {
+            let expected = (value - max).exp() / denominator;
+            assert!(
+                (got[i + j * 4] as f64 - expected).abs() < 1e-6,
+                "column {j} row {i}: got {}, expected {expected}",
+                got[i + j * 4]
+            );
+        }
+    }
+}
+
+#[test]
+fn softmax_read_preserves_masked_and_nan_semantics() {
+    let masked =
+        Tensor::from_vec_col_major(vec![2], vec![f64::NEG_INFINITY, f64::NEG_INFINITY]).unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
+    let out = crate::test_support::on_engine(&mut backend, |session| {
+        session.softmax_read(TensorRead::from_tensor(&masked), 0)
+    })
+    .unwrap()
+    .unwrap()
+    .expect("f64 has a fused kernel");
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0, 0.0]);
+
+    let nan = Tensor::from_vec_col_major(vec![2], vec![f64::NAN, 1.0]).unwrap();
+    let out = crate::test_support::on_engine(&mut backend, |session| {
+        session.softmax_read(TensorRead::from_tensor(&nan), 0)
+    })
+    .unwrap()
+    .unwrap()
+    .expect("f64 has a fused kernel");
+    assert!(out.as_slice::<f64>().unwrap().iter().all(|v| v.is_nan()));
+}
+
+#[test]
+fn softmax_read_declines_other_axes_and_dtypes() {
+    let input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0f32, 2.0, 3.0, 4.0]).unwrap();
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
+    let out = crate::test_support::on_engine(&mut backend, |session| {
+        session.softmax_read(TensorRead::from_tensor(&input), 1)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(out.is_none(), "axis 1 falls back to the composite");
+
+    let integer = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
+    let out = crate::test_support::on_engine(&mut backend, |session| {
+        session.softmax_read(TensorRead::from_tensor(&integer), 0)
+    })
+    .unwrap()
+    .unwrap();
+    assert!(out.is_none(), "integers fall back to the composite");
+}

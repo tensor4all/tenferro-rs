@@ -372,6 +372,9 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn softmax(&self, axis: usize, session: &mut dyn Engine) -> Result<Tensor> {
+        if let Some(output) = session.softmax_read(TensorRead::from_tensor(self), axis)? {
+            return Ok(output);
+        }
         run_session_composite(session, |ops| {
             composite::softmax(ops, &borrowed(self), axis)
         })

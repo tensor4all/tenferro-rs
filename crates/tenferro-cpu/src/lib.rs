@@ -113,10 +113,12 @@ mod indexing;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
 mod operand;
+mod parallel;
 pub mod provider;
 mod reduction;
 mod runtime_adapter;
 mod simd_math;
+mod softmax;
 mod structural;
 #[cfg(test)]
 pub(crate) mod test_support;
