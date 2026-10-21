@@ -13,7 +13,7 @@ use tenferro_tensor::{
 use tinyvec::TinyVec;
 
 use crate::composite;
-use crate::composite::session::{run_session_composite, typed_borrowed};
+use crate::composite::session::{borrowed, run_session_composite, typed_borrowed};
 use crate::{TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt};
 use tenferro_tensor::TypedTensor;
 
@@ -546,6 +546,19 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     ) -> Result<TypedTensor<T>> {
         let out = session.embed_diagonal_read(T::tensor_read(self), axis_a, axis_b)?;
         into_typed_result("embed_diag", out)
+    }
+
+    fn take_along_axis(
+        &self,
+        indices: &Tensor,
+        axis: usize,
+        session: &mut dyn Engine,
+    ) -> Result<TypedTensor<T>> {
+        let indices = borrowed(indices);
+        let out = run_session_composite(session, |ops| {
+            composite::take_along_axis(ops, &typed_borrowed(self), &indices, axis)
+        })?;
+        into_typed_result("take_along_axis", out)
     }
 }
 

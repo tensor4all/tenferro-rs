@@ -44,21 +44,6 @@ pub(crate) struct SessionComposite<'s, 'a> {
     inputs: PhantomData<ReadInput<'a>>,
 }
 
-/// A tensor operand that is either borrowed or materialized for this call.
-enum Operand<'v> {
-    Borrowed(&'v Tensor),
-    Owned(Box<Tensor>),
-}
-
-impl Operand<'_> {
-    fn tensor(&self) -> &Tensor {
-        match self {
-            Self::Borrowed(tensor) => tensor,
-            Self::Owned(tensor) => tensor,
-        }
-    }
-}
-
 impl<'s, 'a> SessionComposite<'s, 'a> {
     fn new(session: &'s mut dyn Engine) -> Self {
         Self {
@@ -79,25 +64,6 @@ impl<'s, 'a> SessionComposite<'s, 'a> {
                 }
             }
             ReadInput::Borrowed(read) => self.session.to_contiguous_read(read),
-        }
-    }
-
-    /// Gather and concatenate take owned tensors; a borrowed view is copied once.
-    fn materialized<'v>(&mut self, value: &'v ReadInput<'_>) -> Result<Operand<'v>> {
-        match value {
-            ReadInput::Owned(tensor) => Ok(Operand::Borrowed(tensor)),
-            ReadInput::Value(value) => match value.as_tensor() {
-                Some(tensor) => Ok(Operand::Borrowed(tensor)),
-                None => Ok(Operand::Owned(Box::new(
-                    self.session.to_contiguous_read(value.tensor_read())?,
-                ))),
-            },
-            ReadInput::Borrowed(read) => match read.as_tensor() {
-                Some(tensor) => Ok(Operand::Borrowed(tensor)),
-                None => Ok(Operand::Owned(Box::new(
-                    self.session.to_contiguous_read(read.clone())?,
-                ))),
-            },
         }
     }
 
@@ -258,12 +224,10 @@ impl<'a> CompositeOps for SessionComposite<'_, 'a> {
     }
 
     fn concatenate(&mut self, values: &[&ReadInput<'a>], axis: usize) -> Result<ReadInput<'a>> {
-        let tensors = values
-            .iter()
-            .map(|value| self.materialized(value))
-            .collect::<Result<Vec<_>>>()?;
-        let refs: Vec<&Tensor> = tensors.iter().map(Operand::tensor).collect();
-        Ok(ReadInput::Owned(self.session.concatenate(&refs, axis)?))
+        let reads: Vec<TensorRead<'_>> = values.iter().map(|value| value.tensor_read()).collect();
+        Ok(ReadInput::Owned(
+            self.session.concatenate_read(&reads, axis)?,
+        ))
     }
 
     fn pad(
@@ -272,10 +236,9 @@ impl<'a> CompositeOps for SessionComposite<'_, 'a> {
         low: &[usize],
         high: &[usize],
     ) -> Result<ReadInput<'a>> {
-        let input = self.materialized(value)?;
         let out = self
             .session
-            .pad(input.tensor(), &zero_pad_config(low, high))?;
+            .pad_read(value.tensor_read(), &zero_pad_config(low, high))?;
         Ok(ReadInput::Owned(out))
     }
 
@@ -285,11 +248,9 @@ impl<'a> CompositeOps for SessionComposite<'_, 'a> {
         indices: &ReadInput<'a>,
         config: GatherConfig,
     ) -> Result<ReadInput<'a>> {
-        let operand = self.materialized(operand)?;
-        let indices = self.materialized(indices)?;
-        Ok(ReadInput::Owned(self.session.gather(
-            operand.tensor(),
-            indices.tensor(),
+        Ok(ReadInput::Owned(self.session.gather_read(
+            operand.tensor_read(),
+            indices.tensor_read(),
             &config,
         )?))
     }

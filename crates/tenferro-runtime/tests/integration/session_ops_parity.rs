@@ -159,6 +159,31 @@ fn structural_family_matches_the_session_form() {
     });
 }
 
+/// #2214: the typed `take_along_axis` reads the typed tensor through the same
+/// composite as the erased form, for batch-varying and broadcast index shapes.
+#[test]
+fn typed_take_along_axis_matches_the_erased_form() {
+    let data: Vec<f64> = (0..12).map(f64::from).collect();
+    let x = t(&[3, 2, 2], data.clone());
+    let tx = TypedTensor::<f64>::from_vec_col_major(vec![3, 2, 2], data).unwrap();
+    let batch_varying =
+        Tensor::from_vec_col_major(vec![2, 2, 2], vec![2_i64, 0, 1, 1, 0, 2, 2, 2]).unwrap();
+    let broadcast = Tensor::from_vec_col_major(vec![2, 1, 2], vec![1_i32, 0, 2, 2]).unwrap();
+    in_session(|s| {
+        for (indices, axis) in [(&batch_varying, 0), (&broadcast, 0)] {
+            same(
+                &Tensor::from_typed(tx.take_along_axis(indices, axis, s).unwrap()),
+                &x.take_along_axis(indices, axis, s).unwrap(),
+            );
+        }
+        let along_last = Tensor::from_vec_col_major(vec![3, 2, 1], vec![1_i64; 6]).unwrap();
+        same(
+            &Tensor::from_typed(tx.take_along_axis(&along_last, 2, s).unwrap()),
+            &x.take_along_axis(&along_last, 2, s).unwrap(),
+        );
+    });
+}
+
 #[test]
 fn dot_family_matches_the_session_form() {
     let config = DotGeneralConfig {

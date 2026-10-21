@@ -87,8 +87,9 @@ compositions (no overflow, max-subtracted softmax, all-masked slices give 0 /
 `-inf` with a zero gradient) and differentiate through eager and traced AD; do
 not hand-roll them. The edge-case policy is in
 [`docs/spec/tensor-semantics.md`](../../../../docs/spec/tensor-semantics.md),
-Section VIII. `take_along_axis` is not on `TypedTensorSessionOpsExt` (an
-indexing op); `erf` is real-only and does not lower to StableHLO.
+Section VIII. `TypedTensorSessionOpsExt` has `take_along_axis` too, with the
+index tensor kept dtype-erased; `erf` is real-only and does not lower to
+StableHLO.
 
 ## Traced tensors and extensions
 
