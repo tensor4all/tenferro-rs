@@ -227,26 +227,6 @@ impl<'a> CpuExecutionContext<'a> {
         }
     }
 
-    /// Run a faer computation with this context's parallelism.
-    ///
-    /// faer's `Par::rayon` schedules on the pool of the calling thread, so a
-    /// parallel faer call must run inside the engine's pool; a serial context
-    /// runs on the caller with `Par::Seq`.
-    #[cfg(feature = "native")]
-    pub(crate) fn with_faer_pool<R: Send>(
-        &self,
-        operation: impl FnOnce(faer::Par) -> R + Send,
-    ) -> R {
-        let par = self.faer_parallelism();
-        match (par, self.rayon_pool()) {
-            (faer::Par::Rayon(_), Some(pool)) if pool.current_thread_index().is_none() => {
-                self.resources.count_faer_entry();
-                pool.install(|| operation(par))
-            }
-            _ => operation(par),
-        }
-    }
-
     /// Run a faer computation at `width` workers, decided by the caller from the
     /// shared work model before any pool is entered.
     ///

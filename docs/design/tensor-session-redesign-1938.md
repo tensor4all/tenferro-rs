@@ -38,8 +38,9 @@ Evidence at the source anchor:
   recycler; recycling must not take execution-admission locks.
 - `crates/tenferro-cpu-basic/src/pooled_uninit_output.rs`: the checkout borrows
   the whole pool; `buffer_pool.rs` already owns shared pool state.
-- `crates/tenferro-cpu/src/lib.rs`: `FaerParallelismExt` itself calls
-  `with_cpu_exec_session`; it is not evidence that the downcast is gone.
+- `crates/tenferro-cpu/src/lib.rs`: direct faer interop re-exports the build and
+  lets the caller enter `CpuEngine::pool`; no faer value crosses the engine
+  boundary, so it is not evidence about the downcast.
 - `crates/tenferro-ad/src/eager.rs`: `with_execution_session` locks the eager
   backend before session entry. `docs/design/explicit-session-boundary.md`
   records A2's unresolved mutex/permit/`Send` problem.

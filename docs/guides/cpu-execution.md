@@ -72,23 +72,28 @@ assert_eq!(engine.num_threads(), 1);
 ```
 <!-- end-snippet-source -->
 
-## Scoped direct faer calls
+## Direct faer calls on the engine's pool
 
-Downstream code that needs a faer routine not exposed by tenferro can use
-`tenferro_cpu::FaerParallelismExt` on the engine it already holds:
+Downstream code that needs a faer routine not exposed by tenferro calls faer on
+the host slices it borrows from the tensor. The pool you handed to
+`CpuEngine::new` remains accessible: `CpuEngine::pool` lends it back, so a
+parallel direct call enters that pool and chooses a width within the engine's
+budget:
 
 ```text
-engine.with_faer_parallelism(|parallel| {
-    faer_operation(..., parallel)
-})?;
+let width = engine.num_threads();
+engine.pool().expect("pooled engine").install(|| {
+    faer_operation(..., Par::rayon(width))
+});
 ```
 
-The callback receives the same policy as an internal faer operation: bounded
-`Par::rayon(n)` derived from the engine's pool, and `Par::Seq` for a serial
-engine. The capability is lexical; it does not expose the Rayon pool, executor
-handle, mutable CPU context, or a value that can outlive the callback. This
-guarantee applies to direct faer/Rayon-compatible calls, not to workers created
-internally by OpenBLAS, MKL, Accelerate, or OpenMP.
+A serial engine has no pool: call it with `Par::Seq`. This keeps direct faer
+work on the same threads as tenferro's own operations without a tenferro
+callback that hands out a `Par`, and a small sequential call never enters a
+pool. tenferro hands out no `faer::Par`; spell the types with
+`tenferro_cpu::faer` (the build tenferro links) to avoid compiling a second faer
+into one binary. This guarantee applies to direct faer/Rayon-compatible calls,
+not to workers created internally by OpenBLAS, MKL, Accelerate, or OpenMP.
 
 ## Vendor BLAS/LAPACK
 

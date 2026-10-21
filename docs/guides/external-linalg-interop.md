@@ -11,12 +11,11 @@ The contract is **direct dependencies** for BLAS/LAPACK: your application adds
 `cblas-sys` + `lapack` at the tested compatible versions listed below, and
 enables the matching CPU provider feature on the tenferro crates. For faer you
 have a choice. `tenferro-cpu` re-exports the build it links as
-`tenferro_cpu::faer` (behind `native`), which makes the `Par` and `Mat` types an
-engine hands out the same ones your own code sees and removes the
-version-mismatch class entirely; add a direct `faer` dependency only when you
-want to control that build yourself, and then keep it on the version below.
-tenferro does not wrap these crates and does not add a hidden interop layer to
-learn.
+`tenferro_cpu::faer` (behind `native`), so your code resolves the same `Par` and
+`Mat` types and one binary carries one faer. No faer value crosses a tenferro
+boundary, so a direct `faer` dependency is also safe; add one only when you want
+to control that build yourself, and then keep it on the version below. tenferro
+does not wrap these crates and does not add a hidden interop layer to learn.
 
 The examples below are compiled and run in CI from
 [`docs/tutorial-code`](https://github.com/tensor4all/tenferro-rs/tree/main/docs/tutorial-code)
@@ -36,24 +35,24 @@ system OpenBLAS (`blas` with the native library linked through
 `RUSTFLAGS`) so that native symbol linkage is verified without rebuilding
 OpenBLAS from source.
 
-For direct faer work that should remain parallel, import
-`tenferro_cpu::FaerParallelismExt` and scope the call on the engine you already
-hold:
+For direct faer work that should remain parallel, enter the pool you already
+own. `CpuEngine::pool` lends back the same pool the engine computes on, and
+faer's `Par::rayon` schedules on the calling thread's pool:
 
 ```text
-engine.with_faer_parallelism(|parallel| {
-    faer_operation(..., parallel)
-})?;
+let width = engine.num_threads();
+engine.pool().expect("pooled engine").install(|| {
+    faer_operation(..., Par::rayon(width))
+});
 ```
 
-This capability supplies the engine-selected `faer::Par` - spell it as
-`tenferro_cpu::faer::Par`, the re-exported build, so it is the same type the
-capability produces: a pooled engine receives bounded `Par::rayon(n)`, while a
-serial engine receives `Par::Seq`. The callback cannot retain the capability or
-the pool. A direct `Par::Seq` call remains the simplest portable escape hatch;
-an ambient `Par::rayon(n)` is outside tenferro's thread-budget contract. The
-scoped capability is CPU/faer-specific and does not claim affinity for external
-BLAS/OpenMP workers.
+tenferro hands out no `faer::Par`, so no faer value crosses a tenferro boundary
+and a separately pinned `faer` cannot meet a confusing type mismatch (#1939).
+Spell the types with `tenferro_cpu::faer`, the re-exported build, to keep one
+faer in the binary; a direct dependency remains safe because only plain
+column-major slices cross the boundary. A serial engine has no pool and takes
+`Par::Seq` directly. This route is CPU/faer-specific and does not claim affinity
+for external BLAS/OpenMP workers.
 
 ## When to use this
 
@@ -83,9 +82,9 @@ Depend directly on the same major versions the tenferro workspace pins
 expecting semver compatibility from `0.1` alone. `cblas-sys` and `lapack` stay
 normal direct dependencies on purpose: your application then controls the
 version, the provider link, and the threading environment exactly as if tenferro
-were not involved. `faer` is the exception, because its `Par` value crosses
-tenferro's `with_faer_parallelism` callback, where a second build could only
-surface as a confusing type error (#1939).
+were not involved. `faer` is re-exported for convenience rather than required:
+tenferro hands out no faer value, so a direct dependency at another compatible
+version only costs a second faer build, not a type mismatch (#1939).
 
 ### Provider features
 
