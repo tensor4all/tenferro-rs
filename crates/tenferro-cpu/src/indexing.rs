@@ -348,8 +348,9 @@ pub(crate) fn gather_read_with_pool(
     start_indices: TensorRead<'_>,
     config: &GatherConfig,
 ) -> crate::Result<Tensor> {
-    let start_indices = crate::materialize_tensor_read(buffers, "gather", start_indices)?;
-    let start_indices = try_index_tensor(&start_indices)?;
+    let mut staged_start_indices = None;
+    let start_indices =
+        index_tensor_read(buffers, "gather", start_indices, &mut staged_start_indices)?;
     match operand {
         TensorRead::Tensor(operand) => dispatch_tensor_unary_result!(operand, |t| typed_gather(
             buffers,
@@ -434,23 +435,18 @@ pub(crate) fn scatter_read_with_pool(
     updates: TensorRead<'_>,
     config: &ScatterConfig,
 ) -> crate::Result<Tensor> {
-    let scatter_indices = crate::materialize_tensor_read(buffers, "scatter", scatter_indices)?;
-    let scatter_indices = try_index_tensor(&scatter_indices)?;
+    let mut staged_scatter_indices = None;
+    let scatter_indices = index_tensor_read(
+        buffers,
+        "scatter",
+        scatter_indices,
+        &mut staged_scatter_indices,
+    )?;
     let (operand_dtype, update_dtype) = (operand.dtype(), updates.dtype());
-    // Borrowed compact strides have to outlive the operands, so owned reads
-    // keep theirs here for the whole call.
-    let owned_strides = |read: &TensorRead<'_>| match read {
-        TensorRead::Tensor(tensor) => inline_col_major_strides("scatter", tensor.shape()),
-        TensorRead::View(_) => Ok(InlineStrides::new()),
-    };
-    let strides: SmallVec<[InlineStrides; 2]> = [&operand, &updates]
-        .into_iter()
-        .map(owned_strides)
-        .collect::<crate::Result<_>>()?;
     macro_rules! scatter_operands {
         ($ty:ty, $variant:ident) => {{
             macro_rules! descriptor {
-                ($read:expr, $strides:expr) => {
+                ($read:expr) => {
                     match $read {
                         TensorRead::Tensor(tensor) => {
                             let typed =
@@ -461,7 +457,7 @@ pub(crate) fn scatter_read_with_pool(
                                         update_dtype,
                                     )
                                 })?;
-                            Operand::from_typed("scatter", typed, $strides)
+                            Operand::from_typed("scatter", typed)
                         }
                         TensorRead::View(TensorView::$variant(view)) => operand_from_view(view),
                         TensorRead::View(_) => Err(crate::Error::dtype_mismatch(
@@ -476,9 +472,9 @@ pub(crate) fn scatter_read_with_pool(
                 buffers,
                 cache,
                 exec_context,
-                descriptor!(&operand, &strides[0])?,
+                descriptor!(&operand)?,
                 &scatter_indices,
-                descriptor!(&updates, &strides[1])?,
+                descriptor!(&updates)?,
                 config,
             )?))
         }};
@@ -582,8 +578,8 @@ pub(crate) fn dynamic_slice_read_with_pool(
     starts: TensorRead<'_>,
     slice_sizes: &[usize],
 ) -> crate::Result<Tensor> {
-    let starts = crate::materialize_tensor_read(buffers, "dynamic_slice", starts)?;
-    let starts = try_index_tensor(&starts)?;
+    let mut staged_starts = None;
+    let starts = index_tensor_read(buffers, "dynamic_slice", starts, &mut staged_starts)?;
     match input {
         TensorRead::Tensor(input) => dispatch_tensor_unary_result!(input, |t| typed_dynamic_slice(
             buffers,
@@ -714,29 +710,14 @@ pub(crate) fn concatenate_read_with_pool(
     let dtype = first.dtype();
     macro_rules! concatenate_operands {
         ($ty:ty, $variant:ident) => {{
-            // Borrowed compact strides have to outlive the operand slice, so
-            // owned inputs keep theirs in this list for the whole call.
-            let strides: SmallVec<[InlineStrides; 4]> = inputs
+            let operands: SmallVec<[Operand<'_, $ty>; 4]> = inputs
                 .iter()
                 .map(|input| match input {
                     TensorRead::Tensor(tensor) => {
                         let typed = TensorAsTyped::<$ty>::as_typed(*tensor).ok_or_else(|| {
                             crate::Error::dtype_mismatch("concatenate", dtype, tensor.dtype())
                         })?;
-                        inline_col_major_strides("concatenate", typed.shape())
-                    }
-                    TensorRead::View(_) => Ok(InlineStrides::new()),
-                })
-                .collect::<crate::Result<_>>()?;
-            let operands: SmallVec<[Operand<'_, $ty>; 4]> = inputs
-                .iter()
-                .zip(strides.iter())
-                .map(|(input, strides)| match input {
-                    TensorRead::Tensor(tensor) => {
-                        let typed = TensorAsTyped::<$ty>::as_typed(*tensor).ok_or_else(|| {
-                            crate::Error::dtype_mismatch("concatenate", dtype, tensor.dtype())
-                        })?;
-                        Operand::from_typed("concatenate", typed, strides)
+                        Operand::from_typed("concatenate", typed)
                     }
                     TensorRead::View(TensorView::$variant(view)) => operand_from_view(view),
                     TensorRead::View(view) => Err(crate::Error::dtype_mismatch(
@@ -828,11 +809,10 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     input: &TypedTensor<T>,
     config: &SliceConfig,
 ) -> crate::Result<TypedTensor<T>> {
-    let strides = inline_col_major_strides("slice", input.shape())?;
     typed_slice_at(
         buffers,
         exec_context,
-        Operand::from_typed("slice", input, &strides)?,
+        Operand::from_typed("slice", input)?,
         config,
     )
 }
@@ -1023,14 +1003,9 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
     inputs: &[&TypedTensor<T>],
     axis: usize,
 ) -> crate::Result<TypedTensor<T>> {
-    let strides: SmallVec<[InlineStrides; 4]> = inputs
-        .iter()
-        .map(|input| inline_col_major_strides("concatenate", input.shape()))
-        .collect::<crate::Result<_>>()?;
     let operands: SmallVec<[Operand<'_, T>; 4]> = inputs
         .iter()
-        .zip(strides.iter())
-        .map(|(input, strides)| Operand::from_typed("concatenate", input, strides))
+        .map(|input| Operand::from_typed("concatenate", input))
         .collect::<crate::Result<_>>()?;
     typed_concatenate_operands(buffers, exec_context, &operands, axis)
 }
@@ -1157,11 +1132,10 @@ fn typed_reverse<T: Copy + Clone + PoolScalar + TensorScalar>(
     input: &TypedTensor<T>,
     axes: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    let strides = inline_col_major_strides("reverse", input.shape())?;
     typed_reverse_at(
         buffers,
         exec_context,
-        Operand::from_typed("reverse", input, &strides)?,
+        Operand::from_typed("reverse", input)?,
         axes,
     )
 }
@@ -1309,6 +1283,21 @@ fn unsupported_index_dtype(complex: bool) -> crate::Error {
     )
 }
 
+/// Index values from a read: an owned tensor is used in place, and only a view
+/// is materialized (into `staged`), because the plans read compact indices.
+fn index_tensor_read<'a>(
+    buffers: &mut BufferPool,
+    op: &'static str,
+    read: TensorRead<'a>,
+    staged: &'a mut Option<Tensor>,
+) -> crate::Result<IndexTensor<'a>> {
+    let tensor = match read {
+        TensorRead::Tensor(tensor) => tensor,
+        view => staged.insert(crate::materialize_tensor_read(buffers, op, view)?),
+    };
+    try_index_tensor(tensor)
+}
+
 fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor<'_>> {
     match tensor.dtype() {
         DType::I32 => {
@@ -1451,12 +1440,11 @@ fn typed_gather<T: Copy + Clone + PoolScalar + TensorScalar>(
     start_indices: &IndexTensor,
     config: &GatherConfig,
 ) -> crate::Result<TypedTensor<T>> {
-    let strides = inline_col_major_strides("gather", operand.shape())?;
     typed_gather_at(
         buffers,
         cache,
         exec_context,
-        Operand::from_typed("gather", operand, &strides)?,
+        Operand::from_typed("gather", operand)?,
         start_indices,
         config,
     )
@@ -1730,15 +1718,13 @@ fn typed_scatter<T>(
 where
     T: Copy + Clone + PoolScalar + TensorScalar,
 {
-    let operand_strides = inline_col_major_strides("scatter", operand.shape())?;
-    let update_strides = inline_col_major_strides("scatter", updates.shape())?;
     typed_scatter_at(
         buffers,
         cache,
         exec_context,
-        Operand::from_typed("scatter", operand, &operand_strides)?,
+        Operand::from_typed("scatter", operand)?,
         scatter_indices,
-        Operand::from_typed("scatter", updates, &update_strides)?,
+        Operand::from_typed("scatter", updates)?,
         config,
     )
 }
@@ -2053,12 +2039,11 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     starts: &IndexTensor,
     slice_sizes: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    let strides = inline_col_major_strides("dynamic_slice", input.shape())?;
     typed_dynamic_slice_at(
         buffers,
         cache,
         exec_context,
-        Operand::from_typed("dynamic_slice", input, &strides)?,
+        Operand::from_typed("dynamic_slice", input)?,
         starts,
         slice_sizes,
     )
@@ -2378,11 +2363,10 @@ fn typed_pad<T: Copy + Clone + PoolScalar + TensorScalar>(
     input: &TypedTensor<T>,
     config: &PadConfig,
 ) -> crate::Result<TypedTensor<T>> {
-    let strides = inline_col_major_strides("pad", input.shape())?;
     typed_pad_at(
         buffers,
         exec_context,
-        Operand::from_typed("pad", input, &strides)?,
+        Operand::from_typed("pad", input)?,
         config,
     )
 }

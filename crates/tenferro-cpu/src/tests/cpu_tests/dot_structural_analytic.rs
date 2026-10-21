@@ -2020,3 +2020,137 @@ fn read_entries_consume_views_without_staging() {
         .unwrap();
     assert_eq!(engine.resources.read_stagings(), before + 1);
 }
+
+/// #2214: each read entry reads a view through its real strides and offset.
+///
+/// Every layout below is a 3x2 view; each read must equal the owned entry on
+/// the compact copy of the same logical values. All layouts share one engine,
+/// so same-shape plans are reused across different strides and offsets.
+#[test]
+fn read_entries_follow_view_strides_and_offsets() {
+    use tenferro_tensor::{
+        Engine, SliceConfig, TensorIndexing, TensorStructural, TensorView, TypedTensorView,
+    };
+
+    // (backing data, strides, offset, logical values in column-major order)
+    let reversed = [0.0_f64, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let shifted = [9.0_f64, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let transposed = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let broadcast = [7.0_f64, 8.0];
+    let layouts: [(&[f64], [isize; 2], isize, [f64; 6]); 4] = [
+        (&transposed, [2, 1], 0, [1.0, 3.0, 5.0, 2.0, 4.0, 6.0]),
+        (&reversed, [-2, -1], 6, [6.0, 4.0, 2.0, 5.0, 3.0, 1.0]),
+        (&shifted, [-2, -1], 7, [6.0, 4.0, 2.0, 5.0, 3.0, 1.0]),
+        (&broadcast, [0, 1], 0, [7.0, 7.0, 7.0, 8.0, 8.0, 8.0]),
+    ];
+    // Updates [10, 20] read backwards from an offset.
+    let update_data = [99.0_f64, 20.0, 99.0, 10.0];
+    let update_view = || {
+        TensorRead::from_view(TensorView::F64(
+            TypedTensorView::from_slice(vec![1, 2], vec![1, -2], 3, &update_data).unwrap(),
+        ))
+    };
+    let updates = Tensor::from_vec_col_major(vec![1, 2], vec![10.0_f64, 20.0]).unwrap();
+    let indices = Tensor::from_vec_col_major(vec![1, 1], vec![1_i64]).unwrap();
+    let starts = Tensor::from_vec_col_major(vec![2], vec![1_i64, 1]).unwrap();
+    let gather = GatherConfig {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1, 2],
+    };
+    let scatter = ScatterConfig {
+        update_window_dims: vec![1],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+    let slice = SliceConfig {
+        starts: vec![1, 0],
+        limits: vec![3, 2],
+        strides: vec![1, 1],
+    };
+    let pad = PadConfig {
+        edge_padding_low: vec![1, 0],
+        edge_padding_high: vec![0, 1],
+        interior_padding: vec![1, 0],
+    };
+    let values = |tensor: Tensor| tensor.as_slice::<f64>().unwrap().to_vec();
+
+    let mut engine = crate::CpuEngine::serial();
+    for (data, strides, offset, logical) in layouts {
+        let view = || {
+            TensorRead::from_view(TensorView::F64(
+                TypedTensorView::from_slice(vec![3, 2], strides.to_vec(), offset, data).unwrap(),
+            ))
+        };
+        let owned = Tensor::from_vec_col_major(vec![3, 2], logical.to_vec()).unwrap();
+        let idx = || TensorRead::from_tensor(&indices);
+        let label = format!("strides {strides:?} offset {offset}");
+        let before = engine.resources.read_stagings();
+
+        macro_rules! same {
+            ($name:literal, $read:expr, $owned:expr) => {
+                assert_eq!(
+                    values($read.unwrap()),
+                    values($owned.unwrap()),
+                    "{} on {label}",
+                    $name
+                );
+            };
+        }
+        same!(
+            "gather",
+            engine.gather_read(view(), idx(), &gather),
+            engine.gather(&owned, &indices, &gather)
+        );
+        same!(
+            "scatter",
+            engine.scatter_read(view(), idx(), update_view(), &scatter),
+            engine.scatter(&owned, &indices, &updates, &scatter)
+        );
+        same!(
+            "slice",
+            engine.slice_read(view(), &slice),
+            engine.slice(&owned, &slice)
+        );
+        same!(
+            "dynamic_slice",
+            engine.dynamic_slice_read(view(), TensorRead::from_tensor(&starts), &[2, 1]),
+            engine.dynamic_slice(&owned, &starts, &[2, 1])
+        );
+        same!(
+            "pad",
+            engine.pad_read(view(), &pad),
+            engine.pad(&owned, &pad)
+        );
+        same!(
+            "concatenate",
+            engine.concatenate_read(&[view(), TensorRead::from_tensor(&owned)], 1),
+            engine.concatenate(&[&owned, &owned], 1)
+        );
+        same!(
+            "reverse",
+            engine.reverse_read(view(), &[0, 1]),
+            engine.reverse(&owned, &[0, 1])
+        );
+        same!(
+            "tril",
+            engine.tril_read(view(), -1),
+            engine.tril(&owned, -1)
+        );
+        same!("triu", engine.triu_read(view(), 1), engine.triu(&owned, 1));
+        same!(
+            "extract_diagonal",
+            engine.extract_diagonal_read(view(), 0, 1),
+            engine.extract_diagonal(&owned, 0, 1)
+        );
+        same!(
+            "embed_diagonal",
+            engine.embed_diagonal_read(view(), 0, 1),
+            engine.embed_diagonal(&owned, 0, 1)
+        );
+        assert_eq!(engine.resources.read_stagings(), before, "{label} staged");
+    }
+}

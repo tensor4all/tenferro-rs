@@ -35,9 +35,10 @@ The important shape is `x.matmul(&weights, &mut engine)`. For
 dynamic dtypes use `TensorSessionOpsExt`; for static scalar types use
 `TypedTensorSessionOpsExt`. The receiver methods mirror the eager session
 methods with the engine last (`x.gather(&idx, config, &mut engine)`,
-`x.reduce_max(None, &mut engine)`, `x.dot_general(&y, config, &mut engine)`);
-indexing, padding, concatenation and triangular/diagonal ops are on `Tensor`
-only (`Tensor::from_typed` moves a typed tensor there without a copy).
+`x.reduce_max(None, &mut engine)`, `x.dot_general(&y, config, &mut engine)`),
+including indexing, padding, concatenation and the triangular/diagonal ops.
+Only the dtype-changing `convert` / `cast` are `Tensor`-only
+(`Tensor::from_typed` moves a typed tensor there without a copy).
 
 ## Eager tensors
 

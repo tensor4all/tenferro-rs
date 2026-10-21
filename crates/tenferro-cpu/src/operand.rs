@@ -20,16 +20,15 @@ pub(crate) struct Operand<'a, T> {
 }
 
 impl<'a, T: tenferro_tensor::TensorScalar + Copy + 'static> Operand<'a, T> {
-    /// Descriptor of a compact owned tensor, whose layout is column-major.
+    /// Descriptor of a compact owned tensor, borrowing its cached column-major strides.
     pub(crate) fn from_typed(
         op: &'static str,
         tensor: &'a tenferro_tensor::TypedTensor<T>,
-        strides: &'a [isize],
     ) -> crate::Result<Self> {
         Ok(Self {
             data: crate::typed_host_data(op, tensor)?,
             shape: tensor.shape(),
-            strides,
+            strides: tensor.strides(),
             offset: 0,
         })
     }
