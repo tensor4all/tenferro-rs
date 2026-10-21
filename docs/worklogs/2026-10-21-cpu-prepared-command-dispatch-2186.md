@@ -55,9 +55,8 @@
   are the minima and maxima of those repeats.
 - `grad_sum_qr_vjp` 2x2 (25 commands): 71.4–72.0 µs → **49.1–50.5 µs** at one
   thread and 73.8 → **50.4–51.0 µs** at four; 8x8: 75.7 → **53.2–54.9 µs**.
-  Per command 2.84 → **1.96 µs**. The same operations executed eagerly cost
-  0.74–0.82 µs per operation, so about 1.1 µs per command still belongs to the
-  executor.
+  Per command 2.84 → **~2.0 µs**. The same operations executed eagerly cost
+  0.74–0.82 µs per operation.
 - A 200-instruction elementwise program (one planned region the CPU declines
   below its element floor, so every instruction executes on the per-instruction
   path): 546 µs → **275–296 µs** at one thread, 561 → **287–289 µs** at four,
@@ -70,9 +69,22 @@
   resolves the second command's dependency.
 - Not claimed: CUDA answers `false` here (no GPU in this session), so its
   schedule is byte-for-byte the previous path; answering `true` is a follow-up
-  that needs a device run. The remaining ~1.1 µs per
-  command is executor work this change did not remove; a codegen-style
-  specialization of a prepared program is #1938 territory.
+  that needs a device run.
+- What remains, measured on the 200-command chain (1T): ~1.40 µs per command
+  against ~0.73 µs for the same operation executed eagerly, i.e. ~0.65 µs of
+  executor work per command, plus ~3.6 µs per run (a one-command program costs
+  4.32 µs). The per-command part was attributed by removing one piece at a time
+  from a build: last-use reclaim into the buffer pool ~36 ns, output residency
+  validation ~30–100 ns, the location proof ~40 ns, the coalesced enqueue
+  wrapper ~0, and the extension/host classification ~30–50 ns. The remaining
+  ~0.4 µs is the dispatch pipeline itself — the engine-slot scan in
+  `EngineSet::execute_slot_instruction`, the instruction classification and the
+  linear scan of the ~60-entry backend dispatch table, and three trait-object
+  boundaries — none of which the eager route pays. Removing it needs a prepared
+  per-instruction dispatch table plus a residency expectation computed at
+  prepare time, i.e. a second prepared representation to keep in step with the
+  program; a codegen-style specialization of a prepared program is #1938
+  territory. This batch stops before that.
 - Reproducer: `cargo bench -p tenferro-linalg --features autodiff --bench
   traced_small_ad_overhead` (see the bench module documentation for the
   environment and the protocol).
