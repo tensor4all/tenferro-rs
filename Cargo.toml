@@ -74,7 +74,7 @@ syn = "2"
 # API needs; the committed `Cargo.lock` fixes the exact versions a build uses,
 # and `cargo update -p <crate>` moves them. strided-perm 0.6.1 adds
 # `copy_into_uninit` (transposes into pooled uninitialized storage), which
-# strided-basic 0.6.4 routes through; cpueinsum 0.4.3 carries tcontract 0.4.3,
+# strided-basic 0.6.4 routes through; cpueinsum 0.4.3 carries tcontract 0.4.4,
 # whose fresh outputs run on faer; `tcontract-exec` is named directly because
 # tenferro passes its `Exec` to tlinalg and cpueinsum.
 strided-view = "0.6.0"
