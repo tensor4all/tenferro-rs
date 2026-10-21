@@ -356,10 +356,10 @@ where
                             real_lane.as_mut_slice(),
                             complex_lane[..spectrum_len].as_mut(),
                         )
-                        .map_err(|_| {
+                        .map_err(|error| {
                             tenferro_tensor::Error::runtime_state(
                                 "fft",
-                                "real-to-complex plan rejected the lane buffers",
+                                format!("real-to-complex plan rejected the lane buffers: {error}"),
                             )
                         })?;
                     }
@@ -397,12 +397,23 @@ where
                     {
                         *slot = values[offset];
                     }
+                    // A real inverse transform treats the one-sided spectrum as
+                    // Hermitian: the DC and Nyquist bins must be real. `irfft`
+                    // ignores their imaginary parts, and `realfft` rejects them
+                    // outright, so drop them here.
+                    if spectrum_len > 0 {
+                        complex_lane[0] = Complex::new(complex_lane[0].re, T::zero());
+                        let last = spectrum_len - 1;
+                        complex_lane[last] = Complex::new(complex_lane[last].re, T::zero());
+                    }
                     if let RealPlan::Inverse(plan) = &plan {
                         plan.process(complex_lane.as_mut_slice(), real_lane.as_mut_slice())
-                            .map_err(|_| {
+                            .map_err(|error| {
                                 tenferro_tensor::Error::runtime_state(
                                     "fft",
-                                    "complex-to-real plan rejected the lane buffers",
+                                    format!(
+                                        "complex-to-real plan rejected the lane buffers: {error}"
+                                    ),
                                 )
                             })?;
                     }
