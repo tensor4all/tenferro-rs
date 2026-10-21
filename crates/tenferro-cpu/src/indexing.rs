@@ -420,6 +420,88 @@ pub(crate) fn scatter_with_pool(
     )
 }
 
+/// Scatter reads, keeping borrowed operand and update views instead of staging them.
+///
+/// The index tensor is converted to a compact `i64` index buffer before the
+/// plan runs, so a borrowed index view is materialized here explicitly; the
+/// operand and update views are not copied.
+pub(crate) fn scatter_read_with_pool(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    operand: TensorRead<'_>,
+    scatter_indices: TensorRead<'_>,
+    updates: TensorRead<'_>,
+    config: &ScatterConfig,
+) -> crate::Result<Tensor> {
+    let scatter_indices = crate::materialize_tensor_read(buffers, "scatter", scatter_indices)?;
+    let scatter_indices = try_index_tensor(&scatter_indices)?;
+    let (operand_dtype, update_dtype) = (operand.dtype(), updates.dtype());
+    // Borrowed compact strides have to outlive the operands, so owned reads
+    // keep theirs here for the whole call.
+    let owned_strides = |read: &TensorRead<'_>| match read {
+        TensorRead::Tensor(tensor) => inline_col_major_strides("scatter", tensor.shape()),
+        TensorRead::View(_) => Ok(InlineStrides::new()),
+    };
+    let strides: SmallVec<[InlineStrides; 2]> = [&operand, &updates]
+        .into_iter()
+        .map(owned_strides)
+        .collect::<crate::Result<_>>()?;
+    macro_rules! scatter_operands {
+        ($ty:ty, $variant:ident) => {{
+            macro_rules! descriptor {
+                ($read:expr, $strides:expr) => {
+                    match $read {
+                        TensorRead::Tensor(tensor) => {
+                            let typed =
+                                TensorAsTyped::<$ty>::as_typed(*tensor).ok_or_else(|| {
+                                    crate::Error::dtype_mismatch(
+                                        "scatter",
+                                        operand_dtype,
+                                        update_dtype,
+                                    )
+                                })?;
+                            Operand::from_typed("scatter", typed, $strides)
+                        }
+                        TensorRead::View(TensorView::$variant(view)) => operand_from_view(view),
+                        TensorRead::View(_) => Err(crate::Error::dtype_mismatch(
+                            "scatter",
+                            operand_dtype,
+                            update_dtype,
+                        )),
+                    }
+                };
+            }
+            Ok(Tensor::from_typed::<$ty>(typed_scatter_at(
+                buffers,
+                cache,
+                exec_context,
+                descriptor!(&operand, &strides[0])?,
+                &scatter_indices,
+                descriptor!(&updates, &strides[1])?,
+                config,
+            )?))
+        }};
+    }
+    match (operand_dtype, update_dtype) {
+        (DType::F32, DType::F32) => scatter_operands!(f32, F32),
+        (DType::F64, DType::F64) => scatter_operands!(f64, F64),
+        (DType::I32, DType::I32) => scatter_operands!(i32, I32),
+        (DType::I64, DType::I64) => scatter_operands!(i64, I64),
+        (DType::C32, DType::C32) => scatter_operands!(tenferro_tensor::Complex32, C32),
+        (DType::C64, DType::C64) => scatter_operands!(tenferro_tensor::Complex64, C64),
+        (DType::Bool, DType::Bool) => Err(crate::Error::unsupported(
+            "scatter",
+            "Bool data tensors are not supported by additive scatter; supported data dtypes: F32/F64/I32/I64/C32/C64",
+        )),
+        _ => Err(crate::Error::dtype_mismatch(
+            "scatter",
+            operand_dtype,
+            update_dtype,
+        )),
+    }
+}
+
 pub(crate) fn try_slice_with_pool(
     buffers: &mut BufferPool,
     exec_context: &ExecContext,
@@ -1648,8 +1730,43 @@ fn typed_scatter<T>(
 where
     T: Copy + Clone + PoolScalar + TensorScalar,
 {
-    let operand_shape = operand.shape();
-    let updates_shape = updates.shape();
+    let operand_strides = inline_col_major_strides("scatter", operand.shape())?;
+    let update_strides = inline_col_major_strides("scatter", updates.shape())?;
+    typed_scatter_at(
+        buffers,
+        cache,
+        exec_context,
+        Operand::from_typed("scatter", operand, &operand_strides)?,
+        scatter_indices,
+        Operand::from_typed("scatter", updates, &update_strides)?,
+        config,
+    )
+}
+
+fn typed_scatter_at<T>(
+    buffers: &mut BufferPool,
+    cache: &CpuPlanCache,
+    exec_context: &ExecContext,
+    operand: Operand<'_, T>,
+    scatter_indices: &IndexTensor,
+    updates: Operand<'_, T>,
+    config: &ScatterConfig,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + TensorScalar,
+{
+    let Operand {
+        data: operand_data,
+        shape: operand_shape,
+        strides: operand_strides,
+        offset: operand_offset,
+    } = operand;
+    let Operand {
+        data: update_data,
+        shape: updates_shape,
+        strides: update_strides,
+        offset: update_offset,
+    } = updates;
     let op_rank = operand_shape.len();
     for &dim in &config.inserted_window_dims {
         if dim >= op_rank {
@@ -1809,9 +1926,7 @@ where
 
     let dtype = kernel_dtype(T::dtype());
     let index_dtype = KernelDType::I64;
-    let operand_strides = col_major_strides(operand_shape);
     let index_strides = col_major_strides(&scatter_indices.shape);
-    let update_strides = col_major_strides(updates_shape);
     let out_strides = col_major_strides(operand_shape);
     let key = indexed_plan_key(
         IndexedPlanFamily::Scatter,
@@ -1824,9 +1939,9 @@ where
             operand_shape,
         ],
         &[
-            &operand_strides,
+            operand_strides,
             &index_strides,
-            &update_strides,
+            update_strides,
             &out_strides,
         ],
         &[
@@ -1842,11 +1957,11 @@ where
                 dtype,
                 index_dtype,
                 operand_shape,
-                &operand_strides,
+                operand_strides,
                 &scatter_indices.shape,
                 &index_strides,
                 updates_shape,
-                &update_strides,
+                update_strides,
                 operand_shape,
                 &out_strides,
                 scatter_spec(config),
@@ -1864,10 +1979,10 @@ where
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("scatter", operand)?),
+            typed_bytes(operand_data),
             operand_shape,
-            &operand_strides,
-            0,
+            operand_strides,
+            operand_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("scatter", err))?;
@@ -1892,10 +2007,10 @@ where
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("scatter", updates)?),
+            typed_bytes(update_data),
             updates_shape,
-            &update_strides,
-            0,
+            update_strides,
+            update_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("scatter", err))?;

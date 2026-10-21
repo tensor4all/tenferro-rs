@@ -808,6 +808,26 @@ impl TensorIndexing for CpuEngine {
             )
         })
     }
+    fn scatter_read(
+        &mut self,
+        operand: tenferro_tensor::TensorRead<'_>,
+        indices: tenferro_tensor::TensorRead<'_>,
+        updates: tenferro_tensor::TensorRead<'_>,
+        config: &ScatterConfig,
+    ) -> crate::Result<Tensor> {
+        self.run_native_with_plans(|context, buffers, cache| {
+            let exec_context = context.strided_exec_context();
+            indexing::scatter_read_with_pool(
+                buffers,
+                cache,
+                &exec_context,
+                operand,
+                indices,
+                updates,
+                config,
+            )
+        })
+    }
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
         self.run_native_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();

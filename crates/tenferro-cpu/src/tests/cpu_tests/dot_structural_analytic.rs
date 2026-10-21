@@ -1936,6 +1936,47 @@ fn read_entries_consume_views_without_staging() {
     assert_eq!(engine.resources.read_stagings(), before);
     assert_eq!(gathered.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
+    // Scatter takes both the operand and the updates as descriptors; the
+    // updates view skips every other element, and an owned operand mixed with a
+    // view update takes the same path.
+    let update_data = [10.0_f64, 99.0, 20.0];
+    let updates = || TypedTensorView::from_slice(vec![1, 2], vec![1, 2], 0, &update_data).unwrap();
+    let scatter_config = ScatterConfig {
+        update_window_dims: vec![1],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+    let before = engine.resources.read_stagings();
+    let scattered = engine
+        .scatter_read(
+            TensorRead::from_view(TensorView::F64(view())),
+            TensorRead::from_tensor(&indices),
+            TensorRead::from_view(TensorView::F64(updates())),
+            &scatter_config,
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(
+        scattered.as_slice::<f64>().unwrap(),
+        &[1.0, 13.0, 5.0, 2.0, 24.0, 6.0]
+    );
+    let owned_operand = Tensor::from_vec_col_major(vec![3, 2], vec![0.0_f64; 6]).unwrap();
+    let before = engine.resources.read_stagings();
+    let scattered = engine
+        .scatter_read(
+            TensorRead::from_tensor(&owned_operand),
+            TensorRead::from_tensor(&indices),
+            TensorRead::from_view(TensorView::F64(updates())),
+            &scatter_config,
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(
+        scattered.as_slice::<f64>().unwrap(),
+        &[0.0, 10.0, 0.0, 0.0, 20.0, 0.0]
+    );
+
     // The structural reads share the same descriptor path.
     let before = engine.resources.read_stagings();
     let lower = engine
