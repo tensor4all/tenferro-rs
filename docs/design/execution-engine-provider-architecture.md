@@ -1788,7 +1788,22 @@ typed runtime execution error; there is no implicit synchronous fallback.
 
 `ScheduledEventDomains` owns the host bridge. Operation, barrier, and collective
 nodes admit only dependency tokens whose origin is the destination completion
-domain. A transfer may have source-domain dependencies and waits on each such
+domain.
+
+One schedule shape does not need that bridge. When every scheduled location and
+node names the root's single event domain and no transfer node exists, the
+scheduler offers the run single-domain coalescing with
+`EventDomainRun::enable_single_domain_coalescing`; same-domain submission order
+already orders the nodes. The same call returns whether the run accepts:
+`true` means the scheduler submits each launch through that run with no
+dependency tokens, resolving no dependency and recording no completion, while
+the run's own `drain` remains the retirement boundary for every launch. `false`
+(the default) keeps the per-node completion contract, so an unknown provider —
+or one whose coalesced scheduling has not been validated on its device — is
+submitted exactly as before. The offer and the answer are one call and one
+fact, so a run cannot accept without the scheduler knowing it.
+
+A transfer may have source-domain dependencies and waits on each such
 token repeatably on the host before enqueue, then passes only same-destination
 tokens to the destination run. Third-domain tokens, source or destination
 mismatches, and host-wait failures are typed rejections before the destination

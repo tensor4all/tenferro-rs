@@ -36,6 +36,35 @@ runs on the calling thread and never touches the pool. The pool entry that used
 to dominate microbenchmarks is now conditional on the provider actually
 splitting work.
 
+## What one prepared command costs
+
+A prepared program replays the same table for each command it holds, plus one
+fixed cost per run. The per-run part is the input-signature check, output
+collection, extension-cache lending, and the event-domain drain; the
+per-command part is submission to the event domain, the input and output slot
+handling, and the operation itself.
+
+Two shapes avoid most of the per-command handling:
+
+- **One location.** When every part of the schedule lives at the same engine,
+  storage class, and event domain and no transfer exists — the ordinary CPU
+  program — each slot's value stays in the command array. Nothing is staged or
+  republished per command.
+- **Coalesced submission.** Such a schedule is also offered single-domain
+  coalescing. A driver that takes the offer reports it, and the scheduler then
+  submits each command with no dependency resolution and no completion token.
+  The CPU immediate driver takes it; an asynchronous driver keeps the per-node
+  completion contract unless it implements the same guarantee.
+
+A run presenting the input signature the handle was prepared for skips the
+specialization projection.
+
+What is left per command is the operation itself plus about one microsecond of
+executor work on this repository's measurement host (see
+[#2186](https://github.com/tensor4all/tenferro-rs/issues/2186)). A caller that
+needs less than that should not be replaying a general program: a direct engine
+call, a batched driver, or a fused region is the cheaper shape.
+
 ## Amortizing a stage
 
 1. **Hold one engine for the stage.** The engine owns the plan cache, the
