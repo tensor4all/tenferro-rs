@@ -175,13 +175,14 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
 
 #[test]
 fn whole_tensor_axis_fft_lane_comes_from_the_buffer_pool() {
-    // The transformed axis is the whole tensor here, so the per-call lane and
-    // the RustFFT in-place scratch are both full `LEN`-element complex buffers
-    // and therefore visible to the input-sized counter (the short-axis case
-    // above hides them). The r2c output is only half that size, so the count
-    // observes the lane and the scratch alone. Before the lane was pooled, each
-    // call added a fresh full-length lane allocation on top of the scratch;
-    // the steady state below pins the reduced count.
+    // The transformed axis is the whole tensor here, so the per-call lane is a
+    // full `LEN`-element buffer and therefore visible to the input-sized
+    // counter (the short-axis case above hides it). Before the lane was pooled,
+    // each call added a fresh full-length lane allocation; since the real
+    // transforms run on `realfft` (#2230) the only per-call allocation is that
+    // crate's half-length complex scratch, which stays below the counter's
+    // threshold. The steady state below therefore shows no input-sized
+    // allocation at all: the lane comes from the pool.
     let _serial = MEASUREMENT_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -201,8 +202,8 @@ fn whole_tensor_axis_fft_lane_comes_from_the_buffer_pool() {
     // Warm the plan cache and the buffer pool; only a steady-state call shows
     // whether the lane is recycled.
     drop(transform(&mut engine));
-    let output = measured((1, INPUT_BYTES), || transform(&mut engine));
+    let output = measured((0, 0), || transform(&mut engine));
     drop(output);
-    let output = measured((1, INPUT_BYTES), || transform(&mut engine));
+    let output = measured((0, 0), || transform(&mut engine));
     drop(output);
 }
