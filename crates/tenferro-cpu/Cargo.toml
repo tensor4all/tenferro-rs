@@ -114,6 +114,6 @@ name = "blas1_pool_aliasing"
 path = "tests/blas1_pool_aliasing.rs"
 
 [[test]]
-name = "faer_reexport_identity"
-path = "tests/faer_reexport_identity.rs"
+name = "direct_faer_on_engine_pool"
+path = "tests/direct_faer_on_engine_pool.rs"
 required-features = ["native"]

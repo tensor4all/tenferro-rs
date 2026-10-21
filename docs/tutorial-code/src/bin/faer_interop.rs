@@ -9,15 +9,16 @@
 //!
 //! Everything here uses only public tenferro APIs and the faer build
 //! `tenferro-cpu` re-exports (`tenferro_cpu::faer`), so this file cannot resolve
-//! a different faer than the session hands to `with_faer_parallelism`. There is
-//! no hidden materialization: a non-contiguous view or a non-host tensor is
+//! a second faer build. tenferro hands out no faer value: a direct call borrows
+//! column-major slices, and a parallel call enters the engine's own pool. There
+//! is no hidden materialization: a non-contiguous view or a non-host tensor is
 //! rejected with an explicit error, and the caller decides when to copy or
 //! transfer.
 
 use tenferro_cpu::faer::linalg::matmul::matmul;
 use tenferro_cpu::faer::linalg::solvers::Solve;
 use tenferro_cpu::faer::{Accum, Mat, MatMut, MatRef, Par};
-use tenferro_cpu::{CpuEngine, FaerParallelismExt};
+use tenferro_cpu::CpuEngine;
 use tenferro_tensor::{
     BackendStorage, BackendStorageHandle, DeviceId, DeviceKind, MemoryKind, Placement,
     StorageBuffer, TensorStructural, TypedTensor, TypedTensorView,
@@ -136,9 +137,15 @@ fn faer_parallelism_from_engine() -> tenferro_tensor::Result<()> {
         .num_threads(2)
         .build()
         .map_err(|err| tenferro_tensor::Error::runtime_state("faer_interop", err.to_string()))?;
-    let mut engine = CpuEngine::new(pool);
+    let engine = CpuEngine::new(pool);
     let mut product = Mat::<f64>::zeros(2, 2);
-    engine.with_faer_parallelism(|parallel| {
+
+    // The caller can borrow back the pool it handed to the engine. faer's
+    // `Par::rayon` schedules on the calling thread's pool, so enter that pool
+    // once and choose a width within the engine's budget. A serial engine has
+    // no pool and takes `Par::Seq` directly.
+    let width = engine.num_threads();
+    engine.pool().expect("pooled engine").install(|| {
         let a_view = MatRef::from_column_major_slice(a.as_slice()?, 2, 2);
         let b_view = MatRef::from_column_major_slice(b.as_slice()?, 2, 2);
         matmul(
@@ -147,10 +154,11 @@ fn faer_parallelism_from_engine() -> tenferro_tensor::Result<()> {
             a_view,
             b_view,
             1.0,
-            parallel,
+            Par::rayon(width),
         );
-        Ok(())
+        Ok::<(), tenferro_tensor::Error>(())
     })?;
+
     let product = product.as_ref();
     assert_close(*product.get(0, 0), 19.0, "A * B (0,0)");
     assert_close(*product.get(1, 0), 43.0, "A * B (1,0)");

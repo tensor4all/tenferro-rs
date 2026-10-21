@@ -47,3 +47,27 @@
 - Not measured here: the decode-shaped (`[1,512] x [512,1024]`) case, whose time
   is dominated by the GEMM itself rather than by the plan build. The umbrella's
   `decode_proj_*` rows own that comparison.
+
+## Follow-up: replay evidence and the 2x2 re-measure (#2139 residuals)
+
+- The public observer for "no rebuild" is the engine's contraction plan cache:
+  `CpuEngine::plan_cache().contraction_stats()`, where `misses` counts plan
+  builds and `hits` counts replays. A prepared plan's own `cpu_cache_stats`
+  covers only the n-ary descriptor cache, so it cannot answer this on the binary
+  fast path.
+- `einsum_prepared_repeat_f64_counter`
+  (`crates/tenferro-einsum/tests/integration/prepared_plan_replay.rs`) prepares a
+  `32x32` f64 `ij,jk->ik` plan, asserts one miss on the first `execute_into`,
+  then four repeats add four hits, no miss, and no entry growth. The
+  tenferro-benchmark case of the same name can report
+  `binary_plan_builds_per_call` from the same delta.
+- Re-measured the 2x2 typed `matmul`
+  (`repeated_tiny_typed_matmul_keeps_only_the_one_time_plan_build`): with the
+  provider warmed under a different key, the first call makes **41** allocations
+  in the test profile on the faer lane (the one-time binary plan build; 88 at
+  filing, 83/98 recorded in `perf-cpu-inline-metadata-2139.md`), and the warm
+  and repeated calls make **0**. No tenferro metadata `Vec` remains on the
+  repeat path, and the repeat builds no provider plan either.
+- Both arms in `eager_dot_plan_reuse.rs` share one counting allocator, so their
+  measured regions take a process-wide lock. The printed first-call count still
+  depends on which test warmed the provider first; it is evidence, not a budget.

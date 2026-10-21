@@ -128,6 +128,12 @@ a moment it chooses. Two explicit entries cover it, both owned by the caller:
   `with_execution_pool` budget. faer parallelism comes from the same
   `CpuExecutionContext` with a width chosen before any pool entry
   (`with_faer_width`).
+- A downstream direct faer call is not an engine operation: it borrows the host
+  column-major slices and, when it should be parallel, enters `CpuEngine::pool`
+  itself with `Par::rayon(width)` up to `num_threads`. tenferro hands out no
+  `faer::Par`, so the `FaerParallelismExt` capability the session model needed
+  was removed with the engine boundary; only the `tenferro_cpu::faer` re-export
+  for build alignment remains.
 - Pinning is the caller's job. tenferro does not narrow and restore CPU masks per
   operation, and does not assign one CPU per worker, because vendor teams inherit
   the creating worker's mask.

@@ -89,7 +89,6 @@ compile_error!(
 ))]
 compile_error!("provider-inject cannot be combined with explicit BLAS provider features");
 
-mod activation;
 mod analytic;
 pub mod backend;
 mod batch_policy;
@@ -226,15 +225,16 @@ where
     Some(unsafe { f(data.cast::<CpuEngine>().as_mut()) })
 }
 
-/// The faer build this crate links, re-exported so a direct call cannot
-/// disagree with it.
+/// The faer build this crate links, re-exported for downstream direct calls.
 ///
-/// [`FaerParallelismExt::with_faer_parallelism`] hands out a `faer::Par` of this
-/// very type, and `MatRef`/`MatMut` views are built over tenferro-owned storage.
-/// A downstream crate that pins its own `faer` can resolve a different build,
-/// and the mismatch then surfaces as a confusing type error at the callback
-/// boundary rather than at dependency resolution (#1939). Spell direct faer
-/// work with this path: `tenferro_cpu::faer::{MatRef, Par, ...}`.
+/// Direct faer work on tenferro-owned host storage borrows column-major slices
+/// and needs no engine handle, so no faer value crosses a tenferro boundary and
+/// a separately pinned `faer` cannot meet a confusing type mismatch (#1939).
+/// Spelling the call through this path still resolves the exact build tenferro
+/// links, which avoids compiling a second faer into one binary; an application
+/// that must control the faer version itself can add a direct dependency
+/// instead. For work that should use the engine's threads, enter
+/// [`CpuEngine::pool`] and pass `faer::Par::rayon`; keep `Par::Seq` otherwise.
 ///
 /// # Examples
 ///
@@ -260,77 +260,6 @@ where
 #[cfg(feature = "native")]
 #[cfg_attr(docsrs, doc(cfg(feature = "native")))]
 pub use faer;
-
-/// Invoke a direct faer operation with the parallelism of a CPU engine.
-///
-/// The `faer::Par` value is scoped to the callback and is derived from the
-/// engine's pool. A non-CPU engine returns a typed unsupported error.
-/// `Par::Seq` remains the portable choice for direct calls outside an engine.
-///
-/// # Examples
-///
-/// ```rust
-/// # #[cfg(feature = "native")]
-/// # fn example() -> tenferro_tensor::Result<()> {
-/// use tenferro_cpu::{CpuEngine, FaerParallelismExt};
-///
-/// let mut engine = CpuEngine::serial();
-/// engine.with_faer_parallelism(|parallel| {
-///     let _ = parallel;
-///     Ok(())
-/// })?;
-/// # Ok(())
-/// # }
-/// # fn main() {}
-/// ```
-#[cfg(feature = "native")]
-#[cfg_attr(docsrs, doc(cfg(feature = "native")))]
-pub trait FaerParallelismExt {
-    /// Run a scoped callback with this engine's faer parallelism policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_tensor::Error::Unsupported`] when the engine is not
-    /// a CPU/faer engine, or the callback's own typed error.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # #[cfg(feature = "native")]
-    /// # fn example(engine: &mut dyn tenferro_tensor::Engine) -> tenferro_tensor::Result<()> {
-    /// use tenferro_cpu::FaerParallelismExt;
-    /// engine.with_faer_parallelism(|parallel| {
-    ///     let _ = parallel;
-    ///     Ok::<_, tenferro_tensor::Error>(())
-    /// })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    fn with_faer_parallelism(
-        &mut self,
-        callback: impl FnOnce(faer::Par) -> tenferro_tensor::Result<()> + Send,
-    ) -> tenferro_tensor::Result<()>;
-}
-
-#[cfg(feature = "native")]
-impl<S> FaerParallelismExt for S
-where
-    S: tenferro_tensor::Engine + ?Sized,
-{
-    fn with_faer_parallelism(
-        &mut self,
-        callback: impl FnOnce(faer::Par) -> tenferro_tensor::Result<()> + Send,
-    ) -> tenferro_tensor::Result<()> {
-        with_cpu_engine(self, |engine| engine.with_faer_parallelism(callback)).unwrap_or_else(
-            || {
-                Err(tenferro_tensor::Error::unsupported(
-                    "with_faer_parallelism",
-                    "selected engine is not a CPU/faer engine",
-                ))
-            },
-        )
-    }
-}
 
 // Unit tests exercise the pool-aware kernels through the former convenience
 // names without restoring those names to the production crate surface.

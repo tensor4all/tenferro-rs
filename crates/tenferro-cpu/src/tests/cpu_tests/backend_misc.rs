@@ -2190,54 +2190,6 @@ fn session_read_delegates_cover_non_add_ops() {
 }
 
 #[test]
-fn fused_activation_read_matches_the_reference_formula() {
-    use tenferro_tensor::ActivationOp;
-
-    let xs: Vec<f64> = vec![-3.5, -1.0, -0.0, 0.0, 0.25, 1.5, 4.0];
-    let input = Tensor::from_vec_col_major(vec![xs.len()], xs.clone()).unwrap();
-    let mut backend = crate::test_support::cpu_engine(2).unwrap();
-
-    for op in [
-        ActivationOp::Sigmoid,
-        ActivationOp::Silu,
-        ActivationOp::Softplus,
-        ActivationOp::Gelu,
-        ActivationOp::GeluTanh,
-    ] {
-        let out = crate::test_support::on_engine(&mut backend, |session| {
-            session.fused_activation_read(op, TensorRead::from_tensor(&input))
-        })
-        .unwrap()
-        .unwrap()
-        .expect("f64 has a fused kernel");
-        let got = out.as_slice::<f64>().unwrap();
-        for (i, &x) in xs.iter().enumerate() {
-            let expected = match op {
-                ActivationOp::Sigmoid => 1.0 / (1.0 + (-x).exp()),
-                ActivationOp::Silu => x / (1.0 + (-x).exp()),
-                ActivationOp::Softplus => (1.0 + x.exp()).ln(),
-                ActivationOp::Gelu => {
-                    0.5 * x * (1.0 + libm::erf(x * std::f64::consts::FRAC_1_SQRT_2))
-                }
-                ActivationOp::GeluTanh => {
-                    0.5 * x
-                        * (1.0
-                            + (std::f64::consts::FRAC_2_SQRT_PI
-                                * std::f64::consts::FRAC_1_SQRT_2
-                                * (x + 0.044_715 * x * x * x))
-                                .tanh())
-                }
-            };
-            assert!(
-                (got[i] - expected).abs() <= 1e-12 * expected.abs().max(1.0),
-                "{op:?} at {x}: got {}, expected {expected}",
-                got[i]
-            );
-        }
-    }
-}
-
-#[test]
 fn fused_activation_read_declines_dtypes_without_a_fused_kernel() {
     use tenferro_tensor::ActivationOp;
 

@@ -4,8 +4,6 @@ use std::panic::AssertUnwindSafe;
 
 use num_complex::{Complex32, Complex64};
 
-#[cfg(feature = "native")]
-use crate::FaerParallelismExt;
 use crate::{
     abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
     embed_diagonal, extract_diagonal, gather, maximum, minimum, mul, neg, pad, pow, reduce_max,
@@ -45,24 +43,6 @@ fn with_cpu_engine_checks_exact_marker_and_scopes_borrow() {
     .unwrap()
     .expect("CpuEngine must expose its scoped CpuEngine");
     assert_eq!(value, 17);
-}
-
-#[cfg(feature = "native")]
-#[test]
-fn faer_parallelism_capability_runs_inside_a_cpu_session() {
-    let mut backend = crate::test_support::cpu_engine(2).unwrap();
-    crate::test_support::on_engine(&mut backend, |session| {
-        session.with_faer_parallelism(|parallel| {
-            let _ = parallel;
-            Ok(())
-        })
-    })
-    .unwrap()
-    .unwrap();
-
-    // A session that is not a CPU execution session is rejected with
-    // `Unsupported`; `test_default_backend_session_methods_cover_cache_fallbacks`
-    // asserts that half through its foreign test session.
 }
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
