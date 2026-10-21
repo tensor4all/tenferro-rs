@@ -111,6 +111,7 @@ class BuildArtifactContracts(unittest.TestCase):
         faer = dependencies["faer"]
         self.assertFalse(faer["default-features"])
         self.assertEqual(set(faer["features"]), {"std", "rayon"})
+        self.assertRegex(faer["version"], r"^\^?\d+\.\d+\.\d+$")
 
         # The registry strided release line the CPU contraction/linalg stack is
         # developed and tested against. Requirements are caret ranges at the

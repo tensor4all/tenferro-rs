@@ -11,6 +11,8 @@ use tenferro_tensor::Tensor;
 
 const LEN: usize = 4096;
 const INPUT_BYTES: usize = LEN * size_of::<Complex64>();
+// Real FFT working lanes are smaller than full complex input buffers.
+const MIN_LANE_BYTES: usize = LEN * size_of::<f64>();
 // The allocation counters below are process-global, so the measurement cases
 // must not run concurrently in one test binary.
 static MEASUREMENT_LOCK: Mutex<()> = Mutex::new(());
@@ -24,7 +26,7 @@ fn record(size: usize) {
     if ENABLED.load(Ordering::Relaxed) {
         TOTAL_COUNT.fetch_add(1, Ordering::Relaxed);
         TOTAL_BYTES.fetch_add(size, Ordering::Relaxed);
-        if size >= INPUT_BYTES {
+        if size >= MIN_LANE_BYTES {
             COUNT.fetch_add(1, Ordering::Relaxed);
             BYTES.fetch_add(size, Ordering::Relaxed);
         }
@@ -175,14 +177,8 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
 
 #[test]
 fn whole_tensor_axis_fft_lane_comes_from_the_buffer_pool() {
-    // The transformed axis is the whole tensor here, so the per-call lane is a
-    // full `LEN`-element buffer and therefore visible to the input-sized
-    // counter (the short-axis case above hides it). Before the lane was pooled,
-    // each call added a fresh full-length lane allocation; since the real
-    // transforms run on `realfft` (#2230) the only per-call allocation is that
-    // crate's half-length complex scratch, which stays below the counter's
-    // threshold. The steady state below therefore shows no input-sized
-    // allocation at all: the lane comes from the pool.
+    // Count real lanes, one-sided complex lanes and provider scratch, not just
+    // the old full-complex RustFFT buffers; both directions must reuse them.
     let _serial = MEASUREMENT_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -202,8 +198,39 @@ fn whole_tensor_axis_fft_lane_comes_from_the_buffer_pool() {
     // Warm the plan cache and the buffer pool; only a steady-state call shows
     // whether the lane is recycled.
     drop(transform(&mut engine));
-    let output = measured((0, 0), || transform(&mut engine));
-    drop(output);
-    let output = measured((0, 0), || transform(&mut engine));
-    drop(output);
+    drop(measured((0, 0), || transform(&mut engine)));
+    let spectrum = measured((0, 0), || transform(&mut engine));
+    let spectrum_values = spectrum
+        .value()
+        .unwrap()
+        .as_slice::<Complex64>()
+        .unwrap()
+        .to_vec();
+    assert_eq!(spectrum_values[0], Complex64::new(LEN as f64, 0.0));
+    assert!(spectrum_values[1..]
+        .iter()
+        .all(|&value| value == Complex64::new(0.0, 0.0)));
+    let inverse = |engine: &mut CpuEngine| {
+        runtime
+            .with_eager_session(engine, |s| {
+                s.irfft(&spectrum, Some(LEN), 0, FftNorm::Backward)
+            })
+            .unwrap()
+    };
+    drop(inverse(&mut engine));
+    for _ in 0..2 {
+        let output = measured((0, 0), || inverse(&mut engine));
+        assert_eq!(
+            output.value().unwrap().as_slice::<f64>().unwrap(),
+            &[1.0; LEN]
+        );
+    }
+    assert_eq!(
+        spectrum.value().unwrap().as_slice::<Complex64>().unwrap(),
+        spectrum_values
+    );
+    assert_eq!(
+        input.value().unwrap().as_slice::<f64>().unwrap(),
+        &[1.0; LEN]
+    );
 }

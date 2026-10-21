@@ -102,12 +102,12 @@ faer = { workspace = true, optional = true }
 # and `tlinalg-blas` (LAPACK/BLAS). Neither depends on the other; the interface they are adapted to
 # lives in this crate. Caret requirements at the patch this crate needs: Cargo unifies the whole
 # CPU stack on one strided source and one faer identity within a compatible line, and the
-# committed `Cargo.lock` fixes the exact versions. tlinalg 0.4.3 takes a `tcontract_exec::Exec`
-# parallelism token and adds the borrowed-workspace `*_workspace` / `*_into` entries the host
-# routes every faer family through. Keep the two requirements identical.
-tlinalg = { version = "0.4.3", optional = true }
-# `tlinalg-blas` takes no `Exec` and no faer, so it moves only when it changes; the two
-# requirements move together whenever either crate does.
+# committed `Cargo.lock` fixes the exact versions. tlinalg 0.4.4 takes the engine's `Exec` token,
+# adds the borrowed-workspace `*_workspace` / `*_into` entries the host routes every faer family
+# through, and admits compatible t4a-faer patch fixes (keep its range compatible with the
+# workspace faer requirement).
+tlinalg = { version = "0.4.4", optional = true }
+# The LAPACK provider takes no `Exec` and no faer, so it moves only when it changes.
 tlinalg-blas = { version = "0.4.3", optional = true }
 tcontract-exec.workspace = true
 rayon.workspace = true
