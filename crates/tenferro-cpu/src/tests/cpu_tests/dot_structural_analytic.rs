@@ -2210,3 +2210,77 @@ fn read_entries_follow_view_strides_and_offsets() {
         assert_eq!(engine.resources.read_stagings(), before, "{label} staged");
     }
 }
+
+/// #2214: the read entry accepts what the owned entry accepts (Bool, a
+/// borrowed `starts` vector) and reports the same errors.
+#[test]
+fn dynamic_update_slice_read_matches_the_owned_dispatch() {
+    use tenferro_tensor::{TensorIndexing, TensorView, TypedTensorView};
+
+    let mut engine = crate::CpuEngine::serial();
+    let operand = Tensor::from_vec_col_major(vec![3], vec![false, false, false]).unwrap();
+    let update = Tensor::from_vec_col_major(vec![1], vec![true]).unwrap();
+    // `starts = [1]`, borrowed as a view with an offset.
+    let start_data = [9_i64, 1];
+    let starts = || {
+        TensorRead::from_view(TensorView::I64(
+            TypedTensorView::from_slice(vec![1], vec![1], 1, &start_data).unwrap(),
+        ))
+    };
+    let flags = engine
+        .dynamic_update_slice_read(
+            TensorRead::from_tensor(&operand),
+            TensorRead::from_tensor(&update),
+            starts(),
+        )
+        .unwrap();
+    assert_eq!(flags.as_slice::<bool>().unwrap(), &[false, true, false]);
+
+    let real = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
+    let owned_err = engine
+        .dynamic_update_slice(
+            &real,
+            &update,
+            &Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap(),
+        )
+        .unwrap_err();
+    let read_err = engine
+        .dynamic_update_slice_read(
+            TensorRead::from_tensor(&real),
+            TensorRead::from_tensor(&update),
+            starts(),
+        )
+        .unwrap_err();
+    assert_eq!(format!("{read_err:?}"), format!("{owned_err:?}"));
+}
+
+/// An empty axis whose extent does not fit in `i64` clamps its start instead
+/// of panicking; the compact output layout for that shape then overflows,
+/// which is reported as an error.
+#[test]
+fn dynamic_update_slice_read_clamps_on_a_huge_empty_axis() {
+    use tenferro_tensor::{TensorIndexing, TensorView, TypedTensorView};
+
+    let mut engine = crate::CpuEngine::serial();
+    let empty: [f64; 0] = [];
+    let operand = TypedTensorView::from_slice(vec![usize::MAX, 0], vec![0, 0], 0, &empty).unwrap();
+    let update = Tensor::from_vec_col_major(vec![0, 0], Vec::<f64>::new()).unwrap();
+    let starts = Tensor::from_vec_col_major(vec![2], vec![0_i64, 0]).unwrap();
+    let err = engine
+        .dynamic_update_slice_read(
+            TensorRead::from_view(TensorView::F64(operand)),
+            TensorRead::from_tensor(&update),
+            TensorRead::from_tensor(&starts),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::Error::BackendSource {
+                op: "dynamic_update_slice",
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+}

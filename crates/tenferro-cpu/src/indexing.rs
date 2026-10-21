@@ -1478,7 +1478,9 @@ fn clamp_window_start(
             format!("window size {window_size} exceeds dimension size {dim_size}"),
         ));
     }
-    let max_start = dim_size.saturating_sub(window_size) as i64;
+    // An empty axis can be longer than `i64::MAX`, so the bound saturates
+    // rather than wrapping negative.
+    let max_start = i64::try_from(dim_size - window_size).unwrap_or(i64::MAX);
     Ok(start.clamp(0, max_start) as usize)
 }
 
