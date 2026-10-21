@@ -1507,7 +1507,7 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
         axes: &[usize],
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
-    /// Zero the elements below the `k`-th diagonal on an engine.
+    /// Zero the elements above the `k`-th diagonal on an engine (keep the lower triangle).
     ///
     /// # Errors
     ///
@@ -1515,7 +1515,7 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
     /// for a typed backend failure.
     fn tril(&self, k: i64, session: &mut dyn Engine) -> tenferro_tensor::Result<TypedTensor<T>>;
-    /// Zero the elements above the `k`-th diagonal on an engine.
+    /// Zero the elements below the `k`-th diagonal on an engine (keep the upper triangle).
     ///
     /// # Errors
     ///
