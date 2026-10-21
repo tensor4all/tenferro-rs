@@ -473,20 +473,40 @@ where
     // a disjoint fresh destination. Successful execution joins all writers and
     // initializes every element before the owning handoff.
     unsafe {
-        lanes::execute(
-            Some(input),
-            in_shape,
-            axis,
-            fft_len,
-            out_axis_len,
+        if matches!(
             spec.operation(),
-            spec.norm(),
-            plans,
-            buffers,
-            output.as_uninit_slice_mut(),
-            threads,
-            project,
-        )?;
+            FftOperation::R2cFull | FftOperation::R2cOnesided | FftOperation::C2r
+        ) {
+            lanes::execute_real(
+                Some(input),
+                in_shape,
+                axis,
+                fft_len,
+                out_axis_len,
+                spec.operation(),
+                spec.norm(),
+                plans,
+                buffers,
+                output.as_uninit_slice_mut(),
+                threads,
+                project,
+            )?;
+        } else {
+            lanes::execute(
+                Some(input),
+                in_shape,
+                axis,
+                fft_len,
+                out_axis_len,
+                spec.operation(),
+                spec.norm(),
+                plans,
+                buffers,
+                output.as_uninit_slice_mut(),
+                threads,
+                project,
+            )?;
+        }
         output.assume_init_recycled()
     }
 }

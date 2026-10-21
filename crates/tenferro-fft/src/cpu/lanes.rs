@@ -2,7 +2,9 @@
 #[cfg(test)]
 mod tests;
 use super::{scale_for, LaneLayout};
-use crate::cache::{cached_fft_plan, CachedFftPlanScalar, FftPlanProvider};
+use crate::cache::{
+    cached_fft_plan, cached_real_plan, CachedFftPlanScalar, FftPlanProvider, RealPlan,
+};
 use crate::{FftNorm, FftOperation};
 use num_complex::Complex;
 use num_traits::Zero;
@@ -237,4 +239,231 @@ where
         Complex::<T>::pool_release(buffers, lane);
     }
     Ok(())
+}
+
+/// Execute a real-to-complex or complex-to-real transform with a `realfft` plan.
+///
+/// The input lanes gather the real (R2C) or one-sided spectrum (C2R) values; the
+/// plan produces the spectrum (R2C) or the real output (C2R). The normalization
+/// is folded into the scatter, like the complex path.
+#[allow(clippy::too_many_arguments)]
+// INVARIANT: these arguments are validated FFT metadata and the two borrowed
+// buffers; no public configurable operation descriptor is duplicated here.
+/// # Safety
+/// The caller proves the input and output lengths match the validated lane
+/// coverage and that real transforms are out of place (`input` is `Some`).
+pub(super) unsafe fn execute_real<T, O>(
+    input: Option<Input<'_, T>>,
+    in_shape: &[usize],
+    axis: usize,
+    fft_len: usize,
+    out_axis_len: usize,
+    operation: FftOperation,
+    norm: FftNorm,
+    plans: &mut (impl FftPlanProvider + ?Sized),
+    _buffers: &mut BufferPool,
+    output: &mut [MaybeUninit<O>],
+    threads: LaneThreads<'_>,
+    project: impl Fn(Complex<T>) -> O + Sync,
+) -> tenferro_tensor::Result<()>
+where
+    T: CachedFftPlanScalar,
+    O: Send,
+    Complex<T>: PoolScalar,
+{
+    let LaneLayout {
+        stride,
+        in_block,
+        out_block,
+        lanes,
+        input_len,
+        output_len,
+    } = LaneLayout::new(in_shape, axis, out_axis_len)?;
+    let in_len = in_shape[axis];
+    let input_actual = match &input {
+        Some(Input::Complex(values)) => values.len(),
+        Some(Input::Real(values)) => values.len(),
+        None => 0,
+    };
+    if input_actual != input_len || output.len() != output_len {
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "fft",
+            "buffer length",
+            "FFT buffers do not match validated lane coverage",
+        ));
+    }
+    if lanes == 0 {
+        return Ok(());
+    }
+    let plan = cached_real_plan::<T, _>(plans, fft_len, operation.is_forward());
+    let scale = scale_for::<T>(norm, operation.is_forward(), fft_len)?;
+    let jobs = if output_len < MIN_PARALLEL_ELEMENTS {
+        1
+    } else {
+        threads.count.max(1).min(lanes)
+    };
+    let per_job = lanes.div_ceil(jobs);
+    let out = Output {
+        pointer: output.as_mut_ptr(),
+        _borrow: PhantomData,
+    };
+    let real_len = fft_len;
+    let spectrum_len = fft_len / 2 + 1;
+    // `R2cFull` asks for the full spectrum, so the lane holds room for the
+    // conjugate mirror as well as the plan's non-negative half.
+    let lane_len = out_axis_len.max(spectrum_len);
+    let complex_len = if operation == FftOperation::C2r {
+        spectrum_len
+    } else {
+        lane_len
+    };
+    let mut real_lanes: Vec<Vec<T>> = (0..jobs).map(|_| vec![T::zero(); real_len]).collect();
+    let mut complex_lanes: Vec<Vec<Complex<T>>> = (0..jobs)
+        .map(|_| vec![Complex::zero(); complex_len])
+        .collect();
+    let run = |job: usize,
+               real_lane: &mut Vec<T>,
+               complex_lane: &mut Vec<Complex<T>>|
+     -> tenferro_tensor::Result<()> {
+        let start = job * per_job;
+        let end = start.saturating_add(per_job).min(lanes);
+        if start >= end {
+            return Ok(());
+        }
+        let mut outer_index = start / stride;
+        let mut inner = start % stride;
+        let mut input_base = outer_index * in_block + inner;
+        let mut output_base = outer_index * out_block + inner;
+        let copy_len = in_len.min(real_len);
+        for _ in start..end {
+            for value in real_lane.iter_mut() {
+                *value = T::zero();
+            }
+            for value in complex_lane.iter_mut() {
+                *value = Complex::zero();
+            }
+            match (&input, operation) {
+                (Some(Input::Real(values)), FftOperation::R2cFull | FftOperation::R2cOnesided) => {
+                    for (slot, offset) in real_lane
+                        .iter_mut()
+                        .zip((input_base..).step_by(stride))
+                        .take(copy_len)
+                    {
+                        *slot = values[offset];
+                    }
+                    if let RealPlan::Forward(plan) = &plan {
+                        plan.process(
+                            real_lane.as_mut_slice(),
+                            complex_lane[..spectrum_len].as_mut(),
+                        )
+                        .map_err(|error| {
+                            tenferro_tensor::Error::runtime_state(
+                                "fft",
+                                format!("real-to-complex plan rejected the lane buffers: {error}"),
+                            )
+                        })?;
+                    }
+                    // Fill the negative-frequency half only when the caller
+                    // asked for the full spectrum; the one-sided output already
+                    // holds every requested bin.
+                    if out_axis_len > spectrum_len {
+                        for k in 1..spectrum_len.saturating_sub(1) {
+                            let mirrored = complex_lane[k].conj();
+                            complex_lane[out_axis_len - k] = mirrored;
+                        }
+                    }
+                    for (value, offset) in complex_lane
+                        .iter()
+                        .take(out_axis_len)
+                        .zip((output_base..).step_by(stride))
+                    {
+                        let value = if scale == T::one() {
+                            *value
+                        } else {
+                            *value * scale
+                        };
+                        // SAFETY: each lane owns indices base + k*stride,
+                        // k<out_axis_len; the jobs tile the checked output.
+                        unsafe {
+                            out.write(offset, project(value));
+                        }
+                    }
+                }
+                (Some(Input::Complex(values)), FftOperation::C2r) => {
+                    for (slot, offset) in complex_lane
+                        .iter_mut()
+                        .zip((input_base..).step_by(stride))
+                        .take(copy_len.min(spectrum_len))
+                    {
+                        *slot = values[offset];
+                    }
+                    // A real inverse transform treats the one-sided spectrum as
+                    // Hermitian: the DC and Nyquist bins must be real. `irfft`
+                    // ignores their imaginary parts, and `realfft` rejects them
+                    // outright, so drop them here.
+                    if spectrum_len > 0 {
+                        complex_lane[0] = Complex::new(complex_lane[0].re, T::zero());
+                        let last = spectrum_len - 1;
+                        complex_lane[last] = Complex::new(complex_lane[last].re, T::zero());
+                    }
+                    if let RealPlan::Inverse(plan) = &plan {
+                        plan.process(complex_lane.as_mut_slice(), real_lane.as_mut_slice())
+                            .map_err(|error| {
+                                tenferro_tensor::Error::runtime_state(
+                                    "fft",
+                                    format!(
+                                        "complex-to-real plan rejected the lane buffers: {error}"
+                                    ),
+                                )
+                            })?;
+                    }
+                    for (value, offset) in real_lane
+                        .iter()
+                        .take(out_axis_len)
+                        .zip((output_base..).step_by(stride))
+                    {
+                        let value = if scale == T::one() {
+                            *value
+                        } else {
+                            *value * scale
+                        };
+                        // SAFETY: each lane owns indices base + k*stride,
+                        // k<out_axis_len; the jobs tile the checked output.
+                        unsafe {
+                            out.write(offset, project(Complex::new(value, T::zero())));
+                        }
+                    }
+                }
+                _ => {
+                    return Ok(());
+                }
+            }
+            inner += 1;
+            if inner == stride {
+                inner = 0;
+                outer_index += 1;
+                input_base = outer_index * in_block;
+                output_base = outer_index * out_block;
+            } else {
+                input_base += 1;
+                output_base += 1;
+            }
+        }
+        Ok(())
+    };
+    if jobs == 1 {
+        run(0, &mut real_lanes[0], &mut complex_lanes[0])
+    } else {
+        let mut fan_out = || {
+            real_lanes
+                .par_iter_mut()
+                .zip(complex_lanes.par_iter_mut())
+                .enumerate()
+                .try_for_each(|(job, (real_lane, complex_lane))| run(job, real_lane, complex_lane))
+        };
+        match threads.pool {
+            Some(pool) if pool.current_thread_index().is_none() => pool.install(fan_out),
+            _ => fan_out(),
+        }
+    }
 }

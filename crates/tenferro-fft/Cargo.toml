@@ -60,6 +60,7 @@ num-complex.workspace = true
 rayon.workspace = true
 num-traits.workspace = true
 rustfft = "6"
+realfft = "3"
 thiserror.workspace = true
 
 [dev-dependencies]
