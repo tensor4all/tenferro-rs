@@ -35,9 +35,10 @@ The important shape is `x.matmul(&weights, &mut engine)`. For
 dynamic dtypes use `TensorSessionOpsExt`; for static scalar types use
 `TypedTensorSessionOpsExt`. The receiver methods mirror the eager session
 methods with the engine last (`x.gather(&idx, config, &mut engine)`,
-`x.reduce_max(None, &mut engine)`, `x.dot_general(&y, config, &mut engine)`);
-indexing, padding, concatenation and triangular/diagonal ops are on `Tensor`
-only (`Tensor::from_typed` moves a typed tensor there without a copy).
+`x.reduce_max(None, &mut engine)`, `x.dot_general(&y, config, &mut engine)`),
+including indexing, padding, concatenation and the triangular/diagonal ops.
+Only the dtype-changing `convert` / `cast` are `Tensor`-only
+(`Tensor::from_typed` moves a typed tensor there without a copy).
 
 ## Eager tensors
 
@@ -87,8 +88,9 @@ compositions (no overflow, max-subtracted softmax, all-masked slices give 0 /
 `-inf` with a zero gradient) and differentiate through eager and traced AD; do
 not hand-roll them. The edge-case policy is in
 [`docs/spec/tensor-semantics.md`](../../../../docs/spec/tensor-semantics.md),
-Section VIII. `take_along_axis` is not on `TypedTensorSessionOpsExt` (an
-indexing op); `erf` is real-only and does not lower to StableHLO.
+Section VIII. `TypedTensorSessionOpsExt` has `take_along_axis` too, with the
+index tensor kept dtype-erased; `erf` is real-only and does not lower to
+StableHLO.
 
 ## Traced tensors and extensions
 

@@ -120,10 +120,12 @@ fn cpu_hot_kernels_delegate_to_erased_strided_replay() {
         .expect("pooled triangular kernel should remain discoverable");
     assert!(
         !pooled_triangular.contains("for row in 0..rows")
-            && pooled_triangular.contains("strided_kernel::triangular_mask_into_uninit"),
+            && pooled_triangular.contains("triangular_mask_from_view"),
         "CPU pooled triangular masks should delegate traversal to strided"
     );
-    assert!(structural.contains("strided_kernel::embed_diagonal_into_uninit"));
+    // The kernels hand the source layout to strided instead of a compact copy.
+    assert!(structural.contains("strided_kernel::triangular_mask_view_into_uninit"));
+    assert!(structural.contains("strided_kernel::embed_diagonal_view_into_uninit"));
     assert!(include_str!("../blas1.rs").contains("strided_kernel::axpby_accum"));
 }
 

@@ -209,6 +209,15 @@ impl TensorSessionOpsExt for Tensor {
         session.dynamic_slice(self, starts, sizes)
     }
 
+    fn dynamic_update_slice(
+        &self,
+        update: &Tensor,
+        starts: &Tensor,
+        session: &mut dyn Engine,
+    ) -> Result<Tensor> {
+        session.dynamic_update_slice(self, update, starts)
+    }
+
     fn pad(&self, config: PadConfig, session: &mut dyn Engine) -> Result<Tensor> {
         session.pad(self, &config)
     }

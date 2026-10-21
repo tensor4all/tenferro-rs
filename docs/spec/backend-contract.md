@@ -299,6 +299,12 @@ The engine uses `last_use` metadata to reclaim buffers via
 - `download_to_host` / `upload_host_tensor`
 - `reclaim_buffer`
 
+Each indexing and structural operation also has a `*_read` entry that takes
+`TensorRead` operands. A backend whose kernel reads strided input overrides it so
+a borrowed view is consumed in place; the CPU engine does this for every such
+entry. A default that cannot do that passes an owned tensor straight to the
+owned-input method and stages only a borrowed view through `to_contiguous_read`.
+
 Every method takes `&mut self`, so one computation uses one engine at a time and
 the borrow is the exclusion contract. There is no session entry, no admission
 permit, no nested-entry error and no shared execution scope: the caller owns the

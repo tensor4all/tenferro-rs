@@ -923,6 +923,39 @@ pub trait TensorSessionOpsExt {
         sizes: &[usize],
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// Return this tensor with `update` written at runtime `starts` on an engine.
+    ///
+    /// `starts` is a rank-1 integer tensor with one entry per axis. Starts are
+    /// clamped so the whole update window fits, matching `dynamic_slice`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let x = Tensor::from_vec_col_major(vec![5], vec![0.0_f64; 5])?;
+    /// let update = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
+    /// // A start of 4 is clamped to 3 so the window of 2 fits.
+    /// let starts = Tensor::from_vec_col_major(vec![1], vec![4_i64])?;
+    /// let y = x.dynamic_update_slice(&update, &starts, &mut engine)?;
+    /// assert_eq!(y.as_slice::<f64>()?, &[0.0, 0.0, 0.0, 3.0, 4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for a rank or dtype mismatch, a
+    /// start-index tensor that is not rank 1 with one entry per axis, or an update
+    /// larger than this tensor, or [`tenferro_tensor::Error::BackendSource`] for a
+    /// typed backend failure.
+    fn dynamic_update_slice(
+        &self,
+        update: &Tensor,
+        starts: &Tensor,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<Tensor>;
     /// Pad this tensor with zeros (edge and interior padding per axis) on an engine.
     ///
     /// # Examples

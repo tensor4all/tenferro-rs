@@ -2358,6 +2358,40 @@ pub trait TensorStructural {
         axis_a: usize,
         axis_b: usize,
     ) -> crate::Result<Tensor>;
+    /// Extract the diagonal with the input taken as a read.
+    ///
+    /// The default stages each borrowed view into compact storage (an owned
+    /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorStructural, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorStructural, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.extract_diagonal_read(x, 0, 1)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn extract_diagonal_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<Tensor> {
+        let input = stage_view(self, input)?;
+        self.extract_diagonal(&input, axis_a, axis_b)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2370,6 +2404,40 @@ pub trait TensorStructural {
         axis_a: usize,
         axis_b: usize,
     ) -> crate::Result<Tensor>;
+    /// Embed the input as a diagonal with the input taken as a read.
+    ///
+    /// The default stages each borrowed view into compact storage (an owned
+    /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorStructural, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorStructural, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.embed_diagonal_read(x, 0, 1)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn embed_diagonal_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<Tensor> {
+        let input = stage_view(self, input)?;
+        self.embed_diagonal(&input, axis_a, axis_b)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2377,6 +2445,35 @@ pub trait TensorStructural {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn tril(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor>;
+    /// Lower-triangular mask with the input taken as a read.
+    ///
+    /// The default stages each borrowed view into compact storage (an owned
+    /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorStructural, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorStructural, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.tril_read(x, 0)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn tril_read(&mut self, input: TensorRead<'_>, k: i64) -> crate::Result<Tensor> {
+        let input = stage_view(self, input)?;
+        self.tril(&input, k)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2384,6 +2481,34 @@ pub trait TensorStructural {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn triu(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor>;
+    /// Upper-triangular mask with the input taken as a read.
+    ///
+    /// The default stages each borrowed view into compact storage (an owned
+    /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorStructural, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorStructural, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.triu_read(x, 0)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn triu_read(&mut self, input: TensorRead<'_>, k: i64) -> crate::Result<Tensor> {
+        let input = stage_view(self, input)?;
+        self.triu(&input, k)
+    }
 }
 
 /// Reduction operations.
@@ -2840,7 +2965,7 @@ pub trait SessionCachedDot: TensorDot {
 ///
 /// fn accepts_indexing<B: TensorIndexing>(_backend: &mut B) {}
 /// ```
-pub trait TensorIndexing {
+pub trait TensorIndexing: TensorStructural {
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2866,6 +2991,43 @@ pub trait TensorIndexing {
         updates: &Tensor,
         config: &ScatterConfig,
     ) -> crate::Result<Tensor>;
+    /// Scatter with every input taken as a read.
+    ///
+    /// The default stages each borrowed view into compact storage (an owned
+    /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, ScatterConfig, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorIndexing, x: TensorRead<'_>, idx: TensorRead<'_>, updates: TensorRead<'_>, config: &ScatterConfig)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.scatter_read(x, idx, updates, config)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn scatter_read(
+        &mut self,
+        operand: TensorRead<'_>,
+        scatter_indices: TensorRead<'_>,
+        updates: TensorRead<'_>,
+        config: &ScatterConfig,
+    ) -> crate::Result<Tensor> {
+        let operand = stage_view(self, operand)?;
+        let scatter_indices = stage_view(self, scatter_indices)?;
+        let updates = stage_view(self, updates)?;
+        self.scatter(&operand, &scatter_indices, &updates, config)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2876,6 +3038,35 @@ pub trait TensorIndexing {
     /// or [`crate::Error::BackendSource`] when backend execution or storage
     /// access cannot provide the requested result.
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
+    /// Slice with the input taken as a read.
+    ///
+    /// The default stages each borrowed view into compact storage (an owned
+    /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, SliceConfig, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorIndexing, x: TensorRead<'_>, config: &SliceConfig)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.slice_read(x, config)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn slice_read(&mut self, input: TensorRead<'_>, config: &SliceConfig) -> crate::Result<Tensor> {
+        let input = stage_view(self, input)?;
+        self.slice(&input, config)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2888,6 +3079,41 @@ pub trait TensorIndexing {
         starts: &Tensor,
         slice_sizes: &[usize],
     ) -> crate::Result<Tensor>;
+    /// Dynamic slice with every input taken as a read.
+    ///
+    /// The default stages each borrowed view into compact storage (an owned
+    /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorIndexing, x: TensorRead<'_>, starts: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.dynamic_slice_read(x, starts, &[2])
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn dynamic_slice_read(
+        &mut self,
+        input: TensorRead<'_>,
+        starts: TensorRead<'_>,
+        slice_sizes: &[usize],
+    ) -> crate::Result<Tensor> {
+        let input = stage_view(self, input)?;
+        let starts = stage_view(self, starts)?;
+        self.dynamic_slice(&input, &starts, slice_sizes)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2900,6 +3126,45 @@ pub trait TensorIndexing {
         update: &Tensor,
         starts: &Tensor,
     ) -> crate::Result<Tensor>;
+    /// Dynamic-update-slice with every input taken as a read.
+    ///
+    /// The default stages each borrowed view into compact storage (an owned
+    /// tensor is passed through) and delegates to the owned-input method; a
+    /// backend whose kernel consumes a borrowed operand should override this so
+    /// a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, TensorRead};
+    ///
+    /// fn run(
+    ///     session: &mut dyn TensorIndexing,
+    ///     x: TensorRead<'_>,
+    ///     update: TensorRead<'_>,
+    ///     starts: TensorRead<'_>,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     session.dynamic_update_slice_read(x, update, starts)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn dynamic_update_slice_read(
+        &mut self,
+        operand: TensorRead<'_>,
+        update: TensorRead<'_>,
+        starts: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        let operand = stage_view(self, operand)?;
+        let update = stage_view(self, update)?;
+        let starts = stage_view(self, starts)?;
+        self.dynamic_update_slice(&operand, &update, &starts)
+    }
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2907,6 +3172,35 @@ pub trait TensorIndexing {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
+    /// Pad with the input taken as a read.
+    ///
+    /// The default stages each borrowed view into compact storage (an owned
+    /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, PadConfig, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorIndexing, x: TensorRead<'_>, config: &PadConfig)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.pad_read(x, config)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn pad_read(&mut self, input: TensorRead<'_>, config: &PadConfig) -> crate::Result<Tensor> {
+        let input = stage_view(self, input)?;
+        self.pad(&input, config)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2914,6 +3208,43 @@ pub trait TensorIndexing {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
+    /// Concatenate with every input taken as a read.
+    ///
+    /// The default stages each borrowed view into compact storage (an owned
+    /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorIndexing, a: TensorRead<'_>, b: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.concatenate_read(&[a, b], 0)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn concatenate_read(
+        &mut self,
+        inputs: &[TensorRead<'_>],
+        axis: usize,
+    ) -> crate::Result<Tensor> {
+        let staged = inputs
+            .iter()
+            .map(|input| stage_view(self, input.clone()))
+            .collect::<crate::Result<Vec<_>>>()?;
+        let refs: Vec<&Tensor> = staged.iter().map(|input| &**input).collect();
+        self.concatenate(&refs, axis)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2921,6 +3252,34 @@ pub trait TensorIndexing {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
+    /// Reverse with the input taken as a read.
+    ///
+    /// The default stages each borrowed view into compact storage (an owned
+    /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
+    /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorIndexing, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.reverse_read(x, &[0])
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn reverse_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let input = stage_view(self, input)?;
+        self.reverse(&input, axes)
+    }
 }
 
 /// Backend-owned canonicalization for typed tensor views.
@@ -3246,8 +3605,8 @@ fn validate_compatible_placement(
 pub trait Engine: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
     /// Gather with both operands taken as reads.
     ///
-    /// The default materializes both reads and delegates to
-    /// [`TensorIndexing::gather`]; a backend whose gather kernel consumes the
+    /// The default stages each borrowed view (an owned tensor is passed
+    /// through) and delegates to [`TensorIndexing::gather`]; a backend whose gather kernel consumes the
     /// operand's strides overrides this so a borrowed operand needs no copy
     /// (invariant I1: the runtime must not materialize by default).
     ///
@@ -3257,17 +3616,17 @@ pub trait Engine: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
     /// source for invalid shapes, ranks, axes, dtypes or output metadata, and
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
-    /// The default implementation materializes both reads first, so it also
-    /// returns whatever [`Self::to_contiguous_read`] reports for a read the
-    /// backend cannot materialize.
+    /// The default implementation stages a view first, so it also returns
+    /// whatever [`TensorStructural::to_contiguous_read`] reports for a view the backend
+    /// cannot materialize.
     fn gather_read(
         &mut self,
         operand: TensorRead<'_>,
         start_indices: TensorRead<'_>,
         config: &GatherConfig,
     ) -> crate::Result<Tensor> {
-        let operand = self.to_contiguous_read(operand)?;
-        let start_indices = self.to_contiguous_read(start_indices)?;
+        let operand = stage_view(self, operand)?;
+        let start_indices = stage_view(self, start_indices)?;
         self.gather(&operand, &start_indices, config)
     }
 
@@ -3434,5 +3793,38 @@ pub trait Engine: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
     /// ```
     fn native_engine(&mut self) -> Option<crate::NativeSessionRef<'_>> {
         None
+    }
+}
+
+/// A read handed to an owned-input method by a materializing `*_read` default.
+///
+/// An owned tensor is already compact, so it is borrowed as is; only a view is
+/// staged.
+enum StagedRead<'a> {
+    Borrowed(&'a Tensor),
+    Staged(Box<Tensor>),
+}
+
+impl std::ops::Deref for StagedRead<'_> {
+    type Target = Tensor;
+
+    fn deref(&self) -> &Tensor {
+        match self {
+            Self::Borrowed(tensor) => tensor,
+            Self::Staged(tensor) => tensor,
+        }
+    }
+}
+
+/// Stage `read` for an owned-input method, copying only when it is a view.
+fn stage_view<'a, S: TensorStructural + ?Sized>(
+    session: &mut S,
+    read: TensorRead<'a>,
+) -> crate::Result<StagedRead<'a>> {
+    match read {
+        TensorRead::Tensor(tensor) => Ok(StagedRead::Borrowed(tensor)),
+        view => Ok(StagedRead::Staged(Box::new(
+            session.to_contiguous_read(view)?,
+        ))),
     }
 }

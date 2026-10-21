@@ -1771,8 +1771,9 @@ fn dot_read_hooks_do_not_stage_view_operands() {
 #[test]
 fn read_entries_consume_views_without_staging() {
     use tenferro_tensor::{
-        Engine, SessionCachedDot, TensorAnalytic, TensorDot, TensorElementwise, TensorReduction,
-        TensorStructural, TensorValue,
+        Engine, SessionCachedDot, SliceConfig, TensorAnalytic, TensorDot, TensorElementwise,
+        TensorIndexing, TensorReduction, TensorStructural, TensorValue, TensorView,
+        TypedTensorView,
     };
 
     let a = TensorValue::from_tensor(Tensor::from_typed::<f64>(
@@ -1857,6 +1858,174 @@ fn read_entries_consume_views_without_staging() {
         )
     );
 
+    // A non-contiguous (transposed) view reaches the slice kernel through its
+    // own strides: it must neither stage a copy nor read the wrong elements.
+    let transposed_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let transposed =
+        TypedTensorView::from_slice(vec![3, 2], vec![2, 1], 0, &transposed_data).unwrap();
+    let before = engine.resources.read_stagings();
+    let sliced = engine
+        .slice_read(
+            TensorRead::from_view(TensorView::F64(transposed)),
+            &SliceConfig {
+                starts: vec![0, 0],
+                limits: vec![2, 2],
+                strides: vec![1, 1],
+            },
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(sliced.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+
+    // The remaining indexing reads take the same descriptor, so a strided view
+    // reaches each kernel unreduced.
+    let view = || TypedTensorView::from_slice(vec![3, 2], vec![2, 1], 0, &transposed_data).unwrap();
+
+    let before = engine.resources.read_stagings();
+    let reversed = engine
+        .reverse_read(TensorRead::from_view(TensorView::F64(view())), &[0])
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(
+        reversed.as_slice::<f64>().unwrap(),
+        &[5.0, 3.0, 1.0, 6.0, 4.0, 2.0]
+    );
+
+    let before = engine.resources.read_stagings();
+    let padded = engine
+        .pad_read(
+            TensorRead::from_view(TensorView::F64(view())),
+            &PadConfig {
+                edge_padding_low: vec![1, 0],
+                edge_padding_high: vec![0, 0],
+                interior_padding: vec![0, 0],
+            },
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(padded.shape(), &[4, 2]);
+
+    let before = engine.resources.read_stagings();
+    let joined = engine
+        .concatenate_read(
+            &[
+                TensorRead::from_view(TensorView::F64(view())),
+                TensorRead::from_view(TensorView::F64(view())),
+            ],
+            0,
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(joined.shape(), &[6, 2]);
+
+    let indices = Tensor::from_vec_col_major(vec![1, 1], vec![1_i64]).unwrap();
+    let before = engine.resources.read_stagings();
+    let gathered = engine
+        .gather_read(
+            TensorRead::from_view(TensorView::F64(view())),
+            TensorRead::from_tensor(&indices),
+            &GatherConfig {
+                offset_dims: vec![1],
+                collapsed_slice_dims: vec![0],
+                start_index_map: vec![0],
+                index_vector_dim: 1,
+                slice_sizes: vec![1, 2],
+            },
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(gathered.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+
+    // Scatter takes both the operand and the updates as descriptors; the
+    // updates view skips every other element, and an owned operand mixed with a
+    // view update takes the same path.
+    let update_data = [10.0_f64, 99.0, 20.0];
+    let updates = || TypedTensorView::from_slice(vec![1, 2], vec![1, 2], 0, &update_data).unwrap();
+    let scatter_config = ScatterConfig {
+        update_window_dims: vec![1],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+    let before = engine.resources.read_stagings();
+    let scattered = engine
+        .scatter_read(
+            TensorRead::from_view(TensorView::F64(view())),
+            TensorRead::from_tensor(&indices),
+            TensorRead::from_view(TensorView::F64(updates())),
+            &scatter_config,
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(
+        scattered.as_slice::<f64>().unwrap(),
+        &[1.0, 13.0, 5.0, 2.0, 24.0, 6.0]
+    );
+    let owned_operand = Tensor::from_vec_col_major(vec![3, 2], vec![0.0_f64; 6]).unwrap();
+    let before = engine.resources.read_stagings();
+    let scattered = engine
+        .scatter_read(
+            TensorRead::from_tensor(&owned_operand),
+            TensorRead::from_tensor(&indices),
+            TensorRead::from_view(TensorView::F64(updates())),
+            &scatter_config,
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(
+        scattered.as_slice::<f64>().unwrap(),
+        &[0.0, 10.0, 0.0, 0.0, 20.0, 0.0]
+    );
+    let starts = Tensor::from_vec_col_major(vec![2], vec![1_i64, 0]).unwrap();
+    let before = engine.resources.read_stagings();
+    let updated = engine
+        .dynamic_update_slice_read(
+            TensorRead::from_view(TensorView::F64(view())),
+            TensorRead::from_view(TensorView::F64(updates())),
+            TensorRead::from_tensor(&starts),
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(
+        updated.as_slice::<f64>().unwrap(),
+        &[1.0, 10.0, 5.0, 2.0, 20.0, 6.0]
+    );
+
+    // The structural reads share the same descriptor path.
+    let before = engine.resources.read_stagings();
+    let lower = engine
+        .tril_read(TensorRead::from_view(TensorView::F64(view())), 0)
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(
+        lower.as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 0.0, 4.0, 6.0]
+    );
+
+    let before = engine.resources.read_stagings();
+    let upper = engine
+        .triu_read(TensorRead::from_view(TensorView::F64(view())), 0)
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(
+        upper.as_slice::<f64>().unwrap(),
+        &[1.0, 0.0, 0.0, 2.0, 4.0, 0.0]
+    );
+
+    let before = engine.resources.read_stagings();
+    let diagonal = engine
+        .extract_diagonal_read(TensorRead::from_view(TensorView::F64(view())), 0, 1)
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(diagonal.as_slice::<f64>().unwrap(), &[1.0, 4.0]);
+
+    let before = engine.resources.read_stagings();
+    let embedded = engine
+        .embed_diagonal_read(TensorRead::from_view(TensorView::F64(view())), 0, 1)
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(embedded.shape(), &[3, 3, 2]);
+
     // `to_contiguous_read` is the canonicalization itself: copying a view is its
     // contract, so it is the live positive control for the counter.
     let before = engine.resources.read_stagings();
@@ -1864,4 +2033,254 @@ fn read_entries_consume_views_without_staging() {
         .to_contiguous_read(TensorRead::from_view(a.tensor_view()))
         .unwrap();
     assert_eq!(engine.resources.read_stagings(), before + 1);
+}
+
+/// #2214: each read entry reads a view through its real strides and offset.
+///
+/// Every layout below is a 3x2 view; each read must equal the owned entry on
+/// the compact copy of the same logical values. All layouts share one engine,
+/// so same-shape plans are reused across different strides and offsets.
+#[test]
+fn read_entries_follow_view_strides_and_offsets() {
+    use tenferro_tensor::{
+        Engine, SliceConfig, TensorIndexing, TensorStructural, TensorView, TypedTensorView,
+    };
+
+    struct Layout<'a> {
+        data: &'a [f64],
+        strides: [isize; 2],
+        offset: isize,
+        /// Logical values in column-major order.
+        logical: [f64; 6],
+    }
+    let reversed = [0.0_f64, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let shifted = [9.0_f64, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let transposed = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let broadcast = [7.0_f64, 8.0];
+    let layouts = [
+        Layout {
+            data: &transposed,
+            strides: [2, 1],
+            offset: 0,
+            logical: [1.0, 3.0, 5.0, 2.0, 4.0, 6.0],
+        },
+        Layout {
+            data: &reversed,
+            strides: [-2, -1],
+            offset: 6,
+            logical: [6.0, 4.0, 2.0, 5.0, 3.0, 1.0],
+        },
+        Layout {
+            data: &shifted,
+            strides: [-2, -1],
+            offset: 7,
+            logical: [6.0, 4.0, 2.0, 5.0, 3.0, 1.0],
+        },
+        Layout {
+            data: &broadcast,
+            strides: [0, 1],
+            offset: 0,
+            logical: [7.0, 7.0, 7.0, 8.0, 8.0, 8.0],
+        },
+    ];
+    // Updates [10, 20] read backwards from an offset.
+    let update_data = [99.0_f64, 20.0, 99.0, 10.0];
+    let update_view = || {
+        TensorRead::from_view(TensorView::F64(
+            TypedTensorView::from_slice(vec![1, 2], vec![1, -2], 3, &update_data).unwrap(),
+        ))
+    };
+    let updates = Tensor::from_vec_col_major(vec![1, 2], vec![10.0_f64, 20.0]).unwrap();
+    let indices = Tensor::from_vec_col_major(vec![1, 1], vec![1_i64]).unwrap();
+    let starts = Tensor::from_vec_col_major(vec![2], vec![1_i64, 1]).unwrap();
+    let update_starts = Tensor::from_vec_col_major(vec![2], vec![2_i64, 0]).unwrap();
+    let gather = GatherConfig {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1, 2],
+    };
+    let scatter = ScatterConfig {
+        update_window_dims: vec![1],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+    let slice = SliceConfig {
+        starts: vec![1, 0],
+        limits: vec![3, 2],
+        strides: vec![1, 1],
+    };
+    let pad = PadConfig {
+        edge_padding_low: vec![1, 0],
+        edge_padding_high: vec![0, 1],
+        interior_padding: vec![1, 0],
+    };
+    let values = |tensor: Tensor| tensor.as_slice::<f64>().unwrap().to_vec();
+
+    let mut engine = crate::CpuEngine::serial();
+    for Layout {
+        data,
+        strides,
+        offset,
+        logical,
+    } in layouts
+    {
+        let view = || {
+            TensorRead::from_view(TensorView::F64(
+                TypedTensorView::from_slice(vec![3, 2], strides, offset, data).unwrap(),
+            ))
+        };
+        let owned = Tensor::from_vec_col_major(vec![3, 2], logical.to_vec()).unwrap();
+        let idx = || TensorRead::from_tensor(&indices);
+        let label = format!("strides {strides:?} offset {offset}");
+        let before = engine.resources.read_stagings();
+
+        macro_rules! same {
+            ($name:literal, $read:expr, $owned:expr) => {
+                assert_eq!(
+                    values($read.unwrap()),
+                    values($owned.unwrap()),
+                    "{} on {label}",
+                    $name
+                );
+            };
+        }
+        same!(
+            "gather",
+            engine.gather_read(view(), idx(), &gather),
+            engine.gather(&owned, &indices, &gather)
+        );
+        same!(
+            "scatter",
+            engine.scatter_read(view(), idx(), update_view(), &scatter),
+            engine.scatter(&owned, &indices, &updates, &scatter)
+        );
+        same!(
+            "dynamic_update_slice",
+            engine.dynamic_update_slice_read(
+                view(),
+                update_view(),
+                TensorRead::from_tensor(&update_starts)
+            ),
+            engine.dynamic_update_slice(&owned, &updates, &update_starts)
+        );
+        same!(
+            "slice",
+            engine.slice_read(view(), &slice),
+            engine.slice(&owned, &slice)
+        );
+        same!(
+            "dynamic_slice",
+            engine.dynamic_slice_read(view(), TensorRead::from_tensor(&starts), &[2, 1]),
+            engine.dynamic_slice(&owned, &starts, &[2, 1])
+        );
+        same!(
+            "pad",
+            engine.pad_read(view(), &pad),
+            engine.pad(&owned, &pad)
+        );
+        same!(
+            "concatenate",
+            engine.concatenate_read(&[view(), TensorRead::from_tensor(&owned)], 1),
+            engine.concatenate(&[&owned, &owned], 1)
+        );
+        same!(
+            "reverse",
+            engine.reverse_read(view(), &[0, 1]),
+            engine.reverse(&owned, &[0, 1])
+        );
+        same!(
+            "tril",
+            engine.tril_read(view(), -1),
+            engine.tril(&owned, -1)
+        );
+        same!("triu", engine.triu_read(view(), 1), engine.triu(&owned, 1));
+        same!(
+            "extract_diagonal",
+            engine.extract_diagonal_read(view(), 0, 1),
+            engine.extract_diagonal(&owned, 0, 1)
+        );
+        same!(
+            "embed_diagonal",
+            engine.embed_diagonal_read(view(), 0, 1),
+            engine.embed_diagonal(&owned, 0, 1)
+        );
+        assert_eq!(engine.resources.read_stagings(), before, "{label} staged");
+    }
+}
+
+/// #2214: the read entry accepts what the owned entry accepts (Bool, a
+/// borrowed `starts` vector) and reports the same errors.
+#[test]
+fn dynamic_update_slice_read_matches_the_owned_dispatch() {
+    use tenferro_tensor::{TensorIndexing, TensorView, TypedTensorView};
+
+    let mut engine = crate::CpuEngine::serial();
+    let operand = Tensor::from_vec_col_major(vec![3], vec![false, false, false]).unwrap();
+    let update = Tensor::from_vec_col_major(vec![1], vec![true]).unwrap();
+    // `starts = [1]`, borrowed as a view with an offset.
+    let start_data = [9_i64, 1];
+    let starts = || {
+        TensorRead::from_view(TensorView::I64(
+            TypedTensorView::from_slice(vec![1], vec![1], 1, &start_data).unwrap(),
+        ))
+    };
+    let flags = engine
+        .dynamic_update_slice_read(
+            TensorRead::from_tensor(&operand),
+            TensorRead::from_tensor(&update),
+            starts(),
+        )
+        .unwrap();
+    assert_eq!(flags.as_slice::<bool>().unwrap(), &[false, true, false]);
+
+    let real = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
+    let owned_err = engine
+        .dynamic_update_slice(
+            &real,
+            &update,
+            &Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap(),
+        )
+        .unwrap_err();
+    let read_err = engine
+        .dynamic_update_slice_read(
+            TensorRead::from_tensor(&real),
+            TensorRead::from_tensor(&update),
+            starts(),
+        )
+        .unwrap_err();
+    assert_eq!(format!("{read_err:?}"), format!("{owned_err:?}"));
+}
+
+/// An empty axis whose extent does not fit in `i64` clamps its start instead
+/// of panicking; the compact output layout for that shape then overflows,
+/// which is reported as an error.
+#[test]
+fn dynamic_update_slice_read_clamps_on_a_huge_empty_axis() {
+    use tenferro_tensor::{TensorIndexing, TensorView, TypedTensorView};
+
+    let mut engine = crate::CpuEngine::serial();
+    let empty: [f64; 0] = [];
+    let operand = TypedTensorView::from_slice(vec![usize::MAX, 0], vec![0, 0], 0, &empty).unwrap();
+    let update = Tensor::from_vec_col_major(vec![0, 0], Vec::<f64>::new()).unwrap();
+    let starts = Tensor::from_vec_col_major(vec![2], vec![0_i64, 0]).unwrap();
+    let err = engine
+        .dynamic_update_slice_read(
+            TensorRead::from_view(TensorView::F64(operand)),
+            TensorRead::from_tensor(&update),
+            TensorRead::from_tensor(&starts),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            crate::Error::BackendSource {
+                op: "dynamic_update_slice",
+                ..
+            }
+        ),
+        "{err:?}"
+    );
 }

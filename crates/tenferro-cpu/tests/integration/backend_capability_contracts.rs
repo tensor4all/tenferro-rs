@@ -422,8 +422,10 @@ fn indirect_indexed_writes_delegate_to_strided_plans() {
 #[test]
 fn gather_delegates_bulk_traversal_to_strided_kernel_plan() {
     let indexing_source = include_str!("../../src/indexing.rs");
-    let typed_gather = rust_function_body(indexing_source, "typed_gather")
-        .expect("typed_gather implementation should exist");
+    // The operand-descriptor entry is the gather kernel; `typed_gather` and
+    // `typed_gather_view` only adapt an owned tensor or a view to it.
+    let typed_gather = rust_function_body(indexing_source, "typed_gather_at")
+        .expect("typed_gather_at implementation should exist");
 
     assert!(
         typed_gather.contains("ErasedGatherPlan"),

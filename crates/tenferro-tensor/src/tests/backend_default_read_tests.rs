@@ -19,6 +19,7 @@ pub(crate) struct DefaultReadBackend {
     reshape_shapes: Vec<Vec<usize>>,
     concatenate_axis: Option<usize>,
     structural_runtime_enabled: bool,
+    contiguous_reads: usize,
 }
 
 impl Default for DefaultReadBackend {
@@ -31,6 +32,7 @@ impl Default for DefaultReadBackend {
             reshape_shapes: Vec::new(),
             concatenate_axis: None,
             structural_runtime_enabled: true,
+            contiguous_reads: 0,
         }
     }
 }
@@ -406,6 +408,7 @@ impl TensorAnalytic for DefaultReadBackend {
 
 impl TensorStructural for DefaultReadBackend {
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.contiguous_reads += 1;
         if !self.structural_runtime_enabled {
             let TensorRead::Tensor(tensor) = input else {
                 return Err(crate::Error::unsupported(
@@ -828,6 +831,77 @@ fn blas1_axpby_rejects_backend_alias_before_execution() {
             ..
         }
     ));
+}
+
+/// #2214: a materializing `*_read` default passes an owned tensor straight to
+/// the owned-input method and stages only a borrowed view.
+#[test]
+fn materializing_read_defaults_stage_views_only() {
+    let owned = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let index = Tensor::from_vec_col_major(vec![1, 1], vec![0_i64]).unwrap();
+    let data = [1.0_f64, 2.0, 3.0, 4.0];
+    let view = || {
+        TensorRead::from_view(TensorView::F64(
+            TypedTensorView::from_slice(vec![2, 2], vec![2, 1], 0, &data).unwrap(),
+        ))
+    };
+    let gather = GatherConfig {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1, 2],
+    };
+    let scatter = ScatterConfig {
+        update_window_dims: vec![1],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+    let slice = SliceConfig {
+        starts: vec![0, 0],
+        limits: vec![1, 2],
+        strides: vec![1, 1],
+    };
+    let pad = PadConfig {
+        edge_padding_low: vec![1, 0],
+        edge_padding_high: vec![0, 0],
+        interior_padding: vec![0, 0],
+    };
+    // Every default with each tensor argument given as `$read`; evaluates to
+    // how many arguments were passed.
+    macro_rules! run_all {
+        ($backend:expr, $read:expr) => {{
+            let backend: &mut DefaultReadBackend = $backend;
+            let idx = || TensorRead::from_tensor(&index);
+            backend.gather_read($read, idx(), &gather).unwrap();
+            backend.scatter_read($read, idx(), $read, &scatter).unwrap();
+            backend.slice_read($read, &slice).unwrap();
+            backend.dynamic_slice_read($read, idx(), &[1, 2]).unwrap();
+            backend
+                .dynamic_update_slice_read($read, $read, idx())
+                .unwrap();
+            backend.pad_read($read, &pad).unwrap();
+            backend.concatenate_read(&[$read, $read], 0).unwrap();
+            backend.reverse_read($read, &[0]).unwrap();
+            backend.tril_read($read, 0).unwrap();
+            backend.triu_read($read, 0).unwrap();
+            backend.extract_diagonal_read($read, 0, 1).unwrap();
+            backend.embed_diagonal_read($read, 0, 1).unwrap();
+            15
+        }};
+    }
+
+    let mut backend = DefaultReadBackend::default();
+    run_all!(&mut backend, TensorRead::from_tensor(&owned));
+    assert_eq!(
+        backend.contiguous_reads, 0,
+        "an owned tensor is never staged"
+    );
+
+    let mut backend = DefaultReadBackend::default();
+    let views = run_all!(&mut backend, view());
+    assert_eq!(backend.contiguous_reads, views, "each view is staged once");
 }
 
 #[test]
