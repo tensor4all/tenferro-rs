@@ -360,6 +360,9 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     }
 
     fn softmax(&self, axis: usize, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
+        if let Some(output) = session.softmax_read(T::tensor_read(self), axis)? {
+            return into_typed_result("softmax", output);
+        }
         let out = run_session_composite(session, |ops| {
             composite::softmax(ops, &typed_borrowed(self), axis)
         })?;

@@ -3728,6 +3728,39 @@ pub trait Engine: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
         Ok(None)
     }
 
+    /// Fused real-float softmax along `axis`.
+    ///
+    /// This is an optional fast path for the shared runtime composite
+    /// formulation. A backend that returns `Ok(Some(output))` must produce the
+    /// same value as the composite: a max-subtracted softmax over `axis`, with
+    /// an all-`-inf` slice yielding zeros and NaN propagating.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Engine, TensorRead};
+    ///
+    /// fn softmax(session: &mut dyn Engine, x: TensorRead<'_>, axis: usize)
+    ///     -> tenferro_tensor::Result<Option<tenferro_tensor::Tensor>>
+    /// {
+    ///     session.softmax_read(x, axis)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error for an invalid axis or unsupported
+    /// dtype, a backend error when storage cannot be read, or a kernel error.
+    /// Returning `Ok(None)` declines the fast path.
+    fn softmax_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axis: usize,
+    ) -> crate::Result<Option<Tensor>> {
+        let _ = (input, axis);
+        Ok(None)
+    }
+
     /// Apply `y <- alpha * x + beta * y` in one pass into caller-owned storage.
     ///
     /// Scalars must have the exact tensor dtype; real coefficients for complex
