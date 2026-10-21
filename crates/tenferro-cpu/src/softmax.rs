@@ -81,9 +81,7 @@ fn softmax_axis0_f32(data: &[f32], axis_len: usize) -> Vec<f32> {
         .for_each(|(out_task, in_task)| {
             // One cache-sized temp per task, reused across its groups.
             let mut temp = vec![0.0f32; group.min(in_task.len())];
-            for (out_chunk, in_chunk) in
-                out_task.chunks_mut(group).zip(in_task.chunks(group))
-            {
+            for (out_chunk, in_chunk) in out_task.chunks_mut(group).zip(in_task.chunks(group)) {
                 let temp = &mut temp[..in_chunk.len()];
                 if avx2_available() {
                     // SAFETY: the host reports AVX2; the group functions touch
@@ -126,9 +124,7 @@ fn softmax_axis0_f64(data: &[f64], axis_len: usize) -> Vec<f64> {
         .zip(data.par_chunks(task))
         .for_each(|(out_task, in_task)| {
             let mut temp = vec![0.0f64; group.min(in_task.len())];
-            for (out_chunk, in_chunk) in
-                out_task.chunks_mut(group).zip(in_task.chunks(group))
-            {
+            for (out_chunk, in_chunk) in out_task.chunks_mut(group).zip(in_task.chunks(group)) {
                 let temp = &mut temp[..in_chunk.len()];
                 shift_group_f64(in_chunk, temp, axis_len);
                 let uninit = unsafe {
@@ -157,10 +153,7 @@ fn avx2_available() -> bool {
 
 fn shift_group_f32(src: &[f32], dst: &mut [f32], axis_len: usize) {
     for (in_slice, out_slice) in src.chunks(axis_len).zip(dst.chunks_mut(axis_len)) {
-        let max = in_slice
-            .iter()
-            .copied()
-            .fold(f32::NEG_INFINITY, f32::max);
+        let max = in_slice.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let safe_max = if max.is_nan() { max } else { max.max(f32::MIN) };
         for (out, &value) in out_slice.iter_mut().zip(in_slice) {
             *out = value - safe_max;
@@ -171,7 +164,11 @@ fn shift_group_f32(src: &[f32], dst: &mut [f32], axis_len: usize) {
 fn scale_group_f32(data: &mut [f32], axis_len: usize) {
     for slice in data.chunks_mut(axis_len) {
         let sum: f32 = slice.iter().copied().sum();
-        let safe_sum = if sum.is_nan() { sum } else { sum.max(f32::MIN_POSITIVE) };
+        let safe_sum = if sum.is_nan() {
+            sum
+        } else {
+            sum.max(f32::MIN_POSITIVE)
+        };
         for value in slice.iter_mut() {
             *value /= safe_sum;
         }
@@ -180,10 +177,7 @@ fn scale_group_f32(data: &mut [f32], axis_len: usize) {
 
 fn shift_group_f64(src: &[f64], dst: &mut [f64], axis_len: usize) {
     for (in_slice, out_slice) in src.chunks(axis_len).zip(dst.chunks_mut(axis_len)) {
-        let max = in_slice
-            .iter()
-            .copied()
-            .fold(f64::NEG_INFINITY, f64::max);
+        let max = in_slice.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let safe_max = if max.is_nan() { max } else { max.max(f64::MIN) };
         for (out, &value) in out_slice.iter_mut().zip(in_slice) {
             *out = value - safe_max;
@@ -194,7 +188,11 @@ fn shift_group_f64(src: &[f64], dst: &mut [f64], axis_len: usize) {
 fn scale_group_f64(data: &mut [f64], axis_len: usize) {
     for slice in data.chunks_mut(axis_len) {
         let sum: f64 = slice.iter().copied().sum();
-        let safe_sum = if sum.is_nan() { sum } else { sum.max(f64::MIN_POSITIVE) };
+        let safe_sum = if sum.is_nan() {
+            sum
+        } else {
+            sum.max(f64::MIN_POSITIVE)
+        };
         for value in slice.iter_mut() {
             *value /= safe_sum;
         }
@@ -227,8 +225,8 @@ unsafe fn shift_group_f32_avx2(src: &[f32], dst: &mut [f32], axis_len: usize) {
             _mm256_storeu_ps(out_slice.as_mut_ptr().add(j), _mm256_sub_ps(value, shift));
             j += 8;
         }
-        for k in j..n {
-            out_slice[k] = in_slice[k] - safe_max;
+        for (out, &input) in out_slice[j..].iter_mut().zip(&in_slice[j..]) {
+            *out = input - safe_max;
         }
     }
 }
@@ -251,7 +249,11 @@ unsafe fn scale_group_f32_avx2(data: &mut [f32], axis_len: usize) {
         for &value in &slice[i..] {
             sum += value;
         }
-        let safe_sum = if sum.is_nan() { sum } else { sum.max(f32::MIN_POSITIVE) };
+        let safe_sum = if sum.is_nan() {
+            sum
+        } else {
+            sum.max(f32::MIN_POSITIVE)
+        };
         let divisor = _mm256_set1_ps(safe_sum);
         let mut j = 0;
         while j + 8 <= n {
@@ -259,8 +261,8 @@ unsafe fn scale_group_f32_avx2(data: &mut [f32], axis_len: usize) {
             _mm256_storeu_ps(slice.as_mut_ptr().add(j), _mm256_div_ps(value, divisor));
             j += 8;
         }
-        for k in j..n {
-            slice[k] /= safe_sum;
+        for value in &mut slice[j..] {
+            *value /= safe_sum;
         }
     }
 }

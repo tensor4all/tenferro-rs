@@ -368,13 +368,10 @@ impl<'a> EagerSession<'a> {
     /// `AxisOutOfBounds` validation error for an invalid axis,
     /// [`Error::ContextMismatch`] for a tensor from another runtime, or a backend error.
     pub fn softmax(&mut self, input: &EagerTensor, axis: usize) -> Result<EagerTensor> {
-        if crate::eager_ops::untracked_fast_path_allowed(&[input]) {
-            if let Some(output) = self.engine.softmax_read(input.tensor_read(), axis)? {
-                return EagerTensor::new_untracked_result(
-                    std::sync::Arc::clone(&input.ctx),
-                    output,
-                );
-            }
+        if crate::eager_ops::untracked_fast_path_allowed(&[input])
+            && let Some(output) = self.engine.softmax_read(input.tensor_read(), axis)?
+        {
+            return EagerTensor::new_untracked_result(std::sync::Arc::clone(&input.ctx), output);
         }
         composite::softmax(&mut self.composite(), input, axis)
     }

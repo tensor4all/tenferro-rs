@@ -59,7 +59,7 @@ mod tests {
         // (The test runner's pool size is not fixed, so only the bounds are
         // asserted for the other cases.)
         let task = task_len(2_097_152, 4_096, 4, MIN_BYTES_PER_TASK);
-        assert!(task >= 4_096 && task <= 2_097_152 && task % 4_096 == 0);
+        assert!((4_096..=2_097_152).contains(&task) && task.is_multiple_of(4_096));
         assert_eq!(task_len(16, 16, 4, MIN_BYTES_PER_TASK), 16);
     }
 }
