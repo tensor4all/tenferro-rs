@@ -5,6 +5,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use num_traits::{Float, FromPrimitive};
+use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 use rustfft::{Fft, FftNum, FftPlanner};
 use tenferro_runtime::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
@@ -130,12 +131,21 @@ impl FftPlanCache {
         ExtensionFftPlanCache::new(&mut self.store).plan_f64(len, forward)
     }
 
+    pub(crate) fn real_plan_f32(&mut self, len: usize, forward: bool) -> RealPlan<f32> {
+        ExtensionFftPlanCache::new(&mut self.store).real_plan_f32(len, forward)
+    }
+
+    pub(crate) fn real_plan_f64(&mut self, len: usize, forward: bool) -> RealPlan<f64> {
+        ExtensionFftPlanCache::new(&mut self.store).real_plan_f64(len, forward)
+    }
+
     #[cfg(test)]
     pub(crate) fn contains_f64(&mut self, len: usize, forward: bool) -> bool {
         let key = FftPlanKey {
             len,
             forward,
             dtype: FftPlanDType::F64,
+            real: false,
         };
         self.store
             .get::<ExtensionFftPlanEntry>(&extension_plan_key(key))
@@ -172,11 +182,22 @@ struct FftPlanKey {
     len: usize,
     forward: bool,
     dtype: FftPlanDType,
+    real: bool,
 }
 
 enum CachedFftPlan {
     F32(Arc<dyn Fft<f32>>),
     F64(Arc<dyn Fft<f64>>),
+    RealF32(Arc<dyn RealToComplex<f32>>),
+    RealF64(Arc<dyn RealToComplex<f64>>),
+    InverseF32(Arc<dyn ComplexToReal<f32>>),
+    InverseF64(Arc<dyn ComplexToReal<f64>>),
+}
+
+/// Cached real-FFT plan for one transform direction.
+pub(crate) enum RealPlan<T> {
+    Forward(Arc<dyn RealToComplex<T>>),
+    Inverse(Arc<dyn ComplexToReal<T>>),
 }
 
 struct ExtensionFftPlanEntry {
@@ -194,6 +215,8 @@ impl ExtensionFftPlanEntry {
 pub(crate) trait FftPlanProvider: Send {
     fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>>;
     fn plan_f64(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f64>>;
+    fn real_plan_f32(&mut self, len: usize, forward: bool) -> RealPlan<f32>;
+    fn real_plan_f64(&mut self, len: usize, forward: bool) -> RealPlan<f64>;
 }
 
 impl FftPlanProvider for FftPlanCache {
@@ -204,6 +227,14 @@ impl FftPlanProvider for FftPlanCache {
     fn plan_f64(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f64>> {
         Self::plan_f64(self, len, forward)
     }
+
+    fn real_plan_f32(&mut self, len: usize, forward: bool) -> RealPlan<f32> {
+        Self::real_plan_f32(self, len, forward)
+    }
+
+    fn real_plan_f64(&mut self, len: usize, forward: bool) -> RealPlan<f64> {
+        Self::real_plan_f64(self, len, forward)
+    }
 }
 
 pub(crate) trait CachedFftPlanScalar: FftNum + Float + FromPrimitive + 'static {
@@ -212,6 +243,12 @@ pub(crate) trait CachedFftPlanScalar: FftNum + Float + FromPrimitive + 'static {
         len: usize,
         forward: bool,
     ) -> Arc<dyn Fft<Self>>;
+
+    fn real_plan<P: FftPlanProvider + ?Sized>(
+        plans: &mut P,
+        len: usize,
+        forward: bool,
+    ) -> RealPlan<Self>;
 }
 
 impl CachedFftPlanScalar for f32 {
@@ -221,6 +258,14 @@ impl CachedFftPlanScalar for f32 {
         forward: bool,
     ) -> Arc<dyn Fft<Self>> {
         plans.plan_f32(len, forward)
+    }
+
+    fn real_plan<P: FftPlanProvider + ?Sized>(
+        plans: &mut P,
+        len: usize,
+        forward: bool,
+    ) -> RealPlan<Self> {
+        plans.real_plan_f32(len, forward)
     }
 }
 
@@ -232,6 +277,14 @@ impl CachedFftPlanScalar for f64 {
     ) -> Arc<dyn Fft<Self>> {
         plans.plan_f64(len, forward)
     }
+
+    fn real_plan<P: FftPlanProvider + ?Sized>(
+        plans: &mut P,
+        len: usize,
+        forward: bool,
+    ) -> RealPlan<Self> {
+        plans.real_plan_f64(len, forward)
+    }
 }
 
 pub(crate) fn cached_fft_plan<T: CachedFftPlanScalar, P: FftPlanProvider + ?Sized>(
@@ -240,6 +293,14 @@ pub(crate) fn cached_fft_plan<T: CachedFftPlanScalar, P: FftPlanProvider + ?Size
     forward: bool,
 ) -> Arc<dyn Fft<T>> {
     T::plan(plans, len, forward)
+}
+
+pub(crate) fn cached_real_plan<T: CachedFftPlanScalar, P: FftPlanProvider + ?Sized>(
+    plans: &mut P,
+    len: usize,
+    forward: bool,
+) -> RealPlan<T> {
+    T::real_plan(plans, len, forward)
 }
 
 pub(crate) struct ExtensionFftPlanCache<'a> {
@@ -268,6 +329,7 @@ impl FftPlanProvider for ExtensionFftPlanCache<'_> {
             len,
             forward,
             dtype: FftPlanDType::F32,
+            real: false,
         };
         let cache_key = extension_plan_key(key);
         if let Some(cached) = self.entries.get::<ExtensionFftPlanEntry>(&cache_key) {
@@ -294,6 +356,7 @@ impl FftPlanProvider for ExtensionFftPlanCache<'_> {
             len,
             forward,
             dtype: FftPlanDType::F64,
+            real: false,
         };
         let cache_key = extension_plan_key(key);
         if let Some(cached) = self.entries.get::<ExtensionFftPlanEntry>(&cache_key) {
@@ -313,6 +376,83 @@ impl FftPlanProvider for ExtensionFftPlanCache<'_> {
             fft_plan_retained_bytes(),
         );
         plan
+    }
+
+    fn real_plan_f32(&mut self, len: usize, forward: bool) -> RealPlan<f32> {
+        let key = FftPlanKey {
+            len,
+            forward,
+            dtype: FftPlanDType::F32,
+            real: true,
+        };
+        let cache_key = extension_plan_key(key);
+        if let Some(cached) = self.entries.get::<ExtensionFftPlanEntry>(&cache_key) {
+            if cached.key == key {
+                match (&cached.plan, forward) {
+                    (CachedFftPlan::RealF32(plan), true) => {
+                        return RealPlan::Forward(Arc::clone(plan));
+                    }
+                    (CachedFftPlan::InverseF32(plan), false) => {
+                        return RealPlan::Inverse(Arc::clone(plan));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let plan = build_real_plan::<f32>(len, forward);
+        let cached = match &plan {
+            RealPlan::Forward(plan) => CachedFftPlan::RealF32(Arc::clone(plan)),
+            RealPlan::Inverse(plan) => CachedFftPlan::InverseF32(Arc::clone(plan)),
+        };
+        self.entries.put(
+            cache_key,
+            ExtensionFftPlanEntry { key, plan: cached },
+            fft_plan_retained_bytes(),
+        );
+        plan
+    }
+
+    fn real_plan_f64(&mut self, len: usize, forward: bool) -> RealPlan<f64> {
+        let key = FftPlanKey {
+            len,
+            forward,
+            dtype: FftPlanDType::F64,
+            real: true,
+        };
+        let cache_key = extension_plan_key(key);
+        if let Some(cached) = self.entries.get::<ExtensionFftPlanEntry>(&cache_key) {
+            if cached.key == key {
+                match (&cached.plan, forward) {
+                    (CachedFftPlan::RealF64(plan), true) => {
+                        return RealPlan::Forward(Arc::clone(plan));
+                    }
+                    (CachedFftPlan::InverseF64(plan), false) => {
+                        return RealPlan::Inverse(Arc::clone(plan));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let plan = build_real_plan::<f64>(len, forward);
+        let cached = match &plan {
+            RealPlan::Forward(plan) => CachedFftPlan::RealF64(Arc::clone(plan)),
+            RealPlan::Inverse(plan) => CachedFftPlan::InverseF64(Arc::clone(plan)),
+        };
+        self.entries.put(
+            cache_key,
+            ExtensionFftPlanEntry { key, plan: cached },
+            fft_plan_retained_bytes(),
+        );
+        plan
+    }
+}
+
+fn build_real_plan<T: FftNum + 'static>(len: usize, forward: bool) -> RealPlan<T> {
+    let mut planner = RealFftPlanner::<T>::new();
+    if forward {
+        RealPlan::Forward(planner.plan_fft_forward(len))
+    } else {
+        RealPlan::Inverse(planner.plan_fft_inverse(len))
     }
 }
 
