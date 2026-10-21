@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::super::execution::ScheduledEventDomains;
 use super::super::schedule::{
@@ -444,6 +444,18 @@ fn mock_transfer_does_not_reuse_source_event_domain_as_destination_completion() 
 #[derive(Debug)]
 struct CoalescingProbe {
     enabled: Arc<AtomicUsize>,
+    reports: bool,
+    enqueued: Arc<Mutex<Vec<usize>>>,
+}
+
+impl CoalescingProbe {
+    fn reporting(enabled: &Arc<AtomicUsize>, reports: bool) -> Self {
+        Self {
+            enabled: Arc::clone(enabled),
+            reports,
+            enqueued: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
 }
 
 impl EventDomainDriver for CoalescingProbe {
@@ -451,6 +463,9 @@ impl EventDomainDriver for CoalescingProbe {
         Ok(Box::new(CoalescingProbeRun {
             domain,
             enabled: Arc::clone(&self.enabled),
+            reports: self.reports,
+            enqueued: Arc::clone(&self.enqueued),
+            accepted: false,
             inner: ImmediateEventDomainDriver::new().begin_run(domain)?,
         }))
     }
@@ -460,6 +475,12 @@ impl EventDomainDriver for CoalescingProbe {
 struct CoalescingProbeRun {
     domain: EventDomainId,
     enabled: Arc<AtomicUsize>,
+    /// Whether this run accepts submission order in place of per-node
+    /// completions; the probe records the offer either way.
+    reports: bool,
+    /// Dependency counts of every enqueue, in submission order.
+    enqueued: Arc<Mutex<Vec<usize>>>,
+    accepted: bool,
     inner: Box<dyn EventDomainRun>,
 }
 
@@ -468,8 +489,10 @@ impl EventDomainRun for CoalescingProbeRun {
         self.domain
     }
 
-    fn enable_single_domain_coalescing(&mut self) {
+    fn enable_single_domain_coalescing(&mut self) -> bool {
         self.enabled.fetch_add(1, Ordering::SeqCst);
+        self.accepted = true;
+        self.accepted && self.reports
     }
 
     fn enqueue(
@@ -477,6 +500,10 @@ impl EventDomainRun for CoalescingProbeRun {
         dependencies: &[Arc<dyn EventToken>],
         launch: &mut dyn FnMut() -> crate::Result<()>,
     ) -> crate::Result<Arc<dyn EventToken>> {
+        self.enqueued
+            .lock()
+            .expect("probe enqueue log")
+            .push(dependencies.len());
         self.inner.enqueue(dependencies, launch)
     }
 
@@ -513,9 +540,7 @@ fn probe_operation(
 #[test]
 fn single_domain_schedule_requests_coalescing_once() {
     let enabled = Arc::new(AtomicUsize::new(0));
-    let driver: Arc<dyn EventDomainDriver> = Arc::new(CoalescingProbe {
-        enabled: Arc::clone(&enabled),
-    });
+    let driver: Arc<dyn EventDomainDriver> = Arc::new(CoalescingProbe::reporting(&enabled, false));
     let domain = qualified_domain(1, 1, 1, 1);
     let graph = ScheduledGraph::for_test(vec![
         probe_operation(0, domain, [], 0),
@@ -540,9 +565,7 @@ fn single_domain_schedule_requests_coalescing_once() {
 #[test]
 fn multi_domain_schedule_never_requests_coalescing() {
     let enabled = Arc::new(AtomicUsize::new(0));
-    let driver: Arc<dyn EventDomainDriver> = Arc::new(CoalescingProbe {
-        enabled: Arc::clone(&enabled),
-    });
+    let driver: Arc<dyn EventDomainDriver> = Arc::new(CoalescingProbe::reporting(&enabled, false));
     let first_domain = qualified_domain(1, 1, 1, 1);
     let second_domain = qualified_domain(1, 1, 1, 2);
     let graph = ScheduledGraph::for_test(vec![
@@ -557,5 +580,87 @@ fn multi_domain_schedule_never_requests_coalescing() {
         enabled.load(Ordering::SeqCst),
         0,
         "a multi-domain schedule must keep the per-node completion path"
+    );
+}
+
+/// A run that accepts the coalescing offer receives no dependency tokens and
+/// records no completion, so the scheduler never resolves a dependency for it.
+#[test]
+fn accepting_run_submits_dependencies_free_commands() {
+    let enabled = Arc::new(AtomicUsize::new(0));
+    let probe = Arc::new(CoalescingProbe::reporting(&enabled, true));
+    let driver: Arc<dyn EventDomainDriver> = probe.clone();
+    let domain = qualified_domain(1, 1, 1, 1);
+    let graph = ScheduledGraph::for_test(vec![
+        probe_operation(0, domain, [], 0),
+        probe_operation(
+            1,
+            domain,
+            [EventDependency::new(domain, EventSlotId::new(0), 0)],
+            1,
+        ),
+    ]);
+    assert!(graph.validate().is_ok());
+
+    let mut domains =
+        ScheduledEventDomains::new_for_test(&graph, &[(coalescing_engine_id(), driver)])
+            .expect("single-domain runs");
+    let mut launches = 0;
+    for node in graph.nodes_for_test() {
+        domains
+            .enqueue(0, node, &mut || {
+                launches += 1;
+                Ok(())
+            })
+            .expect("coalesced enqueue");
+    }
+    assert_eq!(launches, 2, "every node still launches");
+    assert!(
+        domains.completion_count_for_test() == 0,
+        "a reporting run must not make the scheduler record completions"
+    );
+    assert_eq!(
+        probe.enqueued.lock().expect("probe enqueue log").as_slice(),
+        &[0, 0],
+        "a coalesced command carries no dependency tokens"
+    );
+}
+
+/// A run that declines the offer keeps the per-node completion contract:
+/// dependencies are resolved and passed to the run.
+#[test]
+fn declining_run_keeps_per_node_completions() {
+    let enabled = Arc::new(AtomicUsize::new(0));
+    let probe = Arc::new(CoalescingProbe::reporting(&enabled, false));
+    let driver: Arc<dyn EventDomainDriver> = probe.clone();
+    let domain = qualified_domain(1, 1, 1, 1);
+    let graph = ScheduledGraph::for_test(vec![
+        probe_operation(0, domain, [], 0),
+        probe_operation(
+            1,
+            domain,
+            [EventDependency::new(domain, EventSlotId::new(0), 0)],
+            1,
+        ),
+    ]);
+    assert!(graph.validate().is_ok());
+
+    let mut domains =
+        ScheduledEventDomains::new_for_test(&graph, &[(coalescing_engine_id(), driver)])
+            .expect("single-domain runs");
+    for node in graph.nodes_for_test() {
+        domains
+            .enqueue(0, node, &mut || Ok(()))
+            .expect("enqueue with completions");
+    }
+    assert_eq!(
+        domains.completion_count_for_test(),
+        2,
+        "a non-reporting run keeps one completion per node"
+    );
+    assert_eq!(
+        probe.enqueued.lock().expect("probe enqueue log").as_slice(),
+        &[0, 1],
+        "the second command resolves its dependency"
     );
 }

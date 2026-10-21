@@ -70,8 +70,13 @@ impl EventDomainRun for CudaEventDomainRun {
         self.domain
     }
 
-    fn enable_single_domain_coalescing(&mut self) {
+    fn enable_single_domain_coalescing(&mut self) -> bool {
         self.coalesced = true;
+        // The run keeps its own coalesced submission (one stream, no per-node
+        // events), but the scheduler keeps resolving dependencies and recording
+        // completions for it: replacing that bookkeeping is a scheduling change
+        // that has to be validated on a device first (#2186).
+        false
     }
 
     fn enqueue(
