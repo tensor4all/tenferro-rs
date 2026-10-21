@@ -98,15 +98,11 @@ cubecl-cuda = { workspace = true, optional = true }
 cubecl-runtime = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 faer = { workspace = true, optional = true }
-# The extracted tensor-free linalg providers, both from the tlinalg-rs workspace: `tlinalg` (faer)
-# and `tlinalg-blas` (LAPACK/BLAS). Neither depends on the other; the interface they are adapted to
-# lives in this crate. Requirements are exact so the whole CPU stack resolves one strided source
-# and one faer identity; tlinalg 0.4.1 takes a `tcontract_exec::Exec` parallelism token and pins
-# `t4a-faer =0.24.7`, and adds the borrowed-workspace `*_workspace` / `*_into` entries the host
-# routes every faer family through. Keep the two requirements identical.
-tlinalg = { version = "=0.4.3", optional = true }
-# `tlinalg-blas` takes no `Exec` and no faer, so it moves only when it changes; the two
-# requirements move together whenever either crate does.
+# Independent tensor-free providers; their host interface lives in this crate.
+# tlinalg 0.4.4 takes the engine's Exec token and admits compatible t4a-faer patch
+# fixes. Keep its range compatible with the workspace faer requirement.
+tlinalg = { version = "0.4.4", optional = true }
+# The LAPACK provider takes no Exec or faer and needs no bump for the native fix.
 tlinalg-blas = { version = "=0.4.3", optional = true }
 tcontract-exec.workspace = true
 rayon.workspace = true

@@ -85,12 +85,13 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
     let matrix = TypedTensor::<f64>::from_vec_col_major(vec![4, 4], vec![1.0; 16]).unwrap();
     let row = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![1.0; 4]).unwrap();
     let cube = TypedTensor::<f64>::from_vec_col_major(vec![2, 4, 4], vec![1.0; 32]).unwrap();
-    let mut backend = CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(1)
-            .build()
-            .expect("one-worker pool"),
-    );
+    let pool = tenferro_cpu::thread_pool_builder()
+        .num_threads(1)
+        .build()
+        .expect("one-worker pool");
+    // Pool construction returns before workers finish allocating startup state.
+    pool.broadcast(|_| ());
+    let mut backend = CpuEngine::new(pool);
     assert_eq!(backend.num_threads(), 1);
     {
         let session = &mut backend;
@@ -286,12 +287,12 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
         TypedTensor::<f64>::from_vec_col_major(vec![WORKER_LEN], vec![2.0; WORKER_LEN]).unwrap();
     let two_thread_b =
         TypedTensor::<f64>::from_vec_col_major(vec![WORKER_LEN], vec![3.0; WORKER_LEN]).unwrap();
-    let mut two_thread_backend = CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(2)
-            .build()
-            .expect("two-worker pool"),
-    );
+    let pool = tenferro_cpu::thread_pool_builder()
+        .num_threads(2)
+        .build()
+        .expect("two-worker pool");
+    pool.broadcast(|_| ());
+    let mut two_thread_backend = CpuEngine::new(pool);
     assert_eq!(two_thread_backend.num_threads(), 2);
     {
         let session = &mut two_thread_backend;
