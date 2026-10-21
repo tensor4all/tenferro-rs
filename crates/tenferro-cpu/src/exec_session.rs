@@ -432,6 +432,44 @@ impl TensorStructural for CpuEngine {
         })
     }
 
+    fn tril_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+        k: i64,
+    ) -> crate::Result<Tensor> {
+        self.run_native(|buffers| structural::tril_read_with_pool(buffers, input, k))
+    }
+
+    fn triu_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+        k: i64,
+    ) -> crate::Result<Tensor> {
+        self.run_native(|buffers| structural::triu_read_with_pool(buffers, input, k))
+    }
+
+    fn extract_diagonal_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<Tensor> {
+        self.run_native(|buffers| {
+            structural::extract_diagonal_read_with_pool(buffers, input, axis_a, axis_b)
+        })
+    }
+
+    fn embed_diagonal_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<Tensor> {
+        self.run_native(|buffers| {
+            structural::embed_diagonal_read_with_pool(buffers, input, axis_a, axis_b)
+        })
+    }
+
     delegate_with_pool!(cast(input: &Tensor, to: crate::DType) => structural::cast_with_pool);
     delegate_with_pool!(extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) => structural::extract_diagonal_with_pool);
     delegate_with_pool!(embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) => structural::embed_diagonal_with_pool);

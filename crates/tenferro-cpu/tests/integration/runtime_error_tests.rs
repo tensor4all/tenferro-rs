@@ -109,8 +109,8 @@ fn cpu_diagonal_pooled_outputs_use_checked_shape_product() {
     let structural = include_str!("../../src/structural.rs");
     let filled_section = source_section(
         structural,
-        "fn typed_embed_diagonal_impl",
-        "pub(crate) fn typed_tril",
+        "fn embed_diagonal_from_view",
+        "#[cfg(test)]\npub(crate) fn typed_tril",
     );
 
     assert!(
@@ -127,7 +127,7 @@ fn cpu_diagonal_pooled_outputs_use_checked_shape_product() {
         "CPU fill pooled outputs must use the full-overwrite uninit guard"
     );
     assert!(
-        filled_section.contains("strided_kernel::embed_diagonal_into_uninit")
+        filled_section.contains("strided_kernel::embed_diagonal_view_into_uninit")
             && filled_section.contains("// SAFETY:"),
         "CPU diagonal outputs must use strided full-overwrite before the documented completion handoff"
     );

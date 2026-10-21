@@ -183,6 +183,20 @@ macro_rules! dispatch_tensor_view_unary_result {
     };
 }
 
+macro_rules! dispatch_tensor_view_with_bool_special_result {
+    ($view:expr, |$v:ident| $body:expr, bool |$bool_v:ident| $bool_body:expr) => {
+        match $view {
+            TensorView::Bool($bool_v) => Ok(Tensor::from_typed::<bool>($bool_body?)),
+            TensorView::F32($v) => Ok(Tensor::from_typed::<f32>($body?)),
+            TensorView::F64($v) => Ok(Tensor::from_typed::<f64>($body?)),
+            TensorView::I32($v) => Ok(Tensor::from_typed::<i32>($body?)),
+            TensorView::I64($v) => Ok(Tensor::from_typed::<i64>($body?)),
+            TensorView::C32($v) => Ok(Tensor::from_typed::<Complex32>($body?)),
+            TensorView::C64($v) => Ok(Tensor::from_typed::<Complex64>($body?)),
+        }
+    };
+}
+
 macro_rules! dispatch_tensor_unary_with_bool_special_result {
     ($input:expr, |$tensor:ident| $body:expr, bool |$bool_tensor:ident| $bool_body:expr) => {{
         let input = $input;
@@ -238,6 +252,27 @@ fn host_view<'a, T: Copy + TensorScalar>(
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
+/// Borrow a read view as a strided view, keeping its strides and offset.
+fn read_host_view<'a, T, R>(
+    op: &'static str,
+    view: &'a TypedTensorView<'a, T, R>,
+) -> crate::Result<StridedView<'a, T, Identity>>
+where
+    T: Copy + TensorScalar,
+    R: tenferro_tensor::TensorRank,
+{
+    if view.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error(op));
+    }
+    StridedView::new(
+        view.host_storage()?,
+        view.shape(),
+        view.strides(),
+        view.offset(),
+    )
+    .map_err(|err| crate::Error::backend_source(op, err))
+}
+
 /// Diagonal view of `tensor` along `(axis_a, axis_b)` following the
 /// `ExtractDiag` contract: `axis_b` is removed and the diagonal lands at
 /// `axis_a` (`axis_a - 1` when `axis_a > axis_b`), matching
@@ -247,17 +282,16 @@ fn host_view<'a, T: Copy + TensorScalar>(
 /// for `axis_a > axis_b` the `axis_b` axis is moved to the trailing position
 /// before extracting; the strided primitive then removes it.
 fn extract_diagonal_view<'a, T: Copy + TensorScalar>(
-    tensor: &'a TypedTensor<T>,
+    view: &StridedView<'a, T, Identity>,
+    rank: usize,
     axis_a: usize,
     axis_b: usize,
 ) -> crate::Result<StridedView<'a, T, Identity>> {
-    let view = host_view("extract_diagonal", tensor)?;
     if axis_a < axis_b {
         return view
             .diagonal_view(&[(axis_a, axis_b)])
             .map_err(|err| crate::Error::backend_source("extract_diagonal", err));
     }
-    let rank = tensor.shape().len();
     let mut perm: Vec<usize> = (0..rank).filter(|&axis| axis != axis_b).collect();
     perm.push(axis_b);
     view.permute(&perm)
@@ -829,6 +863,72 @@ pub(crate) fn tril(input: &Tensor, k: i64) -> crate::Result<Tensor> {
     with_test_pool(|buffers| tril_with_pool(buffers, input, k))
 }
 
+/// Mask the lower triangle of a read, reading a borrowed view in place.
+pub(crate) fn tril_read_with_pool(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    k: i64,
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(input) => tril_with_pool(buffers, input, k),
+        TensorRead::View(view) => dispatch_tensor_view_with_bool_special_result!(
+            view,
+            |v| typed_tril_read(buffers, &v, k),
+            bool | v | typed_triangular_mask_read(buffers, &v, k, false, false)
+        ),
+    }
+}
+
+/// Mask the upper triangle of a read, reading a borrowed view in place.
+pub(crate) fn triu_read_with_pool(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    k: i64,
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(input) => triu_with_pool(buffers, input, k),
+        TensorRead::View(view) => dispatch_tensor_view_with_bool_special_result!(
+            view,
+            |v| typed_triu_read(buffers, &v, k),
+            bool | v | typed_triangular_mask_read(buffers, &v, k, true, false)
+        ),
+    }
+}
+
+/// Embed a read's diagonal, reading a borrowed view in place.
+pub(crate) fn embed_diagonal_read_with_pool(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    axis_a: usize,
+    axis_b: usize,
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(input) => embed_diagonal_with_pool(buffers, input, axis_a, axis_b),
+        TensorRead::View(view) => dispatch_tensor_view_with_bool_special_result!(
+            view,
+            |v| typed_embed_diagonal_read(buffers, &v, axis_a, axis_b),
+            bool | v | typed_embed_diagonal_read_with_fill(buffers, &v, axis_a, axis_b, false)
+        ),
+    }
+}
+
+/// Extract a read's diagonal, reading a borrowed view in place.
+pub(crate) fn extract_diagonal_read_with_pool(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    axis_a: usize,
+    axis_b: usize,
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(input) => extract_diagonal_with_pool(buffers, input, axis_a, axis_b),
+        TensorRead::View(view) => {
+            dispatch_tensor_view_unary_result!(view, |v| typed_extract_diagonal_read(
+                buffers, &v, axis_a, axis_b
+            ))
+        }
+    }
+}
+
 pub(crate) fn tril_with_pool(
     buffers: &mut BufferPool,
     input: &Tensor,
@@ -1152,7 +1252,8 @@ pub(crate) fn typed_extract_diagonal<T: Copy + Clone + Send + Sync + TensorScala
     validate_axis("extract_diagonal", axis_b, tensor.shape().len())?;
     validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
 
-    let diag = extract_diagonal_view(tensor, axis_a, axis_b)?;
+    let src = host_view("extract_diagonal", tensor)?;
+    let diag = extract_diagonal_view(&src, tensor.shape().len(), axis_a, axis_b)?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit(diag.dims()) };
     copy_into(&mut out.view_mut(), &diag)
@@ -1173,7 +1274,8 @@ where
     validate_axis("extract_diagonal", axis_b, tensor.shape().len())?;
     validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
 
-    let diag = extract_diagonal_view(tensor, axis_a, axis_b)?;
+    let src = host_view("extract_diagonal", tensor)?;
+    let diag = extract_diagonal_view(&src, tensor.shape().len(), axis_a, axis_b)?;
     let mut out = PooledUninitOutput::<T>::new(buffers, diag.dims())?;
     // INVARIANT: `copy_into_uninit` fully overwrites the destination and routes a
     // native-float strided copy to the permutation engine, serial or parallel.
@@ -1223,16 +1325,134 @@ where
         ));
     }
 
-    let n = tensor.shape()[axis_a];
-    let mut out_shape = tensor.shape().to_vec();
-    out_shape.insert(axis_b, n);
+    let src = host_view("embed_diagonal", tensor)?;
+    embed_diagonal_from_view(buffers, &src, axis_a, axis_b, zero)
+}
+
+/// Embed a borrowed read view on a diagonal, reading it in place.
+fn typed_embed_diagonal_read<T, R>(
+    buffers: &mut BufferPool,
+    view: &TypedTensorView<'_, T, R>,
+    axis_a: usize,
+    axis_b: usize,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Zero + Clone + PoolScalar + 'static,
+    R: tenferro_tensor::TensorRank,
+{
+    typed_embed_diagonal_read_with_fill(buffers, view, axis_a, axis_b, T::zero())
+}
+
+fn typed_embed_diagonal_read_with_fill<T, R>(
+    buffers: &mut BufferPool,
+    view: &TypedTensorView<'_, T, R>,
+    axis_a: usize,
+    axis_b: usize,
+    zero: T,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + 'static,
+    R: tenferro_tensor::TensorRank,
+{
+    validate_axis("embed_diagonal", axis_a, view.shape().len())?;
+    if axis_b > view.shape().len() {
+        return Err(crate::Error::axis_out_of_bounds(
+            "embed_diagonal",
+            axis_b,
+            view.shape().len(),
+        ));
+    }
+    let src = read_host_view("embed_diagonal", view)?;
+    embed_diagonal_from_view(buffers, &src, axis_a, axis_b, zero)
+}
+
+/// Mask the lower triangle of a borrowed read view, reading it in place.
+fn typed_tril_read<T, R>(
+    buffers: &mut BufferPool,
+    view: &TypedTensorView<'_, T, R>,
+    k: i64,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Zero + Clone + PoolScalar + 'static,
+    R: tenferro_tensor::TensorRank,
+{
+    typed_triangular_mask_read(buffers, view, k, false, T::zero())
+}
+
+/// Mask the upper triangle of a borrowed read view, reading it in place.
+fn typed_triu_read<T, R>(
+    buffers: &mut BufferPool,
+    view: &TypedTensorView<'_, T, R>,
+    k: i64,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Zero + Clone + PoolScalar + 'static,
+    R: tenferro_tensor::TensorRank,
+{
+    typed_triangular_mask_read(buffers, view, k, true, T::zero())
+}
+
+/// Mask a triangular region of a borrowed read view, reading it in place.
+fn typed_triangular_mask_read<T, R>(
+    buffers: &mut BufferPool,
+    view: &TypedTensorView<'_, T, R>,
+    k: i64,
+    upper: bool,
+    fill: T,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + 'static,
+    R: tenferro_tensor::TensorRank,
+{
+    let op = if upper { "triu" } else { "tril" };
+    let src = read_host_view(op, view)?;
+    let mut out = triangular_mask_from_view(buffers, op, &src, k, upper, fill)?;
+    out.set_placement(view.placement().clone());
+    Ok(out)
+}
+
+/// Extract the diagonal of a borrowed read view, reading it in place.
+fn typed_extract_diagonal_read<T, R>(
+    buffers: &mut BufferPool,
+    view: &TypedTensorView<'_, T, R>,
+    axis_a: usize,
+    axis_b: usize,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + 'static,
+    R: tenferro_tensor::TensorRank,
+{
+    validate_axis("extract_diagonal", axis_a, view.shape().len())?;
+    validate_axis("extract_diagonal", axis_b, view.shape().len())?;
+    validate_axes_distinct("extract_diagonal", axis_a, axis_b)?;
+    let src = read_host_view("extract_diagonal", view)?;
+    let diag = extract_diagonal_view(&src, view.shape().len(), axis_a, axis_b)?;
+    let mut out = PooledUninitOutput::<T>::new(buffers, diag.dims())?;
+    copy_into_uninit(&mut out.as_uninit_view_mut()?, &diag)
+        .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
+    // SAFETY: the successful diagonal copy writes every logical destination element.
+    unsafe { out.assume_init_recycled() }
+}
+
+/// Embed a strided source on a diagonal in a compact pooled output.
+fn embed_diagonal_from_view<T>(
+    buffers: &mut BufferPool,
+    src: &StridedView<'_, T, Identity>,
+    axis_a: usize,
+    axis_b: usize,
+    zero: T,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + 'static,
+{
+    let shape = src.dims();
+    let mut out_shape: Vec<usize> = shape.to_vec();
+    out_shape.insert(axis_b, shape[axis_a]);
     checked_shape_product("embed_diagonal", "output shape", &out_shape)?;
-    let input_data = typed_host_data("embed_diagonal", tensor)?;
     let mut out = PooledUninitOutput::<T>::new(buffers, out_shape)?;
-    strided_kernel::embed_diagonal_into_uninit(
+    strided_kernel::embed_diagonal_view_into_uninit(
         out.as_uninit_slice_mut(),
-        input_data,
-        tensor.shape(),
+        src,
         axis_a,
         axis_b,
         zero,
@@ -1344,21 +1564,44 @@ where
         return tensor.duplicate();
     }
 
-    let input = typed_host_data(op, tensor)?;
-    let mut out = PooledUninitOutput::<T>::new(buffers, tensor.shape())?;
-    strided_kernel::triangular_mask_into_uninit(
+    let src = host_view(op, tensor)?;
+    let mut out = triangular_mask_from_view(buffers, op, &src, k, upper, fill)?;
+    out.set_placement(tensor.placement().clone());
+    Ok(out)
+}
+
+/// Mask a triangular region of `src` into a compact pooled output.
+///
+/// The source layout is `src` itself, so a borrowed view is read in place.
+fn triangular_mask_from_view<T>(
+    buffers: &mut BufferPool,
+    op: &'static str,
+    src: &StridedView<'_, T, Identity>,
+    k: i64,
+    upper: bool,
+    fill: T,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + 'static,
+{
+    let shape = src.dims();
+    if shape.len() < 2 {
+        return Err(crate::Error::rank_mismatch(op, 2, shape.len()));
+    }
+    if shape.contains(&0) {
+        return TypedTensor::<T>::from_vec_col_major(shape.to_vec(), Vec::new());
+    }
+    let mut out = PooledUninitOutput::<T>::new(buffers, shape)?;
+    strided_kernel::triangular_mask_view_into_uninit(
         out.as_uninit_slice_mut(),
-        input,
-        tensor.shape(),
+        src,
         k,
         upper,
         fill,
     )
     .map_err(|err| crate::Error::backend_source(op, err))?;
-    // SAFETY: strided wrote every kept and masked output element.
-    let mut out = unsafe { out.assume_init_recycled()? };
-    out.set_placement(tensor.placement().clone());
-    Ok(out)
+    // SAFETY: the kernel writes every kept and masked output element.
+    unsafe { out.assume_init_recycled() }
 }
 
 #[cfg(test)]

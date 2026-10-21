@@ -1936,6 +1936,41 @@ fn read_entries_consume_views_without_staging() {
     assert_eq!(engine.resources.read_stagings(), before);
     assert_eq!(gathered.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
+    // The structural reads share the same descriptor path.
+    let before = engine.resources.read_stagings();
+    let lower = engine
+        .tril_read(TensorRead::from_view(TensorView::F64(view())), 0)
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(
+        lower.as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 0.0, 4.0, 6.0]
+    );
+
+    let before = engine.resources.read_stagings();
+    let upper = engine
+        .triu_read(TensorRead::from_view(TensorView::F64(view())), 0)
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(
+        upper.as_slice::<f64>().unwrap(),
+        &[1.0, 0.0, 0.0, 2.0, 4.0, 0.0]
+    );
+
+    let before = engine.resources.read_stagings();
+    let diagonal = engine
+        .extract_diagonal_read(TensorRead::from_view(TensorView::F64(view())), 0, 1)
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(diagonal.as_slice::<f64>().unwrap(), &[1.0, 4.0]);
+
+    let before = engine.resources.read_stagings();
+    let embedded = engine
+        .embed_diagonal_read(TensorRead::from_view(TensorView::F64(view())), 0, 1)
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(embedded.shape(), &[3, 3, 2]);
+
     // `to_contiguous_read` is the canonicalization itself: copying a view is its
     // contract, so it is the live positive control for the counter.
     let before = engine.resources.read_stagings();
