@@ -80,6 +80,10 @@ on the same cores.
 - Accuracy of the fused kernels was checked against an mpmath oracle on 2^18
   samples per kernel and dtype; the crate's MPFR suites could not run on this
   host (no `m4` to build `gmp-mpfr-sys`), so they run in that crate's CI.
-- This branch builds only with elem-simd-math, strided-perm/strided-basic and
-  tcontract (plus cpueinsum, which pins tcontract exactly) released from their
-  fix branches and the pins in `Cargo.toml` moved to those releases.
+- The upstream fixes are released (elem-simd-math 0.1.1, strided-perm 0.6.1,
+  strided-basic 0.6.4, tcontract 0.4.3, cpueinsum 0.4.3). With them the CPU
+  stack's exact pins became caret requirements at the patch each API needs
+  and `Cargo.lock` is committed: Cargo already unifies one compatible line to
+  one version, so the exact pins bought nothing the lock does not, while they
+  forced a coordinated release for every upstream patch. The GPU fork pins
+  (`t4a-cubecl*`, `t4a-cubek*`) are deliberately left exact.
