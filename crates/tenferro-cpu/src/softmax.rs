@@ -27,12 +27,28 @@ pub(crate) fn softmax_read_with_pool(
     input: TensorRead<'_>,
     axis: usize,
 ) -> crate::Result<Option<Tensor>> {
-    match input {
-        TensorRead::Tensor(tensor) => softmax_tensor(tensor, axis),
-        view => {
-            let tensor = materialize_tensor_read(buffers, "softmax", view)?;
+    let shape = input.shape();
+    if axis != 0 || shape.is_empty() || shape[0] == 0 {
+        return Ok(None);
+    }
+    match input.dtype() {
+        DType::F32 => {
+            if let Ok(data) = input.as_slice::<f32>() {
+                let output = softmax_axis0_f32(data, shape[0]);
+                return Ok(Some(Tensor::from_vec_col_major(shape.to_vec(), output)?));
+            }
+            let tensor = materialize_tensor_read(buffers, "softmax", input)?;
             softmax_tensor(&tensor, axis)
         }
+        DType::F64 => {
+            if let Ok(data) = input.as_slice::<f64>() {
+                let output = softmax_axis0_f64(data, shape[0]);
+                return Ok(Some(Tensor::from_vec_col_major(shape.to_vec(), output)?));
+            }
+            let tensor = materialize_tensor_read(buffers, "softmax", input)?;
+            softmax_tensor(&tensor, axis)
+        }
+        _ => Ok(None),
     }
 }
 
