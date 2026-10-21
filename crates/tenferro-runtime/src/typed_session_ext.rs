@@ -7,12 +7,11 @@ use crate::{CompareDir, DotGeneralConfig, Engine, TensorScalar, TypedTensor};
 /// AD-free tensor operations on [`TypedTensor`], run on a borrowed engine.
 ///
 /// The methods mirror [`crate::TensorSessionOpsExt`] for a statically known
-/// scalar type, with the engine last. Operations whose backend hooks take
-/// owned dtype-erased tensors (indexing, padding, concatenation, triangular
-/// and diagonal masks) are offered on [`crate::Tensor`] only: a typed form
-/// would have to copy the input first. Move a typed tensor into that surface
-/// with `Tensor::from_typed`, which does not copy. Selection with a bool mask
-/// is [`crate::TypedTensorMaskSessionOpsExt::where_select`].
+/// scalar type, with the engine last. Indexing, padding, concatenation and the
+/// triangular/diagonal masks are included: they go through the `*_read` hooks,
+/// so a typed tensor is borrowed rather than copied before the kernel.
+/// Selection with a bool mask is
+/// [`crate::TypedTensorMaskSessionOpsExt::where_select`].
 ///
 /// # Examples
 ///
@@ -1412,6 +1411,144 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
         eps: f64,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
+
+    /// Gather windows of this tensor at `indices` on an engine (StableHLO `gather`).
+    ///
+    /// Mirrors [`crate::TensorSessionOpsExt::gather`]; the index tensor stays
+    /// dtype-erased, as on that surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn gather(
+        &self,
+        indices: &tenferro_tensor::Tensor,
+        config: crate::GatherConfig,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Scatter `updates` into a copy of this tensor at `indices` on an engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn scatter(
+        &self,
+        indices: &tenferro_tensor::Tensor,
+        updates: &tenferro_tensor::Tensor,
+        config: crate::ScatterConfig,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Slice this tensor with start, limit and stride per axis on an engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn slice(
+        &self,
+        config: crate::SliceConfig,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Slice at runtime `starts` with static `sizes` on an engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn dynamic_slice(
+        &self,
+        starts: &tenferro_tensor::Tensor,
+        sizes: &[usize],
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Pad this tensor with zeros on an engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn pad(
+        &self,
+        config: crate::PadConfig,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Concatenate typed tensors along `axis` on an engine.
+    ///
+    /// N-ary, so it stays an associated function, matching the erased surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn concatenate(
+        inputs: &[&TypedTensor<T>],
+        axis: usize,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>
+    where
+        Self: Sized;
+    /// Reverse the elements along `axes` on an engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn reverse(
+        &self,
+        axes: &[usize],
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Zero the elements below the `k`-th diagonal on an engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn tril(&self, k: i64, session: &mut dyn Engine) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Zero the elements above the `k`-th diagonal on an engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn triu(&self, k: i64, session: &mut dyn Engine) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Extract the diagonal over `axis_a` and `axis_b` on an engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn extract_diag(
+        &self,
+        axis_a: usize,
+        axis_b: usize,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Embed this tensor along the diagonal of `axis_a` and `axis_b` on an engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for an invalid shape,
+    /// axis, dtype or configuration, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn embed_diag(
+        &self,
+        axis_a: usize,
+        axis_b: usize,
+        session: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<TypedTensor<T>>;
 }
 
 /// Engine-explicit bool-mask operations for typed tensors.
@@ -1469,4 +1606,52 @@ pub trait TypedTensorMaskSessionOpsExt {
         on_false: &TypedTensor<U>,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<TypedTensor<U>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    /// Method names declared between a trait header and its closing brace.
+    fn method_names<'a>(source: &'a str, header: &str) -> BTreeSet<&'a str> {
+        let body = source
+            .split_once(header)
+            .unwrap_or_else(|| panic!("trait header not found: {header}"))
+            .1;
+        let body = body.split_once("\n}\n").expect("trait body ends").0;
+        body.lines()
+            .filter_map(|line| line.strip_prefix("    fn "))
+            .filter_map(|rest| rest.split_once('(').map(|(name, _)| name))
+            .collect()
+    }
+
+    /// #2214: an operation may not land on the erased surface alone.
+    ///
+    /// The exemption list is the reviewed set of erased-only operations:
+    /// `convert` and `cast` change the dtype of a dtype-erased tensor (a typed
+    /// tensor has one dtype), `take_along_axis` is still owner-only on the
+    /// erased surface, and `where_select` is on the bool-mask trait. Anything
+    /// else missing here is a new gap.
+    #[test]
+    fn typed_surface_covers_the_erased_surface_except_documented_exemptions() {
+        let erased = method_names(
+            include_str!("session_ext.rs"),
+            "pub trait TensorSessionOpsExt {",
+        );
+        let typed = method_names(
+            include_str!("typed_session_ext.rs"),
+            "pub trait TypedTensorSessionOpsExt<T: TensorScalar> {",
+        );
+        let exempt: BTreeSet<&str> = ["convert", "cast", "take_along_axis", "where_select"]
+            .into_iter()
+            .collect();
+        let missing: Vec<&&str> = erased
+            .difference(&typed)
+            .filter(|name| !exempt.contains(*name))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the typed surface is missing {missing:?}; add the wrapper and its read hook, or extend the reviewed exemption list"
+        );
+    }
 }

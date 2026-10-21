@@ -444,6 +444,109 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         })?;
         into_typed_result("rms_norm", out)
     }
+
+    fn gather(
+        &self,
+        indices: &Tensor,
+        config: crate::GatherConfig,
+        session: &mut dyn Engine,
+    ) -> Result<TypedTensor<T>> {
+        let out = session.gather_read(
+            T::tensor_read(self),
+            TensorRead::from_tensor(indices),
+            &config,
+        )?;
+        into_typed_result("gather", out)
+    }
+
+    fn scatter(
+        &self,
+        indices: &Tensor,
+        updates: &Tensor,
+        config: crate::ScatterConfig,
+        session: &mut dyn Engine,
+    ) -> Result<TypedTensor<T>> {
+        let out = session.scatter_read(
+            T::tensor_read(self),
+            TensorRead::from_tensor(indices),
+            TensorRead::from_tensor(updates),
+            &config,
+        )?;
+        into_typed_result("scatter", out)
+    }
+
+    fn slice(
+        &self,
+        config: crate::SliceConfig,
+        session: &mut dyn Engine,
+    ) -> Result<TypedTensor<T>> {
+        let out = session.slice_read(T::tensor_read(self), &config)?;
+        into_typed_result("slice", out)
+    }
+
+    fn dynamic_slice(
+        &self,
+        starts: &Tensor,
+        sizes: &[usize],
+        session: &mut dyn Engine,
+    ) -> Result<TypedTensor<T>> {
+        let out = session.dynamic_slice_read(
+            T::tensor_read(self),
+            TensorRead::from_tensor(starts),
+            sizes,
+        )?;
+        into_typed_result("dynamic_slice", out)
+    }
+
+    fn pad(&self, config: crate::PadConfig, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
+        let out = session.pad_read(T::tensor_read(self), &config)?;
+        into_typed_result("pad", out)
+    }
+
+    fn concatenate(
+        inputs: &[&TypedTensor<T>],
+        axis: usize,
+        session: &mut dyn Engine,
+    ) -> Result<TypedTensor<T>> {
+        let reads: Vec<TensorRead<'_>> = inputs.iter().map(|input| T::tensor_read(input)).collect();
+        let out = session.concatenate_read(&reads, axis)?;
+        into_typed_result("concatenate", out)
+    }
+
+    fn reverse(&self, axes: &[usize], session: &mut dyn Engine) -> Result<TypedTensor<T>> {
+        let out = session.reverse_read(T::tensor_read(self), axes)?;
+        into_typed_result("reverse", out)
+    }
+
+    fn tril(&self, k: i64, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
+        let out = session.tril_read(T::tensor_read(self), k)?;
+        into_typed_result("tril", out)
+    }
+
+    fn triu(&self, k: i64, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
+        let out = session.triu_read(T::tensor_read(self), k)?;
+        into_typed_result("triu", out)
+    }
+
+    fn extract_diag(
+        &self,
+        axis_a: usize,
+        axis_b: usize,
+        session: &mut dyn Engine,
+    ) -> Result<TypedTensor<T>> {
+        let out = session.extract_diagonal_read(T::tensor_read(self), axis_a, axis_b)?;
+        into_typed_result("extract_diag", out)
+    }
+
+    fn embed_diag(
+        &self,
+        axis_a: usize,
+        axis_b: usize,
+        session: &mut dyn Engine,
+    ) -> Result<TypedTensor<T>> {
+        let out = session.embed_diagonal_read(T::tensor_read(self), axis_a, axis_b)?;
+        into_typed_result("embed_diag", out)
+    }
 }
 
 impl TypedTensorMaskSessionOpsExt for TypedTensor<bool> {
