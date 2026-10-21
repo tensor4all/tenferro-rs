@@ -83,6 +83,7 @@ fn softmax_axis0_f32(data: &[f32], axis_len: usize) -> Vec<f32> {
             let mut temp = vec![0.0f32; group.min(in_task.len())];
             for (out_chunk, in_chunk) in out_task.chunks_mut(group).zip(in_task.chunks(group)) {
                 let temp = &mut temp[..in_chunk.len()];
+                #[cfg(target_arch = "x86_64")]
                 if avx2_available() {
                     // SAFETY: the host reports AVX2; the group functions touch
                     // only the validated slices.
@@ -90,6 +91,8 @@ fn softmax_axis0_f32(data: &[f32], axis_len: usize) -> Vec<f32> {
                 } else {
                     shift_group_f32(in_chunk, temp, axis_len);
                 }
+                #[cfg(not(target_arch = "x86_64"))]
+                shift_group_f32(in_chunk, temp, axis_len);
                 // One vectorized exp per cache-sized group, not per slice.
                 // INVARIANT: `apply` writes every output element before
                 // returning true; the fallback writes every element otherwise.
@@ -104,11 +107,14 @@ fn softmax_axis0_f32(data: &[f32], axis_len: usize) -> Vec<f32> {
                         *out = value.exp();
                     }
                 }
+                #[cfg(target_arch = "x86_64")]
                 if avx2_available() {
                     unsafe { scale_group_f32_avx2(out_chunk, axis_len) };
                 } else {
                     scale_group_f32(out_chunk, axis_len);
                 }
+                #[cfg(not(target_arch = "x86_64"))]
+                scale_group_f32(out_chunk, axis_len);
             }
         });
     output

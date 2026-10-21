@@ -371,7 +371,7 @@ fn output_shape(in_shape: &[usize], spec: &FftPlanSpec) -> tenferro_tensor::Resu
 // INVARIANT: this scalar-dispatched helper carries the validated spec and the
 // existing execution resources; it does not define a second public descriptor.
 #[allow(clippy::too_many_arguments)]
-fn transform<I: TensorScalar, T: CachedFftPlanScalar, O: PoolScalar>(
+fn transform<I: TensorScalar, T: CachedFftPlanScalar + PoolScalar, O: PoolScalar>(
     input: &TypedTensor<I>,
     spec: &FftPlanSpec,
     plans: &mut (impl FftPlanProvider + ?Sized),
@@ -447,7 +447,7 @@ where
     }
 }
 
-fn pooled_transform<T: CachedFftPlanScalar, O: PoolScalar>(
+fn pooled_transform<T: CachedFftPlanScalar + PoolScalar, O: PoolScalar>(
     input: lanes::Input<'_, T>,
     in_shape: &[usize],
     spec: &FftPlanSpec,

@@ -261,13 +261,13 @@ pub(super) unsafe fn execute_real<T, O>(
     operation: FftOperation,
     norm: FftNorm,
     plans: &mut (impl FftPlanProvider + ?Sized),
-    _buffers: &mut BufferPool,
+    buffers: &mut BufferPool,
     output: &mut [MaybeUninit<O>],
     threads: LaneThreads<'_>,
     project: impl Fn(Complex<T>) -> O + Sync,
 ) -> tenferro_tensor::Result<()>
 where
-    T: CachedFftPlanScalar,
+    T: CachedFftPlanScalar + PoolScalar,
     O: Send,
     Complex<T>: PoolScalar,
 {
@@ -317,13 +317,24 @@ where
     } else {
         lane_len
     };
-    let mut real_lanes: Vec<Vec<T>> = (0..jobs).map(|_| vec![T::zero(); real_len]).collect();
+    let scratch_len = match &plan {
+        RealPlan::Forward(plan) => plan.get_scratch_len(),
+        RealPlan::Inverse(plan) => plan.get_scratch_len(),
+    };
+    // INVARIANT: realfft reads padded lanes and takes initialized scratch.
+    let mut real_lanes: Vec<Vec<T>> = (0..jobs)
+        .map(|_| buffers.acquire_zeroed::<T>(real_len))
+        .collect();
     let mut complex_lanes: Vec<Vec<Complex<T>>> = (0..jobs)
-        .map(|_| vec![Complex::zero(); complex_len])
+        .map(|_| buffers.acquire_zeroed::<Complex<T>>(complex_len))
+        .collect();
+    let mut scratch_lanes: Vec<Vec<Complex<T>>> = (0..jobs)
+        .map(|_| buffers.acquire_zeroed::<Complex<T>>(scratch_len))
         .collect();
     let run = |job: usize,
                real_lane: &mut Vec<T>,
-               complex_lane: &mut Vec<Complex<T>>|
+               complex_lane: &mut Vec<Complex<T>>,
+               scratch: &mut Vec<Complex<T>>|
      -> tenferro_tensor::Result<()> {
         let start = job * per_job;
         let end = start.saturating_add(per_job).min(lanes);
@@ -352,9 +363,10 @@ where
                         *slot = values[offset];
                     }
                     if let RealPlan::Forward(plan) = &plan {
-                        plan.process(
+                        plan.process_with_scratch(
                             real_lane.as_mut_slice(),
                             complex_lane[..spectrum_len].as_mut(),
+                            scratch.as_mut_slice(),
                         )
                         .map_err(|error| {
                             tenferro_tensor::Error::runtime_state(
@@ -407,15 +419,17 @@ where
                         complex_lane[last] = Complex::new(complex_lane[last].re, T::zero());
                     }
                     if let RealPlan::Inverse(plan) = &plan {
-                        plan.process(complex_lane.as_mut_slice(), real_lane.as_mut_slice())
-                            .map_err(|error| {
-                                tenferro_tensor::Error::runtime_state(
-                                    "fft",
-                                    format!(
-                                        "complex-to-real plan rejected the lane buffers: {error}"
-                                    ),
-                                )
-                            })?;
+                        plan.process_with_scratch(
+                            complex_lane.as_mut_slice(),
+                            real_lane.as_mut_slice(),
+                            scratch.as_mut_slice(),
+                        )
+                        .map_err(|error| {
+                            tenferro_tensor::Error::runtime_state(
+                                "fft",
+                                format!("complex-to-real plan rejected the lane buffers: {error}"),
+                            )
+                        })?;
                     }
                     for (value, offset) in real_lane
                         .iter()
@@ -451,19 +465,37 @@ where
         }
         Ok(())
     };
-    if jobs == 1 {
-        run(0, &mut real_lanes[0], &mut complex_lanes[0])
+    let result = if jobs == 1 {
+        run(
+            0,
+            &mut real_lanes[0],
+            &mut complex_lanes[0],
+            &mut scratch_lanes[0],
+        )
     } else {
         let mut fan_out = || {
             real_lanes
                 .par_iter_mut()
                 .zip(complex_lanes.par_iter_mut())
+                .zip(scratch_lanes.par_iter_mut())
                 .enumerate()
-                .try_for_each(|(job, (real_lane, complex_lane))| run(job, real_lane, complex_lane))
+                .try_for_each(|(job, ((real_lane, complex_lane), scratch))| {
+                    run(job, real_lane, complex_lane, scratch)
+                })
         };
         match threads.pool {
             Some(pool) if pool.current_thread_index().is_none() => pool.install(fan_out),
             _ => fan_out(),
         }
+    };
+    for lane in real_lanes {
+        T::pool_release(buffers, lane);
     }
+    for lane in complex_lanes {
+        Complex::<T>::pool_release(buffers, lane);
+    }
+    for scratch in scratch_lanes {
+        Complex::<T>::pool_release(buffers, scratch);
+    }
+    result
 }

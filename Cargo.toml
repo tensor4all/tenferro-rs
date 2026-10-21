@@ -95,16 +95,12 @@ strided-basic = { version = "=0.6.3", default-features = false }
 strided-fused = { version = "=0.6.0", default-features = false, features = ["parallel"] }
 strided-kernel = { version = "=0.6.0", features = ["parallel"] }
 libloading = "0.8"
-# One faer identity for the whole CPU stack (#1939): the pinned `tlinalg 0.4.1`
-# resolves `t4a-faer =0.24.7` (its own manifest renames it via
-# `package = "t4a-faer"`), and a second, crates.io `faer` would build a second
-# faer into the binary and give downstream direct calls different `Par`/`Mat`
-# types than the ones `tenferro_cpu::faer` re-exports. `t4a-faer 0.24.7` is the
-# fork's release from main: it carries the evd eigenvector-normalization fix
-# (#2131) and the householder row-split gate for tensor4all/faer#12.
-# tenferro-cpu re-exports this build as `tenferro_cpu::faer` under `native`.
-# The fork keeps the 0.24 API and the `faer` library name.
-faer = { package = "t4a-faer", version = "=0.24.7", default-features = false, features = ["std", "rayon"] }
+# One faer identity for the native CPU stack (#1939): tlinalg 0.4.4 and this
+# dependency use compatible t4a-faer ranges. 0.24.8 fixes divide-and-conquer SVD
+# secular-root stagnation (tensor4all/faer#28); later patch fixes need only a
+# targeted lock update, not another manifest-bump cascade. Keep the `faer` key
+# and library name: tenferro-cpu re-exports this build as `tenferro_cpu::faer`.
+faer = { package = "t4a-faer", version = "0.24.8", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"
 cblas-inject = "0.1.1"
 blas-src = { version = "0.14", default-features = false }

@@ -111,6 +111,7 @@ class BuildArtifactContracts(unittest.TestCase):
         faer = dependencies["faer"]
         self.assertFalse(faer["default-features"])
         self.assertEqual(set(faer["features"]), {"std", "rayon"})
+        self.assertRegex(faer["version"], r"^\^?\d+\.\d+\.\d+$")
 
         # The registry strided release the CPU contraction/linalg stack is
         # developed and tested against. The requirement is asserted by shape, not
@@ -148,10 +149,9 @@ class BuildArtifactContracts(unittest.TestCase):
 
         self.assertNotIn("strided-einsum2", dependencies)
 
-        # The provider crates that take this crate's views are pinned the same way,
-        # from the registry and exactly: that is what keeps one strided source in
-        # the resolved graph. (The lock is not committed here, so the graph itself
-        # is checked by the build, not by this test.)
+        # Providers stay on registry releases. The native linalg provider admits
+        # compatible patches so faer fixes do not force manifest-bump cascades;
+        # the other providers' existing exact requirements are unchanged.
         providers = (
             ("Cargo.toml", ("cpueinsum", "cpueinsum-blas")),
             ("crates/tenferro-linalg/Cargo.toml", ("tlinalg", "tlinalg-blas")),
@@ -163,11 +163,14 @@ class BuildArtifactContracts(unittest.TestCase):
                 with self.subTest(provider=name):
                     spec = dependency_spec(section[name])
                     self.assertNotIn("git", spec)
-                    self.assertTrue(
-                        isinstance(spec["version"], str)
-                        and spec["version"].startswith("="),
-                        f"{name} must pin an exact registry release",
-                    )
+                    if name == "tlinalg":
+                        self.assertRegex(spec["version"], r"^\^?\d+\.\d+\.\d+$")
+                    else:
+                        self.assertTrue(
+                            isinstance(spec["version"], str)
+                            and spec["version"].startswith("="),
+                            f"{name} must pin an exact registry release",
+                        )
 
     def test_linalg_provider_dependencies_are_isolated(self) -> None:
         manifest = tomllib.loads(
