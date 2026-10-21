@@ -85,6 +85,19 @@
   prepare time, i.e. a second prepared representation to keep in step with the
   program; a codegen-style specialization of a prepared program is #1938
   territory. This batch stops before that.
+- Against JAX on the same host and core (JAX 0.12.0 CPU, x64 enabled, one
+  thread, `XLA_FLAGS=--xla_cpu_multi_thread_eigen=false`, 50 warm-ups then
+  median of 11 batches of 200 jitted calls, Python dispatch included exactly as
+  the bench harness counts it), the same `grad_sum_qr_vjp` loss measures 13.50 /
+  15.15 / 27.95 µs at 2x2 / 4x4 / 8x8, against this change's 50.7 / 51.0 / 54.0
+  µs: 3.8x, 3.4x and 1.9x, from 5.3x, 4.8x and 2.7x before it. JAX's own
+  `loss`-only arm costs 10.0 / 10.5 / 12.9 µs, so most of its 2x2 time is its
+  per-call dispatch and the VJP itself adds ~3.5 µs: a fused XLA executable
+  beats a 25-command replay whose commands cost ~1.4-2.0 µs each, while this
+  runtime's fixed per-run cost (~3.6 µs) is already below JAX's dispatch cost.
+  Closing the rest needs either a fused CPU region (the backend declines below
+  16K elements) or a specialized prepared program (#1938), not more trimming of
+  the general scheduler.
 - Reproducer: `cargo bench -p tenferro-linalg --features autodiff --bench
   traced_small_ad_overhead` (see the bench module documentation for the
   environment and the protocol).
