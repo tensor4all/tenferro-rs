@@ -104,22 +104,12 @@ fn softmax_axis0_f32(data: &[f32], axis_len: usize, output: &mut [MaybeUninit<f3
             let mut temp = vec![0.0f32; group.min(in_task.len())];
             for (out_chunk, in_chunk) in out_task.chunks_mut(group).zip(in_task.chunks(group)) {
                 let temp = &mut temp[..in_chunk.len()];
-                if avx2_available() {
-                    // SAFETY: the host reports AVX2; the group functions touch
-                    // only the validated slices.
-                    unsafe { shift_group_f32_avx2(in_chunk, temp, axis_len) };
-                } else {
-                    shift_group_f32(in_chunk, temp, axis_len);
-                }
+                shift_group_f32_best(in_chunk, temp, axis_len);
                 // One vectorized exp per cache-sized group, not per slice.
                 exp_into(temp, out_chunk);
                 // SAFETY: `exp_into` wrote every element of the chunk.
                 let out_chunk = unsafe { initialized(out_chunk) };
-                if avx2_available() {
-                    unsafe { scale_group_f32_avx2(out_chunk, axis_len) };
-                } else {
-                    scale_group_f32(out_chunk, axis_len);
-                }
+                scale_group_f32_best(out_chunk, axis_len);
             }
         });
 }
@@ -145,6 +135,33 @@ fn softmax_axis0_f64(data: &[f64], axis_len: usize, output: &mut [MaybeUninit<f6
                 scale_group_f64(out_chunk, axis_len);
             }
         });
+}
+
+/// The AVX2 shift where the host has it, the scalar group function elsewhere.
+fn shift_group_f32_best(src: &[f32], dst: &mut [f32], axis_len: usize) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if avx2_available() {
+            // SAFETY: the host reports AVX2; the group functions touch only
+            // the validated slices.
+            unsafe { shift_group_f32_avx2(src, dst, axis_len) };
+            return;
+        }
+    }
+    shift_group_f32(src, dst, axis_len);
+}
+
+/// The AVX2 scale where the host has it, the scalar group function elsewhere.
+fn scale_group_f32_best(data: &mut [f32], axis_len: usize) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if avx2_available() {
+            // SAFETY: as `shift_group_f32_best`.
+            unsafe { scale_group_f32_avx2(data, axis_len) };
+            return;
+        }
+    }
+    scale_group_f32(data, axis_len);
 }
 
 #[cfg(target_arch = "x86_64")]
