@@ -112,10 +112,12 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertFalse(faer["default-features"])
         self.assertEqual(set(faer["features"]), {"std", "rayon"})
 
-        # The registry strided release the CPU contraction/linalg stack is
-        # developed and tested against. The requirement is asserted by shape, not
-        # by number: a release bump is a pin change, and hard-coding the version
-        # here would make every bump edit this test as well.
+        # The registry strided release line the CPU contraction/linalg stack is
+        # developed and tested against. Requirements are caret ranges at the
+        # patch each API needs, never exact pins and never git: Cargo unifies
+        # one compatible line to one version, and the committed `Cargo.lock`
+        # fixes the exact versions a build uses. The requirement is asserted by
+        # shape, not by number, so a bump does not edit this test.
         strided = (
             "strided-view",
             "strided-traits",
@@ -131,13 +133,13 @@ class BuildArtifactContracts(unittest.TestCase):
                 self.assertNotIn("git", spec)
                 version = spec["version"]
                 self.assertTrue(
-                    isinstance(version, str) and version.startswith("="),
-                    f"{name} must pin an exact registry release, got {version!r}",
+                    isinstance(version, str) and version[:1].isdigit(),
+                    f"{name} must be a caret registry requirement, got {version!r}",
                 )
                 required.add(version)
         # One release *line* for all of them, so the provider crates (cpueinsum,
         # tlinalg) can meet this crate's `StridedView` at a crate boundary. The family
-        # publishes independent patches -- `strided-basic 0.5.1` with the core at 0.5.0
+        # publishes independent patches -- `strided-basic 0.6.4` with the core at 0.6.0
         # -- so the condition is the release line, not one identical string; the
         # resolved graph and the compiled type boundaries are checked by the build.
         self.assertEqual(
@@ -148,10 +150,9 @@ class BuildArtifactContracts(unittest.TestCase):
 
         self.assertNotIn("strided-einsum2", dependencies)
 
-        # The provider crates that take this crate's views are pinned the same way,
-        # from the registry and exactly: that is what keeps one strided source in
-        # the resolved graph. (The lock is not committed here, so the graph itself
-        # is checked by the build, not by this test.)
+        # The provider crates that take this crate's views follow the same shape:
+        # registry caret requirements, so one strided source resolves in the
+        # graph; the committed lock records which versions.
         providers = (
             ("Cargo.toml", ("cpueinsum", "cpueinsum-blas")),
             ("crates/tenferro-linalg/Cargo.toml", ("tlinalg", "tlinalg-blas")),
@@ -165,9 +166,12 @@ class BuildArtifactContracts(unittest.TestCase):
                     self.assertNotIn("git", spec)
                     self.assertTrue(
                         isinstance(spec["version"], str)
-                        and spec["version"].startswith("="),
-                        f"{name} must pin an exact registry release",
+                        and spec["version"][:1].isdigit(),
+                        f"{name} must be a caret registry requirement",
                     )
+
+        # The lockfile is what makes the resolved graph reproducible.
+        self.assertTrue((ROOT / "Cargo.lock").is_file())
 
     def test_linalg_provider_dependencies_are_isolated(self) -> None:
         manifest = tomllib.loads(
