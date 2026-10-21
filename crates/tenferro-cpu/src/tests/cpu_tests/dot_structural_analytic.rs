@@ -1771,8 +1771,9 @@ fn dot_read_hooks_do_not_stage_view_operands() {
 #[test]
 fn read_entries_consume_views_without_staging() {
     use tenferro_tensor::{
-        Engine, SessionCachedDot, TensorAnalytic, TensorDot, TensorElementwise, TensorReduction,
-        TensorStructural, TensorValue,
+        Engine, SessionCachedDot, SliceConfig, TensorAnalytic, TensorDot, TensorElementwise,
+        TensorIndexing, TensorReduction, TensorStructural, TensorValue, TensorView,
+        TypedTensorView,
     };
 
     let a = TensorValue::from_tensor(Tensor::from_typed::<f64>(
@@ -1856,6 +1857,25 @@ fn read_entries_consume_views_without_staging() {
             &dot_config
         )
     );
+
+    // A non-contiguous (transposed) view reaches the slice kernel through its
+    // own strides: it must neither stage a copy nor read the wrong elements.
+    let transposed_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let transposed =
+        TypedTensorView::from_slice(vec![3, 2], vec![2, 1], 0, &transposed_data).unwrap();
+    let before = engine.resources.read_stagings();
+    let sliced = engine
+        .slice_read(
+            TensorRead::from_view(TensorView::F64(transposed)),
+            &SliceConfig {
+                starts: vec![0, 0],
+                limits: vec![2, 2],
+                strides: vec![1, 1],
+            },
+        )
+        .unwrap();
+    assert_eq!(engine.resources.read_stagings(), before);
+    assert_eq!(sliced.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
 
     // `to_contiguous_read` is the canonicalization itself: copying a view is its
     // contract, so it is the live positive control for the counter.

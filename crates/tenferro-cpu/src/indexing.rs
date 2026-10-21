@@ -9,13 +9,14 @@ use strided_kernel::{
 use tinyvec::TinyVec;
 
 use super::indexed_plan_cache::{IndexedPlanFamily, IndexedPlanKey};
+use super::operand::{operand_from_view, Operand};
 use super::typed_host_data;
 use super::PooledUninitOutput;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::CpuPlanCache;
 use tenferro_tensor::TensorScalar;
 use tenferro_tensor::{DType, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
-use tenferro_tensor::{Tensor, TypedTensor};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensor, TypedTensorView};
 
 type InlineStrides = TinyVec<[isize; 8]>;
 
@@ -377,6 +378,56 @@ pub(crate) fn try_slice_with_pool(
     dispatch_tensor_unary_result!(input, |t| typed_slice(buffers, exec_context, t, config))
 }
 
+/// Slice a read, keeping a borrowed view's layout instead of staging it.
+pub(crate) fn slice_read_with_pool(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    input: TensorRead<'_>,
+    config: &SliceConfig,
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(input) => try_slice_with_pool(buffers, exec_context, input, config),
+        TensorRead::View(view) => match view {
+            TensorView::F32(view) => Ok(Tensor::from_typed::<f32>(typed_slice_view(
+                buffers,
+                exec_context,
+                &view,
+                config,
+            )?)),
+            TensorView::F64(view) => Ok(Tensor::from_typed::<f64>(typed_slice_view(
+                buffers,
+                exec_context,
+                &view,
+                config,
+            )?)),
+            TensorView::I32(view) => Ok(Tensor::from_typed::<i32>(typed_slice_view(
+                buffers,
+                exec_context,
+                &view,
+                config,
+            )?)),
+            TensorView::I64(view) => Ok(Tensor::from_typed::<i64>(typed_slice_view(
+                buffers,
+                exec_context,
+                &view,
+                config,
+            )?)),
+            TensorView::Bool(view) => Ok(Tensor::from_typed::<bool>(typed_slice_view(
+                buffers,
+                exec_context,
+                &view,
+                config,
+            )?)),
+            TensorView::C32(view) => Ok(Tensor::from_typed::<tenferro_tensor::Complex32>(
+                typed_slice_view(buffers, exec_context, &view, config)?,
+            )),
+            TensorView::C64(view) => Ok(Tensor::from_typed::<tenferro_tensor::Complex64>(
+                typed_slice_view(buffers, exec_context, &view, config)?,
+            )),
+        },
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn dynamic_slice(
     input: &Tensor,
@@ -523,7 +574,40 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
     input: &TypedTensor<T>,
     config: &SliceConfig,
 ) -> crate::Result<TypedTensor<T>> {
-    let input_shape = input.shape();
+    let strides = inline_col_major_strides("slice", input.shape())?;
+    typed_slice_at(
+        buffers,
+        exec_context,
+        Operand::from_typed("slice", input, &strides)?,
+        config,
+    )
+}
+
+fn typed_slice_view<T, R>(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    view: &TypedTensorView<'_, T, R>,
+    config: &SliceConfig,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + TensorScalar + 'static,
+    R: tenferro_tensor::TensorRank,
+{
+    typed_slice_at(buffers, exec_context, operand_from_view(view)?, config)
+}
+
+fn typed_slice_at<T: Copy + Clone + PoolScalar + TensorScalar>(
+    buffers: &mut BufferPool,
+    exec_context: &ExecContext,
+    operand: Operand<'_, T>,
+    config: &SliceConfig,
+) -> crate::Result<TypedTensor<T>> {
+    let Operand {
+        data,
+        shape: input_shape,
+        strides: input_strides,
+        offset: input_offset,
+    } = operand;
     let rank = input_shape.len();
     if config.starts.len() != rank {
         return Err(crate::Error::rank_mismatch(
@@ -547,8 +631,7 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         ));
     }
 
-    let out_shape: Vec<usize> = input
-        .shape()
+    let out_shape: Vec<usize> = input_shape
         .iter()
         .enumerate()
         .map(|(axis, &dim)| {
@@ -586,12 +669,11 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         .collect::<crate::Result<Vec<_>>>()?;
 
     let dtype = kernel_dtype(T::dtype());
-    let input_strides = inline_col_major_strides("slice", input_shape)?;
     let out_strides = inline_col_major_strides("slice", &out_shape)?;
     let plan = ErasedSlicePlan::compile(
         dtype,
         input_shape,
-        &input_strides,
+        input_strides,
         &out_shape,
         &out_strides,
         &config.starts,
@@ -608,10 +690,10 @@ fn typed_slice<T: Copy + Clone + PoolScalar + TensorScalar>(
         // for the retained borrow.
         crate::erased_raw_strided_ref(
             dtype,
-            typed_bytes(typed_host_data("slice", input)?),
+            typed_bytes(data),
             input_shape,
-            &input_strides,
-            0,
+            input_strides,
+            input_offset,
         )
     }
     .map_err(|err| crate::Error::backend_source("slice", err))?;

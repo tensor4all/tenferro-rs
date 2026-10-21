@@ -776,6 +776,16 @@ impl TensorIndexing for CpuEngine {
             indexing::try_slice_with_pool(buffers, &exec_context, input, config)
         })
     }
+    fn slice_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+        config: &SliceConfig,
+    ) -> crate::Result<Tensor> {
+        self.run_native_with_context(|context, buffers| {
+            let exec_context = context.strided_exec_context();
+            indexing::slice_read_with_pool(buffers, &exec_context, input, config)
+        })
+    }
     fn dynamic_slice(
         &mut self,
         input: &Tensor,
