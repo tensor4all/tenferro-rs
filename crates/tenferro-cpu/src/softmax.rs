@@ -16,10 +16,8 @@ use tenferro_tensor::{DType, Tensor, TensorRead};
 
 use crate::buffer_pool::BufferPool;
 use crate::materialize_tensor_read;
+use crate::parallel::{group_len, task_len, MIN_BYTES_PER_TASK};
 use crate::simd_math::{apply, VectorKernel};
-
-/// Group bytes per parallel task: one L1/L2-sized batch of slices.
-const GROUP_BYTES: usize = 32 * 1024;
 
 /// Fused softmax over axis 0 for a host `F32`/`F64` tensor, if supported.
 pub(crate) fn softmax_read_with_pool(
@@ -73,66 +71,79 @@ fn softmax_tensor(tensor: &Tensor, axis: usize) -> crate::Result<Option<Tensor>>
 }
 
 fn softmax_axis0_f32(data: &[f32], axis_len: usize) -> Vec<f32> {
-    let mut output = vec![0.0f32; data.len()];
-    let group_slices = (GROUP_BYTES / (axis_len * 4)).max(1);
-    let chunk = axis_len * group_slices;
+    let n = data.len();
+    let mut output = vec![0.0f32; n];
+    let group = group_len(n, axis_len, 4);
+    let task = task_len(n, group, 4, MIN_BYTES_PER_TASK);
     output
-        .par_chunks_mut(chunk)
-        .zip(data.par_chunks(chunk))
-        .for_each(|(out_chunk, in_chunk)| {
-            let mut temp = vec![0.0f32; in_chunk.len()];
-            if avx2_available() {
-                // SAFETY: the host reports AVX2; the group functions touch only
-                // the validated slices.
-                unsafe { shift_group_f32_avx2(in_chunk, &mut temp, axis_len) };
-            } else {
-                shift_group_f32(in_chunk, &mut temp, axis_len);
-            }
-            // One vectorized exp per cache-sized group, not per slice.
-            // INVARIANT: `apply` writes every output element before returning
-            // true; the fallback writes every element when it returns false.
-            let uninit = unsafe {
-                std::slice::from_raw_parts_mut(
-                    out_chunk.as_mut_ptr().cast::<MaybeUninit<f32>>(),
-                    out_chunk.len(),
-                )
-            };
-            if !apply(VectorKernel::Exp, &temp, uninit) {
-                for (out, &value) in out_chunk.iter_mut().zip(&temp) {
-                    *out = value.exp();
+        .par_chunks_mut(task)
+        .zip(data.par_chunks(task))
+        .for_each(|(out_task, in_task)| {
+            // One cache-sized temp per task, reused across its groups.
+            let mut temp = vec![0.0f32; group.min(in_task.len())];
+            for (out_chunk, in_chunk) in
+                out_task.chunks_mut(group).zip(in_task.chunks(group))
+            {
+                let temp = &mut temp[..in_chunk.len()];
+                if avx2_available() {
+                    // SAFETY: the host reports AVX2; the group functions touch
+                    // only the validated slices.
+                    unsafe { shift_group_f32_avx2(in_chunk, temp, axis_len) };
+                } else {
+                    shift_group_f32(in_chunk, temp, axis_len);
                 }
-            }
-            if avx2_available() {
-                unsafe { scale_group_f32_avx2(out_chunk, axis_len) };
-            } else {
-                scale_group_f32(out_chunk, axis_len);
+                // One vectorized exp per cache-sized group, not per slice.
+                // INVARIANT: `apply` writes every output element before
+                // returning true; the fallback writes every element otherwise.
+                let uninit = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        out_chunk.as_mut_ptr().cast::<MaybeUninit<f32>>(),
+                        out_chunk.len(),
+                    )
+                };
+                if !apply(VectorKernel::Exp, temp, uninit) {
+                    for (out, &value) in out_chunk.iter_mut().zip(&*temp) {
+                        *out = value.exp();
+                    }
+                }
+                if avx2_available() {
+                    unsafe { scale_group_f32_avx2(out_chunk, axis_len) };
+                } else {
+                    scale_group_f32(out_chunk, axis_len);
+                }
             }
         });
     output
 }
 
 fn softmax_axis0_f64(data: &[f64], axis_len: usize) -> Vec<f64> {
-    let mut output = vec![0.0f64; data.len()];
-    let group_slices = (GROUP_BYTES / (axis_len * 8)).max(1);
-    let chunk = axis_len * group_slices;
+    let n = data.len();
+    let mut output = vec![0.0f64; n];
+    let group = group_len(n, axis_len, 8);
+    let task = task_len(n, group, 8, MIN_BYTES_PER_TASK);
     output
-        .par_chunks_mut(chunk)
-        .zip(data.par_chunks(chunk))
-        .for_each(|(out_chunk, in_chunk)| {
-            let mut temp = vec![0.0f64; in_chunk.len()];
-            shift_group_f64(in_chunk, &mut temp, axis_len);
-            let uninit = unsafe {
-                std::slice::from_raw_parts_mut(
-                    out_chunk.as_mut_ptr().cast::<MaybeUninit<f64>>(),
-                    out_chunk.len(),
-                )
-            };
-            if !apply(VectorKernel::Exp, &temp, uninit) {
-                for (out, &value) in out_chunk.iter_mut().zip(&temp) {
-                    *out = value.exp();
+        .par_chunks_mut(task)
+        .zip(data.par_chunks(task))
+        .for_each(|(out_task, in_task)| {
+            let mut temp = vec![0.0f64; group.min(in_task.len())];
+            for (out_chunk, in_chunk) in
+                out_task.chunks_mut(group).zip(in_task.chunks(group))
+            {
+                let temp = &mut temp[..in_chunk.len()];
+                shift_group_f64(in_chunk, temp, axis_len);
+                let uninit = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        out_chunk.as_mut_ptr().cast::<MaybeUninit<f64>>(),
+                        out_chunk.len(),
+                    )
+                };
+                if !apply(VectorKernel::Exp, temp, uninit) {
+                    for (out, &value) in out_chunk.iter_mut().zip(&*temp) {
+                        *out = value.exp();
+                    }
                 }
+                scale_group_f64(out_chunk, axis_len);
             }
-            scale_group_f64(out_chunk, axis_len);
         });
     output
 }

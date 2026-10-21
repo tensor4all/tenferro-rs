@@ -114,6 +114,7 @@ mod indexing;
 pub mod inject;
 mod operand;
 pub mod provider;
+mod parallel;
 mod reduction;
 mod softmax;
 mod runtime_adapter;
