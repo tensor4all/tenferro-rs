@@ -2364,6 +2364,18 @@ pub trait TensorStructural {
     /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
     /// should override this so a view is not copied (#2214).
     ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorStructural, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorStructural, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.extract_diagonal_read(x, 0, 1)
+    /// }
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2398,6 +2410,18 @@ pub trait TensorStructural {
     /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
     /// should override this so a view is not copied (#2214).
     ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorStructural, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorStructural, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.embed_diagonal_read(x, 0, 1)
+    /// }
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2427,6 +2451,18 @@ pub trait TensorStructural {
     /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
     /// should override this so a view is not copied (#2214).
     ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorStructural, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorStructural, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.tril_read(x, 0)
+    /// }
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2450,6 +2486,18 @@ pub trait TensorStructural {
     /// The default stages each borrowed view into compact storage (an owned
     /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
     /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorStructural, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorStructural, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.triu_read(x, 0)
+    /// }
+    /// ```
     ///
     /// # Errors
     ///
@@ -2949,6 +2997,18 @@ pub trait TensorIndexing: TensorStructural {
     /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
     /// should override this so a view is not copied (#2214).
     ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, ScatterConfig, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorIndexing, x: TensorRead<'_>, idx: TensorRead<'_>, updates: TensorRead<'_>, config: &ScatterConfig)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.scatter_read(x, idx, updates, config)
+    /// }
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -2984,6 +3044,18 @@ pub trait TensorIndexing: TensorStructural {
     /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
     /// should override this so a view is not copied (#2214).
     ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, SliceConfig, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorIndexing, x: TensorRead<'_>, config: &SliceConfig)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.slice_read(x, config)
+    /// }
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -3012,6 +3084,18 @@ pub trait TensorIndexing: TensorStructural {
     /// The default stages each borrowed view into compact storage (an owned
     /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
     /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorIndexing, x: TensorRead<'_>, starts: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.dynamic_slice_read(x, starts, &[2])
+    /// }
+    /// ```
     ///
     /// # Errors
     ///
@@ -3055,6 +3139,18 @@ pub trait TensorIndexing: TensorStructural {
     /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
     /// should override this so a view is not copied (#2214).
     ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, PadConfig, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorIndexing, x: TensorRead<'_>, config: &PadConfig)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.pad_read(x, config)
+    /// }
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
@@ -3078,6 +3174,18 @@ pub trait TensorIndexing: TensorStructural {
     /// The default stages each borrowed view into compact storage (an owned
     /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
     /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorIndexing, a: TensorRead<'_>, b: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.concatenate_read(&[a, b], 0)
+    /// }
+    /// ```
     ///
     /// # Errors
     ///
@@ -3110,6 +3218,18 @@ pub trait TensorIndexing: TensorStructural {
     /// The default stages each borrowed view into compact storage (an owned
     /// tensor is passed through) and delegates to the owned-input method; a backend whose kernel consumes a borrowed operand
     /// should override this so a view is not copied (#2214).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorIndexing, TensorRead};
+    ///
+    /// fn run(session: &mut dyn TensorIndexing, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<Tensor>
+    /// {
+    ///     session.reverse_read(x, &[0])
+    /// }
+    /// ```
     ///
     /// # Errors
     ///
@@ -3643,7 +3763,7 @@ pub trait Engine: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
 /// staged.
 enum StagedRead<'a> {
     Borrowed(&'a Tensor),
-    Staged(Tensor),
+    Staged(Box<Tensor>),
 }
 
 impl std::ops::Deref for StagedRead<'_> {
@@ -3664,6 +3784,8 @@ fn stage_view<'a, S: TensorStructural + ?Sized>(
 ) -> crate::Result<StagedRead<'a>> {
     match read {
         TensorRead::Tensor(tensor) => Ok(StagedRead::Borrowed(tensor)),
-        view => session.to_contiguous_read(view).map(StagedRead::Staged),
+        view => Ok(StagedRead::Staged(Box::new(
+            session.to_contiguous_read(view)?,
+        ))),
     }
 }
