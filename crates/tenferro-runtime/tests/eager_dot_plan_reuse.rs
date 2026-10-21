@@ -6,6 +6,7 @@
 //! pays for.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
@@ -50,8 +51,19 @@ fn allocations<T>(call: impl FnOnce() -> T) -> (T, usize) {
     (out, ALLOCATIONS.load(Ordering::SeqCst))
 }
 
+/// The counting allocator is process-global, so measured regions run one at a
+/// time; a panic in one region must not poison the other test.
+static MEASURE_LOCK: Mutex<()> = Mutex::new(());
+
+fn measure_lock() -> std::sync::MutexGuard<'static, ()> {
+    MEASURE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[test]
 fn repeated_eager_matmul_does_not_rebuild_its_plan() {
+    let _measure = measure_lock();
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![64, 64], vec![1.0; 64 * 64]).unwrap();
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![64, 64], vec![2.0; 64 * 64]).unwrap();
     let mut engine = CpuEngine::serial();
@@ -71,5 +83,46 @@ fn repeated_eager_matmul_does_not_rebuild_its_plan() {
     assert!(
         repeat == 0,
         "the repeated eager matmul still allocates: {first} then {repeat}"
+    );
+}
+
+#[test]
+fn repeated_tiny_typed_matmul_keeps_only_the_one_time_plan_build() {
+    let _measure = measure_lock();
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0; 4]).unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0; 4]).unwrap();
+    let mut engine = CpuEngine::serial();
+
+    // Warm the provider's one-time builder state under a different key, so the
+    // measured first call isolates the 2x2 plan build instead of the cold
+    // process's provider initialisation.
+    let warmup = TypedTensor::<f64>::from_vec_col_major(vec![3, 3], vec![1.0; 9]).unwrap();
+    let _ = allocations(|| warmup.matmul(&warmup, &mut engine).unwrap());
+
+    let (out, first) = allocations(|| lhs.matmul(&rhs, &mut engine).unwrap());
+    assert_eq!(out.as_slice().unwrap(), &[4.0; 4]);
+    drop(out);
+    // Warm the pooled output so only a plan build could show up.
+    let (warm, warm_allocations) = allocations(|| lhs.matmul(&rhs, &mut engine).unwrap());
+    drop(warm);
+    let (again, repeat) = allocations(|| lhs.matmul(&rhs, &mut engine).unwrap());
+    assert_eq!(again.as_slice().unwrap(), &[4.0; 4]);
+    drop(again);
+    eprintln!(
+        "eager 2x2 matmul (warm provider): first {first}, warm {warm_allocations}, \
+         repeat {repeat} allocations"
+    );
+    // #2139 item 1: the 88 allocations the umbrella inventory records for one
+    // 2x2 typed matmul are the first call's one-time binary plan build, not a
+    // per-call cost. Once that plan is cached, the warm and repeated calls
+    // allocate nothing: no tenferro metadata `Vec` and no provider plan remain
+    // on the per-call path.
+    assert_eq!(
+        warm_allocations, 0,
+        "the warm 2x2 matmul still allocates: {first} then {warm_allocations}"
+    );
+    assert_eq!(
+        repeat, 0,
+        "the repeated 2x2 matmul still allocates: {first} then {repeat}"
     );
 }

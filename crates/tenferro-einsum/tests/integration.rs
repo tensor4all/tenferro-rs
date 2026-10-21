@@ -6,6 +6,8 @@ mod deterministic_path;
 mod eager_tensor;
 #[path = "integration/error_public.rs"]
 mod error_public;
+#[path = "integration/prepared_plan_replay.rs"]
+mod prepared_plan_replay;
 #[path = "integration/public_surface_contract.rs"]
 mod public_surface_contract;
 #[path = "integration/runtime_buffer_pool.rs"]
