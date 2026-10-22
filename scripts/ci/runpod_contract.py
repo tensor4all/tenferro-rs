@@ -2,6 +2,7 @@
 """Validate repository RunPod configuration against the live OpenAPI schema."""
 
 # Adapted from tensor4all/tenferro-benchmark PRs #214 and #215 (main 9012f4b).
+# CUDA minimum-version handling: tensor4all/tenferro-benchmark PR #260.
 from __future__ import annotations
 
 import argparse
@@ -54,23 +55,14 @@ def configured_gpu_tiers(
     return tiers
 
 
-def configured_cuda_versions(config: Mapping[str, object]) -> tuple[str, ...]:
-    """Validate and return the CUDA driver versions accepted for a pod."""
-
-    value = config.get("allowed_cuda_versions")
-    if (
-        not isinstance(value, Sequence)
-        or isinstance(value, (str, bytes))
-        or not value
-        or any(not isinstance(version, str) or not version for version in value)
-    ):
-        raise ContractError(
-            "runpod_config.json allowed_cuda_versions must be a nonempty "
-            "array of strings"
-        )
-    if len(set(value)) != len(value):
-        raise ContractError("allowed_cuda_versions must not contain duplicates")
-    return tuple(value)
+def configured_min_cuda_version(config: Mapping[str, object]) -> str:
+    """Return the open-ended driver floor shared by catalog and pod creation."""
+    value = config.get("min_cuda_version")
+    if "allowed_cuda_versions" in config:
+        raise ContractError("use min_cuda_version instead of an exact CUDA allowlist")
+    if not isinstance(value, str) or not re.fullmatch(r"\d+\.\d+", value):
+        raise ContractError("runpod_config.json min_cuda_version must be major.minor")
+    return value
 
 
 def resolve_local_ref(document: Mapping[str, object], ref: str) -> Mapping[str, object]:
@@ -153,23 +145,18 @@ def validate_gpu_type_ids(document, configured_ids, catalog):
         )
 
 
-def validate_cuda_versions(document, configured_versions):
+def validate_min_cuda_version(document, version):
     try:
-        items = _gpu_properties(document)["allowedCudaVersions"]["items"]
-        pattern = items["pattern"]
-        if items["type"] != "string":
+        field = _gpu_properties(document)["minCudaVersion"]
+        pattern = field["pattern"]
+        if field["type"] != "string":
             raise KeyError("type")
     except (KeyError, TypeError) as error:
         raise ContractError(
-            "POST /v2/pods gpu.allowedCudaVersions must declare a string pattern"
+            "POST /v2/pods gpu.minCudaVersion must declare a string pattern"
         ) from error
-    invalid = [
-        version for version in configured_versions if not re.fullmatch(pattern, version)
-    ]
-    if invalid:
-        raise ContractError(
-            "CUDA versions do not match v2 format: " + ", ".join(invalid)
-        )
+    if not re.fullmatch(pattern, version):
+        raise ContractError("CUDA version does not match v2 format: " + version)
     # v2 permits any major.minor string. This validates syntax, not live stock;
     # availability is checked by the catalog query and the CUDA startup proof.
 
@@ -219,7 +206,7 @@ def main() -> int:
     try:
         config = _load_json(args.config)
         tiers = configured_gpu_tiers(config)
-        cuda_versions = configured_cuda_versions(config)
+        min_cuda_version = configured_min_cuda_version(config)
         configured_ids = [gpu_id for _name, gpu_ids in tiers for gpu_id in gpu_ids]
         if args.schema_file:
             schema = _load_json(args.schema_file)
@@ -240,10 +227,10 @@ def main() -> int:
             schema = fetch_openapi(openapi_url, api_key)
             catalog = fetch_openapi(str(config["catalog_url"]), api_key)
         validate_gpu_type_ids(schema, configured_ids, catalog)
-        validate_cuda_versions(schema, cuda_versions)
+        validate_min_cuda_version(schema, min_cuda_version)
         print(
             f"RunPod v2 catalog recognizes all {len(configured_ids)} configured GPU "
-            f"IDs; CUDA version syntax is valid: {', '.join(cuda_versions)}. "
+            f"IDs; CUDA version syntax is valid: >= {min_cuda_version}. "
             "Live capacity is checked separately."
         )
     except (ContractError, KeyError) as error:

@@ -1,15 +1,16 @@
 import unittest
 import json
+import copy
 from pathlib import Path
 
 from scripts.ci.runpod_contract import (
     ContractError,
-    configured_cuda_versions,
+    configured_min_cuda_version,
     configured_gpu_tiers,
     extract_gpu_type_ids,
     resolve_local_ref,
     schema_properties,
-    validate_cuda_versions,
+    validate_min_cuda_version,
     validate_gpu_type_ids,
 )
 
@@ -20,23 +21,17 @@ CATALOG = {"gpus": [{"id": "NVIDIA A40"}, {"id": "NVIDIA GeForce RTX 4090"}]}
 
 
 class RunPodContractTests(unittest.TestCase):
-    def test_configured_cuda_versions_are_required_and_unique(self) -> None:
+    def test_minimum_cuda_version_requires_explicit_major_minor(self) -> None:
         self.assertEqual(
-            configured_cuda_versions(
-                {
-                    "allowed_cuda_versions": [
-                        "13.0",
-                        "12.9",
-                        "12.8",
-                        "12.4",
-                    ]
-                }
-            ),
-            ("13.0", "12.9", "12.8", "12.4"),
+            configured_min_cuda_version({"min_cuda_version": "12.6"}), "12.6"
         )
-        for value in ([], ["12.8", "12.8"], "12.8"):
+        for value in (None, [], ["12.8"], "12", "", "12.x"):
             with self.subTest(value=value), self.assertRaises(ContractError):
-                configured_cuda_versions({"allowed_cuda_versions": value})
+                configured_min_cuda_version({"min_cuda_version": value})
+        with self.assertRaises(ContractError):
+            configured_min_cuda_version({
+                "min_cuda_version": "12.6", "allowed_cuda_versions": ["13.0"]
+            })
 
     def test_configured_gpu_tiers_preserve_order(self) -> None:
         tiers = configured_gpu_tiers(
@@ -90,9 +85,18 @@ class RunPodContractTests(unittest.TestCase):
             validate_gpu_type_ids(SCHEMA, ["Tesla T4", "Unknown GPU"], CATALOG)
 
     def test_cuda_validation_checks_v2_pattern_not_old_enum(self):
-        validate_cuda_versions(SCHEMA, ["12.7", "13.0"])
+        validate_min_cuda_version(SCHEMA, "12.6")
         with self.assertRaisesRegex(ContractError, "13"):
-            validate_cuda_versions(SCHEMA, ["13"])
+            validate_min_cuda_version(SCHEMA, "13")
+
+    def test_cuda_floor_requires_string_field_in_live_create_schema(self):
+        schema = copy.deepcopy(SCHEMA)
+        gpu_properties = schema_properties(
+            schema, {"$ref": "#/components/schemas/CreateGpuConfig"}
+        )
+        gpu_properties["minCudaVersion"]["type"] = "integer"
+        with self.assertRaisesRegex(ContractError, "minCudaVersion"):
+            validate_min_cuda_version(schema, "12.6")
 
     def test_missing_v2_post_schema_is_a_hard_error(self):
         with self.assertRaisesRegex(ContractError, "POST /v2/pods"):

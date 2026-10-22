@@ -22,7 +22,7 @@ boundary — live data never adds a GPU type maintainers did not review.
 
 1. GET the authenticated REST v2 `/catalog/gpus` endpoint with
    `include=AVAILABILITY`, `product=POD`, `cloud=SECURE`, GPU count and CUDA
-   versions for Secure Cloud stock, VRAM and the eligible types' list prices.
+   `minCudaVersion=12.6` for Secure Cloud stock, VRAM and the eligible types' list prices.
 2. Drop out-of-stock types, types without a Secure Cloud offer, and types
    below `min_vram_gb`.
 3. Emit one single-GPU candidate per type, cheapest first, capped by
@@ -33,9 +33,14 @@ boundary — live data never adds a GPU type maintainers did not review.
    Each tier is reachable within the configured six attempts; the independent
    consecutive-startup-failure stop still limits paid failures.
 
-`gpu.allowedCudaVersions` metadata filtering stays on every create request as
-the first-line filter; the runtime smoke proof below is the real
-compatibility decision.
+Catalog queries and every create request use the same open-ended CUDA floor:
+`min_cuda_version: "12.6"` in the configuration maps to catalog
+`minCudaVersion=12.6` and Pod `gpu.minCudaVersion: "12.6"`. Exact-version
+allowlists excluded compatible newer hosts, including CUDA 13.2 A100s observed
+in the catalog. The lower bound admits future driver versions without changing
+the configuration; the runtime smoke proof below remains the real
+compatibility decision. See the RunPod [catalog filter](https://docs.runpod.io/api-reference-v2/catalog/list-gpu-types)
+and [Pod creation](https://docs.runpod.io/api-reference-v2/pods/create-a-pod) contracts.
 
 ## Runtime compatibility proof (smoke test)
 
@@ -44,7 +49,7 @@ BEFORE the GitHub runner registers — so an incompatible host is rejected
 before any dependency setup or test execution:
 
 1. driver visibility and CUDA API version via `nvidia-smi`,
-2. runtime tier selection mirroring the workflow (12.8 full / 12.4
+2. runtime tier selection mirroring the workflow (12.8 full / 12.6
    baseline),
 3. minimal NVRTC install for the selected tier only,
 4. NVRTC compilation of a tiny kernel for the device's compute capability,

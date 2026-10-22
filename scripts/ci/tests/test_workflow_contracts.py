@@ -693,15 +693,12 @@ class WorkflowContractTests(unittest.TestCase):
             int(minimum_runtime.group(2)),
         )
         self.assertEqual(minimum, (12, 6))
-        allowed_versions = [
-            tuple(int(part) for part in version.split("."))
-            for version in runpod_config["allowed_cuda_versions"]
-        ]
-        self.assertIn(minimum, allowed_versions)
-        self.assertIn(full_runtime, allowed_versions)
-        self.assertTrue(
-            all(version >= minimum for version in allowed_versions)
+        configured_minimum = tuple(
+            int(part) for part in runpod_config["min_cuda_version"].split(".")
         )
+        self.assertEqual(configured_minimum, minimum)
+        self.assertGreaterEqual(full_runtime, configured_minimum)
+        self.assertNotIn("allowed_cuda_versions", runpod_config)
         self.assertIn("id: select_cuda_runtime", text)
         self.assertIn("Selected CUDA runtime:", text)
         self.assertIn("steps.select_cuda_runtime.outputs.runtime_version", text)
