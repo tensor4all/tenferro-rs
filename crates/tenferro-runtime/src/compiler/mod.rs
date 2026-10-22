@@ -1334,35 +1334,32 @@ fn replace_slot_uses(program: &mut ExecProgram, from: usize, to: usize) {
 /// Fold metadata-only instructions into the consumer that reads their result.
 ///
 /// An instruction is folded when it is a view (`InputView::from_op`), has one
-/// input and one output, its output is not a program output, exactly one
-/// instruction uses the output at exactly one input position, that consumer
-/// reads the input through a view (`reads_input_view`), and `same_placement`
-/// holds for the pair: a view derived on another engine would make the schedule
-/// transfer the source instead of the (possibly smaller) result, so a value
-/// that crosses a transfer boundary keeps materializing. A `Reshape` is folded
-/// only when its source is a compact instruction result with no pending view,
-/// because a reshape of a strided view has no view form in general.
+/// input and one output, its dtype is not `DType::External`, its output is not
+/// a program output, exactly one instruction uses the output at exactly one
+/// input position, that consumer reads the input through a view
+/// (`reads_input_view`), and `same_placement` holds for the pair: a view
+/// derived on another engine would make the schedule transfer the source
+/// instead of the (possibly smaller) result, so a value that crosses a
+/// transfer boundary keeps materializing. A `Reshape` is folded only when its
+/// source is the result of an instruction that is not itself a view (an owned,
+/// compact engine result) and it carries no pending view, because a reshape of
+/// a strided view has no view form in general.
 ///
-/// Chains fold in turn: the folded instruction's own pending views move to the
-/// consumer ahead of its transform.
+/// One forward pass over the program suffices: a folded instruction's pending
+/// views move to its consumer ahead of its own transform, and the consumer is
+/// visited later in the same pass, so chains fold in turn. The pass is linear
+/// in the instruction count plus the folded views.
 pub(crate) fn fold_metadata_views(
     program: &mut ExecProgram,
     same_placement: impl Fn(&ExecInstruction, &ExecInstruction) -> bool,
 ) {
-    while fold_metadata_views_one_pass(program, &same_placement) {}
-}
-
-fn fold_metadata_views_one_pass(
-    program: &mut ExecProgram,
-    same_placement: &impl Fn(&ExecInstruction, &ExecInstruction) -> bool,
-) -> bool {
     let n_slots = program.n_slots;
     let mut use_count = vec![0usize; n_slots];
     let mut consumer = vec![None; n_slots];
     for (index, instruction) in program.instructions.iter().enumerate() {
         for (position, &slot) in instruction.input_slots.iter().enumerate() {
             let Some(count) = use_count.get_mut(slot) else {
-                return false;
+                return;
             };
             *count += 1;
             consumer[slot] = Some((index, position));
@@ -1372,10 +1369,11 @@ fn fold_metadata_views_one_pass(
     for &slot in &program.output_slots {
         match is_output.get_mut(slot) {
             Some(output) => *output = true,
-            None => return false,
+            None => return,
         }
     }
     let producer_by_slot = producer_indices_by_slot(program);
+    let mut removed = vec![false; program.instructions.len()];
 
     for index in 0..program.instructions.len() {
         let instruction = &program.instructions[index];
@@ -1427,19 +1425,24 @@ fn fold_metadata_views_one_pass(
             continue;
         }
 
-        let folded = program.instructions.remove(index);
-        let consumer_instruction = &mut program.instructions[consumer_index - 1];
+        let pending = std::mem::take(&mut program.instructions[index].input_views);
+        let consumer_instruction = &mut program.instructions[consumer_index];
         consumer_instruction.input_slots[position] = source;
-        consumer_instruction.input_views.extend(
-            folded
-                .input_views
-                .into_iter()
-                .map(|(_, pending)| (position, pending)),
-        );
+        consumer_instruction
+            .input_views
+            .extend(pending.into_iter().map(|(_, pending)| (position, pending)));
         consumer_instruction.input_views.push((position, view));
-        return true;
+        removed[index] = true;
     }
-    false
+
+    if removed.iter().any(|&removed| removed) {
+        let mut index = 0;
+        program.instructions.retain(|_| {
+            let keep = !removed[index];
+            index += 1;
+            keep
+        });
+    }
 }
 
 /// Fold Transpose instructions into DotGeneral dimension numbers.

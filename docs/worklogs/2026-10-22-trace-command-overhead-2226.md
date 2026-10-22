@@ -27,13 +27,25 @@ lands the first two and records why the third was not started.
   next census item; a transposed view read k times is a measured trade-off
   (k strided reads versus one copy plus k contiguous reads), which is why the
   single-consumer rule stays.
+- **The engine opts in.** A `*_read` entry is not proof that a backend reads a
+  strided view in place: WebGPU's entries reject a view by design (#2214,
+  `read_owned_tensor`), and its `dot_general_read` stages both operands when
+  either is a view. Folding a transpose into such a consumer would turn a
+  working owned path into an `Unsupported` error or an extra copy. The fold
+  therefore runs only for an engine whose `LayoutRuntime::folds_metadata_views`
+  reports `true` (a defaulted capability hook, like
+  `ElementwiseRuntime::max_fused_region_inputs`); CPU reports it, every GPU
+  registration keeps the default and its schedule byte for byte. This is a
+  cost fact per engine, verified on CPU; a GPU engine opts in once its read
+  entries are measured.
 - **Owned-only accessors reject a folded view typed.** `get`/`ensure_owned`
-  return `Error::Internal` when the input carries a view, and each backend
-  dispatch entry declares `read`/`owned` beside its execute function. A
-  misclassified consumer therefore fails loudly instead of reading the source
-  value. Structural and indexing dispatch now takes the existing `*_read` hooks
-  (#2221 reads views in place on CPU), so only `Convert` and the owned host ops
-  (`DynamicTruncate`, `PadToMatch`) remain `owned`.
+  return `Error::Internal` when the input carries a view; `reads_input_view`
+  names the consumers the fold may target (every backend entry but `Convert`,
+  dot, extensions, `ShapeOf`). A misclassified consumer therefore fails loudly
+  instead of reading the source value. Structural and indexing dispatch now
+  takes the existing `*_read` hooks (#2221 reads views in place on CPU), so
+  only `Convert` and the owned host ops (`DynamicTruncate`, `PadToMatch`)
+  materialize their inputs.
 - **`Reshape` folds only from a non-view instruction result** with no pending
   view. "Instruction output" alone does not imply a compact layout: a kept
   metadata command over a borrowed input yields a strided `ExecSlot::Read`, and
@@ -76,17 +88,24 @@ lands the first two and records why the third was not started.
   later runs (builds on the other L3 domain). Acceptance gate declared before
   measuring: the 2x2 row improves by more than 5 % and no row regresses by more
   than 5 % (median), the host's noise band.
+- The baseline's first repeat, the first process after the build, was slow on
+  every prepared row (2x2 70.3 µs, one-command 6.26 µs, chain 284 µs) while
+  its eager rows matched the other repeats; repeats 2–3 and every later
+  experiment agree with each other and with the #2186 numbers. The table keeps
+  all three repeats and marks that one.
 
 | row (1T, median over 15×50, min–max of 3 repeats) | baseline | after item 1 | after items 1–2 |
 |---|---:|---:|---:|
-| `grad_sum_qr_vjp` 2x2 (commands) | 47.8–48.1 µs (25) | 42.4–42.7 µs (20) | **40.5–40.7 µs (20)** |
-| `grad_sum_qr_vjp` 8x8 | 51.7–51.8 µs | 45.9–46.5 µs | **44.1–44.4 µs** |
-| 200-command `exp` chain | 279–281 µs | 276–300 µs | **213–216 µs** |
-| one-command program | 4.36–4.40 µs | 4.20–4.25 µs | **3.42–3.46 µs** |
+| `grad_sum_qr_vjp` 2x2 (commands) | 47.8–48.1 µs (25); first repeat 70.3 | 42.4–42.7 µs (20) | **40.5–40.9 µs (20)** |
+| `grad_sum_qr_vjp` 8x8 | 51.7–51.8 µs; first repeat 74.9 | 45.9–46.5 µs | **44.1–44.4 µs** |
+| 200-command `exp` chain | 280–281 µs; first repeat 284 | 276–300 µs | **213–216 µs** |
+| one-command program | 4.36–4.40 µs; first repeat 6.26 | 4.20–4.25 µs | **3.42–3.46 µs** |
 | eager `exp`, per op | 0.72–0.75 µs | 0.72–0.74 µs | 0.72–0.74 µs |
 
   Per command on the chain: 1.40 → 1.07 µs (eager 0.73). Per run fixed:
-  4.36 → 3.43 µs. The 2x2 row is 15 % below the baseline; no row regressed.
+  4.36 → 3.43 µs. Median of the repeat medians: 2x2 48.07 → 40.70 µs, 15 %
+  below the baseline; no row's median regressed. Raw outputs:
+  `shinaoka-advisor/work/runs/tenferro-rs-2226/bench-*.txt`.
 - The 2x2 census (20 commands) is pinned by
   `tenferro-linalg/tests/integration/traced_command_census.rs`, which also
   checks the folded program's VJP against central finite differences.
@@ -99,9 +118,8 @@ lands the first two and records why the third was not started.
 - Suites: tenferro-runtime (439 unit + integration), tenferro-cpu,
   tenferro-cpu-fused, tenferro-ad, tenferro-linalg with `autodiff`; the
   repository gate (`check-pr-fast.sh`, `repository-rules-review.py`).
-- Not claimed: GPU behaviour (no device in this session). Folding is
-  semantically safe on CUDA and WebGPU because every `*_read` entry either
-  reads the view or stages it once (`stage_view`), the same single copy the
-  removed command made; whether a backend reads a strided operand natively is
-  a per-backend cost fact, verified here on CPU only. The JAX comparison of
-  #2186 was not rerun.
+- Not claimed: GPU behaviour (no device in this session). No GPU engine opts
+  into the fold, so their schedules are unchanged; whether CUDA's read entries
+  consume a strided operand natively (cuTENSOR reads strides; `read_input`
+  stages otherwise) is the measurement a CUDA opt-in needs. The JAX comparison
+  of #2186 was not rerun.

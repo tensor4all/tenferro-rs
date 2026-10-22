@@ -26,22 +26,12 @@ macro_rules! count_keys {
     };
 }
 
-macro_rules! input_access {
-    (read) => {
-        InputAccess::Read
-    };
-    (owned) => {
-        InputAccess::Owned
-    };
-}
-
 macro_rules! define_backend_dispatch {
-    ($( $key:path => $access:ident $execute:ident, )*) => {
+    ($( $key:path => $execute:ident, )*) => {
         pub(super) static BACKEND_DISPATCH_TABLE: &[BackendDispatchEntry] = &[
             $(
                 BackendDispatchEntry {
                     key: $key,
-                    inputs: input_access!($access),
                     execute: $execute,
                 },
             )*
@@ -103,21 +93,8 @@ macro_rules! define_host_dispatch {
     };
 }
 
-/// How an execute function reads its inputs, declared beside it in the table.
-///
-/// `Read` entries take every input through `get_read`, so a folded view on an
-/// input is applied as the operand is read; `Owned` entries materialize their
-/// inputs (`ensure_owned` + `get`) and the fold rule never targets them. The
-/// owned accessors reject a folded view typed, so a wrong marker fails loudly.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum InputAccess {
-    Read,
-    Owned,
-}
-
 pub(super) struct BackendDispatchEntry {
     pub(super) key: PrimitiveOpKind,
-    pub(super) inputs: InputAccess,
     execute: BackendDispatchFn,
 }
 
@@ -135,53 +112,53 @@ impl<B: HostExecution + ?Sized> Clone for HostDispatchEntry<B> {
 }
 
 define_backend_dispatch! {
-    PrimitiveOpKind::Transpose => read execute_transpose,
-    PrimitiveOpKind::Reshape => read execute_reshape,
-    PrimitiveOpKind::BroadcastInDim => read execute_broadcast_in_dim,
-    PrimitiveOpKind::Convert => owned execute_convert,
-    PrimitiveOpKind::ReduceSum => read execute_reduce_sum,
-    PrimitiveOpKind::ReduceSumSquares => read execute_reduce_sum_squares,
-    PrimitiveOpKind::ExtractDiag => read execute_extract_diag,
-    PrimitiveOpKind::EmbedDiag => read execute_embed_diag,
-    PrimitiveOpKind::Tril => read execute_tril,
-    PrimitiveOpKind::Triu => read execute_triu,
-    PrimitiveOpKind::Add => read execute_add,
-    PrimitiveOpKind::Sub => read execute_subtract,
-    PrimitiveOpKind::Mul => read execute_multiply,
-    PrimitiveOpKind::Neg => read execute_negate,
-    PrimitiveOpKind::Conj => read execute_conj,
-    PrimitiveOpKind::Div => read execute_divide,
-    PrimitiveOpKind::Rem => read execute_remainder,
-    PrimitiveOpKind::Abs => read execute_abs,
-    PrimitiveOpKind::Sign => read execute_sign,
-    PrimitiveOpKind::Maximum => read execute_maximum,
-    PrimitiveOpKind::Minimum => read execute_minimum,
-    PrimitiveOpKind::Compare => read execute_compare,
-    PrimitiveOpKind::Select => read execute_select,
-    PrimitiveOpKind::Clamp => read execute_clamp,
-    PrimitiveOpKind::Exp => read execute_exp,
-    PrimitiveOpKind::Log => read execute_log,
-    PrimitiveOpKind::Sin => read execute_sin,
-    PrimitiveOpKind::Cos => read execute_cos,
-    PrimitiveOpKind::Tanh => read execute_tanh,
-    PrimitiveOpKind::Sqrt => read execute_sqrt,
-    PrimitiveOpKind::Rsqrt => read execute_rsqrt,
-    PrimitiveOpKind::Pow => read execute_pow,
-    PrimitiveOpKind::Expm1 => read execute_expm1,
-    PrimitiveOpKind::Log1p => read execute_log1p,
-    PrimitiveOpKind::Erf => read execute_erf,
-    PrimitiveOpKind::Gather => read execute_gather,
-    PrimitiveOpKind::GatherDynamicSliceSizes => read execute_gather_dynamic_slice_sizes,
-    PrimitiveOpKind::Scatter => read execute_scatter,
-    PrimitiveOpKind::Slice => read execute_slice,
-    PrimitiveOpKind::DynamicSlice => read execute_dynamic_slice,
-    PrimitiveOpKind::DynamicUpdateSlice => read execute_dynamic_update_slice,
-    PrimitiveOpKind::Pad => read execute_pad,
-    PrimitiveOpKind::Concatenate => read execute_concatenate,
-    PrimitiveOpKind::Reverse => read execute_reverse,
-    PrimitiveOpKind::ReduceProd => read execute_reduce_prod,
-    PrimitiveOpKind::ReduceMax => read execute_reduce_max,
-    PrimitiveOpKind::ReduceMin => read execute_reduce_min,
+    PrimitiveOpKind::Transpose => execute_transpose,
+    PrimitiveOpKind::Reshape => execute_reshape,
+    PrimitiveOpKind::BroadcastInDim => execute_broadcast_in_dim,
+    PrimitiveOpKind::Convert => execute_convert,
+    PrimitiveOpKind::ReduceSum => execute_reduce_sum,
+    PrimitiveOpKind::ReduceSumSquares => execute_reduce_sum_squares,
+    PrimitiveOpKind::ExtractDiag => execute_extract_diag,
+    PrimitiveOpKind::EmbedDiag => execute_embed_diag,
+    PrimitiveOpKind::Tril => execute_tril,
+    PrimitiveOpKind::Triu => execute_triu,
+    PrimitiveOpKind::Add => execute_add,
+    PrimitiveOpKind::Sub => execute_subtract,
+    PrimitiveOpKind::Mul => execute_multiply,
+    PrimitiveOpKind::Neg => execute_negate,
+    PrimitiveOpKind::Conj => execute_conj,
+    PrimitiveOpKind::Div => execute_divide,
+    PrimitiveOpKind::Rem => execute_remainder,
+    PrimitiveOpKind::Abs => execute_abs,
+    PrimitiveOpKind::Sign => execute_sign,
+    PrimitiveOpKind::Maximum => execute_maximum,
+    PrimitiveOpKind::Minimum => execute_minimum,
+    PrimitiveOpKind::Compare => execute_compare,
+    PrimitiveOpKind::Select => execute_select,
+    PrimitiveOpKind::Clamp => execute_clamp,
+    PrimitiveOpKind::Exp => execute_exp,
+    PrimitiveOpKind::Log => execute_log,
+    PrimitiveOpKind::Sin => execute_sin,
+    PrimitiveOpKind::Cos => execute_cos,
+    PrimitiveOpKind::Tanh => execute_tanh,
+    PrimitiveOpKind::Sqrt => execute_sqrt,
+    PrimitiveOpKind::Rsqrt => execute_rsqrt,
+    PrimitiveOpKind::Pow => execute_pow,
+    PrimitiveOpKind::Expm1 => execute_expm1,
+    PrimitiveOpKind::Log1p => execute_log1p,
+    PrimitiveOpKind::Erf => execute_erf,
+    PrimitiveOpKind::Gather => execute_gather,
+    PrimitiveOpKind::GatherDynamicSliceSizes => execute_gather_dynamic_slice_sizes,
+    PrimitiveOpKind::Scatter => execute_scatter,
+    PrimitiveOpKind::Slice => execute_slice,
+    PrimitiveOpKind::DynamicSlice => execute_dynamic_slice,
+    PrimitiveOpKind::DynamicUpdateSlice => execute_dynamic_update_slice,
+    PrimitiveOpKind::Pad => execute_pad,
+    PrimitiveOpKind::Concatenate => execute_concatenate,
+    PrimitiveOpKind::Reverse => execute_reverse,
+    PrimitiveOpKind::ReduceProd => execute_reduce_prod,
+    PrimitiveOpKind::ReduceMax => execute_reduce_max,
+    PrimitiveOpKind::ReduceMin => execute_reduce_min,
 }
 
 define_ffi_dispatch! {
@@ -211,12 +188,14 @@ pub(super) fn is_host_op(op: &ExecOp) -> bool {
 /// Whether the executor of `op` reads input `input_index` as a `TensorRead`,
 /// so a metadata-only producer can be folded onto that input (#2226).
 ///
-/// Backend entries declare it in `BACKEND_DISPATCH_TABLE`; the FFI entries
-/// (`dot_general_read_cached`, extension executors) and `ShapeOf` take reads;
-/// the remaining host ops materialize their inputs.
+/// Every backend entry but `Convert` (`cast` takes an owned tensor) reads its
+/// inputs through `get_read`; the FFI entries (`dot_general_read_cached`,
+/// extension executors) and `ShapeOf` take reads; the remaining host ops
+/// materialize their inputs. The owned accessors reject a folded view typed,
+/// so a consumer this predicate misclassifies fails loudly.
 pub(super) fn reads_input_view(op: &ExecOp, input_index: usize) -> bool {
     if let Some(entry) = backend_dispatch_entry(op) {
-        return entry.inputs == InputAccess::Read;
+        return entry.key != PrimitiveOpKind::Convert;
     }
     match FfiDispatchKey::for_op(op) {
         Some(FfiDispatchKey::DotGeneral | FfiDispatchKey::DotGeneralWithConj) => {

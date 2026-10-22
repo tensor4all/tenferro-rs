@@ -893,6 +893,30 @@ pub trait LayoutRuntime: fmt::Debug + Send + Sync + 'static {
     /// Returns [`PrepareError`] when provider preparation fails.
     fn prepare(&self, request: LayoutPrepareRequest<'_>)
         -> Result<PrepareCapability, PrepareError>;
+
+    /// Whether this engine's `*_read` entries consume a strided view in place,
+    /// so a metadata-only operation (transpose, reshape, broadcast, slice)
+    /// with one reading consumer may become that consumer's input view at
+    /// preparation instead of running as its own command (#2226).
+    ///
+    /// The default is `false`: an engine whose read entries reject or stage a
+    /// view keeps every metadata operation as a materializing command, and its
+    /// schedule is unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuEngine;
+    ///
+    /// // The CPU engine reads views in place for every operation family.
+    /// let registration = tenferro_cpu::runtime_engine_registration(&CpuEngine::serial())?;
+    /// let layout = registration.capabilities().layout().unwrap();
+    /// assert!(layout.folds_metadata_views());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn folds_metadata_views(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

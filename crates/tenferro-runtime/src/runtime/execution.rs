@@ -2159,8 +2159,6 @@ mod transfer_validation_tests {
     }
 }
 
-/// Collect a flat run's outputs: each output slot's value already sits at the
-/// run's single location.
 fn input_signature_reads(inputs: &[TensorRead<'_>]) -> Result<InputSignature> {
     InputSignature::from_reads(inputs).map_err(|source| prepare_error(Arc::new(source)))
 }

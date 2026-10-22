@@ -286,7 +286,10 @@ input).
   `ShapeOf`);
 - producer and consumer share an execution location (a value that crosses a
   transfer boundary keeps materializing, so the transfer carries the result
-  rather than the source);
+  rather than the source), and that location's engine reports
+  `LayoutRuntime::folds_metadata_views` (its `*_read` entries consume a
+  strided view in place; CPU does, the GPU engines keep the default `false`
+  and an unchanged schedule);
 - for `Reshape`: the source is the output of an instruction that is not itself
   a view, and the reshape carries no pending view of its own (a reshape of a
   strided view has no view form in general; a non-view instruction result is a
@@ -309,7 +312,9 @@ PROCEDURE FoldMetadataViews(program, same_placement):
 ```
 
 Chains fold in turn (`transpose → slice → consumer` leaves the consumer with
-two views on one input, applied in order).
+two views on one input, applied in order). One forward pass suffices, since a
+folded instruction's consumer is visited later in the same pass; the pass is
+linear in the instruction count plus the folded views.
 
 **Interaction with region planning:** a folded `BroadcastInDim` on a region
 input is the same broadcast view the elementwise planner derives from a

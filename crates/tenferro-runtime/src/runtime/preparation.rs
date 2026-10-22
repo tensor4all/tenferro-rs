@@ -368,7 +368,9 @@ impl PreparedProgramRoot {
             let mut folded = ExecProgram::clone(&staging);
             crate::compiler::fold_metadata_views(&mut folded, |producer, consumer| {
                 match (location_of(producer), location_of(consumer)) {
-                    (Some(producer), Some(consumer)) => producer == consumer,
+                    (Some(producer), Some(consumer)) => {
+                        producer == consumer && consumer.witness().folds_metadata_views()
+                    }
                     _ => false,
                 }
             });
@@ -393,14 +395,17 @@ impl PreparedProgramRoot {
             )
             .into();
         let node_regions = super::region::node_regions(&schedule, &regions);
+        let mut first_position = std::collections::HashMap::new();
         let output_duplicates = staging
             .output_slots
             .iter()
             .enumerate()
-            .map(|(position, &slot)| {
-                staging.output_slots[..position]
-                    .iter()
-                    .position(|&earlier| earlier == slot)
+            .map(|(position, &slot)| match first_position.entry(slot) {
+                std::collections::hash_map::Entry::Occupied(first) => Some(*first.get()),
+                std::collections::hash_map::Entry::Vacant(vacant) => {
+                    vacant.insert(position);
+                    None
+                }
             })
             .collect::<Box<[_]>>();
         let needs_extension_caches = staging
@@ -2270,7 +2275,7 @@ fn exec_program_retained_bytes(program: &ExecProgram) -> Option<usize> {
     ])
 }
 
-fn exec_instruction_retained_bytes(instruction: &ExecInstruction) -> Option<usize> {
+pub(super) fn exec_instruction_retained_bytes(instruction: &ExecInstruction) -> Option<usize> {
     let input_views = instruction
         .input_views
         .iter()

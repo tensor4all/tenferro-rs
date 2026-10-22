@@ -56,10 +56,15 @@ pub(crate) struct ElementwiseRegion {
 
 impl ElementwiseRegion {
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
+        // The region owns a copy of each instruction, payloads included.
         let instructions = self
             .instructions
-            .len()
-            .checked_mul(std::mem::size_of::<ExecInstruction>())?;
+            .iter()
+            .try_fold(0usize, |total, instruction| {
+                total.checked_add(super::preparation::exec_instruction_retained_bytes(
+                    instruction,
+                )?)
+            })?;
         let nodes = self
             .node_indices
             .len()

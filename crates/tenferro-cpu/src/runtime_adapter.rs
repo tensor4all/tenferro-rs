@@ -279,6 +279,11 @@ impl LayoutRuntime for CpuPreparer {
             CpuPreparedKind::Layout,
         )
     }
+
+    fn folds_metadata_views(&self) -> bool {
+        // Every CPU `*_read` entry reads a strided view in place (#2221).
+        true
+    }
 }
 
 impl tenferro_runtime::ExecutionEngine for CpuEngine {
