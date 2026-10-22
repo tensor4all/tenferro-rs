@@ -121,7 +121,7 @@ fn slice_and_reshape_of_intermediates_fold() {
         .unwrap()
         .exp()
         .unwrap();
-    let reshaped = negated.reshape(&[3, 2]).unwrap().exp().unwrap();
+    let reshaped = negated.reshape([3, 2]).unwrap().exp().unwrap();
 
     let prepared = prepare(&runtime, &engine, &[&sliced, &reshaped], &[]);
     assert_eq!(prepared.execution_command_count(), 3, "Negate, Exp, Exp");
