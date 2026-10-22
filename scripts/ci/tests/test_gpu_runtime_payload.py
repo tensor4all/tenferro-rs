@@ -35,8 +35,10 @@ rm -rf "$2"
 mkdir -p "$2/targets/x86_64-linux/lib" "$2/targets/x86_64-linux/include"
 ln -s targets/x86_64-linux/lib "$2/lib64"
 ln -s targets/x86_64-linux/include "$2/include"
-for lib in nvrtc cublas cusolver cusparse; do
-  printf '%s' "$1" > "$2/lib64/lib${lib}.so.12"
+for lib in nvrtc cublas cusolver cusparse cufft; do
+  soname=12
+  if [ "$lib" = cufft ]; then soname=11; fi
+  printf '%s' "$1" > "$2/lib64/lib${lib}.so.$soname"
 done
 printf '%s' "$1" > "$2/include/cuda_runtime.h"
 touch "$2/.seed-complete"
@@ -117,7 +119,7 @@ else:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             installed = receiver / 'installed/cuda-12.8'
             self.assertEqual((installed / 'include/cuda_runtime.h').read_text(), '12.8')
-            for library in ('nvrtc', 'cublas', 'cusolver', 'cusparse'):
+            for library in ('nvrtc', 'cublas', 'cusolver', 'cusparse', 'cufft'):
                 self.assertEqual((installed / f'lib64/lib{library}.so').read_text(), '12.8')
             self.assertFalse((receiver / 'installed/cuda-12.6').exists())
             shutil.rmtree(receiver / 'installed')
@@ -139,6 +141,8 @@ else:
                 ('cutensor-miss', 'cutensor-2.6.0.4/lib/libcutensor.so.2', ['cutensor']),
                 ('marker-miss', 'cuda-runtime-12.6/.seed-complete', ['cuda-12.6']),
                 ('library-miss', 'cuda-runtime-12.8/lib64/libcublas.so.12', ['cuda-12.8']),
+                ('cufft-12.6-miss', 'cuda-runtime-12.6/lib64/libcufft.so.11', ['cuda-12.6']),
+                ('cufft-12.8-miss', 'cuda-runtime-12.8/lib64/libcufft.so.11', ['cuda-12.8']),
                 ('header-miss', 'cuda-runtime-12.8/include/cuda_runtime.h', ['cuda-12.8']),
             ]
             for name, missing, expected_installs in scenarios:
@@ -168,6 +172,32 @@ else:
                             self.assertEqual(executable.read_bytes(), b'fixture executable')
                             self.assertTrue(os.access(executable, os.X_OK))
 
+
+    def test_cuda_configuration_rejects_sdk_without_cufft(self):
+        workflow = (ROOT / '.github/workflows/runpod-gpu-execute.yml').read_text()
+        script = step_script(workflow, 'Configure CUDA runtime libraries')
+        for runtime in ('12.6', '12.8'):
+            with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                libraries = root / f'cuda-{runtime}/lib64'
+                libraries.mkdir(parents=True)
+                (libraries.parent / '.seed-complete').touch()
+                for library in ('nvrtc', 'cublas', 'cusolver', 'cusparse', 'cufft'):
+                    (libraries / f'lib{library}.so').write_bytes(b'fixture')
+                cutensor = root / 'cutensor-2.6.0.4/lib'
+                cutensor.mkdir(parents=True)
+                (cutensor / 'libcutensor.so.2').write_bytes(b'fixture')
+                env = dict(os.environ, CUDA_RUNTIME_VERSION=runtime,
+                           CUTENSOR_VERSION='2.6.0.4', TENFERRO_CI_CACHE_ROOT=str(root),
+                           GITHUB_ENV=str(root / 'env'))
+                command = ['bash', '-c', script.replace('/opt/ci-cost-runtime', str(root))]
+                complete = subprocess.run(command, env=env, capture_output=True, text=True)
+                self.assertEqual(complete.returncode, 0, complete.stdout + complete.stderr)
+                (libraries / 'libcufft.so').unlink()
+                (root / 'env').unlink()
+                incomplete = subprocess.run(command, env=env, capture_output=True, text=True)
+                self.assertNotEqual(incomplete.returncode, 0)
+                self.assertFalse((root / 'env').exists())
 
     def test_pjrt_consumer_accepts_prepared_and_legacy_payloads(self):
         workflow = (ROOT / '.github/workflows/runpod-gpu-execute.yml').read_text()
@@ -212,6 +242,24 @@ else:
                 self.assertTrue(os.access(target / 'nvidia/cuda_nvcc/bin/ptxas', os.X_OK))
                 if prepared:
                     self.assertFalse((root / 'temp').exists())
+
+    def test_legacy_runner_requires_cufft_in_discovered_and_cached_trees(self):
+        workflow = (ROOT / '.github/workflows/CI_gpu.yml').read_text()
+        configure = step_script(workflow, 'Configure CUDA runtime libraries')
+        helper = configure[configure.index('cuda_tree_has_cufft() {'):
+                           configure.index('accept_cuda_toolkit() {')]
+        for layout in ('lib64', 'targets/x86_64-linux/lib'):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                libraries = root / layout
+                libraries.mkdir(parents=True)
+                command = ['bash', '-c', helper + '\ncuda_tree_has_cufft "$1"',
+                           'check', str(root)]
+                self.assertNotEqual(subprocess.run(command).returncode, 0)
+                (libraries / 'libcufft.so.11').write_bytes(b'fixture')
+                self.assertEqual(subprocess.run(command).returncode, 0)
+                (libraries / 'libcufft.so.11').write_bytes(b'')
+                self.assertNotEqual(subprocess.run(command).returncode, 0)
 
     def test_preparation_is_a_required_read_only_hosted_prerequisite(self):
         parent = (ROOT / '.github/workflows/runpod-gpu-test.yml').read_text()

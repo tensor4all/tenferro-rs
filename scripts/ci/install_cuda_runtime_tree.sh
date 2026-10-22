@@ -39,6 +39,7 @@ as_root apt-get install -y --no-install-recommends \
   "cuda-nvrtc-${cuda_apt_suffix}" \
   "cuda-nvrtc-dev-${cuda_apt_suffix}" \
   "libcublas-${cuda_apt_suffix}" \
+  "libcufft-${cuda_apt_suffix}" \
   "libcusolver-${cuda_apt_suffix}" \
   "libcusparse-${cuda_apt_suffix}" \
   "libnvjitlink-${cuda_apt_suffix}"

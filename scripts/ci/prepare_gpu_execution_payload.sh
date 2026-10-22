@@ -42,7 +42,7 @@ fi
 cuda_tree_ready() {
   local root="$1" lib
   test -f "$root/.seed-complete" || return 1
-  for lib in nvrtc cublas cusolver cusparse; do
+  for lib in nvrtc cublas cusolver cusparse cufft; do
     local candidates=("$root"/lib64/lib"${lib}".so*)
     test -s "${candidates[0]}" || return 1
   done

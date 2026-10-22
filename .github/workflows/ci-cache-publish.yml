@@ -233,7 +233,7 @@ jobs:
         id: runtime_lookup
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-${{ matrix.cuda }}
-          key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-${{ matrix.cuda }}-minimal-v8
+          key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-${{ matrix.cuda }}-minimal-v9
           lookup-only: true
 
       - name: Build CUDA runtime tree
@@ -250,7 +250,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-${{ matrix.cuda }}
-          key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-${{ matrix.cuda }}-minimal-v8
+          key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-${{ matrix.cuda }}-minimal-v9
 
   publish-cutensor:
     name: Publish cuTENSOR cache
