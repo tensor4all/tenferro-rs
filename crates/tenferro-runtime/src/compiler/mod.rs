@@ -1321,7 +1321,6 @@ fn replace_slot_uses(program: &mut ExecProgram, from: usize, to: usize) {
 // Absorb Transpose instructions that feed directly into DotGeneral by
 // adjusting the DotGeneral dimension numbers and bypassing the Transpose.
 
-/// Fold Transpose instructions into DotGeneral dimension numbers.
 // ============================================================================
 // Metadata view folding (#2226)
 // ============================================================================
@@ -1443,6 +1442,7 @@ fn fold_metadata_views_one_pass(
     false
 }
 
+/// Fold Transpose instructions into DotGeneral dimension numbers.
 pub(crate) fn transpose_folding(program: &mut ExecProgram) {
     loop {
         let producer_by_slot = producer_indices_by_slot(program);

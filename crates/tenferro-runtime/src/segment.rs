@@ -327,9 +327,7 @@ pub(crate) fn build_elementwise_fusion_plan(
             // A folded `BroadcastInDim` on a region input is the same broadcast
             // view the planner derives from a broadcast instruction; any other
             // folded view keeps the region on the per-instruction path.
-            if inst.op.elementwise_fusion_op().is_none() {
-                return None;
-            }
+            inst.op.elementwise_fusion_op()?;
             for (position, view) in &inst.input_views {
                 let InputView::BroadcastInDim { shape, dims } = view else {
                     return None;
