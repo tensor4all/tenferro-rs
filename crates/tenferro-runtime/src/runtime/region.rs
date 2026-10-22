@@ -56,10 +56,15 @@ pub(crate) struct ElementwiseRegion {
 
 impl ElementwiseRegion {
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
+        // The region owns a copy of each instruction, payloads included.
         let instructions = self
             .instructions
-            .len()
-            .checked_mul(std::mem::size_of::<ExecInstruction>())?;
+            .iter()
+            .try_fold(0usize, |total, instruction| {
+                total.checked_add(super::preparation::exec_instruction_retained_bytes(
+                    instruction,
+                )?)
+            })?;
         let nodes = self
             .node_indices
             .len()
@@ -166,6 +171,40 @@ pub(crate) fn plan_elementwise_regions(
         });
     }
     regions
+}
+
+/// How one scheduled node takes part in the planned regions.
+///
+/// Computed once at prepare so the executor neither builds nor probes a
+/// region map per run (#2226).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NodeRegion {
+    /// Dispatched as its own command.
+    Command,
+    /// Starts the region with this index, which executes as one command.
+    Start(usize),
+    /// Executed as part of the region that starts at an earlier node.
+    Covered,
+}
+
+/// The region role of every scheduled node.
+pub(crate) fn node_regions(
+    schedule: &ScheduledGraph,
+    regions: &[ElementwiseRegion],
+) -> Box<[NodeRegion]> {
+    let mut roles = vec![NodeRegion::Command; schedule.nodes().len()];
+    for (region_index, region) in regions.iter().enumerate() {
+        for (position, &node) in region.node_indices.iter().enumerate() {
+            if let Some(role) = roles.get_mut(node) {
+                *role = if position == 0 {
+                    NodeRegion::Start(region_index)
+                } else {
+                    NodeRegion::Covered
+                };
+            }
+        }
+    }
+    roles.into_boxed_slice()
 }
 
 /// Execution counters for planned elementwise regions.

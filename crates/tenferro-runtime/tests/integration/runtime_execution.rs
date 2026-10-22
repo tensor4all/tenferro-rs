@@ -3710,3 +3710,36 @@ fn compile_with_input_specs_rejects_unused_placeholder() {
         .compile_with_input_specs(&out, &[(&y, DType::F64, &[3])])
         .is_ok());
 }
+
+#[test]
+fn an_engine_without_in_place_view_reads_keeps_metadata_commands() -> Result<(), Box<dyn StdError>>
+{
+    // The test registration's `LayoutRuntime` keeps the default
+    // `folds_metadata_views` (`false`), so the transpose stays a scheduled
+    // command (#2226) and the program still computes the same values.
+    let mut backend = CpuEngine::serial();
+    let runtime = runtime_with_cpu(&backend)?;
+    let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
+        vec![2, 3],
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    )?)?;
+    let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
+        vec![3, 2],
+        vec![10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0],
+    )?)?;
+    let out = (&a.neg()?.transpose(&[1, 0])? + &b)?;
+    let program = GraphCompiler::new().compile_many(&[&out])?;
+
+    let prepared = prepare(&[&backend], &runtime, &program, &[])?;
+    assert_eq!(
+        prepared.execution_command_count(),
+        3,
+        "Negate, Transpose, Add"
+    );
+    let outputs = run_prepared(&mut [&mut backend], &runtime, &prepared, &[])?;
+    assert_eq!(
+        outputs[0].as_slice::<f64>()?,
+        &[9.0, 17.0, 25.0, 38.0, 46.0, 54.0]
+    );
+    Ok(())
+}

@@ -1,13 +1,13 @@
 use crate::error::{Error, Result};
 use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::{
-    DType, Engine, GatherConfig, PadConfig, SliceConfig, StridedSliceSpec, Tensor,
-    TensorBackendOps, TensorDeviceTransfer, TensorRead, TensorView,
+    Engine, GatherConfig, PadConfig, SliceConfig, Tensor, TensorBackendOps, TensorDeviceTransfer,
+    TensorRead,
 };
 
 use super::{
-    collect_tensor_refs, constant_tensor, ensure_owned, get, get_read, resolve_tensor_shape_exprs,
-    ExecInstruction, ExecOp, ExecSlot,
+    collect_tensor_reads, constant_tensor, ensure_owned, get, get_read, resolve_tensor_shape_exprs,
+    ExecInstruction, ExecOp, ExecSlot, InputView,
 };
 use crate::scalar_semantics::dynamic_truncate_size;
 
@@ -185,6 +185,28 @@ pub(super) fn is_host_op(op: &ExecOp) -> bool {
     HostDispatchKey::for_op(op).is_some()
 }
 
+/// Whether the executor of `op` reads input `input_index` as a `TensorRead`,
+/// so a metadata-only producer can be folded onto that input (#2226).
+///
+/// Every backend entry but `Convert` (`cast` takes an owned tensor) reads its
+/// inputs through `get_read`; the FFI entries (`dot_general_read_cached`,
+/// extension executors) and `ShapeOf` take reads; the remaining host ops
+/// materialize their inputs. The owned accessors reject a folded view typed,
+/// so a consumer this predicate misclassifies fails loudly.
+pub(super) fn reads_input_view(op: &ExecOp, input_index: usize) -> bool {
+    if let Some(entry) = backend_dispatch_entry(op) {
+        return entry.key != PrimitiveOpKind::Convert;
+    }
+    match FfiDispatchKey::for_op(op) {
+        Some(FfiDispatchKey::DotGeneral | FfiDispatchKey::DotGeneralWithConj) => {
+            return input_index < 2;
+        }
+        Some(FfiDispatchKey::Extension) => return true,
+        None => {}
+    }
+    matches!(HostDispatchKey::for_op(op), Some(HostDispatchKey::ShapeOf))
+}
+
 pub(super) fn is_ffi_op(op: &ExecOp) -> bool {
     FfiDispatchKey::for_op(op).is_some()
 }
@@ -212,7 +234,8 @@ pub(super) fn host_dispatch_entry<B: HostExecution + ?Sized>(
 ///
 /// A view is derivable only from an `ExecSlot::Read`: an owned intermediate
 /// lives in the slot table, so a borrow of it could not carry the run's input
-/// lifetime. Computed intermediates therefore keep the materializing path.
+/// lifetime. Computed intermediates therefore keep the materializing path,
+/// unless the fold pass removed the instruction altogether (`input_views`).
 pub(super) fn view_backend_op<'input>(
     slots: &[Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
@@ -220,66 +243,19 @@ pub(super) fn view_backend_op<'input>(
     if inst.input_slots.len() != 1 || inst.output_slots.len() != 1 {
         return None;
     }
+    let view = InputView::from_op(&inst.op)?;
     let read = match slots.get(inst.input_slots[0])?.as_ref()? {
         ExecSlot::Read(read) => read.clone(),
         ExecSlot::Owned(_) => return None,
     };
-    // A caller-owned payload has no borrowed view.
-    if matches!(read.dtype(), DType::External(_)) {
-        return None;
+    // The instruction's own folded views come first, then its transform; a
+    // layout the view form cannot express (a reshape of a strided view) falls
+    // back to the materializing entry.
+    let mut read = read;
+    for (_, folded) in &inst.input_views {
+        read = folded.apply(read).ok()?;
     }
-    macro_rules! typed_view_map {
-        ($view:expr, $method:ident ( $($arg:expr),* )) => {
-            match $view {
-                TensorView::F32(view) => TensorView::F32(view.$method($($arg),*).ok()?),
-                TensorView::F64(view) => TensorView::F64(view.$method($($arg),*).ok()?),
-                TensorView::I32(view) => TensorView::I32(view.$method($($arg),*).ok()?),
-                TensorView::I64(view) => TensorView::I64(view.$method($($arg),*).ok()?),
-                TensorView::Bool(view) => TensorView::Bool(view.$method($($arg),*).ok()?),
-                TensorView::C32(view) => TensorView::C32(view.$method($($arg),*).ok()?),
-                TensorView::C64(view) => TensorView::C64(view.$method($($arg),*).ok()?),
-            }
-        };
-    }
-    let view = match &inst.op {
-        ExecOp::Transpose { perm } => {
-            typed_view_map!(read.tensor_view(), transpose_view(perm))
-        }
-        ExecOp::Reshape { shape } => {
-            let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape).ok()?;
-            typed_view_map!(read.tensor_view(), reshape_view(&shape))
-        }
-        ExecOp::BroadcastInDim { shape, dims } => {
-            let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape).ok()?;
-            return read
-                .broadcast_in_dim_view(&shape, dims)
-                .ok()
-                .map(ExecSlot::Read);
-        }
-        ExecOp::Slice(config) => {
-            if config.starts.len() != config.limits.len()
-                || config.starts.len() != config.strides.len()
-            {
-                return None;
-            }
-            let mut specs = Vec::with_capacity(config.starts.len());
-            for ((&start, &limit), &step) in config
-                .starts
-                .iter()
-                .zip(&config.limits)
-                .zip(&config.strides)
-            {
-                specs.push(StridedSliceSpec::new(
-                    isize::try_from(start).ok()?,
-                    Some(isize::try_from(limit).ok()?),
-                    isize::try_from(step).ok()?,
-                ));
-            }
-            typed_view_map!(read.tensor_view(), slice_view(&specs))
-        }
-        _ => return None,
-    };
-    Some(ExecSlot::Read(TensorRead::from_view(view)))
+    view.apply(read).ok().map(ExecSlot::Read)
 }
 
 pub(super) fn execute_backend_dispatch(
@@ -313,11 +289,11 @@ pub(super) fn execute_host_dispatch<B: HostExecution + ?Sized>(
 fn ensure_backend_inputs(
     exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'_>>],
-    input_slots: &[usize],
+    inst: &ExecInstruction,
     indices: &[usize],
 ) -> Result<()> {
     for &idx in indices {
-        ensure_owned(exec, slots, input_slots, idx)?;
+        ensure_owned(exec, slots, inst, idx)?;
     }
     Ok(())
 }
@@ -337,10 +313,17 @@ fn host_dispatch_mismatch(expected: HostDispatchKey, op: &ExecOp) -> Error {
 fn ensure_host_owned<B: HostExecution + ?Sized>(
     backend: &mut B,
     slots: &mut [Option<ExecSlot<'_>>],
-    input_slots: &[usize],
+    inst: &ExecInstruction,
     idx: usize,
 ) -> Result<()> {
-    let slot = input_slots
+    if inst.input_views.iter().any(|(input, _)| *input == idx) {
+        return Err(Error::Internal(format!(
+            "host input {idx} of {:?} carries a folded view, but the operation reads owned inputs",
+            inst.op
+        )));
+    }
+    let slot = inst
+        .input_slots
         .get(idx)
         .copied()
         .ok_or_else(|| Error::Internal(format!("host input slot {idx} is missing")))?;
@@ -371,7 +354,7 @@ fn execute_shape_of_host<B: HostExecution + ?Sized>(
     let ExecOp::ShapeOf { axis } = &inst.op else {
         return Err(host_dispatch_mismatch(HostDispatchKey::ShapeOf, &inst.op));
     };
-    let input = get_read(slots, &inst.input_slots, 0)?;
+    let input = get_read(slots, inst, 0)?;
     if *axis >= input.shape().len() {
         return Err(Error::invalid_argument(
             "shape_of",
@@ -404,9 +387,9 @@ fn execute_dynamic_truncate_host<B: HostExecution + ?Sized>(
             &inst.op,
         ));
     };
-    ensure_host_owned(backend, slots, &inst.input_slots, 0)?;
-    ensure_host_owned(backend, slots, &inst.input_slots, 1)?;
-    let input = get(slots, &inst.input_slots, 0)?;
+    ensure_host_owned(backend, slots, inst, 0)?;
+    ensure_host_owned(backend, slots, inst, 1)?;
+    let input = get(slots, inst, 0)?;
     if *axis >= input.shape().len() {
         return Err(Error::invalid_argument(
             "dynamic_truncate",
@@ -418,7 +401,7 @@ fn execute_dynamic_truncate_host<B: HostExecution + ?Sized>(
             ),
         ));
     }
-    let size_tensor = backend.download_to_host(get_read(slots, &inst.input_slots, 1)?)?;
+    let size_tensor = backend.download_to_host(get_read(slots, inst, 1)?)?;
     let axis_extent = input.shape()[*axis];
     let size = dynamic_truncate_size(&size_tensor, axis_extent)?;
     let rank = input.shape().len();
@@ -444,10 +427,10 @@ fn execute_pad_to_match_host<B: HostExecution + ?Sized>(
             &inst.op,
         ));
     };
-    ensure_host_owned(backend, slots, &inst.input_slots, 0)?;
-    ensure_host_owned(backend, slots, &inst.input_slots, 1)?;
-    let input = get(slots, &inst.input_slots, 0)?;
-    let reference = get(slots, &inst.input_slots, 1)?;
+    ensure_host_owned(backend, slots, inst, 0)?;
+    ensure_host_owned(backend, slots, inst, 1)?;
+    let input = get(slots, inst, 0)?;
+    let reference = get(slots, inst, 1)?;
     if *axis >= input.shape().len() {
         return Err(Error::invalid_argument(
             "pad_to_match",
@@ -500,7 +483,7 @@ fn execute_transpose(
     let ExecOp::Transpose { perm } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Transpose, &inst.op));
     };
-    Ok(exec.transpose_read(get_read(slots, &inst.input_slots, 0)?, perm)?)
+    Ok(exec.transpose_read(get_read(slots, inst, 0)?, perm)?)
 }
 
 fn execute_reshape(
@@ -511,8 +494,8 @@ fn execute_reshape(
     let ExecOp::Reshape { shape } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Reshape, &inst.op));
     };
-    let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
-    Ok(exec.reshape_read(get_read(slots, &inst.input_slots, 0)?, &shape)?)
+    let shape = resolve_tensor_shape_exprs(slots, inst, shape)?;
+    Ok(exec.reshape_read(get_read(slots, inst, 0)?, &shape)?)
 }
 
 fn execute_broadcast_in_dim(
@@ -523,8 +506,8 @@ fn execute_broadcast_in_dim(
     let ExecOp::BroadcastInDim { shape, dims } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::BroadcastInDim, &inst.op));
     };
-    let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
-    Ok(exec.broadcast_in_dim_read(get_read(slots, &inst.input_slots, 0)?, &shape, dims)?)
+    let shape = resolve_tensor_shape_exprs(slots, inst, shape)?;
+    Ok(exec.broadcast_in_dim_read(get_read(slots, inst, 0)?, &shape, dims)?)
 }
 
 fn execute_convert(
@@ -532,11 +515,11 @@ fn execute_convert(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0])?;
+    ensure_backend_inputs(exec, slots, inst, &[0])?;
     let ExecOp::Convert { to } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Convert, &inst.op));
     };
-    Ok(exec.cast(get(slots, &inst.input_slots, 0)?, *to)?)
+    Ok(exec.cast(get(slots, inst, 0)?, *to)?)
 }
 
 fn execute_reduce_sum(
@@ -547,7 +530,7 @@ fn execute_reduce_sum(
     let ExecOp::ReduceSum { axes } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::ReduceSum, &inst.op));
     };
-    Ok(exec.reduce_sum_read(get_read(slots, &inst.input_slots, 0)?, axes)?)
+    Ok(exec.reduce_sum_read(get_read(slots, inst, 0)?, axes)?)
 }
 
 fn execute_reduce_sum_squares(
@@ -561,7 +544,7 @@ fn execute_reduce_sum_squares(
             &inst.op,
         ));
     };
-    Ok(exec.reduce_sum_squares_read(get_read(slots, &inst.input_slots, 0)?, axes)?)
+    Ok(exec.reduce_sum_squares_read(get_read(slots, inst, 0)?, axes)?)
 }
 
 fn execute_extract_diag(
@@ -569,11 +552,10 @@ fn execute_extract_diag(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0])?;
     let ExecOp::ExtractDiag { axis_a, axis_b } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::ExtractDiag, &inst.op));
     };
-    Ok(exec.extract_diagonal(get(slots, &inst.input_slots, 0)?, *axis_a, *axis_b)?)
+    Ok(exec.extract_diagonal_read(get_read(slots, inst, 0)?, *axis_a, *axis_b)?)
 }
 
 fn execute_embed_diag(
@@ -581,11 +563,10 @@ fn execute_embed_diag(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0])?;
     let ExecOp::EmbedDiag { axis_a, axis_b } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::EmbedDiag, &inst.op));
     };
-    Ok(exec.embed_diagonal(get(slots, &inst.input_slots, 0)?, *axis_a, *axis_b)?)
+    Ok(exec.embed_diagonal_read(get_read(slots, inst, 0)?, *axis_a, *axis_b)?)
 }
 
 fn execute_tril(
@@ -593,11 +574,10 @@ fn execute_tril(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0])?;
     let ExecOp::Tril { k } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Tril, &inst.op));
     };
-    Ok(exec.tril(get(slots, &inst.input_slots, 0)?, *k)?)
+    Ok(exec.tril_read(get_read(slots, inst, 0)?, *k)?)
 }
 
 fn execute_triu(
@@ -605,11 +585,10 @@ fn execute_triu(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0])?;
     let ExecOp::Triu { k } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Triu, &inst.op));
     };
-    Ok(exec.triu(get(slots, &inst.input_slots, 0)?, *k)?)
+    Ok(exec.triu_read(get_read(slots, inst, 0)?, *k)?)
 }
 
 fn execute_add(
@@ -617,10 +596,7 @@ fn execute_add(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.add_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-    )?)
+    Ok(exec.add_read(get_read(slots, inst, 0)?, get_read(slots, inst, 1)?)?)
 }
 
 fn execute_subtract(
@@ -628,10 +604,7 @@ fn execute_subtract(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.sub_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-    )?)
+    Ok(exec.sub_read(get_read(slots, inst, 0)?, get_read(slots, inst, 1)?)?)
 }
 
 fn execute_multiply(
@@ -639,10 +612,7 @@ fn execute_multiply(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.mul_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-    )?)
+    Ok(exec.mul_read(get_read(slots, inst, 0)?, get_read(slots, inst, 1)?)?)
 }
 
 fn execute_negate(
@@ -650,7 +620,7 @@ fn execute_negate(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.neg_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.neg_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_conj(
@@ -658,7 +628,7 @@ fn execute_conj(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.conj_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.conj_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_divide(
@@ -666,10 +636,7 @@ fn execute_divide(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.div_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-    )?)
+    Ok(exec.div_read(get_read(slots, inst, 0)?, get_read(slots, inst, 1)?)?)
 }
 
 fn execute_remainder(
@@ -677,10 +644,7 @@ fn execute_remainder(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.rem_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-    )?)
+    Ok(exec.rem_read(get_read(slots, inst, 0)?, get_read(slots, inst, 1)?)?)
 }
 
 fn execute_abs(
@@ -688,7 +652,7 @@ fn execute_abs(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.abs_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.abs_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_sign(
@@ -696,7 +660,7 @@ fn execute_sign(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.sign_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.sign_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_maximum(
@@ -704,10 +668,7 @@ fn execute_maximum(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.maximum_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-    )?)
+    Ok(exec.maximum_read(get_read(slots, inst, 0)?, get_read(slots, inst, 1)?)?)
 }
 
 fn execute_minimum(
@@ -715,10 +676,7 @@ fn execute_minimum(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.minimum_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-    )?)
+    Ok(exec.minimum_read(get_read(slots, inst, 0)?, get_read(slots, inst, 1)?)?)
 }
 
 fn execute_compare(
@@ -729,11 +687,7 @@ fn execute_compare(
     let ExecOp::Compare(dir) = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Compare, &inst.op));
     };
-    Ok(exec.compare_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-        dir,
-    )?)
+    Ok(exec.compare_read(get_read(slots, inst, 0)?, get_read(slots, inst, 1)?, dir)?)
 }
 
 fn execute_select(
@@ -742,9 +696,9 @@ fn execute_select(
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     Ok(exec.select_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-        get_read(slots, &inst.input_slots, 2)?,
+        get_read(slots, inst, 0)?,
+        get_read(slots, inst, 1)?,
+        get_read(slots, inst, 2)?,
     )?)
 }
 
@@ -754,9 +708,9 @@ fn execute_clamp(
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     Ok(exec.clamp_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-        get_read(slots, &inst.input_slots, 2)?,
+        get_read(slots, inst, 0)?,
+        get_read(slots, inst, 1)?,
+        get_read(slots, inst, 2)?,
     )?)
 }
 
@@ -765,7 +719,7 @@ fn execute_exp(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.exp_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.exp_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_log(
@@ -773,7 +727,7 @@ fn execute_log(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.log_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.log_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_sin(
@@ -781,7 +735,7 @@ fn execute_sin(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.sin_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.sin_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_cos(
@@ -789,7 +743,7 @@ fn execute_cos(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.cos_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.cos_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_tanh(
@@ -797,7 +751,7 @@ fn execute_tanh(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.tanh_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.tanh_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_sqrt(
@@ -805,7 +759,7 @@ fn execute_sqrt(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.sqrt_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.sqrt_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_rsqrt(
@@ -813,7 +767,7 @@ fn execute_rsqrt(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.rsqrt_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.rsqrt_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_pow(
@@ -821,10 +775,7 @@ fn execute_pow(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.pow_read(
-        get_read(slots, &inst.input_slots, 0)?,
-        get_read(slots, &inst.input_slots, 1)?,
-    )?)
+    Ok(exec.pow_read(get_read(slots, inst, 0)?, get_read(slots, inst, 1)?)?)
 }
 
 fn execute_expm1(
@@ -832,7 +783,7 @@ fn execute_expm1(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.expm1_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.expm1_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_log1p(
@@ -840,7 +791,7 @@ fn execute_log1p(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.log1p_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.log1p_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_erf(
@@ -848,7 +799,7 @@ fn execute_erf(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    Ok(exec.erf_read(get_read(slots, &inst.input_slots, 0)?)?)
+    Ok(exec.erf_read(get_read(slots, inst, 0)?)?)
 }
 
 fn execute_gather(
@@ -856,15 +807,10 @@ fn execute_gather(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0, 1])?;
     let ExecOp::Gather(config) = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Gather, &inst.op));
     };
-    Ok(exec.gather(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
-        config,
-    )?)
+    Ok(exec.gather_read(get_read(slots, inst, 0)?, get_read(slots, inst, 1)?, config)?)
 }
 
 fn execute_gather_dynamic_slice_sizes(
@@ -872,7 +818,6 @@ fn execute_gather_dynamic_slice_sizes(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0, 1])?;
     let ExecOp::GatherDynamicSliceSizes {
         offset_dims,
         collapsed_slice_dims,
@@ -886,7 +831,7 @@ fn execute_gather_dynamic_slice_sizes(
             &inst.op,
         ));
     };
-    let slice_sizes = resolve_tensor_shape_exprs(slots, &inst.input_slots, slice_sizes)?;
+    let slice_sizes = resolve_tensor_shape_exprs(slots, inst, slice_sizes)?;
     let config = GatherConfig {
         offset_dims: offset_dims.clone(),
         collapsed_slice_dims: collapsed_slice_dims.clone(),
@@ -894,9 +839,9 @@ fn execute_gather_dynamic_slice_sizes(
         index_vector_dim: *index_vector_dim,
         slice_sizes,
     };
-    Ok(exec.gather(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
+    Ok(exec.gather_read(
+        get_read(slots, inst, 0)?,
+        get_read(slots, inst, 1)?,
         &config,
     )?)
 }
@@ -906,14 +851,13 @@ fn execute_scatter(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0, 1, 2])?;
     let ExecOp::Scatter(config) = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Scatter, &inst.op));
     };
-    Ok(exec.scatter(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
-        get(slots, &inst.input_slots, 2)?,
+    Ok(exec.scatter_read(
+        get_read(slots, inst, 0)?,
+        get_read(slots, inst, 1)?,
+        get_read(slots, inst, 2)?,
         config,
     )?)
 }
@@ -923,11 +867,10 @@ fn execute_slice(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0])?;
     let ExecOp::Slice(config) = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Slice, &inst.op));
     };
-    Ok(exec.slice(get(slots, &inst.input_slots, 0)?, config)?)
+    Ok(exec.slice_read(get_read(slots, inst, 0)?, config)?)
 }
 
 fn execute_dynamic_slice(
@@ -935,13 +878,12 @@ fn execute_dynamic_slice(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0, 1])?;
     let ExecOp::DynamicSlice { slice_sizes } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::DynamicSlice, &inst.op));
     };
-    Ok(exec.dynamic_slice(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
+    Ok(exec.dynamic_slice_read(
+        get_read(slots, inst, 0)?,
+        get_read(slots, inst, 1)?,
         slice_sizes,
     )?)
 }
@@ -951,11 +893,10 @@ fn execute_dynamic_update_slice(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0, 1, 2])?;
-    Ok(exec.dynamic_update_slice(
-        get(slots, &inst.input_slots, 0)?,
-        get(slots, &inst.input_slots, 1)?,
-        get(slots, &inst.input_slots, 2)?,
+    Ok(exec.dynamic_update_slice_read(
+        get_read(slots, inst, 0)?,
+        get_read(slots, inst, 1)?,
+        get_read(slots, inst, 2)?,
     )?)
 }
 
@@ -964,11 +905,10 @@ fn execute_pad(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0])?;
     let ExecOp::Pad(config) = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Pad, &inst.op));
     };
-    Ok(exec.pad(get(slots, &inst.input_slots, 0)?, config)?)
+    Ok(exec.pad_read(get_read(slots, inst, 0)?, config)?)
 }
 
 fn execute_concatenate(
@@ -976,14 +916,11 @@ fn execute_concatenate(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    for idx in 0..inst.input_slots.len() {
-        ensure_owned(exec, slots, &inst.input_slots, idx)?;
-    }
     let ExecOp::Concatenate { axis } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Concatenate, &inst.op));
     };
-    let inputs = collect_tensor_refs(slots, &inst.input_slots)?;
-    Ok(exec.concatenate(&inputs, *axis)?)
+    let inputs = collect_tensor_reads(slots, inst)?;
+    Ok(exec.concatenate_read(&inputs, *axis)?)
 }
 
 fn execute_reverse(
@@ -991,11 +928,10 @@ fn execute_reverse(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, &inst.input_slots, &[0])?;
     let ExecOp::Reverse { axes } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Reverse, &inst.op));
     };
-    Ok(exec.reverse(get(slots, &inst.input_slots, 0)?, axes)?)
+    Ok(exec.reverse_read(get_read(slots, inst, 0)?, axes)?)
 }
 
 fn execute_reduce_prod(
@@ -1006,7 +942,7 @@ fn execute_reduce_prod(
     let ExecOp::ReduceProd { axes } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::ReduceProd, &inst.op));
     };
-    Ok(exec.reduce_prod_read(get_read(slots, &inst.input_slots, 0)?, axes)?)
+    Ok(exec.reduce_prod_read(get_read(slots, inst, 0)?, axes)?)
 }
 
 fn execute_reduce_max(
@@ -1017,7 +953,7 @@ fn execute_reduce_max(
     let ExecOp::ReduceMax { axes } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::ReduceMax, &inst.op));
     };
-    Ok(exec.reduce_max_read(get_read(slots, &inst.input_slots, 0)?, axes)?)
+    Ok(exec.reduce_max_read(get_read(slots, inst, 0)?, axes)?)
 }
 
 fn execute_reduce_min(
@@ -1028,5 +964,5 @@ fn execute_reduce_min(
     let ExecOp::ReduceMin { axes } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::ReduceMin, &inst.op));
     };
-    Ok(exec.reduce_min_read(get_read(slots, &inst.input_slots, 0)?, axes)?)
+    Ok(exec.reduce_min_read(get_read(slots, inst, 0)?, axes)?)
 }

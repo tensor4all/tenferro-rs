@@ -47,6 +47,7 @@ without reconstructing shapes from scratch downstream.
 | `TransposeFolding` | active | Fold producer `ExecOp::Transpose` into downstream `ExecOp::DotGeneral` dimension numbers |
 | `DotDecomposer` | active | Canonicalize `ExecOp::DotGeneral` into `[M?, K, B...] × [K, N?, B...] → [M?, N?, B...]` by emitting explicit `Transpose`/`Reshape` wrappers |
 | `DeadCodeElimination` | active | Drop instructions whose outputs are never consumed by a program output or later instruction |
+| `MetadataViewFolding` | active (at prepare) | Turn a single-consumer `Transpose`/`Reshape`/`BroadcastInDim`/`Slice` into an input view of the consumer that reads it, so it is not a scheduled command |
 
 ### Removed pass
 
@@ -258,7 +259,84 @@ downstream instruction or program output.
 `DotDecomposer` re-canonicalizes a DotGeneral whose upstream Transpose was
 already folded into dim-numbers by `TransposeFolding`.
 
-### III.5 ReductionSimplification
+### III.5 MetadataViewFolding (#2226)
+
+**Scope:** `ExecProgram`, at preparation (`PreparedProgramRoot::new`), after
+engine placement is known.
+
+**Purpose:** A metadata-only operation moves no bytes, yet as a scheduled
+command it costs a full dispatch and, on an owned intermediate, a full copy.
+When its result has exactly one consumer that reads the operand as a
+`TensorRead`, the transform becomes an entry of that consumer's
+`ExecInstruction::input_views` and the instruction is removed. The consumer
+derives the view when it reads the operand (`InputView::apply`, the same
+derivation the Read-slot path uses for a metadata command over a borrowed
+input).
+
+**When to fire:** an instruction folds when all of the following hold:
+
+- `InputView::from_op` accepts its op (`Transpose`, `Reshape`,
+  `BroadcastInDim`, `Slice`), with one input and one output;
+- its dtype is not `DType::External` (a caller-owned payload has no borrowed
+  view);
+- its output is not a program output (an owned output must be materialized);
+- exactly one instruction uses the output, at exactly one input position;
+- that consumer reads the input through a view (`reads_input_view`: every
+  backend dispatch entry except `Convert`, `DotGeneral`, extensions, and
+  `ShapeOf`);
+- producer and consumer share an execution location (a value that crosses a
+  transfer boundary keeps materializing, so the transfer carries the result
+  rather than the source), and that location's engine reports
+  `LayoutRuntime::folds_metadata_views` (its `*_read` entries consume a
+  strided view in place; CPU does, the GPU engines keep the default `false`
+  and an unchanged schedule);
+- for `Reshape`: the source is the output of an instruction that is not itself
+  a view, and the reshape carries no pending view of its own (a reshape of a
+  strided view has no view form in general; a non-view instruction result is a
+  compact engine result).
+
+**Algorithm:**
+
+```text
+PROCEDURE FoldMetadataViews(program, same_placement):
+  REPEAT until no instruction folds:
+    FOR each instruction i IN program.instructions:
+      IF i is not a foldable view (rules above): CONTINUE
+      (j, k) = the single use of i.output
+      IF NOT reads_input_view(j.op, k) OR NOT same_placement(i, j): CONTINUE
+      j.input_slots[k] = i.input_slots[0]
+      j.input_views += i.input_views (re-indexed to k), then (k, view of i)
+      remove i
+      RESTART the scan
+  populate_last_use(program); validate(program)
+```
+
+Chains fold in turn (`transpose → slice → consumer` leaves the consumer with
+two views on one input, applied in order). One forward pass suffices, since a
+folded instruction's consumer is visited later in the same pass; the pass is
+linear in the instruction count plus the folded views.
+
+**Interaction with region planning:** a folded `BroadcastInDim` on a region
+input is the same broadcast view the elementwise planner derives from a
+broadcast instruction and keeps the region fusable; any other folded view keeps
+the region on the per-instruction path, which reads views itself. The folded
+`broadcast-multiply` form keeps the segmentation boundary of the unfolded
+triplet/pair.
+
+**Example:**
+
+```text
+Before (scheduled commands: 3):
+  t0 = Negate(A)
+  t1 = Transpose(t0, [1, 0])
+  t2 = Add(B, t1)
+
+After (scheduled commands: 2):
+  t0 = Negate(A)
+  t2 = Add(B, t0 viewed as Transpose([1, 0]))
+```
+
+### III.6 ReductionSimplification
 
 `ReductionSimplification` no longer exists in the compiler. Historical notes
 about hoisting independent reductions remain useful background, but there is no
@@ -284,8 +362,18 @@ ExecProgram
     │ 4. DeadCodeElimination
     │ 5. populate_last_use
     ▼
+Staged program (identity-level, placement-independent)
+    │
+    │ at Runtime::prepare, once the engine placement is resolved:
+    │ 6. MetadataViewFolding (same-location pairs), then populate_last_use
+    ▼
 Ready for execution
 ```
+
+`MetadataViewFolding` runs at preparation rather than in the staging pipeline
+because its placement rule needs the resolved operation locations; the staged
+program the preparation cache identifies stays placement-independent, and each
+prepared root executes its own folded copy.
 
 `DotDecomposer` runs after `TransposeFolding` so that any pre-existing
 foldable transpose is absorbed into the DotGeneral dim numbers before the
@@ -305,6 +393,7 @@ deleted.
 |---|---|
 | Contracting-dimension normalization during execution planning | Moved into `DotDimensionSorter` on `ExecProgram` |
 | Lazy transpose absorption around GEMM | Moved into `TransposeFolding` on `ExecProgram` |
+| Metadata-only commands (`Transpose`, `BroadcastInDim`, ...) scheduled and materialized per run | Folded into the consumer's input view at preparation (`MetadataViewFolding`, #2226) |
 | Multi-step `DotGeneral` canonicalization | Implemented in `DotDecomposer` (#729) with the full XLA-style algorithm, including the output Reshape step |
 | Reduction hoisting before contraction | No dedicated pass today |
 | Linalg passthrough via string `CustomCall` | Removed; linalg lowers to `ExecOp::Extension` and dispatches through the registered linalg runtime |

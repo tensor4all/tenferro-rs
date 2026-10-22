@@ -46,6 +46,7 @@ fn result_retention_preserves_output_that_reuses_last_input_slot() {
         output_shapes: Default::default(),
         output_extents: Default::default(),
         last_use: vec![true],
+        input_views: Vec::new(),
     };
     let output = Tensor::from_vec_col_major(vec![2], vec![-1.0_f64, -2.0]).expect("output tensor");
     let mut staged = vec![Some(ExecSlot::Owned(output))];

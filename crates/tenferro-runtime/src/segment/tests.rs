@@ -33,6 +33,7 @@ fn broadcast_with_shape(
         output_shapes: vec![dim_shape(shape)].into_iter().collect(),
         output_extents: vec![exact_extents(shape)].into_iter().collect(),
         last_use: vec![true],
+        input_views: Vec::new(),
     }
 }
 
@@ -46,6 +47,7 @@ fn multiply_with_shape(lhs: usize, rhs: usize, output: usize, shape: &[usize]) -
         output_shapes: vec![dim_shape(shape)].into_iter().collect(),
         output_extents: vec![exact_extents(shape)].into_iter().collect(),
         last_use: vec![true, true],
+        input_views: Vec::new(),
     }
 }
 
@@ -59,6 +61,7 @@ fn add_with_shape(lhs: usize, rhs: usize, output: usize, shape: &[usize]) -> Exe
         output_shapes: vec![dim_shape(shape)].into_iter().collect(),
         output_extents: vec![exact_extents(shape)].into_iter().collect(),
         last_use: vec![true, true],
+        input_views: Vec::new(),
     }
 }
 
@@ -82,6 +85,7 @@ fn broadcast(input: usize, output: usize, dims: Vec<usize>) -> ExecInstruction {
         .into_iter()
         .collect(),
         last_use: vec![true],
+        input_views: Vec::new(),
     }
 }
 
@@ -102,6 +106,7 @@ fn multiply(lhs: usize, rhs: usize, output: usize) -> ExecInstruction {
         .into_iter()
         .collect(),
         last_use: vec![true, true],
+        input_views: Vec::new(),
     }
 }
 
@@ -122,6 +127,7 @@ fn fused_segment_with_a_foreign_input_dtype_declines_fusion() {
                 output_shapes: vec![dim_shape(&[2, 2])].into_iter().collect(),
                 output_extents: vec![exact_extents(&[2, 2])].into_iter().collect(),
                 last_use: vec![true],
+                input_views: Vec::new(),
             },
             ExecInstruction {
                 op: ExecOp::BroadcastInDim {
@@ -135,6 +141,7 @@ fn fused_segment_with_a_foreign_input_dtype_declines_fusion() {
                 output_shapes: vec![dim_shape(&[])].into_iter().collect(),
                 output_extents: vec![exact_extents(&[])].into_iter().collect(),
                 last_use: vec![true],
+                input_views: Vec::new(),
             },
             multiply_with_shape(3, 2, 4, &[2, 2]),
         ],
@@ -317,4 +324,110 @@ fn segment_use_summary_tracks_program_outputs_and_future_inputs() {
     assert!(summary.is_used_at_or_after(1, 2));
     assert!(summary.is_used_at_or_after(3, 2));
     assert!(!summary.is_used_at_or_after(3, 3));
+}
+
+fn folded_broadcast_view(shape: &[usize], dims: Vec<usize>) -> InputView {
+    InputView::BroadcastInDim {
+        shape: dim_shape(shape),
+        dims,
+    }
+}
+
+#[test]
+fn elementwise_fusion_plan_absorbs_folded_broadcast_views() {
+    // The folded form of `broadcast, broadcast, multiply` (#2226): one
+    // multiply whose input views carry the broadcasts.
+    let mut multiply = multiply_with_shape(0, 1, 4, &[3, 2]);
+    multiply.input_views = vec![
+        (0, folded_broadcast_view(&[3, 2], vec![0])),
+        (1, folded_broadcast_view(&[3, 2], vec![1])),
+    ];
+    let instructions = vec![multiply, add_with_shape(4, 4, 5, &[3, 2])];
+
+    let plan = build_elementwise_fusion_plan(&instructions, &[0, 1], &[5])
+        .expect("folded broadcast-multiply segment should build a fusion plan");
+
+    assert_eq!(plan.input_count(), 2);
+    assert_eq!(plan.ops().len(), 2);
+    assert!(!plan.input_views()[0].is_identity());
+    assert!(!plan.input_views()[1].is_identity());
+}
+
+#[test]
+fn elementwise_fusion_plan_declines_other_folded_views() {
+    let mut exp = ExecInstruction {
+        op: ExecOp::Exp,
+        semantic_operation_index: None,
+        input_slots: vec![0],
+        output_slots: vec![1],
+        dtype: DType::F64,
+        output_shapes: vec![dim_shape(&[2, 2])].into_iter().collect(),
+        output_extents: vec![exact_extents(&[2, 2])].into_iter().collect(),
+        last_use: vec![true],
+        input_views: Vec::new(),
+    };
+    exp.input_views = vec![(0, InputView::Transpose { perm: vec![1, 0] })];
+    let instructions = vec![exp, add_with_shape(1, 1, 2, &[2, 2])];
+
+    assert!(build_elementwise_fusion_plan(&instructions, &[0], &[2]).is_none());
+}
+
+#[test]
+fn elementwise_fusion_plan_declines_a_slot_read_with_and_without_a_view() {
+    let mut multiply = multiply_with_shape(0, 1, 2, &[3, 2]);
+    multiply.input_views = vec![(0, folded_broadcast_view(&[3, 2], vec![0]))];
+    // The same region input read as it is by the next instruction.
+    let instructions = vec![multiply, add_with_shape(2, 0, 3, &[3, 2])];
+
+    assert!(build_elementwise_fusion_plan(&instructions, &[0, 1], &[3]).is_none());
+}
+
+#[test]
+fn folded_broadcast_multiply_keeps_its_segment_boundary() {
+    // `exp`, the folded broadcast-multiply, `triu`: the multiply is its own
+    // segment as the unfolded triplet was, so the exp is not merged into a
+    // candidate that the structural op would reject.
+    let mut multiply = multiply_with_shape(2, 3, 4, &[3, 2]);
+    multiply.input_views = vec![
+        (0, folded_broadcast_view(&[3, 2], vec![0])),
+        (1, folded_broadcast_view(&[3, 2], vec![1])),
+    ];
+    let program = ExecProgram {
+        instructions: vec![
+            ExecInstruction {
+                op: ExecOp::Exp,
+                semantic_operation_index: None,
+                input_slots: vec![0],
+                output_slots: vec![1],
+                dtype: DType::F64,
+                output_shapes: vec![dim_shape(&[2, 2])].into_iter().collect(),
+                output_extents: vec![exact_extents(&[2, 2])].into_iter().collect(),
+                last_use: vec![true],
+                input_views: Vec::new(),
+            },
+            multiply,
+            ExecInstruction {
+                op: ExecOp::Triu { k: 0 },
+                semantic_operation_index: None,
+                input_slots: vec![1],
+                output_slots: vec![5],
+                dtype: DType::F64,
+                output_shapes: vec![dim_shape(&[2, 2])].into_iter().collect(),
+                output_extents: vec![exact_extents(&[2, 2])].into_iter().collect(),
+                last_use: vec![true],
+                input_views: Vec::new(),
+            },
+        ],
+        input_slots: vec![0, 2, 3],
+        output_slots: vec![4, 5],
+        n_slots: 6,
+        shape_guards: Vec::new(),
+    };
+
+    let segments = segment_exec_program(&program);
+
+    assert_eq!(segments.len(), 3, "{segments:?}");
+    assert!(segments.iter().all(
+        |segment| matches!(segment, Segment::Fused { instructions, .. } if instructions.len() == 1)
+    ));
 }

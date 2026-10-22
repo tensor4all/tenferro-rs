@@ -331,6 +331,14 @@ pub(crate) struct PreparedProgramRoot {
     regions: Arc<[super::region::ElementwiseRegion]>,
     /// Runtime evidence for region execution; see `runtime::region`.
     region_counters: super::region::RegionExecutionCounters,
+    /// Region role of every scheduled node, computed once (#2226).
+    node_regions: Box<[super::region::NodeRegion]>,
+    /// For every output position, the earlier position that names the same
+    /// slot, so a run duplicates a repeated output instead of searching.
+    output_duplicates: Box<[Option<usize>]>,
+    /// Whether the program has an extension command, so a run must lend the
+    /// engines' extension caches at all.
+    needs_extension_caches: bool,
     extension_planning: Arc<[Arc<dyn ExtensionPlanningConfig>]>,
     logical_retained_bytes: Option<usize>,
 }
@@ -346,6 +354,32 @@ impl PreparedProgramRoot {
         transfer_registry: &FrozenTransferRegistry,
     ) -> Result<Self, ScheduleBuildError> {
         let semantic = Arc::clone(&identity.semantic);
+        // Fold metadata-only operations into their consumer once the
+        // placement is known (#2226): a pair on one location shares the data,
+        // so the consumer derives the view itself and the schedule loses the
+        // command. The context's staging stays the identity-level program;
+        // this root executes the folded one.
+        let staging = {
+            let location_of =
+                |instruction: &ExecInstruction| match instruction.semantic_operation_index {
+                    Some(operation_index) => operation_locations.get(operation_index),
+                    None => Some(&root_location),
+                };
+            let mut folded = ExecProgram::clone(&staging);
+            crate::compiler::fold_metadata_views(&mut folded, |producer, consumer| {
+                match (location_of(producer), location_of(consumer)) {
+                    (Some(producer), Some(consumer)) => {
+                        producer == consumer && consumer.witness().folds_metadata_views()
+                    }
+                    _ => false,
+                }
+            });
+            crate::compiler::populate_last_use(&mut folded)
+                .map_err(|source| ScheduleBuildError::InvalidStaging { source })?;
+            crate::exec::validate_exec_program(&folded, "Runtime::prepare")
+                .map_err(|source| ScheduleBuildError::InvalidStaging { source })?;
+            Arc::new(folded)
+        };
         let schedule = Arc::new(ScheduledGraph::from_exec_program(
             &staging,
             root_location.clone(),
@@ -360,6 +394,24 @@ impl PreparedProgramRoot {
                 root_location.witness().max_fused_region_inputs(),
             )
             .into();
+        let node_regions = super::region::node_regions(&schedule, &regions);
+        let mut first_position = std::collections::HashMap::new();
+        let output_duplicates = staging
+            .output_slots
+            .iter()
+            .enumerate()
+            .map(|(position, &slot)| match first_position.entry(slot) {
+                std::collections::hash_map::Entry::Occupied(first) => Some(*first.get()),
+                std::collections::hash_map::Entry::Vacant(vacant) => {
+                    vacant.insert(position);
+                    None
+                }
+            })
+            .collect::<Box<[_]>>();
+        let needs_extension_caches = staging
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction.op, ExecOp::Extension(_)));
         let logical_retained_bytes = prepared_program_root_retained_bytes(
             &identity,
             &semantic,
@@ -367,7 +419,19 @@ impl PreparedProgramRoot {
             &schedule,
             &regions,
             &extension_planning,
-        );
+        )
+        .and_then(|bytes| {
+            bytes.checked_add(
+                node_regions
+                    .len()
+                    .checked_mul(size_of::<super::region::NodeRegion>())?
+                    .checked_add(
+                        output_duplicates
+                            .len()
+                            .checked_mul(size_of::<Option<usize>>())?,
+                    )?,
+            )
+        });
         Ok(Self {
             identity,
             semantic,
@@ -375,6 +439,9 @@ impl PreparedProgramRoot {
             schedule,
             regions,
             region_counters: super::region::RegionExecutionCounters::default(),
+            node_regions,
+            output_duplicates,
+            needs_extension_caches,
             extension_planning,
             logical_retained_bytes,
         })
@@ -397,6 +464,18 @@ impl PreparedProgramRoot {
 
     pub(crate) fn region_counters(&self) -> &super::region::RegionExecutionCounters {
         &self.region_counters
+    }
+
+    pub(crate) fn node_regions(&self) -> &[super::region::NodeRegion] {
+        &self.node_regions
+    }
+
+    pub(crate) fn output_duplicates(&self) -> &[Option<usize>] {
+        &self.output_duplicates
+    }
+
+    pub(crate) fn needs_extension_caches(&self) -> bool {
+        self.needs_extension_caches
     }
 
     pub(crate) fn schedule(&self) -> &ScheduledGraph {
@@ -2196,7 +2275,19 @@ fn exec_program_retained_bytes(program: &ExecProgram) -> Option<usize> {
     ])
 }
 
-fn exec_instruction_retained_bytes(instruction: &ExecInstruction) -> Option<usize> {
+pub(super) fn exec_instruction_retained_bytes(instruction: &ExecInstruction) -> Option<usize> {
+    let input_views = instruction
+        .input_views
+        .iter()
+        .try_fold(0usize, |total, (_, view)| {
+            total.checked_add(input_view_retained_bytes(view)?)
+        })?
+        .checked_add(
+            instruction
+                .input_views
+                .capacity()
+                .checked_mul(size_of::<(usize, crate::exec::InputView)>())?,
+        )?;
     checked_sum([
         exec_op_retained_bytes(&instruction.op)?,
         instruction
@@ -2228,7 +2319,20 @@ fn exec_instruction_retained_bytes(instruction: &ExecInstruction) -> Option<usiz
                 .map(|shape| shape_extent_vec_bytes(shape)),
         )?,
         instruction.last_use.len().checked_mul(size_of::<bool>())?,
+        input_views,
     ])
+}
+
+fn input_view_retained_bytes(view: &crate::exec::InputView) -> Option<usize> {
+    use crate::exec::InputView;
+    match view {
+        InputView::Transpose { perm } => perm.len().checked_mul(size_of::<usize>()),
+        InputView::Reshape { shape } => dim_expr_vec_bytes(shape),
+        InputView::BroadcastInDim { shape, dims } => {
+            dim_expr_vec_bytes(shape)?.checked_add(dims.len().checked_mul(size_of::<usize>())?)
+        }
+        InputView::Slice(config) => slice_config_retained_bytes(config),
+    }
 }
 
 fn exec_op_retained_bytes(op: &ExecOp) -> Option<usize> {

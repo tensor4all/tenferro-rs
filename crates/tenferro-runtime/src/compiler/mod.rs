@@ -332,6 +332,7 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
                 output_shapes: output_shapes.into_iter().collect(),
                 output_extents: output_extents.into_iter().collect(),
                 last_use: Vec::new(),
+                input_views: Vec::new(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -935,6 +936,7 @@ impl ConjSinkingState<'_> {
             output_shapes: vec![meta.shape].into_iter().collect(),
             output_extents: vec![meta.extents].into_iter().collect(),
             last_use: Vec::new(),
+            input_views: Vec::new(),
         };
         record_producer(self.producer_by_slot, &instr)?;
         self.new_instructions.push(instr);
@@ -1318,6 +1320,130 @@ fn replace_slot_uses(program: &mut ExecProgram, from: usize, to: usize) {
 //
 // Absorb Transpose instructions that feed directly into DotGeneral by
 // adjusting the DotGeneral dimension numbers and bypassing the Transpose.
+
+// ============================================================================
+// Metadata view folding (#2226)
+// ============================================================================
+//
+// A metadata-only operation (transpose, reshape, broadcast_in_dim, slice)
+// moves no bytes, yet as a scheduled command it costs a full dispatch and, on
+// an owned intermediate, a full copy. When its result has one consumer that
+// reads the operand as a `TensorRead`, the transform becomes an input view on
+// that consumer's command and the instruction disappears.
+
+/// Fold metadata-only instructions into the consumer that reads their result.
+///
+/// An instruction is folded when it is a view (`InputView::from_op`), has one
+/// input and one output, its dtype is not `DType::External`, its output is not
+/// a program output, exactly one instruction uses the output at exactly one
+/// input position, that consumer reads the input through a view
+/// (`reads_input_view`), and `same_placement` holds for the pair: a view
+/// derived on another engine would make the schedule transfer the source
+/// instead of the (possibly smaller) result, so a value that crosses a
+/// transfer boundary keeps materializing. A `Reshape` is folded only when its
+/// source is the result of an instruction that is not itself a view (an owned,
+/// compact engine result) and it carries no pending view, because a reshape of
+/// a strided view has no view form in general.
+///
+/// One forward pass over the program suffices: a folded instruction's pending
+/// views move to its consumer ahead of its own transform, and the consumer is
+/// visited later in the same pass, so chains fold in turn. The pass is linear
+/// in the instruction count plus the folded views.
+pub(crate) fn fold_metadata_views(
+    program: &mut ExecProgram,
+    same_placement: impl Fn(&ExecInstruction, &ExecInstruction) -> bool,
+) {
+    let n_slots = program.n_slots;
+    let mut use_count = vec![0usize; n_slots];
+    let mut consumer = vec![None; n_slots];
+    for (index, instruction) in program.instructions.iter().enumerate() {
+        for (position, &slot) in instruction.input_slots.iter().enumerate() {
+            let Some(count) = use_count.get_mut(slot) else {
+                return;
+            };
+            *count += 1;
+            consumer[slot] = Some((index, position));
+        }
+    }
+    let mut is_output = vec![false; n_slots];
+    for &slot in &program.output_slots {
+        match is_output.get_mut(slot) {
+            Some(output) => *output = true,
+            None => return,
+        }
+    }
+    let producer_by_slot = producer_indices_by_slot(program);
+    let mut folded = Vec::new();
+
+    for index in 0..program.instructions.len() {
+        let instruction = &program.instructions[index];
+        let Some(view) = crate::exec::InputView::from_op(&instruction.op) else {
+            continue;
+        };
+        if instruction.input_slots.len() != 1 || instruction.output_slots.len() != 1 {
+            continue;
+        }
+        // A caller-owned payload has no borrowed view (`InputView::apply`), so
+        // it keeps the engine's materializing entry.
+        if matches!(instruction.dtype, DType::External(_)) {
+            continue;
+        }
+        let source = instruction.input_slots[0];
+        let output = instruction.output_slots[0];
+        if is_output[output] || use_count[output] != 1 {
+            continue;
+        }
+        let Some((consumer_index, position)) = consumer[output] else {
+            continue;
+        };
+        // SSA order: the consumer follows the producer.
+        if consumer_index <= index {
+            continue;
+        }
+        // A compact source is an engine result: the output of an instruction
+        // that is not itself a view (a kept metadata command with a borrowed
+        // input yields a strided `ExecSlot::Read`, and a program input may be
+        // any view) and that carries no pending view of its own.
+        if view.requires_compact_source() {
+            let compact_producer =
+                producer_by_slot
+                    .get(source)
+                    .copied()
+                    .flatten()
+                    .is_some_and(|producer| {
+                        crate::exec::InputView::from_op(&program.instructions[producer].op)
+                            .is_none()
+                    });
+            if !compact_producer || !instruction.input_views.is_empty() {
+                continue;
+            }
+        }
+        let consumer_instruction = &program.instructions[consumer_index];
+        if !crate::exec::reads_input_view(&consumer_instruction.op, position)
+            || !same_placement(instruction, consumer_instruction)
+        {
+            continue;
+        }
+
+        let pending = std::mem::take(&mut program.instructions[index].input_views);
+        let consumer_instruction = &mut program.instructions[consumer_index];
+        consumer_instruction.input_slots[position] = source;
+        consumer_instruction
+            .input_views
+            .extend(pending.into_iter().map(|(_, pending)| (position, pending)));
+        consumer_instruction.input_views.push((position, view));
+        folded.push(index);
+    }
+
+    if !folded.is_empty() {
+        let mut keep = vec![true; program.instructions.len()];
+        for index in folded {
+            keep[index] = false;
+        }
+        let mut keep = keep.into_iter();
+        program.instructions.retain(|_| keep.next().unwrap_or(true));
+    }
+}
 
 /// Fold Transpose instructions into DotGeneral dimension numbers.
 pub(crate) fn transpose_folding(program: &mut ExecProgram) {

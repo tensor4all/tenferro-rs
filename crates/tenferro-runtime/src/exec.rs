@@ -8,7 +8,7 @@ use tenferro_tensor::backend::ElementwiseFusionOp;
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, Engine, GatherConfig, PadConfig, ScatterConfig,
-    SliceConfig, Tensor, TensorRead, TypedTensor, ValidationError,
+    SliceConfig, StridedSliceSpec, Tensor, TensorRead, TensorView, TypedTensor, ValidationError,
 };
 use tinyvec::TinyVec;
 
@@ -34,6 +34,161 @@ pub struct ExecInstruction {
     pub output_shapes: ExecOutputShapes,
     pub output_extents: ExecOutputExtents,
     pub last_use: Vec<bool>,
+    /// Metadata-only transforms applied to an input when this instruction
+    /// reads it, as `(input index, view)` pairs in application order (#2226).
+    ///
+    /// A folded `Transpose`, `Reshape`, `BroadcastInDim` or `Slice` is not a
+    /// scheduled command: its consumer derives the view from the source slot at
+    /// the moment it reads the operand. Empty for every instruction that reads
+    /// its inputs as they are, which keeps the common path to one branch.
+    pub input_views: Vec<(usize, InputView)>,
+}
+
+/// A metadata-only transform of one operand.
+///
+/// This is the single definition of which execution ops are views: the
+/// Read-slot path (`view_backend_op`) and the folded consumer path
+/// (`input_views`) both derive their view through [`InputView::apply`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum InputView {
+    Transpose {
+        perm: Vec<usize>,
+    },
+    Reshape {
+        shape: Vec<DimExpr>,
+    },
+    BroadcastInDim {
+        shape: Vec<DimExpr>,
+        dims: Vec<usize>,
+    },
+    Slice(SliceConfig),
+}
+
+impl InputView {
+    /// The view `op` describes, or `None` when `op` moves data.
+    pub(crate) fn from_op(op: &ExecOp) -> Option<Self> {
+        match op {
+            ExecOp::Transpose { perm } => Some(Self::Transpose { perm: perm.clone() }),
+            ExecOp::Reshape { shape } => Some(Self::Reshape {
+                shape: shape.clone(),
+            }),
+            ExecOp::BroadcastInDim { shape, dims } => Some(Self::BroadcastInDim {
+                shape: shape.clone(),
+                dims: dims.clone(),
+            }),
+            ExecOp::Slice(config) => Some(Self::Slice(config.clone())),
+            _ => None,
+        }
+    }
+
+    /// Whether this view may need a compact source: a reshape of a strided
+    /// view has no view form in general, so the fold rule only folds a
+    /// `Reshape` whose source is a compact instruction result.
+    pub(crate) fn requires_compact_source(&self) -> bool {
+        matches!(self, Self::Reshape { .. })
+    }
+
+    /// The view of `read` this transform describes.
+    ///
+    /// Shape expressions are evaluated against the shape `read` has before the
+    /// transform, exactly as the removed instruction evaluated them against
+    /// its single input.
+    pub(crate) fn apply<'a>(&self, read: TensorRead<'a>) -> Result<TensorRead<'a>> {
+        // A caller-owned payload has no borrowed view.
+        if let DType::External(_) = read.dtype() {
+            return Err(Error::unsupported(
+                "input_view",
+                ErrorPhase::Execution,
+                "an externally defined scalar has no metadata view",
+            ));
+        }
+        macro_rules! typed_view_map {
+            ($view:expr, $method:ident ( $($arg:expr),* )) => {
+                match $view {
+                    TensorView::F32(view) => TensorView::F32(view.$method($($arg),*)?),
+                    TensorView::F64(view) => TensorView::F64(view.$method($($arg),*)?),
+                    TensorView::I32(view) => TensorView::I32(view.$method($($arg),*)?),
+                    TensorView::I64(view) => TensorView::I64(view.$method($($arg),*)?),
+                    TensorView::Bool(view) => TensorView::Bool(view.$method($($arg),*)?),
+                    TensorView::C32(view) => TensorView::C32(view.$method($($arg),*)?),
+                    TensorView::C64(view) => TensorView::C64(view.$method($($arg),*)?),
+                }
+            };
+        }
+        let view = match self {
+            Self::Transpose { perm } => typed_view_map!(read.tensor_view(), transpose_view(perm)),
+            Self::Reshape { shape } => {
+                let shape = view_shape(shape, read.shape())?;
+                typed_view_map!(read.tensor_view(), reshape_view(&shape))
+            }
+            Self::BroadcastInDim { shape, dims } => {
+                let shape = view_shape(shape, read.shape())?;
+                return Ok(read.broadcast_in_dim_view(&shape, dims)?);
+            }
+            Self::Slice(config) => {
+                if config.starts.len() != config.limits.len()
+                    || config.starts.len() != config.strides.len()
+                {
+                    return Err(Error::validation(
+                        "slice",
+                        ErrorPhase::Execution,
+                        ValidationError::InvalidArgument {
+                            argument: "config",
+                            message: "slice starts, limits and strides differ in length".into(),
+                        },
+                    ));
+                }
+                let mut specs = Vec::with_capacity(config.starts.len());
+                for ((&start, &limit), &step) in config
+                    .starts
+                    .iter()
+                    .zip(&config.limits)
+                    .zip(&config.strides)
+                {
+                    specs.push(StridedSliceSpec::new(
+                        slice_bound(start)?,
+                        Some(slice_bound(limit)?),
+                        slice_bound(step)?,
+                    ));
+                }
+                typed_view_map!(read.tensor_view(), slice_view(&specs))
+            }
+        };
+        Ok(TensorRead::from_view(view))
+    }
+}
+
+/// Evaluate a view's shape expressions against its source shape.
+fn view_shape(exprs: &[DimExpr], source: &[usize]) -> Result<Vec<usize>> {
+    DimExpr::eval_all(exprs, &[source]).map_err(|cause| Error::ShapeExpressionEvaluation {
+        expression: format!("{} expression(s)", exprs.len()),
+        cause: cause.into(),
+    })
+}
+
+fn slice_bound(value: usize) -> Result<isize> {
+    isize::try_from(value).map_err(|_| {
+        Error::validation(
+            "slice",
+            ErrorPhase::Execution,
+            ValidationError::InvalidArgument {
+                argument: "config",
+                message: format!("slice bound {value} does not fit the address space"),
+            },
+        )
+    })
+}
+
+/// Whether `inst` reads input `idx` through a folded view.
+fn has_input_view(inst: &ExecInstruction, idx: usize) -> bool {
+    inst.input_views.iter().any(|(input, _)| *input == idx)
+}
+
+fn owned_input_has_view(inst: &ExecInstruction, idx: usize, caller: &'static str) -> Error {
+    Error::Internal(format!(
+        "{caller}: input {idx} of {:?} carries a folded view, but the operation reads owned inputs",
+        inst.op
+    ))
 }
 
 pub type ExecOutputShapes = TinyVec<[Vec<DimExpr>; 1]>;
@@ -102,6 +257,7 @@ impl<'a> ExecSlot<'a> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn shape(&self) -> &[usize] {
         match self {
             Self::Owned(tensor) => tensor.shape(),
@@ -240,6 +396,14 @@ pub(crate) fn validate_exec_program(program: &ExecProgram, caller: &str) -> Resu
                 inst.input_slots.len()
             )));
         }
+        for (input, _) in &inst.input_views {
+            if *input >= inst.input_slots.len() {
+                return Err(invalid_compiled_graph(format!(
+                    "{caller}: instruction {inst_idx} folds a view onto input {input}, but has {} input slots",
+                    inst.input_slots.len()
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -282,24 +446,36 @@ fn exec_op_input_arity_bounds(op: &ExecOp) -> Option<(usize, usize)> {
     }
 }
 
+/// The owned tensor in input `idx`.
+///
+/// An input that carries a folded view has no owned form: the fold rule only
+/// folds into consumers that read views, so reaching here with one is a
+/// classification defect, reported typed instead of reading the source value.
 pub(crate) fn get<'slot, 'input>(
     slots: &'slot [Option<ExecSlot<'input>>],
-    input_slots: &[usize],
+    inst: &ExecInstruction,
     idx: usize,
 ) -> Result<&'slot Tensor>
 where
     'input: 'slot,
 {
-    let slot = checked_input_slot(input_slots, idx, "get")?;
+    if has_input_view(inst, idx) {
+        return Err(owned_input_has_view(inst, idx, "get"));
+    }
+    let slot = checked_input_slot(&inst.input_slots, idx, "get")?;
     slot_ref(slots, slot, "input", "get").and_then(|value| value.as_tensor("get"))
 }
 
 pub(crate) fn ensure_owned<'input>(
     exec: &mut dyn Engine,
     slots: &mut [Option<ExecSlot<'input>>],
-    input_slots: &[usize],
+    inst: &ExecInstruction,
     idx: usize,
 ) -> Result<()> {
+    if has_input_view(inst, idx) {
+        return Err(owned_input_has_view(inst, idx, "ensure_owned"));
+    }
+    let input_slots = &inst.input_slots;
     let slot = checked_input_slot(input_slots, idx, "ensure_owned")?;
     let needs_materialization = matches!(
         slot_ref(slots, slot, "input", "ensure_owned")?,
@@ -313,16 +489,23 @@ pub(crate) fn ensure_owned<'input>(
     Ok(())
 }
 
+/// Input `idx` as a read, with its folded views applied.
 pub(crate) fn get_read<'slot, 'input>(
     slots: &'slot [Option<ExecSlot<'input>>],
-    input_slots: &[usize],
+    inst: &ExecInstruction,
     idx: usize,
 ) -> Result<TensorRead<'slot>>
 where
     'input: 'slot,
 {
-    let slot = checked_input_slot(input_slots, idx, "get_read")?;
-    slot_ref(slots, slot, "input", "get_read").map(ExecSlot::as_read)
+    let slot = checked_input_slot(&inst.input_slots, idx, "get_read")?;
+    let mut read = slot_ref(slots, slot, "input", "get_read")?.as_read();
+    for (input, view) in &inst.input_views {
+        if *input == idx {
+            read = view.apply(read)?;
+        }
+    }
+    Ok(read)
 }
 
 pub(crate) fn initialize_exec_slots_in<'input>(
@@ -349,19 +532,23 @@ pub(crate) fn is_ffi_instruction(inst: &ExecInstruction) -> bool {
     dispatch::is_ffi_op(&inst.op)
 }
 
+/// Whether the executor of `op` reads input `input_index` through a view.
+pub(crate) fn reads_input_view(op: &ExecOp, input_index: usize) -> bool {
+    dispatch::reads_input_view(op, input_index)
+}
+
 pub(crate) fn is_exec_session_ffi_instruction(inst: &ExecInstruction) -> bool {
     dispatch::is_exec_session_ffi_op(&inst.op)
 }
 
+/// Evaluate `exprs` against the shapes `inst` reads, folded views included.
 pub(crate) fn resolve_tensor_shape_exprs<'input>(
     slots: &[Option<ExecSlot<'input>>],
-    input_slots: &[usize],
+    inst: &ExecInstruction,
     exprs: &[DimExpr],
 ) -> Result<Vec<usize>> {
-    let mut input_shapes = Vec::with_capacity(input_slots.len());
-    for &slot in input_slots {
-        input_shapes.push(slot_ref(slots, slot, "input", "resolve_tensor_shape_exprs")?.shape());
-    }
+    let reads = collect_tensor_reads(slots, inst)?;
+    let input_shapes: Vec<&[usize]> = reads.iter().map(TensorRead::shape).collect();
     DimExpr::eval_all(exprs, &input_shapes).map_err(|cause| Error::ShapeExpressionEvaluation {
         expression: format!("{} expression(s)", exprs.len()),
         cause: cause.into(),
@@ -488,8 +675,8 @@ pub(crate) fn execute_ffi_instruction_exec<'input>(
         ExecOp::DotGeneral(config) => {
             let result = exec.dot_general_read_cached(
                 cache_slot,
-                get_read(slots, &inst.input_slots, 0)?,
-                get_read(slots, &inst.input_slots, 1)?,
+                get_read(slots, inst, 0)?,
+                get_read(slots, inst, 1)?,
                 config,
             )?;
             slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
@@ -501,8 +688,8 @@ pub(crate) fn execute_ffi_instruction_exec<'input>(
         } => {
             let result = exec.dot_general_with_conj_read_cached(
                 cache_slot,
-                get_read(slots, &inst.input_slots, 0)?,
-                get_read(slots, &inst.input_slots, 1)?,
+                get_read(slots, inst, 0)?,
+                get_read(slots, inst, 1)?,
                 config,
                 *lhs_conj,
                 *rhs_conj,
@@ -608,7 +795,7 @@ fn execute_prepared_extension_instruction_in_session<'input>(
             ),
         ));
     }
-    let inputs = collect_tensor_reads(slots, &inst.input_slots)?;
+    let inputs = collect_tensor_reads(slots, inst)?;
     executor.execute_in_session(session, caches, &inputs)
 }
 
@@ -721,34 +908,20 @@ fn execute_prepared_extension_instruction<'input>(
             },
         )
     })?;
-    let inputs = collect_tensor_reads(slots, &inst.input_slots)?;
+    let inputs = collect_tensor_reads(slots, inst)?;
     executor.execute(&mut context, caches, &inputs)
 }
 
-fn collect_tensor_reads<'slot, 'input>(
+pub(super) fn collect_tensor_reads<'slot, 'input>(
     slots: &'slot [Option<ExecSlot<'input>>],
-    input_slots: &[usize],
+    inst: &ExecInstruction,
 ) -> Result<Vec<TensorRead<'slot>>>
 where
     'input: 'slot,
 {
-    let mut inputs = Vec::with_capacity(input_slots.len());
-    for idx in 0..input_slots.len() {
-        inputs.push(get_read(slots, input_slots, idx)?);
-    }
-    Ok(inputs)
-}
-
-fn collect_tensor_refs<'slot, 'input>(
-    slots: &'slot [Option<ExecSlot<'input>>],
-    input_slots: &[usize],
-) -> Result<Vec<&'slot Tensor>>
-where
-    'input: 'slot,
-{
-    let mut inputs = Vec::with_capacity(input_slots.len());
-    for &slot in input_slots {
-        inputs.push(slot_ref(slots, slot, "input", "extension")?.as_tensor("extension")?);
+    let mut inputs = Vec::with_capacity(inst.input_slots.len());
+    for idx in 0..inst.input_slots.len() {
+        inputs.push(get_read(slots, inst, idx)?);
     }
     Ok(inputs)
 }

@@ -261,6 +261,16 @@ impl ExecutableEngineSnapshot {
             .and_then(|elementwise| elementwise.max_fused_region_inputs())
     }
 
+    /// Whether this engine folds metadata-only operations into their reading
+    /// consumer; see [`super::LayoutRuntime::folds_metadata_views`].
+    pub(super) fn folds_metadata_views(&self) -> bool {
+        self.binding
+            .contract()
+            .capabilities()
+            .layout()
+            .is_some_and(|layout| layout.folds_metadata_views())
+    }
+
     pub(super) fn accepts_input_placement(
         &self,
         placement: &tenferro_tensor::Placement,
