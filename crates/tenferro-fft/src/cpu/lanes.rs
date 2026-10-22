@@ -309,6 +309,12 @@ where
     };
     let real_len = fft_len;
     let spectrum_len = fft_len / 2 + 1;
+    let even_length = fft_len.is_multiple_of(2);
+    let mirror_end = if even_length {
+        spectrum_len - 1
+    } else {
+        spectrum_len
+    };
     // `R2cFull` asks for the full spectrum, so the lane holds room for the
     // conjugate mirror as well as the plan's non-negative half.
     let lane_len = out_axis_len.max(spectrum_len);
@@ -379,7 +385,7 @@ where
                     // asked for the full spectrum; the one-sided output already
                     // holds every requested bin.
                     if out_axis_len > spectrum_len {
-                        for k in 1..spectrum_len.saturating_sub(1) {
+                        for k in 1..mirror_end {
                             let mirrored = complex_lane[k].conj();
                             complex_lane[out_axis_len - k] = mirrored;
                         }
@@ -410,13 +416,15 @@ where
                         *slot = values[offset];
                     }
                     // A real inverse transform treats the one-sided spectrum as
-                    // Hermitian: the DC and Nyquist bins must be real. `irfft`
-                    // ignores their imaginary parts, and `realfft` rejects them
-                    // outright, so drop them here.
+                    // Hermitian: DC is real for every length. A Nyquist bin
+                    // exists only for even lengths; the final odd-length bin
+                    // keeps its imaginary component.
                     if spectrum_len > 0 {
                         complex_lane[0] = Complex::new(complex_lane[0].re, T::zero());
-                        let last = spectrum_len - 1;
-                        complex_lane[last] = Complex::new(complex_lane[last].re, T::zero());
+                        if even_length {
+                            let last = spectrum_len - 1;
+                            complex_lane[last] = Complex::new(complex_lane[last].re, T::zero());
+                        }
                     }
                     if let RealPlan::Inverse(plan) = &plan {
                         plan.process_with_scratch(
