@@ -101,7 +101,8 @@ fn gpu_typed<'a, T: TensorScalar>(
 /// # Errors
 ///
 /// Returns [`crate::Error::RuntimeState`] for a host-backed or foreign tensor,
-/// [`crate::Error::BackendSource`] when synchronization/readback fails, or a
+/// [`crate::Error::BackendSource`] when source preparation, host reservation,
+/// or synchronization/readback fails, or a
 /// typed validation error when device data cannot be decoded.
 pub fn download_tensor(rt: &CudaRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
     // Every entry point of this runtime runs on its home stream, so it is ordered with the
@@ -194,7 +195,10 @@ pub enum DownloadIntoError<T> {
 /// [`crate::Error::RuntimeState`] for a host-backed or foreign tensor, [`crate::Error::Validation`]
 /// when the dtype does not match `T`, [`crate::Error::Unsupported`] when `T` is `bool` (raw bytes
 /// are not a valid `bool`; use [`download_tensor`]), and [`crate::Error::InvalidArgument`] when the
-/// byte length overflows. Returns [`DownloadIntoError::Unproven`] when the copy may have been
+/// byte length overflows. Source preparation or host reservation failure also
+/// returns `Rejected`, with [`crate::Error::BackendSource`] preserving the
+/// original error and the submitted buffer unchanged.
+/// Returns [`DownloadIntoError::Unproven`] when the copy may have been
 /// enqueued but completion could not be proven; the destination vector is then leaked.
 ///
 /// # Examples
@@ -318,16 +322,21 @@ where
         }
     };
 
-    // `clear` keeps the allocation and `reserve` allocates only when the capacity is short, so a
-    // reused buffer is not zero-filled and does not shrink. `as_mut_ptr` then points at `len`
-    // elements of spare capacity; `set_len` publishes them only after the copy completed.
+    let prepared = match rt.prepare_host_download(handle, byte_len, OP) {
+        Ok(prepared) => prepared,
+        Err(error) => return Err(DownloadIntoError::Rejected { error, buffer }),
+    };
+    // Reserve before clearing so a rejected download returns the submitted
+    // contents unchanged. A sufficient capacity is reused without allocation.
+    if let Err(error) = reserve_download_destination(&mut buffer, len, OP) {
+        return Err(DownloadIntoError::Rejected { error, buffer });
+    }
     buffer.clear();
-    buffer.reserve(len);
-    // SAFETY: `buffer` has capacity for `len` elements (`byte_len` bytes) and outlives the call.
-    // `bool` was rejected above and `TensorScalar` is sealed to the numeric, complex and bool
-    // scalars, so every remaining `T` accepts any byte pattern, making `set_len` sound on success.
-    // On error the device may still write the destination, so it is leaked below rather than freed.
-    let copied = unsafe { rt.download_into_host(handle, buffer.as_mut_ptr().cast(), byte_len, OP) };
+    // SAFETY: `buffer` has capacity for the prepared `byte_len` bytes and
+    // outlives the copy. `bool` was rejected above; all remaining sealed
+    // TensorScalar types accept any byte pattern. On an unproven copy error
+    // the destination is leaked below instead of being freed or reused.
+    let copied = unsafe { prepared.copy_into(buffer.as_mut_ptr().cast()) };
     match copied {
         Ok(()) => {
             // SAFETY: the completed copy initialized all `len` elements.
@@ -487,11 +496,13 @@ pub(super) fn download_owned_vec<T: CubeElement>(
     byte_len: usize,
     op: &'static str,
 ) -> crate::Result<Vec<T>> {
-    let mut data = Vec::<T>::with_capacity(len);
+    let prepared = rt.prepare_host_download(handle, byte_len, op)?;
+    let mut data = Vec::<T>::new();
+    reserve_download_destination(&mut data, len, op)?;
     // SAFETY: the spare capacity of `data` holds `len` elements, i.e.
     // `byte_len` bytes, and `data` outlives the call. On error the device may
     // still write into it, so it is leaked below rather than freed.
-    let copied = unsafe { rt.download_into_host(handle, data.as_mut_ptr().cast(), byte_len, op) };
+    let copied = unsafe { prepared.copy_into(data.as_mut_ptr().cast()) };
     match copied {
         Ok(()) => {
             // SAFETY: the completed copy initialized all `len` elements, and
@@ -505,6 +516,21 @@ pub(super) fn download_owned_vec<T: CubeElement>(
         }
     }
 }
+
+// This preserves existing contents on rejection and reserves uninitialized
+// capacity only; a successful CUDA copy initializes it before set_len.
+fn reserve_download_destination<T>(
+    data: &mut Vec<T>,
+    len: usize,
+    op: &'static str,
+) -> crate::Result<()> {
+    data.try_reserve_exact(len.saturating_sub(data.len()))
+        .map_err(|source| crate::Error::backend_source(op, source))
+}
+
+#[cfg(test)]
+#[path = "memory/tests.rs"]
+mod tests;
 
 fn upload_bool(
     rt: &CudaRuntime,

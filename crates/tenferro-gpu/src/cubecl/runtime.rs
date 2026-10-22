@@ -1,5 +1,8 @@
 //! CubeCL CUDA runtime initialization and synchronization.
 
+mod host_download;
+use host_download::PreparedHostDownload;
+
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
@@ -1092,25 +1095,18 @@ impl CudaRuntime {
         Ok(resolved)
     }
 
-    /// Copy `len` bytes of a CubeCL allocation into caller-owned host memory.
+    /// Resolve and validate a readback source before allocating host memory.
     ///
-    /// See `CudaRuntimeState::download_into_host` for the ordering and
-    /// failure contract.
-    ///
-    /// # Safety
-    ///
-    /// `dst` must be valid for writes of `len` bytes and stay allocated until
-    /// this call returns. On error the caller must not free or reuse `dst`
-    /// (the device may still be writing it): leak it instead.
-    pub(crate) unsafe fn download_into_host(
+    /// A refused device allocation returns its typed error here, before the
+    /// caller reserves or clears its destination. The prepared source keeps
+    /// the allocation bound until the direct-to-destination copy completes.
+    pub(crate) fn prepare_host_download(
         &self,
         handle: cubecl_runtime::server::Handle,
-        dst: *mut u8,
         len: usize,
         op: &'static str,
-    ) -> crate::Result<()> {
-        // SAFETY: forwarded caller contract.
-        unsafe { self.inner.download_into_host(handle, dst, len, op) }
+    ) -> crate::Result<PreparedHostDownload<'_>> {
+        PreparedHostDownload::new(&self.inner, handle, len, op)
     }
 
     /// Block the current thread until work submitted to the current CUDA stream completes.
@@ -1497,67 +1493,6 @@ impl CudaRuntimeState {
             return Err(crate::Error::backend_source(op, err));
         }
         out.copy_from_slice(staging);
-        Ok(())
-    }
-
-    /// Copy `len` bytes from the start of `handle` straight into host memory.
-    ///
-    /// This replaces `read_one` plus a host copy for whole-tensor downloads
-    /// (#2009): CubeCL's read stages into its own pinned (or, above 100 MB,
-    /// freshly zeroed pageable) buffer, and the result then had to be copied
-    /// again into the tensor's `Vec<T>`. Here the driver copies directly into
-    /// the destination the caller will own.
-    ///
-    /// Ordering: pending CubeCL launches are flushed, and `get_resource`
-    /// resolves the allocation on the current stream exactly as `read_one`
-    /// does, so writes queued on other CubeCL streams are waited for on this
-    /// stream. The copy is enqueued on that stream and the stream is
-    /// synchronized before returning, so `dst` is complete on `Ok`.
-    ///
-    /// Failure: an error from the copy or the barrier does not prove the
-    /// device is done with either side, so the source allocation is leaked and
-    /// the caller must leak `dst` as well (see the safety contract).
-    ///
-    /// # Safety
-    ///
-    /// `dst` must be valid for writes of `len` bytes until this returns, and
-    /// must not be freed or reused after an error.
-    unsafe fn download_into_host(
-        &self,
-        handle: cubecl_runtime::server::Handle,
-        dst: *mut u8,
-        len: usize,
-        op: &'static str,
-    ) -> crate::Result<()> {
-        if len == 0 {
-            return Ok(());
-        }
-        self.flush_cubecl(op)?;
-        let resource = self
-            .client
-            .get_resource::<cubecl_cuda::ffi_interop::CudaServer>(handle)
-            .map_err(|err| crate::Error::backend_source(op, err))?;
-        let available = usize::try_from(resource.resource().size).unwrap_or(usize::MAX);
-        if available < len {
-            return Err(crate::Error::Internal(format!(
-                "{op}: download of {len} bytes exceeds the {available}-byte allocation"
-            )));
-        }
-        let src = resource.resource().ptr;
-        self.set_current_cuda_context(op)?;
-        let stream = self.raw_cuda_stream()? as usize as cudarc::driver::sys::CUstream;
-        // SAFETY: `src` is the device address of a live CubeCL allocation of at
-        // least `len` bytes (checked above) kept alive by `resource`; `dst` is
-        // valid for `len` byte writes per the caller contract; `stream` is the
-        // current CubeCL stream that `get_resource` ordered the allocation on.
-        let completed = unsafe {
-            cudarc::driver::sys::cuMemcpyDtoHAsync_v2(dst.cast(), src, len, stream).result()
-        }
-        .and_then(|()| unsafe { cudarc::driver::result::stream::synchronize(stream) });
-        if let Err(err) = completed {
-            std::mem::forget(resource);
-            return Err(crate::Error::backend_source(op, err));
-        }
         Ok(())
     }
 

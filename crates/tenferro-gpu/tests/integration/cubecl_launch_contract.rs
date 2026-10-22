@@ -1174,6 +1174,44 @@ fn cubecl_real_complex_scalar_promotion_stays_device_native_and_narrow() {
 }
 
 #[test]
+fn cubecl_download_prepares_source_before_host_reservation() {
+    // #2247: checking a refused device buffer after reserving its declared
+    // host size can abort before the backend error is observed. This ordering
+    // guard runs on hosts without CUDA; the ignored OOM regression verifies
+    // the typed device refusal and returned reuse buffer on real hardware.
+    let memory = cubecl_source("memory.rs");
+    let owned = source_section(
+        &memory,
+        "pub(super) fn download_owned_vec<",
+        "fn reserve_download_destination<",
+    );
+    assert_ordered_needles(
+        "owned download",
+        owned,
+        &[
+            "rt.prepare_host_download(handle, byte_len, op)?",
+            "reserve_download_destination(&mut data, len, op)?",
+            "prepared.copy_into(data.as_mut_ptr().cast())",
+        ],
+    );
+    let reused = source_section(
+        &memory,
+        "fn download_tensor_into_on_stream<",
+        "fn upload_typed<",
+    );
+    assert_ordered_needles(
+        "reused download",
+        reused,
+        &[
+            "rt.prepare_host_download(handle, byte_len, OP)",
+            "reserve_download_destination(&mut buffer, len, OP)",
+            "buffer.clear();\n    // SAFETY:",
+            "prepared.copy_into(buffer.as_mut_ptr().cast())",
+        ],
+    );
+}
+
+#[test]
 fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
     let interop_source = cubecl_source("interop.rs");
     let download_source = source_section(

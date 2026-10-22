@@ -22,5 +22,6 @@
 - CUDA padding tests compile but require NVIDIA hardware to execute. This
   macOS host cannot execute them; the hosted CUDA gate must establish device
   execution.
-- The unrelated refused-allocation abort remains tracked in #2247 and can
-  still fail the complete GPU gate.
+- Refused-allocation readback is also repaired in this batch; its separate
+  lifecycle decisions and validation constraints are recorded in
+  [the #2247 work log](cuda-refused-download-2247.md).

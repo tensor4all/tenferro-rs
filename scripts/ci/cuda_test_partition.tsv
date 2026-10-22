@@ -896,6 +896,8 @@ host	tenferro-ad::integration	symbolic_input::same_symbolic_graph_reused_with_di
 host	tenferro-ad::integration	symbolic_input::symbolic_placeholder_is_concrete_shape_false
 host	tenferro-ad::integration	unification_retirement_contract::unification_7_removes_tidu_dependency_from_production_sources_and_manifests
 host	tenferro-ad::prelude	prelude_calls_traced_ad_operation
+host	tenferro-gpu	cubecl::memory::tests::host_reservation_failure_is_typed_and_preserves_the_buffer
+host	tenferro-gpu	cubecl::memory::tests::host_reservation_reuses_capacity_and_grows_without_initializing
 host	tenferro-gpu	cubecl::batched_gemm::tests::a_single_matrix_keeps_the_cutensor_path
 host	tenferro-gpu	cubecl::batched_gemm::tests::both_transpose_combinations_are_expressed_with_cublas_flags
 host	tenferro-gpu	cubecl::batched_gemm::tests::non_standard_forms_fall_back
@@ -1027,6 +1029,7 @@ host	tenferro-gpu::integration	cubecl_launch_contract::cubecl_gemm_zero_contract
 host	tenferro-gpu::integration	cubecl_launch_contract::cubecl_host_download_paths_synchronize_before_reading
 host	tenferro-gpu::integration	cubecl_launch_contract::cubecl_i64_index_conversion_does_not_roundtrip_through_host
 host	tenferro-gpu::integration	cubecl_launch_contract::cubecl_indexing_kernels_use_saturating_window_arithmetic
+host	tenferro-gpu::integration	cubecl_launch_contract::cubecl_download_prepares_source_before_host_reservation
 host	tenferro-gpu::integration	cubecl_launch_contract::cubecl_interop_download_validates_buffer_before_empty_fast_path
 host	tenferro-gpu::integration	cubecl_launch_contract::cubecl_pad_mapping_avoids_signed_edge_subtraction_overflow
 host	tenferro-gpu::integration	cubecl_launch_contract::cubecl_raw_device_pointer_paths_are_not_public
