@@ -128,18 +128,6 @@ class ChangePolicyTests(unittest.TestCase):
                 self.assertTrue(policy.run_ci_config)
                 self.assertFalse(policy.run_gpu)
 
-    def test_runner_pin_check_is_hosted_only(self) -> None:
-        # The scheduled pin check never touches a pod, so it needs no paid gate.
-        for path in (
-            ".github/workflows/runner-pin-check.yml",
-            "scripts/ci/runner_pin_check.py",
-        ):
-            with self.subTest(path=path):
-                policy = classify_paths([path])
-                self.assertIs(policy.change_class, ChangeClass.CI_ONLY)
-                self.assertTrue(policy.run_ci_config)
-                self.assertFalse(policy.run_gpu)
-
     def test_unrelated_ci_change_does_not_require_gpu(self) -> None:
         policy = classify_paths([".github/workflows/docs.yml"])
         self.assertIs(policy.change_class, ChangeClass.CI_ONLY)

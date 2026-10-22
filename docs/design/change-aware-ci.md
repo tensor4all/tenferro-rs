@@ -269,8 +269,10 @@ cannot be combined with PR-number recovery.
 Repository-owned Linux jobs explicitly use `ubuntu-24.04`, including CUDA
 archive builds, cache publication, CPU/extension validation, oracle replay,
 documentation and lifecycle control jobs. Avoid the moving `ubuntu-latest`
-alias so the build and execution baseline changes deliberately. The public,
-digest-pinned Actions runner used on RunPod already has an Ubuntu 24.04 base.
+alias so the build and execution baseline changes deliberately. RunPod uses
+the official Actions runner `latest` image, currently based on Ubuntu 24.04,
+resolved to an OCI digest before GPU allocation (see
+[Runner image selection](runpod-gpu-provisioning.md#runner-image-selection)).
 CUDA 12.6 and 12.8 installers use NVIDIA's `ubuntu2404` repository; both tiers
 are supported on that distribution. CUDA archive, toolkit/runtime and Linux
 Rust cache namespaces distinguish this migration from Ubuntu 22.04 artifacts.

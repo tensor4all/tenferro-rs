@@ -4,7 +4,7 @@ Status: active. Implements issue #1404 under the #1401 CI performance
 umbrella; the paid-cost controls below implement #2002. Companion code:
 `scripts/ci/runpod_pricing.py`, `scripts/ci/cuda_smoke_test.py`,
 `scripts/ci/runpod_provision.py`, `scripts/ci/gpu_gate_reuse.py`,
-`scripts/ci/runpod_cost.py`, `scripts/ci/runner_pin_check.py`; contract tests
+`scripts/ci/runpod_cost.py`; contract tests
 in `scripts/ci/tests/`.
 
 ## Problem
@@ -105,8 +105,8 @@ nothing was paid for and they do not count toward the early stop.
 Every second between pod creation and runner registration is billed at the
 GPU rate, and a rejected candidate pays it too, so the startup script keeps
 only what registration and the smoke proof need. The official GitHub
-`actions/actions-runner` Ubuntu 24.04 image is pinned by version and OCI
-digest in `runpod-gpu-execute.yml`. It supplies Python, download tools, the
+`actions/actions-runner:latest` image is resolved to its current OCI digest
+on the hosted runner before provisioning. It supplies Python, download tools, the
 runner and its native dependencies before the paid startup script begins.
 The script uses the image's passwordless sudo to retain root execution,
 downloads and verifies a pinned driver-compatible NVRTC package, proves a
@@ -294,33 +294,21 @@ reaches the gate. The paid gate remains
 the required path whenever a runner is available, and #1907's early stop bounds
 the spend when the provider is down.
 
-## Runner pin runbook
+## Runner image selection
 
-The pod registers the runner preinstalled in the official GitHub image,
-pinned as `RUNPOD_IMAGE` (version tag plus OCI digest) in
-`runpod-gpu-execute.yml`. GitHub stops queueing jobs to runners that fall too
-far behind; a rejected runner looks like a pod that passes the CUDA smoke
-proof and never registers (#1921: 2.335.1 was rejected on 2026-09-24).
+`RUNPOD_IMAGE` follows the official `ghcr.io/actions/actions-runner:latest`
+image. Before creating a Pod, the hosted provisioning job resolves `latest`
+with `docker buildx imagetools inspect` and passes `latest@sha256:...` to
+RunPod. All candidate attempts in that run use the same resolved image; the
+next run resolves `latest` again. Registry lookup failures stop the hosted
+job before any GPU allocation.
 
-`.github/workflows/runner-pin-check.yml` runs `runner_pin_check.py` daily and
-on PRs that touch the pin or check. It verifies that the version is a published
-stable release and the official GHCR version tag resolves to the pinned OCI
-digest. It fails when two or more newer stable releases exist, or one newer
-release is at least 14 days old; one younger release warns. GitHub release
-lookup uses the repository's read-only token; GHCR lookup uses an anonymous
-pull token. The check is not a required PR check.
-
-To bump the pin:
-
-1. Read the latest stable release with
-   `gh api repos/actions/runner/releases/latest --jq '.tag_name'`.
-2. Inspect `ghcr.io/actions/actions-runner:<version>` with
-   `docker buildx imagetools inspect` and update the version and image index
-   digest together in `RUNPOD_IMAGE`.
-3. `python3 scripts/ci/runner_pin_check.py` must report `verdict=ok`.
-4. Verify the image's runner/native dependencies, Python and NVRTC setup,
-   then run the full paid CUDA/PJRT/tutorial validation. Its startup log must
-   show the accepted runner online after the CUDA launch proof.
+The selected image and digest appear in the provisioning log and job summary.
+The accepted GPU job's setup log records the actual runner version. The
+existing CUDA launch proof still completes before runner registration.
+Runner releases no longer require manual version/digest updates or a
+scheduled stale-pin check. This avoids repeating the old-runner outage in
+#1921 while keeping the exact image used by each run traceable.
 
 ## Security invariants (unchanged)
 
