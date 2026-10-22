@@ -76,9 +76,8 @@ env:
   JAX_CUDA12_PJRT_VERSION: "0.10.2"
   NVIDIA_CUDNN_CU12_VERSION: "9.23.2.1"
   NVIDIA_CUDA_NVCC_CU12_VERSION: "12.9.86"
-  # Keep this pin current: runner-pin-check.yml checks the release and image.
-  # See the Runner pin runbook in docs/design/runpod-gpu-provisioning.md.
-  RUNPOD_IMAGE: ghcr.io/actions/actions-runner:2.337.0@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4
+  # Resolve latest once before provisioning; all attempts use that run's digest.
+  RUNPOD_IMAGE: ghcr.io/actions/actions-runner:latest
 
 jobs:
   start-runpod:
@@ -218,6 +217,18 @@ jobs:
             exit 1
           }
 
+      - name: Resolve latest official runner image
+        id: runner_image
+        if: steps.paid_path.outputs.run_paid_path != 'false'
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          digest="$(docker buildx imagetools inspect "$RUNPOD_IMAGE" --format '{{json .Manifest}}' | jq -er '.digest')"
+          image="${RUNPOD_IMAGE}@${digest}"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "RunPod runner image: ${image}"
+          echo "RunPod runner image: \`${image}\`" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Define runner label
         id: vars
         if: steps.paid_path.outputs.run_paid_path != 'false'
@@ -256,7 +267,7 @@ jobs:
         if: steps.paid_path.outputs.run_paid_path != 'false'
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          RUNPOD_IMAGE: ${{ env.RUNPOD_IMAGE }}
+          RUNPOD_IMAGE: ${{ steps.runner_image.outputs.image }}
           RUNTIME_ARTIFACT_PREFIX: ${{ inputs.runtime_artifact_prefix }}
           PROVISION_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROVISION_ORG: ${{ env.ORG_NAME }}
@@ -284,7 +295,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export RUNNER_ALLOW_RUNASROOT=1
 
-          # The pinned image supplies the runner and its dependencies. The
+          # The official image supplies the runner and its dependencies. The
           # smoke helper installs only the driver-compatible NVRTC package.
           command -v curl tar gzip python3
 

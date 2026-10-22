@@ -367,7 +367,7 @@ class WorkflowContractTests(unittest.TestCase):
             text_full,
         )
         self.assertIn("PROVISION_RUNNER_GROUP_ID:", create)
-        # The pinned image supplies the runner and bootstrap tools. The same
+        # The official image supplies the runner and bootstrap tools. The same
         # CUDA launch proof must finish before that runner registers.
         self.assertIn('cd /home/runner', create)
         self.assertIn('exec sudo -E bash -lc "$BASH_EXECUTION_STRING"', create)

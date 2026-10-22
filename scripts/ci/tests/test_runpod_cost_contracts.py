@@ -382,26 +382,62 @@ class TelemetryTests(unittest.TestCase):
         self.assertLess(deletion.index("Could not confirm deletion of RunPod pod"), deletion.index("echo \"deleted_at="))
 
 
-class RunnerPinCheckWorkflowTests(unittest.TestCase):
-    """Free scheduled detection of a stale runner pin (item 4)."""
+class RunnerImageTests(unittest.TestCase):
+    """Resolve the current official image before spending on a Pod."""
 
-    def test_scheduled_read_only_and_exercised_by_pin_changes(self) -> None:
-        workflow = text(".github/workflows/runner-pin-check.yml")
-        self.assertIn("  schedule:\n", workflow)
-        self.assertIn("  workflow_dispatch:\n", workflow)
-        self.assertIn("      - .github/workflows/runpod-gpu-execute.yml\n", workflow)
-        self.assertIn("      - scripts/ci/runner_pin_check.py\n", workflow)
-        self.assertIn("permissions:\n  contents: read\n\n", workflow)
-        self.assertNotIn("secrets.", workflow)
-        self.assertNotIn("write", workflow)
-        self.assertIn("python3 scripts/ci/runner_pin_check.py", workflow)
+    def resolve(self, manifest: dict, *, registry_failure: bool = False):
+        script = step_script(text(CHILD), "Resolve latest official runner image")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            docker = root / "docker"
+            docker.write_text('''#!/bin/sh
+printf '%s\\n' "$@" > "$DOCKER_ARGS"
+if [ "$REGISTRY_FAILURE" = true ]; then exit 1; fi
+printf '%s\\n' "$MANIFEST"
+''')
+            docker.chmod(0o755)
+            output, summary, arguments = (root / name for name in ("output", "summary", "args"))
+            env = dict(os.environ, PATH=f'{root}:{os.environ["PATH"]}',
+                       RUNPOD_IMAGE="ghcr.io/actions/actions-runner:latest",
+                       GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary),
+                       DOCKER_ARGS=str(arguments), MANIFEST=json.dumps(manifest),
+                       REGISTRY_FAILURE=str(registry_failure).lower())
+            result = subprocess.run(["bash", "-c", script], env=env,
+                                    capture_output=True, text=True)
+            return (result, output.read_text() if output.exists() else "",
+                    summary.read_text() if summary.exists() else "",
+                    arguments.read_text().splitlines())
 
-    def test_runbook_is_linked_from_the_pin(self) -> None:
+    def test_each_run_resolves_latest_and_records_its_exact_image(self) -> None:
+        for digest in ("sha256:" + "a" * 64, "sha256:" + "b" * 64):
+            with self.subTest(digest=digest):
+                result, output, summary, arguments = self.resolve({"digest": digest})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                image = f"ghcr.io/actions/actions-runner:latest@{digest}"
+                self.assertEqual(output, f"image={image}\n")
+                self.assertIn(image, summary)
+                self.assertIn(image, result.stdout)
+                self.assertEqual(arguments, ["buildx", "imagetools", "inspect",
+                    "ghcr.io/actions/actions-runner:latest", "--format", "{{json .Manifest}}"])
+
+    def test_lookup_failures_do_not_publish_an_image(self) -> None:
+        for manifest, failed in (({}, False), ({"digest": "unused"}, True)):
+            with self.subTest(manifest=manifest, registry_failure=failed):
+                result, output, summary, _ = self.resolve(manifest, registry_failure=failed)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(output, "")
+                self.assertEqual(summary, "")
+
+    def test_resolution_precedes_provisioning_and_uses_the_resolved_image(self) -> None:
         child = text(CHILD)
-        pin = child[child.index("# Keep this pin current") : child.index('  RUNPOD_IMAGE:')]
-        self.assertIn("runner-pin-check.yml", pin)
-        self.assertIn("Runner pin runbook", pin)
-        self.assertIn("## Runner pin runbook", text("docs/design/runpod-gpu-provisioning.md"))
+        resolve = step(child, "Resolve latest official runner image")
+        self.assertIn("if: steps.paid_path.outputs.run_paid_path != 'false'", resolve)
+        self.assertNotIn("secrets.", resolve)
+        self.assertLess(child.index("name: Resolve latest official runner image"),
+                        child.index("name: Create GitHub App token"))
+        provision = step(child, "Provision cheapest compatible RunPod pod")
+        self.assertIn("RUNPOD_IMAGE: ${{ steps.runner_image.outputs.image }}", provision)
+        self.assertIn('--image-name "${RUNPOD_IMAGE}"', provision)
 
 
 if __name__ == "__main__":
