@@ -20,6 +20,10 @@ gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_eager_values
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_traced_values_match_cpu
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_softmax_nan_and_infinity_policy_matches_cpu
 gpu	tenferro-ad::integration	gpu_raw_constant_binding::raw_kernel_reads_a_constant_from_host_in_place
+gpu	tenferro-fft	cuda::tests::canonicalization::cuda_padding_is_zero_c32
+gpu	tenferro-fft	cuda::tests::canonicalization::cuda_padding_is_zero_c64
+gpu	tenferro-fft	cuda::tests::canonicalization::cuda_padding_is_zero_f32
+gpu	tenferro-fft	cuda::tests::canonicalization::cuda_padding_is_zero_f64
 gpu	tenferro-fft	cuda::tests::ffi::cufft_library_is_loaded_once_per_process
 gpu	tenferro-fft::cuda_fft	cache::cuda_cufft_drop_and_reallocate_after_vendor_barrier_is_safe
 gpu	tenferro-fft::cuda_fft	cache::cuda_engine_cache_clear_and_eviction_are_safe_after_launch
@@ -36,7 +40,7 @@ gpu	tenferro-fft::cuda_fft	concrete::cuda_lengths_equal_truncated_and_zero_padde
 gpu	tenferro-fft::cuda_fft	concrete::cuda_multiple_interleaved_column_major_batches
 gpu	tenferro-fft::cuda_fft	concrete::cuda_r2c_c2r_f32_f64
 gpu	tenferro-fft::cuda_fft	concrete::cuda_real_fft_completes_even_and_odd_hermitian_spectrum
-gpu	tenferro-fft::cuda_fft	concrete::cuda_zero_padding_preserves_nonfinite_cpu_oracle_real_and_complex
+gpu	tenferro-fft::cuda_fft	concrete::cuda_zero_padding_matches_explicit_padding_real_and_complex
 gpu	tenferro-fft::cuda_fft	concrete::cuda_zero_transform_axis_with_nonzero_batch_is_padded_on_device
 gpu	tenferro-fft::cuda_fft	traced::cuda_runs_keep_cufft_plans_in_the_engine
 gpu	tenferro-fft::cuda_fft	traced::cuda_traced_execution_uses_explicit_engine_and_fft_module_registration
@@ -1470,6 +1474,10 @@ host	tenferro-fft::backend_capability	cpu_session_is_fft_capable_and_runtime_reg
 host	tenferro-fft::backend_capability	cuda_session_is_fft_capable
 host	tenferro-fft::backend_capability	direct_concrete_api_returns_typed_capability_error_without_fft_capability
 host	tenferro-fft::backend_capability	foreign_placement_is_unsupported_without_transfer
+host	tenferro-fft::cpu_real_fft	real_fft_matches_independent_dft_f32
+host	tenferro-fft::cpu_real_fft	real_fft_matches_independent_dft_f64
+host	tenferro-fft::cpu_real_fft	real_irfft_matches_independent_dft_f32
+host	tenferro-fft::cpu_real_fft	real_irfft_matches_independent_dft_f64
 host	tenferro-fft::cpu_reuse	compact_real_reads_roundtrip_on_all_axes_and_thread_counts
 host	tenferro-fft::cpu_reuse	explicit_reclaim_to_another_backend_does_not_also_return_to_origin
 host	tenferro-fft::cpu_reuse	output_drop_recycles_while_session_remains_active
