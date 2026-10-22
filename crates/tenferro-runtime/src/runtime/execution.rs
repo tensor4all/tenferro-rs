@@ -178,53 +178,42 @@ fn run_extension_callback<R>(
 
 /// Run one scheduled instruction on `exec`.
 ///
-/// The owner extension fallback is handled first, so every other instruction
-/// executes through the engine's typed operations.
-#[allow(clippy::too_many_arguments)]
+/// An extension instruction is the only one that borrows the engine's
+/// extension caches; it takes the owner fallback when its executor cannot run
+/// in the engine's session. Every other instruction executes through the
+/// engine's typed operations and never touches the caches, so a program
+/// without extension commands lends none (#2226).
 fn execute_slot_instruction_on_engine<'input>(
     engine: &mut dyn ExecutionEngine,
-    extension_caches: &mut ExtensionCacheStore,
+    extension_caches: Option<&mut ExtensionCacheStore>,
     operations: &[PreparedOperationPlan],
     instruction_index: usize,
     instruction: &ExecInstruction,
     slots: &mut [Option<ExecSlot<'input>>],
 ) -> Result<()> {
-    if crate::exec::is_ffi_instruction(instruction)
-        && crate::exec::needs_owner_extension_fallback(
-            instruction,
-            Some(&ExtensionExecutionDispatch {
-                operations,
-                caches: extension_caches,
-            }),
-        )
-    {
-        // A prepared operation that executes against the concrete engine type
-        // instead of the engine operations receives the engine itself.
-        let identity = engine.target().context_identity();
-        let mut extension_dispatch = ExtensionExecutionDispatch {
-            operations,
-            caches: extension_caches,
-        };
-        run_extension_callback(engine, |engine| {
-            crate::exec::execute_owner_extension_fallback(
-                engine.as_any_mut(),
-                identity,
-                slots,
-                instruction,
-                Some(&mut extension_dispatch),
+    if matches!(&instruction.op, crate::exec::ExecOp::Extension(_)) {
+        let caches = extension_caches.ok_or_else(|| {
+            Error::runtime_state(
+                "Runtime::run",
+                ErrorPhase::Execution,
+                "engine extension caches were not taken before an extension command",
             )
         })?;
-        crate::exec::reclaim_last_use_inputs_exec(slots, instruction, engine);
-        return Ok(());
-    }
-    let mut extension_dispatch = ExtensionExecutionDispatch {
-        operations,
-        caches: extension_caches,
-    };
-    if crate::exec::is_host_instruction(instruction) {
-        crate::exec::execute_host_instruction_exec(engine, slots, instruction)?;
-    } else if crate::exec::is_ffi_instruction(instruction) {
-        if matches!(&instruction.op, crate::exec::ExecOp::Extension(_)) {
+        let mut extension_dispatch = ExtensionExecutionDispatch { operations, caches };
+        if crate::exec::needs_owner_extension_fallback(instruction, Some(&extension_dispatch)) {
+            // A prepared operation that executes against the concrete engine
+            // type instead of the engine operations receives the engine itself.
+            let identity = engine.target().context_identity();
+            run_extension_callback(engine, |engine| {
+                crate::exec::execute_owner_extension_fallback(
+                    engine.as_any_mut(),
+                    identity,
+                    slots,
+                    instruction,
+                    Some(&mut extension_dispatch),
+                )
+            })?;
+        } else {
             run_extension_callback(engine, |engine| {
                 crate::exec::execute_ffi_instruction_exec(
                     engine,
@@ -234,15 +223,20 @@ fn execute_slot_instruction_on_engine<'input>(
                     Some(&mut extension_dispatch),
                 )
             })?;
-        } else {
-            crate::exec::execute_ffi_instruction_exec(
-                engine,
-                slots,
-                instruction,
-                Some(instruction_index),
-                Some(&mut extension_dispatch),
-            )?;
         }
+        crate::exec::reclaim_last_use_inputs_exec(slots, instruction, engine);
+        return Ok(());
+    }
+    if crate::exec::is_host_instruction(instruction) {
+        crate::exec::execute_host_instruction_exec(engine, slots, instruction)?;
+    } else if crate::exec::is_ffi_instruction(instruction) {
+        crate::exec::execute_ffi_instruction_exec(
+            engine,
+            slots,
+            instruction,
+            Some(instruction_index),
+            None,
+        )?;
     } else if let Some(view) = crate::exec::execute_backend_view_op(slots, instruction) {
         slots[instruction.output_slots[0]] = Some(view);
     } else {
@@ -433,16 +427,8 @@ pub(super) fn run<'a>(
         .map_err(prepare_error)?;
     }
     let root = prepared.prepared.root();
-    engines.take_caches();
-    let result = execute_scheduled(
-        root.staging(),
-        root.schedule(),
-        root.regions(),
-        root.region_counters(),
-        prepared.prepared.operations(),
-        inputs,
-        &mut engines,
-    );
+    engines.take_caches(root.needs_extension_caches());
+    let result = execute_scheduled(root, prepared.prepared.operations(), inputs, &mut engines);
     engines.restore_caches();
     result
 }
@@ -533,12 +519,18 @@ impl<'e, 'r> EngineSet<'e, 'r> {
         })
     }
 
-    fn take_caches(&mut self) {
-        self.caches = self
-            .engines
-            .iter_mut()
-            .map(|engine| engine.take_extension_caches())
-            .collect();
+    /// Lend every engine's extension caches to this run.
+    ///
+    /// Only a program with an extension command reads them; a run of any other
+    /// program leaves the caches in place and skips the exchange.
+    fn take_caches(&mut self, needed: bool) {
+        if needed {
+            self.caches = self
+                .engines
+                .iter_mut()
+                .map(|engine| engine.take_extension_caches())
+                .collect();
+        }
     }
 
     fn restore_caches(&mut self) {
@@ -583,19 +575,9 @@ impl<'e, 'r> EngineSet<'e, 'r> {
     ) -> Result<()> {
         let index = self.index_of(location.engine_id())?;
         let engine = &mut *self.engines[index];
-        let caches = match self.caches.get_mut(index) {
-            Some(caches) => caches,
-            None => {
-                return Err(Error::runtime_state(
-                    "Runtime::run",
-                    ErrorPhase::Execution,
-                    "engine extension caches were not taken before execution",
-                ))
-            }
-        };
         execute_slot_instruction_on_engine(
             engine,
-            caches,
+            self.caches.get_mut(index),
             operations,
             instruction_index,
             instruction,
@@ -656,23 +638,26 @@ impl Drop for EngineSet<'_, '_> {
 }
 
 fn execute_scheduled<'input>(
-    program: &ExecProgram,
-    schedule: &ScheduledGraph,
-    regions: &[super::region::ElementwiseRegion],
-    region_counters: &super::region::RegionExecutionCounters,
+    root: &super::preparation::PreparedProgramRoot,
     operations: &[PreparedOperationPlan],
     inputs: RuntimeInputReads<'input>,
     engines: &mut EngineSet<'_, '_>,
 ) -> Result<Vec<Output<'input>>> {
+    let program = root.staging();
+    let schedule = root.schedule();
+    // The immutable program was validated when the root was prepared; only
+    // the run's own input list is checked here.
     validate_exec_input_count(program, inputs.len())?;
-    crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
     let mut event_domains = Some(ScheduledEventDomains::new(schedule, engines)?);
     let inputs = inputs.into_iter().map(ExecSlot::Read).collect();
+    let flat = schedule.flat_location();
     let executed = execute_scheduled_slots_into(
         program,
         schedule,
-        regions,
-        region_counters,
+        flat,
+        root.regions(),
+        root.node_regions(),
+        root.region_counters(),
         operations,
         inputs,
         engines,
@@ -687,8 +672,8 @@ fn execute_scheduled<'input>(
             ))
         });
     };
-    let collected =
-        executed.and_then(|mut outputs| collect_outputs(program, &mut outputs, engines));
+    let collected = executed
+        .and_then(|slots| collect_outputs(program, slots, flat, root.output_duplicates(), engines));
     match collected {
         Ok(outputs) => {
             engines.retire(event_domains)?;
@@ -706,63 +691,81 @@ fn execute_scheduled<'input>(
     }
 }
 
-/// Turn the located output slots into [`Output`]s.
+/// Turn the run's output slots into [`Output`]s, in program output order.
 ///
 /// A slot that still reads one of the run's inputs (the input itself or a view
 /// of it) is returned borrowed, without a copy. Owned results, which are
 /// always compact, are returned as they are. A program may name one output slot
-/// more than once; repeated borrowed reads are cloned shallowly, and repeated
-/// owned results are explicit engine copies.
+/// more than once (`duplicates`, computed at prepare): the first position takes
+/// the value, a repeated borrowed read is cloned shallowly, and a repeated
+/// owned result is an explicit engine copy on the value's location.
 fn collect_outputs<'input>(
     program: &ExecProgram,
-    outputs: &mut [Option<LocatedExecSlot<'input>>],
+    slots: RunSlots<'input>,
+    flat: Option<&ExecutionLocation>,
+    duplicates: &[Option<usize>],
     engines: &mut EngineSet<'_, '_>,
 ) -> Result<Vec<Output<'input>>> {
-    let mut positions: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (index, &slot) in program.output_slots.iter().enumerate() {
-        positions.entry(slot).or_default().push(index);
-    }
-    let mut collected = (0..program.output_slots.len())
-        .map(|_| None)
-        .collect::<Vec<Option<Output<'input>>>>();
-    for (slot, positions) in positions {
-        let located = outputs
-            .get_mut(slot)
-            .and_then(Option::take)
-            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
-        match located.value {
-            ExecSlot::Read(read) => {
-                for position in positions {
-                    collected[position] = Some(Output::Borrowed(read.clone()));
+    let RunSlots {
+        mut staged,
+        mut located,
+    } = slots;
+    let mut collected: Vec<Output<'input>> = Vec::with_capacity(program.output_slots.len());
+    // The location of each collected owned output, for a repeated position's
+    // engine copy; the flat run has one location for every value.
+    let mut locations: Vec<Option<ExecutionLocation>> = Vec::new();
+    for (position, &slot) in program.output_slots.iter().enumerate() {
+        if let Some(first) = duplicates.get(position).copied().flatten() {
+            let output = match collected.get(first) {
+                Some(Output::Borrowed(read)) => Output::Borrowed(read.clone()),
+                Some(Output::Owned(tensor)) => {
+                    let location = match flat {
+                        Some(location) => location,
+                        None => locations
+                            .get(first)
+                            .and_then(Option::as_ref)
+                            .ok_or(tenferro_tensor::Error::MissingValue { slot })?,
+                    };
+                    Output::Owned(duplicate_owned_output(engines, location, tensor)?)
                 }
+                None => return Err(tenferro_tensor::Error::MissingValue { slot }.into()),
+            };
+            collected.push(output);
+            if flat.is_none() {
+                locations.push(None);
             }
-            ExecSlot::Owned(tensor) => {
-                let mut originals = positions.into_iter();
-                let last = originals
-                    .next_back()
-                    .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
-                for position in originals {
-                    collected[position] = Some(Output::Owned(duplicate_owned_output(
-                        engines,
-                        &located.location,
-                        &tensor,
-                    )?));
-                }
-                collected[last] = Some(Output::Owned(tensor));
-            }
+            continue;
         }
-    }
-    collected
-        .into_iter()
-        .enumerate()
-        .map(|(index, output)| {
-            output.ok_or_else(|| {
-                Error::Internal(format!(
-                    "Runtime::run: output slot {index} was not collected"
+        let value = match (flat, &mut located) {
+            (Some(_), _) => staged
+                .get_mut(slot)
+                .and_then(Option::take)
+                .ok_or(tenferro_tensor::Error::MissingValue { slot })?,
+            (None, Some(located)) => {
+                let values = located
+                    .get_mut(slot)
+                    .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+                let value = values
+                    .pop()
+                    .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
+                values.clear();
+                locations.push(Some(value.location));
+                value.value
+            }
+            (None, None) => {
+                return Err(Error::runtime_state(
+                    "Runtime::run",
+                    ErrorPhase::Execution,
+                    "a multi-location run lost its value lists".to_string(),
                 ))
-            })
-        })
-        .collect()
+            }
+        };
+        collected.push(match value {
+            ExecSlot::Read(read) => Output::Borrowed(read),
+            ExecSlot::Owned(tensor) => Output::Owned(tensor),
+        });
+    }
+    Ok(collected)
 }
 
 fn duplicate_owned_output(
@@ -927,48 +930,6 @@ impl<'input> RunSlots<'input> {
             )
         })
     }
-
-    /// Take the run's outputs.
-    fn finish(
-        self,
-        program: &ExecProgram,
-        flat: Option<&ExecutionLocation>,
-    ) -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
-        let mut staged = self.staged;
-        match (flat, self.located) {
-            (Some(location), _) => collect_flat_outputs(program, &mut staged, location),
-            (None, Some(mut located)) => collect_located_outputs(program, &mut located),
-            (None, None) => Err(Error::runtime_state(
-                "Runtime::run",
-                ErrorPhase::Execution,
-                "a multi-location run lost its value lists".to_string(),
-            )),
-        }
-    }
-}
-
-/// The single location every part of `schedule` sits at, when there is one.
-///
-/// A single-location schedule has no transfer node and no second engine or
-/// storage class: its commands can execute against one flat slot array.
-fn flat_execution_location(schedule: &ScheduledGraph) -> Option<&ExecutionLocation> {
-    if schedule
-        .nodes()
-        .iter()
-        .any(|node| matches!(node, ScheduledNode::Transfer(_)))
-    {
-        return None;
-    }
-    let root = schedule.root_location();
-    if !schedule
-        .input_locations()
-        .iter()
-        .chain(schedule.operation_locations())
-        .all(|location| location == root)
-    {
-        return None;
-    }
-    Some(root)
 }
 
 /// The location `instruction` executes at, proven equal to its node's.
@@ -996,13 +957,15 @@ fn command_location<'a>(
 fn execute_scheduled_slots_into<'input>(
     program: &ExecProgram,
     schedule: &ScheduledGraph,
+    flat: Option<&ExecutionLocation>,
     regions: &[super::region::ElementwiseRegion],
+    node_regions: &[super::region::NodeRegion],
     region_counters: &super::region::RegionExecutionCounters,
     operations: &[PreparedOperationPlan],
     inputs: Vec<ExecSlot<'input>>,
     engines: &mut EngineSet<'_, '_>,
     event_domains: &mut Option<ScheduledEventDomains>,
-) -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
+) -> Result<RunSlots<'input>> {
     let domains = event_domains.as_mut().ok_or_else(|| {
         Error::runtime_state(
             "Runtime::run",
@@ -1010,33 +973,27 @@ fn execute_scheduled_slots_into<'input>(
             "scheduled execution has no event-domain run to submit into",
         )
     })?;
-    let flat = flat_execution_location(schedule);
     let mut slots = RunSlots::new(program.n_slots, flat.is_some());
     // INVARIANT: the immutable schedule was validated during preparation;
     // driver preflight completes before input ingress or any operation launch.
     // A provider panic is caught after this body and drops the event-domain
     // run before this frame's staged tensor storage drops.
-    // Planned elementwise regions: the start node executes the whole region as
-    // one fused command and the covered nodes are skipped.
-    let mut region_starts: HashMap<usize, usize> = HashMap::new();
-    let mut region_covered: HashSet<usize> = HashSet::new();
-    for (region_index, region) in regions.iter().enumerate() {
-        if let Some(&first) = region.node_indices.first() {
-            region_starts.insert(first, region_index);
-        }
-        region_covered.extend(region.node_indices.iter().copied());
-    }
-
-    let result = std::panic::catch_unwind(AssertUnwindSafe(
-        || -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
-            (|| {
-                slots.initialize(program, inputs, schedule)?;
-                for (node_index, node) in schedule.nodes().iter().enumerate() {
-                    match node {
-                        ScheduledNode::Operation(operation_node) => {
-                            if let Some(&region_index) = region_starts.get(&node_index) {
-                                let region = &regions[region_index];
-                                let first_instruction = program
+    // Planned elementwise regions (`node_regions`, computed at prepare): the
+    // start node executes the whole region as one fused command and the
+    // covered nodes are skipped.
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<RunSlots<'input>> {
+        (|| {
+            slots.initialize(program, inputs, schedule)?;
+            for (node_index, node) in schedule.nodes().iter().enumerate() {
+                match node {
+                    ScheduledNode::Operation(operation_node) => {
+                        let role = node_regions
+                            .get(node_index)
+                            .copied()
+                            .unwrap_or(super::region::NodeRegion::Command);
+                        if let super::region::NodeRegion::Start(region_index) = role {
+                            let region = &regions[region_index];
+                            let first_instruction = program
                                     .instructions
                                     .get(region.instruction_range.start)
                                     .ok_or_else(|| {
@@ -1050,76 +1007,73 @@ fn execute_scheduled_slots_into<'input>(
                                             ),
                                         )
                                     })?;
-                                let location = command_location(
-                                    schedule,
-                                    flat,
-                                    first_instruction,
-                                    operation_node.location(),
+                            let location = command_location(
+                                schedule,
+                                flat,
+                                first_instruction,
+                                operation_node.location(),
+                            )?;
+                            let mut launch = || {
+                                slots.stage_region(region, location)?;
+                                let applied = engines.execute_elementwise_fusion_slots(
+                                    location,
+                                    &region.input_slots,
+                                    region.instructions.len(),
+                                    &region.plan,
+                                    slots.execution(),
+                                    &region.output_slots,
                                 )?;
-                                let mut launch = || {
-                                    slots.stage_region(region, location)?;
-                                    let applied = engines.execute_elementwise_fusion_slots(
+                                if applied {
+                                    region_counters.record_fused();
+                                    validate_region_outputs(
+                                        region,
                                         location,
-                                        &region.input_slots,
-                                        region.instructions.len(),
-                                        &region.plan,
-                                        slots.execution(),
-                                        &region.output_slots,
+                                        slots.execution_ref(),
                                     )?;
-                                    if applied {
-                                        region_counters.record_fused();
-                                        validate_region_outputs(
-                                            region,
-                                            location,
-                                            slots.execution_ref(),
-                                        )?;
-                                        return slots.publish_region(region, location);
+                                    return slots.publish_region(region, location);
+                                }
+                                // The backend rejected the fusion: execute the
+                                // region's instructions one by one.
+                                region_counters.record_fallback();
+                                for (offset, instruction) in region.instructions.iter().enumerate()
+                                {
+                                    let instruction_index = region.instruction_range.start + offset;
+                                    let member_location = command_location(
+                                        schedule,
+                                        flat,
+                                        instruction,
+                                        operation_node.location(),
+                                    )?;
+                                    slots.stage_command(instruction, member_location)?;
+                                    engines.execute_slot_instruction(
+                                        member_location,
+                                        instruction_index,
+                                        instruction,
+                                        operations,
+                                        slots.execution(),
+                                    )?;
+                                    validate_instruction_outputs(
+                                        instruction_index,
+                                        instruction,
+                                        member_location,
+                                        slots.execution_ref(),
+                                    )?;
+                                    slots.publish_command(instruction, member_location)?;
+                                }
+                                Ok(())
+                            };
+                            domains.enqueue(node_index, node, &mut launch)?;
+                            region_counters.record_submission();
+                            // Every covered node's completion resolves to the region's
+                            // completion token, which was recorded after the region's
+                            // last command.
+                            let completion = EventDependency::from_completion(node.completion());
+                            if let Some(token) = domains.completions.get(&completion).cloned() {
+                                for &covered in &region.node_indices {
+                                    if covered == node_index {
+                                        continue;
                                     }
-                                    // The backend rejected the fusion: execute the
-                                    // region's instructions one by one.
-                                    region_counters.record_fallback();
-                                    for (offset, instruction) in
-                                        region.instructions.iter().enumerate()
-                                    {
-                                        let instruction_index =
-                                            region.instruction_range.start + offset;
-                                        let member_location = command_location(
-                                            schedule,
-                                            flat,
-                                            instruction,
-                                            operation_node.location(),
-                                        )?;
-                                        slots.stage_command(instruction, member_location)?;
-                                        engines.execute_slot_instruction(
-                                            member_location,
-                                            instruction_index,
-                                            instruction,
-                                            operations,
-                                            slots.execution(),
-                                        )?;
-                                        validate_instruction_outputs(
-                                            instruction_index,
-                                            instruction,
-                                            member_location,
-                                            slots.execution_ref(),
-                                        )?;
-                                        slots.publish_command(instruction, member_location)?;
-                                    }
-                                    Ok(())
-                                };
-                                domains.enqueue(node_index, node, &mut launch)?;
-                                region_counters.record_submission();
-                                // Every covered node's completion resolves to the region's
-                                // completion token, which was recorded after the region's
-                                // last command.
-                                let completion =
-                                    EventDependency::from_completion(node.completion());
-                                if let Some(token) = domains.completions.get(&completion).cloned() {
-                                    for &covered in &region.node_indices {
-                                        if covered == node_index {
-                                            continue;
-                                        }
-                                        let covered_node = schedule.nodes().get(covered).ok_or_else(|| {
+                                    let covered_node = schedule.nodes().get(covered).ok_or_else(|| {
                                             Error::runtime_state(
                                                 "Runtime::run",
                                                 ErrorPhase::Execution,
@@ -1129,23 +1083,21 @@ fn execute_scheduled_slots_into<'input>(
                                                 ),
                                             )
                                         })?;
-                                        domains.completions.insert(
-                                            EventDependency::from_completion(
-                                                covered_node.completion(),
-                                            ),
-                                            Arc::clone(&token),
-                                        );
-                                    }
+                                    domains.completions.insert(
+                                        EventDependency::from_completion(covered_node.completion()),
+                                        Arc::clone(&token),
+                                    );
                                 }
-                                continue;
                             }
-                            if region_covered.contains(&node_index) {
-                                // Executed as part of its region.
-                                continue;
-                            }
-                            let mut launch = || {
-                                let instruction_index = operation_node.instruction_index();
-                                let instruction = program
+                            continue;
+                        }
+                        if role == super::region::NodeRegion::Covered {
+                            // Executed as part of its region.
+                            continue;
+                        }
+                        let mut launch = || {
+                            let instruction_index = operation_node.instruction_index();
+                            let instruction = program
                                     .instructions
                                     .get(instruction_index)
                                     .ok_or_else(|| {
@@ -1158,61 +1110,60 @@ fn execute_scheduled_slots_into<'input>(
                                             ),
                                         )
                                     })?;
-                                let location = command_location(
-                                    schedule,
-                                    flat,
-                                    instruction,
-                                    operation_node.location(),
-                                )?;
-                                slots.stage_command(instruction, location)?;
-                                engines.execute_slot_instruction(
-                                    location,
-                                    instruction_index,
-                                    instruction,
-                                    operations,
-                                    slots.execution(),
-                                )?;
-                                validate_instruction_outputs(
-                                    instruction_index,
-                                    instruction,
-                                    location,
-                                    slots.execution_ref(),
-                                )?;
-                                slots.publish_command(instruction, location)
-                            };
-                            domains.enqueue(node_index, node, &mut launch)?;
-                            region_counters.record_submission();
-                        }
-                        ScheduledNode::Transfer(transfer) => {
-                            let mut launch =
-                                || execute_scheduled_transfer(transfer, slots.transfers()?);
-                            domains.enqueue(node_index, node, &mut launch)?;
-                            region_counters.record_submission();
-                        }
-                        ScheduledNode::Collective(_) => {
-                            return Err(Error::runtime_state_source(
-                                "Runtime::run",
-                                ErrorPhase::Execution,
-                                UnsupportedScheduledNodeError {
-                                    node_index,
-                                    node_kind: ScheduledNodeKind::Collective,
-                                },
-                            ));
-                        }
-                        ScheduledNode::Barrier(_) => {
-                            let mut launch = || Ok(());
-                            domains.enqueue(node_index, node, &mut launch)?;
-                            region_counters.record_submission();
-                        }
+                            let location = command_location(
+                                schedule,
+                                flat,
+                                instruction,
+                                operation_node.location(),
+                            )?;
+                            slots.stage_command(instruction, location)?;
+                            engines.execute_slot_instruction(
+                                location,
+                                instruction_index,
+                                instruction,
+                                operations,
+                                slots.execution(),
+                            )?;
+                            validate_instruction_outputs(
+                                instruction_index,
+                                instruction,
+                                location,
+                                slots.execution_ref(),
+                            )?;
+                            slots.publish_command(instruction, location)
+                        };
+                        domains.enqueue(node_index, node, &mut launch)?;
+                        region_counters.record_submission();
+                    }
+                    ScheduledNode::Transfer(transfer) => {
+                        let mut launch =
+                            || execute_scheduled_transfer(transfer, slots.transfers()?);
+                        domains.enqueue(node_index, node, &mut launch)?;
+                        region_counters.record_submission();
+                    }
+                    ScheduledNode::Collective(_) => {
+                        return Err(Error::runtime_state_source(
+                            "Runtime::run",
+                            ErrorPhase::Execution,
+                            UnsupportedScheduledNodeError {
+                                node_index,
+                                node_kind: ScheduledNodeKind::Collective,
+                            },
+                        ));
+                    }
+                    ScheduledNode::Barrier(_) => {
+                        let mut launch = || Ok(());
+                        domains.enqueue(node_index, node, &mut launch)?;
+                        region_counters.record_submission();
                     }
                 }
-                Ok(())
-            })()?;
-            slots.finish(program, flat)
-        },
-    ));
+            }
+            Ok(())
+        })()?;
+        Ok(slots)
+    }));
     match result {
-        Ok(outputs) => outputs,
+        Ok(slots) => slots,
         Err(payload) => {
             // A provider launch may unwind through the scheduler. Drop the
             // event-domain run before this frame's staged tensor storage drops,
@@ -1247,30 +1198,6 @@ pub(crate) struct MissingScheduledDependencyCompletionError {
 pub(crate) struct DuplicateTransferDestinationError {
     pub(crate) value_slot: usize,
     pub(crate) destination: ExecutionLocation,
-}
-
-/// Prove that same-stream submission order can replace per-node scheduler
-/// events for `schedule`.
-///
-/// True only when every scheduled location and node names one event domain and
-/// no transfer node bridges providers. The provider run must still accept the
-/// mode; this predicate is necessary, not sufficient.
-fn single_domain_coalescing_eligible(schedule: &ScheduledGraph) -> bool {
-    let domain = schedule.root_location().event_domain_id();
-    let same_domain = |location: &ExecutionLocation| location.event_domain_id() == domain;
-    !schedule
-        .nodes()
-        .iter()
-        .any(|node| matches!(node, ScheduledNode::Transfer(_)))
-        && schedule.input_locations().iter().all(same_domain)
-        && schedule.operation_locations().iter().all(same_domain)
-        && schedule.nodes().iter().all(|node| {
-            node.completion().domain() == domain
-                && node
-                    .dependencies()
-                    .iter()
-                    .all(|dependency| dependency.domain() == domain)
-        })
 }
 
 impl ScheduledEventDomains {
@@ -1319,7 +1246,7 @@ impl ScheduledEventDomains {
         // location, completion, and dependency carries the root's, and no
         // transfer node exists. Seed that single run directly instead of
         // scanning every location into a driver table only to find one entry.
-        if single_domain_coalescing_eligible(schedule) {
+        if schedule.coalescing_eligible() {
             let domain = schedule.root_location().event_domain_id();
             let engine_id = schedule.root_location().engine_id().clone();
             let mut run = RuntimeOwnedEventDomainRun::new(
@@ -1589,11 +1516,10 @@ impl ScheduledEventDomains {
     }
 
     /// Release every pending run, each with the engine that owns it.
-    fn into_pending_runs(self) -> Vec<(EngineId, Box<dyn EventDomainRun>)> {
+    fn into_pending_runs(self) -> impl Iterator<Item = (EngineId, Box<dyn EventDomainRun>)> {
         self.runs
             .into_iter()
             .filter_map(RuntimeOwnedEventDomainRun::into_pending)
-            .collect()
     }
 
     pub(crate) fn drain(&mut self) -> Result<()> {
@@ -2231,50 +2157,6 @@ mod transfer_validation_tests {
 
 /// Collect a flat run's outputs: each output slot's value already sits at the
 /// run's single location.
-fn collect_flat_outputs<'input>(
-    program: &ExecProgram,
-    staged: &mut [Option<ExecSlot<'input>>],
-    location: &ExecutionLocation,
-) -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
-    let mut outputs = (0..program.n_slots).map(|_| None).collect::<Vec<_>>();
-    for &slot in &program.output_slots {
-        if outputs[slot].is_some() {
-            continue;
-        }
-        let value = staged
-            .get_mut(slot)
-            .and_then(Option::take)
-            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
-        outputs[slot] = Some(LocatedExecSlot {
-            location: location.clone(),
-            value,
-        });
-    }
-    Ok(outputs)
-}
-
-fn collect_located_outputs<'input>(
-    program: &ExecProgram,
-    located: &mut [Vec<LocatedExecSlot<'input>>],
-) -> Result<Vec<Option<LocatedExecSlot<'input>>>> {
-    let mut outputs = (0..program.n_slots).map(|_| None).collect::<Vec<_>>();
-    for &slot in &program.output_slots {
-        if outputs[slot].is_some() {
-            continue;
-        }
-        let values = located
-            .get_mut(slot)
-            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
-        let value = values
-            .pop()
-            .ok_or(tenferro_tensor::Error::MissingValue { slot })?;
-        values.clear();
-        outputs[slot] = Some(value);
-    }
-    located.iter_mut().for_each(Vec::clear);
-    Ok(outputs)
-}
-
 fn input_signature_reads(inputs: &[TensorRead<'_>]) -> Result<InputSignature> {
     InputSignature::from_reads(inputs).map_err(|source| prepare_error(Arc::new(source)))
 }

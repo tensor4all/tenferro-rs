@@ -2,7 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::exec::{is_ffi_instruction, is_host_instruction, ExecInstruction, ExecOp, ExecProgram};
+use crate::exec::{
+    is_ffi_instruction, is_host_instruction, ExecInstruction, ExecOp, ExecProgram, InputView,
+};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::backend::{
     ElementwiseFusionInputView, ElementwiseFusionInst, ElementwiseFusionPlan,
@@ -55,8 +57,8 @@ pub(crate) fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
             );
             segments.push(Segment::Ffi);
             idx += 1;
-        } else if is_broadcast_multiply_triplet_at(program, idx)
-            && !segment_outputs_have_future_uses(program, &future_uses, idx, idx + 3)
+        } else if let Some(len) = broadcast_multiply_span_at(program, idx)
+            && !segment_outputs_have_future_uses(program, &future_uses, idx, idx + len)
         {
             flush_fused_segment(
                 program,
@@ -65,20 +67,8 @@ pub(crate) fn segment_exec_program(program: &ExecProgram) -> Vec<Segment> {
                 fused_start.take(),
                 idx,
             );
-            segments.push(build_fused_segment(program, &future_uses, idx, idx + 3));
-            idx += 3;
-        } else if is_single_broadcast_multiply_pair_at(program, idx)
-            && !segment_outputs_have_future_uses(program, &future_uses, idx, idx + 2)
-        {
-            flush_fused_segment(
-                program,
-                &future_uses,
-                &mut segments,
-                fused_start.take(),
-                idx,
-            );
-            segments.push(build_fused_segment(program, &future_uses, idx, idx + 2));
-            idx += 2;
+            segments.push(build_fused_segment(program, &future_uses, idx, idx + len));
+            idx += len;
         } else if fused_start.is_none() {
             fused_start = Some(idx);
             idx += 1;
@@ -107,6 +97,36 @@ fn segment_outputs_have_future_uses(
         .iter()
         .flat_map(|inst| inst.output_slots.iter().copied())
         .any(|slot| use_summary.is_used_at_or_after(slot, end))
+}
+
+/// Length of the broadcast-multiply special segment starting at `idx`.
+///
+/// Three forms are the same computation: `broadcast, broadcast, multiply`,
+/// `broadcast, multiply`, and the folded multiply whose input views carry the
+/// broadcasts (#2226). The folded form keeps the segmentation boundary the
+/// unfolded form had, so a neighbouring candidate is not merged with it.
+fn broadcast_multiply_span_at(program: &ExecProgram, idx: usize) -> Option<usize> {
+    if is_broadcast_multiply_triplet_at(program, idx) {
+        Some(3)
+    } else if is_single_broadcast_multiply_pair_at(program, idx) {
+        Some(2)
+    } else if is_folded_broadcast_multiply_at(program, idx) {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+fn is_folded_broadcast_multiply_at(program: &ExecProgram, idx: usize) -> bool {
+    let Some(multiply) = program.instructions.get(idx) else {
+        return false;
+    };
+    matches!(multiply.op, ExecOp::Multiply)
+        && !multiply.input_views.is_empty()
+        && multiply
+            .input_views
+            .iter()
+            .all(|(_, view)| matches!(view, InputView::BroadcastInDim { .. }))
 }
 
 fn is_broadcast_multiply_triplet_at(program: &ExecProgram, idx: usize) -> bool {
@@ -278,9 +298,64 @@ pub(crate) fn build_elementwise_fusion_plan(
 
     let mut ops = Vec::with_capacity(instructions.len());
     let mut next_value = input_slots.len();
+    // A slot read through a folded view (#2226) and also read as it is would
+    // need two layouts for one region input; such a region keeps the
+    // per-instruction path, which reads views itself.
+    let mut viewed_slots = HashSet::new();
+    let mut direct_slots = HashSet::new();
+    for inst in instructions {
+        for (position, &slot) in inst.input_slots.iter().enumerate() {
+            let viewed = inst
+                .input_views
+                .iter()
+                .any(|(viewed, _)| *viewed == position);
+            if viewed {
+                viewed_slots.insert(slot);
+            } else if !matches!(inst.op, ExecOp::BroadcastInDim { .. }) {
+                direct_slots.insert(slot);
+            }
+        }
+    }
+    if viewed_slots.iter().any(|slot| direct_slots.contains(slot)) {
+        return None;
+    }
     for inst in instructions {
         if inst.dtype != dtype || inst.output_slots.len() != 1 {
             return None;
+        }
+        if !inst.input_views.is_empty() {
+            // A folded `BroadcastInDim` on a region input is the same broadcast
+            // view the planner derives from a broadcast instruction; any other
+            // folded view keeps the region on the per-instruction path.
+            if inst.op.elementwise_fusion_op().is_none() {
+                return None;
+            }
+            for (position, view) in &inst.input_views {
+                let InputView::BroadcastInDim { shape, dims } = view else {
+                    return None;
+                };
+                if inst
+                    .input_views
+                    .iter()
+                    .filter(|(other, _)| other == position)
+                    .count()
+                    != 1
+                {
+                    return None;
+                }
+                let input_slot = *inst.input_slots.get(*position)?;
+                let input_value = *slot_to_value.get(&input_slot)?;
+                if input_value >= input_views.len() {
+                    return None;
+                }
+                let shape = const_dim_expr_shape(shape)?;
+                let expected = ElementwiseFusionInputView::broadcast_in_dim(shape, dims.clone());
+                match &input_views[input_value] {
+                    ElementwiseFusionInputView::Identity => input_views[input_value] = expected,
+                    current if *current == expected => {}
+                    _ => return None,
+                }
+            }
         }
         if let ExecOp::BroadcastInDim { shape, dims } = &inst.op {
             let input_slot = *inst.input_slots.first()?;

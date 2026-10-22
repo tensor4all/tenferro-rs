@@ -373,6 +373,7 @@ fn rewrite_degenerate_dot(
             output_shapes: vec![instr.output_shapes[0].clone()].into_iter().collect(),
             output_extents: vec![instr.output_extents[0].clone()].into_iter().collect(),
             last_use: Vec::new(),
+            input_views: Vec::new(),
         });
         return Ok(true);
     }
@@ -414,6 +415,7 @@ fn rewrite_degenerate_dot(
             output_shapes: vec![instr.output_shapes[0].clone()].into_iter().collect(),
             output_extents: vec![instr.output_extents[0].clone()].into_iter().collect(),
             last_use: Vec::new(),
+            input_views: Vec::new(),
         });
         return Ok(true);
     }
@@ -447,6 +449,7 @@ fn rewrite_degenerate_dot(
         output_shapes: vec![transposed_shape.clone()].into_iter().collect(),
         output_extents: vec![transposed_extents.clone()].into_iter().collect(),
         last_use: Vec::new(),
+        input_views: Vec::new(),
     });
     let transposed = EmittedOperand {
         slot: transposed_slot,
@@ -464,6 +467,7 @@ fn rewrite_degenerate_dot(
         output_shapes: vec![instr.output_shapes[0].clone()].into_iter().collect(),
         output_extents: vec![instr.output_extents[0].clone()].into_iter().collect(),
         last_use: Vec::new(),
+        input_views: Vec::new(),
     });
     Ok(true)
 }
@@ -511,6 +515,7 @@ fn emit_broadcast(
         output_extents: vec![exact_extents_from_shape(&shape)].into_iter().collect(),
         output_shapes: vec![shape.clone()].into_iter().collect(),
         last_use: Vec::new(),
+        input_views: Vec::new(),
     });
     EmittedOperand {
         slot: out_slot,
@@ -535,6 +540,7 @@ fn rewrite_full_contraction(input: DotDecomposeInput<'_>, builder: &mut Instruct
         output_shapes: vec![lhs_operand.shape.clone()].into_iter().collect(),
         output_extents: vec![lhs_operand.extents.clone()].into_iter().collect(),
         last_use: Vec::new(),
+        input_views: Vec::new(),
     });
     builder.push(ExecInstruction {
         op: ExecOp::ReduceSum {
@@ -547,6 +553,7 @@ fn rewrite_full_contraction(input: DotDecomposeInput<'_>, builder: &mut Instruct
         output_shapes: vec![instr.output_shapes[0].clone()].into_iter().collect(),
         output_extents: vec![instr.output_extents[0].clone()].into_iter().collect(),
         last_use: Vec::new(),
+        input_views: Vec::new(),
     });
 }
 
@@ -575,6 +582,7 @@ fn emit_conj_if_needed(
         output_shapes: vec![operand.shape.to_vec()].into_iter().collect(),
         output_extents: vec![operand.extents.to_vec()].into_iter().collect(),
         last_use: Vec::new(),
+        input_views: Vec::new(),
     });
     EmittedOperand {
         slot: out_slot,
@@ -732,6 +740,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
         output_shapes: vec![canonical_output_shape.clone()].into_iter().collect(),
         output_extents: vec![canonical_output_extents].into_iter().collect(),
         last_use: Vec::new(),
+        input_views: Vec::new(),
     });
 
     if needs_output_reshape {
@@ -766,6 +775,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
             output_shapes: vec![metadata_shape].into_iter().collect(),
             output_extents: instr.output_extents.clone(),
             last_use: Vec::new(),
+            input_views: Vec::new(),
         });
     }
     Ok(())
@@ -806,6 +816,7 @@ fn emit_transpose_if_needed(
         output_shapes: vec![transposed_shape.clone()].into_iter().collect(),
         output_extents: vec![transposed_extents.clone()].into_iter().collect(),
         last_use: Vec::new(),
+        input_views: Vec::new(),
     });
     EmittedOperand {
         slot: out_slot,
@@ -840,6 +851,7 @@ fn emit_merge_reshape(
         output_shapes: vec![output_shape_meta.clone()].into_iter().collect(),
         output_extents: vec![output_extents_meta.clone()].into_iter().collect(),
         last_use: Vec::new(),
+        input_views: Vec::new(),
     });
     EmittedOperand {
         slot: out_slot,

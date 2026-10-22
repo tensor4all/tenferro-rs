@@ -18,7 +18,7 @@ use super::dispatch::{
 };
 use super::{
     constant_tensor, get, initialize_exec_slots_in, validate_exec_program, ExecInstruction, ExecOp,
-    ExecProgram, ExecSlot,
+    ExecProgram, ExecSlot, InputView,
 };
 use crate::runtime::{
     EngineId, ExecutionContextIdentity, HardwareClassId, InputSignature, PreparedOperation,
@@ -139,6 +139,7 @@ fn exec_instruction_single_output_metadata_stays_inline() {
             .into_iter()
             .collect(),
         last_use: vec![true],
+        input_views: Vec::new(),
     };
 
     assert!(!instr.output_shapes.is_heap());
@@ -175,7 +176,7 @@ fn exec_accessors_reject_bad_input_slot_index_without_panicking() {
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
     ))];
 
-    let err = get(&slots, &[], 0).unwrap_err();
+    let err = get(&slots, &negate_instruction(vec![]), 0).unwrap_err();
 
     assert!(matches!(err, crate::Error::Internal(message) if message.contains("input index 0")));
 }
@@ -186,7 +187,7 @@ fn exec_accessors_reject_out_of_range_slot_without_panicking() {
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
     ))];
 
-    let err = get(&slots, &[4], 0).unwrap_err();
+    let err = get(&slots, &negate_instruction(vec![4]), 0).unwrap_err();
 
     let message = err.to_string();
     assert!(message.contains("slot 4"), "{message}");
@@ -233,6 +234,7 @@ fn validate_exec_program_rejects_empty_instruction_outputs() {
         output_shapes: Vec::new().into_iter().collect(),
         output_extents: Vec::new().into_iter().collect(),
         last_use: vec![true],
+        input_views: Vec::new(),
     });
 
     let err = validate_exec_program(&program, "test").unwrap_err();
@@ -258,6 +260,7 @@ fn validate_exec_program_rejects_terminal_value_instruction_input_arity() {
             .into_iter()
             .collect(),
         last_use: vec![],
+        input_views: Vec::new(),
     });
 
     let err = validate_exec_program(&program, "test").unwrap_err();
@@ -297,6 +300,7 @@ fn validate_exec_program_accepts_symbolic_shape_reference_inputs() {
         .into_iter()
         .collect(),
         last_use: vec![true],
+        input_views: Vec::new(),
     });
 
     validate_exec_program(&program, "test").unwrap();
@@ -312,6 +316,20 @@ fn constant_tensor_rejects_payload_length_mismatch_without_panicking() {
         "{message}"
     );
     assert!(message.contains("got 4"), "{message}");
+}
+
+fn negate_instruction(input_slots: Vec<usize>) -> ExecInstruction {
+    ExecInstruction {
+        op: ExecOp::Negate,
+        semantic_operation_index: None,
+        input_slots,
+        output_slots: vec![0],
+        dtype: DType::F64,
+        output_shapes: Default::default(),
+        output_extents: Default::default(),
+        last_use: Vec::new(),
+        input_views: Vec::new(),
+    }
 }
 
 fn empty_program(input_count: usize) -> ExecProgram {
@@ -663,6 +681,7 @@ fn missing_extension_executor_reports_typed_fields_on_both_execution_paths() {
         output_shapes: Vec::new().into_iter().collect(),
         output_extents: Vec::new().into_iter().collect(),
         last_use: Vec::new(),
+        input_views: Vec::new(),
     };
     let operations = vec![PreparedOperationPlan::metadata(
         metadata_only_prepared_operation(),
@@ -692,4 +711,108 @@ fn missing_extension_executor_reports_typed_fields_on_both_execution_paths() {
     )
     .expect_err("metadata-only extension must not execute in a session");
     assert_missing_extension_executor(error);
+}
+
+#[test]
+fn get_read_applies_a_folded_view_to_an_owned_slot() {
+    let tensor =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let slots = [Some(ExecSlot::Owned(tensor))];
+    let mut instruction = negate_instruction(vec![0]);
+    instruction.input_views = vec![(0, InputView::Transpose { perm: vec![1, 0] })];
+    let mut engine = CpuEngine::serial();
+
+    let read = super::get_read(&slots, &instruction, 0).unwrap();
+    assert_eq!(read.shape(), &[3, 2]);
+    let compact = tenferro_tensor::TensorStructural::to_contiguous_read(&mut engine, read).unwrap();
+    assert_eq!(
+        compact.as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    );
+
+    // A chain applies in order: the transpose, then a slice of its first row.
+    instruction.input_views.push((
+        0,
+        InputView::Slice(SliceConfig {
+            starts: vec![0, 0],
+            limits: vec![1, 2],
+            strides: vec![1, 1],
+        }),
+    ));
+    let read = super::get_read(&slots, &instruction, 0).unwrap();
+    assert_eq!(read.shape(), &[1, 2]);
+    let compact = tenferro_tensor::TensorStructural::to_contiguous_read(&mut engine, read).unwrap();
+    assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+}
+
+#[test]
+fn owned_accessors_reject_a_folded_view_typed() {
+    let tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let mut slots = [Some(ExecSlot::Owned(tensor))];
+    let mut instruction = negate_instruction(vec![0]);
+    instruction.input_views = vec![(0, InputView::Transpose { perm: vec![1, 0] })];
+    let mut engine = CpuEngine::serial();
+
+    assert!(matches!(
+        get(&slots, &instruction, 0),
+        Err(crate::Error::Internal(message)) if message.contains("folded view")
+    ));
+    assert!(matches!(
+        super::ensure_owned(&mut engine, &mut slots, &instruction, 0),
+        Err(crate::Error::Internal(message)) if message.contains("folded view")
+    ));
+}
+
+#[test]
+fn input_view_definition_matches_the_view_ops_and_read_entries() {
+    for descriptor in all_primitive_descriptors() {
+        let op = ExecOp::sample_from_kind(descriptor.kind);
+        let is_view = matches!(
+            descriptor.kind,
+            PrimitiveOpKind::Transpose
+                | PrimitiveOpKind::Reshape
+                | PrimitiveOpKind::BroadcastInDim
+                | PrimitiveOpKind::Slice
+        );
+        assert_eq!(InputView::from_op(&op).is_some(), is_view, "{op:?}");
+    }
+    // Every backend entry but `Convert` reads its inputs as `TensorRead`.
+    for entry in BACKEND_DISPATCH_TABLE {
+        let op = ExecOp::sample_from_kind(entry.key);
+        assert_eq!(
+            super::reads_input_view(&op, 0),
+            entry.key != PrimitiveOpKind::Convert,
+            "{:?}",
+            entry.key
+        );
+    }
+    assert!(super::reads_input_view(
+        &ExecOp::Extension(Arc::new(TestExtension)),
+        0
+    ));
+    assert!(super::reads_input_view(&ExecOp::ShapeOf { axis: 0 }, 0));
+    assert!(!super::reads_input_view(
+        &ExecOp::DynamicTruncate { axis: 0 },
+        0
+    ));
+}
+
+#[test]
+fn validate_exec_program_rejects_a_view_on_a_missing_input() {
+    let mut program = empty_program(1);
+    program.n_slots = 2;
+    let mut instruction = negate_instruction(vec![0]);
+    instruction.output_slots = vec![1];
+    instruction.output_shapes = vec![vec![DimExpr::Const(1)]].into_iter().collect();
+    instruction.output_extents = vec![vec![ShapeExtent::exact(DimExpr::Const(1))]]
+        .into_iter()
+        .collect();
+    instruction.input_views = vec![(1, InputView::Transpose { perm: vec![0] })];
+    program.instructions.push(instruction);
+
+    let err = validate_exec_program(&program, "test").unwrap_err();
+    assert!(
+        err.to_string().contains("folds a view onto input 1"),
+        "{err}"
+    );
 }

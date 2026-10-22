@@ -623,6 +623,61 @@ pub(crate) struct ScheduledGraph {
     root_location: ExecutionLocation,
     input_locations: Box<[ExecutionLocation]>,
     operation_locations: Box<[ExecutionLocation]>,
+    /// Facts about the immutable node list that every run reads (#2226).
+    facts: ScheduleFacts,
+}
+
+/// Per-schedule facts computed once, so a run does not rescan the nodes.
+#[derive(Clone, Copy, Debug, Default)]
+struct ScheduleFacts {
+    /// Every location and node names the root's event domain and there is no
+    /// transfer node: same-stream submission order can replace per-node
+    /// scheduler events, if the provider run accepts (`coalescing_eligible`).
+    coalescing_eligible: bool,
+    /// Every part of the schedule sits at the root location (one engine, one
+    /// storage class, no transfer): commands execute against one flat slot
+    /// array (`flat_location`).
+    flat: bool,
+    /// The first node the executor cannot run, if any (`preflight`).
+    unsupported_node: Option<usize>,
+}
+
+impl ScheduleFacts {
+    fn of(
+        nodes: &[ScheduledNode],
+        root_location: &ExecutionLocation,
+        input_locations: &[ExecutionLocation],
+        operation_locations: &[ExecutionLocation],
+    ) -> Self {
+        let has_transfer = nodes
+            .iter()
+            .any(|node| matches!(node, ScheduledNode::Transfer(_)));
+        let domain = root_location.event_domain_id();
+        let same_domain = |location: &ExecutionLocation| location.event_domain_id() == domain;
+        let coalescing_eligible = !has_transfer
+            && input_locations.iter().all(same_domain)
+            && operation_locations.iter().all(same_domain)
+            && nodes.iter().all(|node| {
+                node.completion().domain() == domain
+                    && node
+                        .dependencies()
+                        .iter()
+                        .all(|dependency| dependency.domain() == domain)
+            });
+        let flat = !has_transfer
+            && input_locations
+                .iter()
+                .chain(operation_locations)
+                .all(|location| location == root_location);
+        let unsupported_node = nodes
+            .iter()
+            .position(|node| matches!(node, ScheduledNode::Collective(_)));
+        Self {
+            coalescing_eligible,
+            flat,
+            unsupported_node,
+        }
+    }
 }
 
 impl ScheduledGraph {
@@ -769,6 +824,7 @@ impl ScheduledGraph {
             }
         }
 
+        let facts = ScheduleFacts::of(&nodes, &root_location, input_locations, operation_locations);
         let graph = Self {
             nodes: nodes.into_boxed_slice(),
             input_slots: program.input_slots.clone().into_boxed_slice(),
@@ -777,6 +833,7 @@ impl ScheduledGraph {
             root_location,
             input_locations: input_locations.to_vec().into_boxed_slice(),
             operation_locations: operation_locations.to_vec().into_boxed_slice(),
+            facts,
         };
         graph
             .validate()
@@ -815,6 +872,7 @@ impl ScheduledGraph {
                         .expect("test storage class"),
                 )
             });
+        let facts = ScheduleFacts::of(&nodes, &root_location, &[], &[]);
         Self {
             nodes: nodes.into_boxed_slice(),
             input_slots: Box::new([]),
@@ -823,6 +881,7 @@ impl ScheduledGraph {
             root_location,
             input_locations: Box::new([]),
             operation_locations: Box::new([]),
+            facts,
         }
     }
 
@@ -914,17 +973,28 @@ impl ScheduledGraph {
     /// is acquired. Preparation currently emits operations, transfers, and
     /// no-op barriers; collective execution remains unsupported.
     pub(crate) fn preflight(&self) -> Result<(), UnsupportedScheduledNodeError> {
-        if let Some(index) = self
-            .nodes
-            .iter()
-            .position(|node| matches!(node, ScheduledNode::Collective(_)))
-        {
+        if let Some(index) = self.facts.unsupported_node {
             return Err(UnsupportedScheduledNodeError {
                 node_index: index,
                 node_kind: ScheduledNodeKind::Collective,
             });
         }
         Ok(())
+    }
+
+    /// Whether same-stream submission order can replace per-node scheduler
+    /// events: every location and node names one event domain and no transfer
+    /// node bridges providers. The provider run must still accept the mode;
+    /// this fact is necessary, not sufficient.
+    pub(crate) fn coalescing_eligible(&self) -> bool {
+        self.facts.coalescing_eligible
+    }
+
+    /// The single location every part of the schedule sits at, when there is
+    /// one: no transfer node and no second engine or storage class, so commands
+    /// can execute against one flat slot array.
+    pub(crate) fn flat_location(&self) -> Option<&ExecutionLocation> {
+        self.facts.flat.then_some(&self.root_location)
     }
 
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
@@ -1018,6 +1088,11 @@ pub(crate) enum ScheduleBuildError {
     ValueSlotOutOfBounds { slot: usize, value_count: usize },
     #[error("scheduled node count exceeds the event-slot identity space")]
     EventSlotExhausted,
+    #[error("the staged program is invalid after metadata view folding")]
+    InvalidStaging {
+        #[source]
+        source: crate::Error,
+    },
 }
 
 #[cfg(test)]

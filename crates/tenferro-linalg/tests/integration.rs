@@ -52,6 +52,9 @@ mod solve_residuals;
 mod support;
 #[path = "integration/traced_ad_explicit.rs"]
 mod traced_ad_explicit;
+#[cfg(feature = "autodiff")]
+#[path = "integration/traced_command_census.rs"]
+mod traced_command_census;
 #[path = "integration/traced_correctness.rs"]
 mod traced_correctness;
 #[path = "integration/traced_extension.rs"]

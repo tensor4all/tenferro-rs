@@ -16,6 +16,8 @@ use tenferro_tensor::{
 
 #[path = "tests/dot_decomposer_tests.rs"]
 mod dot_decomposer_tests;
+#[path = "tests/metadata_views.rs"]
+mod metadata_views;
 #[path = "tests/shape_constraints.rs"]
 mod shape_constraints;
 
@@ -56,6 +58,7 @@ fn make_exec_instr(
         output_shapes: vec![Vec::new(); output_slots.len()].into_iter().collect(),
         output_extents: vec![Vec::new(); output_slots.len()].into_iter().collect(),
         last_use: Vec::new(),
+        input_views: Vec::new(),
     }
 }
 
@@ -78,6 +81,7 @@ fn make_exec_instr_with_meta(
             .collect(),
         output_shapes: output_shapes.into_iter().collect(),
         last_use: Vec::new(),
+        input_views: Vec::new(),
     }
 }
 

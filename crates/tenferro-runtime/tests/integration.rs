@@ -6,6 +6,8 @@ mod engine_registration_debug;
 mod execution_engine_identity;
 #[path = "integration/execution_path_contract.rs"]
 mod execution_path_contract;
+#[path = "integration/metadata_views.rs"]
+mod metadata_views;
 #[path = "integration/public_surface_contract.rs"]
 mod public_surface_contract;
 #[path = "integration/runtime_error_api.rs"]
