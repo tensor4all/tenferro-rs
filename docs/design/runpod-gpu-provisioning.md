@@ -42,6 +42,12 @@ the configuration; the runtime smoke proof below remains the real
 compatibility decision. See the RunPod [catalog filter](https://docs.runpod.io/api-reference-v2/catalog/list-gpu-types)
 and [Pod creation](https://docs.runpod.io/api-reference-v2/pods/create-a-pod) contracts.
 
+Runner readiness queries GitHub by the unique per-attempt runner name, then
+checks its online status and matching label. The JIT minter uses the same value
+for name and label. Never infer absence from the first page of an unfiltered
+organization registry: organizations with more than 100 registrations can have
+the accepted runner on a later page.
+
 ## Runtime compatibility proof (smoke test)
 
 `cuda_smoke_test.py` runs on the pod, as root, inside the startup script
