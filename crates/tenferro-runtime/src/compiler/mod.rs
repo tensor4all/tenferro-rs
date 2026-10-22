@@ -1373,7 +1373,7 @@ pub(crate) fn fold_metadata_views(
         }
     }
     let producer_by_slot = producer_indices_by_slot(program);
-    let mut removed = vec![false; program.instructions.len()];
+    let mut folded = Vec::new();
 
     for index in 0..program.instructions.len() {
         let instruction = &program.instructions[index];
@@ -1432,16 +1432,16 @@ pub(crate) fn fold_metadata_views(
             .input_views
             .extend(pending.into_iter().map(|(_, pending)| (position, pending)));
         consumer_instruction.input_views.push((position, view));
-        removed[index] = true;
+        folded.push(index);
     }
 
-    if removed.iter().any(|&removed| removed) {
-        let mut index = 0;
-        program.instructions.retain(|_| {
-            let keep = !removed[index];
-            index += 1;
-            keep
-        });
+    if !folded.is_empty() {
+        let mut keep = vec![true; program.instructions.len()];
+        for index in folded {
+            keep[index] = false;
+        }
+        let mut keep = keep.into_iter();
+        program.instructions.retain(|_| keep.next().unwrap_or(true));
     }
 }
 
