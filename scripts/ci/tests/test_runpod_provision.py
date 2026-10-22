@@ -652,5 +652,83 @@ class PodApiTransportTests(unittest.TestCase):
             self.assertEqual(second, PodState(status="RUNNING", has_runtime=False))
 
 
+class RunnerRegistryTests(unittest.TestCase):
+    def test_finds_new_online_runner_beyond_first_organization_page(self):
+        from urllib.parse import parse_qs, urlsplit
+        from scripts.ci.runpod_provision import _runner_online_checker
+
+        label = "runpod-123-2-c1"
+        runners = [
+            {"name": f"old-{i}", "status": "offline", "labels": []}
+            for i in range(188)
+        ] + [{"name": label, "status": "online", "labels": [{"name": label}]}]
+        requests = []
+
+        def registry(request, *, timeout):
+            requests.append(request)
+            query = parse_qs(urlsplit(request.full_url).query)
+            name = query.get("name", [None])[0]
+            selected = [runner for runner in runners if runner["name"] == name] if name else runners[:100]
+            return io.BytesIO(json.dumps({"total_count": len(selected) if name else len(runners),
+                                          "runners": selected}).encode())
+
+        with mock.patch.object(provision_module.urllib.request, "urlopen", registry):
+            self.assertTrue(_runner_online_checker("fixture-key", "org")(label))
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].get_header("Authorization"), "Bearer fixture-key")
+        self.assertEqual(parse_qs(urlsplit(requests[0].full_url).query),
+                         {"name": [label], "per_page": ["100"]})
+
+    def test_name_filter_encodes_special_characters(self):
+        from urllib.parse import parse_qs, urlsplit
+        from scripts.ci.runpod_provision import _runner_online_checker
+
+        label = "runner /+?&name=other"
+        with mock.patch.object(provision_module.urllib.request, "urlopen",
+                               return_value=io.BytesIO(b'{"runners": []}')) as request:
+            self.assertFalse(_runner_online_checker("key", "org")(label))
+        self.assertEqual(parse_qs(urlsplit(request.call_args.args[0].full_url).query)["name"], [label])
+
+    def test_requires_same_name_label_and_online_status(self):
+        from scripts.ci.runpod_provision import _runner_online_checker
+
+        for runner in (
+            {"name": "target", "status": "offline", "labels": [{"name": "target"}]},
+            {"name": "other", "status": "online", "labels": [{"name": "target"}]},
+            {"name": "target", "status": "online", "labels": [{"name": "other"}]},
+        ):
+            with self.subTest(runner=runner), mock.patch.object(
+                provision_module.urllib.request, "urlopen",
+                return_value=io.BytesIO(json.dumps({"runners": [runner]}).encode()),
+            ):
+                self.assertFalse(_runner_online_checker("key", "org")("target"))
+
+    def test_expired_startup_budget_never_queries_registry(self):
+        from scripts.ci.runpod_provision import _runner_online_checker
+
+        with mock.patch.object(provision_module.time, "monotonic", return_value=10), mock.patch.object(
+            provision_module.urllib.request, "urlopen",
+        ) as request:
+            self.assertFalse(_runner_online_checker("key", "org")("target", deadline=10))
+        request.assert_not_called()
+
+    def test_request_timeout_stays_within_startup_budget(self):
+        from scripts.ci.runpod_provision import _runner_online_checker
+
+        with mock.patch.object(provision_module.time, "monotonic", return_value=10), mock.patch.object(
+            provision_module.urllib.request, "urlopen", return_value=io.BytesIO(b'{"runners": []}'),
+        ) as request:
+            self.assertFalse(_runner_online_checker("key", "org")("target", deadline=13))
+        self.assertEqual(request.call_args.kwargs["timeout"], 3)
+
+    def test_registry_transport_failure_keeps_waiting(self):
+        from scripts.ci.runpod_provision import _runner_online_checker
+        import urllib.error
+
+        with mock.patch.object(provision_module.urllib.request, "urlopen",
+                               side_effect=urllib.error.URLError("unavailable")):
+            self.assertFalse(_runner_online_checker("key", "org")("target"))
+
+
 if __name__ == "__main__":
     unittest.main()

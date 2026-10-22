@@ -29,6 +29,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -352,12 +353,18 @@ def provision(
 
 
 def _runner_online_checker(token: str, org: str) -> Callable[..., bool]:
+    """Look up the fresh JIT runner by the name minted from its unique label.
+
+    An unfiltered organization listing only returns its first page (100 max),
+    so a newer online runner may be invisible once enough registrations exist.
+    """
     def check(label: str, *, deadline=None) -> bool:
         remaining = 30.0 if deadline is None else deadline - time.monotonic()
         if remaining <= 0:
             return False
+        query = urllib.parse.urlencode({"name": label, "per_page": 100})
         request = urllib.request.Request(
-            f"https://api.github.com/orgs/{org}/actions/runners?per_page=100",
+            f"https://api.github.com/orgs/{org}/actions/runners?{query}",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
@@ -375,7 +382,7 @@ def _runner_online_checker(token: str, org: str) -> Callable[..., bool]:
             return False
         runners = payload.get("runners", [])
         for runner in runners:
-            if runner.get("status") != "online":
+            if runner.get("name") != label or runner.get("status") != "online":
                 continue
             if any(entry.get("name") == label for entry in runner.get("labels", [])):
                 return True
