@@ -19,7 +19,11 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from scripts.ci.runpod_contract import ContractError, configured_gpu_tiers
+from scripts.ci.runpod_contract import (
+    ContractError,
+    configured_gpu_tiers,
+    configured_min_cuda_version,
+)
 from scripts.ci.runpod_http import Cooldown, retry_after
 
 
@@ -138,7 +142,7 @@ def build_pod_payload(
         "gpu": {
             "id": gpu_type_ids[0],
             "count": config["gpu_count"],
-            "allowedCudaVersions": config["allowed_cuda_versions"],
+            "minCudaVersion": configured_min_cuda_version(config),
         },
         "disk": config["container_disk_gb"],
         "mounts": {

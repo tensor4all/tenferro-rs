@@ -3,13 +3,7 @@
   "openapi_url": "https://api.runpod.io/v2/openapi.json",
   "cloud_type": "SECURE",
   "compute_type": "GPU",
-  "allowed_cuda_versions": [
-    "13.0",
-    "12.9",
-    "12.8",
-    "12.7",
-    "12.6"
-  ],
+  "min_cuda_version": "12.6",
   "gpu_tiers": [
     {
       "name": "cost-preferred",
