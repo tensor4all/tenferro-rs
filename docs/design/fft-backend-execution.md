@@ -72,6 +72,14 @@ execution path is:
    input this way:
    `n` is the real output length, and the already validated half-spectrum is
    consumed unchanged.
+
+   Semantic zero-padding is a preparation invariant, independent of FFT
+   arithmetic. NaN/Inf propagation through the transform can differ between
+   RustFFT/realfft and cuFFT algorithms; their nonfinite output classifications
+   are not a cross-backend parity oracle. Test nonfinite padding by inspecting
+   the prepared device input and comparing implicit with explicit zero-padding
+   on the same backend. Finite inputs retain the CPU/CUDA numerical parity
+   checks.
 3. Execute one out-of-place rank-one `cufftMakePlanMany64` plan when the batch
    is nonzero. For canonical shape `[..., n]`, `batch` is the checked product of
    all leading extents. The exact column-major descriptor is:

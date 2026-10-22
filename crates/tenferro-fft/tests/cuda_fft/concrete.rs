@@ -179,40 +179,58 @@ fn cuda_irfft_explicit_even_and_odd_lengths_c32_c64() {
 
 #[test]
 #[ignore = "requires CUDA cuFFT hardware and library"]
-fn cuda_zero_padding_preserves_nonfinite_cpu_oracle_real_and_complex() {
-    if !gpu_available() {
-        return;
-    }
+fn cuda_zero_padding_matches_explicit_padding_real_and_complex() {
+    assert!(gpu_available(), "requires CUDA hardware");
 
-    let mut cpu = CpuEngine::serial();
     let mut cuda = support::cuda_engine();
     let cases = [
         (
-            Tensor::from_vec_col_major(vec![1], vec![f32::NAN]).unwrap(),
+            Tensor::from_vec_col_major([1], vec![f32::NAN]).unwrap(),
+            Tensor::from_vec_col_major([2], vec![f32::NAN, 0.0]).unwrap(),
             1.0e-5,
         ),
         (
-            Tensor::from_vec_col_major(vec![1], vec![f64::INFINITY]).unwrap(),
+            Tensor::from_vec_col_major([1], vec![f64::INFINITY]).unwrap(),
+            Tensor::from_vec_col_major([2], vec![f64::INFINITY, 0.0]).unwrap(),
             1.0e-11,
         ),
         (
-            Tensor::from_vec_col_major(vec![1], vec![num_complex::Complex32::new(f32::NAN, 0.0)])
+            Tensor::from_vec_col_major([1], vec![num_complex::Complex32::new(f32::NAN, 0.0)])
                 .unwrap(),
+            Tensor::from_vec_col_major(
+                [2],
+                vec![
+                    num_complex::Complex32::new(f32::NAN, 0.0),
+                    num_complex::Complex32::new(0.0, 0.0),
+                ],
+            )
+            .unwrap(),
             1.0e-5,
         ),
         (
+            Tensor::from_vec_col_major([1], vec![num_complex::Complex64::new(f64::INFINITY, 0.0)])
+                .unwrap(),
             Tensor::from_vec_col_major(
-                vec![1],
-                vec![num_complex::Complex64::new(f64::INFINITY, 0.0)],
+                [2],
+                vec![
+                    num_complex::Complex64::new(f64::INFINITY, 0.0),
+                    num_complex::Complex64::new(0.0, 0.0),
+                ],
             )
             .unwrap(),
             1.0e-11,
         ),
     ];
-    for (input, tolerance) in cases {
+    // NaN/Inf propagation depends on the FFT algorithm: x86 realfft and cuFFT
+    // differ even for [Inf, 0]. Compare identical inputs on the same backend.
+    // The canonicalization unit tests also inspect the zero tail before cuFFT,
+    // so a contaminated tail cannot be hidden by nonfinite transform outputs.
+    for (input, padded, tolerance) in cases {
+        let padded = support::upload_cuda(&cuda, &padded);
         let expected = Operation::Fft
-            .execute_cpu(&mut cpu, &input, Some(2), -1, FftNorm::Backward)
+            .execute_cuda(&mut cuda, &padded, None, -1, FftNorm::Backward)
             .unwrap();
+        let expected = support::download_cuda(&cuda, &expected).unwrap();
         let gpu_input = support::upload_cuda(&cuda, &input);
         let actual = Operation::Fft
             .execute_cuda(&mut cuda, &gpu_input, Some(2), -1, FftNorm::Backward)

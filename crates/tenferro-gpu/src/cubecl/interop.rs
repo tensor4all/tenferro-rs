@@ -220,7 +220,8 @@ where
 /// # Errors
 ///
 /// Returns [`crate::Error::RuntimeState`] for a host-backed or foreign tensor,
-/// [`crate::Error::BackendSource`] when synchronization/readback fails, or a
+/// [`crate::Error::BackendSource`] when source preparation, host reservation,
+/// or synchronization/readback fails, or a
 /// typed validation error when downloaded bytes do not form the declared shape.
 pub fn download_typed_tensor<T>(
     rt: &CudaRuntime,

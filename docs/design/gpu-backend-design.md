@@ -649,7 +649,12 @@ Each explicit transfer crosses host memory once on the host side (#2009):
   host tensor's storage. The download flushes pending CubeCL work, resolves the
   allocation on the current stream with `get_resource` (which orders writes
   queued on other CubeCL streams, as `read_one` does), enqueues the copy on that
-  stream and synchronizes it. The vector is allocated with its final element
+  stream and synchronizes it. Source resolution and bounds checks precede host
+  reservation, so a refused device allocation is reported without attempting
+  an equally large host allocation (#2247). Host reservation is fallible and
+  preserves its typed error source. The destination-reuse route returns its
+  original buffer unchanged when preparation or reservation fails, before any
+  host copy is submitted. The vector is allocated with its final element
   type, so it has `T`'s alignment, and it becomes visible only after the copy
   completed; if the copy or barrier fails, both the vector and the source
   allocation are leaked rather than freed while the device may still use them.

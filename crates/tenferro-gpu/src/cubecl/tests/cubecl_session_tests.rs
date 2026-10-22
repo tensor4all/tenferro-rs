@@ -263,8 +263,20 @@ fn cubecl_session_flushes_after_error_callback() {
 #[test]
 #[ignore = "requires CUDA"]
 fn cubecl_refused_allocation_is_reported_on_the_buffer() {
-    use cubecl_runtime::server::Handle;
+    use cubecl_runtime::server::{Handle, ServerError};
     use tenferro_tensor::TensorRead;
+
+    fn assert_device_refusal(error: &crate::Error) {
+        assert!(matches!(error, crate::Error::BackendSource { .. }));
+        assert!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<ServerError>()
+                .is_some(),
+            "device refusal must be observed before attempting a host reservation: {error}"
+        );
+    }
 
     assert!(gpu_available(), "CUDA test requires an available device");
     let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
@@ -301,10 +313,28 @@ fn cubecl_refused_allocation_is_reported_on_the_buffer() {
         let read = session.with_raw("test.refused_alloc_read", |raw| {
             raw.download_tensor::<f32>(&output, "test.refused_alloc_read")
         });
-        assert!(
-            read.is_err(),
-            "reading an output whose allocation was refused must fail"
-        );
+        let error = read.expect_err("reading a refused allocation must fail");
+        assert_device_refusal(&error);
+
+        // Both the ordinary and destination-reuse readback routes must report
+        // the same device failure without reserving 200 GiB on the host.
+        let output = tenferro_tensor::Tensor::from_typed::<f32>(output);
+        let error = crate::cuda::download_tensor(session.runtime(), &output).unwrap_err();
+        assert_device_refusal(&error);
+
+        let mut buffer = Vec::<f32>::with_capacity(16);
+        buffer.extend_from_slice(&[10.0, 20.0, 30.0]);
+        let pointer = buffer.as_ptr();
+        let capacity = buffer.capacity();
+        let error = crate::cuda::download_tensor_into(session.runtime(), &output, buffer)
+            .expect_err("reuse readback must reject a refused device allocation");
+        let crate::cuda::DownloadIntoError::Rejected { error, buffer } = error else {
+            panic!("no host copy should have been submitted");
+        };
+        assert_device_refusal(&error);
+        assert_eq!(buffer, [10.0, 20.0, 30.0]);
+        assert_eq!(buffer.as_ptr(), pointer);
+        assert_eq!(buffer.capacity(), capacity);
     });
 
     // The session still works afterwards.
