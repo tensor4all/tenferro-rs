@@ -52,7 +52,8 @@ num-complex = "0.4"
 num-traits = "0.2"
 # Scalar `erf`/`erff` for the CPU analytic kernels (`f64::erf` is unstable in std).
 libm = "0.2.16"
-elem-simd-math = "=0.1.0"
+# 0.1.1 adds the fused activation kernels the CPU engine routes to.
+elem-simd-math = "0.1.1"
 thiserror = "2"
 smallvec = { version = "1", features = ["union"] }
 tinyvec = { version = "1", features = ["alloc"] }
@@ -65,35 +66,26 @@ lru = "0.18.5"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-# Published strided v0.6.0 and the matching providers, shared with the CPU
-# contraction/linalg stack (#2178, #2142, #2180). Keep every crate (cpueinsum,
-# tlinalg, strided) on one registry source: a split strided source gives two
-# `StridedView` types that cannot meet at a crate boundary. All six strided
-# crates move together at 0.6.0 -- the core no longer lags a patch behind the
-# providers. The providers move together too: the published `cpueinsum 0.4.0`
-# carries `tcontract 0.4.0` / `tcontract-exec 0.4.0` (no `WholeBatchVendor`
-# variant; tcontract-rs#135), which pins `strided-view =0.6.0` and
-# `strided-basic =0.6.2` from crates.io; an older `cpueinsum` reaches an older
-# `tcontract` that pins an older strided exactly and would not resolve beside
-# the 0.6.0 requirement. `strided-fused 0.6.0` propagates NaN through the fused
-# DAG so ordered reductions can use it (TF5), and `strided-view` owns its view
-# metadata inline. strided-basic 0.6.2 adds `with_execution_pool`, through which a
-# CPU engine's strided operations enter the engine's pool only when they fan out
-# (#2206); tcontract 0.3.2 / tcontract-exec 0.3.1 / cpueinsum 0.3.2 / tlinalg 0.3.2
-# move their exact strided-basic pin to it. `tcontract-exec` is named directly because tenferro now
-# passes its `Exec` to tlinalg and cpueinsum. `tlinalg` and `tlinalg-blas` are
-# pinned exactly at 0.3.1 in `crates/tenferro-linalg`; that release's additive
-# `*_workspace` / `*_into` entries are what the faer lane routes every family
-# through.
-strided-view = "=0.6.0"
-strided-traits = "=0.6.0"
-strided-perm = { version = "=0.6.0", features = ["parallel"] }
-cpueinsum = "=0.4.2"
-cpueinsum-blas = "=0.4.2"
-tcontract-exec = "=0.4.2"
-strided-basic = { version = "=0.6.3", default-features = false }
-strided-fused = { version = "=0.6.0", default-features = false, features = ["parallel"] }
-strided-kernel = { version = "=0.6.0", features = ["parallel"] }
+# The CPU contraction/linalg stack (strided, tcontract-exec, cpueinsum, tlinalg)
+# on one registry source: a split source (git beside crates.io, or two
+# incompatible semver lines) gives two `StridedView` types that cannot meet at a
+# crate boundary. Within one compatible line Cargo unifies every requirement to
+# a single version, so these are ordinary caret requirements at the patch each
+# API needs; the committed `Cargo.lock` fixes the exact versions a build uses,
+# and `cargo update -p <crate>` moves them. strided-perm 0.6.1 adds
+# `copy_into_uninit` (transposes into pooled uninitialized storage), which
+# strided-basic 0.6.4 routes through; cpueinsum 0.4.3 carries tcontract 0.4.4,
+# whose fresh outputs run on faer; `tcontract-exec` is named directly because
+# tenferro passes its `Exec` to tlinalg and cpueinsum.
+strided-view = "0.6.0"
+strided-traits = "0.6.0"
+strided-perm = { version = "0.6.1", features = ["parallel"] }
+cpueinsum = "0.4.3"
+cpueinsum-blas = "0.4.2"
+tcontract-exec = "0.4.2"
+strided-basic = { version = "0.6.4", default-features = false }
+strided-fused = { version = "0.6.0", default-features = false, features = ["parallel"] }
+strided-kernel = { version = "0.6.0", features = ["parallel"] }
 libloading = "0.8"
 # One faer identity for the native CPU stack (#1939): tlinalg 0.4.4 and this
 # dependency use compatible t4a-faer ranges. 0.24.8 fixes divide-and-conquer SVD
@@ -126,7 +118,7 @@ cubek-std = { package = "t4a-cubek-std", version = "=0.3.0", default-features = 
 cubek-fft = { package = "t4a-cubek-fft", version = "=0.3.0", default-features = false }
 sha2 = "0.10"
 omeco = "0.2.4"
-computegraph = "=0.1.0"
+computegraph = "0.1.0"
 
 [profile.dev]
 opt-level = 0

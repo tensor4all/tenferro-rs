@@ -12,9 +12,6 @@ target/
 # MSVC Windows builds of rustc generate these
 *.pdb
 
-# Cargo lockfile (library crates — remove this line for binary projects)
-Cargo.lock
-
 # Mutation testing
 **/mutants.out*/
 

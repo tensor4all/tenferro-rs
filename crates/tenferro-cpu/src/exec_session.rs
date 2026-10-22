@@ -4,8 +4,8 @@ use crate::{CpuEngine, CpuPlanCache, Tensor, TensorRead, TensorValue, TensorWrit
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::backend::{ElementwiseFusionPlan, Engine};
 use tenferro_tensor::{
-    CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp, GatherConfig,
-    PadConfig, ScatterConfig, SliceConfig, TensorView, TypedTensor,
+    ActivationOp, CompareDir, ContractionScalar, DType, DotGeneralConfig, ElementwiseReadOp,
+    GatherConfig, PadConfig, ScatterConfig, SliceConfig, TensorView, TypedTensor,
 };
 use tenferro_tensor::{
     DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
@@ -15,8 +15,8 @@ use tenferro_tensor::{
 use super::backend::elementwise_read_into_fallback_with_pool;
 use super::provider::CpuExecutionContext;
 use super::{
-    analytic, copy_tensor_read_into, elementwise, indexing, materialize_tensor_read_in_domain,
-    reduction, softmax, structural,
+    activation, analytic, copy_tensor_read_into, elementwise, indexing,
+    materialize_tensor_read_in_domain, reduction, softmax, structural,
 };
 
 /// Native-engine marker for [`CpuEngine`]; private to this crate so no other
@@ -1110,6 +1110,15 @@ impl Engine for CpuEngine {
         tenferro_tensor::backend::validate_norm_squared_read(&input)?;
         crate::blas1::validate_cpu_read("Engine::norm_squared_read", &input)?;
         self.run_native(|buffers| reduction::norm_squared_read(buffers, input))
+    }
+
+    fn fused_activation_read(
+        &mut self,
+        op: ActivationOp,
+        input: TensorRead<'_>,
+    ) -> crate::Result<Option<Tensor>> {
+        crate::blas1::validate_cpu_read(op.label(), &input)?;
+        self.run_native(|buffers| activation::fused_activation_read_with_pool(buffers, op, input))
     }
 
     fn softmax_read(

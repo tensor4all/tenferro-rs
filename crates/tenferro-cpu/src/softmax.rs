@@ -14,65 +14,86 @@ use std::mem::MaybeUninit;
 
 use tenferro_tensor::{DType, Tensor, TensorRead};
 
+use crate::activation::fill_pooled;
 use crate::buffer_pool::BufferPool;
 use crate::materialize_tensor_read;
 use crate::parallel::{group_len, task_len, MIN_BYTES_PER_TASK};
 use crate::simd_math::{apply, VectorKernel};
 
 /// Fused softmax over axis 0 for a host `F32`/`F64` tensor, if supported.
+///
+/// The output is a pooled, recycled tensor: a caller that holds many outputs
+/// and drops them together (a benchmark, a batch loop) gets its storage back
+/// from the pool instead of fresh pages from the allocator.
 pub(crate) fn softmax_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
     axis: usize,
 ) -> crate::Result<Option<Tensor>> {
-    let shape = input.shape();
+    let shape = input.shape().to_vec();
     if axis != 0 || shape.is_empty() || shape[0] == 0 {
         return Ok(None);
     }
+    let axis_len = shape[0];
     match input.dtype() {
         DType::F32 => {
             if let Ok(data) = input.as_slice::<f32>() {
-                let output = softmax_axis0_f32(data, shape[0]);
-                return Ok(Some(Tensor::from_vec_col_major(shape.to_vec(), output)?));
+                return fill_pooled(buffers, &shape, |out| {
+                    softmax_axis0_f32(data, axis_len, out)
+                })
+                .map(Some);
             }
             let tensor = materialize_tensor_read(buffers, "softmax", input)?;
-            softmax_tensor(&tensor, axis)
+            let data = tensor.as_slice::<f32>()?;
+            fill_pooled(buffers, &shape, |out| {
+                softmax_axis0_f32(data, axis_len, out)
+            })
+            .map(Some)
         }
         DType::F64 => {
             if let Ok(data) = input.as_slice::<f64>() {
-                let output = softmax_axis0_f64(data, shape[0]);
-                return Ok(Some(Tensor::from_vec_col_major(shape.to_vec(), output)?));
+                return fill_pooled(buffers, &shape, |out| {
+                    softmax_axis0_f64(data, axis_len, out)
+                })
+                .map(Some);
             }
             let tensor = materialize_tensor_read(buffers, "softmax", input)?;
-            softmax_tensor(&tensor, axis)
+            let data = tensor.as_slice::<f64>()?;
+            fill_pooled(buffers, &shape, |out| {
+                softmax_axis0_f64(data, axis_len, out)
+            })
+            .map(Some)
         }
         _ => Ok(None),
     }
 }
 
-fn softmax_tensor(tensor: &Tensor, axis: usize) -> crate::Result<Option<Tensor>> {
-    let shape = tensor.shape();
-    if axis != 0 || shape.is_empty() || shape[0] == 0 {
-        return Ok(None);
+/// `exp` of `temp` into `out`, every element written; the scalar fallback
+/// covers a dtype or host without the vector kernel.
+fn exp_into<T: Copy + 'static + num_traits::Float>(temp: &[T], out: &mut [MaybeUninit<T>]) {
+    // INVARIANT: `apply` writes every output element before returning true;
+    // the fallback writes every element otherwise.
+    if !apply(VectorKernel::Exp, temp, out) {
+        for (slot, &value) in out.iter_mut().zip(temp) {
+            slot.write(value.exp());
+        }
     }
-    let axis_len = shape[0];
-    let output = match tensor.dtype() {
-        DType::F32 => Tensor::from_vec_col_major(
-            shape.to_vec(),
-            softmax_axis0_f32(tensor.as_slice::<f32>()?, axis_len),
-        )?,
-        DType::F64 => Tensor::from_vec_col_major(
-            shape.to_vec(),
-            softmax_axis0_f64(tensor.as_slice::<f64>()?, axis_len),
-        )?,
-        _ => return Ok(None),
-    };
-    Ok(Some(output))
 }
 
-fn softmax_axis0_f32(data: &[f32], axis_len: usize) -> Vec<f32> {
+/// The initialized view of an output chunk that `exp_into` has filled.
+///
+/// # Safety
+/// Every element of `chunk` must have been written.
+unsafe fn initialized<T>(chunk: &mut [MaybeUninit<T>]) -> &mut [T] {
+    unsafe { std::slice::from_raw_parts_mut(chunk.as_mut_ptr().cast::<T>(), chunk.len()) }
+}
+
+/// Softmax over axis 0 of column-major `data`, written into `output`.
+///
+/// INVARIANT: every element of `output` is written (the tasks and groups
+/// partition it, and each group is filled by `exp_into`).
+fn softmax_axis0_f32(data: &[f32], axis_len: usize, output: &mut [MaybeUninit<f32>]) {
     let n = data.len();
-    let mut output = vec![0.0f32; n];
     let group = group_len(n, axis_len, 4);
     let task = task_len(n, group, 4, MIN_BYTES_PER_TASK);
     output
@@ -83,46 +104,21 @@ fn softmax_axis0_f32(data: &[f32], axis_len: usize) -> Vec<f32> {
             let mut temp = vec![0.0f32; group.min(in_task.len())];
             for (out_chunk, in_chunk) in out_task.chunks_mut(group).zip(in_task.chunks(group)) {
                 let temp = &mut temp[..in_chunk.len()];
-                #[cfg(target_arch = "x86_64")]
-                if avx2_available() {
-                    // SAFETY: the host reports AVX2; the group functions touch
-                    // only the validated slices.
-                    unsafe { shift_group_f32_avx2(in_chunk, temp, axis_len) };
-                } else {
-                    shift_group_f32(in_chunk, temp, axis_len);
-                }
-                #[cfg(not(target_arch = "x86_64"))]
-                shift_group_f32(in_chunk, temp, axis_len);
+                shift_group_f32_best(in_chunk, temp, axis_len);
                 // One vectorized exp per cache-sized group, not per slice.
-                // INVARIANT: `apply` writes every output element before
-                // returning true; the fallback writes every element otherwise.
-                let uninit = unsafe {
-                    std::slice::from_raw_parts_mut(
-                        out_chunk.as_mut_ptr().cast::<MaybeUninit<f32>>(),
-                        out_chunk.len(),
-                    )
-                };
-                if !apply(VectorKernel::Exp, temp, uninit) {
-                    for (out, &value) in out_chunk.iter_mut().zip(&*temp) {
-                        *out = value.exp();
-                    }
-                }
-                #[cfg(target_arch = "x86_64")]
-                if avx2_available() {
-                    unsafe { scale_group_f32_avx2(out_chunk, axis_len) };
-                } else {
-                    scale_group_f32(out_chunk, axis_len);
-                }
-                #[cfg(not(target_arch = "x86_64"))]
-                scale_group_f32(out_chunk, axis_len);
+                exp_into(temp, out_chunk);
+                // SAFETY: `exp_into` wrote every element of the chunk.
+                let out_chunk = unsafe { initialized(out_chunk) };
+                scale_group_f32_best(out_chunk, axis_len);
             }
         });
-    output
 }
 
-fn softmax_axis0_f64(data: &[f64], axis_len: usize) -> Vec<f64> {
+/// Softmax over axis 0 of column-major `data`, written into `output`.
+///
+/// INVARIANT: as [`softmax_axis0_f32`].
+fn softmax_axis0_f64(data: &[f64], axis_len: usize, output: &mut [MaybeUninit<f64>]) {
     let n = data.len();
-    let mut output = vec![0.0f64; n];
     let group = group_len(n, axis_len, 8);
     let task = task_len(n, group, 8, MIN_BYTES_PER_TASK);
     output
@@ -133,21 +129,39 @@ fn softmax_axis0_f64(data: &[f64], axis_len: usize) -> Vec<f64> {
             for (out_chunk, in_chunk) in out_task.chunks_mut(group).zip(in_task.chunks(group)) {
                 let temp = &mut temp[..in_chunk.len()];
                 shift_group_f64(in_chunk, temp, axis_len);
-                let uninit = unsafe {
-                    std::slice::from_raw_parts_mut(
-                        out_chunk.as_mut_ptr().cast::<MaybeUninit<f64>>(),
-                        out_chunk.len(),
-                    )
-                };
-                if !apply(VectorKernel::Exp, temp, uninit) {
-                    for (out, &value) in out_chunk.iter_mut().zip(&*temp) {
-                        *out = value.exp();
-                    }
-                }
+                exp_into(temp, out_chunk);
+                // SAFETY: `exp_into` wrote every element of the chunk.
+                let out_chunk = unsafe { initialized(out_chunk) };
                 scale_group_f64(out_chunk, axis_len);
             }
         });
-    output
+}
+
+/// The AVX2 shift where the host has it, the scalar group function elsewhere.
+fn shift_group_f32_best(src: &[f32], dst: &mut [f32], axis_len: usize) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if avx2_available() {
+            // SAFETY: the host reports AVX2; the group functions touch only
+            // the validated slices.
+            unsafe { shift_group_f32_avx2(src, dst, axis_len) };
+            return;
+        }
+    }
+    shift_group_f32(src, dst, axis_len);
+}
+
+/// The AVX2 scale where the host has it, the scalar group function elsewhere.
+fn scale_group_f32_best(data: &mut [f32], axis_len: usize) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if avx2_available() {
+            // SAFETY: as `shift_group_f32_best`.
+            unsafe { scale_group_f32_avx2(data, axis_len) };
+            return;
+        }
+    }
+    scale_group_f32(data, axis_len);
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -274,76 +288,4 @@ unsafe fn scale_group_f32_avx2(data: &mut [f32], axis_len: usize) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn softmax_tensor_covers_the_f32_and_f64_paths() {
-        let f32_tensor =
-            Tensor::from_vec_col_major(vec![3, 2], vec![1.0f32, 2.0, 3.0, -1.0, 0.0, 1.0]).unwrap();
-        let output = softmax_tensor(&f32_tensor, 0).unwrap().unwrap();
-        for column in output.as_slice::<f32>().unwrap().chunks(3) {
-            let sum: f32 = column.iter().sum();
-            assert!((sum - 1.0).abs() < 1e-5);
-        }
-
-        let f64_tensor =
-            Tensor::from_vec_col_major(vec![3, 2], vec![1.0f64, 2.0, 3.0, -1.0, 0.0, 1.0]).unwrap();
-        let output = softmax_tensor(&f64_tensor, 0).unwrap().unwrap();
-        for column in output.as_slice::<f64>().unwrap().chunks(3) {
-            let sum: f64 = column.iter().sum();
-            assert!((sum - 1.0).abs() < 1e-12);
-        }
-    }
-
-    #[test]
-    fn scalar_group_functions_match_the_reference() {
-        let src = [1.0f32, 2.0, 3.0, -1.0, 0.0, 1.0];
-        let mut shifted = [0.0f32; 6];
-        shift_group_f32(&src, &mut shifted, 3);
-        assert_eq!(shifted, [-2.0, -1.0, 0.0, -2.0, -1.0, 0.0]);
-        for value in shifted.iter_mut() {
-            *value = value.exp();
-        }
-        scale_group_f32(&mut shifted, 3);
-        for column in shifted.chunks(3) {
-            let sum: f32 = column.iter().sum();
-            assert!((sum - 1.0).abs() < 1e-5);
-        }
-
-        let src = [1.0f64, 2.0, 3.0, -1.0, 0.0, 1.0];
-        let mut shifted = [0.0f64; 6];
-        shift_group_f64(&src, &mut shifted, 3);
-        assert_eq!(shifted, [-2.0, -1.0, 0.0, -2.0, -1.0, 0.0]);
-        for value in shifted.iter_mut() {
-            *value = value.exp();
-        }
-        scale_group_f64(&mut shifted, 3);
-        for column in shifted.chunks(3) {
-            let sum: f64 = column.iter().sum();
-            assert!((sum - 1.0).abs() < 1e-12);
-        }
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn avx2_group_functions_match_the_scalar_reference() {
-        if !std::is_x86_feature_detected!("avx2") {
-            return;
-        }
-        let src = [1.0f32, 2.0, 3.0, -1.0, 0.0, 1.0];
-        let mut scalar = [0.0f32; 6];
-        shift_group_f32(&src, &mut scalar, 3);
-        let mut vector = [0.0f32; 6];
-        // SAFETY: guarded by the runtime AVX2 check above.
-        unsafe { shift_group_f32_avx2(&src, &mut vector, 3) };
-        assert_eq!(scalar, vector);
-
-        let mut a = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let mut b = a;
-        // SAFETY: guarded by the runtime AVX2 check above.
-        unsafe { scale_group_f32_avx2(&mut a, 3) };
-        scale_group_f32(&mut b, 3);
-        assert_eq!(a, b);
-    }
-}
+mod tests;
