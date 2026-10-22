@@ -398,7 +398,7 @@ class WorkflowContractTests(unittest.TestCase):
             )
         ]
         self.assertIn("cuda_tree_has_runtime_libs", configure)
-        for lib in ("libcublas.so", "libcusolver.so", "libcusparse.so", "libnvrtc.so"):
+        for lib in ("libcublas.so", "libcusolver.so", "libcusparse.so", "libnvrtc.so", "libcufft.so"):
             self.assertIn(lib, configure)
         # Only the staged, driver-selected tree is accepted; partial native
         # NVRTC installations cannot bypass the completeness check.
@@ -828,11 +828,11 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(pair_line, consumer)
             self.assertIn(pair_line, publisher)
         self.assertIn(
-            "key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-12.8-minimal-v8",
+            "key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-12.8-minimal-v9",
             consumer,
         )
         self.assertIn(
-            "key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-${{ matrix.cuda }}-minimal-v8",
+            "key: cuda-runtime-${{ runner.os }}-ubuntu24-x86_64-${{ matrix.cuda }}-minimal-v9",
             publisher,
         )
         for env_line in (

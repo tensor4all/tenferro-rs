@@ -92,6 +92,9 @@ quota and transfer bytes. The installer requires a nonempty, resolvable
 `libcutensor.so.2`. A cache miss downloads the same vendor redistributable.
 Reader and writer keys rotate together, with no fallback to the larger v2
 cache. CUDA runtime trees already exclude compiler/static archives.
+The `minimal-v9` CUDA runtime namespace includes cuFFT for the FFT tests in
+both the 12.6 and 12.8 tiers. Hosted preparation rejects and rebuilds restored
+trees missing cuFFT; Pod configuration also requires it before running tests.
 
 The hosted toolkit cache contains the relocatable nvcc/include/library tree for
 the exact requested CUDA major.minor version. Its key includes Ubuntu version,

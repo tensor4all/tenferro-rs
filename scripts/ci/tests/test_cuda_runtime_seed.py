@@ -1,10 +1,32 @@
 """Exercise actual runtime seeding against a toolkit with alias directories."""
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "seed_cuda_runtime_tree.sh"
+
+
+class RuntimeInstallerTests(unittest.TestCase):
+    def test_both_runtime_tiers_install_cufft(self):
+        installer = SCRIPT.with_name("install_cuda_runtime_tree.sh").read_text()
+        # Exercise package selection, without installing packages on this host.
+        install = installer.split('installed_path=""', 1)[0]
+        stubs = '''
+id() { printf '0\\n'; }
+ls() { return 0; }
+apt-get() { printf '%s\\n' "$@" >> "$APT_LOG"; }
+'''
+        for runtime in ("12.6", "12.8"):
+            with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as directory:
+                log = Path(directory) / "apt.log"
+                result = subprocess.run(
+                    ["bash", "-c", stubs + install, "installer", runtime, "unused"],
+                    env=dict(os.environ, APT_LOG=str(log)), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"libcufft-{runtime.replace('.', '-')}", log.read_text().splitlines())
+
 
 class RuntimeSeedTests(unittest.TestCase):
     def test_headers_shared_libraries_and_sonames_survive_without_duplicates(self):

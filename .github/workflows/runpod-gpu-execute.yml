@@ -705,7 +705,7 @@ jobs:
           mkdir -p "$sdk_root"
           tar --zstd -xf sdk.tar.zst -C "$sdk_root"
           test -f "$sdk_root/.seed-complete"
-          for lib in nvrtc cublas cusolver cusparse; do
+          for lib in nvrtc cublas cusolver cusparse cufft; do
             directory="$sdk_root/targets/x86_64-linux/lib"
             if [ ! -e "$directory/lib${lib}.so" ]; then
               soname=$(find "$directory" -maxdepth 1 -name "lib${lib}.so.*" -print -quit)
@@ -728,6 +728,7 @@ jobs:
             test -e "$root/lib64/libcublas.so" &&
               test -e "$root/lib64/libcusolver.so" &&
               test -e "$root/lib64/libcusparse.so" &&
+              test -e "$root/lib64/libcufft.so" &&
               test -e "$root/lib64/libnvrtc.so"
           }
           cuda_tree_has_runtime_libs "${cuda_path}"
