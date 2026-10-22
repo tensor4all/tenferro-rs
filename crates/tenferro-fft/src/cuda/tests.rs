@@ -1,5 +1,7 @@
 // INVARIANT: The parent `#[cfg(test)] mod tests;` declaration in
 // `cuda/mod.rs` is the sole inclusion point for this test module.
+#[path = "tests/canonicalization.rs"]
+mod canonicalization;
 #[path = "tests/descriptor.rs"]
 mod descriptor;
 #[path = "tests/ffi.rs"]
