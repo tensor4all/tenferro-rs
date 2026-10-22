@@ -933,16 +933,20 @@ impl<'input> RunSlots<'input> {
 }
 
 /// The location `instruction` executes at, proven equal to its node's.
+///
+/// A flat schedule proved at prepare that every operation sits at its one
+/// location (`ScheduledGraph::flat_location`), so the per-command comparison
+/// only runs for a multi-location schedule.
 fn command_location<'a>(
     schedule: &'a ScheduledGraph,
     flat: Option<&'a ExecutionLocation>,
     instruction: &ExecInstruction,
     node_location: &ExecutionLocation,
 ) -> Result<&'a ExecutionLocation> {
-    let location = match flat {
-        Some(location) => location,
-        None => instruction_execution(schedule, instruction)?.location(),
-    };
+    if let Some(location) = flat {
+        return Ok(location);
+    }
+    let location = instruction_execution(schedule, instruction)?.location();
     if location != node_location {
         return Err(Error::runtime_state(
             "Runtime::run",
