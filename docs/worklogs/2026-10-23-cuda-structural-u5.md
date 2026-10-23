@@ -72,8 +72,32 @@ Two facts worth recording:
   view, so an owned tensor with new metadata must be a fresh allocation, not a relabel.
 - `Tensor::strides()` is not on the dtype-erased tensor; strides come from the typed payload.
 
+## Third slice (this change): the diagonal and triangular families
+
+- `extract_diagonal` — the output is the input's shape with the second axis removed and the
+  first axis shortened to the smaller of the two; one `t4a_cuda_extract_diagonal` into the
+  compact destination, which the planner requires.
+- `embed_diagonal` — the input's axis is re-inserted at the requested position, and the
+  destination is the zeroed allocation, because only the diagonal positions are written.
+- `tril`/`triu` — `t4a_cuda_tril`/`t4a_cuda_triu` over a rank-2-or-higher compact tensor,
+  with higher axes batching the mask.
+
+One ABI fact: `Arg` still has no signed 64-bit scalar, and the mask offset `k` may be
+negative, so it travels as raw bytes of type `i64` (`pod_arg(&k)`) rather than `Arg::U64`,
+which is only bit-identical for positive values.
+
+Evidence, same host-reference style on the A100:
+
+- `a_diagonal_extract_and_embed_round_trip` — a 3x3 matrix's diagonal extracts to `[1, 5,
+  9]`, re-embedding gives the zero-filled matrix with only those positions written, and two
+  equal axes are refused.
+- `the_triangular_masks_match_the_host` — `tril` and `triu` over a 3x4 matrix matched element
+  by element, and a rank-1 tensor is refused.
+
+With this, every `TensorStructural` method is implemented on the new path for F32/F64; the
+only remaining refusals are outside that dtype scope and for borrowed views.
+
 ## Next slices of U5
 
-The diagonal and triangular families (`extract_diagonal`, `embed_diagonal`, `tril`, `triu`),
-then `TensorElementwise`, `TensorReduction`, `TensorIndexing`, and the `ExecutionEngine`
-session wiring that eager/traced/AD drive.
+`TensorElementwise`, `TensorReduction`, `TensorIndexing`, `TensorDot`, and the
+`ExecutionEngine` session wiring that eager/traced/AD drive.

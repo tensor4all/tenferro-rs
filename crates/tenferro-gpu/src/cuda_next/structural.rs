@@ -12,7 +12,8 @@ use tenferro_tensor::{
 };
 
 use t4a_cuda_kernels::{
-    plan_broadcast_in_dim, plan_materialize_strided, CAxisValues, CLayout, Entry, Layout,
+    plan_broadcast_in_dim, plan_embed_diagonal_copy, plan_extract_diagonal,
+    plan_materialize_strided, plan_tril, plan_triu, CAxisValues, CLayout, Entry, Layout,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -211,7 +212,7 @@ impl CudaEngine {
 impl CudaEngine {
     /// Launch one planned kernel on `out`/`input` through this engine's own module set.
     fn launch_planned(
-        &mut self,
+        &self,
         entry: Entry,
         plan: t4a_cuda_kernels::Launch,
         args: &[Arg<'_>],
@@ -462,41 +463,200 @@ impl TensorStructural for CudaEngine {
 
     fn extract_diagonal(
         &mut self,
-        _input: &Tensor,
-        _axis_a: usize,
-        _axis_b: usize,
+        input: &Tensor,
+        axis_a: usize,
+        axis_b: usize,
     ) -> crate::Result<Tensor> {
-        Err(crate::Error::unsupported(
+        let shape = input.shape().to_vec();
+        let kernel = kernel_dtype(input.dtype(), "extract_diagonal")?;
+        if axis_a >= shape.len() || axis_b >= shape.len() || axis_a == axis_b {
+            return Err(crate::Error::unsupported(
+                "extract_diagonal",
+                "two distinct in-range axes are required",
+            ));
+        }
+        // The output is the input's shape without the second axis; its length is the
+        // smaller of the two axes.
+        let mut out_shape: Vec<usize> = shape.clone();
+        let removed = out_shape.remove(axis_b);
+        out_shape[axis_a] = out_shape[axis_a].min(removed);
+        let strides = self.strides_of(input, "extract_diagonal")?;
+        let in_layout = compact_layout(&shape, &strides, "extract_diagonal")?;
+        let out_layout =
+            compact_layout(&out_shape, &compact_strides(&out_shape), "extract_diagonal")?;
+        let in_len = count_i64(&shape, "extract_diagonal")?;
+        let out_len = count_i64(&out_shape, "extract_diagonal")?;
+        let output = alloc_tensor(self.runtime(), input.dtype(), &out_shape)?;
+        let plan = plan_extract_diagonal(
+            kernel,
+            &in_layout,
+            in_len,
+            &out_layout,
+            out_len,
+            axis_a as u32,
+            axis_b as u32,
+        )
+        .map_err(|error| crate::Error::runtime_state_source("extract_diagonal", error))?;
+        let (destination, source) = self.two_allocations(&output, input, "extract_diagonal")?;
+        let (in_cl, out_cl) = (CLayout::new(&in_layout), CLayout::new(&out_layout));
+        self.launch_planned(
+            Entry::ExtractDiagonal,
+            plan,
+            &[
+                Arg::DevicePtr(destination),
+                Arg::DevicePtr(source),
+                Arg::U32(kernel.tag() as u32),
+                layout_arg(&out_cl),
+                layout_arg(&in_cl),
+                Arg::I32(axis_a as i32),
+                Arg::I32(axis_b as i32),
+                Arg::U64(out_len as u64),
+            ],
             "extract_diagonal",
-            "the diagonal slice is not on the new path yet",
-        ))
+        )?;
+        Ok(output)
     }
 
     fn embed_diagonal(
         &mut self,
-        _input: &Tensor,
-        _axis_a: usize,
-        _axis_b: usize,
+        input: &Tensor,
+        axis_a: usize,
+        axis_b: usize,
     ) -> crate::Result<Tensor> {
-        Err(crate::Error::unsupported(
+        let shape = input.shape().to_vec();
+        let kernel = kernel_dtype(input.dtype(), "embed_diagonal")?;
+        if axis_a >= shape.len() || axis_b > shape.len() {
+            return Err(crate::Error::unsupported(
+                "embed_diagonal",
+                "the insertion position must be in range",
+            ));
+        }
+        // The output re-inserts an axis at `axis_b` whose extent is the input's `axis_a`
+        // extent; the diagonal positions are the only ones written, so the destination is
+        // zero-filled by the allocation.
+        let mut out_shape = shape.clone();
+        out_shape.insert(axis_b, shape[axis_a]);
+        let strides = self.strides_of(input, "embed_diagonal")?;
+        let in_layout = compact_layout(&shape, &strides, "embed_diagonal")?;
+        let out_layout =
+            compact_layout(&out_shape, &compact_strides(&out_shape), "embed_diagonal")?;
+        let in_len = count_i64(&shape, "embed_diagonal")?;
+        let out_len = count_i64(&out_shape, "embed_diagonal")?;
+        let output = alloc_tensor(self.runtime(), input.dtype(), &out_shape)?;
+        let plan = plan_embed_diagonal_copy(
+            kernel,
+            &in_layout,
+            in_len,
+            &out_layout,
+            out_len,
+            axis_a as u32,
+            axis_b as u32,
+        )
+        .map_err(|error| crate::Error::runtime_state_source("embed_diagonal", error))?;
+        let (destination, source) = self.two_allocations(&output, input, "embed_diagonal")?;
+        let (in_cl, out_cl) = (CLayout::new(&in_layout), CLayout::new(&out_layout));
+        self.launch_planned(
+            Entry::EmbedDiagonalCopy,
+            plan,
+            &[
+                Arg::DevicePtr(destination),
+                Arg::DevicePtr(source),
+                Arg::U32(kernel.tag() as u32),
+                layout_arg(&out_cl),
+                layout_arg(&in_cl),
+                Arg::I32(axis_a as i32),
+                Arg::I32(axis_b as i32),
+                Arg::U64(in_len as u64),
+            ],
             "embed_diagonal",
-            "the diagonal slice is not on the new path yet",
-        ))
+        )?;
+        Ok(output)
     }
 
-    fn tril(&mut self, _input: &Tensor, _k: i64) -> crate::Result<Tensor> {
-        Err(crate::Error::unsupported(
-            "tril",
-            "the triangular slice is not on the new path yet",
-        ))
+    fn tril(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
+        self.triangular(input, k, true)
     }
 
-    fn triu(&mut self, _input: &Tensor, _k: i64) -> crate::Result<Tensor> {
-        Err(crate::Error::unsupported(
-            "triu",
-            "the triangular slice is not on the new path yet",
-        ))
+    fn triu(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
+        self.triangular(input, k, false)
     }
+}
+
+impl CudaEngine {
+    /// `tril`/`triu` over a rank-2-or-higher compact tensor, batching on higher axes.
+    fn triangular(&mut self, input: &Tensor, k: i64, lower: bool) -> crate::Result<Tensor> {
+        let op = if lower { "tril" } else { "triu" };
+        let shape = input.shape().to_vec();
+        if shape.len() < 2 {
+            return Err(crate::Error::unsupported(
+                op,
+                "a triangular mask needs at least two axes",
+            ));
+        }
+        let kernel = kernel_dtype(input.dtype(), op)?;
+        let len = count_i64(&shape, op)?;
+        let (rows, cols) = (shape[0] as i64, shape[1] as i64);
+        let output = alloc_tensor(self.runtime(), input.dtype(), &shape)?;
+        let plan = if lower {
+            plan_tril(kernel, rows, cols, len)
+        } else {
+            plan_triu(kernel, rows, cols, len)
+        }
+        .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let (destination, source) = self.two_allocations(&output, input, op)?;
+        self.launch_planned(
+            if lower { Entry::Tril } else { Entry::Triu },
+            plan,
+            &[
+                Arg::DevicePtr(destination),
+                Arg::DevicePtr(source),
+                Arg::U32(kernel.tag() as u32),
+                pod_arg(&k),
+                Arg::U64(rows as u64),
+                Arg::U64(cols as u64),
+                Arg::U64(len as u64),
+            ],
+            op,
+        )?;
+        Ok(output)
+    }
+
+    /// The allocations of a fresh `output` and an existing `source`, both of this runtime.
+    fn two_allocations<'a>(
+        &'a self,
+        output: &'a Tensor,
+        source: &'a Tensor,
+        op: &'static str,
+    ) -> crate::Result<(&'a t4a_cuda_runtime::Buffer, &'a t4a_cuda_runtime::Buffer)> {
+        with_scalar!(output.dtype(), |T| {
+            let destination = self.allocation_of::<T>(output, op)?;
+            let input = self.allocation_of::<T>(source, op)?;
+            Ok((destination, input))
+        })
+    }
+}
+
+/// A column-major compact stride list for `shape`.
+fn compact_strides(shape: &[usize]) -> Vec<isize> {
+    let mut strides = Vec::with_capacity(shape.len());
+    let mut stride = 1isize;
+    for &extent in shape {
+        strides.push(stride);
+        stride *= extent as isize;
+    }
+    strides
+}
+
+fn compact_layout(shape: &[usize], strides: &[isize], op: &'static str) -> crate::Result<Layout> {
+    let extents: Vec<i64> = shape.iter().map(|&extent| extent as i64).collect();
+    let strides: Vec<i64> = strides.iter().map(|&stride| stride as i64).collect();
+    Layout::new(&extents, &strides, 0)
+        .map_err(|error| crate::Error::runtime_state_source(op, error))
+}
+
+fn count_i64(shape: &[usize], op: &'static str) -> crate::Result<i64> {
+    i64::try_from(element_count(shape)?)
+        .map_err(|_| crate::Error::unsupported(op, "the element count exceeds i64"))
 }
 
 #[cfg(test)]

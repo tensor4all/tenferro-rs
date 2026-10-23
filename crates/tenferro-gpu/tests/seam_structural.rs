@@ -156,11 +156,73 @@ fn a_broadcast_in_dim_read_matches_the_host() {
 }
 
 #[test]
-fn the_unported_families_refuse_instead_of_transferring() {
+fn a_diagonal_extract_and_embed_round_trip() {
     let Some(mut engine) = engine() else { return };
-    let source = device(&engine, values(4));
-    assert!(engine.tril(&source, 0).is_err());
-    assert!(engine.triu(&source, 0).is_err());
+    // A 3x3 column-major matrix whose diagonal is (1, 5, 9).
+    let data: Vec<f64> = (1..=9).map(|value| value as f64).collect();
+    let source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![3, 3], data.clone()).expect("matrix"),
+    )
+    .expect("upload");
+    let diagonal = engine.extract_diagonal(&source, 0, 1).expect("extract");
+    assert_eq!(diagonal.shape(), &[3]);
+    let back = download_tensor(engine.runtime(), &diagonal).expect("download");
+    assert_eq!(
+        back.as_slice::<f64>().expect("f64 payload"),
+        &[1.0, 5.0, 9.0]
+    );
+
+    // Embedding that diagonal back into a 3x3 gives the zero-filled matrix with only the
+    // diagonal written.
+    let embedded = engine.embed_diagonal(&diagonal, 0, 1).expect("embed");
+    assert_eq!(embedded.shape(), &[3, 3]);
+    let back = download_tensor(engine.runtime(), &embedded).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let mut expected = vec![0.0f64; 9];
+    for (index, value) in [1.0, 5.0, 9.0].iter().enumerate() {
+        expected[index + index * 3] = *value;
+    }
+    assert_eq!(observed, &expected[..]);
+    // Two distinct in-range axes are required.
     assert!(engine.extract_diagonal(&source, 0, 0).is_err());
-    assert!(engine.embed_diagonal(&source, 0, 0).is_err());
+}
+
+#[test]
+fn the_triangular_masks_match_the_host() {
+    let Some(mut engine) = engine() else { return };
+    let data: Vec<f64> = (1..=12).map(|value| value as f64).collect();
+    let source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![3, 4], data.clone()).expect("matrix"),
+    )
+    .expect("upload");
+    let lower = engine.tril(&source, 0).expect("tril");
+    let back = download_tensor(engine.runtime(), &lower).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let mut expected = vec![0.0f64; 12];
+    for column in 0..4 {
+        for row in 0..3 {
+            if row >= column {
+                expected[row + column * 3] = data[row + column * 3];
+            }
+        }
+    }
+    assert_eq!(observed, &expected[..]);
+
+    let upper = engine.triu(&source, 0).expect("triu");
+    let back = download_tensor(engine.runtime(), &upper).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let mut expected = vec![0.0f64; 12];
+    for column in 0..4 {
+        for row in 0..3 {
+            if row <= column {
+                expected[row + column * 3] = data[row + column * 3];
+            }
+        }
+    }
+    assert_eq!(observed, &expected[..]);
+    // A rank-1 tensor has no triangular mask.
+    let vector = device(&engine, values(4));
+    assert!(engine.tril(&vector, 0).is_err());
 }
