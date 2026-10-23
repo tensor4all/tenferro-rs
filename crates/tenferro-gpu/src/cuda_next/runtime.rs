@@ -156,6 +156,16 @@ impl CudaRuntime {
         self.inner.allocation_domain
     }
 
+    /// NVRTC compilation attempts this runtime's artifact cache performed.
+    pub fn compile_attempts(&self) -> u64 {
+        self.submit().compile_attempts()
+    }
+
+    /// Artifact-cache hits this runtime served.
+    pub fn artifact_cache_hits(&self) -> u64 {
+        self.submit().artifact_cache_hits()
+    }
+
     /// Resource counters of this runtime.
     ///
     /// The snapshot is the runtime's own: live and pooled device bytes, pending

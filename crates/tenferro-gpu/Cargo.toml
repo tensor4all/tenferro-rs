@@ -48,7 +48,7 @@ cubecl-interop = ["cuda"]
 # The backend-neutral `gpu/` seam and its CUDA adapter over `t4a-cuda-runtime`
 # (issue #2208 U1). Private surface: the public `cuda::` names keep the CubeCL
 # implementation until the operation surface moves over (U2-U6).
-cuda-next = ["cuda", "dep:t4a-cuda-runtime"]
+cuda-next = ["cuda", "dep:t4a-cuda-runtime", "dep:t4a-cuda-kernels"]
 webgpu = [
     "dep:cubecl",
     "cubecl/std",
@@ -82,6 +82,8 @@ cubek-fft = { workspace = true, optional = true }
 # crates are `publish = false`, so the dependency is a pinned git revision, recorded
 # in docs/design/cuda-seam-u1-2208.md.
 t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "0a101bf19207e0abb2ea169721f63f50af8669b0", optional = true }
+# The kernel catalogue and its NVRTC sources (ABI revision 10).
+t4a-cuda-kernels = { git = "https://github.com/tensor4all/t4a-cuda-kernels", rev = "5019c713c14c1f5d59ea2cf03bbfff08c40f167e", optional = true }
 cudarc = { workspace = true, optional = true, features = ["cublas"] }
 libloading.workspace = true
 lru = { workspace = true, optional = true }
@@ -207,4 +209,9 @@ required-features = ["cuda-next"]
 [[test]]
 name = "seam_copy"
 path = "tests/seam_copy.rs"
+required-features = ["cuda-next"]
+
+[[test]]
+name = "seam_launch"
+path = "tests/seam_launch.rs"
 required-features = ["cuda-next"]

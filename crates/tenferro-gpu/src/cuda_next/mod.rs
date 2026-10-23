@@ -34,6 +34,7 @@ pub fn gpu_available() -> bool {
 pub use crate::gpu;
 
 mod engine;
+mod launch;
 mod pending;
 mod pinned;
 mod publication;
@@ -42,6 +43,7 @@ mod storage;
 mod transfer;
 
 pub use engine::{CudaEngine, CudaEngineError};
+pub use launch::{device_buffer, layout_arg, KernelModules};
 pub use pending::{PendingDownload, PendingUpload, RejectedTransfer, TransferSubmitError};
 pub use pinned::PinnedHostBuffer;
 pub use publication::{
