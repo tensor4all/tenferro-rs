@@ -96,7 +96,11 @@ pub fn upload_tensor(runtime: &CudaRuntime, tensor: &Tensor) -> crate::Result<Te
             runtime,
             typed::<Complex64>(tensor)?,
         )?)),
-        DType::Bool | DType::External(_) => Err(crate::Error::unsupported(
+        DType::Bool => Ok(Tensor::from_typed(upload_typed(
+            runtime,
+            typed::<bool>(tensor)?,
+        )?)),
+        DType::External(_) => Err(crate::Error::unsupported(
             "cuda transfer",
             format!("the transfer route does not serve {:?}", tensor.dtype()),
         )),
@@ -169,7 +173,8 @@ pub fn download_tensor(runtime: &CudaRuntime, tensor: &Tensor) -> crate::Result<
         DType::I64 => Ok(Tensor::from_typed(take::<i64>(runtime, tensor)?)),
         DType::C32 => Ok(Tensor::from_typed(take::<Complex32>(runtime, tensor)?)),
         DType::C64 => Ok(Tensor::from_typed(take::<Complex64>(runtime, tensor)?)),
-        DType::Bool | DType::External(_) => Err(crate::Error::unsupported(
+        DType::Bool => Ok(Tensor::from_typed(take::<bool>(runtime, tensor)?)),
+        DType::External(_) => Err(crate::Error::unsupported(
             "cuda transfer",
             format!("the transfer route does not serve {:?}", tensor.dtype()),
         )),

@@ -436,3 +436,75 @@ fn the_elementwise_family_matches_the_host() {
         )
         .is_err());
 }
+
+#[test]
+fn compare_and_select_round_trip_through_a_boolean_tensor() {
+    use tenferro_tensor::{CompareDir, TensorElementwise as _};
+
+    let Some(mut engine) = engine() else { return };
+    let lhs_data: Vec<f64> = (0..8).map(|index| index as f64 - 3.5).collect();
+    let rhs_data: Vec<f64> = (0..8).map(|index| (index % 3) as f64 - 1.0).collect();
+    let lhs = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![8], lhs_data.clone()).expect("lhs"),
+    )
+    .expect("upload");
+    let rhs = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![8], rhs_data.clone()).expect("rhs"),
+    )
+    .expect("upload");
+
+    let predicate = engine
+        .compare_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &CompareDir::Gt,
+        )
+        .expect("compare");
+    assert_eq!(predicate.dtype(), DType::Bool);
+    let back = download_tensor(engine.runtime(), &predicate).expect("download");
+    let observed = back.as_slice::<bool>().expect("bool payload");
+    let expected: Vec<bool> = lhs_data
+        .iter()
+        .zip(rhs_data.iter())
+        .map(|(left, right)| left > right)
+        .collect();
+    assert_eq!(observed, &expected[..]);
+
+    // Selecting between two branches with that predicate.
+    let on_true = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![8], vec![10.0f64; 8]).expect("on_true"),
+    )
+    .expect("upload");
+    let on_false = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![8], vec![-10.0f64; 8]).expect("on_false"),
+    )
+    .expect("upload");
+    let selected = engine
+        .select_read(
+            TensorRead::from_tensor(&predicate),
+            TensorRead::from_tensor(&on_true),
+            TensorRead::from_tensor(&on_false),
+        )
+        .expect("select");
+    let back = download_tensor(engine.runtime(), &selected).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = lhs_data
+        .iter()
+        .zip(rhs_data.iter())
+        .map(|(left, right)| if left > right { 10.0 } else { -10.0 })
+        .collect();
+    assert_eq!(observed, &expected[..]);
+
+    // A non-boolean predicate is a typed refusal.
+    assert!(engine
+        .select_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&on_true),
+            TensorRead::from_tensor(&on_false)
+        )
+        .is_err());
+}

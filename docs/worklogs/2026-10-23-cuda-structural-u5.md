@@ -143,8 +143,24 @@ shape mismatch.
 One convention worth recording: the kernel's `sign` is the XLA convention — `sign(0) = 0` —
 while `f64::signum(0)` is 1. The first version of the test used `signum` and caught it.
 
+## Sixth slice (this change): comparisons, selection and boolean storage
+
+- `compare_read` writes the boolean result of `t4a_cuda_compare`; `CompareDir` maps one to
+  one onto the kernel's `CompareOp`.
+- `select_read` runs `t4a_cuda_select` with a boolean predicate and two same-shaped,
+  same-dtype branches; a non-boolean predicate is a typed refusal.
+- The transfer route now serves `Bool` in both directions, and the structural slice's scalar
+  macro covers it, because a boolean tensor can now exist on the device at all. Before this,
+  a comparison's result could not even be read back.
+
+Evidence: `compare_and_select_round_trip_through_a_boolean_tensor` on the A100 compares eight
+f64 values (predicate matched element by element), selects between a +10 and a -10 branch, and
+refuses a non-boolean predicate.
+
+The remaining elementwise pieces are `rem`/`rem_read` (the checked integer remainder carries a
+status word and needs a read-back) and `elementwise_read_into` (session-shaped).
+
 ## Next slices of U5
 
-`compare_read`/`select_read` (boolean destinations), `rem`/`rem_read`,
-`elementwise_read_into`, `TensorIndexing`, `TensorDot`, and the `ExecutionEngine` session
-wiring that eager/traced/AD drive.
+`rem`/`rem_read`, `elementwise_read_into`, `TensorIndexing`, `TensorDot`, and the
+`ExecutionEngine` session wiring that eager/traced/AD drive.

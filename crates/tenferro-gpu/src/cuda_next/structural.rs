@@ -37,9 +37,14 @@ macro_rules! with_scalar {
                 type $t = f64;
                 $body
             }
+            DType::Bool => {
+                #[allow(dead_code)]
+                type $t = bool;
+                $body
+            }
             other => Err(crate::Error::unsupported(
                 "cuda structural",
-                format!("the structural slice serves F32 and F64, not {other:?}"),
+                format!("the structural slice does not serve {other:?}"),
             )),
         }
     };
@@ -124,6 +129,7 @@ fn kernel_dtype(dtype: DType, op: &'static str) -> crate::Result<t4a_cuda_kernel
     Ok(match dtype {
         DType::F32 => t4a_cuda_kernels::DType::F32,
         DType::F64 => t4a_cuda_kernels::DType::F64,
+        DType::Bool => t4a_cuda_kernels::DType::Bool,
         other => {
             return Err(crate::Error::unsupported(
                 op,
@@ -1018,26 +1024,101 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
 
     fn compare_read(
         &mut self,
-        _lhs: TensorRead<'_>,
-        _rhs: TensorRead<'_>,
-        _dir: &tenferro_tensor::CompareDir,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        dir: &tenferro_tensor::CompareDir,
     ) -> crate::Result<Tensor> {
-        Err(crate::Error::unsupported(
-            "compare_read",
-            "a boolean destination is outside the structural slice's dtype scope",
-        ))
+        let name = "compare_read";
+        let left = self.device_read(lhs, name)?;
+        let right = self.device_read(rhs, name)?;
+        if left.shape() != right.shape() || left.dtype() != right.dtype() {
+            return Err(crate::Error::unsupported(
+                name,
+                "both operands must share a shape and a dtype on this path",
+            ));
+        }
+        let dtype = left.dtype();
+        let kernel = kernel_dtype(dtype, name)?;
+        let op = match dir {
+            tenferro_tensor::CompareDir::Eq => t4a_cuda_kernels::CompareOp::Eq,
+            tenferro_tensor::CompareDir::Lt => t4a_cuda_kernels::CompareOp::Lt,
+            tenferro_tensor::CompareDir::Le => t4a_cuda_kernels::CompareOp::Le,
+            tenferro_tensor::CompareDir::Gt => t4a_cuda_kernels::CompareOp::Gt,
+            tenferro_tensor::CompareDir::Ge => t4a_cuda_kernels::CompareOp::Ge,
+        };
+        let shape = left.shape().to_vec();
+        let len = count_i64(&shape, name)?;
+        // The comparison writes one Bool byte per element pair.
+        let output = alloc_tensor(self.runtime(), DType::Bool, &shape)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Compare])?;
+        let out = self.allocation_of::<bool>(&output, name)?;
+        with_scalar!(dtype, |T| {
+            dispatcher.compare(
+                op,
+                kernel,
+                len,
+                out,
+                self.allocation_of::<T>(left, name)?,
+                self.allocation_of::<T>(right, name)?,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        Ok(output)
     }
 
     fn select_read(
         &mut self,
-        _pred: TensorRead<'_>,
-        _on_true: TensorRead<'_>,
-        _on_false: TensorRead<'_>,
+        pred: TensorRead<'_>,
+        on_true: TensorRead<'_>,
+        on_false: TensorRead<'_>,
     ) -> crate::Result<Tensor> {
-        Err(crate::Error::unsupported(
-            "select_read",
-            "a boolean predicate is outside the structural slice's dtype scope",
-        ))
+        let name = "select_read";
+        let predicate = self.device_read(pred, name)?;
+        let when_true = self.device_read(on_true, name)?;
+        let when_false = self.device_read(on_false, name)?;
+        if predicate.dtype() != DType::Bool {
+            return Err(crate::Error::unsupported(
+                name,
+                "the predicate must be a boolean tensor",
+            ));
+        }
+        if when_true.shape() != when_false.shape() || when_true.dtype() != when_false.dtype() {
+            return Err(crate::Error::unsupported(
+                name,
+                "the two branches must share a shape and a dtype",
+            ));
+        }
+        if predicate.shape() != when_true.shape() {
+            return Err(crate::Error::unsupported(
+                name,
+                "the predicate must share the branches' shape on this path",
+            ));
+        }
+        let dtype = when_true.dtype();
+        let kernel = kernel_dtype(dtype, name)?;
+        let shape = when_true.shape().to_vec();
+        let len = count_i64(&shape, name)?;
+        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Select])?;
+        let predicate_buffer = self.allocation_of::<bool>(predicate, name)?;
+        with_scalar!(dtype, |T| {
+            dispatcher.select(
+                kernel,
+                len,
+                self.allocation_of::<T>(&output, name)?,
+                predicate_buffer,
+                self.allocation_of::<T>(when_true, name)?,
+                self.allocation_of::<T>(when_false, name)?,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        Ok(output)
     }
 
     fn elementwise_read_into(
