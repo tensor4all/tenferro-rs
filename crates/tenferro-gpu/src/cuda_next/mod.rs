@@ -43,6 +43,7 @@ mod publication;
 mod runtime;
 mod storage;
 mod transfer;
+mod vendor;
 
 pub use dispatch::Dispatcher;
 pub use engine::{CudaEngine, CudaEngineError};
@@ -57,3 +58,4 @@ pub use publication::{
 pub use runtime::{CudaRuntime, CudaRuntimeIdentity};
 pub use storage::CudaStorage;
 pub use transfer::{download_pending, download_tensor, upload_pending, upload_tensor};
+pub use vendor::{Cublas, GemmRequest};

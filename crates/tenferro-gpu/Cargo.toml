@@ -230,3 +230,8 @@ required-features = ["cuda-next"]
 name = "seam_reduce"
 path = "tests/seam_reduce.rs"
 required-features = ["cuda-next"]
+
+[[test]]
+name = "seam_vendor"
+path = "tests/seam_vendor.rs"
+required-features = ["cuda-next"]
