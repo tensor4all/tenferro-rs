@@ -43,9 +43,37 @@ driven through the old engine's `ExecutionEngine` surface, so they cannot move b
 tensor surface they are called through exists. The structural slice is the first piece of
 that surface, which is why it precedes them.
 
+## Second slice (this change): the movement and broadcast reads
+
+- `transpose_read` — the output shape is the input's permuted, and the strided view over the
+  source reads each output axis from the axis the permutation names; one
+  `t4a_cuda_materialize_strided` gathers it into a compact destination. This is the same
+  fold the ABI rev 10 work chose for `reverse`: a permutation is a strided movement, not a
+  second kernel family.
+- `reshape_read` — a compact copy taken **at the new shape** (a compact copy does not care
+  about shape, and a metadata-only `reshape_view` cannot become an owned tensor), with the
+  equal-element-count check before any allocation.
+- `broadcast_in_dim_read` — `t4a_cuda_broadcast_in_dim` with the destination compact and the
+  input's own extents and strides.
+- `Dispatcher::copy_exact` gained an optional destination shape through
+  `CudaEngine::copy_to_fresh`.
+
+Evidence, same host-reference style on the A100:
+
+- `a_transposed_read_matches_the_host_transpose` — a 3x4 matrix read as its 4x3 transpose.
+- `a_reshape_read_relabels_the_same_elements` — 3x4 to 2x6 keeps the elements in order, and
+  a 5x5 reshape is refused.
+- `a_broadcast_in_dim_read_matches_the_host` — a 3-vector broadcast over the second axis of
+  a 3x2 output.
+
+Two facts worth recording:
+
+- `TensorValue::reshape_view` produces a view, and `into_tensor` refuses a metadata-only
+  view, so an owned tensor with new metadata must be a fresh allocation, not a relabel.
+- `Tensor::strides()` is not on the dtype-erased tensor; strides come from the typed payload.
+
 ## Next slices of U5
 
-`transpose_read` (a permuted `materialize_strided`), `reshape_read` (compact copy plus
-metadata), `broadcast_in_dim_read` (`t4a_cuda_broadcast_in_dim`), the diagonal and
-triangular families, then `TensorElementwise`, `TensorReduction`, `TensorIndexing`, and the
-`ExecutionEngine` session wiring that eager/traced/AD drive.
+The diagonal and triangular families (`extract_diagonal`, `embed_diagonal`, `tril`, `triu`),
+then `TensorElementwise`, `TensorReduction`, `TensorIndexing`, and the `ExecutionEngine`
+session wiring that eager/traced/AD drive.

@@ -90,15 +90,75 @@ fn a_cast_converts_on_the_device() {
 }
 
 #[test]
+fn a_transposed_read_matches_the_host_transpose() {
+    let Some(mut engine) = engine() else { return };
+    // A 3x4 column-major matrix, read as its 4x3 transpose.
+    let data: Vec<f64> = (0..12).map(|index| index as f64).collect();
+    let source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![3, 4], data.clone()).expect("matrix"),
+    )
+    .expect("upload");
+    let transposed = engine
+        .transpose_read(TensorRead::from_tensor(&source), &[1, 0])
+        .expect("transpose");
+    assert_eq!(transposed.shape(), &[4, 3]);
+    let back = download_tensor(engine.runtime(), &transposed).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let mut expected = Vec::with_capacity(12);
+    for row in 0..3 {
+        for column in 0..4 {
+            expected.push(data[row + column * 3]);
+        }
+    }
+    assert_eq!(observed, &expected[..]);
+}
+
+#[test]
+fn a_reshape_read_relabels_the_same_elements() {
+    let Some(mut engine) = engine() else { return };
+    let data = values(12);
+    let source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![3, 4], data.clone()).expect("matrix"),
+    )
+    .expect("upload");
+    let reshaped = engine
+        .reshape_read(TensorRead::from_tensor(&source), &[2, 6])
+        .expect("reshape");
+    assert_eq!(reshaped.shape(), &[2, 6]);
+    let back = download_tensor(engine.runtime(), &reshaped).expect("download");
+    assert_eq!(back.as_slice::<f64>().expect("f64 payload"), &data[..]);
+    // A reshape that changes the element count is a typed refusal.
+    assert!(engine
+        .reshape_read(TensorRead::from_tensor(&source), &[5, 5])
+        .is_err());
+}
+
+#[test]
+fn a_broadcast_in_dim_read_matches_the_host() {
+    let Some(mut engine) = engine() else { return };
+    // A 3-vector broadcast along the second axis of a 3x2 output.
+    let data = vec![1.0f64, 2.0, 3.0];
+    let source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![3], data.clone()).expect("vector"),
+    )
+    .expect("upload");
+    let broadcast = engine
+        .broadcast_in_dim_read(TensorRead::from_tensor(&source), &[3, 2], &[0])
+        .expect("broadcast");
+    assert_eq!(broadcast.shape(), &[3, 2]);
+    let back = download_tensor(engine.runtime(), &broadcast).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = (0..2).flat_map(|_| data.clone()).collect();
+    assert_eq!(observed, &expected[..]);
+}
+
+#[test]
 fn the_unported_families_refuse_instead_of_transferring() {
     let Some(mut engine) = engine() else { return };
     let source = device(&engine, values(4));
-    assert!(engine
-        .transpose_read(TensorRead::from_tensor(&source), &[0])
-        .is_err());
-    assert!(engine
-        .reshape_read(TensorRead::from_tensor(&source), &[2, 2])
-        .is_err());
     assert!(engine.tril(&source, 0).is_err());
     assert!(engine.triu(&source, 0).is_err());
     assert!(engine.extract_diagonal(&source, 0, 0).is_err());
