@@ -19,7 +19,9 @@
     "crates/tenferro-linalg/src/gpu/linalg/householder_qr.rs::concatenate_compact_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
     "crates/tenferro-linalg/src/gpu/linalg/householder_qr.rs::gemm_nn_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
     "crates/tenferro-linalg/src/gpu/linalg/householder_qr.rs::geqrf_trailing_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
-    "crates/tenferro-linalg/src/gpu/linalg/svd_polar.rs::svd_polar_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)"
+    "crates/tenferro-linalg/src/gpu/linalg/svd_polar.rs::svd_polar_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
+    "crates/tenferro-gpu/src/cuda_next/transfer.rs::upload_pending": "explicit host-to-device transfer into an existing allocation (#2208 U1): the raw scope carries the runtime's own stream and orders the copy, and the pinned source stays alive in the pending package until its completion is observed",
+    "crates/tenferro-gpu/src/cuda_next/transfer.rs::submit_download": "explicit device-to-host transfer into a pinned buffer (#2208 U1): the raw scope carries the runtime's own stream and orders the copy, and the pinned destination stays alive in the pending package until its completion is observed"
   },
   "Engine implementation": {
     "crates/tenferro-cpu/src/exec_session.rs::CpuEngine": "CPU engine implementation: the caller-held CPU operation surface over its own Rayon pool, buffer pool and workspace (#2206)",

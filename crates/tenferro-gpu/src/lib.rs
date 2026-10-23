@@ -33,10 +33,14 @@ use std::any::Any;
 
 #[cfg(feature = "cuda")]
 mod cubecl;
+#[cfg(feature = "cuda-next")]
+pub mod cuda_next;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod event_domain_admission;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod event_retirement;
+#[cfg(feature = "cuda-next")]
+pub mod gpu;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
 mod kernels;
 #[cfg(any(feature = "cuda", feature = "webgpu"))]
