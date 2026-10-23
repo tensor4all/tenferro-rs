@@ -4,9 +4,9 @@
 //! validation of its own — and every argument order follows the documented ABI.
 
 use t4a_cuda_kernels::{
-    plan_binary, plan_clamp, plan_compare, plan_convert, plan_gather, plan_reduce, plan_reduction,
-    plan_scatter_add, plan_select, plan_unary, BinaryOp, DType, Entry, GatherPlan, Layout,
-    ReduceOp, ReductionPlan, ScalarSide, ScatterPlan, UnaryOp,
+    plan_binary, plan_clamp, plan_compare, plan_convert, plan_copy_exact, plan_gather, plan_reduce,
+    plan_reduction, plan_scatter_add, plan_select, plan_unary, BinaryOp, DType, Entry, GatherPlan,
+    Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan, UnaryOp,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -57,6 +57,33 @@ impl Dispatcher {
             self.modules
                 .launch(entry, LaunchConfig::new(plan.grid[0], plan.block[0]), args)
         }
+    }
+
+    /// `t4a_cuda_copy_exact`: a compact-to-compact byte copy of `len` elements.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the kernel crate's planner refuses the
+    /// invocation, and [`crate::Error::RuntimeStateSource`] when binding or admitting the
+    /// launch fails.
+    pub fn copy_exact(
+        &mut self,
+        dtype: DType,
+        len: i64,
+        out: &t4a_cuda_runtime::Buffer,
+        input: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let plan = plan_copy_exact(dtype, len).map_err(plan_error)?;
+        self.run(
+            Entry::CopyExact,
+            plan,
+            &[
+                Arg::DevicePtr(out),
+                Arg::DevicePtr(input),
+                Arg::U32(dtype.tag() as u32),
+                Arg::U64(len as u64),
+            ],
+        )
     }
 
     /// `t4a_cuda_unary`: one unary operation over `len` elements.

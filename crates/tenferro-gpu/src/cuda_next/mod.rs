@@ -43,6 +43,7 @@ mod pinned;
 mod publication;
 mod runtime;
 mod storage;
+mod structural;
 mod transfer;
 pub(crate) mod vendor;
 
