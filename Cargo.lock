@@ -5040,9 +5040,9 @@ dependencies = [
 
 [[package]]
 name = "t4a-faer"
-version = "0.24.8"
+version = "0.24.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2be6b5081aeb2525fdbe9ec27d6a2396f7ce850ab30899064b88a0a3364531a0"
+checksum = "27493e13b4102a34c25e63775ebdefe44cf3d15476e88371dc46f38c2cae82be"
 dependencies = [
  "bytemuck",
  "dyn-stack",
