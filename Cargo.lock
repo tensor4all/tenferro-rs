@@ -5025,6 +5025,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "t4a-cuda-runtime"
+version = "0.0.0"
+source = "git+https://github.com/tensor4all/t4a-gpu-backend?rev=0a101bf19207e0abb2ea169721f63f50af8669b0#0a101bf19207e0abb2ea169721f63f50af8669b0"
+dependencies = [
+ "cudarc",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "t4a-faer"
 version = "0.24.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5352,6 +5361,7 @@ dependencies = [
  "t4a-cubek-fft",
  "t4a-cubek-matmul",
  "t4a-cubek-std",
+ "t4a-cuda-runtime",
  "tenferro-core-ops",
  "tenferro-cpu",
  "tenferro-runtime",
