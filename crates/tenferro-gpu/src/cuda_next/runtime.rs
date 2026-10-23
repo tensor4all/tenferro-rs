@@ -161,6 +161,11 @@ impl CudaRuntime {
         self.submit().compile_attempts()
     }
 
+    /// Module loads this runtime performed.
+    pub fn module_loads(&self) -> u64 {
+        self.submit().module_loads()
+    }
+
     /// Artifact-cache hits this runtime served.
     pub fn artifact_cache_hits(&self) -> u64 {
         self.submit().artifact_cache_hits()

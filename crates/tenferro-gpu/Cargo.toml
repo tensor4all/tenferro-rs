@@ -220,3 +220,8 @@ required-features = ["cuda-next"]
 name = "seam_dispatch"
 path = "tests/seam_dispatch.rs"
 required-features = ["cuda-next"]
+
+[[test]]
+name = "seam_fusion"
+path = "tests/seam_fusion.rs"
+required-features = ["cuda-next"]
