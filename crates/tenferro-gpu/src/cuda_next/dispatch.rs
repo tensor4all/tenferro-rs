@@ -4,8 +4,9 @@
 //! validation of its own — and every argument order follows the documented ABI.
 
 use t4a_cuda_kernels::{
-    plan_binary, plan_clamp, plan_compare, plan_convert, plan_gather, plan_scatter_add,
-    plan_select, plan_unary, BinaryOp, DType, Entry, GatherPlan, ScalarSide, ScatterPlan, UnaryOp,
+    plan_binary, plan_clamp, plan_compare, plan_convert, plan_gather, plan_reduce, plan_reduction,
+    plan_scatter_add, plan_select, plan_unary, BinaryOp, DType, Entry, GatherPlan, Layout,
+    ReduceOp, ReductionPlan, ScalarSide, ScatterPlan, UnaryOp,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -386,5 +387,161 @@ fn pod_arg<T>(value: &T) -> Arg<'_> {
     Arg::Bytes {
         bytes,
         align: std::mem::align_of::<T>(),
+    }
+}
+
+impl Dispatcher {
+    /// `t4a_cuda_reduce`: one reduction pass with the crate's strategy.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reduce(
+        &mut self,
+        dtype: DType,
+        op: ReduceOp,
+        strategy: t4a_cuda_kernels::ReduceStrategy,
+        out: &Layout,
+        out_len: i64,
+        input: &Layout,
+        in_len: i64,
+        axis: u32,
+        plane_width: u32,
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        in_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let plan = plan_reduce(
+            dtype,
+            op,
+            strategy,
+            out,
+            out_len,
+            input,
+            in_len,
+            axis,
+            plane_width,
+        )
+        .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let in_layout = t4a_cuda_kernels::CLayout::new(input);
+        let output_len = out.element_count().map_err(plan_error)?;
+        self.run(
+            Entry::Reduce,
+            plan,
+            &[
+                Arg::DevicePtr(out_buffer),
+                Arg::DevicePtr(in_buffer),
+                Arg::U32(dtype.tag() as u32),
+                Arg::I32(op.tag()),
+                Arg::I32(strategy.tag()),
+                layout_arg(&out_layout),
+                layout_arg(&in_layout),
+                Arg::I32(axis as i32),
+                Arg::U64(output_len as u64),
+            ],
+        )
+    }
+
+    /// Plan a whole reduction with the crate's split policy and run both passes.
+    ///
+    /// `partials` must hold `splits * out_len` elements, and is only used when the
+    /// policy splits; the returned [`ReductionPlan`] says which happened.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting a launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reduce_auto(
+        &mut self,
+        dtype: DType,
+        op: ReduceOp,
+        out: &Layout,
+        out_len: i64,
+        input: &Layout,
+        in_len: i64,
+        axis: u32,
+        plane_width: u32,
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        in_buffer: &t4a_cuda_runtime::Buffer,
+        partials_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<ReductionPlan> {
+        let plan = plan_reduction(dtype, op, out, out_len, input, in_len, axis, plane_width)
+            .map_err(plan_error)?;
+        match &plan {
+            ReductionPlan::Direct { strategy, launch } => {
+                let out_layout = t4a_cuda_kernels::CLayout::new(out);
+                let in_layout = t4a_cuda_kernels::CLayout::new(input);
+                let output_len = out.element_count().map_err(plan_error)?;
+                self.run(
+                    Entry::Reduce,
+                    *launch,
+                    &[
+                        Arg::DevicePtr(out_buffer),
+                        Arg::DevicePtr(in_buffer),
+                        Arg::U32(dtype.tag() as u32),
+                        Arg::I32(op.tag()),
+                        Arg::I32(strategy.tag()),
+                        layout_arg(&out_layout),
+                        layout_arg(&in_layout),
+                        Arg::I32(axis as i32),
+                        Arg::U64(output_len as u64),
+                    ],
+                )?;
+            }
+            ReductionPlan::Split {
+                split,
+                pass1,
+                combine_op,
+                combine_strategy,
+                pass2,
+            } => {
+                let out_layout = t4a_cuda_kernels::CLayout::new(out);
+                let in_layout = t4a_cuda_kernels::CLayout::new(input);
+                let partials =
+                    t4a_cuda_kernels::reduction_partials_layout(input, axis, split.splits)
+                        .map_err(plan_error)?;
+                let partials_len = partials.element_count().map_err(plan_error)?;
+                let partials_layout =
+                    t4a_cuda_kernels::CLayout::from_wide(&partials).map_err(plan_error)?;
+                let output_len = out.element_count().map_err(plan_error)?;
+                self.run(
+                    Entry::ReducePartials,
+                    *pass1,
+                    &[
+                        Arg::DevicePtr(partials_buffer),
+                        Arg::DevicePtr(in_buffer),
+                        Arg::U32(dtype.tag() as u32),
+                        Arg::I32(op.tag()),
+                        layout_arg(&partials_layout),
+                        layout_arg(&in_layout),
+                        Arg::I32(axis as i32),
+                        Arg::U64(output_len as u64),
+                        // The kernel's `long long` parameters carry the same bits.
+                        Arg::U64(split.splits as u64),
+                        Arg::U64(split.chunk_len as u64),
+                    ],
+                )?;
+                self.run(
+                    Entry::Reduce,
+                    *pass2,
+                    &[
+                        Arg::DevicePtr(out_buffer),
+                        Arg::DevicePtr(partials_buffer),
+                        Arg::U32(dtype.tag() as u32),
+                        Arg::I32(combine_op.tag()),
+                        Arg::I32(combine_strategy.tag()),
+                        layout_arg(&out_layout),
+                        layout_arg(&partials_layout),
+                        Arg::I32(axis as i32),
+                        Arg::U64(output_len as u64),
+                    ],
+                )?;
+                let _ = partials_len;
+            }
+        }
+        Ok(plan)
     }
 }
