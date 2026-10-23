@@ -179,7 +179,7 @@ fn a_diagonal_extract_and_embed_round_trip() {
     assert_eq!(embedded.shape(), &[3, 3]);
     let back = download_tensor(engine.runtime(), &embedded).expect("download");
     let observed = back.as_slice::<f64>().expect("f64 payload");
-    let mut expected = vec![0.0f64; 9];
+    let mut expected = [0.0f64; 9];
     for (index, value) in [1.0, 5.0, 9.0].iter().enumerate() {
         expected[index + index * 3] = *value;
     }
@@ -200,7 +200,7 @@ fn the_triangular_masks_match_the_host() {
     let lower = engine.tril(&source, 0).expect("tril");
     let back = download_tensor(engine.runtime(), &lower).expect("download");
     let observed = back.as_slice::<f64>().expect("f64 payload");
-    let mut expected = vec![0.0f64; 12];
+    let mut expected = [0.0f64; 12];
     for column in 0..4 {
         for row in 0..3 {
             if row >= column {
@@ -213,7 +213,7 @@ fn the_triangular_masks_match_the_host() {
     let upper = engine.triu(&source, 0).expect("triu");
     let back = download_tensor(engine.runtime(), &upper).expect("download");
     let observed = back.as_slice::<f64>().expect("f64 payload");
-    let mut expected = vec![0.0f64; 12];
+    let mut expected = [0.0f64; 12];
     for column in 0..4 {
         for row in 0..3 {
             if row <= column {
@@ -225,4 +225,74 @@ fn the_triangular_masks_match_the_host() {
     // A rank-1 tensor has no triangular mask.
     let vector = device(&engine, values(4));
     assert!(engine.tril(&vector, 0).is_err());
+}
+
+#[test]
+fn the_reductions_match_the_host() {
+    use tenferro_tensor::TensorReduction as _;
+
+    let Some(mut engine) = engine() else { return };
+    // A 3x4 column-major matrix with distinct positive entries.
+    let data: Vec<f64> = (1..=12).map(|value| value as f64 * 0.5).collect();
+    let source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![3, 4], data.clone()).expect("matrix"),
+    )
+    .expect("upload");
+
+    // Summing axis 1 leaves one value per row.
+    let summed = engine
+        .reduce_sum_read(TensorRead::from_tensor(&source), &[1])
+        .expect("sum");
+    assert_eq!(summed.shape(), &[3]);
+    let back = download_tensor(engine.runtime(), &summed).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = (0..3)
+        .map(|row| (0..4).map(|column| data[row + column * 3]).sum())
+        .collect();
+    assert_eq!(observed, &expected[..]);
+
+    // Summing both axes reduces to a scalar.
+    let total = engine
+        .reduce_sum_read(TensorRead::from_tensor(&source), &[0, 1])
+        .expect("total");
+    assert_eq!(total.shape(), &[] as &[usize]);
+    let back = download_tensor(engine.runtime(), &total).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: f64 = data.iter().sum();
+    assert!((observed[0] - expected).abs() < 1e-12);
+
+    // Max over axis 0, and sum of squares over axis 1.
+    let maximum = engine
+        .reduce_max_read(TensorRead::from_tensor(&source), &[0])
+        .expect("max");
+    let back = download_tensor(engine.runtime(), &maximum).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = (0..4)
+        .map(|column| {
+            data[column * 3..column * 3 + 3]
+                .iter()
+                .fold(f64::MIN, |a, b| a.max(*b))
+        })
+        .collect();
+    assert_eq!(observed, &expected[..]);
+
+    let squares = engine
+        .reduce_sum_squares_read(TensorRead::from_tensor(&source), &[1])
+        .expect("squares");
+    let back = download_tensor(engine.runtime(), &squares).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = (0..3)
+        .map(|row| (0..4).map(|column| data[row + column * 3].powi(2)).sum())
+        .collect();
+    assert_eq!(observed, &expected[..]);
+
+    // No axes is the identity copy, and an out-of-range axis is refused.
+    let identity = engine
+        .reduce_sum_read(TensorRead::from_tensor(&source), &[])
+        .expect("identity");
+    assert_eq!(identity.shape(), source.shape());
+    assert!(engine
+        .reduce_min_read(TensorRead::from_tensor(&source), &[7])
+        .is_err());
 }
