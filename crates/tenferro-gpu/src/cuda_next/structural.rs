@@ -42,6 +42,16 @@ macro_rules! with_scalar {
                 type $t = bool;
                 $body
             }
+            DType::I32 => {
+                #[allow(dead_code)]
+                type $t = i32;
+                $body
+            }
+            DType::I64 => {
+                #[allow(dead_code)]
+                type $t = i64;
+                $body
+            }
             other => Err(crate::Error::unsupported(
                 "cuda structural",
                 format!("the structural slice does not serve {other:?}"),
@@ -130,6 +140,8 @@ fn kernel_dtype(dtype: DType, op: &'static str) -> crate::Result<t4a_cuda_kernel
         DType::F32 => t4a_cuda_kernels::DType::F32,
         DType::F64 => t4a_cuda_kernels::DType::F64,
         DType::Bool => t4a_cuda_kernels::DType::Bool,
+        DType::I32 => t4a_cuda_kernels::DType::I32,
+        DType::I64 => t4a_cuda_kernels::DType::I64,
         other => {
             return Err(crate::Error::unsupported(
                 op,
@@ -938,6 +950,74 @@ impl CudaEngine {
     }
 }
 
+impl CudaEngine {
+    /// Remainder of two same-shaped device tensors.
+    ///
+    /// Floats use the plain remainder entry; integers use the checked one, whose
+    /// divide-by-zero flag is read back and reported rather than silently producing a zero.
+    fn remainder(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        name: &'static str,
+    ) -> crate::Result<Tensor> {
+        let left = self.device_read(lhs, name)?;
+        let right = self.device_read(rhs, name)?;
+        if left.shape() != right.shape() || left.dtype() != right.dtype() {
+            return Err(crate::Error::unsupported(
+                name,
+                "both operands must share a shape and a dtype on this path",
+            ));
+        }
+        let dtype = left.dtype();
+        let kernel = kernel_dtype(dtype, name)?;
+        let op = match dtype {
+            DType::F32 | DType::F64 => t4a_cuda_kernels::BinaryOp::Rem,
+            DType::I32 | DType::I64 => t4a_cuda_kernels::BinaryOp::RemChecked,
+            other => {
+                return Err(crate::Error::unsupported(
+                    name,
+                    format!("the remainder is not defined for {other:?}"),
+                ))
+            }
+        };
+        let shape = left.shape().to_vec();
+        let len = count_i64(&shape, name)?;
+        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Binary])?;
+        let status = runtime
+            .upload_bytes(&[0u8; 4])
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        with_scalar!(dtype, |T| {
+            dispatcher.binary(
+                op,
+                kernel,
+                t4a_cuda_kernels::ScalarSide::Both,
+                len,
+                self.allocation_of::<T>(&output, name)?,
+                self.allocation_of::<T>(left, name)?,
+                self.allocation_of::<T>(right, name)?,
+                &status,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        let flag = self
+            .runtime()
+            .download_bytes(&status)
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        if flag.iter().any(|byte| *byte != 0) {
+            return Err(crate::Error::unsupported(
+                name,
+                "the checked remainder reported a division by zero",
+            ));
+        }
+        Ok(output)
+    }
+}
+
 impl tenferro_tensor::TensorElementwise for CudaEngine {
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.elementwise_binary(lhs, rhs, Elementwise::Add, "add_read")
@@ -1123,27 +1203,120 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
 
     fn elementwise_read_into(
         &mut self,
-        _op: tenferro_tensor::ElementwiseReadOp,
-        _inputs: &[TensorRead<'_>],
-        _out: TensorWrite<'_>,
+        op: tenferro_tensor::ElementwiseReadOp,
+        inputs: &[TensorRead<'_>],
+        out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        Err(crate::Error::unsupported(
-            "elementwise_read_into",
-            "the session-shaped read-into route is not on this path yet",
-        ))
+        let name = "elementwise_read_into";
+        let destination = match out {
+            TensorWrite::Tensor(tensor) => tensor,
+            TensorWrite::View(_) => {
+                return Err(crate::Error::unsupported(
+                    name,
+                    "a borrowed view destination is not served by the structural slice",
+                ))
+            }
+        };
+        if is_host(destination) {
+            return Err(crate::Error::unsupported(
+                name,
+                "a host destination would need an implicit transfer",
+            ));
+        }
+        let dtype = destination.dtype();
+        let kernel = kernel_dtype(dtype, name)?;
+        let shape = destination.shape().to_vec();
+        let len = count_i64(&shape, name)?;
+        // Each shape carries the operands it needs: one for the unary forms, two for the
+        // binary ones.
+        let unary = matches!(
+            op,
+            tenferro_tensor::ElementwiseReadOp::Negate | tenferro_tensor::ElementwiseReadOp::Conj
+        );
+        let expected = if unary { 1 } else { 2 };
+        if inputs.len() != expected {
+            return Err(crate::Error::unsupported(
+                name,
+                format!(
+                    "this operation takes {expected} operand(s), got {}",
+                    inputs.len()
+                ),
+            ));
+        }
+        let sources: Vec<&Tensor> = inputs
+            .iter()
+            .map(|input| self.device_read(input.clone(), name))
+            .collect::<crate::Result<_>>()?;
+        for source in &sources {
+            if source.shape() != shape.as_slice() || source.dtype() != dtype {
+                return Err(crate::Error::unsupported(
+                    name,
+                    "every operand must share the destination's shape and dtype on this path",
+                ));
+            }
+        }
+        let runtime = self.runtime().clone();
+        match op {
+            tenferro_tensor::ElementwiseReadOp::Negate => {
+                let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Unary])?;
+                with_scalar!(dtype, |T| {
+                    dispatcher.unary(
+                        t4a_cuda_kernels::UnaryOp::Neg,
+                        kernel,
+                        kernel,
+                        len,
+                        self.allocation_of::<T>(destination, name)?,
+                        self.allocation_of::<T>(sources[0], name)?,
+                    )
+                })?;
+            }
+            tenferro_tensor::ElementwiseReadOp::Conj => {
+                let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Unary])?;
+                with_scalar!(dtype, |T| {
+                    dispatcher.unary(
+                        t4a_cuda_kernels::UnaryOp::Conj,
+                        kernel,
+                        kernel,
+                        len,
+                        self.allocation_of::<T>(destination, name)?,
+                        self.allocation_of::<T>(sources[0], name)?,
+                    )
+                })?;
+            }
+            binary => {
+                let entry = match binary {
+                    tenferro_tensor::ElementwiseReadOp::Add => Entry::Add,
+                    tenferro_tensor::ElementwiseReadOp::Subtract => Entry::Sub,
+                    tenferro_tensor::ElementwiseReadOp::Multiply => Entry::Mul,
+                    _ => Entry::Div,
+                };
+                let mut dispatcher = Dispatcher::for_entries(&runtime, &[entry])?;
+                with_scalar!(dtype, |T| {
+                    dispatcher.arithmetic(
+                        entry,
+                        kernel,
+                        len,
+                        self.allocation_of::<T>(destination, name)?,
+                        self.allocation_of::<T>(sources[0], name)?,
+                        self.allocation_of::<T>(sources[1], name)?,
+                    )
+                })?;
+            }
+        }
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(name, error))
     }
 
-    fn rem(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        Err(crate::Error::unsupported(
+    fn rem(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        self.remainder(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
             "rem",
-            "the checked-remainder route carries a status word and is not on this path yet",
-        ))
+        )
     }
 
-    fn rem_read(&mut self, _lhs: TensorRead<'_>, _rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        Err(crate::Error::unsupported(
-            "rem_read",
-            "the checked-remainder route carries a status word and is not on this path yet",
-        ))
+    fn rem_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.remainder(lhs, rhs, "rem_read")
     }
 }
