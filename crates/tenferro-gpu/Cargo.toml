@@ -84,7 +84,7 @@ cubek-fft = { workspace = true, optional = true }
 t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "0a101bf19207e0abb2ea169721f63f50af8669b0", optional = true }
 # The kernel catalogue and its NVRTC sources (ABI revision 10).
 t4a-cuda-kernels = { git = "https://github.com/tensor4all/t4a-cuda-kernels", rev = "5019c713c14c1f5d59ea2cf03bbfff08c40f167e", optional = true }
-cudarc = { workspace = true, optional = true, features = ["cublas"] }
+cudarc = { workspace = true, optional = true, features = ["cublas", "cutensor"] }
 libloading.workspace = true
 lru = { workspace = true, optional = true }
 num-complex.workspace = true
@@ -234,4 +234,9 @@ required-features = ["cuda-next"]
 [[test]]
 name = "seam_vendor"
 path = "tests/seam_vendor.rs"
+required-features = ["cuda-next"]
+
+[[test]]
+name = "seam_contraction"
+path = "tests/seam_contraction.rs"
 required-features = ["cuda-next"]

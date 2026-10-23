@@ -207,9 +207,9 @@ fn transpose(transposed: bool) -> cublas::cublasOperation_t {
 /// A `double2`-shaped coefficient with CUDA's 16-byte alignment (never a
 /// `num_complex` value, whose alignment is 8).
 #[repr(C, align(16))]
-struct Complex128Coefficient {
-    re: f64,
-    im: f64,
+pub(crate) struct ComplexCoefficient {
+    pub(crate) re: f64,
+    pub(crate) im: f64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -232,8 +232,8 @@ fn gemm_single(
     let beta = 0.0f64;
     let alpha32 = 1.0f32;
     let beta32 = 0.0f32;
-    let complex = Complex128Coefficient { re: 1.0, im: 0.0 };
-    let complex_zero = Complex128Coefficient { re: 0.0, im: 0.0 };
+    let complex = ComplexCoefficient { re: 1.0, im: 0.0 };
+    let complex_zero = ComplexCoefficient { re: 0.0, im: 0.0 };
     // SAFETY: the pointers were validated by the caller's scope; the coefficients are
     // live stack values in host pointer mode.
     unsafe {
@@ -277,12 +277,12 @@ fn gemm_single(
                 m,
                 n,
                 k,
-                (&complex as *const Complex128Coefficient).cast(),
+                (&complex as *const ComplexCoefficient).cast(),
                 a.cast(),
                 lda,
                 b.cast(),
                 ldb,
-                (&complex_zero as *const Complex128Coefficient).cast(),
+                (&complex_zero as *const ComplexCoefficient).cast(),
                 c.cast(),
                 ldc,
             ),
@@ -293,12 +293,12 @@ fn gemm_single(
                 m,
                 n,
                 k,
-                (&complex as *const Complex128Coefficient).cast(),
+                (&complex as *const ComplexCoefficient).cast(),
                 a.cast(),
                 lda,
                 b.cast(),
                 ldb,
-                (&complex_zero as *const Complex128Coefficient).cast(),
+                (&complex_zero as *const ComplexCoefficient).cast(),
                 c.cast(),
                 ldc,
             ),
@@ -334,8 +334,8 @@ fn gemm_batched(
     let beta = 0.0f64;
     let alpha32 = 1.0f32;
     let beta32 = 0.0f32;
-    let complex = Complex128Coefficient { re: 1.0, im: 0.0 };
-    let complex_zero = Complex128Coefficient { re: 0.0, im: 0.0 };
+    let complex = ComplexCoefficient { re: 1.0, im: 0.0 };
+    let complex_zero = ComplexCoefficient { re: 0.0, im: 0.0 };
     // SAFETY: as `gemm_single`, with the caller's batch strides.
     unsafe {
         match dtype {
@@ -386,14 +386,14 @@ fn gemm_batched(
                 m,
                 n,
                 k,
-                (&complex as *const Complex128Coefficient).cast(),
+                (&complex as *const ComplexCoefficient).cast(),
                 a.cast(),
                 lda,
                 stride_a,
                 b.cast(),
                 ldb,
                 stride_b,
-                (&complex_zero as *const Complex128Coefficient).cast(),
+                (&complex_zero as *const ComplexCoefficient).cast(),
                 c.cast(),
                 ldc,
                 stride_c,
@@ -406,14 +406,14 @@ fn gemm_batched(
                 m,
                 n,
                 k,
-                (&complex as *const Complex128Coefficient).cast(),
+                (&complex as *const ComplexCoefficient).cast(),
                 a.cast(),
                 lda,
                 stride_a,
                 b.cast(),
                 ldb,
                 stride_b,
-                (&complex_zero as *const Complex128Coefficient).cast(),
+                (&complex_zero as *const ComplexCoefficient).cast(),
                 c.cast(),
                 ldc,
                 stride_c,

@@ -33,6 +33,7 @@ pub fn gpu_available() -> bool {
 /// The seam this adapter implements.
 pub use crate::gpu;
 
+mod cutensor;
 mod dispatch;
 mod engine;
 mod fusion;
@@ -43,8 +44,9 @@ mod publication;
 mod runtime;
 mod storage;
 mod transfer;
-mod vendor;
+pub(crate) mod vendor;
 
+pub use cutensor::{Contraction, Cutensor, Operand};
 pub use dispatch::Dispatcher;
 pub use engine::{CudaEngine, CudaEngineError};
 pub use fusion::{PrepareCounters, PreparedFusion};
