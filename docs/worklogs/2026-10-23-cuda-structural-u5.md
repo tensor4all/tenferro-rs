@@ -160,7 +160,28 @@ refuses a non-boolean predicate.
 The remaining elementwise pieces are `rem`/`rem_read` (the checked integer remainder carries a
 status word and needs a read-back) and `elementwise_read_into` (session-shaped).
 
+## Seventh slice (this change): the last elementwise pieces
+
+- `rem`/`rem_read` — floats use the plain `Rem` entry; integers use `RemChecked`, whose
+  divide-by-zero flag is a device word that is read back and reported as a typed error rather
+  than silently producing a zero. Complex remainder is refused (it is not defined).
+- `elementwise_read_into` — the session-shaped route, for the six operations the enum names:
+  `Add`/`Subtract`/`Multiply` through the arithmetic entries, `Divide` through `t4a_cuda_div`,
+  `Negate`/`Conj` through `t4a_cuda_unary`. It writes straight into the caller's allocation,
+  so no intermediate tensor is created.
+- The scalar macro and the dtype mapping now also carry `I32`/`I64`, which the integer
+  remainder needs.
+
+Evidence: `remainder_and_read_into_match_the_host` on the A100 covers the floating remainder,
+the integer remainder (`[7,-7,7,7] % [2,2,-2,3] = [1,-1,1,1]`), the checked divide-by-zero
+refusal, reading into an existing allocation for both `Add` and `Negate`, and the
+operand-count refusal.
+
+With this, every `TensorElementwise` method is implemented on the new path. One limitation is
+recorded: `elementwise_read_into` requires every operand to share the destination's shape, so
+the scalar-operand forms are refused rather than broadcast.
+
 ## Next slices of U5
 
-`rem`/`rem_read`, `elementwise_read_into`, `TensorIndexing`, `TensorDot`, and the
-`ExecutionEngine` session wiring that eager/traced/AD drive.
+`TensorIndexing` (needs the windowing family — `slice`, `dynamic_slice`, `pad` — that U2 left
+out), `TensorDot`, and the `ExecutionEngine` session wiring that eager/traced/AD drive.

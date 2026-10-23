@@ -508,3 +508,110 @@ fn compare_and_select_round_trip_through_a_boolean_tensor() {
         )
         .is_err());
 }
+
+#[test]
+fn remainder_and_read_into_match_the_host() {
+    use tenferro_tensor::{ElementwiseReadOp, TensorElementwise as _};
+
+    let Some(mut engine) = engine() else { return };
+
+    // Floating remainder through the plain entry.
+    let lhs_data: Vec<f64> = (0..8).map(|index| index as f64 * 1.25).collect();
+    let rhs_data: Vec<f64> = (0..8)
+        .map(|index| 0.5 + (index % 3) as f64 * 0.25)
+        .collect();
+    let lhs = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![8], lhs_data.clone()).expect("lhs"),
+    )
+    .expect("upload");
+    let rhs = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![8], rhs_data.clone()).expect("rhs"),
+    )
+    .expect("upload");
+    let remainder = engine
+        .rem_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        .expect("rem");
+    let back = download_tensor(engine.runtime(), &remainder).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = lhs_data
+        .iter()
+        .zip(rhs_data.iter())
+        .map(|(left, right)| left - (left / right).trunc() * right)
+        .collect();
+    for (value, reference) in observed.iter().zip(expected.iter()) {
+        assert!((value - reference).abs() < 1e-12, "{value} vs {reference}");
+    }
+
+    // Integer remainder, including the checked divide-by-zero flag.
+    let ints = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![4], vec![7i32, -7, 7, 7]).expect("ints"),
+    )
+    .expect("upload");
+    let divisors = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![4], vec![2i32, 2, -2, 0]).expect("divisors"),
+    )
+    .expect("upload");
+    // A zero divisor makes the whole call a typed error.
+    assert!(engine
+        .rem_read(
+            TensorRead::from_tensor(&ints),
+            TensorRead::from_tensor(&divisors)
+        )
+        .is_err());
+
+    let safe_divisors = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![4], vec![2i32, 2, -2, 3]).expect("safe"),
+    )
+    .expect("upload");
+    let integer_remainder = engine
+        .rem_read(
+            TensorRead::from_tensor(&ints),
+            TensorRead::from_tensor(&safe_divisors),
+        )
+        .expect("integer rem");
+    let back = download_tensor(engine.runtime(), &integer_remainder).expect("download");
+    assert_eq!(back.as_slice::<i32>().expect("i32 payload"), &[1, -1, 1, 1]);
+
+    // The read-into route writes straight into the caller's allocation.
+    let mut destination = device(&engine, vec![0.0f64; 8]);
+    engine
+        .elementwise_read_into(
+            ElementwiseReadOp::Add,
+            &[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+            TensorWrite::from_tensor(&mut destination),
+        )
+        .expect("read into");
+    let back = download_tensor(engine.runtime(), &destination).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = lhs_data
+        .iter()
+        .zip(rhs_data.iter())
+        .map(|(left, right)| left + right)
+        .collect();
+    assert_eq!(observed, &expected[..]);
+
+    // Negation through the same route, and the operand-count refusal.
+    engine
+        .elementwise_read_into(
+            ElementwiseReadOp::Negate,
+            &[TensorRead::from_tensor(&lhs)],
+            TensorWrite::from_tensor(&mut destination),
+        )
+        .expect("negate into");
+    let back = download_tensor(engine.runtime(), &destination).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = lhs_data.iter().map(|value| -value).collect();
+    assert_eq!(observed, &expected[..]);
+    assert!(engine
+        .elementwise_read_into(
+            ElementwiseReadOp::Add,
+            &[TensorRead::from_tensor(&lhs)],
+            TensorWrite::from_tensor(&mut destination),
+        )
+        .is_err());
+}
