@@ -662,3 +662,133 @@ fn count_i64(shape: &[usize], op: &'static str) -> crate::Result<i64> {
 #[cfg(test)]
 #[path = "structural/tests.rs"]
 mod tests;
+
+/// One `TensorReduction` request: the axes and the kernel operation.
+fn reduction_op(op: ReduceOp) -> t4a_cuda_kernels::ReduceOp {
+    match op {
+        ReduceOp::Sum => t4a_cuda_kernels::ReduceOp::Sum,
+        ReduceOp::Prod => t4a_cuda_kernels::ReduceOp::Prod,
+        ReduceOp::Max => t4a_cuda_kernels::ReduceOp::Max,
+        ReduceOp::Min => t4a_cuda_kernels::ReduceOp::Min,
+        ReduceOp::SumSquares => t4a_cuda_kernels::ReduceOp::SumSquares,
+    }
+}
+
+/// The reduction family the tensor layer asks for.
+#[derive(Clone, Copy)]
+enum ReduceOp {
+    Sum,
+    Prod,
+    Max,
+    Min,
+    SumSquares,
+}
+
+impl CudaEngine {
+    /// Reduce `axes` one axis at a time, largest axis first so the indices stay valid.
+    fn reduce_axes(
+        &mut self,
+        input: TensorRead<'_>,
+        axes: &[usize],
+        op: ReduceOp,
+        name: &'static str,
+    ) -> crate::Result<Tensor> {
+        let source = self.device_read(input, name)?;
+        let dtype = source.dtype();
+        let kernel = kernel_dtype(dtype, name)?;
+        let kernel_op = reduction_op(op);
+        let mut shape = source.shape().to_vec();
+        let mut ordered: Vec<usize> = axes.to_vec();
+        ordered.sort_unstable();
+        ordered.dedup();
+        if let Some(&axis) = ordered.iter().find(|&&axis| axis >= shape.len()) {
+            return Err(crate::Error::unsupported(
+                name,
+                format!("axis {axis} is outside the tensor's rank {}", shape.len()),
+            ));
+        }
+        if ordered.is_empty() {
+            let shape = source.shape().to_vec();
+            return self.copy_to_fresh(source, shape, name);
+        }
+        // The first pass reads the caller's tensor; later passes read the previous result.
+        let mut owned: Option<Tensor> = None;
+        let width = 32u32;
+        // The reduction kernel is keepdims: the destination has the input's rank with an
+        // extent of one on the reduced axis, so the unit axes are squeezed off at the end.
+        for &axis in ordered.iter().rev() {
+            let out_shape: Vec<usize> = {
+                let mut next = shape.clone();
+                next[axis] = 1;
+                next
+            };
+            let out_layout = compact_layout(&out_shape, &compact_strides(&out_shape), name)?;
+            let in_layout = compact_layout(&shape, &compact_strides(&shape), name)?;
+            let out_len = count_i64(&out_shape, name)?;
+            let in_len = count_i64(&shape, name)?;
+            let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
+            // Partials hold `splits * out_len` at most; the crate's cap is the input length.
+            let partials = alloc_tensor(self.runtime(), dtype, &[in_len as usize])?;
+            let source_tensor = owned.as_ref().unwrap_or(source);
+            let runtime = self.runtime().clone();
+            let mut dispatcher =
+                Dispatcher::for_entries(&runtime, &[Entry::Reduce, Entry::ReducePartials])?;
+            with_scalar!(dtype, |T| {
+                dispatcher.reduce_auto(
+                    kernel,
+                    kernel_op,
+                    &out_layout,
+                    out_len,
+                    &in_layout,
+                    in_len,
+                    axis as u32,
+                    width,
+                    self.allocation_of::<T>(&output, name)?,
+                    self.allocation_of::<T>(source_tensor, name)?,
+                    self.allocation_of::<T>(&partials, name)?,
+                )
+            })?;
+            self.runtime()
+                .synchronize()
+                .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+            drop(partials);
+            shape = out_shape;
+            owned = Some(output);
+        }
+        let intermediate = owned.expect("at least one axis was reduced");
+        let squeezed: Vec<usize> = (0..intermediate.shape().len())
+            .filter(|axis| !ordered.contains(axis))
+            .map(|axis| intermediate.shape()[axis])
+            .collect();
+        if squeezed == intermediate.shape() {
+            return Ok(intermediate);
+        }
+        self.copy_to_fresh(&intermediate, squeezed, name)
+    }
+}
+
+impl tenferro_tensor::TensorReduction for CudaEngine {
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.reduce_axes(input, axes, ReduceOp::Sum, "reduce_sum_read")
+    }
+
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.reduce_axes(input, axes, ReduceOp::Prod, "reduce_prod_read")
+    }
+
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.reduce_axes(input, axes, ReduceOp::Max, "reduce_max_read")
+    }
+
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        self.reduce_axes(input, axes, ReduceOp::Min, "reduce_min_read")
+    }
+
+    fn reduce_sum_squares_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axes: &[usize],
+    ) -> crate::Result<Tensor> {
+        self.reduce_axes(input, axes, ReduceOp::SumSquares, "reduce_sum_squares_read")
+    }
+}

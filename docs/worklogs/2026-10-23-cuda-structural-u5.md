@@ -97,7 +97,27 @@ Evidence, same host-reference style on the A100:
 With this, every `TensorStructural` method is implemented on the new path for F32/F64; the
 only remaining refusals are outside that dtype scope and for borrowed views.
 
+## Fourth slice (this change): the reduction family
+
+`TensorReduction` is implemented for all five operations (`sum`, `prod`, `max`, `min`,
+`sum_squares`), served by the U4 reduction dispatcher:
+
+- Axes are deduplicated and sorted, then reduced **one axis at a time, largest first**, so
+  each pass sees the shape the previous one produced.
+- The reduction kernel is **keepdims**: the destination has the input's rank with extent one
+  on the reduced axis. The unit axes are therefore squeezed off by a final compact copy,
+  which is the only extra work a multi-axis reduction pays.
+- No axes is the identity copy; an axis outside the rank is a typed refusal.
+- The strategy (unit/plane/split) is the crate's own policy — `reduce_auto` — so a split
+  reduction's two passes run on the runtime's stream in order.
+- The partials workspace is one allocation of the input's element count, which is the
+  crate's own cap, shared by every pass.
+
+Evidence: `the_reductions_match_the_host` on the A100 — axis-1 sum of a 3x4 matrix, a
+two-axis sum to a scalar, axis-0 max, axis-1 sum of squares, the no-axes identity, and an
+out-of-range axis refused.
+
 ## Next slices of U5
 
-`TensorElementwise`, `TensorReduction`, `TensorIndexing`, `TensorDot`, and the
-`ExecutionEngine` session wiring that eager/traced/AD drive.
+`TensorElementwise`, `TensorIndexing`, `TensorDot`, and the `ExecutionEngine` session wiring
+that eager/traced/AD drive.
