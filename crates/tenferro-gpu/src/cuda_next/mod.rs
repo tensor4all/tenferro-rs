@@ -35,6 +35,7 @@ pub use crate::gpu;
 
 mod dispatch;
 mod engine;
+mod fusion;
 mod launch;
 mod pending;
 mod pinned;
@@ -45,6 +46,7 @@ mod transfer;
 
 pub use dispatch::Dispatcher;
 pub use engine::{CudaEngine, CudaEngineError};
+pub use fusion::{PrepareCounters, PreparedFusion};
 pub use launch::{device_buffer, layout_arg, KernelModules};
 pub use pending::{PendingDownload, PendingUpload, RejectedTransfer, TransferSubmitError};
 pub use pinned::PinnedHostBuffer;
