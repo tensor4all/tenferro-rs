@@ -33,6 +33,7 @@ pub fn gpu_available() -> bool {
 /// The seam this adapter implements.
 pub use crate::gpu;
 
+mod dispatch;
 mod engine;
 mod launch;
 mod pending;
@@ -42,6 +43,7 @@ mod runtime;
 mod storage;
 mod transfer;
 
+pub use dispatch::Dispatcher;
 pub use engine::{CudaEngine, CudaEngineError};
 pub use launch::{device_buffer, layout_arg, KernelModules};
 pub use pending::{PendingDownload, PendingUpload, RejectedTransfer, TransferSubmitError};

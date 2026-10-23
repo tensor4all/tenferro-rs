@@ -279,6 +279,24 @@ impl CudaRuntime {
         }
     }
 
+    /// Read a runtime allocation back into a byte vector.
+    ///
+    /// # Errors
+    ///
+    /// [`cuda::CudaDeviceError::Initialization`] when the copy cannot be admitted or
+    /// completed.
+    ///
+    /// [`cuda::CudaDeviceError::Initialization`]: crate::cuda::CudaDeviceError::Initialization
+    pub fn download_bytes(&self, buffer: &t4a_cuda_runtime::Buffer) -> crate::Result<Vec<u8>> {
+        let mut guard = self.submit();
+        let mut pending = guard
+            .download(buffer)
+            .map_err(|error| crate::Error::runtime_state_source("cuda download", error))?;
+        pending
+            .wait()
+            .map_err(|error| crate::Error::runtime_state_source("cuda download", error))
+    }
+
     /// Admit one raw host-to-device upload and return its allocation.
     ///
     /// This is the seam's own upload path, used by callers that already hold bytes (the

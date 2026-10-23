@@ -56,6 +56,51 @@ impl KernelModules {
         })
     }
 
+    /// Prepare only the modules `entries` need.
+    ///
+    /// The eager [`KernelModules::new`] compiles every translation unit; this compiles the
+    /// distinct modules that export `entries`, which is what a dispatch path wants.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Unsupported`] when an entry has no translation unit,
+    /// [`crate::Error::RuntimeStateSource`] when NVRTC rejects a module, and
+    /// [`crate::Error::RuntimeState`] when the runtime cannot prepare its artifact.
+    pub fn for_entries(runtime: &CudaRuntime, entries: &[Entry]) -> crate::Result<KernelModules> {
+        let mut needed: Vec<&'static str> = Vec::new();
+        for entry in entries {
+            let module = module_of(*entry).ok_or_else(|| {
+                crate::Error::unsupported("cuda prepare", "the entry has no translation unit")
+            })?;
+            if !needed.contains(&module.name) {
+                needed.push(module.name);
+            }
+        }
+        let capability = runtime.device_info().compute_capability();
+        let arch = format!("sm_{}{}", capability.major, capability.minor);
+        let mut artifacts = HashMap::with_capacity(needed.len());
+        {
+            let mut guard = runtime.submit();
+            for module in MODULES
+                .iter()
+                .filter(|module| needed.contains(&module.name))
+            {
+                let mut request = CompileRequest::new(module.name, compose(module));
+                request.output = OutputKind::Cubin;
+                request.arch = Some(arch.clone());
+                let artifact = guard
+                    .compile(&request)
+                    .map_err(|error| crate::Error::runtime_state_source("cuda prepare", error))?;
+                artifacts.insert(module.name, artifact);
+            }
+        }
+        Ok(KernelModules {
+            runtime: runtime.clone(),
+            artifacts,
+            functions: HashMap::new(),
+        })
+    }
+
     /// Number of prepared modules.
     pub fn modules(&self) -> usize {
         self.artifacts.len()
