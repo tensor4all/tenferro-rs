@@ -792,3 +792,277 @@ impl tenferro_tensor::TensorReduction for CudaEngine {
         self.reduce_axes(input, axes, ReduceOp::SumSquares, "reduce_sum_squares_read")
     }
 }
+
+/// The elementwise family the tensor layer asks for.
+#[derive(Clone, Copy)]
+enum Elementwise {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl CudaEngine {
+    /// One same-shape binary elementwise operation over two device tensors.
+    fn elementwise_binary(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        op: Elementwise,
+        name: &'static str,
+    ) -> crate::Result<Tensor> {
+        let left = self.device_read(lhs, name)?;
+        let right = self.device_read(rhs, name)?;
+        if left.shape() != right.shape() {
+            return Err(crate::Error::unsupported(
+                name,
+                "both operands must share a shape on this path",
+            ));
+        }
+        let dtype = left.dtype();
+        if right.dtype() != dtype {
+            return Err(crate::Error::unsupported(
+                name,
+                "both operands must share a dtype on this path",
+            ));
+        }
+        let kernel = kernel_dtype(dtype, name)?;
+        let shape = left.shape().to_vec();
+        let len = count_i64(&shape, name)?;
+        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        let runtime = self.runtime().clone();
+        let entry = match op {
+            Elementwise::Add => Entry::Add,
+            Elementwise::Sub => Entry::Sub,
+            Elementwise::Mul => Entry::Mul,
+            Elementwise::Div => Entry::Div,
+        };
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[entry])?;
+        with_scalar!(dtype, |T| {
+            dispatcher.arithmetic(
+                entry,
+                kernel,
+                len,
+                self.allocation_of::<T>(&output, name)?,
+                self.allocation_of::<T>(left, name)?,
+                self.allocation_of::<T>(right, name)?,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        Ok(output)
+    }
+
+    /// One unary elementwise operation over a device tensor.
+    fn elementwise_unary(
+        &mut self,
+        input: TensorRead<'_>,
+        op: t4a_cuda_kernels::UnaryOp,
+        name: &'static str,
+    ) -> crate::Result<Tensor> {
+        let source = self.device_read(input, name)?;
+        let dtype = source.dtype();
+        let kernel = kernel_dtype(dtype, name)?;
+        let shape = source.shape().to_vec();
+        let len = count_i64(&shape, name)?;
+        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Unary])?;
+        with_scalar!(dtype, |T| {
+            dispatcher.unary(
+                op,
+                kernel,
+                kernel,
+                len,
+                self.allocation_of::<T>(&output, name)?,
+                self.allocation_of::<T>(source, name)?,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        Ok(output)
+    }
+
+    /// One binary selection (`maximum`/`minimum`) over two device tensors.
+    fn elementwise_extreme(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        op: t4a_cuda_kernels::BinaryOp,
+        name: &'static str,
+    ) -> crate::Result<Tensor> {
+        let left = self.device_read(lhs, name)?;
+        let right = self.device_read(rhs, name)?;
+        if left.shape() != right.shape() || left.dtype() != right.dtype() {
+            return Err(crate::Error::unsupported(
+                name,
+                "both operands must share a shape and a dtype on this path",
+            ));
+        }
+        let dtype = left.dtype();
+        let kernel = kernel_dtype(dtype, name)?;
+        let shape = left.shape().to_vec();
+        let len = count_i64(&shape, name)?;
+        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Binary])?;
+        // The entry always takes a status word for its checked-integer route; a
+        // comparison of two full buffers never sets it.
+        let status = runtime
+            .upload_bytes(&[0u8; 4])
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        with_scalar!(dtype, |T| {
+            dispatcher.binary(
+                op,
+                kernel,
+                t4a_cuda_kernels::ScalarSide::Both,
+                len,
+                self.allocation_of::<T>(&output, name)?,
+                self.allocation_of::<T>(left, name)?,
+                self.allocation_of::<T>(right, name)?,
+                &status,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        Ok(output)
+    }
+}
+
+impl tenferro_tensor::TensorElementwise for CudaEngine {
+    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_binary(lhs, rhs, Elementwise::Add, "add_read")
+    }
+
+    fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_binary(lhs, rhs, Elementwise::Sub, "sub_read")
+    }
+
+    fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_binary(lhs, rhs, Elementwise::Mul, "mul_read")
+    }
+
+    fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_binary(lhs, rhs, Elementwise::Div, "div_read")
+    }
+
+    fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Neg, "neg_read")
+    }
+
+    fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Conj, "conj_read")
+    }
+
+    fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Abs, "abs_read")
+    }
+
+    fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Sign, "sign_read")
+    }
+
+    fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_extreme(lhs, rhs, t4a_cuda_kernels::BinaryOp::Max, "maximum_read")
+    }
+
+    fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_extreme(lhs, rhs, t4a_cuda_kernels::BinaryOp::Min, "minimum_read")
+    }
+
+    fn clamp_read(
+        &mut self,
+        input: TensorRead<'_>,
+        lower: TensorRead<'_>,
+        upper: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        let name = "clamp_read";
+        let source = self.device_read(input, name)?;
+        let low = self.device_read(lower, name)?;
+        let high = self.device_read(upper, name)?;
+        if source.shape() != low.shape()
+            || source.shape() != high.shape()
+            || source.dtype() != low.dtype()
+            || source.dtype() != high.dtype()
+        {
+            return Err(crate::Error::unsupported(
+                name,
+                "input and both per-element bounds must share a shape and a dtype",
+            ));
+        }
+        let dtype = source.dtype();
+        let kernel = kernel_dtype(dtype, name)?;
+        let shape = source.shape().to_vec();
+        let len = count_i64(&shape, name)?;
+        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Clamp])?;
+        with_scalar!(dtype, |T| {
+            dispatcher.clamp_buffers(
+                kernel,
+                len,
+                self.allocation_of::<T>(&output, name)?,
+                self.allocation_of::<T>(source, name)?,
+                self.allocation_of::<T>(low, name)?,
+                self.allocation_of::<T>(high, name)?,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        Ok(output)
+    }
+
+    fn compare_read(
+        &mut self,
+        _lhs: TensorRead<'_>,
+        _rhs: TensorRead<'_>,
+        _dir: &tenferro_tensor::CompareDir,
+    ) -> crate::Result<Tensor> {
+        Err(crate::Error::unsupported(
+            "compare_read",
+            "a boolean destination is outside the structural slice's dtype scope",
+        ))
+    }
+
+    fn select_read(
+        &mut self,
+        _pred: TensorRead<'_>,
+        _on_true: TensorRead<'_>,
+        _on_false: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        Err(crate::Error::unsupported(
+            "select_read",
+            "a boolean predicate is outside the structural slice's dtype scope",
+        ))
+    }
+
+    fn elementwise_read_into(
+        &mut self,
+        _op: tenferro_tensor::ElementwiseReadOp,
+        _inputs: &[TensorRead<'_>],
+        _out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        Err(crate::Error::unsupported(
+            "elementwise_read_into",
+            "the session-shaped read-into route is not on this path yet",
+        ))
+    }
+
+    fn rem(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
+        Err(crate::Error::unsupported(
+            "rem",
+            "the checked-remainder route carries a status word and is not on this path yet",
+        ))
+    }
+
+    fn rem_read(&mut self, _lhs: TensorRead<'_>, _rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        Err(crate::Error::unsupported(
+            "rem_read",
+            "the checked-remainder route carries a status word and is not on this path yet",
+        ))
+    }
+}
