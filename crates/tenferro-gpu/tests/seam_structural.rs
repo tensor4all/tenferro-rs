@@ -296,3 +296,143 @@ fn the_reductions_match_the_host() {
         .reduce_min_read(TensorRead::from_tensor(&source), &[7])
         .is_err());
 }
+
+#[test]
+fn the_elementwise_family_matches_the_host() {
+    use tenferro_tensor::TensorElementwise as _;
+
+    let Some(mut engine) = engine() else { return };
+    let lhs_data: Vec<f64> = (0..12).map(|index| index as f64 * 0.5 - 2.0).collect();
+    let rhs_data: Vec<f64> = (0..12).map(|index| (index % 5) as f64 + 0.25).collect();
+    let lhs = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![3, 4], lhs_data.clone()).expect("lhs"),
+    )
+    .expect("upload");
+    let rhs = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![3, 4], rhs_data.clone()).expect("rhs"),
+    )
+    .expect("upload");
+
+    let sum = engine
+        .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        .expect("add");
+    let back = download_tensor(engine.runtime(), &sum).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = lhs_data
+        .iter()
+        .zip(rhs_data.iter())
+        .map(|(left, right)| left + right)
+        .collect();
+    assert_eq!(observed, &expected[..]);
+
+    let product = engine
+        .mul_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        .expect("mul");
+    let back = download_tensor(engine.runtime(), &product).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = lhs_data
+        .iter()
+        .zip(rhs_data.iter())
+        .map(|(left, right)| left * right)
+        .collect();
+    assert_eq!(observed, &expected[..]);
+
+    let quotient = engine
+        .div_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        .expect("div");
+    let back = download_tensor(engine.runtime(), &quotient).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = lhs_data
+        .iter()
+        .zip(rhs_data.iter())
+        .map(|(left, right)| left / right)
+        .collect();
+    assert_eq!(observed, &expected[..]);
+
+    let difference = engine
+        .sub_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        .expect("sub");
+    let back = download_tensor(engine.runtime(), &difference).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = lhs_data
+        .iter()
+        .zip(rhs_data.iter())
+        .map(|(left, right)| left - right)
+        .collect();
+    assert_eq!(observed, &expected[..]);
+
+    // Unary operations: negation, absolute value and the sign.
+    for (op, reference) in [
+        ("neg", (|value: f64| -value) as fn(f64) -> f64),
+        ("abs", f64::abs as fn(f64) -> f64),
+        // The kernel follows the XLA convention: `sign(0) = 0`, not `f64::signum`'s 1.
+        (
+            "sign",
+            (|value: f64| if value == 0.0 { 0.0 } else { value.signum() }) as fn(f64) -> f64,
+        ),
+    ] {
+        let result = match op {
+            "neg" => engine.neg_read(TensorRead::from_tensor(&lhs)),
+            "abs" => engine.abs_read(TensorRead::from_tensor(&lhs)),
+            _ => engine.sign_read(TensorRead::from_tensor(&lhs)),
+        }
+        .expect("unary");
+        let back = download_tensor(engine.runtime(), &result).expect("download");
+        let observed = back.as_slice::<f64>().expect("f64 payload");
+        let expected: Vec<f64> = lhs_data.iter().map(|value| reference(*value)).collect();
+        assert_eq!(observed, &expected[..], "{op}");
+    }
+
+    // Binary extrema and clamp with per-element bounds.
+    let maximum = engine
+        .maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        .expect("maximum");
+    let back = download_tensor(engine.runtime(), &maximum).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = lhs_data
+        .iter()
+        .zip(rhs_data.iter())
+        .map(|(left, right)| left.max(*right))
+        .collect();
+    assert_eq!(observed, &expected[..]);
+
+    let lower = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![3, 4], vec![-0.5f64; 12]).expect("lower"),
+    )
+    .expect("upload");
+    let upper = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![3, 4], vec![1.0f64; 12]).expect("upper"),
+    )
+    .expect("upload");
+    let clamped = engine
+        .clamp_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&lower),
+            TensorRead::from_tensor(&upper),
+        )
+        .expect("clamp");
+    let back = download_tensor(engine.runtime(), &clamped).expect("download");
+    let observed = back.as_slice::<f64>().expect("f64 payload");
+    let expected: Vec<f64> = lhs_data
+        .iter()
+        .map(|value| value.clamp(-0.5, 1.0))
+        .collect();
+    assert_eq!(observed, &expected[..]);
+
+    // Mismatched shapes and the boolean-shaped routes are typed refusals.
+    let narrow = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![4], vec![1.0f64; 4]).expect("narrow"),
+    )
+    .expect("upload");
+    assert!(engine
+        .add_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&narrow)
+        )
+        .is_err());
+}

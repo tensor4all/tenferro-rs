@@ -117,7 +117,34 @@ Evidence: `the_reductions_match_the_host` on the A100 — axis-1 sum of a 3x4 ma
 two-axis sum to a scalar, axis-0 max, axis-1 sum of squares, the no-axes identity, and an
 out-of-range axis refused.
 
+## Fifth slice (this change): the elementwise family
+
+`TensorElementwise` for the eleven operations the arithmetic and unary kernels already
+serve:
+
+- `add`, `sub`, `mul`, `div` — the `t4a_cuda_add`/`sub`/`mul`/`div` entries (division only
+  for F32/F64, which is the ABI's own dtype list for that entry).
+- `neg`, `conj`, `abs`, `sign` — `t4a_cuda_unary` with the matching operation.
+- `maximum`, `minimum` — `t4a_cuda_binary` with `Max`/`Min` and both operands as buffers.
+- `clamp` — `t4a_cuda_clamp` with **per-element** lower and upper operands, which is the ABI's
+  shape (the scalar form is the caller's broadcast).
+- `compare_read`, `select_read` (boolean destinations/predicates), `rem`/`rem_read` (checked
+  remainder carries a status word) and `elementwise_read_into` (session-shaped) answer typed
+  refusals. Those four are the remaining pieces of the family.
+- New dispatcher methods: `arithmetic` (one elementwise entry over three operands) and
+  `clamp_buffers` (four operand buffers).
+- The binary entry always takes a status word for its checked-integer route; a comparison of
+  two full buffers uploads a zeroed one and never reads it back.
+
+Evidence: `the_elementwise_family_matches_the_host` on the A100 covers `add`, `sub`, `mul`,
+`div`, `neg`, `abs`, `sign`, `maximum`, `clamp` with per-element bounds, and the refusal of a
+shape mismatch.
+
+One convention worth recording: the kernel's `sign` is the XLA convention — `sign(0) = 0` —
+while `f64::signum(0)` is 1. The first version of the test used `signum` and caught it.
+
 ## Next slices of U5
 
-`TensorElementwise`, `TensorIndexing`, `TensorDot`, and the `ExecutionEngine` session wiring
-that eager/traced/AD drive.
+`compare_read`/`select_read` (boolean destinations), `rem`/`rem_read`,
+`elementwise_read_into`, `TensorIndexing`, `TensorDot`, and the `ExecutionEngine` session
+wiring that eager/traced/AD drive.
