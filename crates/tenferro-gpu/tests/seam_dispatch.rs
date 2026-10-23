@@ -244,9 +244,7 @@ fn scatter_add_matches_the_host_reference() {
     let out_layout = Layout::compact(&[4]).expect("out layout");
     let index_layout = Layout::compact(&[]).expect("rank-0 index");
     let updates_layout = Layout::compact(&[]).expect("rank-0 updates");
-    let out = runtime
-        .upload_bytes(&f64_bytes(&[1.0; 4]))
-        .expect("out");
+    let out = runtime.upload_bytes(&f64_bytes(&[1.0; 4])).expect("out");
     let first_indices = runtime
         .upload_bytes(&1i32.to_ne_bytes()[..])
         .expect("indices");
