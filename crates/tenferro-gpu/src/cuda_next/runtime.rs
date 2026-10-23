@@ -171,6 +171,25 @@ impl CudaRuntime {
         self.submit().artifact_cache_hits()
     }
 
+    /// Run `closure` inside a raw scope on this runtime's stream, under the submission
+    /// lock.
+    ///
+    /// # Safety
+    ///
+    /// As [`crate::Runtime::with_raw`](t4a_cuda_runtime::Runtime::with_raw): the closure
+    /// must use this runtime's stream, keep its enqueues within the registered resources
+    /// and obey each kernel's or vendor library's contract.
+    pub(crate) unsafe fn with_raw_locked<R>(
+        &self,
+        resources: Vec<t4a_cuda_runtime::RawResource<'_>>,
+        closure: impl FnOnce(t4a_cuda_runtime::RawScope<'_>) -> R,
+    ) -> crate::Result<R> {
+        let mut guard = self.submit();
+        // SAFETY: forwarded to the caller's contract.
+        unsafe { guard.with_raw(resources, closure) }
+            .map_err(|error| crate::Error::runtime_state_source("cuda raw scope", error))
+    }
+
     /// Resource counters of this runtime.
     ///
     /// The snapshot is the runtime's own: live and pooled device bytes, pending

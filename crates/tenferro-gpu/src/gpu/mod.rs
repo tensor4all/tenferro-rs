@@ -236,12 +236,14 @@ pub struct OpDescriptor {
 
 /// The vendor libraries one backend serves.
 ///
-/// The concrete request types (GEMM, contraction, linalg, transform) land with their
-/// adapters in U4; U1 fixes only the trait and its borrow direction: a request borrows
-/// the engine's buffers and scalars, and the adapter resolves the runtime's stream and
-/// plans through the runtime it was built with. `Send` for the same reason as
-/// [`KernelSource`].
-#[doc(hidden)]
+/// The concrete request types land with the operation dispatch that calls them (U5): the
+/// seam's [`Buffer`] carries an allocation identity today, and a vendor call additionally
+/// needs the backend's device handle, which is the storage-handle decision the parent
+/// design leaves to the private enum behind `Buffer`. Until then the CUDA adapter exposes
+/// typed methods ([`Cublas`](crate::cuda_next::Cublas)) and this trait stays the declared
+/// seam, not a second dispatch path.
+///
+/// `Send` for the same reason as [`KernelSource`].
 pub trait VendorOps: Send {
     /// Serve one vendor operation described by `op` over `buffers`.
     ///
