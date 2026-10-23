@@ -405,7 +405,7 @@ fn plan_error(error: t4a_cuda_kernels::Error) -> crate::Error {
 /// `T` must be `repr(C)` plain data with no padding and entirely initialised; the four
 /// ABI structs this module passes (`CLayout` is handled by
 /// [`layout_arg`](super::layout_arg)) are asserted by the kernel crate.
-fn pod_arg<T>(value: &T) -> Arg<'_> {
+pub(crate) fn pod_arg<T>(value: &T) -> Arg<'_> {
     // SAFETY: the callers pass the kernel crate's `repr(C)` parameter structs, which the
     // crate asserts are sized without padding; the slice borrows `value` for the launch.
     let bytes = unsafe {
