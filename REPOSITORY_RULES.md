@@ -293,6 +293,23 @@ diff-scoped review bot.
 - Accepted feature issues, specs, and repository rules are the source of truth
   for implementation. External prototype code may inform implementation only
   when its license and provenance are compatible with this repository.
+- The `ai-ready` label is maintainer-controlled authorization for autonomous AI
+  issue burn. Maintainers may apply it only after human review confirms that
+  the issue states the intended behavior, implementation scope and non-goals,
+  acceptance criteria, affected crates/backends/dtypes/features, required tests
+  and documentation, and all public-API, dependency, architecture, and AD
+  decisions needed for implementation. An unresolved maintainer or product
+  decision makes the issue ineligible for the label.
+- An AI agent may autonomously implement an open issue only when it carries the
+  `ai-ready` label. The agent must treat the issue and its linked accepted specs
+  as the scope boundary. If implementation exposes missing or contradictory
+  requirements, requires a new decision, or would expand that boundary, stop
+  the burn and request maintainer clarification; the label must be removed until
+  the issue is ready again.
+- `ai-ready` authorizes implementation, focused validation, and preparation of
+  a reviewable pull request. It does not authorize merge, publication, release,
+  external communication, destructive operations, or scope expansion, and it
+  does not replace human review or required CI.
 - When maintainers take over a prototype branch, preserve the contributor's
   commits where practical and add new commits on top. When maintainer or
   AI-assisted implementation is otherwise based on external prototype code,
