@@ -218,3 +218,66 @@ fn poisson_jacobi_step_uses_first_axis_lanes() {
         }
     }
 }
+
+#[test]
+fn view_index_spelling_reads_and_writes_checked_elements() {
+    let mut tensor =
+        TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]).unwrap();
+    {
+        let view = tensor.host_col_major_view().unwrap();
+        assert_eq!(view[[0, 1]], 3);
+        assert_eq!(view[[1, 0]], 2);
+    }
+    {
+        let mut view = tensor.host_col_major_view_mut().unwrap();
+        assert_eq!(view[[1, 0]], 2);
+        view[[1, 0]] = 9;
+    }
+    assert_eq!(tensor.as_slice().unwrap(), &[1, 9, 3, 4]);
+}
+
+#[test]
+#[should_panic(expected = "out of bounds")]
+fn shared_view_index_spelling_reports_out_of_bounds() {
+    let tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![1, 2]).unwrap();
+    let view = tensor.host_col_major_view().unwrap();
+    let _ = view[[2]];
+}
+
+#[test]
+#[should_panic(expected = "out of bounds")]
+fn mutable_view_index_spelling_reports_out_of_bounds() {
+    let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![1, 2]).unwrap();
+    let view = tensor.host_col_major_view_mut().unwrap();
+    let _ = view[[2]];
+}
+
+#[test]
+#[should_panic(expected = "out of bounds")]
+fn mutable_view_index_assign_reports_out_of_bounds() {
+    let mut tensor = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![1, 2]).unwrap();
+    let mut view = tensor.host_col_major_view_mut().unwrap();
+    view[[2]] = 5;
+}
+
+#[test]
+#[should_panic(expected = "backend storage cannot be borrowed as host data")]
+fn typed_tensor_index_spelling_reports_backend_storage_as_invalid() {
+    let placement = Placement {
+        memory_kind: MemoryKind::Device,
+        device: Some(DeviceId {
+            kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+            ordinal: 0,
+        }),
+        cpu_affinity: None,
+    };
+    let tensor = TypedTensor::<f64, Rank<1>>::from_buffer_col_major(
+        [2],
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(1736, 2))),
+        placement,
+    )
+    .unwrap();
+    // In bounds, but the payload lives on a device backend, so the host
+    // element borrow is refused rather than panicking as out of bounds.
+    let _ = tensor[[0]];
+}

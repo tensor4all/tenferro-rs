@@ -10,7 +10,7 @@ use std::fmt;
 
 use tenferro_tensor_core::ValidationError;
 
-use super::{checked_view_element_count, Rank, TensorScalar, TypedTensor, TypedTensorView};
+use super::{checked_view_element_count, Rank, TypedTensor, TypedTensorView};
 use crate::{Host, Representation};
 
 #[inline(always)]
@@ -471,7 +471,7 @@ impl<'a, T, const N: usize> ColMajorViewMut<'a, T, N> {
     }
 }
 
-impl<T: TensorScalar, const N: usize> TypedTensor<T, Rank<N>> {
+impl<T, const N: usize> TypedTensor<T, Rank<N>> {
     /// Validate and borrow this owned tensor as a compact column-major host view.
     ///
     /// # Examples
@@ -520,7 +520,7 @@ impl<T: TensorScalar, const N: usize> TypedTensor<T, Rank<N>> {
     }
 }
 
-impl<T: TensorScalar, const N: usize> TypedTensor<T, Rank<N>, Host> {
+impl<T, const N: usize> TypedTensor<T, Rank<N>, Host> {
     /// Validate and borrow this host-marked tensor as a compact column-major
     /// host view. The `Host` marker is kept: no erasure to `Dynamic` is needed.
     ///
@@ -595,6 +595,92 @@ impl<'a, T: 'static, const N: usize, D: Representation> TypedTensorView<'a, T, R
         const OP: &str = "TypedTensorView::host_col_major_view";
         let shape = *self.layout().shape_array();
         ColMajorView::new(self.as_slice()?, shape, OP)
+    }
+}
+
+impl<T, const N: usize> std::ops::Index<[usize; N]> for ColMajorView<'_, T, N> {
+    type Output = T;
+
+    /// # Panics
+    ///
+    /// Panics when the index is out of bounds, like any other slice indexing.
+    /// Use [`ColMajorView::get`] for the checked form.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Rank, TypedTensor};
+    /// let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4])?;
+    /// let view = tensor.host_col_major_view()?;
+    /// assert_eq!(view[[0, 1]], 3);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[inline(always)]
+    fn index(&self, index: [usize; N]) -> &T {
+        match self.get(index) {
+            Some(value) => value,
+            None => panic!(
+                "ColMajorView index {index:?} is out of bounds for shape {:?}",
+                self.shape
+            ),
+        }
+    }
+}
+
+impl<T, const N: usize> std::ops::Index<[usize; N]> for ColMajorViewMut<'_, T, N> {
+    type Output = T;
+
+    /// # Panics
+    ///
+    /// Panics when the index is out of bounds, like any other slice indexing.
+    /// Use [`ColMajorViewMut::get`] for the checked form.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Rank, TypedTensor};
+    /// let mut tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4])?;
+    /// let view = tensor.host_col_major_view_mut()?;
+    /// assert_eq!(view[[1, 0]], 2);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[inline(always)]
+    fn index(&self, index: [usize; N]) -> &T {
+        match self.get(index) {
+            Some(value) => value,
+            None => panic!(
+                "ColMajorViewMut index {index:?} is out of bounds for shape {:?}",
+                self.shape
+            ),
+        }
+    }
+}
+
+impl<T, const N: usize> std::ops::IndexMut<[usize; N]> for ColMajorViewMut<'_, T, N> {
+    /// # Panics
+    ///
+    /// Panics when the index is out of bounds, like any other slice indexing.
+    /// Use [`ColMajorViewMut::get_mut`] for the checked form.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Rank, TypedTensor};
+    /// let mut tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4])?;
+    /// {
+    ///     let mut view = tensor.host_col_major_view_mut()?;
+    ///     view[[1, 0]] = 7;
+    ///     assert_eq!(view.as_slice(), &[1, 7, 3, 4]);
+    /// }
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[inline(always)]
+    fn index_mut(&mut self, index: [usize; N]) -> &mut T {
+        let shape = self.shape;
+        match self.get_mut(index) {
+            Some(value) => value,
+            None => panic!("ColMajorViewMut index {index:?} is out of bounds for shape {shape:?}"),
+        }
     }
 }
 

@@ -1917,6 +1917,8 @@ session, and the refusal a caller sees today is typed and explicit.
 ## 7. What this plan does not claim
 
 It does not claim that an external scalar is fully supported, that the erased
-layer is open, that Df64 QR or its derivatives run, or that set-induced
-recompilation is prevented. It records the order in which those become true and
-the evidence each stage must produce.
+layer is open, or that set-induced recompilation is prevented.
+
+Df64 QR and its derivatives *are* claimed, and delivered: §5.6 records the
+factorization, §5.8 the reverse and forward rules and the connected programs,
+and §5.9–5.10 the two consumer roles and the four configurations.

@@ -109,9 +109,13 @@ references. Checked random access accepts `[usize; N]`; the unsafe accessor
 requires every coordinate to be in bounds and repeats no rank, backend,
 layout, or `Result` work.
 
-Checked random access uses `get`/`get_mut` and returns `Option`; these views do
-not implement `Index` or `IndexMut`, because invalid user coordinates must not
-cross a public library boundary as a panic.
+Checked random access uses `get`/`get_mut` and returns `Option`; that is the
+non-panicking entry point. These views also implement `Index`/`IndexMut` for
+the `[usize; N]` coordinate, mirroring the owned `TypedTensor`, so a dense
+downstream loop does not handle a `Result` or `Option` per element. Indexing
+delegates to the same checked access, so the bounds check is unchanged; the
+panic message names the shape, and `get`/`get_mut` remain the path for a
+caller that cannot rule out an invalid coordinate (#1903, #1787).
 
 The first coordinate varies fastest. These views do not materialize storage,
 transfer device data, replace arbitrary-strided kernels, or promise removal of

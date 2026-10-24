@@ -310,3 +310,51 @@ fn views_carry_a_representation_marker_and_host_views_need_no_check() {
     let dynamic: tenferro_tensor::TypedTensorView<'_, i32, Rank<2>> = union.as_view();
     assert!(dynamic.host_storage().is_ok());
 }
+
+#[test]
+fn array_index_spelling_covers_both_representations() {
+    let mut dynamic =
+        TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]).unwrap();
+    assert_eq!(dynamic[[0, 1]], 3);
+    dynamic[[1, 0]] = 7;
+    assert_eq!(dynamic.as_slice().unwrap(), &[1, 7, 3, 4]);
+
+    let mut host =
+        TypedTensor::<i32, Rank<2>, Host>::from_host_vec_col_major([2, 2], vec![1, 2, 3, 4])
+            .unwrap();
+    assert_eq!(host[[0, 1]], 3);
+    host[[1, 0]] = 7;
+    // The pre-existing slice spelling keeps resolving next to the array one.
+    assert_eq!(host[&[1, 0]], 7);
+    host[&[0, 1]] = 9;
+    assert_eq!(host.as_slice(), &[1, 7, 9, 4]);
+}
+
+#[test]
+#[should_panic(expected = "is invalid")]
+fn array_index_spelling_reports_an_out_of_bounds_read() {
+    let dynamic = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![1, 2]).unwrap();
+    let _ = dynamic[[2]];
+}
+
+#[test]
+#[should_panic(expected = "is invalid")]
+fn array_index_spelling_reports_an_out_of_bounds_write() {
+    let mut dynamic = TypedTensor::<i32, Rank<1>>::from_vec_col_major([2], vec![1, 2]).unwrap();
+    dynamic[[2]] = 5;
+}
+
+#[test]
+#[should_panic(expected = "is invalid")]
+fn host_array_index_spelling_reports_an_out_of_bounds_read() {
+    let host = TypedTensor::<i32, Rank<1>, Host>::from_host_vec_col_major([2], vec![1, 2]).unwrap();
+    let _ = host[[2]];
+}
+
+#[test]
+#[should_panic(expected = "is invalid")]
+fn host_array_index_spelling_reports_an_out_of_bounds_write() {
+    let mut host =
+        TypedTensor::<i32, Rank<1>, Host>::from_host_vec_col_major([2], vec![1, 2]).unwrap();
+    host[[2]] = 5;
+}
