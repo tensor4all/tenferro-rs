@@ -5,9 +5,14 @@ fn softmax_tensor_covers_the_f32_and_f64_paths() {
     let mut pool = BufferPool::new();
     let f32_tensor =
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0f32, 2.0, 3.0, -1.0, 0.0, 1.0]).unwrap();
-    let output = softmax_read_with_pool(&mut pool, TensorRead::from_tensor(&f32_tensor), 0)
-        .unwrap()
-        .unwrap();
+    let output = softmax_read_with_pool(
+        FanOut::SERIAL,
+        &mut pool,
+        TensorRead::from_tensor(&f32_tensor),
+        0,
+    )
+    .unwrap()
+    .unwrap();
     for column in output.as_slice::<f32>().unwrap().chunks(3) {
         let sum: f32 = column.iter().sum();
         assert!((sum - 1.0).abs() < 1e-5);
@@ -15,9 +20,14 @@ fn softmax_tensor_covers_the_f32_and_f64_paths() {
 
     let f64_tensor =
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0f64, 2.0, 3.0, -1.0, 0.0, 1.0]).unwrap();
-    let output = softmax_read_with_pool(&mut pool, TensorRead::from_tensor(&f64_tensor), 0)
-        .unwrap()
-        .unwrap();
+    let output = softmax_read_with_pool(
+        FanOut::SERIAL,
+        &mut pool,
+        TensorRead::from_tensor(&f64_tensor),
+        0,
+    )
+    .unwrap()
+    .unwrap();
     for column in output.as_slice::<f64>().unwrap().chunks(3) {
         let sum: f64 = column.iter().sum();
         assert!((sum - 1.0).abs() < 1e-12);

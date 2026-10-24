@@ -31,9 +31,14 @@ fn every_op_matches_the_scalar_definition_in_both_dtypes() {
     let mut pool = BufferPool::new();
     for op in OPS {
         let input = Tensor::from_vec_col_major(vec![n], xs.clone()).unwrap();
-        let out = fused_activation_read_with_pool(&mut pool, op, TensorRead::from_tensor(&input))
-            .unwrap()
-            .expect("f64 has a fused kernel");
+        let out = fused_activation_read_with_pool(
+            FanOut::SERIAL,
+            &mut pool,
+            op,
+            TensorRead::from_tensor(&input),
+        )
+        .unwrap()
+        .expect("f64 has a fused kernel");
         for (&got, &x) in out.as_slice::<f64>().unwrap().iter().zip(&xs) {
             let want = reference(op, x);
             assert!(
@@ -43,9 +48,14 @@ fn every_op_matches_the_scalar_definition_in_both_dtypes() {
         }
         let input32 =
             Tensor::from_vec_col_major(vec![n], xs.iter().map(|&v| v as f32).collect()).unwrap();
-        let out = fused_activation_read_with_pool(&mut pool, op, TensorRead::from_tensor(&input32))
-            .unwrap()
-            .expect("f32 has a fused kernel");
+        let out = fused_activation_read_with_pool(
+            FanOut::SERIAL,
+            &mut pool,
+            op,
+            TensorRead::from_tensor(&input32),
+        )
+        .unwrap()
+        .expect("f32 has a fused kernel");
         for (&got, &x) in out.as_slice::<f32>().unwrap().iter().zip(&xs) {
             let want = reference(op, x as f32 as f64);
             assert!(
@@ -66,6 +76,7 @@ fn strided_input_is_materialized_once_and_integers_decline() {
     .unwrap();
     let view = tenferro_tensor::TensorView::F32(base.as_view().transpose_view([1, 0]).unwrap());
     let out = fused_activation_read_with_pool(
+        FanOut::SERIAL,
         &mut pool,
         ActivationOp::Sigmoid,
         TensorRead::from_view(view),
@@ -83,6 +94,7 @@ fn strided_input_is_materialized_once_and_integers_decline() {
     }
     let ints = Tensor::from_vec_col_major(vec![2], vec![1i32, 2]).unwrap();
     assert!(fused_activation_read_with_pool(
+        FanOut::SERIAL,
         &mut pool,
         ActivationOp::Silu,
         TensorRead::from_tensor(&ints)

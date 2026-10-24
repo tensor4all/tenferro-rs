@@ -9,7 +9,6 @@
 //! AVX2 horizontal reductions and the shifted values live in a cache-sized
 //! per-task buffer.
 
-use rayon::prelude::*;
 use std::mem::MaybeUninit;
 
 use tenferro_tensor::{DType, Tensor, TensorRead};
@@ -17,7 +16,7 @@ use tenferro_tensor::{DType, Tensor, TensorRead};
 use crate::activation::fill_pooled;
 use crate::buffer_pool::BufferPool;
 use crate::materialize_tensor_read;
-use crate::parallel::{group_len, task_len, MIN_BYTES_PER_TASK};
+use crate::parallel::{group_len, FanOut};
 use crate::simd_math::{apply, VectorKernel};
 
 /// Fused softmax over axis 0 for a host `F32`/`F64` tensor, if supported.
@@ -26,6 +25,7 @@ use crate::simd_math::{apply, VectorKernel};
 /// and drops them together (a benchmark, a batch loop) gets its storage back
 /// from the pool instead of fresh pages from the allocator.
 pub(crate) fn softmax_read_with_pool(
+    fan: FanOut<'_>,
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
     axis: usize,
@@ -39,28 +39,28 @@ pub(crate) fn softmax_read_with_pool(
         DType::F32 => {
             if let Ok(data) = input.as_slice::<f32>() {
                 return fill_pooled(buffers, &shape, |out| {
-                    softmax_axis0_f32(data, axis_len, out)
+                    softmax_axis0_f32(fan, data, axis_len, out)
                 })
                 .map(Some);
             }
             let tensor = materialize_tensor_read(buffers, "softmax", input)?;
             let data = tensor.as_slice::<f32>()?;
             fill_pooled(buffers, &shape, |out| {
-                softmax_axis0_f32(data, axis_len, out)
+                softmax_axis0_f32(fan, data, axis_len, out)
             })
             .map(Some)
         }
         DType::F64 => {
             if let Ok(data) = input.as_slice::<f64>() {
                 return fill_pooled(buffers, &shape, |out| {
-                    softmax_axis0_f64(data, axis_len, out)
+                    softmax_axis0_f64(fan, data, axis_len, out)
                 })
                 .map(Some);
             }
             let tensor = materialize_tensor_read(buffers, "softmax", input)?;
             let data = tensor.as_slice::<f64>()?;
             fill_pooled(buffers, &shape, |out| {
-                softmax_axis0_f64(data, axis_len, out)
+                softmax_axis0_f64(fan, data, axis_len, out)
             })
             .map(Some)
         }
@@ -92,49 +92,54 @@ unsafe fn initialized<T>(chunk: &mut [MaybeUninit<T>]) -> &mut [T] {
 ///
 /// INVARIANT: every element of `output` is written (the tasks and groups
 /// partition it, and each group is filled by `exp_into`).
-fn softmax_axis0_f32(data: &[f32], axis_len: usize, output: &mut [MaybeUninit<f32>]) {
+fn softmax_axis0_f32(
+    fan: FanOut<'_>,
+    data: &[f32],
+    axis_len: usize,
+    output: &mut [MaybeUninit<f32>],
+) {
     let n = data.len();
     let group = group_len(n, axis_len, 4);
-    let task = task_len(n, group, 4, MIN_BYTES_PER_TASK);
-    output
-        .par_chunks_mut(task)
-        .zip(data.par_chunks(task))
-        .for_each(|(out_task, in_task)| {
-            // One cache-sized temp per task, reused across its groups.
-            let mut temp = vec![0.0f32; group.min(in_task.len())];
-            for (out_chunk, in_chunk) in out_task.chunks_mut(group).zip(in_task.chunks(group)) {
-                let temp = &mut temp[..in_chunk.len()];
-                shift_group_f32_best(in_chunk, temp, axis_len);
-                // One vectorized exp per cache-sized group, not per slice.
-                exp_into(temp, out_chunk);
-                // SAFETY: `exp_into` wrote every element of the chunk.
-                let out_chunk = unsafe { initialized(out_chunk) };
-                scale_group_f32_best(out_chunk, axis_len);
-            }
-        });
+    let task = fan.task_len(n, group, 4);
+    fan.run(output, data, task, |out_task, in_task| {
+        // One cache-sized temp per task, reused across its groups.
+        let mut temp = vec![0.0f32; group.min(in_task.len())];
+        for (out_chunk, in_chunk) in out_task.chunks_mut(group).zip(in_task.chunks(group)) {
+            let temp = &mut temp[..in_chunk.len()];
+            shift_group_f32_best(in_chunk, temp, axis_len);
+            // One vectorized exp per cache-sized group, not per slice.
+            exp_into(temp, out_chunk);
+            // SAFETY: `exp_into` wrote every element of the chunk.
+            let out_chunk = unsafe { initialized(out_chunk) };
+            scale_group_f32_best(out_chunk, axis_len);
+        }
+    });
 }
 
 /// Softmax over axis 0 of column-major `data`, written into `output`.
 ///
 /// INVARIANT: as [`softmax_axis0_f32`].
-fn softmax_axis0_f64(data: &[f64], axis_len: usize, output: &mut [MaybeUninit<f64>]) {
+fn softmax_axis0_f64(
+    fan: FanOut<'_>,
+    data: &[f64],
+    axis_len: usize,
+    output: &mut [MaybeUninit<f64>],
+) {
     let n = data.len();
     let group = group_len(n, axis_len, 8);
-    let task = task_len(n, group, 8, MIN_BYTES_PER_TASK);
-    output
-        .par_chunks_mut(task)
-        .zip(data.par_chunks(task))
-        .for_each(|(out_task, in_task)| {
-            let mut temp = vec![0.0f64; group.min(in_task.len())];
-            for (out_chunk, in_chunk) in out_task.chunks_mut(group).zip(in_task.chunks(group)) {
-                let temp = &mut temp[..in_chunk.len()];
-                shift_group_f64(in_chunk, temp, axis_len);
-                exp_into(temp, out_chunk);
-                // SAFETY: `exp_into` wrote every element of the chunk.
-                let out_chunk = unsafe { initialized(out_chunk) };
-                scale_group_f64(out_chunk, axis_len);
-            }
-        });
+    let task = fan.task_len(n, group, 8);
+    fan.run(output, data, task, |out_task, in_task| {
+        let mut temp = vec![0.0f64; group.min(in_task.len())];
+        for (out_chunk, in_chunk) in out_task.chunks_mut(group).zip(in_task.chunks(group)) {
+            let temp = &mut temp[..in_chunk.len()];
+            shift_group_f64(in_chunk, temp, axis_len);
+            // One vectorized exp per cache-sized group, not per slice.
+            exp_into(temp, out_chunk);
+            // SAFETY: `exp_into` wrote every element of the chunk.
+            let out_chunk = unsafe { initialized(out_chunk) };
+            scale_group_f64(out_chunk, axis_len);
+        }
+    });
 }
 
 /// The AVX2 shift where the host has it, the scalar group function elsewhere.
