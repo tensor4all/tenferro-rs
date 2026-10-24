@@ -63,6 +63,7 @@ smallvec.workspace = true
 tinyvec.workspace = true
 strided-kernel.workspace = true
 strided-basic = { workspace = true, features = ["parallel"] }
+strided-nn.workspace = true
 thiserror.workspace = true
 faer = { workspace = true, optional = true }
 cblas-sys = { workspace = true, optional = true }

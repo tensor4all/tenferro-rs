@@ -1131,8 +1131,7 @@ impl Engine for CpuEngine {
     ) -> crate::Result<Option<Tensor>> {
         crate::blas1::validate_cpu_read("softmax", &input)?;
         self.run_native_with_context(|context, buffers| {
-            let fan = crate::parallel::FanOut::from_context(context);
-            softmax::softmax_read_with_pool(fan, buffers, input, axis)
+            softmax::softmax_read_with_pool(context, buffers, input, axis)
         })
     }
 

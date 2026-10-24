@@ -1,9 +1,8 @@
 //! Parallel chunking helpers shared by the CPU kernels.
 //!
-//! The kernels split their output into cache-sized groups, then hand several
-//! groups to each worker. Small problems launch fewer workers so the
-//! synchronization cost does not dominate, mirroring PyTorch's `parallel_for`
-//! grain selection.
+//! The kernels split their output into cache-sized tasks and hand each worker
+//! one of them. Small problems launch fewer workers so the synchronization cost
+//! does not dominate, mirroring PyTorch's `parallel_for` grain selection.
 //!
 //! The fan-out itself belongs to the engine's pool: raw Rayon iterators outside
 //! a pool run on the process-global one, which a serial engine must never start
@@ -14,9 +13,6 @@ use std::mem::MaybeUninit;
 use rayon::prelude::*;
 
 use crate::provider::CpuExecutionContext;
-
-/// Bytes in one cache-sized group of slices.
-pub(crate) const GROUP_BYTES: usize = 32 * 1024;
 
 /// Minimum amount of work (in bytes) that justifies one worker.
 pub(crate) const MIN_BYTES_PER_TASK: usize = 32 * 1024;
@@ -85,26 +81,9 @@ impl<'p> FanOut<'p> {
     }
 }
 
-/// Number of elements in one cache-sized group.
-///
-/// A group never exceeds the whole tensor and always contains at least one
-/// slice, so a single slice longer than `GROUP_BYTES` stays intact.
-pub(crate) fn group_len(n: usize, axis_len: usize, element_size: usize) -> usize {
-    let slices = (GROUP_BYTES / (axis_len * element_size)).max(1);
-    (axis_len * slices).min(n).max(1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn group_is_cache_sized_and_covers_at_least_one_slice() {
-        assert_eq!(group_len(32_768, 64, 4), 8_192);
-        assert_eq!(group_len(2_097_152, 512, 4), 8_192);
-        assert_eq!(group_len(64, 64, 4), 64);
-        assert_eq!(group_len(1_000_000, 1_000_000, 8), 1_000_000);
-    }
 
     #[test]
     fn task_caps_workers_for_small_problems() {
