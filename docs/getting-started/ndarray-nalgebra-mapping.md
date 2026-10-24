@@ -90,11 +90,10 @@ users know feature-based BLAS selection; tenferro's knobs live in the
 | faer (default) | `native` | Portable, pure Rust, no system dependencies; the right default for most workloads |
 | BLAS / LAPACK | `blas` plus exactly one explicit provider feature | Large GEMM-dominated workloads, or to reuse an already-tuned system BLAS |
 
-`native` and `blas` are additive, and the compiled default is what every
-`CpuEngine` in the process uses — BLAS when `blas` is compiled, otherwise faer.
-Within the BLAS family the three explicit provider features (`blas-openblas`,
-`blas-mkl`, `blas-accelerate`) are mutually exclusive, and tenferro rejects a
-build that enables more than one.
+A build enables exactly one of `native` and `blas`, and that provider is what
+every `CpuEngine` in the process uses. Enabling both, or neither, is rejected at
+compile time; so is enabling more than one of the three explicit BLAS provider
+features (`blas-openblas`, `blas-mkl`, `blas-accelerate`).
 
 ## Operation arity: `.dot()` to `matmul`
 
