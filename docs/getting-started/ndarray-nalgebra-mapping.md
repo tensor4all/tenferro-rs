@@ -80,8 +80,8 @@ see the [performance idioms reference](https://tensor4all.org/tenferro-rs/skill-
 
 ## faer vs BLAS providers
 
-tenferro's CPU crates have two provider families controlled by additive
-features: the `native` provider and the `blas` provider. `ndarray-linalg`
+tenferro's CPU crates have two provider families selected by mutually exclusive
+Cargo features: the `native` provider and the `blas` provider. `ndarray-linalg`
 users know feature-based BLAS selection; tenferro's knobs live in the
 `tenferro-cpu` (and `tenferro-runtime`) features.
 
@@ -90,11 +90,11 @@ users know feature-based BLAS selection; tenferro's knobs live in the
 | faer (default) | `native` | Portable, pure Rust, no system dependencies; the right default for most workloads |
 | BLAS / LAPACK | `blas` plus exactly one explicit provider feature | Large GEMM-dominated workloads, or to reuse an already-tuned system BLAS |
 
-`native` and `blas` are additive, and the compiled default is what every
-`CpuEngine` in the process uses — BLAS when `blas` is compiled, otherwise faer.
-Within the BLAS family the three explicit provider features (`blas-openblas`,
-`blas-mkl`, `blas-accelerate`) are mutually exclusive, and tenferro rejects a
-build that enables more than one.
+A build enables at most one of `native` and `blas`, and that provider is what
+every `CpuEngine` in the process uses. Enabling both is rejected at compile time,
+and so is enabling more than one of the three explicit BLAS provider features
+(`blas-openblas`, `blas-mkl`, `blas-accelerate`). A build with neither provider
+compiles and returns a typed `Unsupported` from the numerical routes.
 
 ## Operation arity: `.dot()` to `matmul`
 

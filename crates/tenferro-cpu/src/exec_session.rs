@@ -1118,7 +1118,10 @@ impl Engine for CpuEngine {
         input: TensorRead<'_>,
     ) -> crate::Result<Option<Tensor>> {
         crate::blas1::validate_cpu_read(op.label(), &input)?;
-        self.run_native(|buffers| activation::fused_activation_read_with_pool(buffers, op, input))
+        self.run_native_with_context(|context, buffers| {
+            let fan = crate::parallel::FanOut::from_context(context);
+            activation::fused_activation_read_with_pool(fan, buffers, op, input)
+        })
     }
 
     fn softmax_read(
@@ -1127,7 +1130,9 @@ impl Engine for CpuEngine {
         axis: usize,
     ) -> crate::Result<Option<Tensor>> {
         crate::blas1::validate_cpu_read("softmax", &input)?;
-        self.run_native(|buffers| softmax::softmax_read_with_pool(buffers, input, axis))
+        self.run_native_with_context(|context, buffers| {
+            softmax::softmax_read_with_pool(context, buffers, input, axis)
+        })
     }
 
     fn axpby_read_into_accum(

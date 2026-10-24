@@ -63,6 +63,7 @@ smallvec.workspace = true
 tinyvec.workspace = true
 strided-kernel.workspace = true
 strided-basic = { workspace = true, features = ["parallel"] }
+strided-nn.workspace = true
 thiserror.workspace = true
 faer = { workspace = true, optional = true }
 cblas-sys = { workspace = true, optional = true }
@@ -108,6 +109,10 @@ path = "tests/integration.rs"
 [[test]]
 name = "blas1_thread_counts"
 path = "tests/blas1_thread_counts.rs"
+
+[[test]]
+name = "softmax_pool_ownership"
+path = "tests/softmax_pool_ownership.rs"
 
 [[test]]
 name = "blas1_pool_aliasing"

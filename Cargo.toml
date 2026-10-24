@@ -84,6 +84,9 @@ cpueinsum = "0.4.3"
 cpueinsum-blas = "0.4.2"
 tcontract-exec = "0.4.2"
 strided-basic = { version = "0.6.4", default-features = false }
+# Fused NN kernels moved out of this repository (#2272): axis-0 softmax with a
+# tensor-free contract, caller-provided scratch and the caller's `ExecContext`.
+strided-nn = "0.1.1"
 strided-fused = { version = "0.6.0", default-features = false, features = ["parallel"] }
 strided-kernel = { version = "0.6.0", features = ["parallel"] }
 libloading = "0.8"

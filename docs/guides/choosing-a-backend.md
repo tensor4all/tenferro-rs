@@ -86,11 +86,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 <!-- end-snippet-source -->
 
-This requires both `native` and `blas` in the resolved Cargo feature
-set. It does not make OpenBLAS and MKL independently selectable at runtime:
-the concrete external BLAS implementation is selected by the process's build
-and linked library configuration. Its worker environment remains a
-provider-owned process-wide concern.
+The example compiles under either provider feature. A build enables at most one
+of `native` and `blas`; enabling both is a `compile_error!`, so one process links
+one CPU provider and `cpu_provider_id()` is fixed for the build. A build with
+neither compiles, reports `tenferro.cpu.none`, and returns a typed `Unsupported`
+for the numerical routes.
+The concrete external BLAS implementation is chosen by the linked library
+configuration, and its worker environment remains a provider-owned process-wide
+concern.
 
 ## Nested Parallelism
 
@@ -195,9 +198,9 @@ assert_eq!(runtime.snapshot()?.engine_count(), 1);
 <!-- end-snippet-source -->
 
 If two pools must run in one process, give each its own `CpuEngine` and its own
-`Runtime`. Compile either example with both `native` and `blas`; if an engine
-uses OpenBLAS, MKL, or Accelerate, its library and thread settings are still
-process-wide provider settings. Separate processes are required when
+`Runtime`. Every engine of a build shares that build's single CPU provider; if
+the build uses OpenBLAS, MKL, or Accelerate, its library and thread settings are
+still process-wide provider settings. Separate processes are required when
 the application needs mutually incompatible external BLAS installations or
 independent provider environment pools.
 
