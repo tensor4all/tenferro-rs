@@ -1578,6 +1578,151 @@ impl<T, R: TensorRank> std::ops::IndexMut<&[usize]> for TypedTensor<T, R, Host> 
     }
 }
 
+impl<T, const N: usize> std::ops::Index<[usize; N]> for TypedTensor<T, Rank<N>, Host> {
+    type Output = T;
+
+    /// # Panics
+    ///
+    /// Panics when an index is out of bounds, like any other slice indexing.
+    /// Use [`TypedTensor::get`] for the checked form.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Host, Rank, TypedTensor};
+    /// let tensor =
+    ///     TypedTensor::<i32, Rank<2>, Host>::from_host_vec_col_major([2, 2], vec![1, 2, 3, 4])?;
+    /// assert_eq!(tensor[[0, 1]], 3);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn index(&self, indices: [usize; N]) -> &T {
+        match self.get(&indices) {
+            Ok(value) => value,
+            Err(err) => panic!("TypedTensor host index {indices:?} is invalid: {err}"),
+        }
+    }
+}
+
+impl<T, const N: usize> std::ops::Index<&[usize; N]> for TypedTensor<T, Rank<N>, Host> {
+    type Output = T;
+
+    /// The `&[usize; N]` spelling, which keeps a bare `&[i, j]` literal
+    /// resolving as an integer index rather than forcing `usize` inference to
+    /// choose between the slice and array spellings.
+    ///
+    /// # Panics
+    ///
+    /// Panics when an index is out of bounds, like any other slice indexing.
+    /// Use [`TypedTensor::get`] for the checked form.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Host, Rank, TypedTensor};
+    /// let tensor =
+    ///     TypedTensor::<i32, Rank<2>, Host>::from_host_vec_col_major([2, 2], vec![1, 2, 3, 4])?;
+    /// assert_eq!(tensor[&[0, 1]], 3);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn index(&self, indices: &[usize; N]) -> &T {
+        std::ops::Index::index(self, *indices)
+    }
+}
+
+impl<T, const N: usize> std::ops::IndexMut<[usize; N]> for TypedTensor<T, Rank<N>, Host> {
+    /// # Panics
+    ///
+    /// Panics when an index is out of bounds, like any other slice indexing.
+    /// Use [`TypedTensor::get_mut`] for the checked form.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Host, Rank, TypedTensor};
+    /// let mut tensor =
+    ///     TypedTensor::<i32, Rank<2>, Host>::from_host_vec_col_major([2, 2], vec![1, 2, 3, 4])?;
+    /// tensor[[1, 0]] = 7;
+    /// assert_eq!(tensor.as_slice(), &[1, 7, 3, 4]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn index_mut(&mut self, indices: [usize; N]) -> &mut T {
+        match self.get_mut(&indices) {
+            Ok(value) => value,
+            Err(err) => panic!("TypedTensor host index {indices:?} is invalid: {err}"),
+        }
+    }
+}
+
+impl<T, const N: usize> std::ops::IndexMut<&[usize; N]> for TypedTensor<T, Rank<N>, Host> {
+    /// # Panics
+    ///
+    /// Panics when an index is out of bounds, like any other slice indexing.
+    /// Use [`TypedTensor::get_mut`] for the checked form.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Host, Rank, TypedTensor};
+    /// let mut tensor =
+    ///     TypedTensor::<i32, Rank<2>, Host>::from_host_vec_col_major([2, 2], vec![1, 2, 3, 4])?;
+    /// tensor[&[1, 0]] = 7;
+    /// assert_eq!(tensor.as_slice(), &[1, 7, 3, 4]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn index_mut(&mut self, indices: &[usize; N]) -> &mut T {
+        std::ops::IndexMut::index_mut(self, *indices)
+    }
+}
+
+impl<T, const N: usize> std::ops::Index<[usize; N]> for TypedTensor<T, Rank<N>> {
+    type Output = T;
+
+    /// # Panics
+    ///
+    /// Panics when an index is out of bounds or when the storage is not
+    /// host-accessible, like any other slice indexing. Use
+    /// [`TypedTensor::get`] for the checked form.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Rank, TypedTensor};
+    /// let tensor = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1., 2., 3., 4.])?;
+    /// assert_eq!(tensor[[0, 1]], 3.);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn index(&self, indices: [usize; N]) -> &T {
+        match self.get(&indices) {
+            Ok(value) => value,
+            Err(err) => panic!("TypedTensor index {indices:?} is invalid: {err}"),
+        }
+    }
+}
+
+impl<T, const N: usize> std::ops::IndexMut<[usize; N]> for TypedTensor<T, Rank<N>> {
+    /// # Panics
+    ///
+    /// Panics when an index is out of bounds or when the storage is not
+    /// host-accessible, like any other slice indexing. Use
+    /// [`TypedTensor::get_mut`] for the checked form.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Rank, TypedTensor};
+    /// let mut tensor = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1., 2., 3., 4.])?;
+    /// tensor[[1, 0]] = 7.;
+    /// assert_eq!(tensor.as_slice()?, &[1., 7., 3., 4.]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn index_mut(&mut self, indices: [usize; N]) -> &mut T {
+        match self.get_mut(&indices) {
+            Ok(value) => value,
+            Err(err) => panic!("TypedTensor index {indices:?} is invalid: {err}"),
+        }
+    }
+}
+
 /// Read mapping over a host slice, as one owning guard.
 fn host_read_guard<T>(data: &[T]) -> HostReadGuard<'_, T> {
     HostReadGuard::new(data)
