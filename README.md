@@ -1,5 +1,9 @@
 # tenferro-rs
 
+> **[Where tenferro-rs fits in the tensor4all Rust stack →](https://tensor4all.org/tensor4all-meta/stack/)**
+> The layer map, from the tensor-network frontends above this crate down to the
+> numerical providers below it.
+
 **A Rust-native tensor computation stack with opt-in autodiff for scientific workloads.**
 
 [![CI](https://github.com/tensor4all/tenferro-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/tensor4all/tenferro-rs/actions/workflows/ci.yml)
