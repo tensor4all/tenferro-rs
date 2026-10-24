@@ -30,6 +30,12 @@ Supported entry points:
 
 The shared workflow bodies live in `ai/contribution-workflows/`.
 
+Open issues carrying the maintainer-controlled `ai-ready` label have completed
+human readiness review and may be selected for autonomous AI implementation.
+The label authorizes implementation and preparation of a reviewable pull
+request within the accepted issue scope; it does not authorize merge, release,
+publication, or bypassing human review and required CI.
+
 Use the issue-intake workflow for bug reports, feature requests, design
 discussion issues, and documentation or article topic issues. Use the
 bug-fix PR workflow only for fixes to existing intended behavior. If a proposed

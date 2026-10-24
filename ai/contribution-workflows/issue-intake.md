@@ -23,6 +23,8 @@ must start as issues.
   If prototype code exists, collect it as a link and provenance note.
 - Treat maintainers as the authority for labels, acceptance, roadmap priority,
   and merge decisions.
+- Treat `ai-ready` as maintainer-controlled authorization for autonomous AI
+  issue burn, not as a label inferred or applied during ordinary intake.
 
 ## Reporting a documentation gap found by an AI agent
 
@@ -154,3 +156,29 @@ gh issue create --title "<title>" --body-file <body-file>
 ```
 
 Use labels only after checking that they exist in the repository.
+
+## Step 7: Mark An Issue Ready For AI Burn
+
+Only a maintainer may add or remove the `ai-ready` label. Add it only after a
+human review confirms all of the following:
+
+- Intended behavior, current behavior, scope, and non-goals are explicit.
+- Acceptance criteria and focused regression or verification coverage are
+  precise enough for an implementer to execute without a new design decision.
+- Affected crates, backends, devices, dtypes, feature flags, AD behavior,
+  documentation, and design records are identified or explicitly not
+  applicable.
+- Any public API, dependency, architecture, operation-family, backend, feature,
+  or AD-semantics decision required by the implementation has already been
+  accepted.
+- Relevant reproduction details, source locations, references, and provenance
+  constraints are present.
+- No unresolved maintainer, product, roadmap, or compatibility question remains.
+
+The label permits an AI agent to take the issue through implementation, focused
+validation, and preparation of a reviewable pull request. It does not authorize
+merge, publication, release, external communication, destructive operations,
+or work outside the issue's accepted scope. If the agent discovers missing or
+contradictory requirements or needs a new decision, it must stop the issue burn
+and request maintainer clarification; remove `ai-ready` until the issue is ready
+again.
