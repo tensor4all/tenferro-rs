@@ -15,6 +15,8 @@
 //! window was armed, so it is not a peak-memory measurement.
 
 #![cfg(feature = "native")]
+// The placement ledger allocates per token, so allocation counts are taken without it.
+#![cfg(not(feature = "ledger"))]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

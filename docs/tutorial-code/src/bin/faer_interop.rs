@@ -57,8 +57,8 @@ fn faer_immutable_view() -> tenferro_tensor::Result<()> {
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![7.0, 9.0, 11.0, 8.0, 10.0, 12.0])?;
     let b_view = MatRef::from_column_major_slice(b.as_slice()?, b.shape()[0], b.shape()[1]);
 
-    // faer computes into its own output. Par::Seq keeps the call off faer's
-    // global rayon pool; Par::Rayon(n) would use that ambient pool instead.
+    // faer computes into its own output. Par::Seq keeps the call on this thread;
+    // a parallel width comes from an engine token (see faer-engine-parallelism).
     let mut product = Mat::<f64>::zeros(rows, b.shape()[1]);
     matmul(
         product.as_mut(),
@@ -133,31 +133,29 @@ fn faer_solve_on_zero_copy_views() -> tenferro_tensor::Result<()> {
 fn faer_parallelism_from_engine() -> tenferro_tensor::Result<()> {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0])?;
     let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0])?;
-    let pool = tenferro_cpu::thread_pool_builder()
-        .num_threads(2)
+    let pool = tenferro_cpu::Pool::builder()
+        .threads(2)
         .build()
         .map_err(|err| tenferro_tensor::Error::runtime_state("faer_interop", err.to_string()))?;
-    let engine = CpuEngine::new(pool);
+    let mut engine = CpuEngine::new(pool);
     let mut product = Mat::<f64>::zeros(2, 2);
 
-    // The caller can borrow back the pool it handed to the engine. faer's
-    // `Par::rayon` schedules on the calling thread's pool, so enter that pool
-    // once and choose a width within the engine's budget. A serial engine has
-    // no pool and takes `Par::Seq` directly.
-    let width = engine.num_threads();
-    engine.pool().expect("pooled engine").install(|| {
-        let a_view = MatRef::from_column_major_slice(a.as_slice()?, 2, 2);
-        let b_view = MatRef::from_column_major_slice(b.as_slice()?, 2, 2);
-        matmul(
-            product.as_mut(),
-            Accum::Replace,
-            a_view,
-            b_view,
-            1.0,
-            Par::rayon(width),
-        );
-        Ok::<(), tenferro_tensor::Error>(())
-    })?;
+    // The engine's token hands its budget to faer as a plain width and enters
+    // the engine's pool once: faer's `Par::rayon` schedules on the calling
+    // thread's pool, so the direct call runs on the engine's workers and
+    // never on Rayon's global pool. A serial engine's token hands over a width
+    // of one, which maps to `Par::Seq`.
+    let (a_data, b_data) = (a.as_slice()?, b.as_slice()?);
+    engine.exec()?.into_token().external(|width| {
+        let a_view = MatRef::from_column_major_slice(a_data, 2, 2);
+        let b_view = MatRef::from_column_major_slice(b_data, 2, 2);
+        let par = if width.get() == 1 {
+            Par::Seq
+        } else {
+            Par::rayon(width.get())
+        };
+        matmul(product.as_mut(), Accum::Replace, a_view, b_view, 1.0, par);
+    });
 
     let product = product.as_ref();
     assert_close(*product.get(0, 0), 19.0, "A * B (0,0)");

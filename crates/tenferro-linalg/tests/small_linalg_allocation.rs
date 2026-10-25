@@ -12,6 +12,9 @@
 //! lane the only growth is the second lane's hoisted scratch, recorded next to
 //! the one-thread ceilings.
 
+// The placement ledger allocates per token, so allocation counts are taken without it.
+#![cfg(not(feature = "ledger"))]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -220,8 +223,8 @@ fn check_lane(
     packed_lu_growth: usize,
 ) {
     let mut backend = tenferro_cpu::CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(threads)
+        tenferro_cpu::Pool::builder()
+            .threads(threads)
             .build()
             .unwrap(),
     );

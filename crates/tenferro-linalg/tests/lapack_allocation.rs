@@ -11,6 +11,8 @@
 //! first — because a cold first call legitimately allocates.
 
 #![cfg(feature = "blas")]
+// The placement ledger allocates per token, so allocation counts are taken without it.
+#![cfg(not(feature = "ledger"))]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

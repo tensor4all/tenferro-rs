@@ -4,7 +4,7 @@
 //!
 //! Workload (design doc "Prototype specification (PR C)"): a prepared plan
 //! for `"ij,jk->ik"` on 8×8 f64 column-major inputs, executed 10 times per
-//! iteration, on a one-worker `CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(1).build().unwrap())`.
+//! iteration, on a one-worker `CpuEngine::new(tenferro_cpu::Pool::builder().threads(1).build().unwrap())`.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_cpu::CpuEngine;
@@ -22,12 +22,7 @@ fn f64_square(seed: usize) -> Tensor {
 }
 
 fn bench_einsum_session_chain(c: &mut Criterion) {
-    let mut backend = CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(1)
-            .build()
-            .unwrap(),
-    );
+    let mut backend = CpuEngine::new(tenferro_cpu::Pool::builder().threads(1).build().unwrap());
     let lhs = f64_square(1);
     let rhs = f64_square(2);
     let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();

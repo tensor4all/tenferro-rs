@@ -109,12 +109,7 @@ fn compile_mps_inner_product(fixture: &MpsFixture) -> CompiledGraph {
 }
 
 fn cpu_runtime_with_einsum_one_thread() -> Runtime {
-    let backend = CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(1)
-            .build()
-            .unwrap(),
-    );
+    let backend = CpuEngine::new(tenferro_cpu::Pool::builder().threads(1).build().unwrap());
     let mut builder = Runtime::builder();
     builder
         .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
@@ -157,12 +152,7 @@ fn bench_mps_inner_product(c: &mut Criterion) {
         let runtime = cpu_runtime_with_einsum_one_thread();
         let params = format!("L_{L}_chi_{chi}_d_{PHYS_DIM}");
 
-        let mut engine = CpuEngine::new(
-            tenferro_cpu::thread_pool_builder()
-                .num_threads(1)
-                .build()
-                .unwrap(),
-        );
+        let mut engine = CpuEngine::new(tenferro_cpu::Pool::builder().threads(1).build().unwrap());
         let warmup_outputs = run_program(&runtime, &mut engine, &compiled)
             .expect("warmup evaluation should succeed");
         black_box(warmup_outputs);
@@ -185,12 +175,8 @@ fn bench_mps_inner_product(c: &mut Criterion) {
                 b.iter(|| {
                     let compiled = compile_mps_inner_product(black_box(&fixture));
                     let runtime = cpu_runtime_with_einsum_one_thread();
-                    let mut engine = CpuEngine::new(
-                        tenferro_cpu::thread_pool_builder()
-                            .num_threads(1)
-                            .build()
-                            .unwrap(),
-                    );
+                    let mut engine =
+                        CpuEngine::new(tenferro_cpu::Pool::builder().threads(1).build().unwrap());
                     let outputs = run_program(&runtime, &mut engine, black_box(&compiled))
                         .expect("MPS inner-product compile+eval should succeed");
                     black_box(outputs);

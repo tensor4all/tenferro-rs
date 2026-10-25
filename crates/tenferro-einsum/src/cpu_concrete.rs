@@ -137,7 +137,7 @@ pub(crate) fn execute_cached(
                             TensorView::$variant(view) => Ok(view),
                             _ => Err(tenferro_tensor::Error::dtype_mismatch("CPU einsum", inputs[0].dtype(), input.dtype())),
                         }).collect::<tenferro_tensor::Result<Vec<_>>>()?;
-                        run(&Execution { exec, workspaces, max_retained_bytes: buffers.max_retained_capacity_bytes() }, tree, cache, |shape| {
+                        run(&mut Execution { exec, workspaces, max_retained_bytes: buffers.max_retained_capacity_bytes() }, tree, cache, |shape| {
                             let mut output = tenferro_cpu_basic::PooledUninitOutput::new(buffers, shape)?;
                             output.as_uninit_slice_mut().fill(std::mem::MaybeUninit::new(Default::default()));
                             // SAFETY: every physical element of the compact output
@@ -165,14 +165,14 @@ pub(crate) fn execute_cached(
 
 #[cfg(any(feature = "native", feature = "blas"))]
 struct Execution<'a, 'pool> {
-    exec: &'a cpueinsum::Exec<'pool>,
+    exec: &'a mut cpueinsum::Exec<'pool>,
     workspaces: &'a tenferro_cpu::ContractionWorkspaces,
     max_retained_bytes: usize,
 }
 
 #[cfg(any(feature = "native", feature = "blas"))]
 fn run<T: Scalar>(
-    execution: &Execution<'_, '_>,
+    execution: &mut Execution<'_, '_>,
     tree: &ContractionTree,
     cache: Option<&Cache>,
     allocate: impl FnOnce(Vec<usize>) -> tenferro_tensor::Result<tenferro_tensor::TypedTensor<T>>,
@@ -195,7 +195,7 @@ fn run<T: Scalar>(
 
 #[cfg(any(feature = "native", feature = "blas"))]
 fn run_into<T: Scalar>(
-    execution: &Execution<'_, '_>,
+    execution: &mut Execution<'_, '_>,
     tree: &ContractionTree,
     cache: Option<&Cache>,
     inputs: &[TypedTensorView<'_, T>],
@@ -302,7 +302,7 @@ fn run_into<T: Scalar>(
         plan.scratch_len(),
         execution.max_retained_bytes,
         |scratch| {
-            plan.execute_into(execution.exec, &views, out, scratch)
+            plan.execute_into(&mut *execution.exec, &views, out, scratch)
                 .map_err(|error| map_lower_einsum_error("CPU einsum", error))
         },
     )
@@ -367,7 +367,7 @@ pub(crate) fn execute_into(
                             TensorView::$variant(view) => Ok(view),
                             _ => Err(tenferro_tensor::Error::runtime_state("CPU einsum", "incompatible input view")),
                         }).collect::<tenferro_tensor::Result<Vec<_>>>()?;
-                        run_into(&Execution { exec, workspaces, max_retained_bytes: buffers.max_retained_capacity_bytes() }, tree, cache, &views, &mut lower_out)
+                        run_into(&mut Execution { exec, workspaces, max_retained_bytes: buffers.max_retained_capacity_bytes() }, tree, cache, &views, &mut lower_out)
                     },)*
                     _ => Err(tenferro_tensor::Error::unsupported_dtype("CPU einsum", dtype, "unsupported scalar")),
                 }
@@ -413,10 +413,7 @@ mod tests {
                 let tree =
                     ContractionTree::optimize(&subs, &[a.shape(), id.shape(), id.shape()]).unwrap();
                 let mut backend = tenferro_cpu::CpuEngine::new(
-                    tenferro_cpu::thread_pool_builder()
-                        .num_threads(1)
-                        .build()
-                        .unwrap(),
+                    tenferro_cpu::Pool::builder().threads(1).build().unwrap(),
                 );
                 let mut cache = Cache::default();
                 let out = {

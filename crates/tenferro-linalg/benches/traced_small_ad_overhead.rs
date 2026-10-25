@@ -161,8 +161,8 @@ fn engine(threads: usize) -> CpuEngine {
         "an ambient RAYON_NUM_THREADS would size a hidden pool; unset it"
     );
     CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(threads)
+        tenferro_cpu::Pool::builder()
+            .threads(threads)
             .build()
             .unwrap(),
     )

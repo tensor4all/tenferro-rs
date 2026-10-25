@@ -38,6 +38,7 @@ fn one_containing_set_runs_the_same_arithmetic() {
         &mut destination,
         &member_of_the_contribution_set(),
         &increment,
+        tenferro_cpu::Exec::serial(),
     )
     .expect("addition through the contribution's set succeeds");
 

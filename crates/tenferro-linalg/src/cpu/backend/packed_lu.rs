@@ -13,8 +13,8 @@ use super::linalg;
 use super::{batched_vector_rhs_shape_of, has_zero_dim, square_matrix_dim};
 use crate::cpu::linalg::{pooled_copy, pooled_zeroed};
 use num_complex::{Complex32, Complex64};
+use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
-use tenferro_cpu::CpuExecutionContext;
 use tenferro_tensor::{Error, Tensor, TensorScalar, TypedTensor};
 
 /// Per-dtype dispatch from a CPU provider to its packed-LU batch kernels.
@@ -22,7 +22,7 @@ pub(super) trait CpuPackedLu: TensorScalar + PoolScalar + Copy {
     /// Solve `op(A) X = B` in place for every batch from packed factors.
     #[allow(clippy::too_many_arguments)]
     fn prepared_solve(
-        ctx: &CpuExecutionContext<'_>,
+        exec: &mut Exec<'_>,
         buffers: &BufferPool,
         op: &'static str,
         n: usize,
@@ -37,7 +37,7 @@ pub(super) trait CpuPackedLu: TensorScalar + PoolScalar + Copy {
     /// Factor `A` in place and solve `A X = B` for every batch.
     #[allow(clippy::too_many_arguments)]
     fn factor_solve(
-        ctx: &CpuExecutionContext<'_>,
+        exec: &mut Exec<'_>,
         buffers: &BufferPool,
         op: &'static str,
         n: usize,
@@ -53,7 +53,7 @@ macro_rules! impl_cpu_packed_lu {
         $(
             impl CpuPackedLu for $scalar {
                 fn prepared_solve(
-                    ctx: &CpuExecutionContext<'_>,
+                    exec: &mut Exec<'_>,
                     buffers: &BufferPool,
                     op: &'static str,
                     n: usize,
@@ -64,14 +64,14 @@ macro_rules! impl_cpu_packed_lu {
                     transpose_a: bool,
                     conjugate_a: bool,
                 ) -> tenferro_tensor::Result<()> {
-                    let _ = (op, &ctx, &buffers, &packed_lu, &pivots, &output, n, nrhs, transpose_a, conjugate_a);
+                    let _ = (op, &exec, &buffers, &packed_lu, &pivots, &output, n, nrhs, transpose_a, conjugate_a);
                     {
 #[cfg(feature = "native")]
 {
                             #[cfg(feature = "native")]
                             {
                                 crate::cpu::tlinalg::solve_prepared_batch::<$scalar>(
-                                    ctx,
+                                    exec,
                                     tlinalg::Op::LuSolvePrepared,
                                     n,
                                     nrhs,
@@ -89,7 +89,7 @@ macro_rules! impl_cpu_packed_lu {
                             #[cfg(feature = "blas")]
                             {
                                 crate::cpu::tlinalg_blas::solve_prepared_batch::<$scalar>(
-                                    ctx,
+                                    exec,
                                     tlinalg_blas::Op::LuSolvePrepared,
                                     n,
                                     nrhs,
@@ -106,7 +106,7 @@ macro_rules! impl_cpu_packed_lu {
                 }
 
                 fn factor_solve(
-                    ctx: &CpuExecutionContext<'_>,
+                    exec: &mut Exec<'_>,
                     buffers: &BufferPool,
                     op: &'static str,
                     n: usize,
@@ -115,14 +115,14 @@ macro_rules! impl_cpu_packed_lu {
                     pivots: &mut [i32],
                     output: &mut [Self],
                 ) -> tenferro_tensor::Result<()> {
-                    let _ = (op, &ctx, &buffers, &packed_lu, &pivots, &output, n, nrhs);
+                    let _ = (op, &exec, &buffers, &packed_lu, &pivots, &output, n, nrhs);
                     {
 #[cfg(feature = "native")]
 {
                             #[cfg(feature = "native")]
                             {
                                 crate::cpu::tlinalg::factor_solve_batch::<$scalar>(
-                                    ctx,
+                                    exec,
                                     buffers,
                                     tlinalg::Op::LuFactorSolve,
                                     n,
@@ -139,7 +139,7 @@ macro_rules! impl_cpu_packed_lu {
                             #[cfg(feature = "blas")]
                             {
                                 crate::cpu::tlinalg_blas::factor_solve_batch::<$scalar>(
-                                    ctx,
+                                    exec,
                                     tlinalg_blas::Op::LuFactorSolve,
                                     n,
                                     nrhs,
@@ -191,7 +191,7 @@ pub(super) fn rhs_matrix_shape(a_shape: &[usize], b_shape: &[usize]) -> Vec<usiz
 /// `Error::Internal` if the precondition above does not hold.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a_shape: &[usize],
     packed_lu: &TypedTensor<T>,
@@ -209,7 +209,7 @@ pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
     };
     let mut output = pooled_output(buffers, OP, b)?;
     T::prepared_solve(
-        ctx,
+        exec,
         buffers,
         OP,
         n,
@@ -234,7 +234,7 @@ pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
 /// `Error::Extension` with `crate::Error::Singular` for an exactly singular
 /// matrix when the RHS is nonempty.
 pub(super) fn lu_factor_solve_typed<T: CpuPackedLu>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -269,7 +269,7 @@ pub(super) fn lu_factor_solve_typed<T: CpuPackedLu>(
     let mut output = pooled_output(buffers, OP, b)?;
     if !has_zero_dim(a.shape()) {
         T::factor_solve(
-            ctx,
+            exec,
             buffers,
             OP,
             n,
@@ -292,7 +292,7 @@ pub(super) fn lu_factor_solve_typed<T: CpuPackedLu>(
 /// [`lu_solve_prepared_typed`].
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lu_solve_prepared_entered(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a: &Tensor,
     packed_lu: &Tensor,
@@ -313,7 +313,7 @@ pub(super) fn lu_solve_prepared_entered(
             let lu = packed_lu.as_typed::<$scalar>().ok_or_else(inconsistent)?;
             let rhs = b.as_typed::<$scalar>().ok_or_else(inconsistent)?;
             lu_solve_prepared_typed(
-                ctx,
+                exec,
                 buffers,
                 a.shape(),
                 lu,
@@ -341,7 +341,7 @@ pub(super) fn lu_solve_prepared_entered(
 /// Returns an unsupported-dtype error for a non-linalg dtype, and the typed
 /// errors of [`lu_factor_solve_typed`].
 pub(super) fn lu_factor_solve_entered(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a: &Tensor,
     b: &Tensor,
@@ -352,7 +352,7 @@ pub(super) fn lu_factor_solve_entered(
         ($scalar:ty) => {{
             let a = a.as_typed::<$scalar>().ok_or_else(inconsistent)?;
             let b = b.as_typed::<$scalar>().ok_or_else(inconsistent)?;
-            let (x, lu, pivots) = lu_factor_solve_typed(ctx, buffers, a, b)?;
+            let (x, lu, pivots) = lu_factor_solve_typed(exec, buffers, a, b)?;
             Ok(vec![
                 Tensor::from_typed::<$scalar>(x),
                 Tensor::from_typed::<$scalar>(lu),

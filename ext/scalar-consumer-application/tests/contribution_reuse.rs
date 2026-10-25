@@ -62,6 +62,7 @@ fn two_containing_sets_reuse_the_contribution_entry_point() {
         &mut through_contribution,
         &member_of_the_contribution_set(),
         &increment,
+        tenferro_cpu::Exec::serial(),
     )
     .expect("addition through the contribution's set succeeds");
     scalar_binary_into::<Df64, Df64Add>(
@@ -69,6 +70,7 @@ fn two_containing_sets_reuse_the_contribution_entry_point() {
         &mut through_application,
         &member_of_the_application_set(),
         &increment,
+        tenferro_cpu::Exec::serial(),
     )
     .expect("addition through the application's set succeeds");
 

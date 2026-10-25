@@ -117,8 +117,8 @@ fn fixture(n: usize, threads: usize) -> Fixture {
         CpuEngine::serial()
     } else {
         CpuEngine::new(
-            tenferro_cpu::thread_pool_builder()
-                .num_threads(threads)
+            tenferro_cpu::Pool::builder()
+                .threads(threads)
                 .build()
                 .unwrap(),
         )

@@ -11,9 +11,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // snippet source: docs/guides/parallelism-and-caching.md:27
     fn snippet_parallelism_and_caching_1() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_1
-use tenferro_cpu::{thread_pool_builder, CpuEngine};
+use tenferro_cpu::{Pool, CpuEngine};
 
-let pool = thread_pool_builder().num_threads(4).build()?;
+let pool = Pool::builder().threads(4).build()?;
 let engine = CpuEngine::new(pool);
 assert_eq!(engine.num_threads(), 4);
         // snippet-end:parallelism_and_caching_1
@@ -25,7 +25,7 @@ assert_eq!(engine.num_threads(), 4);
     // snippet source: docs/guides/parallelism-and-caching.md:92
     fn snippet_parallelism_and_caching_2() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_2
-use tenferro_cpu::{thread_pool_builder, CpuEngine};
+use tenferro_cpu::{Pool, CpuEngine};
 use tenferro_tensor::{TensorStructural, TypedTensor};
 
 let tensor = TypedTensor::<f64>::from_vec_col_major(
@@ -33,7 +33,7 @@ let tensor = TypedTensor::<f64>::from_vec_col_major(
     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
 let transposed = tensor.as_view().transpose_view([1, 0])?.into_tensor_read()?;
-let mut engine = CpuEngine::new(thread_pool_builder().num_threads(4).build()?);
+let mut engine = CpuEngine::new(Pool::builder().threads(4).build()?);
 let compact = engine.to_contiguous_read(transposed)?;
 
 assert_eq!(compact.shape(), &[3, 2]);
@@ -47,9 +47,9 @@ assert_eq!(compact.as_slice::<f64>()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
     // snippet source: docs/guides/parallelism-and-caching.md:166
     fn snippet_parallelism_and_caching_3() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_3
-use tenferro_cpu::{thread_pool_builder, CpuEngine};
+use tenferro_cpu::{Pool, CpuEngine};
 
-let engine = CpuEngine::new(thread_pool_builder().num_threads(1).build()?);
+let engine = CpuEngine::new(Pool::builder().threads(1).build()?);
 assert_eq!(engine.num_threads(), 1);
         // snippet-end:parallelism_and_caching_3
         Ok(())
@@ -60,11 +60,11 @@ assert_eq!(engine.num_threads(), 1);
     // snippet source: docs/guides/parallelism-and-caching.md:194
     fn snippet_parallelism_and_caching_4() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_4
-use tenferro_cpu::{thread_pool_builder, CpuEngine};
+use tenferro_cpu::{Pool, CpuEngine};
 use tenferro_runtime::{GraphCompiler, Runtime};
 
 let mut compiler = GraphCompiler::new();
-let engine = CpuEngine::new(thread_pool_builder().num_threads(4).build()?);
+let engine = CpuEngine::new(Pool::builder().threads(4).build()?);
 let mut builder = Runtime::builder();
 builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
 let runtime = builder.build()?;
@@ -152,13 +152,13 @@ engine.reset_buffer_pool();
     // snippet source: docs/guides/choosing-a-backend.md (custom engine id)
     fn snippet_choosing_a_backend_engine_id() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:choosing_a_backend_engine_id
-use tenferro_cpu::{runtime_engine_registration_with_id, thread_pool_builder, CpuEngine};
+use tenferro_cpu::{runtime_engine_registration_with_id, Pool, CpuEngine};
 use tenferro_runtime::{EngineId, ExecutionEngine, Runtime};
 
 // A caller-chosen engine id must agree on both sides: extension modules are
 // installed against the id the runtime registered.
 let engine_id = EngineId::new("example.cpu.primary.v1")?;
-let engine = CpuEngine::new(thread_pool_builder().num_threads(1).build()?)
+let engine = CpuEngine::new(Pool::builder().threads(1).build()?)
     .with_runtime_engine_id(engine_id.clone());
 
 let mut builder = Runtime::builder();

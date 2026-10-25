@@ -1612,12 +1612,7 @@ fn prepared_nary_accumulation_reuses_plan_with_runtime_scalars() {
         TensorRead::from_tensor(&id),
     ];
     let mut plan = ConcreteEinsumPlan::prepare_read(&reads, "ij,jk,kl->il").unwrap();
-    let mut backend = CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(1)
-            .build()
-            .unwrap(),
-    );
+    let mut backend = CpuEngine::new(tenferro_cpu::Pool::builder().threads(1).build().unwrap());
     let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64; 4]).unwrap();
     for (alpha, beta, expected) in [
         (2.0, 3.0, [32.0, 34.0, 36.0, 38.0]),

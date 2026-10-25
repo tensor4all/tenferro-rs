@@ -1,3 +1,4 @@
+use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::TypedTensor;
 use tlinalg_blas::Op;
@@ -57,7 +58,7 @@ pub(crate) fn lu<T: LapackLinalg>(
 }
 
 pub(crate) fn lu_factor<T: LapackLinalg>(
-    ctx: &tenferro_cpu::CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)> {
@@ -97,7 +98,7 @@ pub(crate) fn lu_factor<T: LapackLinalg>(
     let mut pivot_data = pooled_zeroed::<i32>(buffers, "lu_factor", "pivots", &pivot_shape)?;
     let mut parity_data = pooled_zeroed::<T>(buffers, "lu_factor", "parity", batch_shape)?;
     crate::cpu::tlinalg_blas::factor_batch::<T>(
-        ctx,
+        exec,
         Op::LuFactor,
         m,
         n,

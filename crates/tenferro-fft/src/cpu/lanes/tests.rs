@@ -42,8 +42,8 @@ fn impulse_reference_covers_borrowed_and_consuming_lane_modes() {
                     &mut plans,
                     &mut buffers,
                     &mut output,
-                    super::LaneThreads::new(1, None),
                     std::convert::identity,
+                    Exec::serial(),
                 )
                 .unwrap();
             }
@@ -71,6 +71,8 @@ fn impulse_reference_covers_borrowed_and_consuming_lane_modes() {
 
 #[test]
 fn checked_lane_boundary_rejects_mismatched_spans_and_overflow_before_writes() {
+    // A real pool: eight lanes fork over an eight-slot token.
+    let pool = tenferro_cpu::Pool::builder().threads(8).build().unwrap();
     for (shape, input_len, output_len, valid) in [
         ([1, 2], 2, 2, true),
         ([1, 2], 1, 2, false),
@@ -96,8 +98,8 @@ fn checked_lane_boundary_rejects_mismatched_spans_and_overflow_before_writes() {
                 &mut plans,
                 &mut buffers,
                 &mut output,
-                super::LaneThreads::new(8, None),
                 |value| value,
+                Exec::new(&pool, 8).unwrap(),
             )
         };
         assert_eq!(

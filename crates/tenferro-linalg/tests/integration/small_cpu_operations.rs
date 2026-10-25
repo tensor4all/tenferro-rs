@@ -29,8 +29,8 @@ fn assert_close(actual: &[f64], expected: &[f64], label: &str) {
 
 fn pooled(threads: usize) -> CpuEngine {
     CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(threads)
+        tenferro_cpu::Pool::builder()
+            .threads(threads)
             .build()
             .expect("test pool"),
     )
@@ -56,8 +56,9 @@ fn tiny_householder_qr_from_factors_uses_the_direct_faer_lane_inline() {
         .expect("pooled r");
 
     assert_close(&values(&actual_r), &values(&serial_r), "direct faer r");
+    #[cfg(feature = "ledger")]
     assert_eq!(
-        engine.pool_stats().entries,
+        engine.take_ledger_installs(),
         0,
         "a tiny direct faer product must not enter the pool"
     );
@@ -75,8 +76,9 @@ fn tiny_qr_uses_the_tlinalg_lane_inline() {
 
     assert_close(&values(&q), &values(&serial_q), "tlinalg q");
     assert_close(&values(&r), &values(&serial_r), "tlinalg r");
+    #[cfg(feature = "ledger")]
     assert_eq!(
-        engine.pool_stats().entries,
+        engine.take_ledger_installs(),
         0,
         "a tiny tlinalg factorization must not enter the pool"
     );

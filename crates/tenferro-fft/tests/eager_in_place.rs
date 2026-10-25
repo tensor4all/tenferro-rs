@@ -26,8 +26,8 @@ fn consuming_fft_preserves_allocation_and_matches_borrowed_fft_on_every_axis() {
     let shape = [32, 32, 32];
     for threads in [1, 2, 4, 8] {
         let mut engine = CpuEngine::new(
-            tenferro_cpu::thread_pool_builder()
-                .num_threads(threads)
+            tenferro_cpu::Pool::builder()
+                .threads(threads)
                 .build()
                 .unwrap(),
         );

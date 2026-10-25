@@ -25,8 +25,8 @@ fn cpu_ctx(_threads: usize) -> Arc<EagerRuntime> {
 
 fn cpu_engine(threads: usize) -> CpuEngine {
     CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(threads)
+        tenferro_cpu::Pool::builder()
+            .threads(threads)
             .build()
             .unwrap(),
     )

@@ -87,12 +87,7 @@ fn binary_public_execution_surfaces_bypass_general_optimizers() {
     let subs = parse_einsum_subscripts("ij,jk->ik").unwrap();
     let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![f64::NAN; 4]).unwrap();
     let mut tout = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![f64::NAN; 4]).unwrap();
-    let mut backend = CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(1)
-            .build()
-            .unwrap(),
-    );
+    let mut backend = CpuEngine::new(tenferro_cpu::Pool::builder().threads(1).build().unwrap());
     {
         let session = &mut backend;
         {
@@ -222,12 +217,7 @@ fn binary_public_einsum_preserves_general_numerical_semantics() {
             vec![],
         ),
     ];
-    let mut backend = CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(1)
-            .build()
-            .unwrap(),
-    );
+    let mut backend = CpuEngine::new(tenferro_cpu::Pool::builder().threads(1).build().unwrap());
     for (notation, ashape, adata, bshape, bdata, shape, expected) in cases {
         let a = Tensor::from_vec_col_major(ashape, adata).unwrap();
         let b = Tensor::from_vec_col_major(bshape, bdata).unwrap();

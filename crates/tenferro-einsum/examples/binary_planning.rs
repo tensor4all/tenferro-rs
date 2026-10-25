@@ -61,8 +61,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         CpuEngine::serial()
     } else {
         CpuEngine::new(
-            tenferro_cpu::thread_pool_builder()
-                .num_threads(threads.parse().unwrap())
+            tenferro_cpu::Pool::builder()
+                .threads(threads.parse().unwrap())
                 .build()
                 .unwrap(),
         )

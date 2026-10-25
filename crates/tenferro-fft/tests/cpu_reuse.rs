@@ -12,7 +12,7 @@ fn compact_real_reads_roundtrip_on_all_axes_and_thread_counts() {
             let read = TensorRead::from_view(TensorView::$variant(
                 TypedTensorView::from_slice(shape, [1, 64, 2048], 0, &data).unwrap()));
             for threads in [1, 2, 4, 8] {
-                let mut backend = CpuEngine::new(tenferro_cpu::thread_pool_builder().num_threads(threads).build().unwrap());
+                let mut backend = CpuEngine::new(tenferro_cpu::Pool::builder().threads(threads).build().unwrap());
                 // Managed backends clamp the request to the process CPU set.
                 assert!((1..=threads).contains(&backend.num_threads()));
                 for (axis, &length) in shape.iter().enumerate() {
@@ -121,12 +121,7 @@ fn uneven_parallel_lane_partition_matches_serial() {
     )
     .unwrap();
     let mut serial = CpuEngine::serial();
-    let mut parallel = CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(8)
-            .build()
-            .unwrap(),
-    );
+    let mut parallel = CpuEngine::new(tenferro_cpu::Pool::builder().threads(8).build().unwrap());
     let expected = {
         let s: &mut dyn tenferro_tensor::Engine = &mut serial;
         input.fft(None, 2, FftNorm::Backward, s)
@@ -154,12 +149,7 @@ fn parallel_lanes_match_serial_on_every_axis_with_padding_and_truncation() {
     )
     .unwrap();
     let mut serial = CpuEngine::serial();
-    let mut parallel = CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(8)
-            .build()
-            .unwrap(),
-    );
+    let mut parallel = CpuEngine::new(tenferro_cpu::Pool::builder().threads(8).build().unwrap());
     assert_eq!(serial.num_threads(), 1);
     // CI may expose fewer than eight CPUs; keep testing its effective budget.
     assert!((1..=8).contains(&parallel.num_threads()));

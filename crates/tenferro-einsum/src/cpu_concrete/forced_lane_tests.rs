@@ -28,12 +28,8 @@ fn execute_nary_with_strategy(
 ) -> tenferro_tensor::Result<Tensor> {
     let (inputs, tree) = nary_inputs();
     let reads: Vec<TensorRead<'_>> = inputs.iter().map(TensorRead::from_tensor).collect();
-    let mut backend = tenferro_cpu::CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(4)
-            .build()
-            .unwrap(),
-    );
+    let mut backend =
+        tenferro_cpu::CpuEngine::new(tenferro_cpu::Pool::builder().threads(4).build().unwrap());
     {
         let session = &mut backend;
         {

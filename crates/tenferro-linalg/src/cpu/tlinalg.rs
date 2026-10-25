@@ -18,7 +18,6 @@ use core::mem::MaybeUninit;
 use strided_view::RawStridedRef;
 use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar, PooledUninitOutput};
-use tenferro_cpu::CpuExecutionContext;
 use tlinalg::packed_lu::{
     factor_into, factor_solve_into, factor_solve_workspace, factor_workspace, solve_prepared_into,
     validate_pivots,
@@ -26,15 +25,6 @@ use tlinalg::packed_lu::{
 use tlinalg::{FaerScalar, Op};
 
 use super::tlinalg_error::map_error;
-
-/// Build the one execution token accepted by `tlinalg`.
-///
-/// The token borrows the retained execution resources of the caller's
-/// owner-scoped context, so the provider reuses the domain's pool wrapper and
-/// workspace instead of a per-call `Pool::borrow`.
-pub(crate) fn exec_from<'a>(ctx: &CpuExecutionContext<'a>) -> tenferro_tensor::Result<Exec<'a>> {
-    ctx.contraction_exec()
-}
 
 /// Pooled bytes one provider `*_into` call borrows as its complete scratch region.
 ///
@@ -75,7 +65,7 @@ impl<T: PoolScalar> PooledWorkspace<T> {
 // INVARIANT: the argument list mirrors the lower provider's factor contract.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn factor_batch<T: FaerScalar + PoolScalar>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &BufferPool,
     op: Op,
     m: usize,
@@ -84,7 +74,6 @@ pub(crate) fn factor_batch<T: FaerScalar + PoolScalar>(
     pivots: &mut [i32],
     parity: &mut [T],
 ) -> tenferro_tensor::Result<()> {
-    let exec = exec_from(ctx)?;
     let mut workspace = PooledWorkspace::<T>::new(
         buffers,
         factor_workspace::<T>(m, n, parity.len(), exec).map_err(|error| map_error(op, error))?,
@@ -97,7 +86,7 @@ pub(crate) fn factor_batch<T: FaerScalar + PoolScalar>(
 // INVARIANT: the argument list mirrors the lower provider's prepared-solve contract.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn solve_prepared_batch<T: FaerScalar + PoolScalar>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     op: Op,
     n: usize,
     nrhs: usize,
@@ -134,7 +123,7 @@ pub(crate) fn solve_prepared_batch<T: FaerScalar + PoolScalar>(
         transpose_a,
         conjugate_a,
         &mut [],
-        exec_from(ctx)?,
+        exec,
     )
     .map_err(|error| map_error(op, error))
 }
@@ -143,7 +132,7 @@ pub(crate) fn solve_prepared_batch<T: FaerScalar + PoolScalar>(
 // INVARIANT: the argument list mirrors the lower provider's fused contract.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn factor_solve_batch<T: FaerScalar + PoolScalar>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &BufferPool,
     op: Op,
     n: usize,
@@ -152,7 +141,6 @@ pub(crate) fn factor_solve_batch<T: FaerScalar + PoolScalar>(
     pivots: &mut [i32],
     output: &mut [T],
 ) -> tenferro_tensor::Result<()> {
-    let exec = exec_from(ctx)?;
     // The provider derives the batch from the packed factors; the query takes it explicitly.
     let batch = packed_lu.len() / n.saturating_mul(n).max(1);
     let mut workspace = PooledWorkspace::<T>::new(

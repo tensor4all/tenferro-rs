@@ -197,7 +197,9 @@ fn a_sum_reduction_over_a_view_retains_low_order_information() {
     let dense = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![4], values)
         .expect("shape matches data");
 
-    let total = scalar_fold::<Df64, Df64Add>("sum", &dense, Df64::zero()).expect("reduction");
+    let total =
+        scalar_fold::<Df64, Df64Add>("sum", &dense, Df64::zero(), tenferro_cpu::Exec::serial())
+            .expect("reduction");
     // 1 + 2^-80 + 2^-80 = 1 + 2^-79 exactly.
     assert_eq!(total, value(1.0, 2f64.powi(-79)));
     assert_eq!(total.narrow_to_f64(), 1.0);
