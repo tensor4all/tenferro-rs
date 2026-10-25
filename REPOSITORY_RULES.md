@@ -666,8 +666,8 @@ Tests follow implementation ownership.
   uninitialized output allocation, the placement token it mints per operation
   and the serial/parallel threshold policy. A `strided-rs` call without the
   operation's `Exec` token, a throwaway pool, an extra pool built inside an
-  operation, or a process-global pool is non-compliant. Memory reuse and thread policy are execution resources, not
-  tensor metadata; backend-neutral tensor/view types expose metadata-only
+  operation, or a process-global pool is non-compliant. Memory reuse and thread
+  policy are execution resources, not tensor metadata; backend-neutral tensor/view types expose metadata-only
   layout transforms and do not own data-moving convenience methods.
 - Exceptions with dedicated implementations: `reshape` (metadata-only) and
   indexing ops without a matching strided plan. Max/min reductions and static
@@ -686,15 +686,12 @@ Tests follow implementation ownership.
   `compile_error!`. There is no runtime provider kind, provider bundle, kernel
   slot, or per-handle provider selection. `blas` is a compiled adapter, not a
   vendor-only execution world, and keeps the native path for declined steps.
-- Tensor-sized CPU kernels run through the repository CPU threading policy.
-  Only `strided-exec` starts tasks; parallelism is split with `Exec::fork` /
-  `for_ranges` (and handed to outside libraries with `Exec::external`), and no
-  other crate depends on `rayon` (`deny.toml`). `strided-kernel` is compiled
-  with its `parallel` feature for elementwise, reduction, and structural
-  materialization kernels. CPU contraction and linalg call the lower numerical
-  libraries (cpueinsum/tcontract, tlinalg) with the engine's provider bundle
-  (`tcontract_exec::Exec`: the placement token, the workspace and the batch
-  policy). The lower library owns lane selection within the token's budget.
+- Tensor-sized CPU kernels run through the repository CPU threading policy:
+  only `strided-exec` starts tasks (`Exec::fork` / `for_ranges` / `external`;
+  no other crate depends on `rayon`, see `deny.toml`). `strided-kernel` is
+  compiled with its `parallel` feature. CPU contraction and linalg call
+  cpueinsum/tcontract and tlinalg with the engine's `tcontract_exec::Exec`
+  bundle, and the lower library owns lane selection within the token's budget.
 - A tensor-sized CPU operation that remains a dedicated sequential loop
   because no strided-kernel/backend-native parallel primitive fits keeps a
   nearby source comment naming that rationale. Undocumented serial loops must

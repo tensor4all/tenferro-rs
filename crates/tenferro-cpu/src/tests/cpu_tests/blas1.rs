@@ -392,6 +392,56 @@ fn blas1_strided_destination_region_preserves_surrounding_bytes() {
     assert_eq!(source, source_before);
 }
 
+#[test]
+fn blas1_strided_destination_region_covers_f32_c32_and_c64() {
+    let mut backend = crate::test_support::cpu_engine(1).unwrap();
+    // Column-major `[4, 3]` strides; region rows 0..2, columns 1..3.
+    let region = [5_usize, 6, 9, 10];
+
+    macro_rules! case {
+        ($ty:ty, $variant:ident, $alpha:expr, $beta:expr, $make:expr) => {{
+            let make = $make;
+            let (alpha, beta): ($ty, $ty) = ($alpha, $beta);
+            let mut storage: Vec<$ty> = (0..12).map(|index| make(10.0 + index as f32)).collect();
+            let mut expected = storage.clone();
+            let compact_x: Vec<$ty> = (1..=4).map(|index| make(index as f32)).collect();
+            for (position, &index) in region.iter().enumerate() {
+                expected[index] = alpha * compact_x[position] + beta * expected[index];
+            }
+            let x = Tensor::from_vec_col_major(vec![2, 2], compact_x).unwrap();
+            let destination =
+                TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 4], 5, &mut storage).unwrap();
+            crate::test_support::on_engine(&mut backend, |session| {
+                session.axpby_read_into_accum(
+                    ContractionScalar::$variant(alpha),
+                    TensorRead::from_tensor(&x),
+                    ContractionScalar::$variant(beta),
+                    TensorWrite::from_view(TensorViewMut::$variant(destination)),
+                )
+            })
+            .unwrap()
+            .unwrap();
+            assert_eq!(storage, expected);
+        }};
+    }
+
+    case!(f32, F32, 2.0, 0.5, |v: f32| v);
+    case!(
+        Complex32,
+        C32,
+        Complex32::new(2.0, 1.0),
+        Complex32::new(0.5, -0.25),
+        |v: f32| Complex32::new(v, -0.5 * v)
+    );
+    case!(
+        Complex64,
+        C64,
+        Complex64::new(2.0, 1.0),
+        Complex64::new(0.5, -0.25),
+        |v: f32| Complex64::new(f64::from(v), -0.5 * f64::from(v))
+    );
+}
+
 fn assert_axpby_rejects_without_mutating(
     backend: &mut CpuEngine,
     alpha: ContractionScalar,

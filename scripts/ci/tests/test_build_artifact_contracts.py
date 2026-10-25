@@ -155,8 +155,7 @@ class BuildArtifactContracts(unittest.TestCase):
         # registry caret requirements, so one strided source resolves in the
         # graph; the committed lock records which versions.
         providers = (
-            ("Cargo.toml", ("cpueinsum", "cpueinsum-blas")),
-            ("crates/tenferro-linalg/Cargo.toml", ("tlinalg", "tlinalg-blas")),
+            ("Cargo.toml", ("cpueinsum", "cpueinsum-blas", "tlinalg", "tlinalg-blas")),
         )
         for relative, names in providers:
             manifest = tomllib.loads((ROOT / relative).read_text())

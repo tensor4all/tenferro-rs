@@ -291,3 +291,37 @@ fn elementwise_into_fallback_returns_its_staged_result_to_the_pool() {
     assert_eq!(out.as_slice::<f64>().unwrap(), &[11.0, 22.0, 33.0, 44.0]);
     assert_eq!(buffers.len(), 1, "the staged result must be reclaimed");
 }
+
+#[test]
+fn elementwise_into_fallback_covers_every_supported_op() {
+    use tenferro_tensor::ElementwiseReadOp as Op;
+
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![6.0_f64, -8.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+    let binary = [lhs_read(&lhs), lhs_read(&rhs)];
+    let unary = [lhs_read(&lhs)];
+    for (op, inputs, expected) in [
+        (Op::Add, &binary[..], [8.0, -4.0]),
+        (Op::Subtract, &binary[..], [4.0, -12.0]),
+        (Op::Multiply, &binary[..], [12.0, -32.0]),
+        (Op::Divide, &binary[..], [3.0, -2.0]),
+        (Op::Negate, &unary[..], [-6.0, 8.0]),
+        (Op::Conj, &unary[..], [6.0, -8.0]),
+    ] {
+        let mut buffers = BufferPool::new();
+        let mut out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+        elementwise_read_into_fallback_with_pool(
+            &mut buffers,
+            op,
+            inputs,
+            TensorWrite::from_tensor(&mut out),
+            Exec::serial(),
+        )
+        .unwrap();
+        assert_eq!(out.as_slice::<f64>().unwrap(), &expected, "{op:?}");
+    }
+}
+
+fn lhs_read(tensor: &Tensor) -> TensorRead<'_> {
+    TensorRead::from_tensor(tensor)
+}
