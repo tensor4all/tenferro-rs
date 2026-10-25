@@ -71,16 +71,16 @@ rocm = [
 ]
 
 [dependencies]
-tenferro-runtime = { path = "../tenferro-runtime", version = "0.7.1", default-features = false }
-tenferro-ad = { path = "../tenferro-ad", version = "0.7.1", default-features = false, optional = true }
-tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.7.1" }
-tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.7.1", default-features = false }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.7.1", default-features = false }
-tenferro-cpu = { path = "../tenferro-cpu", version = "0.7.1", default-features = false }
-tenferro-cpu-basic = { path = "../tenferro-cpu-basic", version = "0.7.1" }
+tenferro-runtime = { path = "../tenferro-runtime", version = "0.8.0", default-features = false }
+tenferro-ad = { path = "../tenferro-ad", version = "0.8.0", default-features = false, optional = true }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.8.0" }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.8.0", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.8.0", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", version = "0.8.0", default-features = false }
+tenferro-cpu-basic = { path = "../tenferro-cpu-basic", version = "0.8.0" }
 cpueinsum.workspace = true
 cpueinsum-blas = { workspace = true, optional = true }
-tenferro-gpu = { path = "../tenferro-gpu", version = "0.7.1", default-features = false, optional = true }
+tenferro-gpu = { path = "../tenferro-gpu", version = "0.8.0", default-features = false, optional = true }
 computegraph.workspace = true
 lru.workspace = true
 omeco.workspace = true
@@ -88,7 +88,7 @@ tinyvec.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.7.1", default-features = false }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.8.0", default-features = false }
 criterion.workspace = true
 num-complex.workspace = true
 
