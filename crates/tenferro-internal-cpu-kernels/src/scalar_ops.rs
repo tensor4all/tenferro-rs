@@ -15,7 +15,7 @@ pub mod op;
 
 pub use op::{AddOp, BinaryScalarOp, MulOp, SubOp};
 
-use strided_kernel::{reduce, zip_map2_into, StridedView, StridedViewMut};
+use strided_kernel::{reduce, zip_map2_into, Exec, StridedView, StridedViewMut};
 use tenferro_tensor::col_major_strides;
 use tenferro_tensor::{DynRank, Host, StrideVec, TypedTensor};
 
@@ -42,13 +42,14 @@ fn require_same_shape(op: &'static str, lhs: &[usize], rhs: &[usize]) -> crate::
 /// # Examples
 ///
 /// ```rust
+/// use strided_kernel::Exec;
 /// use tenferro_internal_cpu_kernels::scalar_ops::{scalar_binary_into, AddOp};
 /// use tenferro_tensor::{DynRank, Host, TypedTensor};
 ///
 /// let lhs = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 /// let rhs = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![10.0_f64, 20.0])?;
 /// let mut out = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![0.0_f64, 0.0])?;
-/// scalar_binary_into::<f64, AddOp>("add", &mut out, &lhs, &rhs)?;
+/// scalar_binary_into::<f64, AddOp>("add", &mut out, &lhs, &rhs, Exec::serial())?;
 /// assert_eq!(out.as_slice(), &[11.0, 22.0]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -62,6 +63,7 @@ pub fn scalar_binary_into<T, Op>(
     destination: &mut TypedTensor<T, DynRank, Host>,
     lhs: &TypedTensor<T, DynRank, Host>,
     rhs: &TypedTensor<T, DynRank, Host>,
+    exec: Exec<'_>,
 ) -> crate::Result<()>
 where
     T: Copy + Send + Sync,
@@ -82,9 +84,13 @@ where
     let rhs_view: StridedView<'_, T> = StridedView::new(rhs.as_slice(), rhs.shape(), &strides, 0)
         .map_err(|err| crate::Error::backend_source(op, err))?;
 
-    zip_map2_into(&mut destination_view, &lhs_view, &rhs_view, |a, b| {
-        Op::apply(a, b)
-    })
+    zip_map2_into(
+        &mut destination_view,
+        &lhs_view,
+        &rhs_view,
+        |a, b| Op::apply(a, b),
+        exec,
+    )
     .map_err(|err| crate::Error::backend_source(op, err))
 }
 
@@ -98,11 +104,12 @@ where
 /// # Examples
 ///
 /// ```rust
+/// use strided_kernel::Exec;
 /// use tenferro_internal_cpu_kernels::scalar_ops::{scalar_fold, AddOp};
 /// use tenferro_tensor::{DynRank, Host, TypedTensor};
 ///
 /// let values = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
-/// let total = scalar_fold::<f64, AddOp>("sum", &values, 0.0_f64)?;
+/// let total = scalar_fold::<f64, AddOp>("sum", &values, 0.0_f64, Exec::serial())?;
 /// assert_eq!(total, 6.0);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -115,6 +122,7 @@ pub fn scalar_fold<T, Op>(
     op: &'static str,
     source: &TypedTensor<T, DynRank, Host>,
     init: T,
+    exec: Exec<'_>,
 ) -> crate::Result<T>
 where
     T: Copy + Send + Sync,
@@ -123,7 +131,7 @@ where
     let strides = strides_for(source.shape())?;
     let view: StridedView<'_, T> = StridedView::new(source.as_slice(), source.shape(), &strides, 0)
         .map_err(|err| crate::Error::backend_source(op, err))?;
-    reduce(&view, |element| element, |a, b| Op::apply(a, b), init)
+    reduce(&view, |element| element, |a, b| Op::apply(a, b), init, exec)
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 

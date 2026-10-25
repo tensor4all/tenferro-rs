@@ -3,7 +3,7 @@
 //! CPU-owned one-shot elementwise read-into replay.
 
 use strided_kernel::{
-    erased_map_into, erased_zip_into, ErasedMapOp, ErasedZipOp, ExecContext, KernelDType,
+    erased_map_into, erased_zip_into, ErasedMapOp, ErasedZipOp, Exec, KernelDType,
 };
 use tenferro_tensor::backend::{validate_read_into_destination, ElementwiseReadOp};
 use tenferro_tensor::{
@@ -137,9 +137,9 @@ fn typed_bytes_mut<T>(data: &mut [T]) -> &mut [u8] {
 fn execute_one_shot_map<T: 'static>(
     dtype: KernelDType,
     op: ErasedMapOp,
-    ctx: &ExecContext,
     input: TypedTensorView<'_, T>,
     mut out: TypedTensorViewMut<'_, T>,
+    exec: Exec<'_>,
 ) -> crate::Result<()> {
     let input_data = input.host_storage()?;
     // INVARIANT: dtype and layout come from the same validated typed view, and
@@ -174,17 +174,17 @@ fn execute_one_shot_map<T: 'static>(
         )
     }
     .map_err(|error| Error::backend_source("elementwise_read_into", error))?;
-    erased_map_into(dtype, op, ctx, &mut out_descriptor, &input_descriptor)
+    erased_map_into(dtype, op, &mut out_descriptor, &input_descriptor, exec)
         .map_err(|error| Error::backend_source("elementwise_read_into", error))
 }
 
 fn execute_one_shot_zip<T: 'static>(
     dtype: KernelDType,
     op: ErasedZipOp,
-    ctx: &ExecContext,
     lhs: TypedTensorView<'_, T>,
     rhs: TypedTensorView<'_, T>,
     mut out: TypedTensorViewMut<'_, T>,
+    exec: Exec<'_>,
 ) -> crate::Result<()> {
     let lhs_data = lhs.host_storage()?;
     // INVARIANT: dtype and layout come from the same validated typed view, and
@@ -237,10 +237,10 @@ fn execute_one_shot_zip<T: 'static>(
     erased_zip_into(
         dtype,
         op,
-        ctx,
         &mut out_descriptor,
         &lhs_descriptor,
         &rhs_descriptor,
+        exec,
     )
     .map_err(|error| Error::backend_source("elementwise_read_into", error))
 }
@@ -249,7 +249,7 @@ fn execute_one_shot_elementwise(
     op: ElementwiseReadOp,
     inputs: &[TensorRead<'_>],
     out: TensorWrite<'_>,
-    ctx: &ExecContext,
+    exec: Exec<'_>,
 ) -> crate::Result<()> {
     let out = tensor_write_view(out)?;
     macro_rules! dispatch_map {
@@ -257,25 +257,25 @@ fn execute_one_shot_elementwise(
             let input = inputs[0].clone().tensor_view();
             match (input, out) {
                 (TensorView::F32(input), TensorViewMut::F32(out)) => {
-                    execute_one_shot_map(KernelDType::F32, $map_op, ctx, input, out)
+                    execute_one_shot_map(KernelDType::F32, $map_op, input, out, exec)
                 }
                 (TensorView::F64(input), TensorViewMut::F64(out)) => {
-                    execute_one_shot_map(KernelDType::F64, $map_op, ctx, input, out)
+                    execute_one_shot_map(KernelDType::F64, $map_op, input, out, exec)
                 }
                 (TensorView::I32(input), TensorViewMut::I32(out)) => {
-                    execute_one_shot_map(KernelDType::I32, $map_op, ctx, input, out)
+                    execute_one_shot_map(KernelDType::I32, $map_op, input, out, exec)
                 }
                 (TensorView::I64(input), TensorViewMut::I64(out)) => {
-                    execute_one_shot_map(KernelDType::I64, $map_op, ctx, input, out)
+                    execute_one_shot_map(KernelDType::I64, $map_op, input, out, exec)
                 }
                 (TensorView::Bool(input), TensorViewMut::Bool(out)) => {
-                    execute_one_shot_map(KernelDType::Bool, $map_op, ctx, input, out)
+                    execute_one_shot_map(KernelDType::Bool, $map_op, input, out, exec)
                 }
                 (TensorView::C32(input), TensorViewMut::C32(out)) => {
-                    execute_one_shot_map(KernelDType::C32, $map_op, ctx, input, out)
+                    execute_one_shot_map(KernelDType::C32, $map_op, input, out, exec)
                 }
                 (TensorView::C64(input), TensorViewMut::C64(out)) => {
-                    execute_one_shot_map(KernelDType::C64, $map_op, ctx, input, out)
+                    execute_one_shot_map(KernelDType::C64, $map_op, input, out, exec)
                 }
                 _ => unreachable!("one-shot eligibility validates matching dtypes"),
             }
@@ -287,22 +287,22 @@ fn execute_one_shot_elementwise(
             let rhs = inputs[1].clone().tensor_view();
             match (lhs, rhs, out) {
                 (TensorView::F32(lhs), TensorView::F32(rhs), TensorViewMut::F32(out)) => {
-                    execute_one_shot_zip(KernelDType::F32, $zip_op, ctx, lhs, rhs, out)
+                    execute_one_shot_zip(KernelDType::F32, $zip_op, lhs, rhs, out, exec)
                 }
                 (TensorView::F64(lhs), TensorView::F64(rhs), TensorViewMut::F64(out)) => {
-                    execute_one_shot_zip(KernelDType::F64, $zip_op, ctx, lhs, rhs, out)
+                    execute_one_shot_zip(KernelDType::F64, $zip_op, lhs, rhs, out, exec)
                 }
                 (TensorView::I32(lhs), TensorView::I32(rhs), TensorViewMut::I32(out)) => {
-                    execute_one_shot_zip(KernelDType::I32, $zip_op, ctx, lhs, rhs, out)
+                    execute_one_shot_zip(KernelDType::I32, $zip_op, lhs, rhs, out, exec)
                 }
                 (TensorView::I64(lhs), TensorView::I64(rhs), TensorViewMut::I64(out)) => {
-                    execute_one_shot_zip(KernelDType::I64, $zip_op, ctx, lhs, rhs, out)
+                    execute_one_shot_zip(KernelDType::I64, $zip_op, lhs, rhs, out, exec)
                 }
                 (TensorView::C32(lhs), TensorView::C32(rhs), TensorViewMut::C32(out)) => {
-                    execute_one_shot_zip(KernelDType::C32, $zip_op, ctx, lhs, rhs, out)
+                    execute_one_shot_zip(KernelDType::C32, $zip_op, lhs, rhs, out, exec)
                 }
                 (TensorView::C64(lhs), TensorView::C64(rhs), TensorViewMut::C64(out)) => {
-                    execute_one_shot_zip(KernelDType::C64, $zip_op, ctx, lhs, rhs, out)
+                    execute_one_shot_zip(KernelDType::C64, $zip_op, lhs, rhs, out, exec)
                 }
                 _ => unreachable!("one-shot eligibility validates matching dtypes"),
             }
@@ -334,12 +334,12 @@ fn execute_one_shot_elementwise(
 /// [`crate::Error::BackendSource`] when an eligible strided replay fails.
 /// Errors returned by `fallback` are preserved unchanged.
 #[doc(hidden)]
-pub fn elementwise_read_into_with_context(
+pub fn elementwise_read_into_with_exec(
     op: ElementwiseReadOp,
     inputs: &[TensorRead<'_>],
     out: TensorWrite<'_>,
-    ctx: &ExecContext,
-    fallback: impl FnOnce(&[TensorRead<'_>], TensorWrite<'_>) -> crate::Result<()>,
+    fallback: impl FnOnce(&[TensorRead<'_>], TensorWrite<'_>, Exec<'_>) -> crate::Result<()>,
+    exec: Exec<'_>,
 ) -> crate::Result<()> {
     if inputs.len() != op.arity() {
         return Err(Error::invalid_argument(
@@ -350,9 +350,9 @@ pub fn elementwise_read_into_with_context(
     }
     validate_elementwise_output_disjoint(op, inputs, &out)?;
     if one_shot_eligible(op, inputs, &out) {
-        execute_one_shot_elementwise(op, inputs, out, ctx)
+        execute_one_shot_elementwise(op, inputs, out, exec)
     } else {
-        fallback(inputs, out)
+        fallback(inputs, out, exec)
     }
 }
 

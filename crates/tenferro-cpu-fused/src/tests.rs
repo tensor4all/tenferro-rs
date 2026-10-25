@@ -1,4 +1,5 @@
 use super::*;
+use strided_basic::Exec;
 
 #[test]
 fn elementwise_fusion_validation_covers_descriptor_errors_and_empty_outputs() {
@@ -89,7 +90,7 @@ fn elementwise_fusion_declines_i32_add_multiply_plan() {
     );
 
     assert!(
-        elementwise_fusion_with_pool(&mut buffers, &ExecContext::serial(), &[&lhs, &rhs], &plan)
+        elementwise_fusion_with_pool(&mut buffers, &[&lhs, &rhs], &plan, Exec::serial())
             .unwrap()
             .is_none(),
         "I32 has no measured vectorized replay and must stay unfused"
@@ -120,10 +121,9 @@ fn elementwise_fusion_executes_reversed_first_input_plan() {
         ],
     );
 
-    let outputs =
-        elementwise_fusion_with_pool(&mut buffers, &ExecContext::serial(), &[&lhs, &rhs], &plan)
-            .unwrap()
-            .expect("reversed first input order should be handled by strided fused replay");
+    let outputs = elementwise_fusion_with_pool(&mut buffers, &[&lhs, &rhs], &plan, Exec::serial())
+        .unwrap()
+        .expect("reversed first input order should be handled by strided fused replay");
 
     assert_eq!(outputs.len(), 1);
     let actual = outputs[0].as_slice::<f64>().unwrap();
@@ -158,9 +158,9 @@ fn elementwise_fusion_executes_f32_plan_and_declines_i64() {
 
     let f32_outputs = elementwise_fusion_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         &[&f32_lhs, &f32_rhs],
         &add_plan,
+        Exec::serial(),
     )
     .unwrap()
     .expect("F32 add fusion should be delegated to strided-kernel");
@@ -190,9 +190,9 @@ fn elementwise_fusion_executes_f32_plan_and_declines_i64() {
     assert!(
         elementwise_fusion_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             &[&i64_lhs, &i64_rhs],
             &i64_plan,
+            Exec::serial(),
         )
         .unwrap()
         .is_none(),
@@ -221,14 +221,9 @@ fn elementwise_fusion_declines_bool_and_complex_dtypes() {
     );
 
     assert!(
-        elementwise_fusion_with_pool(
-            &mut buffers,
-            &ExecContext::serial(),
-            &[&bool_input],
-            &bool_plan,
-        )
-        .unwrap()
-        .is_none(),
+        elementwise_fusion_with_pool(&mut buffers, &[&bool_input], &bool_plan, Exec::serial(),)
+            .unwrap()
+            .is_none(),
         "Bool has no measured vectorized replay and must stay unfused"
     );
 
@@ -259,9 +254,9 @@ fn elementwise_fusion_declines_bool_and_complex_dtypes() {
     assert!(
         elementwise_fusion_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             &[&c32_lhs, &c32_rhs],
             &c32_plan,
+            Exec::serial(),
         )
         .unwrap()
         .is_none(),
@@ -295,9 +290,9 @@ fn elementwise_fusion_declines_bool_and_complex_dtypes() {
     assert!(
         elementwise_fusion_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             &[&c64_lhs, &c64_rhs],
             &c64_plan,
+            Exec::serial(),
         )
         .unwrap()
         .is_none(),
@@ -388,14 +383,10 @@ macro_rules! ordered_fusion_bit_match {
                     vec![input_count],
                     vec![ElementwiseFusionInst::new(op, (0..input_count).collect())],
                 );
-                let outputs = elementwise_fusion_with_pool(
-                    &mut buffers,
-                    &ExecContext::serial(),
-                    &inputs,
-                    &plan,
-                )
-                .unwrap()
-                .unwrap_or_else(|| panic!("{op:?} must fuse above the floor"));
+                let outputs =
+                    elementwise_fusion_with_pool(&mut buffers, &inputs, &plan, Exec::serial())
+                        .unwrap()
+                        .unwrap_or_else(|| panic!("{op:?} must fuse above the floor"));
                 let actual = outputs[0].as_slice::<$ty>().unwrap();
                 for index in 0..n {
                     let expected = ordered_reference(
@@ -442,14 +433,9 @@ fn elementwise_fusion_returns_none_for_erased_unsupported_ops() {
         )],
     );
     assert!(
-        elementwise_fusion_with_pool(
-            &mut buffers,
-            &ExecContext::serial(),
-            &[&lhs, &rhs],
-            &divide_plan
-        )
-        .unwrap()
-        .is_none(),
+        elementwise_fusion_with_pool(&mut buffers, &[&lhs, &rhs], &divide_plan, Exec::serial(),)
+            .unwrap()
+            .is_none(),
         "integer divide is not owned by erased strided fusion"
     );
 
@@ -472,9 +458,9 @@ fn elementwise_fusion_returns_none_for_erased_unsupported_ops() {
     assert!(
         elementwise_fusion_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             &[&complex, &complex],
-            &ordered_plan
+            &ordered_plan,
+            Exec::serial(),
         )
         .unwrap()
         .is_none(),
@@ -511,7 +497,7 @@ fn elementwise_fusion_returns_none_above_erased_input_limit() {
     let plan = ElementwiseFusionPlan::new(DType::F64, input_count, vec![2 * input_count - 2], ops);
 
     assert!(
-        elementwise_fusion_with_pool(&mut buffers, &ExecContext::serial(), &inputs, &plan)
+        elementwise_fusion_with_pool(&mut buffers, &inputs, &plan, Exec::serial())
             .unwrap()
             .is_none(),
         "plans reading more inputs than erased strided fusion accepts are declined"
@@ -561,10 +547,9 @@ fn elementwise_fusion_executes_every_selected_op_against_a_host_reference() {
             vec![1],
             vec![ElementwiseFusionInst::new(op, vec![0])],
         );
-        let outputs =
-            elementwise_fusion_with_pool(&mut buffers, &ExecContext::serial(), &[&input], &plan)
-                .unwrap()
-                .unwrap_or_else(|| panic!("{op:?} should be selected for F64"));
+        let outputs = elementwise_fusion_with_pool(&mut buffers, &[&input], &plan, Exec::serial())
+            .unwrap()
+            .unwrap_or_else(|| panic!("{op:?} should be selected for F64"));
         let actual = outputs[0].as_slice::<f64>().unwrap();
         for (index, &x) in unary_data.iter().enumerate() {
             let expected = reference(x);
@@ -596,14 +581,10 @@ fn elementwise_fusion_executes_every_selected_op_against_a_host_reference() {
             vec![2],
             vec![ElementwiseFusionInst::new(op, vec![0, 1])],
         );
-        let outputs = elementwise_fusion_with_pool(
-            &mut buffers,
-            &ExecContext::serial(),
-            &[&lhs, &rhs],
-            &plan,
-        )
-        .unwrap()
-        .unwrap_or_else(|| panic!("{op:?} should be selected for F64"));
+        let outputs =
+            elementwise_fusion_with_pool(&mut buffers, &[&lhs, &rhs], &plan, Exec::serial())
+                .unwrap()
+                .unwrap_or_else(|| panic!("{op:?} should be selected for F64"));
         let actual = outputs[0].as_slice::<f64>().unwrap();
         for index in 0..n {
             let expected = reference(lhs_data[index], rhs_data[index]);
@@ -638,7 +619,7 @@ fn elementwise_fusion_rejects_malformed_broadcast_views() {
         )
     };
     let run = |buffers: &mut BufferPool, input: &Tensor, plan: &ElementwiseFusionPlan| {
-        elementwise_fusion_with_pool(buffers, &ExecContext::serial(), &[input], plan)
+        elementwise_fusion_with_pool(buffers, &[input], plan, Exec::serial())
     };
 
     // `dims` rank disagrees with the input rank.
@@ -739,7 +720,7 @@ fn elementwise_fusion_declines_empty_outputs_unfused_ops_and_mismatched_dims() {
     // Empty outputs: validation reports `false` and the region is declined.
     let empty = ElementwiseFusionPlan::new(DType::F64, 1, Vec::new(), Vec::new());
     assert!(
-        elementwise_fusion_with_pool(&mut buffers, &ExecContext::serial(), &[&input], &empty)
+        elementwise_fusion_with_pool(&mut buffers, &[&input], &empty, Exec::serial())
             .unwrap()
             .is_none(),
         "an empty-output plan must be declined"
@@ -759,14 +740,9 @@ fn elementwise_fusion_declines_empty_outputs_unfused_ops_and_mismatched_dims() {
         )],
     );
     assert!(
-        elementwise_fusion_with_pool(
-            &mut buffers,
-            &ExecContext::serial(),
-            &[&input, &rhs],
-            &remainder,
-        )
-        .unwrap()
-        .is_none(),
+        elementwise_fusion_with_pool(&mut buffers, &[&input, &rhs], &remainder, Exec::serial(),)
+            .unwrap()
+            .is_none(),
         "a plan with an unfused op must be declined"
     );
 
@@ -785,14 +761,9 @@ fn elementwise_fusion_declines_empty_outputs_unfused_ops_and_mismatched_dims() {
         )],
     );
     assert!(
-        elementwise_fusion_with_pool(
-            &mut buffers,
-            &ExecContext::serial(),
-            &[&input, &input],
-            &widened,
-        )
-        .unwrap()
-        .is_none(),
+        elementwise_fusion_with_pool(&mut buffers, &[&input, &input], &widened, Exec::serial(),)
+            .unwrap()
+            .is_none(),
         "inputs with different mapped shapes must be declined"
     );
 }
