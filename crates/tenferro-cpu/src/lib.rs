@@ -131,6 +131,7 @@ use strided_kernel::col_major_strides as kernel_col_major_strides;
 use strided_kernel::StridedArray;
 
 use crate::buffer_pool::BufferPool;
+use strided_exec::Exec;
 pub(crate) use tenferro_tensor::*;
 
 /// Stable provider identity of the compile-time-selected CPU backend.
@@ -187,8 +188,11 @@ pub use runtime_adapter::{
 };
 /// The placement types of the CPU stack, re-exported so callers need no separate
 /// dependency: build a [`Pool`] with [`Pool::builder`] and hand it to
-/// [`CpuEngine::new`]; [`Exec`] is the token every fan-out entry takes.
-pub use strided_exec::{Exec, Pool, PoolBuilder};
+/// [`CpuEngine::new`]. The token every fan-out entry takes is
+/// `tenferro_cpu::strided_exec::Exec`; it is not re-exported at the root because
+/// [`CpuEngine::exec`] returns the different `tcontract_exec::Exec` bundle.
+pub use strided_exec;
+pub use strided_exec::{Pool, PoolBuilder};
 /// Ordinary CPU entry points that take a caller-provided destination and the
 /// caller's own arithmetic instead of the typed pool.
 pub use tenferro_internal_cpu_kernels::scalar_ops::{

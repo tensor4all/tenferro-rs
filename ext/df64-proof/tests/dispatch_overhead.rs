@@ -17,6 +17,8 @@
 //! unoptimized build inflates this layer, so the report is taken in both the test profile and
 //! the release profile and each number is labelled with the profile it came from.
 
+// Calls without an engine pass `Exec::serial()`: no token is reachable, so they run on the
+// calling thread. No engine is reachable in these helpers.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -234,7 +236,7 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
             "total",
             &stored,
             Df64::zero(),
-            tenferro_cpu::Exec::serial(),
+            tenferro_cpu::strided_exec::Exec::serial(),
         )
         .expect("the body's own reduction");
         std::hint::black_box(total);

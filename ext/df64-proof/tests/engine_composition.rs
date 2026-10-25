@@ -3,6 +3,8 @@
 //! The runtime carries the external payload, the extension's kernel runs on the
 //! caller-held engine, and ordinary tensor operations run on the same engine.
 
+// Calls without an engine pass `Exec::serial()`: no token is reachable, so they run on the
+// calling thread. No engine is reachable in these helpers.
 use tenferro_cpu::{scalar_binary_into, CpuEngine};
 use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_tensor::Tensor;
@@ -55,7 +57,7 @@ fn an_external_scalar_composes_with_ordinary_operations_on_one_engine() {
         &mut destination,
         payload::<Df64>(&lhs),
         payload::<Df64>(&rhs),
-        tenferro_cpu::Exec::serial(),
+        tenferro_cpu::strided_exec::Exec::serial(),
     )
     .expect("extension addition");
 

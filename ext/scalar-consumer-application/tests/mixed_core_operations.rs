@@ -7,6 +7,8 @@
 //! reading: the core operations themselves run in that mixed runtime, on a value that the
 //! runtime produced, with the standard path still available in the same process.
 
+// Calls without an engine pass `Exec::serial()`: no token is reachable, so they run on the
+// calling thread. No engine is reachable in these helpers.
 use std::sync::Arc;
 
 use tenferro_cpu::{scalar_binary_into, scalar_fold, AddOp, CpuEngine};
@@ -108,7 +110,7 @@ fn the_core_operations_run_in_the_mixed_configuration() {
         &mut sum,
         &leading,
         &increment,
-        tenferro_cpu::Exec::serial(),
+        tenferro_cpu::strided_exec::Exec::serial(),
     )
     .expect("addition in the extended scalar");
     let difference = sum.as_slice()[0] - Df64::from_f64(1.0);
@@ -121,18 +123,26 @@ fn the_core_operations_run_in_the_mixed_configuration() {
         vec![Df64::from_f64(1.0), Df64 { hi: low, lo: 0.0 }],
     )
     .expect("shape matches data");
-    let reduced =
-        scalar_fold::<Df64, Df64Add>("sum", &values, Df64::zero(), tenferro_cpu::Exec::serial())
-            .expect("reduction in the extended scalar");
+    let reduced = scalar_fold::<Df64, Df64Add>(
+        "sum",
+        &values,
+        Df64::zero(),
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .expect("reduction in the extended scalar");
     assert_eq!(reduced - Df64::from_f64(1.0), Df64 { hi: low, lo: 0.0 });
 
     // The canonical path is still present and still ordinary in the same process.
     let ordinary =
         TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, low])
             .expect("shape");
-    let ordinary_total =
-        scalar_fold::<f64, AddOp>("sum", &ordinary, 0.0_f64, tenferro_cpu::Exec::serial())
-            .expect("f64 sum");
+    let ordinary_total = scalar_fold::<f64, AddOp>(
+        "sum",
+        &ordinary,
+        0.0_f64,
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .expect("f64 sum");
     assert_eq!(
         ordinary_total - 1.0,
         0.0,

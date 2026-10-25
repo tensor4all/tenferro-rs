@@ -5,6 +5,8 @@
 //! rounding of the storage type. The shared entry points are used unchanged; what this crate adds
 //! is the element type and its operation types.
 
+// Calls without an engine pass `Exec::serial()`: no token is reachable, so they run on the
+// calling thread. No engine is reachable in these helpers.
 use tenferro_bf16_proof::reduction::{sum_in_f32_accumulation, sum_with_per_step_rounding};
 use tenferro_bf16_proof::{Bf16, Bf16Add, Bf16Mul, Bf16Sub};
 use tenferro_cpu::{scalar_binary_into, scalar_fold};
@@ -37,7 +39,7 @@ fn the_shared_elementwise_entry_point_serves_bfloat16() {
         &mut destination,
         &lhs,
         &rhs,
-        tenferro_cpu::Exec::serial(),
+        tenferro_cpu::strided_exec::Exec::serial(),
     )
     .expect("addition through the shared entry point");
     assert_eq!(widened(&destination), vec![3.0, 7.0]);
@@ -48,7 +50,7 @@ fn the_shared_elementwise_entry_point_serves_bfloat16() {
         &mut difference,
         &rhs,
         &lhs,
-        tenferro_cpu::Exec::serial(),
+        tenferro_cpu::strided_exec::Exec::serial(),
     )
     .expect("subtraction through the shared entry point");
     assert_eq!(widened(&difference), vec![1.0, 1.0]);
@@ -59,7 +61,7 @@ fn the_shared_elementwise_entry_point_serves_bfloat16() {
         &mut product,
         &lhs,
         &rhs,
-        tenferro_cpu::Exec::serial(),
+        tenferro_cpu::strided_exec::Exec::serial(),
     )
     .expect("multiplication through the shared entry point");
     assert_eq!(widened(&product), vec![2.0, 12.0]);
@@ -77,7 +79,7 @@ fn a_single_operation_rounds_once() {
         &mut destination,
         &lhs,
         &rhs,
-        tenferro_cpu::Exec::serial(),
+        tenferro_cpu::strided_exec::Exec::serial(),
     )
     .expect("addition through the shared entry point");
     assert_eq!(widened(&destination), vec![1.0]);
@@ -91,9 +93,13 @@ fn the_shared_fold_rounds_at_every_step() {
     // becomes two, while independent partial sums stay exact for longer. Every grouping lies
     // between the stalled chain and the exact sum.
     let ones = values(&[1.0; 300]);
-    let total =
-        scalar_fold::<Bf16, Bf16Add>("sum", &ones, Bf16::zero(), tenferro_cpu::Exec::serial())
-            .expect("shared fold");
+    let total = scalar_fold::<Bf16, Bf16Add>(
+        "sum",
+        &ones,
+        Bf16::zero(),
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .expect("shared fold");
     assert!(
         (256.0..=300.0).contains(&total.to_f32()),
         "{}",

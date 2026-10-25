@@ -7,6 +7,8 @@
 //! instantiation sets to be equal, so the second set contributes membership and dispatch
 //! rather than another numerical specialization.
 
+// Calls without an engine pass `Exec::serial()`: no token is reachable, so they run on the
+// calling thread. No engine is reachable in these helpers.
 use tenferro_cpu::scalar_binary_into;
 use tenferro_df64_proof::{Df64, Df64Add, ExtendedSet};
 use tenferro_tensor::ScalarSet;
@@ -38,7 +40,7 @@ fn one_containing_set_runs_the_same_arithmetic() {
         &mut destination,
         &member_of_the_contribution_set(),
         &increment,
-        tenferro_cpu::Exec::serial(),
+        tenferro_cpu::strided_exec::Exec::serial(),
     )
     .expect("addition through the contribution's set succeeds");
 

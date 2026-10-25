@@ -12,8 +12,11 @@ can fan out takes it as its last parameter and splits it (`fork`,
 `for_ranges`, `external`). A token cannot be copied and every parallel entry
 consumes it, so the number of tasks running at once under one operation is at
 most its budget, at every nesting depth. `strided-exec` is the only crate of the
-stack that starts tasks; `tenferro-cpu` re-exports `Pool`, `PoolBuilder` and
-`Exec` so you need no separate dependency.
+stack that starts tasks; `tenferro-cpu` re-exports `Pool` and `PoolBuilder`, and the
+`strided_exec` crate itself, so the token is named
+`tenferro_cpu::strided_exec::Exec` and you need no separate dependency. (It is
+not re-exported at the root: `CpuEngine::exec` returns the different
+`tcontract_exec::Exec` bundle.)
 
 For the dispatch cost of an operation once the engine exists, see
 [Dispatch and Engine Cost](dispatch-and-engine-cost.md).

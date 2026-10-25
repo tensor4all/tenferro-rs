@@ -10,7 +10,7 @@ use num_complex::Complex;
 use num_traits::Zero;
 use std::{marker::PhantomData, mem::MaybeUninit};
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
-use tenferro_cpu::Exec;
+use tenferro_cpu::strided_exec::Exec;
 
 /// Disjoint per-job lane buffers, shared by the forked jobs.
 ///
