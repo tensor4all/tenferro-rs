@@ -10,6 +10,7 @@ use crate::{
     reduce_min, reduce_prod, reduce_sum, reduce_sum_squares, rem, reshape, scatter, select, sign,
     transpose, tril, triu, with_cpu_engine, CpuEngine, Error,
 };
+use strided_exec::Exec;
 #[cfg(feature = "blas")]
 use tenferro_tensor::StridedSliceSpec;
 use tenferro_tensor::{
@@ -376,6 +377,7 @@ fn analytic_read_view_covers_every_preset_scalar() {
                 &mut buffers,
                 tenferro_tensor::TensorRead::from_tensor(&lhs),
                 tenferro_tensor::TensorRead::from_tensor(&rhs),
+                Exec::serial(),
             )
             .expect("pow admits this preset scalar")
         }};
@@ -430,6 +432,7 @@ fn analytic_read_view_covers_every_preset_scalar() {
         &mut buffers,
         tenferro_tensor::TensorRead::from_tensor(&bools),
         tenferro_tensor::TensorRead::from_tensor(&bools),
+        Exec::serial(),
     )
     .expect_err("pow refuses the boolean analytic view");
     assert!(matches!(
@@ -441,7 +444,7 @@ fn analytic_read_view_covers_every_preset_scalar() {
     ));
 }
 
-/// Shared fixture: run one large native map through the session's parallelism.
+/// Shared fixture: run one large native map through the placement token it is given.
 #[cfg(test)]
 pub(crate) mod native_participants {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -518,6 +521,7 @@ pub(crate) mod native_participants {
     pub(crate) fn run_native_map_of_len(
         len: usize,
         require_two: bool,
+        exec: strided_exec::Exec<'_>,
     ) -> (Arc<NativeParticipants>, Vec<f64>) {
         let source =
             strided_kernel::StridedArray::<f64>::from_fn_col_major(&[len], |index| index[0] as f64);
@@ -528,10 +532,15 @@ pub(crate) mod native_participants {
             NativeParticipants::default()
         });
         let observed = Arc::clone(&participants);
-        strided_kernel::map_into(&mut destination.view_mut(), &source.view(), |value| {
-            observed.observe();
-            value + 1.0
-        })
+        strided_kernel::map_into(
+            &mut destination.view_mut(),
+            &source.view(),
+            |value| {
+                observed.observe();
+                value + 1.0
+            },
+            exec,
+        )
         .unwrap();
         let output = destination.into_data();
         assert_eq!(output[0], 1.0);
@@ -539,7 +548,10 @@ pub(crate) mod native_participants {
         (participants, output)
     }
 
-    pub(crate) fn run_unscoped_native_map(require_two: bool) -> Arc<NativeParticipants> {
-        run_native_map_of_len(LARGE_NATIVE_TEST_LEN, require_two).0
+    pub(crate) fn run_unscoped_native_map(
+        require_two: bool,
+        exec: strided_exec::Exec<'_>,
+    ) -> Arc<NativeParticipants> {
+        run_native_map_of_len(LARGE_NATIVE_TEST_LEN, require_two, exec).0
     }
 }

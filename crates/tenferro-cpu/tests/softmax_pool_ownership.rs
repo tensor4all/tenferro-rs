@@ -8,7 +8,7 @@
 //! A serial engine must stay on the calling thread and a pooled engine must use
 //! only its own pool, per the caller-held-engine contract of #2206.
 
-use tenferro_cpu::{thread_pool_builder, CpuEngine};
+use tenferro_cpu::{CpuEngine, Pool};
 use tenferro_tensor::backend::ActivationOp;
 use tenferro_tensor::{Engine, Tensor, TensorElementwise, TensorRead};
 
@@ -39,22 +39,37 @@ fn run(engine: &mut CpuEngine, op: &str) {
 #[test]
 fn fast_paths_never_enter_the_global_rayon_pool() {
     let mut serial = CpuEngine::serial();
-    let mut pooled = CpuEngine::new(
-        thread_pool_builder()
-            .num_threads(4)
-            .build()
-            .expect("test pool"),
-    );
+    let mut pooled = CpuEngine::new(Pool::builder().threads(4).build().expect("test pool"));
     for op in ["control", "softmax", "activation"] {
         run(&mut serial, op);
         run(&mut pooled, op);
     }
-    // `build_global` fails exactly when something already started the global
-    // pool, which no engine-held operation may do.
+    // The ledger reports whether anything started Rayon's global pool, which
+    // no engine-held operation may do (`--features ledger`, in this binary alone).
+    #[cfg(feature = "ledger")]
     assert!(
-        rayon::ThreadPoolBuilder::new().build_global().is_ok(),
+        strided_exec::ledger::global_pool_unstarted(),
         "a CPU fast path entered Rayon's global pool"
     );
+}
+
+/// The tasks running at once under one operation never exceed the engine's
+/// budget, for the fused paths that fan out.
+#[cfg(feature = "ledger")]
+#[test]
+fn fast_paths_stay_within_the_engine_budget() {
+    let mut pooled = CpuEngine::new(Pool::builder().threads(3).build().expect("test pool"));
+    for op in ["control", "softmax", "activation"] {
+        run(&mut pooled, op);
+        let roots = pooled.take_ledger_roots();
+        assert!(!roots.is_empty(), "{op} minted a token");
+        for root in roots {
+            assert!(
+                strided_exec::ledger::max_live(root) <= 3,
+                "{op} ran more than 3 tasks at once"
+            );
+        }
+    }
 }
 
 /// A serial engine and a pooled engine compute the same normalized columns.
@@ -62,12 +77,7 @@ fn fast_paths_never_enter_the_global_rayon_pool() {
 fn serial_and_pooled_engines_agree() {
     let x = input();
     let mut serial = CpuEngine::serial();
-    let mut pooled = CpuEngine::new(
-        thread_pool_builder()
-            .num_threads(4)
-            .build()
-            .expect("test pool"),
-    );
+    let mut pooled = CpuEngine::new(Pool::builder().threads(4).build().expect("test pool"));
     let a = serial
         .softmax_read(TensorRead::from_tensor(&x), 0)
         .unwrap()

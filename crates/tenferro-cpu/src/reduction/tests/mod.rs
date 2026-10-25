@@ -5,6 +5,7 @@ use super::{
     reduce_sum_read, reduce_sum_squares, typed_input,
 };
 use num_complex::{Complex32, Complex64};
+use strided_exec::Exec;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensor};
 
 fn tensor<T: tenferro_tensor::TensorScalar + Copy>(values: Vec<T>) -> Tensor {
@@ -33,8 +34,8 @@ fn reduce_max_and_min_cover_every_preset_scalar() {
     for input in &cases {
         // Either the table computes the reduction or its refusal arm answers; both are
         // dispatch bodies this module owns.
-        let _ = reduce_max(input, &[0], &strided_kernel::ExecContext::serial());
-        let _ = reduce_min(input, &[0], &strided_kernel::ExecContext::serial());
+        let _ = reduce_max(input, &[0], Exec::serial());
+        let _ = reduce_min(input, &[0], Exec::serial());
     }
 }
 
@@ -61,10 +62,9 @@ fn reduce_sum_and_prod_cover_every_preset_scalar() {
         tensor(vec![Complex32::new(1.0, 1.0), Complex32::new(2.0, 2.0)]),
         tensor(vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, 2.0)]),
     ];
-    let context = strided_kernel::ExecContext::serial();
     for input in &cases {
-        let _ = reduce_sum(input, &[0], &context);
-        let _ = reduce_prod(input, &[0], &context);
+        let _ = reduce_sum(input, &[0], Exec::serial());
+        let _ = reduce_prod(input, &[0], Exec::serial());
     }
 }
 
@@ -72,7 +72,6 @@ fn reduce_sum_and_prod_cover_every_preset_scalar() {
 /// arms without materializing, and the boolean view is refused with a typed refusal rather than a panic.
 #[test]
 fn reduce_sum_read_covers_every_preset_view() {
-    let context = strided_kernel::ExecContext::serial();
     let mut buffers = crate::buffer_pool::BufferPool::new();
 
     macro_rules! check {
@@ -83,7 +82,7 @@ fn reduce_sum_read_covers_every_preset_view() {
                 .expect("the tensor was built from this scalar")
                 .as_view();
             let read = TensorRead::from_view(TensorView::$variant(typed));
-            let result = reduce_sum_read(&mut buffers, read, &[0], &context);
+            let result = reduce_sum_read(&mut buffers, read, &[0], Exec::serial());
             if $supported {
                 assert!(result.is_ok(), "{} view must reduce", stringify!($scalar));
             } else {
@@ -117,7 +116,6 @@ fn reduce_sum_read_covers_every_preset_view() {
 /// arms. The owned-tensor tests take neither path.
 #[test]
 fn reduction_read_tables_cover_views_and_sum_squares_refusals() {
-    let context = strided_kernel::ExecContext::serial();
     let mut buffers = crate::buffer_pool::BufferPool::new();
 
     macro_rules! prod_view {
@@ -128,7 +126,7 @@ fn reduction_read_tables_cover_views_and_sum_squares_refusals() {
                 .expect("the tensor was built from this scalar")
                 .as_view();
             let read = TensorRead::from_view(TensorView::$variant(typed));
-            let result = reduce_prod_read(&mut buffers, read, &[0], &context)
+            let result = reduce_prod_read(&mut buffers, read, &[0], Exec::serial())
                 .expect("the product view arm admits this scalar");
             assert_eq!(result.as_slice::<$scalar>().unwrap(), &[$expected],);
         }};
@@ -145,7 +143,7 @@ fn reduction_read_tables_cover_views_and_sum_squares_refusals() {
         &mut buffers,
         TensorRead::from_view(TensorView::Bool(bool_view)),
         &[0],
-        &context,
+        Exec::serial(),
     )
     .expect_err("reduce_prod refuses boolean views");
     assert!(matches!(
@@ -169,9 +167,13 @@ fn reduction_read_tables_cover_views_and_sum_squares_refusals() {
     );
 
     for unsupported in [tensor(vec![1_i32, 2]), tensor(vec![false, true])] {
-        let sums = reduce_sum_squares(&mut buffers, &unsupported, &[0], &context);
+        let sums = reduce_sum_squares(&mut buffers, &unsupported, &[0], Exec::serial());
         assert!(sums.is_err(), "sum of squares admits floating dtypes only");
-        let norms = norm_squared_read(&mut buffers, TensorRead::from_tensor(&unsupported));
+        let norms = norm_squared_read(
+            &mut buffers,
+            TensorRead::from_tensor(&unsupported),
+            Exec::serial(),
+        );
         assert!(norms.is_err(), "squared norm admits floating dtypes only");
     }
 }

@@ -149,53 +149,41 @@ impl LowerContractionError for cpueinsum_blas::BlasError {
     }
 }
 
-// Exactly one retained wrapper per raw pool: the engine owns the pool and its
-// provider wrapper together, so the SPMD gate and arena are never split.
+// Exactly one retained wrapper per pool: the engine owns the pool and its
+// provider wrapper (the scratch arena) together, so the arena is never split from
+// the pool it serves. The wrapper starts no task; placement is the
+// `strided_exec::Exec` token the engine mints from it for each operation.
 pub(crate) struct ExecutionResources {
     pool: Option<Pool<'static>>,
-    #[cfg(test)]
-    raw_pool: Option<std::sync::Arc<rayon::ThreadPool>>,
     serial: ArenaProvider,
     pub(crate) nary: ContractionWorkspaces,
-    /// Entries into the raw Rayon pool made directly by the faer lane. The
-    /// tcontract wrapper counts its own entries through [`Pool::stats`].
-    faer_entries: AtomicU64,
     /// Reads canonicalized out of a view through `to_contiguous_read`, which is
     /// the operand staging copy a read hook must not make. Counted so a
     /// regression test can assert that a read hook stages nothing.
     read_stagings: AtomicU64,
+    /// Ledger roots of the tokens minted since the last
+    /// [`ExecutionResources::take_ledger_roots`] (test support).
+    #[cfg(feature = "ledger")]
+    ledger_roots: std::sync::Mutex<Vec<u64>>,
 }
 impl fmt::Debug for ExecutionResources {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ContractionResources")
-            .field("threads", &self.pool.as_ref().map_or(1, Pool::size))
+            .field("threads", &self.thread_budget())
             .field("workspace", &self.workspace().stats())
             .finish()
     }
 }
 impl ExecutionResources {
-    pub(crate) fn new(pool: Option<rayon::ThreadPool>) -> Self {
-        #[cfg(test)]
-        let (pool, raw_pool) = match pool {
-            Some(pool) => {
-                let raw_pool = std::sync::Arc::new(pool);
-                (
-                    Some(Pool::shared(std::sync::Arc::clone(&raw_pool))),
-                    Some(raw_pool),
-                )
-            }
-            None => (None, None),
-        };
-        #[cfg(not(test))]
-        let pool = pool.map(Pool::owned);
+    /// Take over `pool`, or run serially without one.
+    pub(crate) fn new(pool: Option<strided_exec::Pool>) -> Self {
         Self {
-            pool,
-            #[cfg(test)]
-            raw_pool,
+            pool: pool.map(Pool::owned),
             serial: ArenaProvider::new(),
             nary: ContractionWorkspaces::default(),
-            faer_entries: AtomicU64::new(0),
             read_stagings: AtomicU64::new(0),
+            #[cfg(feature = "ledger")]
+            ledger_roots: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -209,27 +197,6 @@ impl ExecutionResources {
         self.read_stagings.load(Ordering::Relaxed)
     }
 
-    /// Test handle to the owned raw pool, so a test can enter that exact pool
-    /// from another thread without borrowing the engine.
-    #[cfg(test)]
-    pub(crate) fn raw_pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
-        self.raw_pool.clone()
-    }
-    /// Entry counters of the provider pool this engine owns.
-    pub(crate) fn pool_stats(&self) -> crate::CpuPoolStats {
-        let provider = self.pool.as_ref().map(Pool::stats).unwrap_or_default();
-        crate::CpuPoolStats {
-            entries: provider
-                .entries
-                .saturating_add(self.faer_entries.load(Ordering::Relaxed)),
-            broadcasts: provider.broadcasts,
-            inline_runs: provider.inline_runs,
-        }
-    }
-    #[cfg(feature = "native")]
-    pub(crate) fn count_faer_entry(&self) {
-        self.faer_entries.fetch_add(1, Ordering::Relaxed);
-    }
     pub(crate) fn retained_bytes(&self) -> usize {
         self.workspace().retained_bytes()
     }
@@ -243,10 +210,6 @@ impl ExecutionResources {
             max_bytes,
         }
     }
-    /// The pool this engine runs on, if any.
-    pub(crate) fn rayon_pool(&self) -> Option<&rayon::ThreadPool> {
-        self.pool.as_ref().map(Pool::rayon_pool)
-    }
     /// Number of workers of the owned pool, or one without a pool.
     pub(crate) fn thread_budget(&self) -> std::num::NonZeroUsize {
         std::num::NonZeroUsize::new(self.pool.as_ref().map_or(1, Pool::size))
@@ -255,13 +218,39 @@ impl ExecutionResources {
     fn workspace(&self) -> &ArenaProvider {
         self.pool.as_ref().map_or(&self.serial, Pool::workspace)
     }
-    pub(crate) fn exec(&self, budget: usize) -> crate::Result<Exec<'_>> {
-        let exec = match &self.pool {
-            Some(pool) if budget > 1 => Exec::rayon(pool),
-            _ => Exec::serial_with_workspace(self.workspace()),
+    /// Mint the one provider bundle of an operation: every worker of the pool
+    /// as the budget (clamped once, inside [`Exec::new`]), the workspace, and
+    /// `policy`. A serial engine mints a serial token with its own workspace
+    /// and never enters a pool.
+    pub(crate) fn exec(&self, policy: crate::CpuBatchPolicy) -> Exec<'_> {
+        #[cfg_attr(not(feature = "ledger"), allow(unused_mut))]
+        let mut exec = match &self.pool {
+            Some(pool) => match Exec::new(pool, pool.size()) {
+                Ok(exec) => exec,
+                // INVARIANT: a pool is at least one worker wide, so its full
+                // width is a non-zero budget.
+                Err(_) => unreachable!("a pool has at least one worker"),
+            },
+            None => Exec::serial_with_workspace(&self.serial),
         };
-        exec.with_budget(budget)
-            .map_err(|error| crate::Error::backend_source("cpu_contraction", error))
+        #[cfg(feature = "ledger")]
+        if let Some(root) = exec.token().ledger_root() {
+            self.ledger_roots
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(root);
+        }
+        exec.with_batch_policy(policy)
+    }
+    /// Ledger roots of every token minted since the previous call.
+    #[cfg(feature = "ledger")]
+    pub(crate) fn take_ledger_roots(&self) -> Vec<u64> {
+        std::mem::take(
+            &mut *self
+                .ledger_roots
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 }
 
@@ -486,7 +475,7 @@ fn key<T: Scalar>(
 #[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 fn initialized<T: Scalar>(
-    exec: &Exec<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     plans: &crate::CpuPlanCache,
     slot: Option<usize>,
@@ -543,7 +532,7 @@ fn initialized<T: Scalar>(
 #[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 fn fresh<T: Scalar>(
-    exec: &Exec<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     plans: &crate::CpuPlanCache,
     slot: Option<usize>,
@@ -596,7 +585,7 @@ fn fresh<T: Scalar>(
 #[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dot_fresh(
-    exec: &Exec<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     plans: &crate::CpuPlanCache,
     slot: Option<usize>,
@@ -634,7 +623,7 @@ fn writable_view<'a>(out: TensorWrite<'a>, op: &'static str) -> crate::Result<Te
 #[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dot_into(
-    exec: &Exec<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     plans: &crate::CpuPlanCache,
     slot: Option<usize>,
@@ -761,7 +750,7 @@ impl BinaryCache {
 #[cfg(not(any(feature = "native", feature = "blas")))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dot_fresh(
-    _exec: &Exec<'_>,
+    _exec: &mut Exec<'_>,
     _buffers: &mut BufferPool,
     _plans: &crate::CpuPlanCache,
     _slot: Option<usize>,
@@ -777,7 +766,7 @@ pub(crate) fn dot_fresh(
 #[cfg(not(any(feature = "native", feature = "blas")))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dot_into(
-    _exec: &Exec<'_>,
+    _exec: &mut Exec<'_>,
     _buffers: &mut BufferPool,
     _plans: &crate::CpuPlanCache,
     _slot: Option<usize>,

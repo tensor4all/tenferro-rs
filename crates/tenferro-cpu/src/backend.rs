@@ -1,7 +1,7 @@
 //! Pool helpers shared by the CPU engine's operations.
 
 use num_complex::{Complex32, Complex64};
-use strided_kernel::ExecContext;
+use strided_exec::Exec;
 use tenferro_tensor::{DType, ElementwiseReadOp};
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
@@ -11,30 +11,42 @@ use super::{copy_tensor_read_into, elementwise};
 
 pub(crate) fn elementwise_read_into_fallback_with_pool(
     buffers: &mut BufferPool,
-    ctx: &ExecContext,
     op: ElementwiseReadOp,
     inputs: &[TensorRead<'_>],
     out: TensorWrite<'_>,
+    mut exec: Exec<'_>,
 ) -> crate::Result<()> {
     let result = match op {
-        ElementwiseReadOp::Add => {
-            elementwise::add_read_with_pool(buffers, ctx, inputs[0].clone(), inputs[1].clone())?
-        }
-        ElementwiseReadOp::Subtract => {
-            elementwise::sub_read_with_pool(buffers, ctx, inputs[0].clone(), inputs[1].clone())?
-        }
-        ElementwiseReadOp::Multiply => {
-            elementwise::mul_read_with_pool(buffers, ctx, inputs[0].clone(), inputs[1].clone())?
-        }
+        ElementwiseReadOp::Add => elementwise::add_read_with_pool(
+            buffers,
+            inputs[0].clone(),
+            inputs[1].clone(),
+            exec.reborrow(),
+        )?,
+        ElementwiseReadOp::Subtract => elementwise::sub_read_with_pool(
+            buffers,
+            inputs[0].clone(),
+            inputs[1].clone(),
+            exec.reborrow(),
+        )?,
+        ElementwiseReadOp::Multiply => elementwise::mul_read_with_pool(
+            buffers,
+            inputs[0].clone(),
+            inputs[1].clone(),
+            exec.reborrow(),
+        )?,
         ElementwiseReadOp::Negate => {
-            elementwise::neg_read_with_pool(buffers, ctx, inputs[0].clone())?
+            elementwise::neg_read_with_pool(buffers, inputs[0].clone(), exec.reborrow())?
         }
         ElementwiseReadOp::Conj => {
-            elementwise::conj_read_with_pool(buffers, ctx, inputs[0].clone())?
+            elementwise::conj_read_with_pool(buffers, inputs[0].clone(), exec.reborrow())?
         }
-        ElementwiseReadOp::Divide => {
-            elementwise::div_read_with_pool(buffers, ctx, inputs[0].clone(), inputs[1].clone())?
-        }
+        ElementwiseReadOp::Divide => elementwise::div_read_with_pool(
+            buffers,
+            inputs[0].clone(),
+            inputs[1].clone(),
+            exec.reborrow(),
+        )?,
         _ => {
             return Err(crate::Error::unsupported(
                 "CpuEngine::elementwise_read_into",
@@ -46,6 +58,7 @@ pub(crate) fn elementwise_read_into_fallback_with_pool(
         "CpuEngine::elementwise_read_into",
         TensorRead::from_tensor(&result),
         out,
+        exec,
     );
     // The staged result is scratch: return it to the pool for the next op.
     reclaim_tensor(buffers, result);

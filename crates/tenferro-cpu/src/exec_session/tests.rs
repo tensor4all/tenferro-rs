@@ -104,22 +104,23 @@ fn linalg_resource_callback_and_result_stay_on_the_caller_without_send() {
 fn native_operation_starts_on_the_caller_and_fans_out_on_the_engine_pool() {
     let mut backend = crate::test_support::cpu_engine(2).unwrap();
 
-    assert!(rayon::current_thread_index().is_none());
-    let (worker, participants) = crate::tests::with_cpu_session(&mut backend, |cpu| {
-        cpu.with_linalg_pool(|context, _| {
-            context.with_native_parallelism(|| {
-                Ok((
-                    rayon::current_thread_index(),
-                    crate::tests::native_participants::run_unscoped_native_map(true),
-                ))
-            })
+    let caller = std::thread::current().id();
+    let (same_thread, participants) = crate::tests::with_cpu_session(&mut backend, |cpu| {
+        cpu.with_linalg_pool(|exec, _| {
+            Ok((
+                std::thread::current().id() == caller,
+                crate::tests::native_participants::run_unscoped_native_map(true, exec.token()),
+            ))
         })
     })
     .unwrap();
-    // The operation itself stays on the calling thread (#2206); strided enters
-    // the engine's two-worker pool only for the part that fans out.
-    assert_eq!(worker, None);
+    // The operation itself stays on the calling thread (#2206); the token
+    // enters the engine's two-worker pool only for the part that fans out.
+    assert!(same_thread);
     assert_eq!(participants.max_active(), 2);
     assert_eq!(participants.thread_count(), 2);
-    assert!(rayon::current_thread_index().is_none());
+    assert!(
+        !participants.thread_ids().contains(&caller),
+        "the fan-out ran on the engine's workers, not on the caller"
+    );
 }

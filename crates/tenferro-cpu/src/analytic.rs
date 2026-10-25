@@ -9,6 +9,7 @@ use super::typed_view;
 use super::{typed_view_from_view, PooledUninitOutput};
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::simd_math::{self, VectorKernel};
+use strided_exec::Exec;
 use tenferro_tensor::{
     BackendId, CapabilityAxis, DType, Tensor, TensorRank, TensorRead, TensorScalar, TensorView,
     TypedTensor, TypedTensorView,
@@ -263,6 +264,7 @@ fn map_unary<T: Copy + PoolScalar + 'static>(
     input: &StridedView<'_, T>,
     f: impl Fn(T) -> T + Copy + Sync,
     vector: VectorKernel,
+    exec: Exec<'_>,
 ) -> crate::Result<()> {
     // `strided-kernel` owns the layout and the fanout: it hands the kernel the flat runs it already
     // knows about — the whole buffer when the operation runs sequentially, one block at a time on
@@ -273,6 +275,7 @@ fn map_unary<T: Copy + PoolScalar + 'static>(
         input,
         |src, dst| simd_math::apply(vector, src, dst),
         f,
+        exec,
     )
     .map_err(|err| crate::Error::backend_source(op, err))
 }
@@ -283,6 +286,7 @@ fn typed_unary_view_with_pool<T, R>(
     input: &TypedTensorView<'_, T, R>,
     f: impl Fn(T) -> T + Copy + Sync,
     vector: VectorKernel,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + PoolScalar + 'static,
@@ -295,6 +299,7 @@ where
         &typed_view_from_view(op, input)?,
         f,
         vector,
+        exec,
     )?;
     // SAFETY: the successful map replay writes every logical destination element.
     Ok(unsafe { out.assume_init_recycled()? })
@@ -306,12 +311,13 @@ pub(crate) fn typed_unary_view_tensor_with_pool<T, R>(
     input: &TypedTensorView<'_, T, R>,
     f: impl Fn(T) -> T + Copy + Sync,
     vector: VectorKernel,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor>
 where
     T: Copy + PoolScalar + TensorScalar + 'static,
     R: TensorRank,
 {
-    let out = typed_unary_view_with_pool(op, buffers, input, f, vector)?;
+    let out = typed_unary_view_with_pool(op, buffers, input, f, vector, exec)?;
     Ok(T::typed_tensor_into_tensor(out))
 }
 
@@ -350,22 +356,24 @@ fn strided_view_contains<T>(
     op: &'static str,
     view: &StridedView<'_, T>,
     pred: impl Fn(T) -> bool + Copy + Sync,
+    exec: Exec<'_>,
 ) -> crate::Result<bool>
 where
     T: Copy + Send + Sync,
 {
-    reduce(view, pred, |lhs, rhs| lhs || rhs, false)
+    reduce(view, pred, |lhs, rhs| lhs || rhs, false, exec)
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 fn ensure_nonnegative_integer_exponents<T>(
     op: &'static str,
     rhs: &StridedView<'_, T>,
+    exec: Exec<'_>,
 ) -> crate::Result<()>
 where
     T: IntegerPowElem,
 {
-    if strided_view_contains(op, rhs, |value| value.is_negative_exponent())? {
+    if strided_view_contains(op, rhs, |value| value.is_negative_exponent(), exec)? {
         return Err(crate::cpu_negative_integer_exponent(op, T::dtype()));
     }
     Ok(())
@@ -376,8 +384,9 @@ fn replay_pow_pair<T: PowElem + PoolScalar>(
     out: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<T>>,
     lhs: &StridedView<'_, T>,
     rhs: &StridedView<'_, T>,
+    exec: Exec<'_>,
 ) -> crate::Result<()> {
-    zip_map2_into(out, lhs, rhs, |x, y| MaybeUninit::new(x.pow_elem(y)))
+    zip_map2_into(out, lhs, rhs, |x, y| MaybeUninit::new(x.pow_elem(y)), exec)
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
@@ -386,8 +395,9 @@ fn replay_pow_left<T: PowElem + PoolScalar>(
     out: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<T>>,
     input: &StridedView<'_, T>,
     scalar: T,
+    exec: Exec<'_>,
 ) -> crate::Result<()> {
-    map_into(out, input, |x| MaybeUninit::new(scalar.pow_elem(x)))
+    map_into(out, input, |x| MaybeUninit::new(scalar.pow_elem(x)), exec)
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
@@ -396,8 +406,9 @@ fn replay_pow_right<T: PowElem + PoolScalar>(
     out: &mut strided_kernel::StridedViewMut<'_, MaybeUninit<T>>,
     input: &StridedView<'_, T>,
     scalar: T,
+    exec: Exec<'_>,
 ) -> crate::Result<()> {
-    map_into(out, input, |x| MaybeUninit::new(x.pow_elem(scalar)))
+    map_into(out, input, |x| MaybeUninit::new(x.pow_elem(scalar)), exec)
         .map_err(|err| crate::Error::backend_source(op, err))
 }
 
@@ -406,6 +417,7 @@ fn typed_pow_view_with_pool<T, L, R>(
     buffers: &mut BufferPool,
     lhs: &TypedTensorView<'_, T, L>,
     rhs: &TypedTensorView<'_, T, R>,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: PowElem + PoolScalar + 'static,
@@ -432,6 +444,7 @@ where
             &mut out.as_uninit_view_mut()?,
             &typed_view_from_view(op, lhs)?,
             &typed_view_from_view(op, rhs)?,
+            exec,
         )?;
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, lhs)?.get(&[]);
@@ -440,6 +453,7 @@ where
             &mut out.as_uninit_view_mut()?,
             &typed_view_from_view(op, rhs)?,
             scalar,
+            exec,
         )?;
     } else {
         let scalar = typed_view_from_view(op, rhs)?.get(&[]);
@@ -448,6 +462,7 @@ where
             &mut out.as_uninit_view_mut()?,
             &typed_view_from_view(op, lhs)?,
             scalar,
+            exec,
         )?;
     }
     // SAFETY: the selected map kernel writes every logical destination element.
@@ -469,13 +484,14 @@ macro_rules! define_unary_analytic_dispatch {
         #[cfg(test)]
         pub(crate) fn $dispatch_fn(input: &Tensor) -> crate::Result<Tensor> {
             with_test_pool(|buffers| {
-                $dispatch_read_with_pool_fn(buffers, TensorRead::from_tensor(input))
+                $dispatch_read_with_pool_fn(buffers, TensorRead::from_tensor(input), Exec::serial())
             })
         }
 
         pub(crate) fn $dispatch_read_with_pool_fn(
             buffers: &mut BufferPool,
             input: TensorRead<'_>,
+            exec: Exec<'_>,
         ) -> crate::Result<Tensor> {
             let dtype = input.dtype();
             require_cpu_capability(
@@ -496,6 +512,7 @@ macro_rules! define_unary_analytic_dispatch {
                         &view,
                         $elem,
                         $vec,
+                        exec,
                     )
                 }
             )
@@ -626,29 +643,34 @@ pub(crate) fn pow_read_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     let lhs_dtype = lhs.dtype();
     let rhs_dtype = rhs.dtype();
     let (lhs_view, rhs_view) = (read_as_analytic_view(lhs)?, read_as_analytic_view(rhs)?);
     match (lhs_view, rhs_view) {
         (AnalyticReadView::F32(a), AnalyticReadView::F32(b)) => Ok(Tensor::from_typed::<f32>(
-            typed_pow_view_with_pool("pow", buffers, &a, &b)?,
+            typed_pow_view_with_pool("pow", buffers, &a, &b, exec)?,
         )),
         (AnalyticReadView::F64(a), AnalyticReadView::F64(b)) => Ok(Tensor::from_typed::<f64>(
-            typed_pow_view_with_pool("pow", buffers, &a, &b)?,
+            typed_pow_view_with_pool("pow", buffers, &a, &b, exec)?,
         )),
         (AnalyticReadView::I32(a), AnalyticReadView::I32(b)) => Ok(Tensor::from_typed::<i32>(
-            typed_integer_pow_view_with_pool(buffers, &a, &b)?,
+            typed_integer_pow_view_with_pool(buffers, &a, &b, exec)?,
         )),
         (AnalyticReadView::I64(a), AnalyticReadView::I64(b)) => Ok(Tensor::from_typed::<i64>(
-            typed_integer_pow_view_with_pool(buffers, &a, &b)?,
+            typed_integer_pow_view_with_pool(buffers, &a, &b, exec)?,
         )),
-        (AnalyticReadView::C32(a), AnalyticReadView::C32(b)) => Ok(
-            Tensor::from_typed::<Complex32>(typed_pow_view_with_pool("pow", buffers, &a, &b)?),
-        ),
-        (AnalyticReadView::C64(a), AnalyticReadView::C64(b)) => Ok(
-            Tensor::from_typed::<Complex64>(typed_pow_view_with_pool("pow", buffers, &a, &b)?),
-        ),
+        (AnalyticReadView::C32(a), AnalyticReadView::C32(b)) => {
+            Ok(Tensor::from_typed::<Complex32>(typed_pow_view_with_pool(
+                "pow", buffers, &a, &b, exec,
+            )?))
+        }
+        (AnalyticReadView::C64(a), AnalyticReadView::C64(b)) => {
+            Ok(Tensor::from_typed::<Complex64>(typed_pow_view_with_pool(
+                "pow", buffers, &a, &b, exec,
+            )?))
+        }
         _ => Err(crate::Error::dtype_mismatch("pow", lhs_dtype, rhs_dtype)),
     }
 }
@@ -682,6 +704,7 @@ where
             &mut out.as_uninit_view_mut()?,
             &typed_view("pow", lhs)?,
             &typed_view("pow", rhs)?,
+            Exec::serial(),
         )?;
     } else if lhs.shape().is_empty() {
         let scalar = typed_view("pow", lhs)?.get(&[]);
@@ -690,6 +713,7 @@ where
             &mut out.as_uninit_view_mut()?,
             &typed_view("pow", rhs)?,
             scalar,
+            Exec::serial(),
         )?;
     } else {
         let scalar = typed_view("pow", rhs)?.get(&[]);
@@ -698,6 +722,7 @@ where
             &mut out.as_uninit_view_mut()?,
             &typed_view("pow", lhs)?,
             scalar,
+            Exec::serial(),
         )?;
     }
     // SAFETY: the selected map kernel writes every logical destination element.
@@ -714,7 +739,7 @@ where
     T: IntegerPowElem,
 {
     let rhs_view = typed_view("pow", rhs)?;
-    ensure_nonnegative_integer_exponents("pow", &rhs_view)?;
+    ensure_nonnegative_integer_exponents("pow", &rhs_view, Exec::serial())?;
     typed_pow_with_pool(buffers, lhs, rhs)
 }
 
@@ -722,6 +747,7 @@ fn typed_integer_pow_view_with_pool<T, L, R>(
     buffers: &mut BufferPool,
     lhs: &TypedTensorView<'_, T, L>,
     rhs: &TypedTensorView<'_, T, R>,
+    mut exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: IntegerPowElem,
@@ -729,6 +755,6 @@ where
     R: TensorRank,
 {
     let rhs_view = typed_view_from_view("pow", rhs)?;
-    ensure_nonnegative_integer_exponents("pow", &rhs_view)?;
-    typed_pow_view_with_pool("pow", buffers, lhs, rhs)
+    ensure_nonnegative_integer_exponents("pow", &rhs_view, exec.reborrow())?;
+    typed_pow_view_with_pool("pow", buffers, lhs, rhs, exec)
 }

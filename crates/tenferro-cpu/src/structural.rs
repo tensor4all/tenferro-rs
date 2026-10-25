@@ -42,6 +42,7 @@ use super::typed_array_uninit;
 use super::{
     cpu_backend_buffer_error, typed_host_data, typed_view, typed_view_from_view, PooledUninitOutput,
 };
+use strided_exec::Exec;
 
 #[cfg(test)]
 fn with_test_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
@@ -307,7 +308,8 @@ fn copy_view_to_array<T: Copy + Clone + Send + Sync + TensorScalar + 'static>(
     src: &StridedView<'_, T>,
     placement: &tenferro_tensor::Placement,
 ) -> crate::Result<TypedTensor<T>> {
-    copy_into(&mut out.view_mut(), src).map_err(|err| crate::Error::backend_source(op, err))?;
+    copy_into(&mut out.view_mut(), src, Exec::serial())
+        .map_err(|err| crate::Error::backend_source(op, err))?;
     tensor_from_array_with_placement(op, out, placement)
 }
 
@@ -327,6 +329,7 @@ pub(crate) fn typed_materialize_view_with_pool<T, R>(
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T, R>,
     op: &'static str,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T, R>>
 where
     T: Copy + Clone + PoolScalar + 'static,
@@ -348,7 +351,7 @@ where
     // blocked permutation copy on native floats in a sequential context and
     // the element-wise map elsewhere, so the destination is written completely
     // before typed exposure either way.
-    copy_into_uninit(&mut out.as_uninit_view_mut()?, &src)
+    copy_into_uninit(&mut out.as_uninit_view_mut()?, &src, exec)
         .map_err(|err| crate::Error::backend_source(op, err))?;
     // SAFETY: the successful copy replay writes every logical destination element.
     let mut out = unsafe { out.assume_init_as_recycled::<R>()? };
@@ -360,6 +363,7 @@ pub(crate) fn typed_copy_view_into<T, R>(
     src: &TypedTensorView<'_, T, R>,
     dst: &mut TypedTensorViewMut<'_, T, R>,
     op: &'static str,
+    exec: Exec<'_>,
 ) -> crate::Result<()>
 where
     T: Copy + Send + Sync + 'static,
@@ -404,7 +408,7 @@ where
         dst_offset,
     )
     .map_err(|err| crate::Error::backend_source(op, err))?;
-    copy_into(&mut dst_view, &src_view).map_err(|err| crate::Error::backend_source(op, err))
+    copy_into(&mut dst_view, &src_view, exec).map_err(|err| crate::Error::backend_source(op, err))
 }
 
 pub(crate) fn validate_cpu_host_placement(
@@ -429,26 +433,28 @@ pub(crate) fn validate_cpu_host_placement(
 
 #[cfg(test)]
 pub(crate) fn transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
-    with_test_pool(|buffers| transpose_with_pool(buffers, input, perm))
+    with_test_pool(|buffers| transpose_with_pool(buffers, input, perm, Exec::serial()))
 }
 
 pub(crate) fn transpose_with_pool(
     buffers: &mut BufferPool,
     input: &Tensor,
     perm: &[usize],
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
-    dispatch_tensor_unary_result!(input, |t| typed_transpose_with_pool(buffers, t, perm))
+    dispatch_tensor_unary_result!(input, |t| typed_transpose_with_pool(buffers, t, perm, exec))
 }
 
 pub(crate) fn transpose_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
     perm: &[usize],
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     match input {
-        TensorRead::Tensor(input) => transpose_with_pool(buffers, input, perm),
+        TensorRead::Tensor(input) => transpose_with_pool(buffers, input, perm, exec),
         TensorRead::View(input) => dispatch_tensor_view_unary_result!(input, |view| {
-            typed_transpose_view_with_pool(buffers, &view, perm)
+            typed_transpose_view_with_pool(buffers, &view, perm, exec)
         }),
     }
 }
@@ -481,6 +487,7 @@ pub(crate) fn reshape_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
     shape: &[usize],
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     // A caller-owned payload has no preset view, so keep its typed refusal
     // instead of converting it to a view.
@@ -494,7 +501,7 @@ pub(crate) fn reshape_read_with_pool(
     // owned case through the strided entry keeps the same result while letting
     // a multi-thread context run the copy on its pool.
     dispatch_tensor_view_unary_result!(input.tensor_view(), |view| {
-        typed_reshape_view_with_pool(buffers, &view, shape)
+        typed_reshape_view_with_pool(buffers, &view, shape, exec)
     })
 }
 
@@ -504,7 +511,9 @@ pub(crate) fn broadcast_in_dim(
     shape: &[usize],
     dims: &[usize],
 ) -> crate::Result<Tensor> {
-    with_test_pool(|buffers| broadcast_in_dim_with_pool(buffers, input, shape, dims))
+    with_test_pool(|buffers| {
+        broadcast_in_dim_with_pool(buffers, input, shape, dims, Exec::serial())
+    })
 }
 
 pub(crate) fn broadcast_in_dim_with_pool(
@@ -512,9 +521,10 @@ pub(crate) fn broadcast_in_dim_with_pool(
     input: &Tensor,
     shape: &[usize],
     dims: &[usize],
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     dispatch_tensor_unary_result!(input, |t| typed_broadcast_in_dim_with_pool(
-        buffers, t, shape, dims
+        buffers, t, shape, dims, exec,
     ))
 }
 
@@ -523,11 +533,12 @@ pub(crate) fn broadcast_in_dim_read_with_pool(
     input: TensorRead<'_>,
     shape: &[usize],
     dims: &[usize],
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     match input {
-        TensorRead::Tensor(input) => broadcast_in_dim_with_pool(buffers, input, shape, dims),
+        TensorRead::Tensor(input) => broadcast_in_dim_with_pool(buffers, input, shape, dims, exec),
         TensorRead::View(input) => dispatch_tensor_view_unary_result!(input, |view| {
-            typed_broadcast_in_dim_view_with_pool(buffers, &view, shape, dims)
+            typed_broadcast_in_dim_view_with_pool(buffers, &view, shape, dims, exec)
         }),
     }
 }
@@ -565,18 +576,19 @@ pub(crate) fn convert_with_pool(
     to: DType,
 ) -> crate::Result<Tensor> {
     tenferro_tensor::validate::validate_convert_dtype("convert", input.dtype(), to)?;
-    cast_with_pool(buffers, input, to)
+    cast_with_pool(buffers, input, to, Exec::serial())
 }
 
 pub(crate) fn cast_with_pool(
     buffers: &mut BufferPool,
     input: &Tensor,
     to: DType,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     macro_rules! converted {
         ($variant:ident, $tensor:expr, $map:expr) => {
             Ok(Tensor::from_typed::<preset_scalar!($variant)>(
-                typed_convert_with_pool(buffers, $tensor, $map)?,
+                typed_convert_with_pool(buffers, $tensor, $map, exec)?,
             ))
         };
     }
@@ -822,7 +834,9 @@ pub(crate) fn extract_diagonal(
     axis_a: usize,
     axis_b: usize,
 ) -> crate::Result<Tensor> {
-    with_test_pool(|buffers| extract_diagonal_with_pool(buffers, input, axis_a, axis_b))
+    with_test_pool(|buffers| {
+        extract_diagonal_with_pool(buffers, input, axis_a, axis_b, Exec::serial())
+    })
 }
 
 pub(crate) fn extract_diagonal_with_pool(
@@ -830,9 +844,10 @@ pub(crate) fn extract_diagonal_with_pool(
     input: &Tensor,
     axis_a: usize,
     axis_b: usize,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     dispatch_tensor_unary_result!(input, |t| typed_extract_diagonal_with_pool(
-        buffers, t, axis_a, axis_b
+        buffers, t, axis_a, axis_b, exec,
     ))
 }
 
@@ -842,7 +857,9 @@ pub(crate) fn embed_diagonal(
     axis_a: usize,
     axis_b: usize,
 ) -> crate::Result<Tensor> {
-    with_test_pool(|buffers| embed_diagonal_with_pool(buffers, input, axis_a, axis_b))
+    with_test_pool(|buffers| {
+        embed_diagonal_with_pool(buffers, input, axis_a, axis_b, Exec::serial())
+    })
 }
 
 pub(crate) fn embed_diagonal_with_pool(
@@ -850,17 +867,18 @@ pub(crate) fn embed_diagonal_with_pool(
     input: &Tensor,
     axis_a: usize,
     axis_b: usize,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     dispatch_tensor_unary_with_bool_special_result!(
         input,
-        |t| typed_embed_diagonal_with_pool(buffers, t, axis_a, axis_b),
-        bool | t | typed_embed_diagonal_impl(buffers, t, axis_a, axis_b, false)
+        |t| typed_embed_diagonal_with_pool(buffers, t, axis_a, axis_b, exec),
+        bool | t | typed_embed_diagonal_impl(buffers, t, axis_a, axis_b, false, exec)
     )
 }
 
 #[cfg(test)]
 pub(crate) fn tril(input: &Tensor, k: i64) -> crate::Result<Tensor> {
-    with_test_pool(|buffers| tril_with_pool(buffers, input, k))
+    with_test_pool(|buffers| tril_with_pool(buffers, input, k, Exec::serial()))
 }
 
 /// Mask the lower triangle of a read, reading a borrowed view in place.
@@ -868,13 +886,14 @@ pub(crate) fn tril_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
     k: i64,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     match input {
-        TensorRead::Tensor(input) => tril_with_pool(buffers, input, k),
+        TensorRead::Tensor(input) => tril_with_pool(buffers, input, k, exec),
         TensorRead::View(view) => dispatch_tensor_view_with_bool_special_result!(
             view,
-            |v| typed_tril_read(buffers, &v, k),
-            bool | v | typed_triangular_mask_read(buffers, &v, k, false, false)
+            |v| typed_tril_read(buffers, &v, k, exec),
+            bool | v | typed_triangular_mask_read(buffers, &v, k, false, false, exec)
         ),
     }
 }
@@ -884,13 +903,14 @@ pub(crate) fn triu_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
     k: i64,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     match input {
-        TensorRead::Tensor(input) => triu_with_pool(buffers, input, k),
+        TensorRead::Tensor(input) => triu_with_pool(buffers, input, k, exec),
         TensorRead::View(view) => dispatch_tensor_view_with_bool_special_result!(
             view,
-            |v| typed_triu_read(buffers, &v, k),
-            bool | v | typed_triangular_mask_read(buffers, &v, k, true, false)
+            |v| typed_triu_read(buffers, &v, k, exec),
+            bool | v | typed_triangular_mask_read(buffers, &v, k, true, false, exec)
         ),
     }
 }
@@ -901,13 +921,15 @@ pub(crate) fn embed_diagonal_read_with_pool(
     input: TensorRead<'_>,
     axis_a: usize,
     axis_b: usize,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     match input {
-        TensorRead::Tensor(input) => embed_diagonal_with_pool(buffers, input, axis_a, axis_b),
+        TensorRead::Tensor(input) => embed_diagonal_with_pool(buffers, input, axis_a, axis_b, exec),
         TensorRead::View(view) => dispatch_tensor_view_with_bool_special_result!(
             view,
-            |v| typed_embed_diagonal_read(buffers, &v, axis_a, axis_b),
-            bool | v | typed_embed_diagonal_read_with_fill(buffers, &v, axis_a, axis_b, false)
+            |v| typed_embed_diagonal_read(buffers, &v, axis_a, axis_b, exec),
+            bool | v
+                | typed_embed_diagonal_read_with_fill(buffers, &v, axis_a, axis_b, false, exec)
         ),
     }
 }
@@ -918,12 +940,15 @@ pub(crate) fn extract_diagonal_read_with_pool(
     input: TensorRead<'_>,
     axis_a: usize,
     axis_b: usize,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     match input {
-        TensorRead::Tensor(input) => extract_diagonal_with_pool(buffers, input, axis_a, axis_b),
+        TensorRead::Tensor(input) => {
+            extract_diagonal_with_pool(buffers, input, axis_a, axis_b, exec)
+        }
         TensorRead::View(view) => {
             dispatch_tensor_view_unary_result!(view, |v| typed_extract_diagonal_read(
-                buffers, &v, axis_a, axis_b
+                buffers, &v, axis_a, axis_b, exec,
             ))
         }
     }
@@ -933,28 +958,30 @@ pub(crate) fn tril_with_pool(
     buffers: &mut BufferPool,
     input: &Tensor,
     k: i64,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     dispatch_tensor_unary_with_bool_special_result!(
         input,
-        |t| typed_tril_with_pool(buffers, t, k),
-        bool | t | typed_triangular_mask_with_fill_pool(buffers, t, k, false, false)
+        |t| typed_tril_with_pool(buffers, t, k, exec),
+        bool | t | typed_triangular_mask_with_fill_pool(buffers, t, k, false, false, exec)
     )
 }
 
 #[cfg(test)]
 pub(crate) fn triu(input: &Tensor, k: i64) -> crate::Result<Tensor> {
-    with_test_pool(|buffers| triu_with_pool(buffers, input, k))
+    with_test_pool(|buffers| triu_with_pool(buffers, input, k, Exec::serial()))
 }
 
 pub(crate) fn triu_with_pool(
     buffers: &mut BufferPool,
     input: &Tensor,
     k: i64,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     dispatch_tensor_unary_with_bool_special_result!(
         input,
-        |t| typed_triu_with_pool(buffers, t, k),
-        bool | t | typed_triangular_mask_with_fill_pool(buffers, t, k, true, false)
+        |t| typed_triu_with_pool(buffers, t, k, exec),
+        bool | t | typed_triangular_mask_with_fill_pool(buffers, t, k, true, false, exec)
     )
 }
 
@@ -977,17 +1004,19 @@ pub(crate) fn typed_transpose_with_pool<T>(
     buffers: &mut BufferPool,
     tensor: &TypedTensor<T>,
     perm: &[usize],
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
 {
-    typed_transpose_view_with_pool(buffers, &tensor.as_view(), perm)
+    typed_transpose_view_with_pool(buffers, &tensor.as_view(), perm, exec)
 }
 
 pub(crate) fn typed_transpose_view_with_pool<T, R>(
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T, R>,
     perm: &[usize],
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
@@ -1002,7 +1031,7 @@ where
     let mut out = PooledUninitOutput::<T>::new(buffers, permuted.dims())?;
     // INVARIANT: `copy_into_uninit` fully overwrites the destination and selects
     // the blocked permutation engine for a sequential native-float copy.
-    copy_into_uninit(&mut out.as_uninit_view_mut()?, &permuted)
+    copy_into_uninit(&mut out.as_uninit_view_mut()?, &permuted, exec)
         .map_err(|err| crate::Error::backend_source("transpose", err))?;
     // SAFETY: the successful transpose copy writes every logical destination element.
     let mut out = unsafe { out.assume_init_recycled()? };
@@ -1047,6 +1076,7 @@ pub(crate) fn typed_reshape_view_with_pool<T, R>(
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T, R>,
     shape: &[usize],
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
@@ -1074,7 +1104,7 @@ where
     .map_err(|err| crate::Error::backend_source("reshape", err))?;
     // INVARIANT: `copy_into_uninit` fully overwrites the destination and selects
     // the blocked permutation engine for a sequential native-float copy.
-    copy_into_uninit(&mut copy_target, &src)
+    copy_into_uninit(&mut copy_target, &src, exec)
         .map_err(|err| crate::Error::backend_source("reshape", err))?;
     // SAFETY: the successful reshape copy writes every logical destination element.
     let mut out = unsafe { out.assume_init_recycled()? };
@@ -1099,11 +1129,12 @@ pub(crate) fn typed_broadcast_in_dim_with_pool<T>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
     dims: &[usize],
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
 {
-    typed_broadcast_in_dim_view_with_pool(buffers, &tensor.as_view(), shape, dims)
+    typed_broadcast_in_dim_view_with_pool(buffers, &tensor.as_view(), shape, dims, exec)
 }
 
 pub(crate) fn typed_broadcast_in_dim_view_with_pool<T, R>(
@@ -1111,6 +1142,7 @@ pub(crate) fn typed_broadcast_in_dim_view_with_pool<T, R>(
     view: &TypedTensorView<'_, T, R>,
     shape: &[usize],
     dims: &[usize],
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
@@ -1157,8 +1189,13 @@ where
         .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     checked_shape_product("broadcast_in_dim", "output shape", shape)?;
     let mut out = PooledUninitOutput::<T>::new(buffers, shape)?;
-    map_into(&mut out.as_uninit_view_mut()?, &broadcast, MaybeUninit::new)
-        .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
+    map_into(
+        &mut out.as_uninit_view_mut()?,
+        &broadcast,
+        MaybeUninit::new,
+        exec,
+    )
+    .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     // SAFETY: the successful broadcast copy writes every logical destination element.
     let mut out = unsafe { out.assume_init_recycled()? };
     out.set_placement(view.placement().clone());
@@ -1217,7 +1254,7 @@ where
         .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     checked_shape_product("broadcast_in_dim", "output shape", shape)?;
     let mut out = make_out(shape)?;
-    copy_into(&mut out.view_mut(), &broadcast)
+    copy_into(&mut out.view_mut(), &broadcast, Exec::serial())
         .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     tensor_from_array_with_placement("broadcast_in_dim", out, view.placement())
 }
@@ -1226,6 +1263,7 @@ fn typed_convert_with_pool<S, T>(
     buffers: &mut BufferPool,
     tensor: &TypedTensor<S>,
     f: impl Fn(S) -> T + Sync,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     S: Copy + Send + Sync + TensorScalar,
@@ -1236,6 +1274,7 @@ where
         &mut out.as_uninit_view_mut()?,
         &typed_view("convert", tensor)?,
         |x| MaybeUninit::new(f(x)),
+        exec,
     )
     .map_err(|err| crate::Error::backend_source("convert", err))?;
     // SAFETY: the successful conversion map writes every logical destination element.
@@ -1256,7 +1295,7 @@ pub(crate) fn typed_extract_diagonal<T: Copy + Clone + Send + Sync + TensorScala
     let diag = extract_diagonal_view(&src, tensor.shape().len(), axis_a, axis_b)?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit(diag.dims()) };
-    copy_into(&mut out.view_mut(), &diag)
+    copy_into(&mut out.view_mut(), &diag, Exec::serial())
         .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
     Ok(tensor_from_array(out))
 }
@@ -1266,6 +1305,7 @@ pub(crate) fn typed_extract_diagonal_with_pool<T>(
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar,
@@ -1279,7 +1319,7 @@ where
     let mut out = PooledUninitOutput::<T>::new(buffers, diag.dims())?;
     // INVARIANT: `copy_into_uninit` fully overwrites the destination and routes a
     // native-float strided copy to the permutation engine, serial or parallel.
-    copy_into_uninit(&mut out.as_uninit_view_mut()?, &diag)
+    copy_into_uninit(&mut out.as_uninit_view_mut()?, &diag, exec)
         .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
     // SAFETY: the successful diagonal copy writes every logical destination element.
     unsafe { out.assume_init_recycled() }
@@ -1291,7 +1331,9 @@ pub(crate) fn typed_embed_diagonal<T: Copy + Zero + Clone + PoolScalar + 'static
     axis_a: usize,
     axis_b: usize,
 ) -> crate::Result<TypedTensor<T>> {
-    with_test_pool(|buffers| typed_embed_diagonal_impl(buffers, tensor, axis_a, axis_b, T::zero()))
+    with_test_pool(|buffers| {
+        typed_embed_diagonal_impl(buffers, tensor, axis_a, axis_b, T::zero(), Exec::serial())
+    })
 }
 
 pub(crate) fn typed_embed_diagonal_with_pool<T>(
@@ -1299,11 +1341,12 @@ pub(crate) fn typed_embed_diagonal_with_pool<T>(
     tensor: &TypedTensor<T>,
     axis_a: usize,
     axis_b: usize,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Zero + Clone + PoolScalar + 'static,
 {
-    typed_embed_diagonal_impl(buffers, tensor, axis_a, axis_b, T::zero())
+    typed_embed_diagonal_impl(buffers, tensor, axis_a, axis_b, T::zero(), exec)
 }
 
 fn typed_embed_diagonal_impl<T>(
@@ -1312,6 +1355,7 @@ fn typed_embed_diagonal_impl<T>(
     axis_a: usize,
     axis_b: usize,
     zero: T,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
@@ -1326,7 +1370,7 @@ where
     }
 
     let src = host_view("embed_diagonal", tensor)?;
-    embed_diagonal_from_view(buffers, &src, axis_a, axis_b, zero)
+    embed_diagonal_from_view(buffers, &src, axis_a, axis_b, zero, exec)
 }
 
 /// Embed a borrowed read view on a diagonal, reading it in place.
@@ -1335,12 +1379,13 @@ fn typed_embed_diagonal_read<T, R>(
     view: &TypedTensorView<'_, T, R>,
     axis_a: usize,
     axis_b: usize,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Zero + Clone + PoolScalar + 'static,
     R: tenferro_tensor::TensorRank,
 {
-    typed_embed_diagonal_read_with_fill(buffers, view, axis_a, axis_b, T::zero())
+    typed_embed_diagonal_read_with_fill(buffers, view, axis_a, axis_b, T::zero(), exec)
 }
 
 fn typed_embed_diagonal_read_with_fill<T, R>(
@@ -1349,6 +1394,7 @@ fn typed_embed_diagonal_read_with_fill<T, R>(
     axis_a: usize,
     axis_b: usize,
     zero: T,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
@@ -1363,7 +1409,7 @@ where
         ));
     }
     let src = read_host_view("embed_diagonal", view)?;
-    embed_diagonal_from_view(buffers, &src, axis_a, axis_b, zero)
+    embed_diagonal_from_view(buffers, &src, axis_a, axis_b, zero, exec)
 }
 
 /// Mask the lower triangle of a borrowed read view, reading it in place.
@@ -1371,12 +1417,13 @@ fn typed_tril_read<T, R>(
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T, R>,
     k: i64,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Zero + Clone + PoolScalar + 'static,
     R: tenferro_tensor::TensorRank,
 {
-    typed_triangular_mask_read(buffers, view, k, false, T::zero())
+    typed_triangular_mask_read(buffers, view, k, false, T::zero(), exec)
 }
 
 /// Mask the upper triangle of a borrowed read view, reading it in place.
@@ -1384,12 +1431,13 @@ fn typed_triu_read<T, R>(
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T, R>,
     k: i64,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Zero + Clone + PoolScalar + 'static,
     R: tenferro_tensor::TensorRank,
 {
-    typed_triangular_mask_read(buffers, view, k, true, T::zero())
+    typed_triangular_mask_read(buffers, view, k, true, T::zero(), exec)
 }
 
 /// Mask a triangular region of a borrowed read view, reading it in place.
@@ -1399,6 +1447,7 @@ fn typed_triangular_mask_read<T, R>(
     k: i64,
     upper: bool,
     fill: T,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
@@ -1406,7 +1455,7 @@ where
 {
     let op = if upper { "triu" } else { "tril" };
     let src = read_host_view(op, view)?;
-    let mut out = triangular_mask_from_view(buffers, op, &src, k, upper, fill)?;
+    let mut out = triangular_mask_from_view(buffers, op, &src, k, upper, fill, exec)?;
     out.set_placement(view.placement().clone());
     Ok(out)
 }
@@ -1417,6 +1466,7 @@ fn typed_extract_diagonal_read<T, R>(
     view: &TypedTensorView<'_, T, R>,
     axis_a: usize,
     axis_b: usize,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
@@ -1428,7 +1478,7 @@ where
     let src = read_host_view("extract_diagonal", view)?;
     let diag = extract_diagonal_view(&src, view.shape().len(), axis_a, axis_b)?;
     let mut out = PooledUninitOutput::<T>::new(buffers, diag.dims())?;
-    copy_into_uninit(&mut out.as_uninit_view_mut()?, &diag)
+    copy_into_uninit(&mut out.as_uninit_view_mut()?, &diag, exec)
         .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
     // SAFETY: the successful diagonal copy writes every logical destination element.
     unsafe { out.assume_init_recycled() }
@@ -1441,6 +1491,7 @@ fn embed_diagonal_from_view<T>(
     axis_a: usize,
     axis_b: usize,
     zero: T,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
@@ -1456,6 +1507,7 @@ where
         axis_a,
         axis_b,
         zero,
+        exec,
     )
     .map_err(|err| crate::Error::backend_source("embed_diagonal", err))?;
     // SAFETY: strided initialized the whole output, including off-diagonal zeros.
@@ -1474,11 +1526,12 @@ pub(crate) fn typed_tril_with_pool<T>(
     buffers: &mut BufferPool,
     tensor: &TypedTensor<T>,
     k: i64,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Zero + Clone + PoolScalar + 'static,
 {
-    typed_triangular_mask_with_fill_pool(buffers, tensor, k, false, T::zero())
+    typed_triangular_mask_with_fill_pool(buffers, tensor, k, false, T::zero(), exec)
 }
 
 #[cfg(test)]
@@ -1493,11 +1546,12 @@ pub(crate) fn typed_triu_with_pool<T>(
     buffers: &mut BufferPool,
     tensor: &TypedTensor<T>,
     k: i64,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Zero + Clone + PoolScalar + 'static,
 {
-    typed_triangular_mask_with_fill_pool(buffers, tensor, k, true, T::zero())
+    typed_triangular_mask_with_fill_pool(buffers, tensor, k, true, T::zero(), exec)
 }
 
 #[cfg(test)]
@@ -1552,6 +1606,7 @@ fn typed_triangular_mask_with_fill_pool<T>(
     k: i64,
     upper: bool,
     fill: T,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
@@ -1565,7 +1620,7 @@ where
     }
 
     let src = host_view(op, tensor)?;
-    let mut out = triangular_mask_from_view(buffers, op, &src, k, upper, fill)?;
+    let mut out = triangular_mask_from_view(buffers, op, &src, k, upper, fill, exec)?;
     out.set_placement(tensor.placement().clone());
     Ok(out)
 }
@@ -1580,6 +1635,7 @@ fn triangular_mask_from_view<T>(
     k: i64,
     upper: bool,
     fill: T,
+    exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + PoolScalar + 'static,
@@ -1598,6 +1654,7 @@ where
         k,
         upper,
         fill,
+        exec,
     )
     .map_err(|err| crate::Error::backend_source(op, err))?;
     // SAFETY: the kernel writes every kept and masked output element.

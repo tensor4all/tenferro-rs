@@ -16,7 +16,8 @@ use tenferro_tensor::{ActivationOp, DType, Tensor, TensorRead, TensorScalar};
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::materialize_tensor_read;
-use crate::parallel::FanOut;
+use crate::parallel::run_chunks;
+use strided_exec::Exec;
 
 /// Elements per unit of work handed to one worker; a multiple of every SIMD
 /// width, so no task ends on a partial vector except the last.
@@ -64,35 +65,42 @@ fn kernel_f64(op: ActivationOp) -> Kernel<f64> {
     }
 }
 
-/// Apply `kernel` over equal-length slices, split across the engine's pool into
-/// tasks of whole chunks; small inputs stay on fewer workers and a serial engine
-/// stays on the calling thread.
+/// Apply `kernel` over equal-length slices, split over `exec` into tasks of
+/// whole chunks; small inputs stay on fewer workers and a serial token stays on
+/// the calling thread.
 fn apply_parallel<T: Copy + Send + Sync>(
-    fan: FanOut,
     kernel: Kernel<T>,
     src: &[T],
     dst: &mut [MaybeUninit<T>],
+    exec: Exec<'_>,
 ) {
     let n = src.len();
-    let task = fan.task_len(n, CHUNK.min(n.max(1)), size_of::<T>());
-    fan.run(dst, src, task, |out, input| {
-        // The chunks are built from one length, so the kernel's length check
-        // cannot fail.
-        kernel(input, out).expect("equal-length chunks");
-    });
+    run_chunks(
+        dst,
+        src,
+        CHUNK.min(n.max(1)),
+        |out, input| {
+            // The chunks are built from one length, so the kernel's length check
+            // cannot fail.
+            kernel(input, out).expect("equal-length chunks");
+        },
+        exec,
+    );
 }
 
 /// Evaluate `op` on a contiguous slice into a fresh pooled tensor.
 fn fused_slice<T: Copy + Send + Sync + PoolScalar + TensorScalar>(
-    fan: FanOut,
     buffers: &BufferPool,
     kernel: Kernel<T>,
     shape: &[usize],
     data: &[T],
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     // INVARIANT: `apply_parallel` covers every element of the destination
     // exactly once; each kernel writes every slot on success.
-    fill_pooled(buffers, shape, |out| apply_parallel(fan, kernel, data, out))
+    fill_pooled(buffers, shape, |out| {
+        apply_parallel(kernel, data, out, exec)
+    })
 }
 
 /// Fused activation fast path for the CPU backend.
@@ -101,38 +109,38 @@ fn fused_slice<T: Copy + Send + Sync + PoolScalar + TensorScalar>(
 /// the shared composite formulation. A strided or offset input is
 /// materialized once, into the pool, before the single pass.
 pub(crate) fn fused_activation_read_with_pool(
-    fan: FanOut,
     buffers: &mut BufferPool,
     op: ActivationOp,
     input: TensorRead<'_>,
+    mut exec: Exec<'_>,
 ) -> crate::Result<Option<Tensor>> {
     let shape = input.shape().to_vec();
     match input.dtype() {
         DType::F32 => {
             if let Ok(data) = input.as_slice::<f32>() {
-                return fused_slice(fan, buffers, kernel_f32(op), &shape, data).map(Some);
+                return fused_slice(buffers, kernel_f32(op), &shape, data, exec).map(Some);
             }
-            let tensor = materialize_tensor_read(buffers, op.label(), input)?;
+            let tensor = materialize_tensor_read(buffers, op.label(), input, exec.reborrow())?;
             fused_slice(
-                fan,
                 buffers,
                 kernel_f32(op),
                 &shape,
                 tensor.as_slice::<f32>()?,
+                exec,
             )
             .map(Some)
         }
         DType::F64 => {
             if let Ok(data) = input.as_slice::<f64>() {
-                return fused_slice(fan, buffers, kernel_f64(op), &shape, data).map(Some);
+                return fused_slice(buffers, kernel_f64(op), &shape, data, exec).map(Some);
             }
-            let tensor = materialize_tensor_read(buffers, op.label(), input)?;
+            let tensor = materialize_tensor_read(buffers, op.label(), input, exec.reborrow())?;
             fused_slice(
-                fan,
                 buffers,
                 kernel_f64(op),
                 &shape,
                 tensor.as_slice::<f64>()?,
+                exec,
             )
             .map(Some)
         }

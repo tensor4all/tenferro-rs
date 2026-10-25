@@ -1,6 +1,6 @@
 //! Helpers shared by the crate's unit tests.
 
-use crate::{thread_pool_builder, CpuEngine};
+use crate::{CpuEngine, Pool};
 use tenferro_tensor::Engine;
 
 /// A CPU engine with `threads` workers: a serial engine for one thread, a
@@ -13,8 +13,8 @@ pub(crate) fn cpu_engine(threads: usize) -> crate::Result<CpuEngine> {
             "thread count must be at least 1",
         )),
         1 => Ok(CpuEngine::serial()),
-        threads => thread_pool_builder()
-            .num_threads(threads)
+        threads => Pool::builder()
+            .threads(threads)
             .build()
             .map(CpuEngine::new)
             .map_err(|source| crate::Error::backend_source("test_support::cpu_engine", source)),

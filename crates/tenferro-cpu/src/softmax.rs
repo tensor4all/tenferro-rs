@@ -7,7 +7,7 @@
 //! owns only the tensor boundary: axis, dtype and empty-shape decisions, the
 //! materialized input, the pooled output and the caller-sized scratch.
 //!
-//! The kernel's fan-out goes through the engine's execution context, so a serial
+//! The kernel's fan-out goes through the operation's placement token, so a serial
 //! engine stays on the calling thread and a pooled engine stays inside its own
 //! pool and thread budget (#2206, #2273).
 
@@ -17,7 +17,7 @@ use tenferro_tensor::{DType, Tensor, TensorRead};
 use crate::activation::fill_pooled;
 use crate::buffer_pool::BufferPool;
 use crate::materialize_tensor_read;
-use crate::provider::CpuExecutionContext;
+use strided_exec::Exec;
 
 /// Fused softmax over axis 0 for a host `F32`/`F64` tensor, if supported.
 ///
@@ -25,31 +25,30 @@ use crate::provider::CpuExecutionContext;
 /// and drops them together (a benchmark, a batch loop) gets its storage back
 /// from the pool instead of fresh pages from the allocator.
 pub(crate) fn softmax_read_with_pool(
-    context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
     axis: usize,
+    mut exec: Exec<'_>,
 ) -> crate::Result<Option<Tensor>> {
     let shape = input.shape().to_vec();
     if axis != 0 || shape.is_empty() || shape[0] == 0 {
         return Ok(None);
     }
-    let exec = context.strided_exec_context();
-    let workers = context.native_thread_count();
+    let workers = exec.budget().get();
     match input.dtype() {
         DType::F32 => {
             if let Ok(data) = input.as_slice::<f32>() {
-                return softmax_f32(exec, workers, buffers, &shape, data).map(Some);
+                return softmax_f32(workers, buffers, &shape, data, exec).map(Some);
             }
-            let tensor = materialize_tensor_read(buffers, "softmax", input)?;
-            softmax_f32(exec, workers, buffers, &shape, tensor.as_slice::<f32>()?).map(Some)
+            let tensor = materialize_tensor_read(buffers, "softmax", input, exec.reborrow())?;
+            softmax_f32(workers, buffers, &shape, tensor.as_slice::<f32>()?, exec).map(Some)
         }
         DType::F64 => {
             if let Ok(data) = input.as_slice::<f64>() {
-                return softmax_f64(exec, workers, buffers, &shape, data).map(Some);
+                return softmax_f64(workers, buffers, &shape, data, exec).map(Some);
             }
-            let tensor = materialize_tensor_read(buffers, "softmax", input)?;
-            softmax_f64(exec, workers, buffers, &shape, tensor.as_slice::<f64>()?).map(Some)
+            let tensor = materialize_tensor_read(buffers, "softmax", input, exec.reborrow())?;
+            softmax_f64(workers, buffers, &shape, tensor.as_slice::<f64>()?, exec).map(Some)
         }
         _ => Ok(None),
     }
@@ -62,11 +61,11 @@ pub(crate) fn softmax_read_with_pool(
 /// the output has the same length, and the scratch is sized for the engine's
 /// worker count.
 fn softmax_f32(
-    exec: strided_kernel::ExecContext,
     workers: usize,
     buffers: &BufferPool,
     shape: &[usize],
     data: &[f32],
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     fill_pooled(buffers, shape, |out| {
         // An empty input needs no scratch; sizing it from a huge `shape[0]`
@@ -77,7 +76,7 @@ fn softmax_f32(
             scratch_len::<f32>(shape[0], data.len(), workers)
         };
         let mut scratch = vec![0.0f32; scratch_len];
-        softmax_axis0_f32(exec, shape[0], data, out, &mut scratch)
+        softmax_axis0_f32(shape[0], data, out, &mut scratch, exec)
             .expect("validated softmax contract");
     })
 }
@@ -86,11 +85,11 @@ fn softmax_f32(
 ///
 /// INVARIANT: as [`softmax_f32`].
 fn softmax_f64(
-    exec: strided_kernel::ExecContext,
     workers: usize,
     buffers: &BufferPool,
     shape: &[usize],
     data: &[f64],
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     fill_pooled(buffers, shape, |out| {
         // An empty input needs no scratch; sizing it from a huge `shape[0]`
@@ -101,7 +100,7 @@ fn softmax_f64(
             scratch_len::<f64>(shape[0], data.len(), workers)
         };
         let mut scratch = vec![0.0f64; scratch_len];
-        softmax_axis0_f64(exec, shape[0], data, out, &mut scratch)
+        softmax_axis0_f64(shape[0], data, out, &mut scratch, exec)
             .expect("validated softmax contract");
     })
 }
