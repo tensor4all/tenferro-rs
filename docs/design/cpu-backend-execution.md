@@ -1,6 +1,6 @@
 # CPU Engine Execution Contract
 
-`CpuEngine` is a caller-held execution value. It owns one Rayon pool (or none
+`CpuEngine` is a caller-held execution value. It owns one `strided_exec::Pool` (or none
 for `CpuEngine::serial()`), the buffer pool that recycles outputs, the N-ary
 contraction scratch, the plan cache and the accounting of memory that unfinished
 work retains. The caller builds the pool, hands it over, and passes `&mut` to
@@ -35,31 +35,37 @@ only; it is not a dispatch key.
 - `&mut engine` is the exclusivity mechanism. There is no session, admission
   permit, execution scope, held session or resource arbiter; concurrent
   computations use separate engines and separate pools.
-- Every operation starts on the calling thread and enters the engine's pool only
-  after a provider has chosen more than one worker.
-- Calling an operation from a worker of the engine's own pool is rejected with
-  `CpuEngineError::CallerInOwnPool`, because some provider strategies cannot
-  start from a pool worker and the others would run with less parallelism than
-  the engine promises. There is no further nested-execution admission.
+- Every operation starts on the calling thread with one placement token minted
+  from the engine's pool (`strided_exec::Exec`, budget = the pool's width). The
+  token enters the pool only when an entry splits the work into more than one
+  task.
+- The token is correct from a plain thread, from a worker of the engine's own
+  pool (the entry runs in place), and from a worker of a different pool. A
+  provider strategy that needs every worker at once (a barrier team) asks the
+  token with `Exec::can_broadcast` and takes its barrier-free path when it is
+  refused, so there is no engine-level refusal for a nested call.
 - tenferro does not narrow and restore CPU masks per operation. A serial engine
-  is safe inside any pool; a pooled engine is used from a thread outside its own
-  pool.
+  never starts or enters a pool and is safe inside any pool.
 
 ## The Lower-Library Seam
 
-`CpuExecutionContext` is the one engine-scoped interop seam. cpueinsum,
-tcontract, and tlinalg receive one parallelism token: `Sequential`, or the
-engine's pool with a thread budget. The lower library owns lane selection,
-vendor batching, scratch, and scheduling within that budget; tenferro owns
-tensor semantics, placement, output allocation, validation, and cache lifetime.
+The `tcontract_exec::Exec` bundle is the one engine-scoped interop seam: a
+`strided_exec::Exec` placement token over the engine's pool (or the serial
+token), the engine's workspace and the resolved batch policy. cpueinsum,
+tcontract, and tlinalg take it by `&mut` (`*_workspace` queries by `&`). The
+lower library owns lane selection, vendor batching, scratch, and scheduling
+within the token's budget, splitting it with `fork` and `for_ranges`; tenferro
+owns tensor semantics, placement, output allocation, validation, and cache
+lifetime.
 
-One lower-library numerical call may install the engine's pool for the duration
-of that call. Strided-rs work and FFT lane fan-out use the same bounded,
-operation-local exception. tenferro never installs the caller's continuation.
+Strided-rs kernels, FFT lanes and every other tenferro fan-out take the same
+token by value, last, and split it with `fork`, `for_ranges` or `external`;
+`strided-exec` is the only crate that starts tasks. tenferro never installs the
+caller's continuation.
 
 A caller that wants concurrent numerical work holds several engines over several
 pools, and each engine is used from one calling thread at a time. tenferro hands
-out its provider token for one engine but never installs the caller's
+out its provider bundle for one engine but never installs the caller's
 continuation, and vendor threading remains outside tenferro's budget.
 
 Vendor BLAS/LAPACK is called from the coordinator thread. tenferro guarantees
@@ -68,8 +74,8 @@ nothing about the vendor's own worker team, thread count, or placement;
 call.
 
 The token is not uniform across the two linalg providers, by design: the
-faer-backed `tlinalg` owns batch lanes and takes a `tcontract_exec::Exec` (pool
-plus budget plus the resolved batch policy), while `tlinalg-blas` is
+faer-backed `tlinalg` owns batch lanes and takes a `tcontract_exec::Exec` (token
+plus workspace plus the resolved batch policy), while `tlinalg-blas` is
 deliberately token-free because LAPACK/BLAS own their own threading, its batch
 loop is serial, and a Rayon fan-out around a vendor call would fight the
 vendor's own pool. The host places the vendor call instead; its scratch still
@@ -139,7 +145,7 @@ selects a region only inside it.
 
 ## Diagnostics
 
-`CpuEngine::num_threads()`, `pool()`, `buffer_pool_stats()`,
+`CpuEngine::num_threads()`, `buffer_pool_stats()`,
 `buffer_pool_limit_bytes()`, `plan_cache()` and `allocation_domain()` are the
 observation accessors. They report the engine's own state; they do not grant
 execution or storage authority.

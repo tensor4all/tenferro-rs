@@ -242,9 +242,10 @@ Audit hints:
   the preferred contiguous layout; generic-stride inputs that trigger faer
   performance warnings must be justified or converted deliberately at an
   explicit boundary.
-- Pass faer parallelism through the engine's `CpuExecutionContext`
-  (`with_faer_width`) only; never choose `Par::Rayon` or thread counts inside
-  operation helpers.
+- Pass faer parallelism through the operation's placement token only
+  (`Exec::external` hands the budget over as a plain width; `Par::Seq` for a
+  width of one, else `Par::rayon(width)`); never choose `Par::rayon` or thread
+  counts inside operation helpers.
 - Scratch and batching follow the batched linalg rule in Dense Layout And
   Linear Algebra, which applies to faer and LAPACK providers alike.
 
@@ -254,7 +255,7 @@ Audit hints:
   `Par::rayon(...)`/`Par::Seq` chosen inside an op helper; `Vec` scratch
   allocated per decomposition, solve, or batch iteration.
 - Fix: zero-copy `MatRef`/`MatMut` after validation, parallelism from the
-  engine's `CpuExecutionContext`, scratch sized once per operation.
+  operation's placement token, scratch sized once per operation.
 
 ## Performance Anti-Patterns
 
@@ -328,7 +329,7 @@ Audit hints:
 - Thread settings in benchmark harnesses are enforced and verified, not only
   requested: build the `CpuEngine` pool with the requested degree, assert
   `engine.num_threads()` at startup, and fail on conflicting thread environment
-  variables. A `--num-threads 1` flag that left the ambient Rayon pool running
+  variables. A `--num-threads 1` flag that left an ambient pool running
   multi-threaded once produced a 7x wrong one-thread row.
 - For tensor-sized CPU cases, compare one and four threads in the same run: a
   four-thread time that is not faster than the one-thread time is a finding,
@@ -450,7 +451,7 @@ Audit hints:
 - Engine resource pools such as buffer pools may live on the engine but still
   need explicit limit/clear controls, stats APIs, and documentation.
 - Engines owning resource pools or runtime contexts, including `CpuEngine`'s
-  buffer pool, workspace and caller-supplied Rayon pool, and CUDA engines'
+  buffer pool, workspace and caller-supplied `Pool`, and CUDA engines'
   runtime client/context, are construct-once-and-reuse values. Examples should
   bind the engine once and reuse it across related operations; they must not
   present per-call `CpuEngine::new()`/`CpuEngine::serial()` (or GPU engine
@@ -471,72 +472,85 @@ Audit hints:
 
 ## CPU Threading Contract
 
-- A CPU engine owns exactly one Rayon pool, or none for `CpuEngine::serial()`.
-  The caller builds the pool (usually with `thread_pool_builder`) and hands it
-  over; tenferro never starts a hidden or global pool, keeps no process-wide
-  registry of engines, and does not arbitrate between callers. `&mut engine` is
-  the exclusivity mechanism. Concurrent computations use separate engines and
-  separate pools, each on its own calling thread.
+- A CPU engine owns exactly one `strided_exec::Pool`, or none for
+  `CpuEngine::serial()`. The caller builds the pool (with `Pool::builder()`, which
+  `tenferro-cpu` re-exports) and hands it over; tenferro never starts a hidden or
+  global pool, keeps no process-wide registry of engines, and does not
+  arbitrate between callers. `&mut engine` is the exclusivity mechanism.
+  Concurrent computations use separate engines and separate pools, each on its
+  own calling thread.
+- Only `strided-exec` starts tasks. Where CPU work runs and how many tasks run at
+  once is decided by one borrowed token, `strided_exec::Exec`: a pool reference
+  plus a budget. It is neither `Clone` nor `Copy`, every parallel entry
+  consumes it, and a split (`fork`, `for_ranges`) gives each child a share of
+  the budget, so the tasks running at once under one operation never exceed its
+  budget at any nesting depth. tenferro has no raw Rayon call, no thread-local
+  placement state and no second clamp: `Exec::new` clamps the budget once, to
+  the pool width.
 - The thread width is decided before the pool is built and never changed at
-  run time. Do not derive it from `rayon::current_num_threads`, do not build a
-  second pool inside an operation, and do not install or restore an execution
-  context per operation. `CpuEngine::num_threads()` reports the fixed budget.
-- Every operation starts on the calling thread. The engine enters its pool only
-  when a provider has chosen more than one worker for that operation, so small
-  operations stay on the calling thread and pay no pool entry. `strided-kernel`
-  work uses the engine's `with_execution_pool`/`ExecContext` budget;
-  cpueinsum/tcontract, tlinalg and tlinalg-blas receive the engine's provider
-  token (`CpuEngine::exec`) with the same pool and budget.
-- For faer-backed CPU ops, the `CpuExecutionContext` handed out by the engine is
-  the single source of truth for thread-pool policy. Choose the faer width from
-  the shared work model **before** any pool entry and pass it with
-  `with_faer_width`; never choose `Par::rayon` or a thread count inside an
-  operation helper. Do not derive faer parallelism independently.
-- Calling an operation from a worker of the engine's own pool is rejected with
-  `CpuEngineError::CallerInOwnPool`: some provider strategies cannot start from
-  a pool worker, and the others would run with less parallelism than the engine
-  promises. There is no arbiter or nested-execution admission beyond this
-  check. Calling from a worker of a *different* pool is allowed; a serial engine
-  is safe inside any pool because it never touches Rayon's global pool.
-- Pinning is the caller's job. Pin the calling thread or the pool's workers when
-  measuring or placing work; tenferro does not narrow and restore CPU masks per
-  operation. Do not assign one CPU per worker: vendor teams inherit the creating
-  worker's mask, so a one-CPU worker mask silently confines the whole provider
-  team to one CPU (measured: 3-20x slower dgemm/LU paths at four threads).
-  Provider thread counts remain controlled by the provider variables below, not
-  by worker affinity.
-- `thread_pool_builder` reserves `DEFAULT_WORKER_STACK_BYTES` (16 MiB) per worker
-  rather than the `std::thread` default of 2 MiB, because provider kernels
-  recurse with large private frames: a `NUM_THREADS=64` OpenBLAS build keeps
-  about 541 KiB per `dgetrf_parallel` level, which overflowed a 2 MiB worker at
-  n>=256. It is a plain `rayon::ThreadPoolBuilder` preset, not a construction
-  mode. A pool that installs a custom `spawn_handler` must forward
-  `rayon::ThreadBuilder::stack_size` to its own `std::thread::Builder`, since
-  Rayon applies the configured size only in its default spawn path.
-  `TENFERRO_CPU_WORKER_STACK_BYTES` overrides the preset's default.
-- Use `Par::Seq` for one-thread engines and explicit `Par::rayon(n)` from the
-  engine's budget for multi-thread engines. Do not derive the policy from an
-  ambient Rayon pool during plan or engine setup.
+  run time. Do not derive it from an ambient pool, do not build a second pool
+  inside an operation, and do not install or restore an execution context per
+  operation. `CpuEngine::num_threads()` reports the fixed budget.
+- Every operation starts on the calling thread and mints one token from the
+  engine's pool. Kernels take it by value as their **last** parameter; a kernel
+  that runs several parallel phases takes `reborrow()` for each of them, and
+  one that runs independent parts forks it. Plans never store a token; replay
+  takes it per call. A serial engine mints a serial token: no pool is started
+  or entered. A small operation never enters the pool because a serial token, a
+  budget of one and a single task run inline.
+- cpueinsum/tcontract and tlinalg receive the engine's provider bundle
+  (`CpuEngine::exec`, a `tcontract_exec::Exec`: token, workspace, batch
+  policy) by `&mut` and fork the token for their lanes. They never call back
+  into tenferro from a lane. Direct downstream faer calls take their width from
+  the same token with `Exec::external`.
+- For faer-backed CPU ops the token is the single source of truth for
+  thread-pool policy. Choose the faer width from the shared work model
+  **before** any pool entry and hand it over with `Exec::limit(..).external(..)`;
+  never choose `Par::rayon` or a thread count inside an operation helper. Do
+  not derive faer parallelism independently. How faer divides the width it
+  receives is faer's concern.
+- The token is correct when the operation is called from a plain thread, from a
+  worker of the engine's own pool (the entry runs in place) and from a worker of
+  a different pool. A kernel that needs every worker at once (a barrier team)
+  asks `Exec::can_broadcast` and takes a barrier-free path when it is refused.
+- Pinning is the caller's job. Pin the calling thread or the pool's workers
+  (`PoolBuilder::on_start`) when measuring or placing work; tenferro does not
+  narrow and restore CPU masks per operation. Do not assign one CPU per worker:
+  vendor teams inherit the creating worker's mask, so a one-CPU worker mask
+  silently confines the whole provider team to one CPU (measured: 3-20x slower
+  dgemm/LU paths at four threads). Provider thread counts remain controlled by
+  the provider variables below, not by worker affinity.
+- `PoolBuilder` reserves 16 MiB per worker by default rather than the
+  `std::thread` default of 2 MiB, because provider kernels recurse with large
+  private frames: a `NUM_THREADS=64` OpenBLAS build keeps about 541 KiB per
+  `dgetrf_parallel` level, which overflowed a 2 MiB worker at n>=256. Lower it
+  with `stack_size` only for pools that never run provider code.
 - tenferro does not own an outer fan-out for ordinary numerical work: lane
-  selection for batched and grouped work belongs to cpueinsum, tlinalg, and
-  tlinalg-blas, which receive one parallelism token (the engine's pool with a
-  budget, or `Sequential`) and never call back into tenferro from a lane. No
-  placement promise is made for threads a vendor creates.
+  selection for batched and grouped work belongs to cpueinsum and tlinalg, which
+  fork the token they receive. tlinalg-blas takes no token: the vendor owns its
+  threading. No placement promise is made for threads a vendor creates.
 - Vendor BLAS/LAPACK is called from the coordinator thread; tenferro bounds
   only the token it passes to its own lower libraries.
 - Tensor-sized strided CPU kernels that are not provider-owned also run on the
-  engine's pool, so Rayon-backed `strided-kernel` work uses the caller-owned
-  pool. BLAS/LAPACK provider-owned threading remains controlled by provider
-  variables such as `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`,
-  `OMP_NUM_THREADS`, and `VECLIB_MAXIMUM_THREADS`.
+  engine's pool through the token. BLAS/LAPACK provider-owned threading remains
+  controlled by provider variables such as `OPENBLAS_NUM_THREADS`,
+  `MKL_NUM_THREADS`, `OMP_NUM_THREADS`, and `VECLIB_MAXIMUM_THREADS`.
+- The invariants are checked mechanically: `deny.toml` (`cargo deny check bans`)
+  rejects a direct `rayon` dependency anywhere in the workspace;
+  `scripts/check-no-public-rayon.sh` (`cargo public-api`) fails when a `rayon::`
+  path appears in `tenferro-cpu`'s public API; tests read the
+  `strided_exec::ledger` through `CpuEngine::take_ledger_*` (feature `ledger`)
+  for `max_live <= budget` and for zero pool installs on small operations, and
+  a test binary of its own asserts `ledger::global_pool_unstarted()`.
 
 Audit hints:
 
-- Detect: a hidden or global Rayon pool, a pool or engine built inside an
-  operation, a second `ThreadPoolBuilder` per call, thread width derived from
-  `rayon::current_num_threads`, a per-operation context install, a lock held
-  across provider work, `Par::rayon(0)`, or per-worker single-CPU affinity that
-  provider-created threads would inherit.
-- Fix: build one pool, hand it to one engine, take `&mut` for the operation,
-  let the provider choose the width up to the engine's budget, and leave
-  provider-owned threading to the provider variables.
+- Detect: a hidden or global pool, a direct `rayon` dependency or `par_iter`, a
+  pool or engine built inside an operation, a second `Pool::builder()` per call,
+  thread width derived from an ambient pool, a per-operation context install, a
+  token stored in a plan or struct, a token passed twice instead of
+  `reborrow`/`fork`, a lock held across provider work, `Par::rayon(0)`, or
+  per-worker single-CPU affinity that provider-created threads would inherit.
+- Fix: build one `Pool`, hand it to one engine, take `&mut` for the operation,
+  pass the minted token down by value, split it with `fork`/`for_ranges`, and
+  leave provider-owned threading to the provider variables.

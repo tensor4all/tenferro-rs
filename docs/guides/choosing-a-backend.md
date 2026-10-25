@@ -11,7 +11,7 @@ the pool or open the device, hold the engine, and pass it to every operation.
 
 | Backend | Device | Hard requirements | Cargo feature | Threading and synchronization | Good fit |
 | --- | --- | --- | --- | --- | --- |
-| CPU | Host CPUs | At least one CPU provider; `native` is the default | `tenferro-cpu` `native` or `blas` | The caller's Rayon pool (or no pool at all for `CpuEngine::serial`). CPU calls return synchronously. | Controlled CPU execution, dense linalg, and host pipelines |
+| CPU | Host CPUs | At least one CPU provider; `native` is the default | `tenferro-cpu` `native` or `blas` | The caller's `Pool` (or no pool at all for `CpuEngine::serial`); one placement token per operation. CPU calls return synchronously. | Controlled CPU execution, dense linalg, and host pipelines |
 | CUDA | NVIDIA GPU | CUDA runtime plus the NVIDIA library stack required by the operation, including cuBLAS/cuSOLVER/cuTENSOR/cuFFT where applicable; missing libraries are typed errors | `tenferro-gpu` `cuda` | `CudaEngine::open` owns one device, its stream and its caches. Launches are asynchronous until an explicit synchronize, download, or host inspection. | NVIDIA production workloads and CUDA library-backed dense operations |
 | WebGPU | A WebGPU adapter/device and queue | A working wgpu/WebGPU implementation; coverage is experimental and operation-specific | `tenferro-gpu` `webgpu` | wgpu owns the device queue. Submissions are asynchronous; queue synchronization or download establishes a host-visible boundary. | Portable GPU experiments and Apple shared CPU/Metal paths |
 | XLA/PJRT | A PJRT addressable device | A PJRT plugin shared library; the `pjrt` loader returns a typed error when it is absent or invalid | `tenferro-xla` `pjrt` | The PJRT plugin owns device execution and intra-op scheduling. tenferro controls lowering and invocation, not the plugin's worker pool. | Static traced programs and deployments already using XLA plugins |
@@ -45,8 +45,9 @@ handle. `native` (the default) links the tenferro-owned faer/cpueinsum/
 tcontract/tlinalg kernels; `blas` adds the vendor adapters.
 
 The faer provider is the default because it gives tenferro the most control:
-the engine derives `Par::Seq` or `Par::rayon(n)` from the pool the caller
-handed it, and every worker runs inside that pool.
+the operation's placement token hands faer a plain width (`Exec::external`),
+which becomes `Par::Seq` or `Par::rayon(n)`, and every worker runs inside the
+pool the caller handed the engine.
 
 External BLAS providers own their worker pools. Provider workers inherit the
 calling thread's mask, but tenferro cannot bound the provider's fan-out, and
@@ -57,7 +58,7 @@ performance is worth giving up tenferro's per-operation thread-count control.
 
 | Provider family | Required library | Cargo feature | Thread ownership and scope | Guidance |
 | --- | --- | --- | --- | --- |
-| faer / cpueinsum / tcontract / tlinalg | None beyond the Rust dependencies | `native` | The caller's Rayon pool; the engine never creates workers | Default choice when reproducibility and predictable nesting matter |
+| faer / cpueinsum / tcontract / tlinalg | None beyond the Rust dependencies | `native` | The caller's `Pool`; the engine never creates workers | Default choice when reproducibility and predictable nesting matter |
 | OpenBLAS | OpenBLAS and its CBLAS/LAPACK entry points | `blas`, `blas-openblas` | OpenBLAS-owned pool; settings such as `OPENBLAS_NUM_THREADS` are provider/process-wide | Use for peak BLAS/LAPACK throughput; keep the outer fan-out small to avoid oversubscription |
 | Intel MKL | MKL and its BLAS/LAPACK entry points | `blas`, `blas-mkl` | MKL-owned pool; `MKL_NUM_THREADS` and related OpenMP settings are provider/process-wide | Use when the deployment already standardizes on MKL; tenferro cannot bound the provider's fan-out |
 | Apple Accelerate | Apple Accelerate BLAS/LAPACK | `blas`, `blas-accelerate` | Accelerate-owned pool; `VECLIB_MAXIMUM_THREADS` is provider/process-wide | Use for Apple-native deployments |
@@ -68,13 +69,13 @@ hands to `CpuEngine`:
 
 <!-- snippet-source: crates/tenferro-cpu/examples/choosing_cpu_provider.rs -->
 ```rust
-use tenferro_cpu::{thread_pool_builder, CpuEngine};
+use tenferro_cpu::{CpuEngine, Pool};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The caller builds the pool (and pins its workers if it wants to); the
     // engine computes on it. A serial engine has no pool at all.
     let serial = CpuEngine::serial();
-    let pooled = CpuEngine::new(thread_pool_builder().num_threads(2).build()?);
+    let pooled = CpuEngine::new(Pool::builder().threads(2).build()?);
     println!(
         "provider={} serial_threads={} pooled_threads={}",
         tenferro_cpu::cpu_provider_id(),
@@ -105,10 +106,10 @@ Panel A: faer (caller-owned pool)
 caller thread
   -> CpuEngine operation (one operation at a time; &mut borrow)
     -> operation starts on the calling thread
-      -> enters the caller's pool only when a provider chose > 1 worker
-         (<= pool width partitions on that pool; nested strided ops inside
-         a partition stay sequential)
-      -> faer ops (Par::rayon(pool width) on the same pool)
+      -> enters the caller's pool only when an entry splits into > 1 task
+         (one token: at most its budget of tasks at once; a fork gives each
+         child a share of the budget)
+      -> faer ops (width from Exec::external, Par::rayon on the same pool)
 
 Panel B: external BLAS (provider-owned pool)
 caller thread
@@ -134,7 +135,7 @@ the caller already owns.
 
 | Backend/family | Outer/inner parallelism and nesting | Worker, stream, or queue owner and scope | Synchronization | Storage and event domain | Unsupported behavior and dtype/op coverage |
 | --- | --- | --- | --- | --- | --- |
-| CPU/native kernels | The engine starts on the calling thread and enters the caller's pool only for a multi-worker provider choice | The caller's Rayon pool, one engine per pool | Direct CPU operations complete before return | Host storage classes; the CPU runtime uses an immediate event domain | Typed unsupported errors; see [CPU execution](cpu-execution.md) and [linear algebra](linear-algebra.md) |
+| CPU/native kernels | The engine starts on the calling thread and enters the caller's pool only for a multi-worker provider choice | The caller's `Pool`, one engine per pool | Direct CPU operations complete before return | Host storage classes; the CPU runtime uses an immediate event domain | Typed unsupported errors; see [CPU execution](cpu-execution.md) and [linear algebra](linear-algebra.md) |
 | CPU/BLAS or LAPACK | The vendor owns its own worker team; tenferro neither bounds nor schedules it | Linked provider pool and environment; usually process-wide | The provider call returns before the synchronous CPU API returns; worker synchronization is vendor-owned | Host storage classes; CPU event domain | Unsupported operations are typed errors; `blas` keeps a native fallback for declined small steps; see [CPU execution](cpu-execution.md) |
 | CUDA | Device kernels use provider-selected grid/stream parallelism; host-side nesting is limited to explicit engine calls | One `CudaEngine` owns its `CudaRuntime`, stream, handles and plan caches | Launches may be asynchronous; synchronize, download, or host inspection is the boundary | CUDA device storage and CUDA stream/event domain | Unsupported CUDA operation or dtype, and missing NVIDIA library, return typed errors; see [GPU coverage](devices-and-gpu.md) |
 | WebGPU | Device parallelism is inside the submitted shader; independent work may share the queue, with no tenferro CPU-style nested budget | wgpu device and queue owned by the WebGPU backend | Queue submission is asynchronous; explicit synchronization or download makes results host-visible | WebGPU storage and queue/event domain | Unsupported operation or dtype returns an error; no implicit CPU fallback; see [GPU coverage](devices-and-gpu.md) |
@@ -148,7 +149,7 @@ catalog.
 
 Every engine is caller-held, and that is the whole contract:
 
-- **The caller owns execution resources.** You build the Rayon pool or open the
+- **The caller owns execution resources.** You build the `Pool` or open the
   CUDA device, you keep the engine, and you decide when it is dropped. The
   engine owns the plan cache, the buffer pool and the extension caches that
   belong to those resources.
@@ -181,13 +182,13 @@ on a different id (extension modules install against that id):
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#choosing_a_backend_engine_id -->
 ```rust
-use tenferro_cpu::{runtime_engine_registration_with_id, thread_pool_builder, CpuEngine};
+use tenferro_cpu::{runtime_engine_registration_with_id, Pool, CpuEngine};
 use tenferro_runtime::{EngineId, ExecutionEngine, Runtime};
 
 // A caller-chosen engine id must agree on both sides: extension modules are
 // installed against the id the runtime registered.
 let engine_id = EngineId::new("example.cpu.primary.v1")?;
-let engine = CpuEngine::new(thread_pool_builder().num_threads(1).build()?)
+let engine = CpuEngine::new(Pool::builder().threads(1).build()?)
     .with_runtime_engine_id(engine_id.clone());
 
 let mut builder = Runtime::builder();
