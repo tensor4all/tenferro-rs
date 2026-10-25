@@ -87,9 +87,7 @@ cpueinsum = "0.5.0"
 cpueinsum-blas = "0.5.0"
 tcontract-exec = "0.5.0"
 tlinalg = "0.5.0"
-# TEMPORARY path dependency: tlinalg-blas 0.5.0 (strided 0.7) is not on crates.io yet; it becomes
-# `tlinalg-blas = "0.5.0"` once published.
-tlinalg-blas = { path = "../tlinalg-rs-exec/crates/tlinalg-blas", version = "0.4.3" }
+tlinalg-blas = "0.5.0"
 strided-basic = { version = "0.7.0", default-features = false }
 # Fused NN kernels moved out of this repository (#2272): axis-0 softmax with a
 # tensor-free contract, caller-provided scratch and the caller's `Exec` token.

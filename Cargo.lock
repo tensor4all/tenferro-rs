@@ -5645,7 +5645,9 @@ dependencies = [
 
 [[package]]
 name = "tlinalg-blas"
-version = "0.4.3"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb044c0768c7876d43d39bd07c3ab7fe229f8710004eba7935506f3604bbb0f7"
 dependencies = [
  "cblas-sys",
  "lapack",
