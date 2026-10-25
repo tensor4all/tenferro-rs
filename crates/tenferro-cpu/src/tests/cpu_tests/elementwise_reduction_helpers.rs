@@ -757,34 +757,26 @@ fn reduce_max_and_min_propagate_nan_instead_of_leaking_sentinel() {
         TypedTensor::from_vec_col_major(vec![2], vec![f64::NAN, f64::NAN]).unwrap(),
     );
 
-    assert!(
-        reduce_max(&mixed, &[0], &strided_kernel::ExecContext::serial())
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap()[0]
-            .is_nan()
-    );
-    assert!(
-        reduce_min(&mixed, &[0], &strided_kernel::ExecContext::serial())
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap()[0]
-            .is_nan()
-    );
-    assert!(
-        reduce_max(&all_nan, &[0], &strided_kernel::ExecContext::serial())
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap()[0]
-            .is_nan()
-    );
-    assert!(
-        reduce_min(&all_nan, &[0], &strided_kernel::ExecContext::serial())
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap()[0]
-            .is_nan()
-    );
+    assert!(reduce_max(&mixed, &[0], strided_kernel::Exec::serial())
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap()[0]
+        .is_nan());
+    assert!(reduce_min(&mixed, &[0], strided_kernel::Exec::serial())
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap()[0]
+        .is_nan());
+    assert!(reduce_max(&all_nan, &[0], strided_kernel::Exec::serial())
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap()[0]
+        .is_nan());
+    assert!(reduce_min(&all_nan, &[0], strided_kernel::Exec::serial())
+        .unwrap()
+        .as_slice::<f64>()
+        .unwrap()[0]
+        .is_nan());
 }
 
 #[test]
@@ -794,28 +786,28 @@ fn reduce_sum_zero_length_axis_is_rejected_like_other_reductions() {
     );
 
     assert!(matches!(
-        reduce_sum(&empty, &[0], &strided_kernel::ExecContext::serial()),
+        reduce_sum(&empty, &[0], strided_kernel::Exec::serial()),
         Err(crate::Error::Validation {
             op: "reduce_sum",
             ..
         })
     ));
     assert!(matches!(
-        reduce_prod(&empty, &[0], &strided_kernel::ExecContext::serial()),
+        reduce_prod(&empty, &[0], strided_kernel::Exec::serial()),
         Err(crate::Error::Validation {
             op: "reduce_prod",
             ..
         })
     ));
     assert!(matches!(
-        reduce_max(&empty, &[0], &strided_kernel::ExecContext::serial()),
+        reduce_max(&empty, &[0], strided_kernel::Exec::serial()),
         Err(crate::Error::Validation {
             op: "reduce_max",
             ..
         })
     ));
     assert!(matches!(
-        reduce_min(&empty, &[0], &strided_kernel::ExecContext::serial()),
+        reduce_min(&empty, &[0], strided_kernel::Exec::serial()),
         Err(crate::Error::Validation {
             op: "reduce_min",
             ..
@@ -829,8 +821,8 @@ fn empty_reduction_axes_are_noop_before_dtype_dispatch() {
     let bools = Tensor::from_typed::<bool>(bool_tensor.duplicate().unwrap());
     let mut backend = crate::CpuEngine::serial();
 
-    let sum_owned = reduce_sum(&bools, &[], &strided_kernel::ExecContext::serial()).unwrap();
-    let prod_owned = reduce_prod(&bools, &[], &strided_kernel::ExecContext::serial()).unwrap();
+    let sum_owned = reduce_sum(&bools, &[], strided_kernel::Exec::serial()).unwrap();
+    let prod_owned = reduce_prod(&bools, &[], strided_kernel::Exec::serial()).unwrap();
     let sum_read = crate::test_support::on_engine(&mut backend, |__s| {
         __s.reduce_sum_read(TensorRead::from_tensor(&bools), &[])
     })
@@ -1172,11 +1164,11 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
         )
         .unwrap(),
     );
-    let sum = reduce_sum(&complex, &[0], &strided_kernel::ExecContext::serial()).unwrap();
+    let sum = reduce_sum(&complex, &[0], strided_kernel::Exec::serial()).unwrap();
     assert_eq!(get_c32(&sum, &[0]), Complex32::new(3.0, 1.0));
     assert_eq!(get_c32(&sum, &[1]), Complex32::new(7.0, 1.0));
 
-    let prod = reduce_prod(&complex, &[], &strided_kernel::ExecContext::serial()).unwrap();
+    let prod = reduce_prod(&complex, &[], strided_kernel::Exec::serial()).unwrap();
     assert_eq!(prod.shape(), &[2, 2]);
 
     assert!(matches!(
@@ -1185,7 +1177,7 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
                 TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap()
             ),
             &[2],
-            &strided_kernel::ExecContext::serial()
+            strided_kernel::Exec::serial(),
         ),
         Err(crate::Error::Validation {
             op: "reduce_sum",
@@ -1198,7 +1190,7 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
                 TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap()
             ),
             &[0, 0],
-            &strided_kernel::ExecContext::serial()
+            strided_kernel::Exec::serial(),
         ),
         Err(crate::Error::Validation {
             op: "reduce_prod",
@@ -1206,14 +1198,14 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
         })
     ));
     assert!(matches!(
-        reduce_max(&complex, &[0], &strided_kernel::ExecContext::serial()),
+        reduce_max(&complex, &[0], strided_kernel::Exec::serial()),
         Err(crate::Error::Unsupported {
             op: "reduce_max",
             ..
         })
     ));
     assert!(matches!(
-        reduce_min(&complex, &[0], &strided_kernel::ExecContext::serial()),
+        reduce_min(&complex, &[0], strided_kernel::Exec::serial()),
         Err(crate::Error::Unsupported {
             op: "reduce_min",
             ..
@@ -1224,14 +1216,14 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
         TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap(),
     );
     assert!(matches!(
-        reduce_max(&real, &[2], &strided_kernel::ExecContext::serial()),
+        reduce_max(&real, &[2], strided_kernel::Exec::serial()),
         Err(crate::Error::Validation {
             op: "reduce_max",
             source: tenferro_tensor::ValidationError::AxisOutOfBounds { .. },
         })
     ));
     assert!(matches!(
-        reduce_min(&real, &[0, 0], &strided_kernel::ExecContext::serial()),
+        reduce_min(&real, &[0, 0], strided_kernel::Exec::serial()),
         Err(crate::Error::Validation {
             op: "reduce_min",
             source: tenferro_tensor::ValidationError::DuplicateAxis { .. },

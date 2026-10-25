@@ -10,8 +10,8 @@ fn matrix(shape: [usize; 2], data: &[f64]) -> Tensor {
 
 fn pooled(threads: usize) -> CpuEngine {
     CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(threads)
+        tenferro_cpu::Pool::builder()
+            .threads(threads)
             .build()
             .expect("test pool"),
     )
@@ -38,8 +38,9 @@ fn tiny_einsum_uses_the_contraction_lane_inline_and_matches_serial() {
         actual.as_slice::<f64>().expect("f64 values"),
         expected.as_slice::<f64>().expect("f64 values")
     );
+    #[cfg(feature = "ledger")]
     assert_eq!(
-        engine.pool_stats().entries,
+        engine.take_ledger_installs(),
         0,
         "a tiny contraction must not enter the pool"
     );

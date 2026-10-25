@@ -41,7 +41,7 @@ pub mod dispatch;
 pub mod elementwise;
 pub mod read_into;
 pub mod scalar_ops;
-pub use read_into::elementwise_read_into_with_context;
+pub use read_into::elementwise_read_into_with_exec;
 
 // Re-exported so the exported dispatch macros can name them with `$crate` paths.
 pub use num_complex::{Complex32, Complex64};
@@ -179,9 +179,12 @@ where
     )
     .map_err(|err| Error::backend_source(op, err))?;
     let mut out = PooledUninitOutput::<T>::new(buffers, view.shape())?;
-    map_into(&mut out.as_uninit_view_mut()?, &src, |x| {
-        MaybeUninit::new(x)
-    })
+    map_into(
+        &mut out.as_uninit_view_mut()?,
+        &src,
+        |x| MaybeUninit::new(x),
+        strided_kernel::Exec::serial(),
+    )
     .map_err(|err| Error::backend_source(op, err))?;
     // SAFETY: the successful map replay writes every logical destination element.
     let out = unsafe { out.assume_init_as_recycled::<R>()? };

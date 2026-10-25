@@ -17,7 +17,7 @@ fn reshape_via_context(
     shape: &[usize],
 ) -> tenferro_tensor::Result<Tensor> {
     with_cpu_session(backend, |cpu| {
-        cpu.with_linalg_pool(|context, buffers| context.reshape_tensor(buffers, input, shape))
+        cpu.with_linalg_pool(|exec, buffers| crate::reshape_tensor(exec, buffers, input, shape))
     })
 }
 

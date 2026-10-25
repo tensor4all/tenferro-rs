@@ -15,7 +15,7 @@ pub type Result<T> = tenferro_tensor::Result<T>;
 pub use tenferro_tensor::{DType, Error, Tensor, TypedTensor};
 
 use std::mem::size_of_val;
-use strided_basic::{ErasedRawStridedPtr, ErasedRawStridedRef, ExecContext, KernelDType};
+use strided_basic::{ErasedRawStridedPtr, ErasedRawStridedRef, Exec, KernelDType};
 use strided_fused::{ErasedFusedPlan, FusedInst, FusedOp, FusedPlan};
 use tenferro_cpu_basic::{
     erased_raw_strided_ref, erased_raw_strided_uninit_mut, typed_host_data, BufferPool, PoolScalar,
@@ -283,9 +283,9 @@ fn erased_fusion_input<'a>(
 #[doc(hidden)]
 pub fn elementwise_fusion_with_pool(
     buffers: &mut BufferPool,
-    exec_context: &ExecContext,
     inputs: &[&Tensor],
     plan: &ElementwiseFusionPlan,
+    exec: Exec<'_>,
 ) -> crate::Result<Option<Vec<Tensor>>> {
     if !validate_elementwise_fusion_inputs(inputs, plan)? {
         return Ok(None);
@@ -335,16 +335,16 @@ pub fn elementwise_fusion_with_pool(
         })
         .collect::<crate::Result<Vec<_>>>()?;
 
-    execute_erased_fused_outputs(buffers, exec_context, dtype, &input_refs, &shape, plan).map(Some)
+    execute_erased_fused_outputs(buffers, dtype, &input_refs, &shape, plan, exec).map(Some)
 }
 
 fn execute_erased_fused_outputs(
     buffers: &mut BufferPool,
-    exec_context: &ExecContext,
     dtype: FusedDType,
     input_refs: &[ErasedRawStridedRef<'_>],
     shape: &[usize],
     plan: &ElementwiseFusionPlan,
+    exec: Exec<'_>,
 ) -> crate::Result<Vec<Tensor>> {
     let input_ptrs: Vec<_> = input_refs
         .iter()
@@ -352,22 +352,12 @@ fn execute_erased_fused_outputs(
         .collect();
     let kernel = dtype.kernel();
     match dtype {
-        FusedDType::F32 => execute_erased_fused_plan::<f32>(
-            buffers,
-            exec_context,
-            kernel,
-            &input_ptrs,
-            shape,
-            plan,
-        ),
-        FusedDType::F64 => execute_erased_fused_plan::<f64>(
-            buffers,
-            exec_context,
-            kernel,
-            &input_ptrs,
-            shape,
-            plan,
-        ),
+        FusedDType::F32 => {
+            execute_erased_fused_plan::<f32>(buffers, kernel, &input_ptrs, shape, plan, exec)
+        }
+        FusedDType::F64 => {
+            execute_erased_fused_plan::<f64>(buffers, kernel, &input_ptrs, shape, plan, exec)
+        }
     }
 }
 
@@ -379,11 +369,11 @@ fn execute_erased_fused_outputs(
 /// output.
 fn execute_erased_fused_plan<T>(
     buffers: &mut BufferPool,
-    exec_context: &ExecContext,
     dtype: KernelDType,
     input_ptrs: &[ErasedRawStridedPtr<'_>],
     shape: &[usize],
     plan: &ElementwiseFusionPlan,
+    exec: Exec<'_>,
 ) -> crate::Result<Vec<Tensor>>
 where
     T: Clone + PoolScalar,
@@ -418,7 +408,7 @@ where
         })
         .collect::<crate::Result<Vec<_>>>()?;
     erased_plan
-        .execute_outputs_uninit(exec_context, &mut dests, input_ptrs)
+        .execute_outputs_uninit(&mut dests, input_ptrs, exec)
         .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
     drop(dests);
     outputs

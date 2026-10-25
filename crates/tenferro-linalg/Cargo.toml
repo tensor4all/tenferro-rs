@@ -20,6 +20,8 @@ rustdoc-args = ["--cfg", "docsrs"]
 features = ["autodiff", "native", "cuda", "webgpu"]
 
 [features]
+# Test support, off by default (see `tenferro-cpu`): placement-ledger assertions.
+ledger = ["tenferro-cpu/ledger"]
 default = ["native"]
 __bench_unification_semantic_ad_api = []
 autodiff = [
@@ -100,17 +102,12 @@ cudarc = { workspace = true, optional = true }
 faer = { workspace = true, optional = true }
 # The extracted tensor-free linalg providers, both from the tlinalg-rs workspace: `tlinalg` (faer)
 # and `tlinalg-blas` (LAPACK/BLAS). Neither depends on the other; the interface they are adapted to
-# lives in this crate. Caret requirements at the patch this crate needs: Cargo unifies the whole
-# CPU stack on one strided source and one faer identity within a compatible line, and the
-# committed `Cargo.lock` fixes the exact versions. tlinalg 0.4.4 takes the engine's `Exec` token,
-# adds the borrowed-workspace `*_workspace` / `*_into` entries the host routes every faer family
-# through, and admits compatible t4a-faer patch fixes (keep its range compatible with the
-# workspace faer requirement).
-tlinalg = { version = "0.4.4", optional = true }
-# The LAPACK provider takes no `Exec` and no faer, so it moves only when it changes.
-tlinalg-blas = { version = "0.4.3", optional = true }
+# lives in this crate. Their requirements live in the workspace manifest, next to the rest of the
+# CPU stack: tlinalg 0.5 takes the engine's `tcontract_exec::Exec` bundle by `&mut` (`*_workspace`
+# entries by `&`) and forks its batch lanes over that token.
+tlinalg = { workspace = true, optional = true }
+tlinalg-blas = { workspace = true, optional = true }
 tcontract-exec.workspace = true
-rayon.workspace = true
 lapack = { workspace = true, optional = true }
 lapack-inject = { workspace = true, optional = true }
 libloading = { workspace = true, optional = true }

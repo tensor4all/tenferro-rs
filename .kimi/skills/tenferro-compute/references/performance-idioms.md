@@ -129,9 +129,9 @@ other compile-time metadata changes.
 
 ## Threading
 
-Build the pool yourself with `tenferro_cpu::thread_pool_builder().num_threads(n)`
+Build the pool yourself with `tenferro_cpu::Pool::builder().threads(n)`
 and hand it to `CpuEngine::new`, or use `CpuEngine::serial()` for no pool at all.
-tenferro never builds threads and never enters an ambient Rayon pool. `native`
+tenferro never builds threads and never enters an ambient pool. `native`
 follows the engine's pool; BLAS/LAPACK provider threads are configured with
 variables such as `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, or
 `VECLIB_MAXIMUM_THREADS`. Avoid outer parallel loops that oversubscribe the

@@ -72,27 +72,26 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             let other = TypedTensor::<$ty>::from_vec_col_major(vec![], vec![2]).unwrap();
             let owned = mul_read_with_pool(
                 &mut buffers,
-                &ExecContext::serial(),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     scalar.duplicate().unwrap(),
                 )),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     other.duplicate().unwrap(),
                 )),
+                Exec::serial(),
             )
             .unwrap();
             assert_eq!(owned.as_slice::<$ty>().unwrap(), &[expected]);
             let view = mul_read_with_pool(
                 &mut buffers,
-                &ExecContext::serial(),
                 TensorRead::from_view(TensorView::$variant(scalar.as_view())),
                 TensorRead::from_view(TensorView::$variant(other.as_view())),
+                Exec::serial(),
             )
             .unwrap();
             assert_eq!(view.as_slice::<$ty>().unwrap(), &[expected]);
             let broadcast = broadcast_multiply_read_with_pool(
                 &mut buffers,
-                &ExecContext::serial(),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     scalar.duplicate().unwrap(),
                 )),
@@ -101,6 +100,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(other)),
                 &[],
                 &[],
+                Exec::serial(),
             )
             .unwrap()
             .unwrap();
@@ -114,13 +114,13 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             ];
             let owned_scalar_vector = mul_read_with_pool(
                 &mut buffers,
-                &ExecContext::serial(),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     scalar.duplicate().unwrap(),
                 )),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     vector.duplicate().unwrap(),
                 )),
+                Exec::serial(),
             )
             .unwrap();
             assert_eq!(owned_scalar_vector.shape(), &[3]);
@@ -130,13 +130,13 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             );
             let owned_vector_scalar = mul_read_with_pool(
                 &mut buffers,
-                &ExecContext::serial(),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     vector.duplicate().unwrap(),
                 )),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     scalar.duplicate().unwrap(),
                 )),
+                Exec::serial(),
             )
             .unwrap();
             assert_eq!(owned_vector_scalar.shape(), &[3]);
@@ -147,9 +147,9 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
 
             let view_scalar_vector = mul_read_with_pool(
                 &mut buffers,
-                &ExecContext::serial(),
                 TensorRead::from_view(TensorView::$variant(scalar.as_view())),
                 TensorRead::from_view(TensorView::$variant(vector.as_view())),
+                Exec::serial(),
             )
             .unwrap();
             assert_eq!(view_scalar_vector.shape(), &[3]);
@@ -159,9 +159,9 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             );
             let view_vector_scalar = mul_read_with_pool(
                 &mut buffers,
-                &ExecContext::serial(),
                 TensorRead::from_view(TensorView::$variant(vector.as_view())),
                 TensorRead::from_view(TensorView::$variant(scalar.as_view())),
+                Exec::serial(),
             )
             .unwrap();
             assert_eq!(view_vector_scalar.shape(), &[3]);
@@ -172,7 +172,6 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
 
             let broadcast_scalar_vector = broadcast_multiply_read_with_pool(
                 &mut buffers,
-                &ExecContext::serial(),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(
                     scalar.duplicate().unwrap(),
                 )),
@@ -183,6 +182,7 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
                 )),
                 &[3],
                 &[0],
+                Exec::serial(),
             )
             .unwrap()
             .unwrap();
@@ -193,13 +193,13 @@ fn integer_multiplication_wraps_owned_view_and_scalar_broadcast_paths() {
             );
             let broadcast_vector_scalar = broadcast_multiply_read_with_pool(
                 &mut buffers,
-                &ExecContext::serial(),
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(vector)),
                 &[3],
                 &[0],
                 TensorRead::from_tensor(&Tensor::from_typed::<preset_scalar!($variant)>(scalar)),
                 &[3],
                 &[],
+                Exec::serial(),
             )
             .unwrap()
             .unwrap();
@@ -224,13 +224,13 @@ fn broadcast_multiply_rank_n_outer_product_matches_reference() {
 
     let out = broadcast_multiply_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F64(lhs)),
         &[2, 3, 2, 2],
         &[0, 1],
         TensorRead::from_view(TensorView::F64(rhs)),
         &[2, 3, 2, 2],
         &[2, 3],
+        Exec::serial(),
     )
     .unwrap()
     .expect("f64 broadcast multiply is supported");
@@ -260,13 +260,13 @@ fn broadcast_multiply_shared_batch_outer_product_matches_reference() {
 
     let out = broadcast_multiply_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F64(lhs)),
         &[2, 4, 3],
         &[0, 2],
         TensorRead::from_view(TensorView::F64(rhs)),
         &[2, 4, 3],
         &[1, 2],
+        Exec::serial(),
     )
     .unwrap()
     .expect("f64 broadcast multiply is supported");
@@ -294,13 +294,13 @@ fn broadcast_multiply_fallback_handles_permuted_elementwise_without_materializat
 
     let out = broadcast_multiply_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_tensor(&lhs),
         &[2, 3, 4],
         &[0, 1, 2],
         TensorRead::from_tensor(&rhs),
         &[2, 3, 4],
         &[2, 0, 1],
+        Exec::serial(),
     )
     .unwrap()
     .expect("same-rank permuted elementwise multiply should use fallback broadcast mul");
@@ -334,13 +334,13 @@ fn broadcast_multiply_handles_scalar_full_output_pairs() {
 
     let lhs_scalar = broadcast_multiply_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_tensor(&scalar),
         &[3],
         &[],
         TensorRead::from_tensor(&vector),
         &[3],
         &[0],
+        Exec::serial(),
     )
     .unwrap()
     .expect("scalar lhs broadcast multiply should materialize");
@@ -348,13 +348,13 @@ fn broadcast_multiply_handles_scalar_full_output_pairs() {
 
     let rhs_scalar = broadcast_multiply_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_tensor(&vector),
         &[3],
         &[0],
         TensorRead::from_tensor(&scalar),
         &[3],
         &[],
+        Exec::serial(),
     )
     .unwrap()
     .expect("scalar rhs broadcast multiply should materialize");
@@ -364,13 +364,13 @@ fn broadcast_multiply_handles_scalar_full_output_pairs() {
         Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![3.0]).unwrap());
     let both_scalar = broadcast_multiply_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_tensor(&scalar),
         &[3],
         &[],
         TensorRead::from_tensor(&other_scalar),
         &[3],
         &[],
+        Exec::serial(),
     )
     .unwrap()
     .expect("scalar-scalar broadcast multiply should materialize");
@@ -384,13 +384,13 @@ fn broadcast_multiply_handles_scalar_full_output_pairs() {
     );
     let complex_value = broadcast_multiply_value_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_tensor(&complex_scalar),
         &[2],
         &[],
         TensorRead::from_tensor(&complex_vector),
         &[2],
         &[0],
+        Exec::serial(),
     )
     .unwrap()
     .expect("complex scalar broadcast multiply should materialize");
@@ -411,13 +411,13 @@ fn lazy_outer_product_lhs_prefix_preserves_logical_output_order() {
 
     let out = try_lazy_outer_product_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         &lhs,
         &[2, 3, 4],
         &[0, 1],
         &rhs,
         &[2, 3, 4],
         &[2],
+        Exec::serial(),
     )
     .unwrap()
     .expect("non-canonical lhs physical order should use lazy outer-product output");
@@ -453,13 +453,13 @@ fn lazy_outer_product_rhs_prefix_preserves_logical_output_order() {
 
     let out = try_lazy_outer_product_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         &lhs,
         &[4, 2, 3],
         &[1, 2],
         &rhs,
         &[4, 2, 3],
         &[0],
+        Exec::serial(),
     )
     .unwrap()
     .expect("rhs-prefix output should still support lazy non-canonical lhs order");
@@ -585,9 +585,9 @@ fn typed_view_helpers_cover_scalar_and_validation_paths() {
         "test_binary",
         ErasedZipOp::Add,
         &mut buffers,
-        &ExecContext::serial(),
         &lhs_view,
         &rhs_view,
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(same_shape.as_slice().unwrap(), &[11.0, 24.0]);
@@ -596,9 +596,9 @@ fn typed_view_helpers_cover_scalar_and_validation_paths() {
         "test_binary",
         ErasedZipOp::Multiply,
         &mut buffers,
-        &ExecContext::serial(),
         &scalar_view,
         &rhs_view,
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(scalar_lhs.as_slice().unwrap(), &[20.0, 40.0]);
@@ -607,9 +607,9 @@ fn typed_view_helpers_cover_scalar_and_validation_paths() {
         "test_binary",
         ErasedZipOp::Multiply,
         &mut buffers,
-        &ExecContext::serial(),
         &lhs_view,
         &scalar_view,
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(scalar_rhs.as_slice().unwrap(), &[2.0, 8.0]);
@@ -619,9 +619,9 @@ fn typed_view_helpers_cover_scalar_and_validation_paths() {
             "test_binary",
             ErasedZipOp::Add,
             &mut buffers,
-            &ExecContext::serial(),
             &lhs_view,
             &short_view,
+            Exec::serial(),
         ),
         "test_binary",
     );
@@ -630,68 +630,68 @@ fn typed_view_helpers_cover_scalar_and_validation_paths() {
         "test_unary",
         ErasedMapOp::Negate,
         &mut buffers,
-        &ExecContext::serial(),
         &lhs_view,
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(negated.as_slice().unwrap(), &[-1.0, -4.0]);
 
     let compared = typed_compare_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         &lhs_view,
         &rhs_view,
         &CompareDir::Lt,
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(compared.as_slice().unwrap(), &[true, true]);
     assert_shape_mismatch(
         typed_compare_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             &lhs_view,
             &short_view,
             &CompareDir::Lt,
+            Exec::serial(),
         ),
         "compare",
     );
 
     let selected = typed_select_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         &pred_view,
         &lhs_view,
         &rhs_view,
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(selected.as_slice().unwrap(), &[1.0, 20.0]);
     assert_shape_mismatch(
         typed_select_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             &pred_view,
             &short_view,
             &rhs_view,
+            Exec::serial(),
         ),
         "select",
     );
     assert_shape_mismatch(
         typed_select_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             &pred_view,
             &lhs_view,
             &short_view,
+            Exec::serial(),
         ),
         "select",
     );
 
     let clamped = typed_clamp_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         &lhs_view,
         &lower_view,
         &upper_view,
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(clamped.as_slice().unwrap(), &[1.0, 4.0]);
@@ -702,10 +702,10 @@ fn typed_view_helpers_cover_scalar_and_validation_paths() {
         TypedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 3.0]).unwrap();
     let degenerate = typed_clamp_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         &lhs_view,
         &degenerate_lower.as_view(),
         &degenerate_upper.as_view(),
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(degenerate.as_slice().unwrap(), &[3.0, 3.0]);
@@ -713,20 +713,20 @@ fn typed_view_helpers_cover_scalar_and_validation_paths() {
     assert_shape_mismatch(
         typed_clamp_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             &lhs_view,
             &short_view,
             &upper_view,
+            Exec::serial(),
         ),
         "clamp",
     );
     assert_shape_mismatch(
         typed_clamp_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             &lhs_view,
             &lower_view,
             &short_view,
+            Exec::serial(),
         ),
         "clamp",
     );
@@ -914,18 +914,18 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let add_f32 = add_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F32(f32_a.as_view())),
         TensorRead::from_tensor(&f32_b_tensor),
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(add_f32.as_slice::<f32>().unwrap(), &[4.0, 2.0]);
 
     let add_c32_scalar = add_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F32(f32_scalar.as_view())),
         TensorRead::from_tensor(&c32_b_tensor),
+        Exec::serial(),
     )
     .unwrap();
     assert_c32_close(
@@ -935,9 +935,9 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let add_c64_scalar = add_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(c64_b.as_view())),
         TensorRead::from_tensor(&f64_scalar_tensor),
+        Exec::serial(),
     )
     .unwrap();
     assert_c64_close(
@@ -947,18 +947,18 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let mul_f64 = mul_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F64(f64_a.as_view())),
         TensorRead::from_tensor(&f64_b_tensor),
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(mul_f64.as_slice::<f64>().unwrap(), &[-3.0, 0.0, 20.0]);
 
     let mul_c32_scalar = mul_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_tensor(&c32_b_tensor),
         TensorRead::from_view(TensorView::F32(f32_scalar.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_c32_close(
@@ -969,18 +969,18 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_dtype_mismatch(
         mul_read_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             TensorRead::from_view(TensorView::F32(f32_a.as_view())),
             TensorRead::from_view(TensorView::F64(f64_a.as_view())),
+            Exec::serial(),
         ),
         "mul",
     );
 
     let div_c32 = div_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F32(f32_scalar.as_view())),
         TensorRead::from_view(TensorView::C32(c32_b.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_c32_close(
@@ -990,9 +990,9 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let div_c64 = div_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(c64_a.as_view())),
         TensorRead::from_view(TensorView::F64(f64_scalar.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_c64_close(
@@ -1002,73 +1002,73 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let div_f32 = div_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_tensor(&f32_b_tensor),
         TensorRead::from_tensor(&f32_scalar_tensor),
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(div_f32.as_slice::<f32>().unwrap(), &[1.5, 2.0]);
 
     let div_f64 = div_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_tensor(&f64_b_tensor),
         TensorRead::from_view(TensorView::F64(f64_scalar.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(div_f64.as_slice::<f64>().unwrap(), &[0.5, 1.0, 2.5]);
 
     let neg = neg_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(c64_a.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_c64_close(neg.as_slice::<Complex<f64>>().unwrap()[0], c64(-3.0, -4.0));
     let neg_i32 = neg_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::I32(i32_a.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(neg_i32.as_slice::<i32>().unwrap(), &[-1, -4]);
 
     let conj = conj_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C32(c32_a.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_c32_close(conj.as_slice::<Complex<f32>>().unwrap()[0], c32(3.0, -4.0));
     assert_unsupported(
         conj_read_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             TensorRead::from_view(TensorView::Bool(bool_a.as_view())),
+            Exec::serial(),
         ),
         "conj",
     );
 
     let abs = abs_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(c64_a.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(abs.as_slice::<f64>().unwrap()[0], 5.0);
 
     let sign = sign_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F64(f64_a.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(sign.as_slice::<f64>().unwrap(), &[-1.0, 0.0, 1.0]);
 
     let sign_complex = sign_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C32(c32_a.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_c32_close(
@@ -1083,8 +1083,8 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
             .unwrap();
     let tiny_sign = sign_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(tiny_complex.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_c64_close(
@@ -1096,8 +1096,8 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
             .unwrap();
     let zero_sign = sign_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(zero_complex.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_c64_close(
@@ -1108,9 +1108,9 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_unsupported_contains(
         maximum_read_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             TensorRead::from_view(TensorView::C32(c32_a.as_view())),
             TensorRead::from_tensor(&c32_b_tensor),
+            Exec::serial(),
         ),
         "maximum",
         "total order",
@@ -1118,9 +1118,9 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_unsupported_contains(
         minimum_read_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             TensorRead::from_view(TensorView::C64(c64_a.as_view())),
             TensorRead::from_tensor(&c64_b_tensor),
+            Exec::serial(),
         ),
         "minimum",
         "total order",
@@ -1128,30 +1128,30 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let cmp_i32 = compare_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::I32(i32_a.as_view())),
         TensorRead::from_view(TensorView::I32(i32_b.as_view())),
         &CompareDir::Lt,
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(cmp_i32.as_slice::<bool>().unwrap(), &[true, false]);
 
     let cmp_i64 = compare_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::I64(i64_a.as_view())),
         TensorRead::from_view(TensorView::I64(i64_b.as_view())),
         &CompareDir::Ge,
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(cmp_i64.as_slice::<bool>().unwrap(), &[true, true]);
 
     let cmp_bool = compare_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::Bool(bool_a.as_view())),
         TensorRead::from_view(TensorView::Bool(bool_b.as_view())),
         &CompareDir::Eq,
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(cmp_bool.as_slice::<bool>().unwrap(), &[false, true]);
@@ -1159,10 +1159,10 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_unsupported_contains(
         compare_read_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             TensorRead::from_view(TensorView::C32(c32_a.as_view())),
             TensorRead::from_view(TensorView::C32(c32_b.as_view())),
             &CompareDir::Gt,
+            Exec::serial(),
         ),
         "compare",
         "total order",
@@ -1170,30 +1170,30 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
 
     let select_i64 = select_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::Bool(pred.as_view())),
         TensorRead::from_view(TensorView::I64(i64_a.as_view())),
         TensorRead::from_view(TensorView::I64(i64_b.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(select_i64.as_slice::<i64>().unwrap(), &[5, -1]);
 
     let select_bool = select_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::Bool(pred.as_view())),
         TensorRead::from_view(TensorView::Bool(bool_a.as_view())),
         TensorRead::from_view(TensorView::Bool(bool_b.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(select_bool.as_slice::<bool>().unwrap(), &[true, false]);
 
     let select_c32 = select_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::Bool(pred.as_view())),
         TensorRead::from_view(TensorView::C32(c32_a.as_view())),
         TensorRead::from_view(TensorView::C32(c32_b.as_view())),
+        Exec::serial(),
     )
     .unwrap();
     assert_c32_close(
@@ -1204,20 +1204,20 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_dtype_mismatch(
         select_read_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             TensorRead::from_view(TensorView::Bool(pred.as_view())),
             TensorRead::from_view(TensorView::F32(f32_a.as_view())),
             TensorRead::from_view(TensorView::F64(f64_a.as_view())),
+            Exec::serial(),
         ),
         "select",
     );
     assert_dtype_mismatch(
         select_read_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             TensorRead::from_view(TensorView::F32(f32_a.as_view())),
             TensorRead::from_view(TensorView::F32(f32_a.as_view())),
             TensorRead::from_view(TensorView::F32(f32_b.as_view())),
+            Exec::serial(),
         ),
         "select",
     );
@@ -1225,10 +1225,10 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_unsupported_contains(
         clamp_read_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             TensorRead::from_view(TensorView::C32(c32_a.as_view())),
             TensorRead::from_view(TensorView::C32(c32_b.as_view())),
             TensorRead::from_view(TensorView::C32(c32_a.as_view())),
+            Exec::serial(),
         ),
         "clamp",
         "total order",
@@ -1236,10 +1236,10 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_unsupported_contains(
         clamp_read_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             TensorRead::from_view(TensorView::C64(c64_a.as_view())),
             TensorRead::from_view(TensorView::C64(c64_b.as_view())),
             TensorRead::from_view(TensorView::C64(c64_a.as_view())),
+            Exec::serial(),
         ),
         "clamp",
         "total order",
@@ -1248,10 +1248,10 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     assert_dtype_mismatch(
         clamp_read_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             TensorRead::from_view(TensorView::F32(f32_a.as_view())),
             TensorRead::from_view(TensorView::F32(f32_b.as_view())),
             TensorRead::from_view(TensorView::F64(f64_b.as_view())),
+            Exec::serial(),
         ),
         "clamp",
     );
@@ -1277,14 +1277,13 @@ fn ordered_compare_fixed_dispatch_preserves_owned_and_view_semantics() {
     let mut buffers = BufferPool::new();
 
     for (dir, expected) in cases {
-        let owned =
-            compare_with_pool(&mut buffers, &ExecContext::serial(), &lhs, &rhs, &dir).unwrap();
+        let owned = compare_with_pool(&mut buffers, &lhs, &rhs, &dir, Exec::serial()).unwrap();
         let borrowed = compare_read_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             TensorRead::from_view(TensorView::F64(lhs_typed.as_view())),
             TensorRead::from_view(TensorView::F64(rhs_typed.as_view())),
             &dir,
+            Exec::serial(),
         )
         .unwrap();
 
@@ -1343,13 +1342,13 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     let rhs_f32 = TypedTensorView::from_slice([4], [1], 0, &rhs_f32_data).unwrap();
     let value_f32 = broadcast_multiply_value_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::F32(lhs_f32.clone())),
         &lhs_shape,
         &lhs_dims,
         TensorRead::from_view(TensorView::F32(rhs_f32)),
         &lhs_shape,
         &rhs_dims,
+        Exec::serial(),
     )
     .unwrap()
     .expect("non-canonical f32 outer product should stay lazy");
@@ -1367,13 +1366,13 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     let rhs_i32 = TypedTensorView::from_slice([4], [1], 0, &rhs_i32_data).unwrap();
     let value_i32 = broadcast_multiply_value_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::I32(lhs_i32.clone())),
         &lhs_shape,
         &lhs_dims,
         TensorRead::from_view(TensorView::I32(rhs_i32)),
         &lhs_shape,
         &rhs_dims,
+        Exec::serial(),
     )
     .unwrap()
     .expect("non-canonical i32 outer product should stay lazy");
@@ -1385,13 +1384,13 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     let rhs_i64 = TypedTensorView::from_slice([4], [1], 0, &rhs_i64_data).unwrap();
     let value_i64 = broadcast_multiply_value_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::I64(lhs_i64.clone())),
         &lhs_shape,
         &lhs_dims,
         TensorRead::from_view(TensorView::I64(rhs_i64)),
         &lhs_shape,
         &rhs_dims,
+        Exec::serial(),
     )
     .unwrap()
     .expect("non-canonical i64 outer product should stay lazy");
@@ -1410,13 +1409,13 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     let rhs_c32 = TypedTensorView::from_slice([4], [1], 0, &rhs_c32_data).unwrap();
     let value_c32 = broadcast_multiply_value_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C32(lhs_c32.clone())),
         &lhs_shape,
         &lhs_dims,
         TensorRead::from_view(TensorView::C32(rhs_c32)),
         &lhs_shape,
         &rhs_dims,
+        Exec::serial(),
     )
     .unwrap()
     .expect("non-canonical c32 outer product should stay lazy");
@@ -1435,13 +1434,13 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     let rhs_c64 = TypedTensorView::from_slice([4], [1], 0, &rhs_c64_data).unwrap();
     let value_c64 = broadcast_multiply_value_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_view(TensorView::C64(lhs_c64.clone())),
         &lhs_shape,
         &lhs_dims,
         TensorRead::from_view(TensorView::C64(rhs_c64)),
         &lhs_shape,
         &rhs_dims,
+        Exec::serial(),
     )
     .unwrap()
     .expect("non-canonical c64 outer product should stay lazy");
@@ -1453,13 +1452,13 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
         Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(vec![2], vec![4, 5]).unwrap());
     let materialized = broadcast_multiply_value_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_tensor(&same_shape_i64_lhs),
         &[2],
         &[0],
         TensorRead::from_tensor(&same_shape_i64_rhs),
         &[2],
         &[0],
+        Exec::serial(),
     )
     .unwrap()
     .expect("same-shape multiply should materialize");
@@ -1480,13 +1479,13 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     );
     assert!(broadcast_multiply_read_with_pool(
         &mut buffers,
-        &ExecContext::serial(),
         TensorRead::from_tensor(&bool_lhs),
         &[2],
         &[0],
         TensorRead::from_tensor(&bool_rhs),
         &[2],
         &[0],
+        Exec::serial(),
     )
     .unwrap()
     .is_none());
@@ -1494,13 +1493,13 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     assert_shape_mismatch(
         typed_broadcast_mul_with_pool(
             &mut buffers,
-            &ExecContext::serial(),
             &lhs_f32,
             &[2, 3, 4],
             &[0, 1],
             &lhs_f32,
             &[2, 3, 5],
             &[0, 1],
+            Exec::serial(),
         ),
         "broadcast_multiply",
     );

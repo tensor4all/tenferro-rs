@@ -1,10 +1,10 @@
 //! CPU execution engine, kernels and provider selection.
 //!
-//! A [`CpuEngine`] owns one Rayon pool built by the caller (or none) and the
+//! A [`CpuEngine`] owns one [`Pool`] built by the caller (or none) and the
 //! workspace its operations write. Every operation takes the engine as `&mut`:
 //!
 //! ```rust
-//! use tenferro_cpu::{thread_pool_builder, CpuEngine};
+//! use tenferro_cpu::{Pool, CpuEngine};
 //! use tenferro_tensor::{Tensor, TensorElementwise, TensorRead};
 //!
 //! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
@@ -14,7 +14,7 @@
 //! let c = serial.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))?;
 //! assert_eq!(c.as_slice::<f64>()?, &[4.0, 6.0]);
 //!
-//! let mut parallel = CpuEngine::new(thread_pool_builder().num_threads(2).build()?);
+//! let mut parallel = CpuEngine::new(Pool::builder().threads(2).build()?);
 //! let d = parallel.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))?;
 //! assert_eq!(d.as_slice::<f64>()?, &[4.0, 6.0]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
@@ -115,7 +115,7 @@ mod indexing;
 pub mod inject;
 mod operand;
 mod parallel;
-pub mod provider;
+mod provider;
 mod reduction;
 mod runtime_adapter;
 mod simd_math;
@@ -131,6 +131,7 @@ use strided_kernel::col_major_strides as kernel_col_major_strides;
 use strided_kernel::StridedArray;
 
 use crate::buffer_pool::BufferPool;
+use strided_exec::Exec;
 pub(crate) use tenferro_tensor::*;
 
 /// Stable provider identity of the compile-time-selected CPU backend.
@@ -174,19 +175,24 @@ pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
 #[doc(hidden)]
 pub use dot_runtime::{validate_cpu_host_read, validate_cpu_host_write};
-pub use engine::{
-    thread_pool_builder, CpuEngine, CpuEngineError, CpuPoolStats, DEFAULT_WORKER_STACK_BYTES,
-    MIN_WORKER_STACK_BYTES,
-};
+pub use engine::{CpuEngine, CpuEngineError};
 #[doc(hidden)]
 pub use gemm::GemmAnalysisCache;
 pub use indexed_plan_cache::IndexedPlanCacheLimits;
 pub use plan_cache::CpuPlanCache;
-pub use provider::{CpuExecutionContext, ParallelMode};
+#[doc(hidden)]
+pub use provider::{reshape_tensor, with_materialized_tensor_read};
 pub use runtime_adapter::{
     runtime_engine_id, runtime_engine_registration, runtime_engine_registration_with_id,
     runtime_hardware_class,
 };
+/// The placement types of the CPU stack, re-exported so callers need no separate
+/// dependency: build a [`Pool`] with [`Pool::builder`] and hand it to
+/// [`CpuEngine::new`]. The token every fan-out entry takes is
+/// `tenferro_cpu::strided_exec::Exec`; it is not re-exported at the root because
+/// [`CpuEngine::exec`] returns the different `tcontract_exec::Exec` bundle.
+pub use strided_exec;
+pub use strided_exec::{Pool, PoolBuilder};
 /// Ordinary CPU entry points that take a caller-provided destination and the
 /// caller's own arithmetic instead of the typed pool.
 pub use tenferro_internal_cpu_kernels::scalar_ops::{
@@ -236,8 +242,9 @@ where
 /// Spelling the call through this path still resolves the exact build tenferro
 /// links, which avoids compiling a second faer into one binary; an application
 /// that must control the faer version itself can add a direct dependency
-/// instead. For work that should use the engine's threads, enter
-/// [`CpuEngine::pool`] and pass `faer::Par::rayon`; keep `Par::Seq` otherwise.
+/// instead. For work that should use the engine's threads, take the width from
+/// the engine's token (`engine.exec()?.into_token().external(..)`) and pass
+/// `faer::Par::rayon(width)` inside it; keep `Par::Seq` otherwise.
 ///
 /// # Examples
 ///
@@ -273,7 +280,7 @@ macro_rules! test_elementwise_wrapper {
     ($name:ident($($arg:ident: $ty:ty),*) => $with_pool:ident) => {
         pub(crate) fn $name($($arg: $ty),*) -> crate::Result<Tensor> {
             let mut buffers = BufferPool::new();
-            elementwise::$with_pool(&mut buffers, &strided_kernel::ExecContext::serial(), $($arg),*)
+            elementwise::$with_pool(&mut buffers, $($arg),*, Exec::serial())
         }
     };
 }
@@ -348,23 +355,25 @@ pub(crate) fn materialize_tensor_read_in_domain(
     op: &'static str,
     input: TensorRead<'_>,
     domain: Option<&dyn SharedTensorAllocationDomain>,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     if let Some(domain) = domain {
         if input.backend_family().is_some() {
             return materialize_managed_read(op, input, domain);
         }
     }
-    materialize_tensor_read(buffers, op, input)
+    materialize_tensor_read(buffers, op, input, exec)
 }
 
 pub(crate) fn materialize_tensor_read(
     buffers: &mut BufferPool,
     op: &'static str,
     input: TensorRead<'_>,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     match input {
         TensorRead::Tensor(tensor) => clone_host_tensor_read(op, tensor),
-        TensorRead::View(view) => materialize_tensor_view(buffers, op, view),
+        TensorRead::View(view) => materialize_tensor_view(buffers, op, view, exec),
     }
 }
 
@@ -447,6 +456,7 @@ pub(crate) fn copy_tensor_read_into(
     op: &'static str,
     src: TensorRead<'_>,
     dst: TensorWrite<'_>,
+    exec: Exec<'_>,
 ) -> crate::Result<()> {
     let src_dtype = src.dtype();
     let dst_dtype = dst.dtype();
@@ -462,10 +472,10 @@ pub(crate) fn copy_tensor_read_into(
                         .as_typed_mut::<preset_scalar!($variant)>()
                         .expect("the dtype guard selects this arm");
                     let mut dst = dst.as_view_mut();
-                    structural::typed_copy_view_into(&src, &mut dst, op)
+                    structural::typed_copy_view_into(&src, &mut dst, op, exec)
                 }
                 TensorWrite::View(TensorViewMut::$variant(mut dst)) => {
-                    structural::typed_copy_view_into(&src, &mut dst, op)
+                    structural::typed_copy_view_into(&src, &mut dst, op, exec)
                 }
                 _ => Err(crate::Error::dtype_mismatch(op, src_dtype, dst_dtype)),
             }
@@ -631,11 +641,12 @@ fn materialize_tensor_view(
     buffers: &mut BufferPool,
     op: &'static str,
     view: TensorView<'_>,
+    exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
     macro_rules! materialize {
         ($variant:ident, $view:expr) => {{
             Ok(Tensor::from_typed::<preset_scalar!($variant)>(
-                structural::typed_materialize_view_with_pool(buffers, &$view, op)?,
+                structural::typed_materialize_view_with_pool(buffers, &$view, op, exec)?,
             ))
         }};
     }

@@ -555,8 +555,8 @@ fn faer_routes_hand_whole_batches_to_tlinalg() {
         "Faer routes should hand the whole batch to tlinalg instead of looping per matrix"
     );
     assert!(
-        source.contains("exec_from(ctx)"),
-        "Faer routes should hand one execution token to each batched tlinalg call"
+        source.contains("exec: &mut Exec<'_>") && !source.contains("exec_from("),
+        "Faer routes should hand the operation's one execution bundle to each batched tlinalg call"
     );
 }
 
@@ -609,7 +609,7 @@ fn cpu_solve_read_into_reaches_direct_write_for_eligible_outputs() {
     );
 
     assert!(
-        solve_read_into.contains("solve_read_into_entered(context, buffers, a, b, out)"),
+        solve_read_into.contains("solve_read_into_entered(exec, buffers, a, b, out)"),
         "eligible solve_read_into should reach the direct in-place solver"
     );
     assert_eq!(

@@ -57,7 +57,6 @@ elem-simd-math = "0.1.1"
 thiserror = "2"
 smallvec = { version = "1", features = ["union"] }
 tinyvec = { version = "1", features = ["alloc"] }
-rayon = "1"
 criterion = "0.5"
 trybuild = "1"
 serde = "1"
@@ -69,23 +68,32 @@ syn = "2"
 # The CPU contraction/linalg stack (strided, tcontract-exec, cpueinsum, tlinalg)
 # on one registry source: a split source (git beside crates.io, or two
 # incompatible semver lines) gives two `StridedView` types that cannot meet at a
-# crate boundary. Within one compatible line Cargo unifies every requirement to
-# a single version, so these are ordinary caret requirements at the patch each
-# API needs; the committed `Cargo.lock` fixes the exact versions a build uses,
-# and `cargo update -p <crate>` moves them. strided-perm 0.6.1 adds
-# `copy_into_uninit` (transposes into pooled uninitialized storage), which
-# strided-basic 0.6.4 routes through; cpueinsum 0.4.3 carries tcontract 0.4.4,
-# whose fresh outputs run on faer; `tcontract-exec` is named directly because
-# tenferro passes its `Exec` to tlinalg and cpueinsum.
-strided-view = "0.6.0"
-strided-traits = "0.6.0"
-strided-perm = { version = "0.6.1", features = ["parallel"] }
-cpueinsum = "0.4.3"
-cpueinsum-blas = "0.4.2"
-tcontract-exec = "0.4.2"
-strided-basic = { version = "0.6.4", default-features = false }
-strided-fused = { version = "0.6.0", default-features = false, features = ["parallel"] }
-strided-kernel = { version = "0.6.0", features = ["parallel"] }
+# crate boundary, and two `strided_exec::Exec` types that cannot meet at a
+# kernel boundary. Within one compatible line Cargo unifies every requirement to
+# a single version, so the strided crates are ordinary caret requirements at the
+# patch each API needs; the committed `Cargo.lock` fixes the exact versions a
+# build uses, and `cargo update -p <crate>` moves them. Every fan-out entry of
+# strided 0.7 takes a `strided_exec::Exec` token as its last parameter;
+# `strided-exec` 0.7.1 adds `Exec::can_broadcast` and joins a `Pool`'s workers
+# on drop. `strided-exec` is the only crate that depends on Rayon (see
+# `deny.toml`); tenferro starts no task itself.
+strided-view = "0.7.0"
+strided-traits = "0.7.0"
+strided-exec = "0.7.1"
+strided-perm = { version = "0.7.0", features = ["parallel"] }
+# The CPU provider stack is on the strided 0.7 / tcontract 0.5 release train; one
+# `tcontract-exec` (check `cargo tree -i tcontract-exec`) keeps `Exec` one type.
+cpueinsum = "0.5.0"
+cpueinsum-blas = "0.5.0"
+tcontract-exec = "0.5.0"
+tlinalg = "0.5.0"
+tlinalg-blas = "0.5.0"
+strided-basic = { version = "0.7.0", default-features = false }
+# Fused NN kernels moved out of this repository (#2272): axis-0 softmax with a
+# tensor-free contract, caller-provided scratch and the caller's `Exec` token.
+strided-nn = "0.7.0"
+strided-fused = { version = "0.7.0", default-features = false, features = ["parallel"] }
+strided-kernel = { version = "0.7.0", features = ["parallel"] }
 libloading = "0.8"
 # One faer identity for the native CPU stack (#1939): tlinalg 0.4.4 and this
 # dependency use compatible t4a-faer ranges. 0.24.8 fixes divide-and-conquer SVD

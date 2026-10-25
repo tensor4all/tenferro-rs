@@ -21,8 +21,8 @@ pub(crate) fn engine(threads: usize) -> tenferro_cpu::CpuEngine {
         tenferro_cpu::CpuEngine::serial()
     } else {
         tenferro_cpu::CpuEngine::new(
-            tenferro_cpu::thread_pool_builder()
-                .num_threads(threads)
+            tenferro_cpu::Pool::builder()
+                .threads(threads)
                 .build()
                 .expect("test pool"),
         )

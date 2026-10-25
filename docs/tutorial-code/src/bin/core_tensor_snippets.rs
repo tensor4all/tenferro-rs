@@ -811,10 +811,10 @@ assert_eq!(data, vec![1.0, 3.0, 2.0, 4.0]);
     // snippet source: docs/guides/cpu-execution.md:23
     fn snippet_cpu_execution_28() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:cpu_execution_28
-use tenferro_cpu::{thread_pool_builder, CpuEngine};
+use tenferro_cpu::{Pool, CpuEngine};
 
 // The caller owns the pool: tenferro builds no threads of its own.
-let pool = thread_pool_builder().num_threads(4).build()?;
+let pool = Pool::builder().threads(4).build()?;
 let engine = CpuEngine::new(pool);
 println!("workers={}", engine.num_threads());
         // snippet-end:cpu_execution_28
@@ -831,7 +831,6 @@ use tenferro_cpu::CpuEngine;
 // A serial engine has no pool at all: every operation runs on the calling
 // thread, so it is safe to use from inside a pool the caller already owns.
 let engine = CpuEngine::serial();
-assert!(engine.pool().is_none());
 assert_eq!(engine.num_threads(), 1);
         // snippet-end:cpu_execution_29
         Ok(())
@@ -843,7 +842,7 @@ assert_eq!(engine.num_threads(), 1);
     fn snippet_cpu_execution_30() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:cpu_execution_30
 let engine = tenferro_cpu::CpuEngine::new(
-    tenferro_cpu::thread_pool_builder().num_threads(2).build()?,
+    tenferro_cpu::Pool::builder().threads(2).build()?,
 );
 println!(
     "workers={} batch_policy={:?}",

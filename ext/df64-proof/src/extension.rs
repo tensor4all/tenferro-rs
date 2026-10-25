@@ -2176,8 +2176,15 @@ fn total_of(
     let tensor = input.tensor();
     let payload =
         external_payload::<Df64>("df64_total", tensor).map_err(tenferro_runtime::Error::from)?;
-    let total = scalar_fold::<Df64, Df64Add>("df64_total", payload, Df64::zero())
-        .map_err(tenferro_runtime::Error::from)?;
+    // The resolved input borrows the engine for the whole fold, so no engine token is
+    // reachable here: the fold runs on the calling thread.
+    let total = scalar_fold::<Df64, Df64Add>(
+        "df64_total",
+        payload,
+        Df64::zero(),
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .map_err(tenferro_runtime::Error::from)?;
     let output = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![], vec![total])
         .map_err(tenferro_runtime::Error::from)?;
     Ok(vec![Tensor::external(ErasedHostTensor::new(output))])

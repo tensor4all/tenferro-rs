@@ -1,3 +1,5 @@
+// Calls without an engine pass `Exec::serial()`: no token is reachable, so they run on the
+// calling thread. No engine is reachable in these helpers.
 use tenferro_cpu::{scalar_binary_into, scalar_fold, AddOp};
 use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_tensor::{DynRank, Host, TypedTensor};
@@ -16,8 +18,13 @@ fn external_scalar_sum_retains_low_order_information() {
     let low = 2f64.powi(-80);
     let values = df64(&[1.0, low]);
 
-    let total =
-        scalar_fold::<Df64, Df64Add>("sum", &values, Df64::zero()).expect("reduction succeeds");
+    let total = scalar_fold::<Df64, Df64Add>(
+        "sum",
+        &values,
+        Df64::zero(),
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .expect("reduction succeeds");
     let difference = total - Df64::from_f64(1.0);
 
     assert_eq!(difference, Df64 { hi: low, lo: 0.0 });
@@ -34,8 +41,14 @@ fn external_scalar_runs_through_the_elementwise_entry_point() {
     let rhs = df64(&[2.0, 4.0]);
     let mut destination = df64(&[0.0, 0.0]);
 
-    scalar_binary_into::<Df64, Df64Add>("add", &mut destination, &lhs, &rhs)
-        .expect("addition succeeds");
+    scalar_binary_into::<Df64, Df64Add>(
+        "add",
+        &mut destination,
+        &lhs,
+        &rhs,
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .expect("addition succeeds");
 
     assert_eq!(
         destination.as_slice(),
@@ -50,8 +63,14 @@ fn external_scalar_keeps_low_order_information_through_the_elementwise_entry_poi
     let rhs = df64(&[low]);
     let mut destination = df64(&[0.0]);
 
-    scalar_binary_into::<Df64, Df64Add>("add", &mut destination, &lhs, &rhs)
-        .expect("addition succeeds");
+    scalar_binary_into::<Df64, Df64Add>(
+        "add",
+        &mut destination,
+        &lhs,
+        &rhs,
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .expect("addition succeeds");
 
     assert_eq!(destination.as_slice()[0], Df64 { hi: 1.0, lo: low });
     assert_eq!(destination.as_slice()[0].narrow_to_f64(), 1.0);
@@ -68,10 +87,23 @@ fn preset_scalar_f64_uses_the_same_entry_points() {
         TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![0.0_f64, 0.0])
             .unwrap();
 
-    scalar_binary_into::<f64, AddOp>("add", &mut destination, &lhs, &rhs).unwrap();
+    scalar_binary_into::<f64, AddOp>(
+        "add",
+        &mut destination,
+        &lhs,
+        &rhs,
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .unwrap();
     assert_eq!(destination.as_slice(), &[11.0, 22.0]);
 
-    let total = scalar_fold::<f64, AddOp>("sum", &destination, 0.0_f64).unwrap();
+    let total = scalar_fold::<f64, AddOp>(
+        "sum",
+        &destination,
+        0.0_f64,
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .unwrap();
     assert_eq!(total, 33.0);
 }
 
@@ -84,7 +116,14 @@ fn mutable_borrow_through_the_public_tensor_type_reaches_the_entry_point() {
 
     let lhs = df64(&[10.0, 10.0]);
     let mut destination = df64(&[0.0, 0.0]);
-    scalar_binary_into::<Df64, Df64Add>("add", &mut destination, &values, &lhs).unwrap();
+    scalar_binary_into::<Df64, Df64Add>(
+        "add",
+        &mut destination,
+        &values,
+        &lhs,
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .unwrap();
 
     assert_eq!(
         destination.as_slice(),
@@ -98,8 +137,14 @@ fn mismatched_shapes_are_rejected_without_touching_the_destination() {
     let rhs = df64(&[1.0]);
     let mut destination = df64(&[9.0, 9.0]);
 
-    let error = scalar_binary_into::<Df64, Df64Add>("add", &mut destination, &lhs, &rhs)
-        .expect_err("shape mismatch is rejected");
+    let error = scalar_binary_into::<Df64, Df64Add>(
+        "add",
+        &mut destination,
+        &lhs,
+        &rhs,
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .expect_err("shape mismatch is rejected");
 
     assert_eq!(
         error.kind(),
@@ -117,7 +162,13 @@ fn mismatched_shapes_are_rejected_without_touching_the_destination() {
 fn empty_input_folds_to_the_initial_value() {
     let empty: TypedTensor<Df64, DynRank, Host> =
         TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![0], Vec::new()).unwrap();
-    let total = scalar_fold::<Df64, Df64Add>("sum", &empty, Df64::zero()).unwrap();
+    let total = scalar_fold::<Df64, Df64Add>(
+        "sum",
+        &empty,
+        Df64::zero(),
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .unwrap();
     assert_eq!(total, Df64::zero());
 }
 
@@ -217,7 +268,13 @@ fn erased_values_carry_a_scalar_tenferro_does_not_define() {
     // The external member reaches the shared numerical body through the same
     // erased container tenferro's own scalars use.
     let typed = values[1].downcast_ref::<Df64>().unwrap();
-    let total = scalar_fold::<Df64, Df64Add>("sum", typed, Df64::zero()).unwrap();
+    let total = scalar_fold::<Df64, Df64Add>(
+        "sum",
+        typed,
+        Df64::zero(),
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .unwrap();
     assert_eq!(total, Df64::from_f64(2.0));
 
     // A mismatched recovery returns nothing rather than reinterpreting bytes.
@@ -260,7 +317,14 @@ fn two_sets_containing_the_same_scalar_share_one_numerical_instantiation() {
     let mut out =
         TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![0.0_f64, 0.0])
             .unwrap();
-    scalar_binary_into::<f64, AddOp>("add", &mut out, &from_default, &from_extended).unwrap();
+    scalar_binary_into::<f64, AddOp>(
+        "add",
+        &mut out,
+        &from_default,
+        &from_extended,
+        tenferro_cpu::strided_exec::Exec::serial(),
+    )
+    .unwrap();
 
     assert_eq!(out.as_slice(), &[11.0, 22.0]);
 }

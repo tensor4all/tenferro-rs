@@ -585,9 +585,9 @@ fn test_cpu_elementwise_fusion_executes_add_mul_plan() {
     let mut buffers = crate::buffer_pool::BufferPool::default();
     let outputs = tenferro_cpu_fused::elementwise_fusion_with_pool(
         &mut buffers,
-        &strided_kernel::ExecContext::serial(),
         &[&lhs, &rhs],
         &fusion_plan,
+        strided_exec::Exec::serial(),
     )
     .unwrap()
     .expect("the CPU fused executor should execute supported plans");
@@ -638,9 +638,9 @@ fn test_cpu_elementwise_fusion_executes_broadcast_chain_plan() {
     let mut buffers = crate::buffer_pool::BufferPool::default();
     let outputs = tenferro_cpu_fused::elementwise_fusion_with_pool(
         &mut buffers,
-        &strided_kernel::ExecContext::serial(),
         &[&lhs, &rhs],
         &fusion_plan,
+        strided_exec::Exec::serial(),
     )
     .unwrap()
     .expect("the CPU fused executor should execute broadcast input views");
@@ -687,9 +687,9 @@ fn test_cpu_elementwise_fusion_broadcasts_mapped_unit_axes() {
     let mut buffers = crate::buffer_pool::BufferPool::default();
     let outputs = tenferro_cpu_fused::elementwise_fusion_with_pool(
         &mut buffers,
-        &strided_kernel::ExecContext::serial(),
         &[&lhs, &rhs],
         &fusion_plan,
+        strided_exec::Exec::serial(),
     )
     .unwrap()
     .expect("the CPU fused executor should broadcast mapped unit axes");
@@ -722,6 +722,7 @@ fn test_materialize_tensor_read_covers_host_tensor_and_view_variants() {
             &mut buffers,
             "dot_general",
             TensorRead::from_tensor(tensor),
+            Exec::serial(),
         )
         .unwrap();
         assert_eq!(materialized.dtype(), tensor.dtype());
@@ -734,6 +735,7 @@ fn test_materialize_tensor_read_covers_host_tensor_and_view_variants() {
                 &mut buffers,
                 "dot_general",
                 TensorRead::from_view($view),
+                Exec::serial(),
             )
             .unwrap();
             assert_eq!(materialized.shape(), &[2]);
@@ -954,12 +956,14 @@ fn cpu_structural_read_direct_helpers_preserve_view_placement() {
         &mut buffers,
         TensorRead::from_view(TensorView::I64(input.as_view())),
         &[0],
+        Exec::serial(),
     )
     .unwrap();
     let reshape = crate::structural::reshape_read_with_pool(
         &mut buffers,
         TensorRead::from_view(TensorView::I64(input.as_view())),
         &[1, 2],
+        Exec::serial(),
     )
     .unwrap();
     let broadcast = crate::structural::broadcast_in_dim_read_with_pool(
@@ -967,6 +971,7 @@ fn cpu_structural_read_direct_helpers_preserve_view_placement() {
         TensorRead::from_view(TensorView::I64(input.as_view())),
         &[2, 2],
         &[0],
+        Exec::serial(),
     )
     .unwrap();
 
@@ -991,6 +996,7 @@ fn cpu_structural_read_direct_helpers_cover_all_dtypes() {
                 &mut buffers,
                 TensorRead::from_view(TensorView::$variant(view)),
                 &[0],
+                Exec::serial(),
             )
             .unwrap();
 
@@ -999,6 +1005,7 @@ fn cpu_structural_read_direct_helpers_cover_all_dtypes() {
                 &mut buffers,
                 TensorRead::from_view(TensorView::$variant(view)),
                 &[1, 2],
+                Exec::serial(),
             )
             .unwrap();
 
@@ -1008,6 +1015,7 @@ fn cpu_structural_read_direct_helpers_cover_all_dtypes() {
                 TensorRead::from_view(TensorView::$variant(view)),
                 &[2, 2],
                 &[0],
+                Exec::serial(),
             )
             .unwrap();
 
@@ -1045,6 +1053,7 @@ fn cpu_structural_read_direct_helpers_cover_zero_stride_empty_and_rank_zero() {
         &mut buffers,
         TensorRead::from_view(TensorView::I32(repeated)),
         &[1, 0],
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(repeated.shape(), &[3, 2]);
@@ -1058,6 +1067,7 @@ fn cpu_structural_read_direct_helpers_cover_zero_stride_empty_and_rank_zero() {
         TensorRead::from_view(TensorView::F64(empty)),
         &[0, 3, 2],
         &[0, 1],
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(empty.shape(), &[0, 3, 2]);
@@ -1069,6 +1079,7 @@ fn cpu_structural_read_direct_helpers_cover_zero_stride_empty_and_rank_zero() {
         &mut buffers,
         TensorRead::from_view(TensorView::F64(scalar)),
         &[],
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(scalar.shape(), &[] as &[usize]);
@@ -1083,13 +1094,15 @@ fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
     );
 
     let owned_transpose =
-        crate::structural::transpose_with_pool(&mut buffers, &input, &[1]).unwrap_err();
+        crate::structural::transpose_with_pool(&mut buffers, &input, &[1], Exec::serial())
+            .unwrap_err();
     let view_transpose = crate::structural::transpose_read_with_pool(
         &mut buffers,
         TensorRead::from_view(TensorView::F64(
             input.as_typed::<f64>().expect("an f64 tensor").as_view(),
         )),
         &[1],
+        Exec::serial(),
     )
     .unwrap_err();
     assert_eq!(view_transpose.kind(), owned_transpose.kind());
@@ -1102,14 +1115,20 @@ fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
             input.as_typed::<f64>().expect("an f64 tensor").as_view(),
         )),
         &[3],
+        Exec::serial(),
     )
     .unwrap_err();
     assert_eq!(view_reshape.kind(), owned_reshape.kind());
     assert_eq!(view_reshape.to_string(), owned_reshape.to_string());
 
-    let owned_broadcast =
-        crate::structural::broadcast_in_dim_with_pool(&mut buffers, &input, &[3], &[0])
-            .unwrap_err();
+    let owned_broadcast = crate::structural::broadcast_in_dim_with_pool(
+        &mut buffers,
+        &input,
+        &[3],
+        &[0],
+        Exec::serial(),
+    )
+    .unwrap_err();
     let view_broadcast = crate::structural::broadcast_in_dim_read_with_pool(
         &mut buffers,
         TensorRead::from_view(TensorView::F64(
@@ -1117,6 +1136,7 @@ fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
         )),
         &[3],
         &[0],
+        Exec::serial(),
     )
     .unwrap_err();
     assert_eq!(view_broadcast.kind(), owned_broadcast.kind());
@@ -1140,6 +1160,7 @@ fn cpu_structural_read_empty_pathological_layout_returns_typed_errors_without_pa
             &mut buffers,
             TensorRead::from_view(TensorView::F64(view)),
             &[0, 1],
+            Exec::serial(),
         )
     }));
     let transpose = transpose
@@ -1156,6 +1177,7 @@ fn cpu_structural_read_empty_pathological_layout_returns_typed_errors_without_pa
             TensorRead::from_view(TensorView::F64(view)),
             &[0, usize::MAX],
             &[0],
+            Exec::serial(),
         )
     }));
     let broadcast = broadcast
@@ -1250,6 +1272,7 @@ fn cpu_view_materialization_handles_negative_and_zero_strides() {
         &mut buffers,
         &reversed,
         "negative_stride_materialize",
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(reversed.as_slice().unwrap(), &[50, 30, 10]);
@@ -1262,6 +1285,7 @@ fn cpu_view_materialization_handles_negative_and_zero_strides() {
         &mut buffers,
         &broadcast,
         "zero_stride_materialize",
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(broadcast.shape(), &[2, 3]);
@@ -1278,6 +1302,7 @@ fn cpu_view_materialization_handles_empty_and_rank_zero_views() {
         &mut buffers,
         &empty,
         "empty_materialize",
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(empty.shape(), &[0, 3]);
@@ -1289,6 +1314,7 @@ fn cpu_view_materialization_handles_empty_and_rank_zero_views() {
         &mut buffers,
         &scalar,
         "rank_zero_materialize",
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(scalar.shape(), &[] as &[usize]);
@@ -1312,6 +1338,7 @@ fn cpu_view_materialization_preserves_static_rank_and_placement() {
             &mut buffers,
             &ranked,
             "static_rank_materialize",
+            Exec::serial(),
         )
         .unwrap();
     assert_eq!(ranked.shape(), &[3, 2]);
@@ -1327,6 +1354,7 @@ fn cpu_view_materialization_preserves_static_rank_and_placement() {
         &mut buffers,
         &placed.as_view(),
         "placement_materialize",
+        Exec::serial(),
     )
     .unwrap();
     assert_eq!(
@@ -1361,6 +1389,7 @@ fn cpu_view_materialization_rejects_backend_buffer_with_caller_operation_name() 
         &mut buffers,
         &view,
         "review_materialize_op",
+        Exec::serial(),
     )
     .unwrap_err();
 
@@ -1868,6 +1897,7 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
         crate::analytic::exp_read_with_pool(
             &mut crate::buffer_pool::BufferPool::new(),
             TensorRead::from_tensor(&int_tensor),
+            Exec::serial(),
         ),
         Err(crate::Error::UnsupportedDType {
             op: "exp",

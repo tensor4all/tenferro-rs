@@ -11,7 +11,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use strided_basic::ExecContext;
+use strided_basic::Exec;
 use tenferro_cpu_basic::BufferPool;
 use tenferro_cpu_fused::elementwise_fusion_with_pool;
 use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan};
@@ -80,10 +80,9 @@ fn two_operation_fused_region_has_a_pinned_steady_state_allocation_ceiling() {
         ],
     );
     let mut buffers = BufferPool::default();
-    let exec = ExecContext::serial();
     let run = |buffers: &mut BufferPool| {
-        let outputs =
-            elementwise_fusion_with_pool(buffers, &exec, &[&lhs, &rhs], &plan).expect("fusion");
+        let outputs = elementwise_fusion_with_pool(buffers, &[&lhs, &rhs], &plan, Exec::serial())
+            .expect("fusion");
         let outputs = outputs.expect("the two-operation region must fuse");
         assert_eq!(outputs[0].as_slice::<f64>().unwrap()[7], (7.0 + 8.0) * 8.0);
     };

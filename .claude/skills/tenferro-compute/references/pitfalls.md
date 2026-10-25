@@ -36,7 +36,7 @@ is in the [traced API example](api-cheatsheet.md#traced-tensors-and-extensions).
 - A scratch crate inside the checkout needs an empty `[workspace]` table.
 - `native` (default) and `blas` are the two CPU backend features; exactly one is
   needed and enabling both is a build error.
-- Use `CpuEngine::new(thread_pool_builder().num_threads(n).build()?)` for native CPU work; configure BLAS provider
+- Use `CpuEngine::new(Pool::builder().threads(n).build()?)` for native CPU work; configure BLAS provider
   threads with the provider's environment variables.
 - Choose exactly one BLAS provider feature (`blas-openblas`, `blas-mkl`, or
   `blas-accelerate`) when using `blas`.

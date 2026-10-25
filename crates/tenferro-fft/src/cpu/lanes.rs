@@ -8,28 +8,29 @@ use crate::cache::{
 use crate::{FftNorm, FftOperation};
 use num_complex::Complex;
 use num_traits::Zero;
-use rayon::prelude::*;
 use std::{marker::PhantomData, mem::MaybeUninit};
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+use tenferro_cpu::strided_exec::Exec;
 
-/// Worker budget for one lane execution, and the engine pool to run fan-out on.
+/// Disjoint per-job lane buffers, shared by the forked jobs.
 ///
-/// The lane count is decided on the calling thread first; only a fan-out of
-/// more than one job enters `pool`, so small transforms never leave the caller
-/// (#2206).
-#[derive(Clone, Copy)]
-pub(super) struct LaneThreads<'p> {
-    count: usize,
-    pool: Option<&'p rayon::ThreadPool>,
-}
-
-impl<'p> LaneThreads<'p> {
-    pub(super) fn new(count: usize, pool: Option<&'p rayon::ThreadPool>) -> Self {
-        Self { count, pool }
-    }
-
-    pub(super) fn from_context(context: &tenferro_cpu::CpuExecutionContext<'p>) -> Self {
-        Self::new(context.native_thread_count(), context.rayon_pool())
+/// `Exec::fork` runs job `i` exactly once, so job `i` is the only code that
+/// touches element `i`; that is what makes the unchecked per-job access sound.
+struct JobSlots<T>(*mut T);
+// SAFETY: each job index runs exactly once under `Exec::fork`, so jobs access
+// distinct elements; the fork joins before the owning slice is used again.
+unsafe impl<T: Send> Send for JobSlots<T> {}
+// SAFETY: as above, shared access is only used for the disjoint elements.
+unsafe impl<T: Send> Sync for JobSlots<T> {}
+impl<T> JobSlots<T> {
+    /// # Safety
+    /// `job` must be in bounds and must not be accessed by any other job.
+    // INVARIANT: the exclusive access is per job index, proven by the caller; a shared
+    // receiver is what lets every forked job reach its own element.
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn get(&self, job: usize) -> &mut T {
+        // SAFETY: the caller proves bounds and exclusivity.
+        unsafe { &mut *self.0.add(job) }
     }
 }
 
@@ -85,8 +86,8 @@ pub(super) unsafe fn execute<T, O>(
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
     output: &mut [MaybeUninit<O>],
-    threads: LaneThreads<'_>,
     project: impl Fn(Complex<T>) -> O + Sync,
+    exec: Exec<'_>,
 ) -> tenferro_tensor::Result<()>
 where
     T: CachedFftPlanScalar,
@@ -122,7 +123,7 @@ where
     let jobs = if output_len < MIN_PARALLEL_ELEMENTS {
         1
     } else {
-        threads.count.max(1).min(lanes)
+        exec.budget().get().min(lanes)
     };
     let per_job = lanes.div_ceil(jobs);
     let out = Output {
@@ -224,16 +225,12 @@ where
     if jobs == 1 {
         run(0, &mut lane_buffers[0]);
     } else {
-        let mut fan_out = || {
-            (0..jobs)
-                .into_par_iter()
-                .zip(lane_buffers.par_iter_mut())
-                .for_each(|(job, lane)| run(job, lane));
-        };
-        match threads.pool {
-            Some(pool) if pool.current_thread_index().is_none() => pool.install(fan_out),
-            _ => fan_out(),
-        }
+        let slots = JobSlots(lane_buffers.as_mut_ptr());
+        exec.fork(jobs, |job, _child| {
+            // SAFETY: `job < jobs == lane_buffers.len()`, and `fork` runs each job
+            // index exactly once, so this is the only access to this buffer.
+            run(job, unsafe { slots.get(job) });
+        });
     }
     for lane in lane_buffers {
         Complex::<T>::pool_release(buffers, lane);
@@ -263,8 +260,8 @@ pub(super) unsafe fn execute_real<T, O>(
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
     output: &mut [MaybeUninit<O>],
-    threads: LaneThreads<'_>,
     project: impl Fn(Complex<T>) -> O + Sync,
+    exec: Exec<'_>,
 ) -> tenferro_tensor::Result<()>
 where
     T: CachedFftPlanScalar + PoolScalar,
@@ -300,7 +297,7 @@ where
     let jobs = if output_len < MIN_PARALLEL_ELEMENTS {
         1
     } else {
-        threads.count.max(1).min(lanes)
+        exec.budget().get().min(lanes)
     };
     let per_job = lanes.div_ceil(jobs);
     let out = Output {
@@ -481,19 +478,33 @@ where
             &mut scratch_lanes[0],
         )
     } else {
-        let mut fan_out = || {
-            real_lanes
-                .par_iter_mut()
-                .zip(complex_lanes.par_iter_mut())
-                .zip(scratch_lanes.par_iter_mut())
-                .enumerate()
-                .try_for_each(|(job, ((real_lane, complex_lane), scratch))| {
-                    run(job, real_lane, complex_lane, scratch)
-                })
-        };
-        match threads.pool {
-            Some(pool) if pool.current_thread_index().is_none() => pool.install(fan_out),
-            _ => fan_out(),
+        let real_slots = JobSlots(real_lanes.as_mut_ptr());
+        let complex_slots = JobSlots(complex_lanes.as_mut_ptr());
+        let scratch_slots = JobSlots(scratch_lanes.as_mut_ptr());
+        let first_error = std::sync::Mutex::new(None);
+        exec.fork(jobs, |job, _child| {
+            // SAFETY: `job < jobs`, which is the length of all three lane vectors,
+            // and `fork` runs each job index exactly once, so these are the only
+            // accesses to this job's buffers.
+            let outcome = run(
+                job,
+                unsafe { real_slots.get(job) },
+                unsafe { complex_slots.get(job) },
+                unsafe { scratch_slots.get(job) },
+            );
+            if let Err(error) = outcome {
+                first_error
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get_or_insert(error);
+            }
+        });
+        match first_error
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
     };
     for lane in real_lanes {

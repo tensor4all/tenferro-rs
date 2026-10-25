@@ -35,14 +35,15 @@ system OpenBLAS (`blas` with the native library linked through
 `RUSTFLAGS`) so that native symbol linkage is verified without rebuilding
 OpenBLAS from source.
 
-For direct faer work that should remain parallel, enter the pool you already
-own. `CpuEngine::pool` lends back the same pool the engine computes on, and
-faer's `Par::rayon` schedules on the calling thread's pool:
+For direct faer work that should remain parallel, take the width from the
+engine's placement token. `CpuEngine::exec` lends the engine's provider bundle;
+`Exec::external` enters the engine's pool once and hands the budget over as a
+plain width, and faer's `Par::rayon` schedules on the calling thread's pool:
 
 ```text
-let width = engine.num_threads();
-engine.pool().expect("pooled engine").install(|| {
-    faer_operation(..., Par::rayon(width))
+engine.exec()?.into_token().external(|width| {
+    let par = if width.get() == 1 { Par::Seq } else { Par::rayon(width.get()) };
+    faer_operation(..., par)
 });
 ```
 
@@ -162,8 +163,8 @@ fn faer_immutable_view() -> tenferro_tensor::Result<()> {
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![7.0, 9.0, 11.0, 8.0, 10.0, 12.0])?;
     let b_view = MatRef::from_column_major_slice(b.as_slice()?, b.shape()[0], b.shape()[1]);
 
-    // faer computes into its own output. Par::Seq keeps the call off faer's
-    // global rayon pool; Par::Rayon(n) would use that ambient pool instead.
+    // faer computes into its own output. Par::Seq keeps the call on this thread;
+    // a parallel width comes from an engine token (see faer-engine-parallelism).
     let mut product = Mat::<f64>::zeros(rows, b.shape()[1]);
     matmul(
         product.as_mut(),
@@ -451,10 +452,11 @@ its width, its buffer pool, and (for faer) its selected faer parallelism. Direct
 external calls deliberately sit outside that context:
 
 - A direct faer call with `Par::Seq` runs inline on the calling thread.
-- A direct faer call with `Par::Rayon(n)` uses rayon's **global** thread pool.
-  That is not the pool the engine computes on: the engine uses only the pool the
-  caller passed to `CpuEngine::new`. A direct call therefore does not participate
-  in the engine's resources at all — not its pool, not its budget.
+- A direct faer call with `Par::rayon(n)` made outside any pool uses rayon's
+  **global** thread pool. That is not the pool the engine computes on: the
+  engine uses only the pool the caller passed to `CpuEngine::new`. Take the
+  width from the engine's token (`Exec::external`, above) to run on the
+  engine's pool and within its budget.
 - A direct BLAS/LAPACK call runs on the provider's own threads as described
   above.
 

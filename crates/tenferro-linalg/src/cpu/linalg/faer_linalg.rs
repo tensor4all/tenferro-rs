@@ -12,14 +12,13 @@ use strided_view::{RawStridedMut, RawStridedRef};
 
 use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar, PooledUninitOutput};
-use tenferro_cpu::CpuExecutionContext;
 use tenferro_tensor::{
     DType, Tensor, TensorView, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use tlinalg::Op;
 
 use super::{finish_lease, pooled_copy, pooled_output, pooled_zeroed, raw_view};
-use crate::cpu::tlinalg::{exec_from, PooledWorkspace};
+use crate::cpu::tlinalg::PooledWorkspace;
 use crate::cpu::tlinalg_error::map_error;
 
 /// The host-side scalar vocabulary of the faer route.
@@ -41,7 +40,7 @@ pub(crate) trait FaerLinalg:
     fn q_phase(diagonal: Self) -> Self;
     /// `C = A B` for the compact Householder fold of `from_factors_2d`.
     fn gemm_data(
-        ctx: &CpuExecutionContext<'_>,
+        exec: &mut Exec<'_>,
         a: &[Self],
         a_rows: usize,
         a_cols: usize,
@@ -54,14 +53,14 @@ pub(crate) trait FaerLinalg:
         input: RawStridedRef<'_, Self>,
         values: &mut [core::mem::MaybeUninit<Self::RealScalar>],
         workspace: &mut [core::mem::MaybeUninit<u8>],
-        exec: Exec<'_>,
+        exec: &mut Exec<'_>,
     ) -> tlinalg::Result<()>;
     /// Batched Hermitian eigenvalues in the real scalar.
     fn eigh_values_into(
         input: RawStridedRef<'_, Self>,
         values: &mut [core::mem::MaybeUninit<Self::RealScalar>],
         workspace: &mut [core::mem::MaybeUninit<u8>],
-        exec: Exec<'_>,
+        exec: &mut Exec<'_>,
     ) -> tlinalg::Result<()>;
 }
 
@@ -102,7 +101,7 @@ macro_rules! impl_faer_linalg {
             }
 
             fn gemm_data(
-                ctx: &CpuExecutionContext<'_>,
+                exec: &mut Exec<'_>,
                 a: &[Self],
                 a_rows: usize,
                 a_cols: usize,
@@ -128,20 +127,30 @@ macro_rules! impl_faer_linalg {
                 // The shared work model decides the width before any pool is
                 // entered: a small product stays on the calling thread (#2206).
                 let muladds = (a_rows as f64) * (a_cols as f64) * (b_cols as f64);
-                let width = ctx
-                    .contraction_exec()?
+                let width = exec
                     .batch_decision(&tcontract_exec::BatchQuery::new(1, muladds))
                     .item_threads;
-                ctx.with_faer_width(width, |par| {
-                    faer::linalg::matmul::matmul(
-                        out,
-                        faer::Accum::Replace,
-                        lhs,
-                        rhs,
-                        $faer_one,
-                        par,
-                    );
-                });
+                // `external` enters the pool once for a width above one and runs
+                // inline otherwise; faer's `Par::rayon` then schedules on that pool.
+                exec.token()
+                    .limit(
+                        std::num::NonZeroUsize::new(width).unwrap_or(std::num::NonZeroUsize::MIN),
+                    )
+                    .external(|granted| {
+                        let par = if granted.get() == 1 {
+                            faer::Par::Seq
+                        } else {
+                            faer::Par::rayon(granted.get())
+                        };
+                        faer::linalg::matmul::matmul(
+                            out,
+                            faer::Accum::Replace,
+                            lhs,
+                            rhs,
+                            $faer_one,
+                            par,
+                        );
+                    });
                 Ok(())
             }
 
@@ -149,7 +158,7 @@ macro_rules! impl_faer_linalg {
                 input: RawStridedRef<'_, Self>,
                 values: &mut [core::mem::MaybeUninit<$real>],
                 workspace: &mut [core::mem::MaybeUninit<u8>],
-                exec: Exec<'_>,
+                exec: &mut Exec<'_>,
             ) -> tlinalg::Result<()> {
                 tlinalg::svd::svd_values_into(Op::SvdValues, input, values, workspace, exec)
             }
@@ -158,7 +167,7 @@ macro_rules! impl_faer_linalg {
                 input: RawStridedRef<'_, Self>,
                 values: &mut [core::mem::MaybeUninit<$real>],
                 workspace: &mut [core::mem::MaybeUninit<u8>],
-                exec: Exec<'_>,
+                exec: &mut Exec<'_>,
             ) -> tlinalg::Result<()> {
                 tlinalg::eigh::eigh_values_into(Op::EighValues, input, values, workspace, exec)
             }
@@ -296,7 +305,7 @@ pub(crate) trait FaerEig: FaerLinalg {
         values: &mut [core::mem::MaybeUninit<Self::ComplexScalar>],
         vectors: Option<&mut [core::mem::MaybeUninit<Self::ComplexScalar>]>,
         workspace: &mut [core::mem::MaybeUninit<u8>],
-        exec: Exec<'_>,
+        exec: &mut Exec<'_>,
     ) -> tlinalg::Result<()>;
 
     /// Put the provider's eigenvectors into the public contract's gauge.
@@ -325,7 +334,7 @@ macro_rules! impl_faer_eig {
                 values: &mut [core::mem::MaybeUninit<$complex>],
                 vectors: Option<&mut [core::mem::MaybeUninit<$complex>]>,
                 workspace: &mut [core::mem::MaybeUninit<u8>],
-                exec: Exec<'_>,
+                exec: &mut Exec<'_>,
             ) -> tlinalg::Result<()> {
                 match vectors {
                     Some(vectors) => {
@@ -558,7 +567,7 @@ fn provider(op: Op) -> impl Fn(tlinalg::Error) -> tenferro_tensor::Error {
 // ---------------------------------------------------------------------------------------------
 
 fn cholesky_impl<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
@@ -569,38 +578,37 @@ fn cholesky_impl<T: FaerLinalg>(
         return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
     }
     let mut l = pooled_output::<T>(buffers, OP, "matrix", &shape)?;
-    let par = exec_from(ctx)?;
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::cholesky::cholesky_workspace::<T>(n, batch, par).map_err(provider(Op::Cholesky)),
+        tlinalg::cholesky::cholesky_workspace::<T>(n, batch, exec).map_err(provider(Op::Cholesky)),
     )?;
     tlinalg::cholesky::cholesky_into(
         Op::Cholesky,
         raw_view(OP, view)?,
         l.as_uninit_slice_mut(),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::Cholesky))?;
     tensor_from_lease(l, view.placement())
 }
 
 pub(crate) fn cholesky<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    cholesky_impl(ctx, buffers, &input.as_view())
+    cholesky_impl(exec, buffers, &input.as_view())
 }
 
 pub(crate) fn cholesky_view<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     square_matrix_dim_view(&view, "cholesky")?;
-    cholesky_impl(ctx, buffers, &view)
+    cholesky_impl(exec, buffers, &view)
 }
 
 /// Lower Cholesky factor of one compact `n x n` matrix, for the managed (prepared) route.
@@ -608,7 +616,7 @@ pub(crate) fn cholesky_view<T: FaerLinalg>(
 /// The factor stays a pooled tensor, so the host's staging copy into the managed domain returns its
 /// storage to the session pool instead of allocating a fresh vector per call.
 pub(crate) fn cholesky_compact_data<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &[T],
     n: usize,
@@ -630,17 +638,16 @@ pub(crate) fn cholesky_compact_data<T: FaerLinalg>(
         tenferro_tensor::Error::invalid_argument("cholesky", "layout", error.to_string())
     })?;
     let mut l = pooled_output::<T>(buffers, "cholesky", "matrix", &dims)?;
-    let par = exec_from(ctx)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::cholesky::cholesky_workspace::<T>(n, 1, par).map_err(provider(Op::Cholesky)),
+        tlinalg::cholesky::cholesky_workspace::<T>(n, 1, exec).map_err(provider(Op::Cholesky)),
     )?;
     tlinalg::cholesky::cholesky_into(
         Op::Cholesky,
         descriptor,
         l.as_uninit_slice_mut(),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::Cholesky))?;
     finish_lease(l)
@@ -651,7 +658,7 @@ pub(crate) fn cholesky_compact_data<T: FaerLinalg>(
 // ---------------------------------------------------------------------------------------------
 
 fn lu_impl<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -679,10 +686,9 @@ fn lu_impl<T: FaerLinalg>(
     let mut l = pooled_output::<T>(buffers, OP, "L", &l_shape)?;
     let mut u = pooled_output::<T>(buffers, OP, "U", &u_shape)?;
     let mut parity = pooled_output::<T>(buffers, OP, "parity", batch_shape)?;
-    let par = exec_from(ctx)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::lu::lu_workspace::<T>(m, n, batch, par).map_err(provider(Op::Lu)),
+        tlinalg::lu::lu_workspace::<T>(m, n, batch, exec).map_err(provider(Op::Lu)),
     )?;
     tlinalg::lu::lu_into(
         Op::Lu,
@@ -692,7 +698,7 @@ fn lu_impl<T: FaerLinalg>(
         u.as_uninit_slice_mut(),
         parity.as_uninit_slice_mut(),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::Lu))?;
     Ok(vec![
@@ -704,24 +710,24 @@ fn lu_impl<T: FaerLinalg>(
 }
 
 pub(crate) fn lu<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    lu_impl(ctx, buffers, &input.as_view())
+    lu_impl(exec, buffers, &input.as_view())
 }
 
 pub(crate) fn lu_view<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     matrix_dims_view(&view, "lu")?;
-    lu_impl(ctx, buffers, &view)
+    lu_impl(exec, buffers, &view)
 }
 
 pub(crate) fn lu_factor<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)> {
@@ -758,7 +764,7 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
     // buffer initialized.
     let mut parity_data = pooled_zeroed::<T>(buffers, "lu_factor", "parity", &batch_shape)?;
     crate::cpu::tlinalg::factor_batch::<T>(
-        ctx,
+        exec,
         buffers,
         Op::LuFactor,
         m,
@@ -780,7 +786,7 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
 // ---------------------------------------------------------------------------------------------
 
 fn full_piv_lu_impl<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -808,10 +814,9 @@ fn full_piv_lu_impl<T: FaerLinalg>(
     let mut u = pooled_output::<T>(buffers, OP, "U", &shape)?;
     let mut q = pooled_output::<T>(buffers, OP, "permutation matrix", &shape)?;
     let mut parity = pooled_output::<T>(buffers, OP, "parity", batch_shape)?;
-    let par = exec_from(ctx)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::full_piv_lu::full_piv_lu_workspace::<T>(n, batch, par)
+        tlinalg::full_piv_lu::full_piv_lu_workspace::<T>(n, batch, exec)
             .map_err(provider(Op::FullPivLu)),
     )?;
     tlinalg::full_piv_lu::full_piv_lu_into(
@@ -823,7 +828,7 @@ fn full_piv_lu_impl<T: FaerLinalg>(
         q.as_uninit_slice_mut(),
         parity.as_uninit_slice_mut(),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::FullPivLu))?;
     Ok(vec![
@@ -836,20 +841,20 @@ fn full_piv_lu_impl<T: FaerLinalg>(
 }
 
 pub(crate) fn full_piv_lu<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    full_piv_lu_impl(ctx, buffers, &input.as_view())
+    full_piv_lu_impl(exec, buffers, &input.as_view())
 }
 
 pub(crate) fn full_piv_lu_view<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     square_matrix_dim_view(&view, "full_piv_lu")?;
-    full_piv_lu_impl(ctx, buffers, &view)
+    full_piv_lu_impl(exec, buffers, &view)
 }
 
 /// Validate a batched binary solve: square `A`, an `n`-row matrix RHS, and equal batch shapes.
@@ -887,7 +892,7 @@ fn solve_shapes<'s>(
 }
 
 pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -901,10 +906,9 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut x = pooled_output::<T>(buffers, OP, "solution", b.shape())?;
     let (a_view, b_view) = (a.as_view(), b.as_view());
-    let par = exec_from(ctx)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::full_piv_lu::full_piv_lu_solve_workspace::<T>(n, nrhs, batch, par)
+        tlinalg::full_piv_lu::full_piv_lu_solve_workspace::<T>(n, nrhs, batch, exec)
             .map_err(provider(Op::FullPivLuSolve)),
     )?;
     tlinalg::full_piv_lu::full_piv_lu_solve_into(
@@ -914,7 +918,7 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
         transpose_a,
         x.as_uninit_slice_mut(),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::FullPivLuSolve))?;
     tensor_from_lease(x, b.placement())
@@ -925,7 +929,7 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
 // ---------------------------------------------------------------------------------------------
 
 pub(crate) fn solve<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -942,10 +946,9 @@ pub(crate) fn solve<T: FaerLinalg>(
     let mut output = pooled_copy::<T>(buffers, OP, "solution", b.shape(), b.host_data()?)?;
     let a_view = a.as_view();
     let b_view = b.as_view();
-    let par = exec_from(ctx)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::lu::lu_solve_workspace::<T>(n, nrhs, transpose_a, batch, par)
+        tlinalg::lu::lu_solve_workspace::<T>(n, nrhs, transpose_a, batch, exec)
             .map_err(provider(Op::Solve)),
     )?;
     {
@@ -961,7 +964,7 @@ pub(crate) fn solve<T: FaerLinalg>(
             out,
             transpose_a,
             workspace.bytes_mut(),
-            par,
+            exec,
         )
         .map_err(provider(Op::Solve))?;
     }
@@ -982,11 +985,11 @@ fn rhs_layout(shape: &[usize], strides: &[isize], n: usize) -> ([usize; 2], [isi
 /// `copy_rhs` selects where the right-hand side comes from: copied from `b` by the provider only
 /// after the factorization and singularity check succeed (the direct-output route, which leaves
 /// the caller's buffer untouched on failure), or already present in `out`.
-// INVARIANT: context, pool, the three operands, the transpose flag, the RHS source and the route
+// INVARIANT: exec, pool, the three operands, the transpose flag, the RHS source and the route
 // name are distinct inputs of the one direct-solve boundary both view routes share.
 #[allow(clippy::too_many_arguments)]
 fn solve_in_place_view<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a: &TypedTensorView<'_, T>,
     b: &TypedTensorView<'_, T>,
@@ -1047,14 +1050,13 @@ fn solve_in_place_view<T: FaerLinalg>(
     } else {
         None
     };
-    let par = exec_from(ctx)?;
     let out = RawStridedMut::new(out.host_storage_mut()?, &out_dims, &out_strides, out_offset)
         .map_err(|error| tenferro_tensor::Error::invalid_argument(op, "out", error.to_string()))?;
     // The view routes are rank-1 or rank-2 only, so one item per call; the query and the call take
     // the same `Exec`, and the provider resolves the same route for both.
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::lu::lu_solve_workspace::<T>(n, out_dims[1], transpose_a, 1, par)
+        tlinalg::lu::lu_solve_workspace::<T>(n, out_dims[1], transpose_a, 1, exec)
             .map_err(provider(Op::Solve)),
     )?;
     tlinalg::lu::solve_into(
@@ -1064,7 +1066,7 @@ fn solve_in_place_view<T: FaerLinalg>(
         out,
         transpose_a,
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(|error| match error {
         // The provider names its own operation; the host reports the route the caller used.
@@ -1076,7 +1078,7 @@ fn solve_in_place_view<T: FaerLinalg>(
 }
 
 pub(crate) fn solve_from_views<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a: TypedTensorView<'_, T>,
     b: TypedTensorView<'_, T>,
@@ -1084,7 +1086,7 @@ pub(crate) fn solve_from_views<T: FaerLinalg>(
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let mut output = super::output_from_rhs_view(buffers, &b, "solve")?;
     let mut out = output.as_view_mut();
-    solve_in_place_view(ctx, buffers, &a, &b, &mut out, transpose_a, false, "solve")?;
+    solve_in_place_view(exec, buffers, &a, &b, &mut out, transpose_a, false, "solve")?;
     Ok(output)
 }
 
@@ -1092,7 +1094,7 @@ pub(crate) fn solve_from_views<T: FaerLinalg>(
 /// populated only after factorization and singularity checks have completed, so validation and
 /// provider failures do not partially modify the caller-owned buffer.
 pub(crate) fn solve_into<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a: TypedTensorView<'_, T>,
     b: TypedTensorView<'_, T>,
@@ -1100,7 +1102,7 @@ pub(crate) fn solve_into<T: FaerLinalg>(
     transpose_a: bool,
 ) -> tenferro_tensor::Result<()> {
     solve_in_place_view(
-        ctx,
+        exec,
         buffers,
         &a,
         &b,
@@ -1116,7 +1118,7 @@ pub(crate) fn solve_into<T: FaerLinalg>(
 // ---------------------------------------------------------------------------------------------
 
 fn triangular_solve_impl<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a: &TypedTensorView<'_, T>,
     b: &TypedTensorView<'_, T>,
@@ -1129,7 +1131,6 @@ fn triangular_solve_impl<T: FaerLinalg>(
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), placement);
     }
     let mut x = pooled_output::<T>(buffers, OP, "solution", b.shape())?;
-    let par = exec_from(ctx)?;
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
@@ -1139,7 +1140,7 @@ fn triangular_solve_impl<T: FaerLinalg>(
             b.shape()[1],
             flags,
             batch,
-            par,
+            exec,
         )
         .map_err(provider(Op::TriangularSolve)),
     )?;
@@ -1150,7 +1151,7 @@ fn triangular_solve_impl<T: FaerLinalg>(
         flags,
         x.as_uninit_slice_mut(),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::TriangularSolve))?;
     tensor_from_lease(x, placement)
@@ -1159,7 +1160,7 @@ fn triangular_solve_impl<T: FaerLinalg>(
 // Keeps triangular-solve operands and flags explicit at the CPU backend boundary.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn triangular_solve<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -1169,7 +1170,7 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
     unit_diagonal: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     triangular_solve_impl(
-        ctx,
+        exec,
         buffers,
         &a.as_view(),
         &b.as_view(),
@@ -1188,7 +1189,7 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
 /// single copy of `b` the destructive solve needs, straight into the output.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn triangular_solve_view<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a: TypedTensorView<'_, T>,
     b: TypedTensorView<'_, T>,
@@ -1203,7 +1204,7 @@ pub(crate) fn triangular_solve_view<T: FaerLinalg>(
     // not accept a rank the owned route rejects.
     matrix_dims_view(&b, OP)?;
     triangular_solve_impl(
-        ctx,
+        exec,
         buffers,
         &a,
         &b,
@@ -1221,7 +1222,7 @@ pub(crate) fn triangular_solve_view<T: FaerLinalg>(
 // ---------------------------------------------------------------------------------------------
 
 fn svd_impl<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T>,
     full: bool,
@@ -1260,10 +1261,9 @@ fn svd_impl<T: FaerLinalg>(
     let mut u = pooled_output::<T>(buffers, "svd", "left singular vectors", &u_shape)?;
     let mut s = pooled_output::<T>(buffers, "svd", "singular values", &s_shape)?;
     let mut vt = pooled_output::<T>(buffers, "svd", "right singular vectors", &vt_shape)?;
-    let par = exec_from(ctx)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::svd::svd_workspace::<T>(m, n, full, batch, par).map_err(provider(Op::Svd)),
+        tlinalg::svd::svd_workspace::<T>(m, n, full, batch, exec).map_err(provider(Op::Svd)),
     )?;
     tlinalg::svd::svd_into(
         Op::Svd,
@@ -1273,7 +1273,7 @@ fn svd_impl<T: FaerLinalg>(
         s.as_uninit_slice_mut(),
         vt.as_uninit_slice_mut(),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::Svd))?;
     Ok(vec![
@@ -1284,37 +1284,37 @@ fn svd_impl<T: FaerLinalg>(
 }
 
 pub(crate) fn svd<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    svd_impl(ctx, buffers, &input.as_view(), false)
+    svd_impl(exec, buffers, &input.as_view(), false)
 }
 
 pub(crate) fn svd_full<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    svd_impl(ctx, buffers, &input.as_view(), true)
+    svd_impl(exec, buffers, &input.as_view(), true)
 }
 
 pub(crate) fn svd_view<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     matrix_dims_view(&view, "svd")?;
-    svd_impl(ctx, buffers, &view, false)
+    svd_impl(exec, buffers, &view, false)
 }
 
 pub(crate) fn svd_full_view<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     matrix_dims_view(&view, "svd_full")?;
-    svd_impl(ctx, buffers, &view, true)
+    svd_impl(exec, buffers, &view, true)
 }
 
 /// Full-SVD factors for an input with an empty dimension.
@@ -1368,7 +1368,7 @@ fn identity_blocks<T: FaerLinalg>(
 }
 
 fn svd_values_impl<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
@@ -1379,37 +1379,36 @@ fn svd_values_impl<T: FaerLinalg>(
         return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
     }
     let mut s = pooled_output::<T::RealScalar>(buffers, OP, "singular values", &shape)?;
-    let par = exec_from(ctx)?;
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::svd::svd_values_workspace::<T>(m, n, batch, par).map_err(provider(Op::SvdValues)),
+        tlinalg::svd::svd_values_workspace::<T>(m, n, batch, exec).map_err(provider(Op::SvdValues)),
     )?;
     T::svd_values_into(
         raw_view(OP, view)?,
         s.as_uninit_slice_mut(),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::SvdValues))?;
     tensor_from_lease(s, view.placement())
 }
 
 pub(crate) fn svd_values<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
-    svd_values_impl(ctx, buffers, &input.as_view())
+    svd_values_impl(exec, buffers, &input.as_view())
 }
 
 pub(crate) fn svd_values_view<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
     matrix_dims_view(&view, "svd_values")?;
-    svd_values_impl(ctx, buffers, &view)
+    svd_values_impl(exec, buffers, &view)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1417,7 +1416,7 @@ pub(crate) fn svd_values_view<T: FaerLinalg>(
 // ---------------------------------------------------------------------------------------------
 
 fn qr_impl<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -1435,11 +1434,10 @@ fn qr_impl<T: FaerLinalg>(
     }
     let mut q = pooled_output::<T>(buffers, OP, "Q", &q_shape)?;
     let mut r = pooled_output::<T>(buffers, OP, "R", &r_shape)?;
-    let par = exec_from(ctx)?;
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::qr::qr_workspace::<T>(m, n, batch, par).map_err(provider(Op::Qr)),
+        tlinalg::qr::qr_workspace::<T>(m, n, batch, exec).map_err(provider(Op::Qr)),
     )?;
     tlinalg::qr::qr_into(
         Op::Qr,
@@ -1447,7 +1445,7 @@ fn qr_impl<T: FaerLinalg>(
         q.as_uninit_slice_mut(),
         r.as_uninit_slice_mut(),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::Qr))?;
     Ok(vec![
@@ -1457,20 +1455,20 @@ fn qr_impl<T: FaerLinalg>(
 }
 
 pub(crate) fn qr<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    qr_impl(ctx, buffers, &input.as_view())
+    qr_impl(exec, buffers, &input.as_view())
 }
 
 pub(crate) fn qr_view<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     matrix_dims_view(&view, "qr")?;
-    qr_impl(ctx, buffers, &view)
+    qr_impl(exec, buffers, &view)
 }
 
 /// Column-pivoted QR with the host's rank decision.
@@ -1481,7 +1479,7 @@ pub(crate) fn qr_view<T: FaerLinalg>(
 /// columns of `Q`, zero `R`, identity permutation); the host then decides each rank from the `R`
 /// diagonal, which is zero for such an item.
 fn rank_revealing_qr_impl<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T>,
     options: crate::RankRevealingQrOptions,
@@ -1501,10 +1499,9 @@ fn rank_revealing_qr_impl<T: FaerLinalg>(
     let mut r = pooled_output::<T>(buffers, OP, "R", &r_shape)?;
     let mut permutation = pooled_output::<i64>(buffers, OP, "permutation", &p_shape)?;
     if batch > 0 {
-        let par = exec_from(ctx)?;
         let mut workspace = pooled_workspace::<T>(
             buffers,
-            tlinalg::qr::rank_revealing_qr_workspace::<T>(m, n, batch, par)
+            tlinalg::qr::rank_revealing_qr_workspace::<T>(m, n, batch, exec)
                 .map_err(provider(Op::RankRevealingQr)),
         )?;
         tlinalg::qr::rank_revealing_qr_into(
@@ -1514,7 +1511,7 @@ fn rank_revealing_qr_impl<T: FaerLinalg>(
             r.as_uninit_slice_mut(),
             permutation.as_uninit_slice_mut(),
             workspace.bytes_mut(),
-            par,
+            exec,
         )
         .map_err(provider(Op::RankRevealingQr))?;
     }
@@ -1536,24 +1533,24 @@ fn rank_revealing_qr_impl<T: FaerLinalg>(
 }
 
 pub(crate) fn rank_revealing_qr<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     options: crate::RankRevealingQrOptions,
 ) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<T>> {
-    rank_revealing_qr_impl(ctx, buffers, &input.as_view(), options)
+    rank_revealing_qr_impl(exec, buffers, &input.as_view(), options)
 }
 
 /// Column-pivoted QR of a borrowed 2-D host view, read in place by the provider.
 pub(crate) fn rank_revealing_qr_view<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
     options: crate::RankRevealingQrOptions,
 ) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<T>> {
     crate::rank_revealing_qr::validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
     matrix_dims_view(&view, "rank_revealing_qr")?;
-    rank_revealing_qr_impl(ctx, buffers, &view, options)
+    rank_revealing_qr_impl(exec, buffers, &view, options)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1561,7 +1558,7 @@ pub(crate) fn rank_revealing_qr_view<T: FaerLinalg>(
 // ---------------------------------------------------------------------------------------------
 
 fn eigh_impl<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -1578,11 +1575,10 @@ fn eigh_impl<T: FaerLinalg>(
     }
     let mut values = pooled_output::<T>(buffers, OP, "eigenvalues", &values_shape)?;
     let mut vectors = pooled_output::<T>(buffers, OP, "eigenvectors", &vectors_shape)?;
-    let par = exec_from(ctx)?;
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::eigh::eigh_workspace::<T>(n, true, batch, par).map_err(provider(Op::Eigh)),
+        tlinalg::eigh::eigh_workspace::<T>(n, true, batch, exec).map_err(provider(Op::Eigh)),
     )?;
     tlinalg::eigh::eigh_into(
         Op::Eigh,
@@ -1590,7 +1586,7 @@ fn eigh_impl<T: FaerLinalg>(
         values.as_uninit_slice_mut(),
         vectors.as_uninit_slice_mut(),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::Eigh))?;
     Ok(vec![
@@ -1600,24 +1596,24 @@ fn eigh_impl<T: FaerLinalg>(
 }
 
 pub(crate) fn eigh<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    eigh_impl(ctx, buffers, &input.as_view())
+    eigh_impl(exec, buffers, &input.as_view())
 }
 
 pub(crate) fn eigh_view<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     square_matrix_dim_view(&view, "eigh")?;
-    eigh_impl(ctx, buffers, &view)
+    eigh_impl(exec, buffers, &view)
 }
 
 fn eigh_values_impl<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
@@ -1628,37 +1624,36 @@ fn eigh_values_impl<T: FaerLinalg>(
         return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
     }
     let mut values = pooled_output::<T::RealScalar>(buffers, OP, "eigenvalues", &shape)?;
-    let par = exec_from(ctx)?;
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::eigh::eigh_values_workspace::<T>(n, batch, par).map_err(provider(Op::EighValues)),
+        tlinalg::eigh::eigh_values_workspace::<T>(n, batch, exec).map_err(provider(Op::EighValues)),
     )?;
     T::eigh_values_into(
         raw_view(OP, view)?,
         values.as_uninit_slice_mut(),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::EighValues))?;
     tensor_from_lease(values, view.placement())
 }
 
 pub(crate) fn eigh_values<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
-    eigh_values_impl(ctx, buffers, &input.as_view())
+    eigh_values_impl(exec, buffers, &input.as_view())
 }
 
 pub(crate) fn eigh_values_view<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
     square_matrix_dim_view(&view, "eigh_values")?;
-    eigh_values_impl(ctx, buffers, &view)
+    eigh_values_impl(exec, buffers, &view)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1670,7 +1665,7 @@ pub(crate) fn eigh_values_view<T: FaerLinalg>(
 /// General eigendecomposition always returns complex factors, so even empty outputs are tagged
 /// complex, exactly as the owned entry point tags them.
 fn eig_impl<T: FaerEig>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T>,
     vectors: bool,
@@ -1711,14 +1706,13 @@ fn eig_impl<T: FaerEig>(
     } else {
         None
     };
-    let par = exec_from(ctx)?;
     let batch_count = checked_product(op, "batch shape", batch_shape)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
         if vectors {
-            tlinalg::eig::eig_workspace::<T>(n, true, batch_count, par)
+            tlinalg::eig::eig_workspace::<T>(n, true, batch_count, exec)
         } else {
-            tlinalg::eig::eig_values_workspace::<T>(n, batch_count, par)
+            tlinalg::eig::eig_values_workspace::<T>(n, batch_count, exec)
         }
         .map_err(provider(provider_op)),
     )?;
@@ -1729,7 +1723,7 @@ fn eig_impl<T: FaerEig>(
             .as_mut()
             .map(|lease| lease.as_uninit_slice_mut()),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(provider_op))?;
     let placement = view.placement();
@@ -1758,25 +1752,25 @@ macro_rules! eig_dispatch {
 
 /// General eigendecomposition of a borrowed 2-D host view.
 pub(crate) fn eig_view(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TensorView<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     eig_dispatch!(view, "eig", |typed| {
         square_matrix_dim_view(&typed, "eig")?;
-        eig_impl(ctx, buffers, &typed, true)
+        eig_impl(exec, buffers, &typed, true)
     })
 }
 
 /// Eigenvalues of a borrowed 2-D host view, without the eigenvector solve.
 pub(crate) fn eig_values_view(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TensorView<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     let mut outputs = eig_dispatch!(view, "eig_values", |typed| {
         square_matrix_dim_view(&typed, "eig_values")?;
-        eig_impl(ctx, buffers, &typed, false)
+        eig_impl(exec, buffers, &typed, false)
     })?;
     outputs.pop().ok_or_else(|| {
         tenferro_tensor::Error::runtime_state("eig_values", "eigenvalue output missing")
@@ -1793,31 +1787,31 @@ fn typed_or_unsupported<'t, T: PoolScalar>(
 }
 
 pub(crate) fn eig(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     match input.dtype() {
         DType::F32 => eig_impl(
-            ctx,
+            exec,
             buffers,
             &typed_or_unsupported::<f32>(input, "eig")?.as_view(),
             true,
         ),
         DType::F64 => eig_impl(
-            ctx,
+            exec,
             buffers,
             &typed_or_unsupported::<f64>(input, "eig")?.as_view(),
             true,
         ),
         DType::C32 => eig_impl(
-            ctx,
+            exec,
             buffers,
             &typed_or_unsupported::<Complex32>(input, "eig")?.as_view(),
             true,
         ),
         DType::C64 => eig_impl(
-            ctx,
+            exec,
             buffers,
             &typed_or_unsupported::<Complex64>(input, "eig")?.as_view(),
             true,
@@ -1827,32 +1821,32 @@ pub(crate) fn eig(
 }
 
 pub(crate) fn eig_values(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Tensor> {
     const OP: &str = "eig_values";
     let mut outputs = match input.dtype() {
         DType::F32 => eig_impl(
-            ctx,
+            exec,
             buffers,
             &typed_or_unsupported::<f32>(input, OP)?.as_view(),
             false,
         ),
         DType::F64 => eig_impl(
-            ctx,
+            exec,
             buffers,
             &typed_or_unsupported::<f64>(input, OP)?.as_view(),
             false,
         ),
         DType::C32 => eig_impl(
-            ctx,
+            exec,
             buffers,
             &typed_or_unsupported::<Complex32>(input, OP)?.as_view(),
             false,
         ),
         DType::C64 => eig_impl(
-            ctx,
+            exec,
             buffers,
             &typed_or_unsupported::<Complex64>(input, OP)?.as_view(),
             false,
@@ -1873,7 +1867,7 @@ pub(crate) fn eig_values(
 /// The coefficients stay a pooled tensor, so their storage returns to the session pool when the
 /// caller drops them instead of being exported into an ordinary vector.
 fn compact_factor_data<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &BufferPool,
     data: &mut [T],
     rows: usize,
@@ -1881,10 +1875,9 @@ fn compact_factor_data<T: FaerLinalg>(
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let k = rows.min(cols);
     let mut coeff = pooled_output::<T>(buffers, "compact_factor", "coefficients", &[k])?;
-    let par = exec_from(ctx)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::householder::compact_factor_workspace::<T>(rows, cols, 1, par)
+        tlinalg::householder::compact_factor_workspace::<T>(rows, cols, 1, exec)
             .map_err(provider(Op::HouseholderQr)),
     )?;
     tlinalg::householder::compact_factor_into(
@@ -1895,7 +1888,7 @@ fn compact_factor_data<T: FaerLinalg>(
         data,
         coeff.as_uninit_slice_mut(),
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::HouseholderQr))?;
     finish_lease(coeff)
@@ -1905,7 +1898,7 @@ fn compact_factor_data<T: FaerLinalg>(
 // INVARIANT: these buffers and dimensions mirror the provider reflector ABI.
 #[allow(clippy::too_many_arguments)]
 fn apply_reflectors_data<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &BufferPool,
     a: &[T],
     a_cols: usize,
@@ -1922,10 +1915,9 @@ fn apply_reflectors_data<T: FaerLinalg>(
         cols,
         k,
     };
-    let par = exec_from(ctx)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::householder::apply_reflectors_workspace::<T>(shape, 1, transpose, par)
+        tlinalg::householder::apply_reflectors_workspace::<T>(shape, 1, transpose, exec)
             .map_err(provider(Op::HouseholderQr)),
     )?;
     tlinalg::householder::apply_reflectors_into(
@@ -1937,7 +1929,7 @@ fn apply_reflectors_data<T: FaerLinalg>(
         c,
         transpose,
         workspace.bytes_mut(),
-        par,
+        exec,
     )
     .map_err(provider(Op::HouseholderQr))
 }
@@ -1981,7 +1973,7 @@ fn validate_compact_state<T>(
 }
 
 pub(crate) fn compact_factor_2d<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
@@ -1994,7 +1986,7 @@ pub(crate) fn compact_factor_2d<T: FaerLinalg>(
         &[rows, cols],
         input.host_data()?,
     )?;
-    let mut coeff = compact_factor_data(ctx, buffers, packed.host_data_mut()?, rows, cols)?;
+    let mut coeff = compact_factor_data(exec, buffers, packed.host_data_mut()?, rows, cols)?;
     let k = rows.min(cols);
     if coeff.shape().len() != 1 || coeff.shape()[0] != k {
         return Err(invalid_config(
@@ -2009,7 +2001,7 @@ pub(crate) fn compact_factor_2d<T: FaerLinalg>(
 }
 
 pub(crate) fn append_2d<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     packed: &TypedTensor<T>,
     coeff: &TypedTensor<T>,
@@ -2056,7 +2048,7 @@ pub(crate) fn append_2d<T: FaerLinalg>(
         input.host_data()?,
     )?;
     apply_reflectors_data(
-        ctx,
+        exec,
         buffers,
         packed.host_data()?,
         old_cols,
@@ -2082,7 +2074,7 @@ pub(crate) fn append_2d<T: FaerLinalg>(
         None
     } else {
         Some(compact_factor_data(
-            ctx,
+            exec,
             buffers,
             trailing.host_data_mut()?,
             trailing_rows,
@@ -2134,7 +2126,7 @@ pub(crate) fn append_2d<T: FaerLinalg>(
 }
 
 pub(crate) fn from_factors_2d<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     q: &TypedTensor<T>,
     r: &TypedTensor<T>,
@@ -2168,7 +2160,7 @@ pub(crate) fn from_factors_2d<T: FaerLinalg>(
     }
     const OP: &str = "from_factors_2d";
     let mut q_packed = pooled_copy::<T>(buffers, OP, "packed Q", &[rows, q_cols], q.host_data()?)?;
-    let q_coeff = compact_factor_data(ctx, buffers, q_packed.host_data_mut()?, rows, q_cols)?;
+    let q_coeff = compact_factor_data(exec, buffers, q_packed.host_data_mut()?, rows, q_cols)?;
     let mut folded = pooled_zeroed::<T>(buffers, OP, "folded R", &[q_cols, cols])?;
     let mut t = pooled_zeroed::<T>(buffers, OP, "triangular factor", &[q_cols, q_cols])?;
     {
@@ -2183,7 +2175,7 @@ pub(crate) fn from_factors_2d<T: FaerLinalg>(
         }
     }
     T::gemm_data(
-        ctx,
+        exec,
         t.host_data()?,
         q_cols,
         q_cols,
@@ -2252,7 +2244,7 @@ pub(crate) fn raw_r_2d<T: FaerLinalg>(
 }
 
 pub(crate) fn q_columns_2d<T: FaerLinalg>(
-    ctx: &CpuExecutionContext<'_>,
+    exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     packed: &TypedTensor<T>,
     coeff: &TypedTensor<T>,
@@ -2280,7 +2272,7 @@ pub(crate) fn q_columns_2d<T: FaerLinalg>(
     }
     if columns != 0 {
         apply_reflectors_data(
-            ctx,
+            exec,
             buffers,
             packed.host_data()?,
             packed.shape()[1],

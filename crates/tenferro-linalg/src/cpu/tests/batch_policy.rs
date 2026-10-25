@@ -10,22 +10,15 @@ use tenferro_cpu::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy};
 #[cfg(feature = "native")]
 #[test]
 fn forced_outer_reaches_the_faer_exec() {
-    use crate::cpu::tlinalg::exec_from;
-
-    let mut backend = tenferro_cpu::CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(4)
-            .build()
-            .unwrap(),
-    );
+    let mut backend =
+        tenferro_cpu::CpuEngine::new(tenferro_cpu::Pool::builder().threads(4).build().unwrap());
     let decision = with_cpu_linalg(&mut backend, |session| {
         with_batch_policy(
             session,
             CpuBatchPolicy::new(CpuBatchStrategy::Outer),
             |session| {
                 with_cpu_engine(session, |cpu| {
-                    cpu.with_linalg_pool(|context, _| {
-                        let exec = exec_from(context)?;
+                    cpu.with_linalg_pool(|exec, _| {
                         assert_eq!(exec.batch_policy().strategy, CpuBatchStrategy::Outer);
                         Ok(exec.batch_decision(&tcontract_exec::BatchQuery::new(8, 4096.0)))
                     })
@@ -51,12 +44,8 @@ fn forced_strategy_on_the_blas_linalg_lane_is_refused_before_writes() {
     let a_data: Vec<f64> = (0..n * n * batch)
         .map(|index| ((index % 7) as f64) - 3.0)
         .collect();
-    let mut backend = tenferro_cpu::CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(2)
-            .build()
-            .unwrap(),
-    );
+    let mut backend =
+        tenferro_cpu::CpuEngine::new(tenferro_cpu::Pool::builder().threads(2).build().unwrap());
 
     let strategies = [
         CpuBatchStrategy::Outer,
@@ -105,12 +94,8 @@ fn forced_strategy_on_blas_solve_read_into_is_refused_before_writes() {
 
     let a = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
     let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
-    let mut backend = tenferro_cpu::CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(2)
-            .build()
-            .unwrap(),
-    );
+    let mut backend =
+        tenferro_cpu::CpuEngine::new(tenferro_cpu::Pool::builder().threads(2).build().unwrap());
 
     for strategy in [
         CpuBatchStrategy::Outer,

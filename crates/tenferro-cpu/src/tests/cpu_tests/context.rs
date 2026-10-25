@@ -48,11 +48,3 @@ fn operations_are_called_from_the_caller_thread() {
         .unwrap();
     assert_eq!(std::thread::current().id(), caller);
 }
-
-#[test]
-fn thread_pool_builder_presets_the_provider_worker_stack() {
-    assert_eq!(crate::DEFAULT_WORKER_STACK_BYTES, 16 << 20);
-    let pool = crate::thread_pool_builder().num_threads(2).build().unwrap();
-    let engine = CpuEngine::new(pool);
-    assert_eq!(engine.num_threads(), 2);
-}

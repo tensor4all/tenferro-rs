@@ -29,9 +29,13 @@ fn run(
     inputs: &[TensorRead<'_>],
     out: TensorWrite<'_>,
 ) -> crate::Result<()> {
-    elementwise_read_into_with_context(op, inputs, out, &ExecContext::serial(), |_, _| {
-        panic!("eligible host operation unexpectedly used fallback")
-    })
+    elementwise_read_into_with_exec(
+        op,
+        inputs,
+        out,
+        |_, _, _| panic!("eligible host operation unexpectedly used fallback"),
+        Exec::serial(),
+    )
 }
 
 #[test]
@@ -181,15 +185,15 @@ fn replay_supports_mutable_views_and_preserves_fallback_errors() {
         tenferro_tensor::TypedTensor::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap(),
     );
     let mut fallback_called = false;
-    elementwise_read_into_with_context(
+    elementwise_read_into_with_exec(
         ElementwiseReadOp::Conj,
         &[TensorRead::from_tensor(&input)],
         TensorWrite::from_tensor(&mut output),
-        &ExecContext::serial(),
-        |_, _| {
+        |_, _, _| {
             fallback_called = true;
             Err(Error::unsupported("test", "fallback"))
         },
+        Exec::serial(),
     )
     .unwrap_err();
     assert!(fallback_called);
@@ -197,12 +201,12 @@ fn replay_supports_mutable_views_and_preserves_fallback_errors() {
     let mut output = Tensor::from_typed::<f64>(
         tenferro_tensor::TypedTensor::from_vec_col_major(vec![1], vec![0.0]).unwrap(),
     );
-    let error = elementwise_read_into_with_context(
+    let error = elementwise_read_into_with_exec(
         ElementwiseReadOp::Conj,
         &[],
         TensorWrite::from_tensor(&mut output),
-        &ExecContext::serial(),
-        |_, _| Ok(()),
+        |_, _, _| Ok(()),
+        Exec::serial(),
     )
     .unwrap_err();
     assert!(matches!(error, Error::Validation { .. }));

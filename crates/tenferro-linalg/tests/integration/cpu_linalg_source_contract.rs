@@ -367,7 +367,7 @@ fn cpu_backend_overrides_solve_read_into_hook() {
         override_section.contains("validate_solve_read_into")
             && override_section.contains("with_linalg_pool")
             && override_section.contains("solve_read_into_entered"),
-        "CpuEngine must override solve_read_into and inject its entered pool/context"
+        "CpuEngine must override solve_read_into and inject its entered pool/exec bundle"
     );
 
     let trait_source = linalg_backend_trait_source();
@@ -407,7 +407,7 @@ fn faer_eligible_reads_reach_the_view_path_before_any_materialization() {
             .find(view_entry)
             .unwrap_or_else(|| panic!("{read} must return through {view_entry}"));
         let materialization = section
-            .find("context.with_materialized_tensor_read(")
+            .find("tenferro_cpu::with_materialized_tensor_read(")
             .unwrap_or_else(|| panic!("{read} must keep a materializing fallback"));
         assert!(
             eligibility < view_return && view_return < materialization,
@@ -429,7 +429,7 @@ fn faer_eligible_reads_reach_the_view_path_before_any_materialization() {
         .find("triangular_solve_faer_view_entered")
         .expect("triangular_solve_read must return through its view adapter");
     let materialization = section
-        .find("context.with_materialized_tensor_read(")
+        .find("tenferro_cpu::with_materialized_tensor_read(")
         .expect("triangular_solve_read must keep a materializing fallback");
     assert!(
         eligibility < view_return && rhs_eligibility < view_return && view_return < materialization,
@@ -465,7 +465,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
             "{read} must delegate to already-entered helper {entered}"
         );
         assert!(
-            section.contains("context.with_materialized_tensor_read("),
+            section.contains("tenferro_cpu::with_materialized_tensor_read("),
             "{read} must canonicalize through its entered execution-context proof"
         );
         assert!(
@@ -490,7 +490,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
     for read in ["triangular_solve_read", "solve_read"] {
         assert_eq!(
             rust_function_section(&source, read)
-                .matches("context.with_materialized_tensor_read(")
+                .matches("tenferro_cpu::with_materialized_tensor_read(")
                 .count(),
             2,
             "{read} must nest scoped materialization so failure of the second input reclaims the first"
@@ -519,16 +519,16 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
     );
     let managed = rust_function_section(&source, "managed_cholesky");
     assert!(
-        managed.contains("context: &CpuExecutionContext")
+        managed.contains("exec: &mut Exec")
             && managed.contains("buffers: &mut BufferPool")
             && !managed.contains("with_linalg_pool")
             && !managed.contains("&mut CpuEngine"),
-        "managed Cholesky must consume an already-entered context and pool without recursively entering"
+        "managed Cholesky must consume an already-entered exec bundle and pool without recursively entering"
     );
     let managed_typed = rust_function_section(&source, "managed_cholesky_typed");
     for required in [
         "let values = if n == 0",
-        "T::factor(context, buffers",
+        "T::factor(exec, buffers",
         "domain.allocate(",
         "write_managed_cholesky_output(",
     ] {
@@ -540,7 +540,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
 
     let solve = rust_function_section(&source, "solve_entered");
     assert!(
-        solve.contains("context.reshape_tensor("),
+        solve.contains("tenferro_cpu::reshape_tensor(exec,"),
         "vector RHS solve must use its already-entered metadata-only reshape"
     );
     assert!(
@@ -550,7 +550,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
 }
 
 #[test]
-fn cpu_linalg_materialization_requires_an_entered_context_token() {
+fn cpu_linalg_materialization_requires_the_operations_exec_bundle() {
     let cpu_lib = cpu_crate_source("lib.rs");
     let interop = source_section(
         &cpu_lib,
@@ -566,24 +566,23 @@ fn cpu_linalg_materialization_requires_an_entered_context_token() {
         cpu_lib.contains("pub(crate) fn materialize_tensor_read"),
         "the raw materializer must remain crate-private"
     );
+    let raw = rust_function_section(&cpu_lib, "materialize_tensor_read");
+    assert!(
+        raw.contains("exec: Exec<'_>"),
+        "the raw materializer must take the placement token, never an ambient pool"
+    );
 
     let provider = cpu_crate_source("provider.rs");
     let scoped = rust_function_section(&provider, "with_materialized_tensor_read");
     assert!(
-        scoped.contains("&self")
+        scoped.contains("exec: &mut Exec")
             && scoped.contains("crate::materialize_tensor_read")
             && scoped.contains("reclaim_tensor(buffers, materialized)"),
-        "entered context receiver must own raw materialization and ordinary-path reclaim"
+        "the scoped materializer must take the operation's exec bundle and own the ordinary-path reclaim"
     );
     assert!(
-        rust_function_section(&provider, "reshape_tensor").contains("&self"),
-        "metadata-only reshape must also require the entered context receiver"
-    );
-    // `CpuExecutionContext::new` is the only constructor of the context token.
-    let entered = rust_function_section(&provider, "new");
-    assert!(
-        !entered.trim_start().starts_with("pub "),
-        "external crates must not be able to construct an entered execution-context token"
+        rust_function_section(&provider, "reshape_tensor").contains("exec: &mut Exec"),
+        "metadata-only reshape must also take the operation's exec bundle"
     );
 }
 

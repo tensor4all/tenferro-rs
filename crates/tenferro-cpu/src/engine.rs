@@ -1,12 +1,14 @@
-//! The CPU execution engine: a caller-held value that owns one Rayon pool (or
-//! none) and the workspace every operation on it writes.
+//! The CPU execution engine: a caller-held value that owns one
+//! [`strided_exec::Pool`] (or none) and the workspace every operation on it
+//! writes.
 //!
-//! tenferro never builds threads. The caller builds the pool, usually from
-//! [`thread_pool_builder`], and hands it to [`CpuEngine::new`]; a
+//! tenferro never builds threads. The caller builds the pool with
+//! [`Pool::builder`](crate::Pool::builder) and hands it to [`CpuEngine::new`]; a
 //! [`CpuEngine::serial`] engine has no pool at all. Every operation takes the
 //! engine through `&mut`, so one computation uses it at a time without run-time
-//! locks. An operation starts on the calling thread and enters the pool only
-//! after a provider has chosen more than one worker for it.
+//! locks. An operation starts on the calling thread with one placement token
+//! minted from the engine's pool; the kernels split that token and enter the pool
+//! only after a provider has chosen more than one task for it.
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -15,56 +17,7 @@ use tenferro_tensor::{AllocationDomainId, SharedTensorAllocationDomain};
 
 use crate::buffer_pool::{BufferPool, BufferPoolStats};
 use crate::contraction::ExecutionResources;
-use crate::provider::CpuExecutionContext;
 use crate::{CacheStats, CpuPlanCache};
-
-/// Stack size the [`thread_pool_builder`] preset reserves for every worker.
-///
-/// Rust's `std::thread` default is 2 MiB, but provider code can recurse with
-/// large private frames: a `NUM_THREADS=64` OpenBLAS build keeps a
-/// `job_t job[64]` (about 541 KiB per level, measured) on the stack of every
-/// recursive `dgetrf_parallel` frame, so 2 MiB allowed only three levels and
-/// aborted with a stack overflow at n>=256. Sixteen MiB leaves room for about
-/// thirty such frames, which is the order of the 8 MiB main-thread default that
-/// provider calls receive outside a pool.
-///
-/// # Examples
-///
-/// ```
-/// assert_eq!(tenferro_cpu::DEFAULT_WORKER_STACK_BYTES, 16 << 20);
-/// ```
-pub const DEFAULT_WORKER_STACK_BYTES: usize = 16 << 20;
-
-/// Smallest worker stack a caller should configure for a pool that runs
-/// provider code.
-///
-/// # Examples
-///
-/// ```
-/// assert!(tenferro_cpu::MIN_WORKER_STACK_BYTES < tenferro_cpu::DEFAULT_WORKER_STACK_BYTES);
-/// ```
-pub const MIN_WORKER_STACK_BYTES: usize = 64 << 10;
-
-/// A `rayon::ThreadPoolBuilder` preset with the worker stack size the CPU
-/// providers need ([`DEFAULT_WORKER_STACK_BYTES`]).
-///
-/// This is a convenience, not a construction mode: the caller sets the thread
-/// count, pins workers if it wants to, builds the pool and hands it to
-/// [`CpuEngine::new`].
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::{thread_pool_builder, CpuEngine};
-///
-/// let pool = thread_pool_builder().num_threads(2).build()?;
-/// let engine = CpuEngine::new(pool);
-/// assert_eq!(engine.num_threads(), 2);
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// ```
-pub fn thread_pool_builder() -> rayon::ThreadPoolBuilder {
-    rayon::ThreadPoolBuilder::new().stack_size(DEFAULT_WORKER_STACK_BYTES)
-}
 
 /// Typed refusals reported by a [`CpuEngine`] before an operation runs.
 ///
@@ -75,22 +28,11 @@ pub fn thread_pool_builder() -> rayon::ThreadPoolBuilder {
 /// ```
 /// use tenferro_cpu::CpuEngineError;
 ///
-/// assert!(CpuEngineError::CallerInOwnPool.to_string().contains("worker"));
+/// assert!(CpuEngineError::Broken.to_string().contains("panic"));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CpuEngineError {
-    /// The operation was called from a worker of the engine's own pool.
-    ///
-    /// Some provider strategies cannot start on the pool's own worker (a
-    /// team that needs every worker at once is refused), and the others would
-    /// run with less parallelism than the engine promises. tenferro rejects
-    /// the call instead of letting the outcome depend on the provider.
-    #[error(
-        "a CPU engine operation was called from a worker of the engine's own pool; \
-         call it from a thread outside that pool"
-    )]
-    CallerInOwnPool,
     /// An earlier operation panicked while it was using the engine.
     ///
     /// The engine's workspace may be half updated, so later operations are
@@ -99,34 +41,9 @@ pub enum CpuEngineError {
     Broken,
 }
 
-/// Entry counters of the provider pool a [`CpuEngine`] owns.
-///
-/// A serial engine has no pool and reports zero. The counters include entries
-/// made by the tcontract execution wrapper (contraction and tlinalg providers)
-/// and by the direct faer lane, so a small operation that stays inline leaves
-/// every counter at zero.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::CpuEngine;
-///
-/// assert_eq!(CpuEngine::serial().pool_stats().entries, 0);
-/// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[doc(hidden)]
-pub struct CpuPoolStats {
-    /// Entries into the engine's Rayon pool from outside it.
-    pub entries: u64,
-    /// SPMD broadcasts started from outside the pool.
-    pub broadcasts: u64,
-    /// Parallel requests served in place because the caller was a worker.
-    pub inline_runs: u64,
-}
-
 /// A caller-held CPU execution engine.
 ///
-/// The engine owns one Rayon pool (or none for [`CpuEngine::serial`]) and the
+/// The engine owns one [`strided_exec::Pool`] (or none for [`CpuEngine::serial`]) and the
 /// workspace operations write: the buffer pool that recycles outputs, the
 /// contraction scratch, and a handle to a [`CpuPlanCache`]. It implements
 /// [`tenferro_tensor::Engine`], so every operation takes it as `&mut`.
@@ -187,31 +104,30 @@ impl CpuEngine {
     /// An engine that computes on `pool`, which it takes over.
     ///
     /// Every operation may use all workers of the pool; a caller that wants
-    /// fewer threads builds a smaller pool. Build the pool with
-    /// [`thread_pool_builder`] to get the worker stack the providers need.
+    /// fewer threads builds a smaller pool. [`Pool::builder`](crate::Pool::builder)
+    /// reserves the worker stack the providers need by default.
     ///
     /// # Examples
     ///
     /// ```
-    /// let pool = tenferro_cpu::thread_pool_builder().num_threads(4).build()?;
+    /// let pool = tenferro_cpu::Pool::builder().threads(4).build()?;
     /// let engine = tenferro_cpu::CpuEngine::new(pool);
     /// assert_eq!(engine.num_threads(), 4);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn new(pool: rayon::ThreadPool) -> Self {
+    pub fn new(pool: crate::Pool) -> Self {
         Self::with_resources(ExecutionResources::new(Some(pool)))
     }
 
     /// An engine with no pool: every operation runs on the calling thread.
     ///
-    /// A serial engine never touches Rayon's global pool, so it is safe to use
-    /// from inside any other pool.
+    /// A serial engine never starts or enters a pool, so it is safe to use from
+    /// inside any other pool.
     ///
     /// # Examples
     ///
     /// ```
     /// let engine = tenferro_cpu::CpuEngine::serial();
-    /// assert!(engine.pool().is_none());
     /// assert_eq!(engine.num_threads(), 1);
     /// ```
     pub fn serial() -> Self {
@@ -350,32 +266,6 @@ impl CpuEngine {
         self.batch_policy
     }
 
-    /// The pool this engine computes on, or `None` for a serial engine.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let pool = tenferro_cpu::thread_pool_builder().num_threads(2).build()?;
-    /// let engine = tenferro_cpu::CpuEngine::new(pool);
-    /// assert_eq!(engine.pool().map(|pool| pool.current_num_threads()), Some(2));
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn pool(&self) -> Option<&rayon::ThreadPool> {
-        self.resources.rayon_pool()
-    }
-
-    /// Entry counters of this engine's provider pool.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// assert_eq!(tenferro_cpu::CpuEngine::serial().pool_stats().entries, 0);
-    /// ```
-    #[doc(hidden)]
-    pub fn pool_stats(&self) -> CpuPoolStats {
-        self.resources.pool_stats()
-    }
-
     /// The number of workers operations may use: the pool size, or one.
     ///
     /// # Examples
@@ -403,20 +293,19 @@ impl CpuEngine {
         self.broken
     }
 
-    /// The provider execution token for this engine: its pool, its budget and
-    /// its batch policy.
+    /// The provider execution bundle for this engine: a placement token over
+    /// every worker of its pool, its workspace and its batch policy.
     ///
     /// A downstream kernel that calls a provider (cpueinsum, tcontract,
-    /// tlinalg) directly passes this token, so it uses the same threads, budget
-    /// and batch policy as tenferro. Getting the token applies the same checks
-    /// as an operation; what the kernel then does with the (copyable) token is
-    /// that kernel's responsibility.
+    /// tlinalg) directly passes this bundle by `&mut`, so it uses the same
+    /// threads, budget and batch policy as tenferro. The bundle is not `Clone`:
+    /// it is the engine's whole thread budget for that one call, and the provider
+    /// splits it. Getting it applies the same checks as an operation.
     ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] with a [`CpuEngineError`] source
-    /// when called from a worker of the engine's own pool or when the engine is
-    /// broken.
+    /// when the engine is broken.
     ///
     /// # Examples
     ///
@@ -428,10 +317,10 @@ impl CpuEngine {
     /// ```
     pub fn exec(&mut self) -> crate::Result<cpueinsum::Exec<'_>> {
         self.check_entry("CpuEngine::exec")?;
-        CpuExecutionContext::new(&self.resources, self.batch_policy).contraction_exec()
+        Ok(self.resources.exec(self.batch_policy))
     }
 
-    /// Borrow the provider token, the buffer pool and the N-ary contraction
+    /// Borrow the provider bundle, the buffer pool and the N-ary contraction
     /// scratch for one downstream call.
     ///
     /// # Errors
@@ -454,26 +343,25 @@ impl CpuEngine {
     pub fn with_contraction_exec<R>(
         &mut self,
         op: impl FnOnce(
-            &cpueinsum::Exec<'_>,
+            &mut cpueinsum::Exec<'_>,
             &mut BufferPool,
             &crate::ContractionWorkspaces,
         ) -> crate::Result<R>,
     ) -> crate::Result<R> {
         self.check_entry("CpuEngine::with_contraction_exec")?;
-        let context = CpuExecutionContext::new(&self.resources, self.batch_policy);
         let _retention = self
             .resources
             .retention_guard(self.buffers.max_retained_capacity_bytes());
-        let exec = context.contraction_exec()?;
+        let mut exec = self.resources.exec(self.batch_policy);
         let nary = &self.resources.nary;
         guard_unwind(&mut self.buffers, &mut self.broken, |buffers| {
-            op(&exec, buffers, nary)
+            op(&mut exec, buffers, nary)
         })
     }
 
-    /// Borrow the execution context and buffer pool for a linalg provider call.
+    /// Borrow the provider bundle and buffer pool for a linalg provider call.
     ///
-    /// The provider chooses its own execution through the context; this
+    /// The provider chooses its own execution through the bundle; this
     /// callback itself runs on the calling thread.
     ///
     /// # Errors
@@ -486,19 +374,19 @@ impl CpuEngine {
     /// use tenferro_cpu::{CpuBatchStrategy, CpuEngine};
     ///
     /// let mut engine = CpuEngine::serial();
-    /// let strategy = engine.with_linalg_pool(|context, _| Ok(context.batch_policy().strategy))?;
+    /// let strategy = engine.with_linalg_pool(|exec, _| Ok(exec.batch_policy().strategy))?;
     /// assert_eq!(strategy, CpuBatchStrategy::Auto);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[doc(hidden)]
     pub fn with_linalg_pool<R>(
         &mut self,
-        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R>,
+        op: impl FnOnce(&mut cpueinsum::Exec<'_>, &mut BufferPool) -> crate::Result<R>,
     ) -> crate::Result<R> {
         self.check_entry("CpuEngine::with_linalg_pool")?;
-        let context = CpuExecutionContext::new(&self.resources, self.batch_policy);
+        let mut exec = self.resources.exec(self.batch_policy);
         guard_unwind(&mut self.buffers, &mut self.broken, |buffers| {
-            op(&context, buffers)
+            op(&mut exec, buffers)
         })
     }
 
@@ -510,17 +398,47 @@ impl CpuEngine {
                 CpuEngineError::Broken,
             ));
         }
-        if self
-            .resources
-            .rayon_pool()
-            .is_some_and(|pool| pool.current_thread_index().is_some())
-        {
-            return Err(crate::Error::runtime_state_source(
-                op,
-                CpuEngineError::CallerInOwnPool,
-            ));
-        }
         Ok(())
+    }
+
+    /// Ledger roots of every placement token the engine minted since the last
+    /// call, so a test can read `strided_exec::ledger` for the operation it just
+    /// ran (`max_live`, `installs`).
+    ///
+    /// Available with the `ledger` cargo feature, which is test support.
+    #[cfg(feature = "ledger")]
+    #[doc(hidden)]
+    pub fn take_ledger_roots(&self) -> Vec<u64> {
+        self.resources.take_ledger_roots()
+    }
+
+    /// Pool entries (installs from a plain thread or a foreign pool) made by
+    /// the tokens minted since the last `take_ledger_*` call, which it consumes.
+    ///
+    /// Zero means every operation since then stayed on the calling thread.
+    /// Available with the `ledger` cargo feature, which is test support.
+    #[cfg(feature = "ledger")]
+    #[doc(hidden)]
+    pub fn take_ledger_installs(&self) -> usize {
+        self.take_ledger_roots()
+            .into_iter()
+            .map(strided_exec::ledger::installs)
+            .sum()
+    }
+
+    /// Largest number of tasks live at once under any token minted since the
+    /// last `take_ledger_*` call, which it consumes. It never exceeds
+    /// [`CpuEngine::num_threads`].
+    ///
+    /// Available with the `ledger` cargo feature, which is test support.
+    #[cfg(feature = "ledger")]
+    #[doc(hidden)]
+    pub fn take_ledger_max_live(&self) -> usize {
+        self.take_ledger_roots()
+            .into_iter()
+            .map(strided_exec::ledger::max_live)
+            .max()
+            .unwrap_or(0)
     }
 
     /// Number of retained buffers in the engine's buffer pool.
@@ -680,19 +598,19 @@ pub(crate) fn guard_unwind<R>(
 }
 
 impl CpuEngine {
-    /// Split borrows for the operation helpers: the execution context (which
-    /// borrows only the pool resources), the buffer pool, the plan cache and
-    /// the broken flag.
+    /// Split borrows for the operation helpers: the provider bundle minted for
+    /// this operation (it borrows only the pool resources), the buffer pool, the
+    /// plan cache and the broken flag.
     pub(crate) fn parts(
         &mut self,
     ) -> (
-        CpuExecutionContext<'_>,
+        cpueinsum::Exec<'_>,
         &mut BufferPool,
         &CpuPlanCache,
         &mut bool,
     ) {
         (
-            CpuExecutionContext::new(&self.resources, self.batch_policy),
+            self.resources.exec(self.batch_policy),
             &mut self.buffers,
             &self.plans,
             &mut self.broken,

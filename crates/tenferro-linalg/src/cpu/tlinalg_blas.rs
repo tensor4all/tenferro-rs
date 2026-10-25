@@ -13,8 +13,8 @@
 
 #![cfg(feature = "blas")]
 
+use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::BufferPool;
-use tenferro_cpu::CpuExecutionContext;
 use tlinalg_blas::lu::{lu_factor, lu_factor_solve, lu_solve_prepared};
 use tlinalg_blas::{LapackScalar, Op};
 
@@ -33,10 +33,8 @@ pub(crate) fn workspace(pool: &mut BufferPool) -> TlinalgWorkspace<'_> {
 /// lane already does; every other forced route is a typed unsupported request
 /// resolved ahead of every empty, zero or single-item shortcut in the linalg
 /// entry points.
-pub(crate) fn reject_forced_batch_strategy(
-    ctx: &CpuExecutionContext<'_>,
-) -> tenferro_tensor::Result<()> {
-    let strategy = ctx.batch_policy().strategy;
+pub(crate) fn reject_forced_batch_strategy(exec: &mut Exec<'_>) -> tenferro_tensor::Result<()> {
+    let strategy = exec.batch_policy().strategy;
     if matches!(
         strategy,
         tenferro_cpu::CpuBatchStrategy::Auto | tenferro_cpu::CpuBatchStrategy::Sequential
@@ -54,7 +52,7 @@ pub(crate) fn reject_forced_batch_strategy(
 
 /// Factor `batch` compact `m x n` matrices in place.
 pub(crate) fn factor_batch<T: LapackScalar>(
-    _ctx: &CpuExecutionContext<'_>,
+    _ctx: &mut Exec<'_>,
     op: Op,
     m: usize,
     n: usize,
@@ -68,7 +66,7 @@ pub(crate) fn factor_batch<T: LapackScalar>(
 /// Solve `op(A) X = B` for `batch` compact systems from packed factors.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn solve_prepared_batch<T: LapackScalar>(
-    _ctx: &CpuExecutionContext<'_>,
+    _ctx: &mut Exec<'_>,
     op: Op,
     n: usize,
     nrhs: usize,
@@ -93,7 +91,7 @@ pub(crate) fn solve_prepared_batch<T: LapackScalar>(
 
 /// Factor and solve `A X = B` for `batch` compact systems, keeping the packed factors.
 pub(crate) fn factor_solve_batch<T: LapackScalar>(
-    _ctx: &CpuExecutionContext<'_>,
+    _ctx: &mut Exec<'_>,
     op: Op,
     n: usize,
     nrhs: usize,

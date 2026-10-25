@@ -71,7 +71,7 @@ impl FftBackend for CpuEngine {
             return self.execute_fft(&owned, spec, cache);
         }
         let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
-        self.with_linalg_pool(|context, buffers| {
+        self.with_linalg_pool(|exec, buffers| {
             macro_rules! transform {
                 ($input:expr, $kind:ident, $variant:ident, $project:expr) => {
                     pooled_transform(
@@ -80,8 +80,8 @@ impl FftBackend for CpuEngine {
                         spec,
                         &mut plans,
                         buffers,
-                        lanes::LaneThreads::from_context(context),
                         $project,
+                        exec.token(),
                     )
                     .map(Tensor::from_typed::<preset_scalar!($variant)>)
                 };
@@ -131,16 +131,9 @@ impl FftBackend for CpuEngine {
         if managed.is_none() {
             validate_host_fft_input(fft_op_name(spec.operation()), input)?;
         }
-        self.with_linalg_pool(|context, buffers| {
+        self.with_linalg_pool(|exec, buffers| {
             {
-                execute_fft_with_plans(
-                    input,
-                    spec,
-                    &mut plans,
-                    buffers,
-                    managed,
-                    lanes::LaneThreads::from_context(context),
-                )
+                execute_fft_with_plans(input, spec, &mut plans, buffers, managed, exec.token())
             }
         })
     }
@@ -181,20 +174,20 @@ pub(crate) fn execute_in_place(
         ));
     }
     let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
-    session.with_linalg_pool(|context, buffers| match input.dtype() {
+    session.with_linalg_pool(|exec, buffers| match input.dtype() {
         tenferro_tensor::DType::C64 => in_place_typed(
             in_place_operand::<f64>(&mut *input)?,
             spec,
             &mut plans,
             buffers,
-            lanes::LaneThreads::from_context(context),
+            exec.token(),
         ),
         tenferro_tensor::DType::C32 => in_place_typed(
             in_place_operand::<f32>(&mut *input)?,
             spec,
             &mut plans,
             buffers,
-            lanes::LaneThreads::from_context(context),
+            exec.token(),
         ),
         other => Err(crate::tensor_unsupported_dtype(
             "fft_in_place",
@@ -227,7 +220,7 @@ fn in_place_typed<T: CachedFftPlanScalar + TensorScalar>(
     spec: &FftPlanSpec,
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
-    threads: lanes::LaneThreads<'_>,
+    exec: tenferro_cpu::strided_exec::Exec<'_>,
 ) -> tenferro_tensor::Result<()>
 where
     Complex<T>: TensorScalar + PoolScalar,
@@ -257,8 +250,8 @@ where
                 plans,
                 buffers,
                 output,
-                threads,
                 |v| v,
+                exec,
             )
         }
     })?
@@ -306,7 +299,7 @@ fn execute_fft_with_plans(
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
     domain: Option<&dyn SharedTensorAllocationDomain>,
-    threads: lanes::LaneThreads<'_>,
+    exec: tenferro_cpu::strided_exec::Exec<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     macro_rules! transform {
         ($input:expr, $kind:ident, $variant:ident, $project:expr) => {
@@ -316,9 +309,9 @@ fn execute_fft_with_plans(
                 plans,
                 buffers,
                 domain,
-                threads,
                 |values| lanes::Input::$kind(values),
                 $project,
+                exec,
             )
             .map(Tensor::from_typed::<preset_scalar!($variant)>)
         };
@@ -377,22 +370,22 @@ fn transform<I: TensorScalar, T: CachedFftPlanScalar + PoolScalar, O: PoolScalar
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
     domain: Option<&dyn SharedTensorAllocationDomain>,
-    threads: lanes::LaneThreads<'_>,
     wrap: for<'a> fn(&'a [I]) -> lanes::Input<'a, T>,
     project: impl Fn(Complex<T>) -> O + Sync,
+    exec: tenferro_cpu::strided_exec::Exec<'_>,
 ) -> tenferro_tensor::Result<TypedTensor<O>>
 where
     Complex<T>: PoolScalar,
 {
-    let mut produce = |read: &[I]| {
+    let produce = |read: &[I]| {
         pooled_transform(
             wrap(read),
             input.shape(),
             spec,
             plans,
             buffers,
-            threads,
             &project,
+            exec,
         )
     };
     if let Some(domain) = domain {
@@ -453,8 +446,8 @@ fn pooled_transform<T: CachedFftPlanScalar + PoolScalar, O: PoolScalar>(
     spec: &FftPlanSpec,
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
-    threads: lanes::LaneThreads<'_>,
     project: impl Fn(Complex<T>) -> O + Sync,
+    exec: tenferro_cpu::strided_exec::Exec<'_>,
 ) -> tenferro_tensor::Result<TypedTensor<O>>
 where
     Complex<T>: PoolScalar,
@@ -488,8 +481,8 @@ where
                 plans,
                 buffers,
                 output.as_uninit_slice_mut(),
-                threads,
                 project,
+                exec,
             )?;
         } else {
             lanes::execute(
@@ -503,8 +496,8 @@ where
                 plans,
                 buffers,
                 output.as_uninit_slice_mut(),
-                threads,
                 project,
+                exec,
             )?;
         }
         output.assume_init_recycled()

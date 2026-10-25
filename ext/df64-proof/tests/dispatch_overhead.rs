@@ -17,6 +17,8 @@
 //! unoptimized build inflates this layer, so the report is taken in both the test profile and
 //! the release profile and each number is labelled with the profile it came from.
 
+// Calls without an engine pass `Exec::serial()`: no token is reachable, so they run on the
+// calling thread. No engine is reachable in these helpers.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -71,8 +73,8 @@ fn runtime() -> (Runtime, CpuEngine, usize) {
     // One worker thread, so the numbers are a reproducible baseline rather than a function of
     // this machine's core count.
     let backend = CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(1)
+        tenferro_cpu::Pool::builder()
+            .threads(1)
             .build()
             .expect("single-threaded CPU thread pool"),
     );
@@ -230,8 +232,13 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
         );
     });
     let (direct_allocations, direct_ns) = measure(iterations, || {
-        let total = scalar_fold::<Df64, Df64Add>("total", &stored, Df64::zero())
-            .expect("the body's own reduction");
+        let total = scalar_fold::<Df64, Df64Add>(
+            "total",
+            &stored,
+            Df64::zero(),
+            tenferro_cpu::strided_exec::Exec::serial(),
+        )
+        .expect("the body's own reduction");
         std::hint::black_box(total);
     });
 

@@ -4,7 +4,7 @@ use super::{
     dynamic_slice, f32_index_to_i64, f64_index_to_i64, inline_col_major_strides, typed_concatenate,
     BufferPool,
 };
-use strided_kernel::ExecContext;
+use strided_exec::Exec;
 use tenferro_tensor::{Error, ErrorKind, Tensor, TypedTensor, ValidationError, ValidationKind};
 
 #[test]
@@ -12,7 +12,7 @@ fn typed_concatenate_rejects_empty_typed_inputs_without_panicking() {
     let mut buffers = BufferPool::new();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        typed_concatenate::<f64>(&mut buffers, &ExecContext::serial(), &[], 0)
+        typed_concatenate::<f64>(&mut buffers, &[], 0, Exec::serial())
     }));
 
     assert!(result.is_ok(), "empty typed concatenate should return Err");
@@ -32,7 +32,7 @@ fn typed_concatenate_accepts_nonempty_typed_inputs() {
     let b = TypedTensor::from_vec_col_major(vec![1], vec![3.0]).unwrap();
     let inputs = vec![&a, &b];
 
-    let out = typed_concatenate(&mut buffers, &ExecContext::serial(), &inputs, 0).unwrap();
+    let out = typed_concatenate(&mut buffers, &inputs, 0, Exec::serial()).unwrap();
 
     assert_eq!(out.shape(), &[3]);
     assert_eq!(out.host_data().unwrap(), &[1.0, 2.0, 3.0]);

@@ -311,7 +311,7 @@ fn read_elementwise_and_analytic_paths_do_not_materialize_views() {
 }
 
 #[test]
-fn cpu_session_overrides_elementwise_read_into_with_pooled_context() {
+fn cpu_session_overrides_elementwise_read_into_with_the_engine_token() {
     // The operation implementations live on the execution session only.
     let session_source = include_str!("../../src/exec_session.rs");
 
@@ -325,8 +325,8 @@ fn cpu_session_overrides_elementwise_read_into_with_pooled_context() {
         let implementation = rust_function_body(elementwise_impl, "elementwise_read_into")
             .unwrap_or_else(|| panic!("{surface}::elementwise_read_into must be implemented"));
         assert!(
-            implementation.contains("strided_exec_context"),
-            "{surface}::elementwise_read_into must inject its pooled ExecContext"
+            implementation.contains("run_native_with_exec"),
+            "{surface}::elementwise_read_into must take the engine's placement token"
         );
     }
 }
@@ -502,8 +502,8 @@ fn strided_kernel_ownership_requires_backend_execution_resources() {
     assert_eq!(
         contract_set(&contract, "execution-resources"),
         BTreeSet::from([
-            "engine-owned-Rayon",
-            "nested-execution",
+            "engine-owned-pool",
+            "token-split-nesting",
             "persistent-BufferPool",
             "serial-parallel-threshold",
             "uninitialized-full-overwrite",
@@ -512,8 +512,8 @@ fn strided_kernel_ownership_requires_backend_execution_resources() {
     assert_eq!(
         contract_set(&contract, "noncompliant"),
         BTreeSet::from([
-            "ambient-global-Rayon",
-            "context-free-strided-call",
+            "ambient-global-pool",
+            "token-free-strided-call",
             "throwaway-pool",
         ])
     );

@@ -1,7 +1,7 @@
 use super::*;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::test_support::with_cpu_session;
-use strided_kernel::ExecContext;
+use strided_exec::Exec;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorRead, TensorWrite, TypedTensor};
 
 mod batch_policy;
@@ -29,7 +29,7 @@ fn cpu_tensor_kernel_parallel_features_are_wired() {
 }
 
 #[test]
-fn native_kernel_modules_cannot_select_ambient_or_ad_hoc_execution_policies() {
+fn native_kernel_modules_take_placement_only_from_the_token() {
     let provider = include_str!("../provider.rs");
     let native_modules = [
         ("analytic", include_str!("../analytic.rs")),
@@ -46,25 +46,20 @@ fn native_kernel_modules_cannot_select_ambient_or_ad_hoc_execution_policies() {
         ("structural", include_str!("../structural.rs")),
     ];
 
-    assert!(!provider.contains("ExecutionPolicy::AmbientRayon"));
-    assert_eq!(
-        provider
-            .matches("strided_kernel::with_execution_policy(")
-            .count(),
-        2,
-        "one parallel (engine pool) and one sequential entry"
-    );
-    assert!(!provider.contains("ExecContext::ambient("));
-    for (name, source) in native_modules {
+    // No thread-local or ambient placement exists in the CPU stack: kernels take
+    // the placement token and nothing else decides where they run.
+    for (name, source) in native_modules.iter().chain([("provider", provider)].iter()) {
         assert!(
-            !source.contains("ExecutionPolicy::")
+            !source.contains("ExecutionPolicy")
                 && !source.contains("with_execution_policy(")
-                && !source.contains("ExecContext::ambient("),
-            "{name} must inherit native policy from CpuExecutionContext"
+                && !source.contains("with_execution_pool(")
+                && !source.contains("ExecContext")
+                && !source.contains("thread_local!"),
+            "{name} must take its placement from the strided_exec::Exec token"
         );
         assert!(
             !source.contains("rayon::") && !source.contains("into_par_iter("),
-            "{name} must not fan out through ambient Rayon"
+            "{name} must not fan out through Rayon"
         );
     }
 }
@@ -109,8 +104,10 @@ fn cpu_hot_kernels_delegate_to_erased_strided_replay() {
     ] {
         let compact_source = source.split_whitespace().collect::<String>();
         assert!(
-            !compact_source.contains(".execute(&ExecContext::serial()"),
-            "{name} erased strided replay should inherit CpuExecutionContext, not force serial"
+            !compact_source.contains(".execute(Exec::serial()")
+                && !compact_source
+                    .contains(".execute_uninit(&mutout_ref,&input_ptr,Exec::serial()"),
+            "{name} erased strided replay should take the engine's token, not force serial"
         );
     }
     let pooled_triangular = structural
@@ -138,13 +135,12 @@ fn explicit_native_operation_uses_the_selected_rayon_budget() {
     let mut backend = crate::test_support::cpu_engine(2).unwrap();
     let caller = std::thread::current().id();
     let participants = with_cpu_session(&mut backend, |cpu| {
-        cpu.with_linalg_pool(|context, _| {
+        cpu.with_linalg_pool(|exec, _| {
             assert_eq!(std::thread::current().id(), caller);
-            context.with_native_parallelism(|| {
-                Ok(crate::tests::native_participants::run_unscoped_native_map(
-                    true,
-                ))
-            })
+            Ok(crate::tests::native_participants::run_unscoped_native_map(
+                true,
+                exec.token(),
+            ))
         })
     })
     .unwrap();
@@ -159,7 +155,7 @@ fn with_linalg_pool_restores_backend_pool_and_context() {
 
     let len_inside_pool = with_cpu_session(&mut backend, |cpu| {
         cpu.with_linalg_pool(|context, pool| {
-            assert_eq!(context.thread_budget().get(), 1);
+            assert_eq!(context.budget(), 1);
             <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0, 3.0, 4.0]);
             Ok(pool.len())
         })
@@ -275,7 +271,7 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
 #[test]
 fn elementwise_into_fallback_returns_its_staged_result_to_the_pool() {
     let mut buffers = BufferPool::new();
-    let ctx = ExecContext::default();
+    let ctx = Exec::serial();
     // The fallback (taken when the one-shot kernel does not apply) stages the
     // sum before copying it into `out`.
     let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
@@ -285,13 +281,47 @@ fn elementwise_into_fallback_returns_its_staged_result_to_the_pool() {
 
     elementwise_read_into_fallback_with_pool(
         &mut buffers,
-        &ctx,
         ElementwiseReadOp::Add,
         &[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
         TensorWrite::from_tensor(&mut out),
+        ctx,
     )
     .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[11.0, 22.0, 33.0, 44.0]);
     assert_eq!(buffers.len(), 1, "the staged result must be reclaimed");
+}
+
+#[test]
+fn elementwise_into_fallback_covers_every_supported_op() {
+    use tenferro_tensor::ElementwiseReadOp as Op;
+
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![6.0_f64, -8.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
+    let binary = [lhs_read(&lhs), lhs_read(&rhs)];
+    let unary = [lhs_read(&lhs)];
+    for (op, inputs, expected) in [
+        (Op::Add, &binary[..], [8.0, -4.0]),
+        (Op::Subtract, &binary[..], [4.0, -12.0]),
+        (Op::Multiply, &binary[..], [12.0, -32.0]),
+        (Op::Divide, &binary[..], [3.0, -2.0]),
+        (Op::Negate, &unary[..], [-6.0, 8.0]),
+        (Op::Conj, &unary[..], [6.0, -8.0]),
+    ] {
+        let mut buffers = BufferPool::new();
+        let mut out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+        elementwise_read_into_fallback_with_pool(
+            &mut buffers,
+            op,
+            inputs,
+            TensorWrite::from_tensor(&mut out),
+            Exec::serial(),
+        )
+        .unwrap();
+        assert_eq!(out.as_slice::<f64>().unwrap(), &expected, "{op:?}");
+    }
+}
+
+fn lhs_read(tensor: &Tensor) -> TensorRead<'_> {
+    TensorRead::from_tensor(tensor)
 }

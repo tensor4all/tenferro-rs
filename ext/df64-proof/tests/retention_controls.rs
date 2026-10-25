@@ -32,8 +32,8 @@ fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
 
 fn runtime() -> (Runtime, CpuEngine) {
     let backend = CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(1)
+        tenferro_cpu::Pool::builder()
+            .threads(1)
             .build()
             .expect("single-threaded CPU thread pool"),
     );

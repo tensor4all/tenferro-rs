@@ -159,7 +159,8 @@ diff-scoped review bot must be listed in that script's `ALWAYS_SECTIONS` or
 
 Execution entry is a caller-held engine. `Engine` is the only operation
 surface and `ExecutionEngine` is the prepared-program target: a caller builds a
-Rayon pool and hands it to `CpuEngine::new` (or uses `CpuEngine::serial()`), or
+`Pool` (`tenferro_cpu::Pool`, the `strided_exec::Pool`) and hands it to
+`CpuEngine::new` (or uses `CpuEngine::serial()`), or
 opens a device as a `CudaEngine`, then passes `&mut` to every operation or
 `&mut [&mut dyn ExecutionEngine]` to `Runtime::run`. Rust's `&mut` borrow is the
 exclusivity mechanism. There is no session, admission permit, execution scope,
@@ -643,8 +644,8 @@ Tests follow implementation ownership.
   affine-kernels = copy,permutation,broadcast,map,zip-map,fused-elementwise,sum-product-reduction,gather,additive-scatter,dynamic-slice,dynamic-update-slice
   einsum-owner = tenferro:benchmark-backed-exception
   execution-entry = CpuEngine
-  execution-resources = persistent-BufferPool,uninitialized-full-overwrite,engine-owned-Rayon,nested-execution,serial-parallel-threshold
-  noncompliant = context-free-strided-call,throwaway-pool,ambient-global-Rayon
+  execution-resources = persistent-BufferPool,uninitialized-full-overwrite,engine-owned-pool,token-split-nesting,serial-parallel-threshold
+  noncompliant = token-free-strided-call,throwaway-pool,ambient-global-pool
   resource-classification = memory-reuse-and-thread-policy:execution-not-metadata
   ```
 
@@ -660,13 +661,13 @@ Tests follow implementation ownership.
   recorded ownership rationale.
 - Calling a `strided-rs` primitive is necessary but not sufficient. Public
   tensor-sized CPU work enters through a caller-held `CpuEngine`: the caller
-  builds the Rayon pool with `thread_pool_builder` and hands it over, and the
+  builds the `Pool` with `Pool::builder()` and hands it over, and the
   engine owns the pool, the persistent `BufferPool`, fully-overwritten
-  uninitialized output allocation, the provider token and the serial/parallel
-  threshold policy. A context-free `strided-rs` call, a throwaway pool, an extra
-  pool built inside an operation, or Rayon's ambient global pool is
-  non-compliant. Memory reuse and thread policy are execution resources, not
-  tensor metadata; backend-neutral tensor/view types expose metadata-only
+  uninitialized output allocation, the placement token it mints per operation
+  and the serial/parallel threshold policy. A `strided-rs` call without the
+  operation's `Exec` token, a throwaway pool, an extra pool built inside an
+  operation, or a process-global pool is non-compliant. Memory reuse and thread
+  policy are execution resources, not tensor metadata; backend-neutral tensor/view types expose metadata-only
   layout transforms and do not own data-moving convenience methods.
 - Exceptions with dedicated implementations: `reshape` (metadata-only) and
   indexing ops without a matching strided plan. Max/min reductions and static
@@ -685,13 +686,12 @@ Tests follow implementation ownership.
   `compile_error!`. There is no runtime provider kind, provider bundle, kernel
   slot, or per-handle provider selection. `blas` is a compiled adapter, not a
   vendor-only execution world, and keeps the native path for declined steps.
-- Tensor-sized CPU kernels run through the repository CPU threading policy.
-  `strided-kernel` is compiled with its `parallel` feature for elementwise,
-  reduction, and structural materialization kernels. CPU contraction and
-  linalg call the lower numerical libraries (cpueinsum/tcontract, tlinalg,
-  tlinalg-blas) with one parallelism token from the engine's
-  `CpuExecutionContext`: `Sequential`, or the engine-owned pool with a thread
-  budget. The lower library owns lane selection within that budget.
+- Tensor-sized CPU kernels run through the repository CPU threading policy:
+  only `strided-exec` starts tasks (`Exec::fork` / `for_ranges` / `external`;
+  no other crate depends on `rayon`, see `deny.toml`). `strided-kernel` is
+  compiled with its `parallel` feature. CPU contraction and linalg call
+  cpueinsum/tcontract and tlinalg with the engine's `tcontract_exec::Exec`
+  bundle, and the lower library owns lane selection within the token's budget.
 - A tensor-sized CPU operation that remains a dedicated sequential loop
   because no strided-kernel/backend-native parallel primitive fits keeps a
   nearby source comment naming that rationale. Undocumented serial loops must

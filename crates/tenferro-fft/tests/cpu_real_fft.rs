@@ -63,8 +63,8 @@ macro_rules! real_fft_regression {
                     CpuEngine::serial()
                 } else {
                     CpuEngine::new(
-                        tenferro_cpu::thread_pool_builder()
-                            .num_threads(threads).build().unwrap(),
+                        tenferro_cpu::Pool::builder()
+                            .threads(threads).build().unwrap(),
                     )
                 };
                 assert_eq!(engine.num_threads(), threads);

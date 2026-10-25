@@ -19,7 +19,7 @@ engine.
 | Part | Owned by | Lifetime | Shared how |
 | --- | --- | --- | --- |
 | Recorded graph, compiled program, prepared program, AD rules, values, gradients | the runtime | as long as the caller keeps the runtime | shared; concurrent runs use separate engines |
-| Rayon pool, buffer pool, N-ary contraction scratch, graph run slots, plan cache | the engine | as long as the caller keeps the engine | one run at a time through `&mut` |
+| Thread pool, buffer pool, N-ary contraction scratch, graph run slots, plan cache | the engine | as long as the caller keeps the engine | one run at a time through `&mut` |
 | CUDA/WebGPU stream, allocation domain, vendor handles, device-tied plans, pinned staging, retirement queues | the engine | as long as the caller keeps the engine | one run at a time through `&mut` |
 
 A runtime therefore stores no engine, stream, event or buffer. An engine stores
@@ -38,18 +38,19 @@ no graph, gradient or differentiation state. Prepared programs store target
   `&mut [&mut dyn ExecutionEngine]`; slot `i` of a prepared program binds to the
   `i`-th supplied engine for that call only.
 - `CpuEngine::serial()` has no pool and runs on the calling thread. `CpuEngine::new(pool)`
-  takes a caller-built Rayon pool by value, so one pool can never back two
-  engines. `thread_pool_builder()` is a plain `ThreadPoolBuilder` preset (worker
-  stack for provider recursion), not a second construction mode.
+  takes a caller-built `Pool` (`tenferro_cpu::Pool`, the `strided_exec::Pool`) by
+  value, so one pool can never back two engines. `Pool::builder()` reserves the
+  worker stack that provider recursion needs.
 - `CudaEngine::open(device)` opens the caller-selected device and owns its
   logical stream, allocation domain, vendor handles and retirement queues. Two
   opens are two independent engines; their tensors mix only through an explicit,
   self-ordering transfer.
-- An operation starts on the calling thread. It enters the engine's pool only
-  after a provider has chosen more than one worker, so a small operation pays no
-  pool entry. Calling an operation from a worker of the engine's own pool is
-  rejected with `CpuEngineError::CallerInOwnPool`; a serial engine is safe inside
-  any pool.
+- An operation starts on the calling thread with one placement token minted
+  from the engine's pool. The token enters the pool only when an entry splits
+  the work into more than one task, so a small operation pays no pool entry. The
+  token is correct from a plain thread, from a worker of the engine's own pool
+  and from a worker of a different pool; a serial engine never enters a pool and
+  is safe inside any pool.
 - There is no arbitration between engines. A caller that wants `k` concurrent
   computations holds `k` engines and runs them from `k` calling threads. tenferro
   never subdivides a pool, keeps no process-wide engine registry and does not
@@ -122,15 +123,16 @@ a moment it chooses. Two explicit entries cover it, both owned by the caller:
 - The width is decided before the pool is built and is fixed for the engine's
   life (`engine.num_threads()`). Providers may use fewer workers for small work
   from their own work model, up to the engine's budget; they may not derive a
-  width from the ambient Rayon pool.
-- The engine hands its provider token (`CpuEngine::exec`) to cpueinsum/tcontract,
-  tlinalg and tlinalg-blas, and runs strided work with the engine's
-  `with_execution_pool` budget. faer parallelism comes from the same
-  `CpuExecutionContext` with a width chosen before any pool entry
-  (`with_faer_width`).
+  width from an ambient pool.
+- The engine mints one provider bundle (`CpuEngine::exec`: placement token,
+  workspace, batch policy) per operation and hands it to cpueinsum/tcontract and
+  tlinalg by `&mut`; strided work takes the bundle's token by value. faer
+  parallelism is the token's budget handed over as a plain width with
+  `Exec::external`, chosen before any pool entry.
 - A downstream direct faer call is not an engine operation: it borrows the host
-  column-major slices and, when it should be parallel, enters `CpuEngine::pool`
-  itself with `Par::rayon(width)` up to `num_threads`. tenferro hands out no
+  column-major slices and, when it should be parallel, takes the width from
+  `engine.exec()?.into_token().external(..)` and uses `Par::rayon(width)` within
+  it. tenferro hands out no
   `faer::Par`, so the `FaerParallelismExt` capability the session model needed
   was removed with the engine boundary; only the `tenferro_cpu::faer` re-export
   for build alignment remains.
@@ -148,7 +150,7 @@ The session model is gone, not deprecated:
 | `CpuExecSession`, `CudaExecSession`, `WebGpuExecSession` as public entries | `CpuEngine`, `CudaEngine`, engine implementations |
 | held CPU/CUDA session, `open_session`, `adopt_held_permit`, `CpuHeldSession`, `CudaHeldSession` | engine held by the caller |
 | phase lease, child-execution ticket, shared execution scope | separate caller-held engines and caller-side fan-out |
-| admission permit, reentry/contention errors, `ResourceArbiter`, CPU-affinity narrowing | `&mut` borrow plus `CallerInOwnPool` |
+| admission permit, reentry/contention errors, `ResourceArbiter`, CPU-affinity narrowing | `&mut` borrow; the placement token is correct from any caller thread |
 | CPU domain/placement tagging | caller chooses the pool and engine |
 | `run_compiled`, `run_compiled_values`, `run_prepared`, `PreparedDeferred`, `submit` | `Runtime::prepare` then `Runtime::run` |
 

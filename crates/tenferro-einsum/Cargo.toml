@@ -20,6 +20,8 @@ rustdoc-args = ["--cfg", "docsrs"]
 features = ["autodiff", "native", "cuda", "webgpu"]
 
 [features]
+# Test support, off by default (see `tenferro-cpu`): placement-ledger assertions.
+ledger = ["tenferro-cpu/ledger"]
 default = ["native"]
 autodiff = [
     "dep:tenferro-ad",
