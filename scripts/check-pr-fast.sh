@@ -243,6 +243,15 @@ else
   log "engine entry audit: skipped for ${change_class} changes"
 fi
 
+# The manifests use compatible ranges rather than exact pins (R-git-workflow-58),
+# so one assert that no identity-critical crate resolves twice is what keeps a
+# range from splitting a type identity.
+if [[ "${change_class}" != "docs-only" ]]; then
+  run scripts/check-single-versions.sh
+else
+  log "single-version check: skipped for docs-only changes"
+fi
+
 if [[ "${change_class}" != "docs-only" && "$focused_test_count" -eq 0 && "$ci_profile_count" -eq 0 ]]; then
   die "focused verification command required for ${change_class} changes; pass --test COMMAND or --ci-profile NAME"
 fi
