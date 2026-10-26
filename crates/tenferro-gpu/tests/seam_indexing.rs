@@ -399,7 +399,8 @@ fn a_rank_nine_concatenation_uses_the_general_path() {
     let mut expected = Vec::new();
     for eighth in 0..2 {
         for second_axis in 0..2 {
-            expected.push(first_data[second_axis + eighth * 1 * 2]);
+            // The `[1, 2, .., 2]` source: axis 1 has stride 1, axis 8 has stride 2.
+            expected.push(first_data[second_axis + eighth * 2]);
             expected.push(second_data[second_axis * 2 + eighth * 2 * 2]);
             expected.push(second_data[1 + second_axis * 2 + eighth * 2 * 2]);
         }
