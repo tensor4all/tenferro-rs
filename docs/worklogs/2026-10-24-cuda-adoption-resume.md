@@ -235,7 +235,11 @@ truncated destination or a transposed map would fail it.
 `concatenate_copy` follows as well: the wide branch packs the destination layout once and each
 input's layout per input, plans each placement through the same planner (so the grid geometry and
 the validation come from one source), and launches `t4a_cuda_concatenate_copy_any`. A rank-9
-concatenation along the last axis is the test.
+concatenation is the test, along the leading axis so the inputs interleave (a wrong axis or offset
+cannot pass as a flat append), with an empty input in the sequence. The review of that step also
+caught that an empty input planned a zero grid the wide path still submitted — the runtime rejects
+that — so an empty placement is planned for its validation and not submitted, keeping the running
+offset.
 
 The remaining families, and what each needs beyond the pattern above:
 

@@ -848,40 +848,44 @@ impl CudaEngine {
                 t4a_cuda_runtime::RawResource::Buffer(destination),
                 t4a_cuda_runtime::RawResource::Buffer(source_buffer),
             ];
-            // SAFETY: every address the parameters name is registered with this scope, the
-            // planner proved the placement, and the geometry outlives the synchronise below.
-            unsafe {
-                modules.in_scope(
-                    Entry::ConcatenateCopy,
-                    symbol,
-                    resources,
-                    |scope, function| {
-                        let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
-                        let in_mirror = in_geometry.mirror(in_ref, scope, op)?;
-                        let args = [
-                            Arg::DevicePtr(destination),
-                            Arg::DevicePtr(source_buffer),
-                            Arg::U32(kernel.tag() as u32),
-                            pod_arg(&out_mirror),
-                            pod_arg(&in_mirror),
-                            Arg::U32(axis_u32),
-                            Arg::U64(axis_offset as u64),
-                            Arg::U64(in_len as u64),
-                        ];
-                        scope
-                            .launch(
-                                function,
-                                LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
-                                &args,
-                            )
-                            .map_err(|error| crate::Error::runtime_state_source(op, error))
-                    },
-                )
-            }?;
+            // An empty input places no element; plan it for the validation, submit nothing.
+            if plan.grid[0] != 0 {
+                // SAFETY: every address the parameters name is registered with this scope and the
+                // planner proved the placement. The geometry drops at the end of this iteration,
+                // and the runtime's same-stream free ordering keeps the allocation alive until the
+                // queued copy has run.
+                unsafe {
+                    modules.in_scope(
+                        Entry::ConcatenateCopy,
+                        symbol,
+                        resources,
+                        |scope, function| {
+                            let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
+                            let in_mirror = in_geometry.mirror(in_ref, scope, op)?;
+                            let args = [
+                                Arg::DevicePtr(destination),
+                                Arg::DevicePtr(source_buffer),
+                                Arg::U32(kernel.tag() as u32),
+                                pod_arg(&out_mirror),
+                                pod_arg(&in_mirror),
+                                Arg::U32(axis_u32),
+                                Arg::U64(axis_offset as u64),
+                                Arg::U64(in_len as u64),
+                            ];
+                            scope
+                                .launch(
+                                    function,
+                                    LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                                    &args,
+                                )
+                                .map_err(|error| crate::Error::runtime_state_source(op, error))
+                        },
+                    )
+                }?;
+            }
             offset = offset.checked_add(source.shape()[axis]).ok_or_else(|| {
                 crate::Error::invalid_argument(op, "inputs", "the concatenation offset overflows")
             })?;
-            let _ = out_len;
         }
         self.runtime()
             .synchronize()

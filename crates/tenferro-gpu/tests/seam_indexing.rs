@@ -381,25 +381,37 @@ fn float_indices_are_checked_for_exactness() {
 #[test]
 fn a_rank_nine_concatenation_uses_the_general_path() {
     let Some(mut engine) = engine() else { return };
-    // Nine axes exceed the by-value layout form, so both layouts travel in device memory.
-    let mut first_shape = vec![1usize; 9];
-    first_shape[0] = 2;
-    first_shape[8] = 3;
-    let first_data: Vec<f64> = (0..6).map(|index| index as f64).collect();
-    let second_data: Vec<f64> = vec![100.0, 101.0];
-    let mut second_shape = first_shape.clone();
-    second_shape[8] = 1;
-    assert_eq!(second_data.len(), 2, "one axis-8 slice of two elements");
+    // Nine axes exceed the by-value layout form. Concatenating the leading axis interleaves the
+    // inputs, so a wrong axis or offset cannot pass as a flat append.
+    let first_shape = vec![1usize, 2, 1, 1, 1, 1, 1, 1, 2];
+    let second_shape = vec![2usize, 2, 1, 1, 1, 1, 1, 1, 2];
+    let first_data: Vec<f64> = (0..4).map(|index| index as f64).collect();
+    let second_data: Vec<f64> = (0..8).map(|index| 100.0 + index as f64).collect();
     let first = device(&engine, first_shape.clone(), first_data.clone());
     let second = device(&engine, second_shape, second_data.clone());
     let joined = engine
-        .concatenate(&[&first, &second], 8)
+        .concatenate(&[&first, &second], 0)
         .expect("rank-9 concatenate");
     let mut out_shape = first_shape.clone();
-    out_shape[8] = 4;
+    out_shape[0] = 3;
     assert_eq!(joined.shape(), &out_shape[..]);
-    // Columns of the first input, then the second input's single column.
-    let mut expected = first_data;
-    expected.extend_from_slice(&second_data);
+    // Column-major: axis 0 is fastest, then axis 1, then axis 8.
+    let mut expected = Vec::new();
+    for eighth in 0..2 {
+        for second_axis in 0..2 {
+            expected.push(first_data[second_axis + eighth * 1 * 2]);
+            expected.push(second_data[second_axis * 2 + eighth * 2 * 2]);
+            expected.push(second_data[1 + second_axis * 2 + eighth * 2 * 2]);
+        }
+    }
+    assert_eq!(read(&engine, &joined), expected);
+
+    // An empty input is a placement with nothing to copy; it must not break the sequence.
+    let empty_shape = vec![0usize, 2, 1, 1, 1, 1, 1, 1, 2];
+    let empty = device(&engine, empty_shape, Vec::new());
+    let joined = engine
+        .concatenate(&[&empty, &first, &second], 0)
+        .expect("concatenate with an empty input");
+    assert_eq!(joined.shape(), &out_shape[..]);
     assert_eq!(read(&engine, &joined), expected);
 }
