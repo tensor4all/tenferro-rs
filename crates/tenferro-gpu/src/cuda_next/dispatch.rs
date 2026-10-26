@@ -5,10 +5,9 @@
 
 use t4a_cuda_kernels::{
     plan_binary, plan_clamp, plan_compare, plan_concatenate_copy, plan_convert, plan_copy_exact,
-    plan_dynamic_slice, plan_elementwise, plan_gather, plan_init_validation, plan_pad, plan_reduce,
-    plan_reduction, plan_scatter_add, plan_select, plan_slice, plan_unary,
-    plan_validate_float_indices, BinaryOp, DType, Entry, GatherPlan, Layout, ReduceOp,
-    ReductionPlan, ScalarSide, ScatterPlan, UnaryOp,
+    plan_dynamic_slice, plan_elementwise, plan_gather, plan_pad, plan_reduce, plan_reduction,
+    plan_scatter_add, plan_select, plan_slice, plan_unary, plan_validate_float_indices, BinaryOp,
+    DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan, UnaryOp,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -608,32 +607,6 @@ impl Dispatcher {
         )
     }
 
-    /// `t4a_cuda_init_validation`: reset the flag to "no violation".
-    ///
-    /// # Errors
-    ///
-    /// [`crate::Error::RuntimeState`] when the planner refuses the dtype, and
-    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
-    pub fn init_validation(
-        &mut self,
-        dtype: DType,
-        flag: &t4a_cuda_runtime::Buffer,
-        value: &t4a_cuda_runtime::Buffer,
-    ) -> crate::Result<()> {
-        let plan = plan_init_validation(dtype).map_err(plan_error)?;
-        // The value slot gets its own allocation: the ABI writes it as a double, so sharing
-        // the flag word would clobber the verdict with the low half of that write.
-        self.run(
-            Entry::InitValidation,
-            plan,
-            &[
-                Arg::DevicePtr(flag),
-                Arg::DevicePtr(value),
-                Arg::U32(dtype.tag() as u32),
-            ],
-        )
-    }
-
     /// `t4a_cuda_validate_float_indices`: record the lowest index that is not an exact
     /// integer.
     ///
@@ -641,7 +614,7 @@ impl Dispatcher {
     ///
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
-    pub fn validate_float_indices(
+    pub(crate) fn validate_float_indices(
         &mut self,
         dtype: DType,
         len: i64,

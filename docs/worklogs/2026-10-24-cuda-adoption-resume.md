@@ -124,6 +124,16 @@ Fixes made after the review, each verified against the shared contract:
   separate value slot as a double: aliasing it with the flag word clobbered the verdict, which
   the first version did and a direct probe (`flag` left at `UINT32_MAX` for exact indices,
   `0` for a fractional one) caught.
+- Found by the independent review of that step, and fixed: the two launch wrappers were `pub`
+  on safe code and could read past a caller's buffer (now `pub(crate)`; the other dispatcher
+  methods that predate this branch still are `pub` and deserve the same treatment); the
+  ABI's `init_validation` launch and its value slot were unnecessary, since the host upload
+  already writes the sentinel the validator compares against; the explicit `synchronize`
+  before `download_bytes` was redundant, that helper already waits on its own stream; and
+  `TensorDeviceTransfer`'s storage preconditions now report `RuntimeState` like the other
+  backends instead of `Unsupported`. The test was strengthened to assert the window values,
+  the offending element in the message, NaN/infinity/out-of-range for both float dtypes, and
+  the scatter route.
 - `TensorDeviceTransfer` is implemented for the new engine.
 - `Engine`/`ExecutionEngine` are not: `Engine` requires `TensorBuffer`, `TensorFusion`,
   `TensorAnalytic` and `SessionCachedDot` in addition to the traits this path has, so the
@@ -132,9 +142,8 @@ Fixes made after the review, each verified against the shared contract:
 
 ## Remaining, in order
 
-1. The float-index exactness check (`validate_float_indices` + `extract_invalid_float_index`)
-   for gather, scatter and dynamic slice, and the rank>8 `_any` routing for the indexing
-   families.
+1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index
+   exactness check landed).
 2. `TensorDot` on `cuda_next::Cutensor`, extending `Contraction` with `beta`.
 3. The neutral kernel/vendor vocabulary plus the CUDA lowering; `structural.rs` loses every
    `t4a` import.

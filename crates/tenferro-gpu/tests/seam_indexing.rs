@@ -293,7 +293,15 @@ fn mismatched_index_metadata_is_refused_before_any_device_read() {
 fn float_indices_are_checked_for_exactness() {
     let Some(mut engine) = engine() else { return };
     let source = device(&engine, vec![4, 5], matrix(4, 5));
-    // An exactly representable float start is served.
+    let gather_config = tenferro_tensor::GatherConfig {
+        offset_dims: vec![1],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1, 2],
+    };
+
+    // An exactly representable float start is served, and the window holds the right values.
     let exact = upload_tensor(
         engine.runtime(),
         &Tensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).expect("starts"),
@@ -303,33 +311,68 @@ fn float_indices_are_checked_for_exactness() {
         .dynamic_slice(&source, &exact, &[2, 3])
         .expect("exact float starts");
     assert_eq!(sliced.shape(), &[2, 3]);
+    assert_eq!(
+        read(&engine, &sliced),
+        vec![9.0, 10.0, 13.0, 14.0, 17.0, 18.0]
+    );
 
-    // A fractional start is refused with the position of the offending element.
+    // A fractional start is refused, and the error names the offending element.
     let fractional = upload_tensor(
         engine.runtime(),
         &Tensor::from_vec_col_major(vec![2], vec![1.5f32, 2.0]).expect("starts"),
     )
     .expect("upload starts");
-    let refused = engine.dynamic_slice(&source, &fractional, &[2, 3]);
-    assert!(refused.is_err());
+    let refused = engine
+        .dynamic_slice(&source, &fractional, &[2, 3])
+        .expect_err("fractional start");
+    assert!(
+        format!("{refused}").contains("index element 0"),
+        "the refusal names the offending element: {refused}"
+    );
 
-    // The same check guards a gather's index tensor.
+    // A NaN, an infinity and a value past the exact integer range are refused too — the first
+    // two for the window starts, the last for an F64 index tensor.
+    for bad in [f32::NAN, f32::INFINITY, -f32::INFINITY] {
+        let starts = upload_tensor(
+            engine.runtime(),
+            &Tensor::from_vec_col_major(vec![2], vec![bad, 1.0]).expect("starts"),
+        )
+        .expect("upload starts");
+        assert!(
+            engine.dynamic_slice(&source, &starts, &[1, 1]).is_err(),
+            "{bad} must be refused"
+        );
+    }
     let operand = device(&engine, vec![3, 4], matrix(3, 4));
-    let bad_index = upload_tensor(
+    for bad in [1.5f64, f64::NAN, 1.0e300] {
+        let indices = upload_tensor(
+            engine.runtime(),
+            &Tensor::from_vec_col_major(vec![2, 1], vec![0.0f64, bad]).expect("indices"),
+        )
+        .expect("upload indices");
+        assert!(
+            engine.gather(&operand, &indices, &gather_config).is_err(),
+            "{bad} must be refused"
+        );
+    }
+
+    // The same check guards a scatter's index tensor.
+    let updates = device(&engine, vec![2], vec![5.0, 7.0]);
+    let fractional_indices = upload_tensor(
         engine.runtime(),
-        &Tensor::from_vec_col_major(vec![2, 1], vec![0.0f64, 1.5]).expect("indices"),
+        &Tensor::from_vec_col_major(vec![2], vec![0.5f32, 1.0]).expect("indices"),
     )
     .expect("upload indices");
     assert!(engine
-        .gather(
+        .scatter(
             &operand,
-            &bad_index,
-            &tenferro_tensor::GatherConfig {
-                offset_dims: vec![1],
-                collapsed_slice_dims: vec![0],
-                start_index_map: vec![0],
+            &fractional_indices,
+            &updates,
+            &tenferro_tensor::ScatterConfig {
+                update_window_dims: vec![],
+                inserted_window_dims: vec![0, 1],
+                scatter_dims_to_operand_dims: vec![0],
                 index_vector_dim: 1,
-                slice_sizes: vec![1, 2],
             },
         )
         .is_err());

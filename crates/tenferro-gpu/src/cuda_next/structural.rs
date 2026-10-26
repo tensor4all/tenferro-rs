@@ -1530,19 +1530,12 @@ impl CudaEngine {
         }
         let kernel = kernel_dtype(dtype, op)?;
         let runtime = self.runtime().clone();
+        // The flag starts at `UINT32_MAX`, the value the ABI's own initialiser writes; the
+        // validator only lowers it to the first offending position it finds.
         let flag = runtime
             .upload_bytes(&u32::MAX.to_ne_bytes())
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-        // The ABI resets a separate value slot to zero; keeping it apart from the flag word
-        // stops that write from clobbering the verdict.
-        let value = runtime
-            .upload_bytes(&[0u8; 8])
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-        let mut dispatcher = Dispatcher::for_entries(
-            &runtime,
-            &[Entry::InitValidation, Entry::ValidateFloatIndices],
-        )?;
-        dispatcher.init_validation(kernel, &flag, &value)?;
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::ValidateFloatIndices])?;
         with_scalar!(dtype, |T| {
             dispatcher.validate_float_indices(
                 kernel,
@@ -1552,9 +1545,7 @@ impl CudaEngine {
                 &flag,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        // Reading the flag back waits for the validation launch on the same stream.
         let word = self
             .runtime()
             .download_bytes(&flag)
@@ -2581,6 +2572,12 @@ impl tenferro_tensor::TensorDeviceTransfer for CudaEngine {
     fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
         let op = "download_to_host";
         let tensor = self.device_read(tensor, op)?;
+        if !tensor.is_backend_buffer() {
+            return Err(crate::Error::runtime_state(
+                op,
+                "expected a device tensor; a host tensor is already on the host",
+            ));
+        }
         super::transfer::download_tensor(self.runtime(), tensor)
     }
 
@@ -2593,9 +2590,9 @@ impl tenferro_tensor::TensorDeviceTransfer for CudaEngine {
             ));
         };
         if tensor.is_backend_buffer() {
-            return Err(crate::Error::unsupported(
+            return Err(crate::Error::runtime_state(
                 op,
-                "expected a host tensor; a device buffer already lives on this engine",
+                "expected a host tensor; a device buffer is already resident",
             ));
         }
         super::transfer::upload_tensor(self.runtime(), tensor)
