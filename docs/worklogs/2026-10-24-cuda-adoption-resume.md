@@ -449,6 +449,18 @@ trust their callers' lengths (they should be crate-private, which means folding 
 the crate), `with_current_context` re-entry on cuFFT's plan-rollback path, and `tenferro-fft`'s
 `cuda` feature now targeting the new engine while the public `cuda::CudaEngine` remains CubeCL.
 
+## PR 1's gates
+
+- `cargo nextest run -j 16 --workspace --no-fail-fast`: **3496 passed, 311 skipped, 0 failed** — the
+  repository's CI shape.
+- `cargo check -j 16 --workspace --all-targets`, `cargo clippy -j 16 --workspace --all-targets --
+  -D warnings`, `cargo fmt --check`, engine-entry audit, repository-rules review and
+  `check-public-error-docs.py`: clean.
+- `cargo test --workspace` (plain libtest, parallel) fails one target that plain `cargo test` cannot
+  run safely: `tenferro-gpu`'s `integration` target drives `trybuild`, which invokes nested `cargo`
+  and therefore cannot share the build directory with a parallel workspace build. Standalone it
+  passes 69/69, and it skips itself under nextest (`NEXTEST` set), which is why CI never sees it.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index
