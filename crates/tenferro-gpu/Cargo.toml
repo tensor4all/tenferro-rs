@@ -257,6 +257,11 @@ path = "tests/seam_dot.rs"
 required-features = ["cuda-next"]
 
 [[test]]
+name = "seam_raw"
+path = "tests/seam_raw.rs"
+required-features = ["cuda-next"]
+
+[[test]]
 name = "seam_runtime"
 path = "tests/seam_runtime.rs"
 required-features = ["cuda-next"]

@@ -388,6 +388,18 @@ stream-ordered (measured context: cuFFT synchronizes inside its hook twice, cuSO
 `with_raw` sites and only three that synchronize or wait — so a "wait before returning" rule would
 have meant editing 25 call sites and would not have been what makes it safe).
 
+## The extension session exists
+
+`cuda_next/raw.rs` is the hook the two extension crates need: `with_raw(op, |session| ...)` runs a
+closure inside the runtime's raw scope, and the session hands out the stream (`stream()`), zero-filled
+scratch (`alloc_bytes`, allocated through the scope's domain and retained by it), read and writable
+tensor views (`tensor`/`tensor_mut`, registered on demand and checked against this runtime's domain),
+a membership check for a vendor call that only reads (`retain_tensor`) and a stream barrier
+(`synchronize`). Transfers are deliberately absent: their admission is the lock the scope holds.
+
+`seam_raw` covers it: the four addresses (scratch, read view, write view, retained) are non-zero and
+the expected ones, and a tensor of another engine is refused rather than addressed.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index
