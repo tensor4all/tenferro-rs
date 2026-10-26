@@ -279,7 +279,17 @@ every axis, which left all four pointers at the same address and would have pass
 swapped (the review caught that), and an additive scatter mirrors it with distinct window, update
 and scatter arrays.
 
-The remaining families, and what each needs beyond the pattern above:
+### The general path now covers the whole tensor surface
+
+Every entry the tensor surface dispatches is either rank-free (its parameters carry no layout:
+`CopyExact`, the elementwise family, `Compare`, `Select`, `Clamp`, `Convert`, `Tril`/`Triu`, the two
+validation entries, and the fused-expression emitter, which takes pointers and an element count
+only) or has a wide branch (movement, broadcast, concatenate, slice, pad, dynamic slice, both
+diagonal entries, reduce and reduce-partials, gather and scatter-add). The `_any` entries in the
+catalogue that no surface route names — the view entries, `FillOne`, `MatrixAdjoint`, and the linalg
+auxiliaries — need nothing here until a route calls them.
+
+What each remaining entry would need, for reference:
 
 | Family | Geometry to pack besides the operand layouts |
 |---|---|
