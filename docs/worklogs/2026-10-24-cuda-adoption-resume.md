@@ -140,6 +140,23 @@ Fixes made after the review, each verified against the shared contract:
   runtime wiring needs those four surfaces first — that is the next unit, together with the
   decision of which runtime engine id and registration the new engine uses.
 
+## The engine surface and the dtype policy
+
+- `Engine` is now implementable for the new engine: `TensorAnalytic` (the eleven operations,
+  each the catalogue's own `UnaryOp`, with the complex absolute value landing in the real
+  dtype), `TensorFusion`/`TensorBuffer`/`SessionCachedDot` (defaults only), `gather_read` and
+  `native_engine` (no typed session is exposed before the cutover) are in place, so `Engine`
+  compiles. `ExecutionEngine` and the registration/preparer that the runtime's prepared-program
+  model needs are not: they replace the CubeCL preparer rather than sitting beside it, so they
+  belong with the U6 cutover where there is exactly one engine id and one registration.
+- `kernel_dtype` no longer keeps a second dtype policy: it maps the seven preset dtypes and lets
+  the kernel crate's planners decide what each entry serves, which is the single source the
+  design asks for. A planner refusal about the operation or dtype now surfaces as `Unsupported`
+  instead of `RuntimeState`.
+- `seam_dtype` covers the policy: complex conjugation and the complex absolute value (including
+  its real output dtype), C32 arithmetic, integer arithmetic, and an analytic operation the
+  catalogue refuses for integers reported as unsupported.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index

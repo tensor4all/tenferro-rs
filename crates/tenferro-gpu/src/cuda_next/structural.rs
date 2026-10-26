@@ -142,16 +142,20 @@ fn storage_of<'a, T: TensorScalar>(
 
 /// The kernel crate's dtype tag for a tensor dtype.
 fn kernel_dtype(dtype: DType, op: &'static str) -> crate::Result<t4a_cuda_kernels::DType> {
+    // The dtype policy belongs to the kernel crate's planners, which check it per entry; this
+    // is only the tag both sides agree on. A second policy here would drift from them.
     Ok(match dtype {
         DType::F32 => t4a_cuda_kernels::DType::F32,
         DType::F64 => t4a_cuda_kernels::DType::F64,
         DType::Bool => t4a_cuda_kernels::DType::Bool,
         DType::I32 => t4a_cuda_kernels::DType::I32,
         DType::I64 => t4a_cuda_kernels::DType::I64,
-        other => {
+        DType::C32 => t4a_cuda_kernels::DType::C32,
+        DType::C64 => t4a_cuda_kernels::DType::C64,
+        DType::External(_) => {
             return Err(crate::Error::unsupported(
                 op,
-                format!("the structural slice serves F32 and F64, not {other:?}"),
+                "an externally defined payload has no kernel tag",
             ))
         }
     })
@@ -904,20 +908,30 @@ impl CudaEngine {
         let source = self.device_read(input, name)?;
         let dtype = source.dtype();
         let kernel = kernel_dtype(dtype, name)?;
+        // The complex absolute value is the one unequal pair: it lands in the real dtype.
+        let out_dtype = match (op, dtype) {
+            (t4a_cuda_kernels::UnaryOp::Abs, DType::C32) => DType::F32,
+            (t4a_cuda_kernels::UnaryOp::Abs, DType::C64) => DType::F64,
+            _ => dtype,
+        };
+        let out_kernel = kernel_dtype(out_dtype, name)?;
         let shape = source.shape().to_vec();
         let len = count_i64(&shape, name)?;
-        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        let output = alloc_tensor(self.runtime(), out_dtype, &shape)?;
         let runtime = self.runtime().clone();
         let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Unary])?;
-        with_scalar!(dtype, |T| {
-            dispatcher.unary(
-                op,
-                kernel,
-                kernel,
-                len,
-                self.allocation_of::<T>(&output, name)?,
-                self.allocation_of::<T>(source, name)?,
-            )
+        with_scalar!(out_dtype, |T| {
+            let out = self.allocation_of::<T>(&output, name)?;
+            with_scalar!(dtype, |S| {
+                dispatcher.unary(
+                    op,
+                    out_kernel,
+                    kernel,
+                    len,
+                    out,
+                    self.allocation_of::<S>(source, name)?,
+                )
+            })
         })?;
         self.runtime()
             .synchronize()
@@ -2596,5 +2610,147 @@ impl tenferro_tensor::TensorDeviceTransfer for CudaEngine {
             ));
         }
         super::transfer::upload_tensor(self.runtime(), tensor)
+    }
+}
+
+impl CudaEngine {
+    /// Elementwise power over two same-shaped device tensors.
+    ///
+    /// Floats use the plain power entry; integers use the checked one, whose flag is read
+    /// back and reported instead of silently producing garbage.
+    fn power(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        name: &'static str,
+    ) -> crate::Result<Tensor> {
+        let left = self.device_read(lhs, name)?;
+        let right = self.device_read(rhs, name)?;
+        if left.shape() != right.shape() || left.dtype() != right.dtype() {
+            return Err(crate::Error::unsupported(
+                name,
+                "both operands must share a shape and a dtype on this path",
+            ));
+        }
+        let dtype = left.dtype();
+        let kernel = kernel_dtype(dtype, name)?;
+        let op = match dtype {
+            DType::F32 | DType::F64 => t4a_cuda_kernels::BinaryOp::Pow,
+            DType::I32 | DType::I64 => t4a_cuda_kernels::BinaryOp::PowChecked,
+            other => {
+                return Err(crate::Error::unsupported(
+                    name,
+                    format!("the power is not defined for {other:?}"),
+                ))
+            }
+        };
+        let shape = left.shape().to_vec();
+        let len = count_i64(&shape, name)?;
+        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Binary])?;
+        let status = runtime
+            .upload_bytes(&[0u8; 4])
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        with_scalar!(dtype, |T| {
+            dispatcher.binary(
+                op,
+                kernel,
+                t4a_cuda_kernels::ScalarSide::Both,
+                len,
+                self.allocation_of::<T>(&output, name)?,
+                self.allocation_of::<T>(left, name)?,
+                self.allocation_of::<T>(right, name)?,
+                &status,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        let flag = self
+            .runtime()
+            .download_bytes(&status)
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        if flag.iter().any(|byte| *byte != 0) {
+            return Err(crate::Error::unsupported(
+                name,
+                "the checked power reported a domain or overflow error",
+            ));
+        }
+        Ok(output)
+    }
+}
+
+impl tenferro_tensor::TensorFusion for CudaEngine {}
+
+impl tenferro_tensor::SessionCachedDot for CudaEngine {}
+
+impl tenferro_tensor::TensorBuffer for CudaEngine {}
+
+impl tenferro_tensor::TensorAnalytic for CudaEngine {
+    fn exp_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Exp, "exp_read")
+    }
+
+    fn log_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Log, "log_read")
+    }
+
+    fn sin_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Sin, "sin_read")
+    }
+
+    fn cos_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Cos, "cos_read")
+    }
+
+    fn tanh_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Tanh, "tanh_read")
+    }
+
+    fn sqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Sqrt, "sqrt_read")
+    }
+
+    fn rsqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Rsqrt, "rsqrt_read")
+    }
+
+    fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.power(lhs, rhs, "pow_read")
+    }
+
+    fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Expm1, "expm1_read")
+    }
+
+    fn log1p_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Log1p, "log1p_read")
+    }
+
+    fn erf_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Erf, "erf_read")
+    }
+}
+
+impl tenferro_tensor::Engine for CudaEngine {
+    fn gather_read(
+        &mut self,
+        operand: tenferro_tensor::TensorRead<'_>,
+        start_indices: tenferro_tensor::TensorRead<'_>,
+        config: &tenferro_tensor::GatherConfig,
+    ) -> crate::Result<Tensor> {
+        use tenferro_tensor::TensorIndexing as _;
+        let op = "gather_read";
+        let operand = self.device_read(operand, op)?;
+        let indices = self.device_read(start_indices, op)?;
+        self.gather(operand, indices, config)
+    }
+
+    fn native_engine(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
+        // The new path exposes no typed native session yet: a caller-written kernel would
+        // need this engine's module set, which stays private until the operation surface
+        // moves over (U6).
+        None
     }
 }

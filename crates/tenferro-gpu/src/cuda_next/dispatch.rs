@@ -680,7 +680,14 @@ impl Dispatcher {
 
 /// A planner refusal as the seam's typed cause.
 fn plan_error(error: t4a_cuda_kernels::Error) -> crate::Error {
-    crate::Error::runtime_state("cuda plan", error.to_string())
+    match error {
+        // A planner refusal about the operation or dtype is the backend not serving the
+        // request, not a runtime failure; keep the two classes apart for the caller.
+        t4a_cuda_kernels::Error::UnsupportedDType | t4a_cuda_kernels::Error::UnsupportedOp => {
+            crate::Error::unsupported("cuda plan", error.to_string())
+        }
+        error => crate::Error::runtime_state("cuda plan", error.to_string()),
+    }
 }
 
 /// A by-value parameter view of a plain-data ABI struct, borrowing it for the launch.
