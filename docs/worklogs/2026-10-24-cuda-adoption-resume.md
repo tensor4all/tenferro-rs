@@ -440,8 +440,11 @@ nested call runs inside the context that is already current, and the level is po
 leaves (panic included). `a_nested_context_activation_does_not_block` covers nesting and a later,
 fresh activation.
 
-Still open from that review, and recorded for the next unit: division always takes the float-only
-entry (integer and complex division need `DivChecked`/`DivComplex`), the safe dispatcher helpers
+Division is fixed too: an integer division takes the checked entry and reports a zero divisor
+instead of silently producing one, and a complex division takes the robust complex entry
+(`seam_dtype`'s `integer_and_complex_division_use_their_own_entries` covers an exact integer
+quotient, the zero-divisor refusal and `(1 + 2i) / (3 - 4i)`). Still open from that review: the safe
+dispatcher helpers
 trust their callers' lengths (they should be crate-private, which means folding `seam_dispatch` into
 the crate), `with_current_context` re-entry on cuFFT's plan-rollback path, and `tenferro-fft`'s
 `cuda` feature now targeting the new engine while the public `cuda::CudaEngine` remains CubeCL.

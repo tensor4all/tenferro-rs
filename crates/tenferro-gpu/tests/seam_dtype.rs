@@ -241,3 +241,56 @@ fn a_float_to_integer_cast_is_checked_before_it_truncates() {
     let source = upload(&engine, complex);
     assert!(engine.cast(&source, DType::I32).is_err());
 }
+
+#[test]
+fn integer_and_complex_division_use_their_own_entries() {
+    let Some(mut engine) = engine() else { return };
+    // Integer division is the checked one: exact where it divides, and a reported failure where it
+    // does not.
+    let host = Tensor::from_vec_col_major(vec![3], vec![7i64, -8, 9]).expect("host");
+    let left = upload(&engine, host);
+    let divisor = upload(
+        &engine,
+        Tensor::from_vec_col_major(vec![3], vec![2i64, 4, 3]).expect("host"),
+    );
+    let quotient = engine
+        .div_read(
+            TensorRead::from_tensor(&left),
+            TensorRead::from_tensor(&divisor),
+        )
+        .expect("integer division");
+    assert_eq!(read::<i64>(&engine, &quotient), vec![3i64, -2, 3]);
+    let zero = upload(
+        &engine,
+        Tensor::from_vec_col_major(vec![3], vec![0i64, 1, 1]).expect("host"),
+    );
+    assert!(
+        engine
+            .div_read(
+                TensorRead::from_tensor(&left),
+                TensorRead::from_tensor(&zero)
+            )
+            .is_err(),
+        "a division by zero is reported, not silently zero"
+    );
+
+    // Complex division uses the robust entry.
+    let numerator = upload(
+        &engine,
+        Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]).expect("host"),
+    );
+    let denominator = upload(
+        &engine,
+        Tensor::from_vec_col_major(vec![1], vec![Complex64::new(3.0, -4.0)]).expect("host"),
+    );
+    let ratio = engine
+        .div_read(
+            TensorRead::from_tensor(&numerator),
+            TensorRead::from_tensor(&denominator),
+        )
+        .expect("complex division");
+    let observed = read::<Complex64>(&engine, &ratio);
+    // (1 + 2i) / (3 - 4i) = (-1 + 2i) / 5
+    assert!((observed[0].re + 0.2).abs() < 1e-12, "{:?}", observed[0]);
+    assert!((observed[0].im - 0.4).abs() < 1e-12, "{:?}", observed[0]);
+}

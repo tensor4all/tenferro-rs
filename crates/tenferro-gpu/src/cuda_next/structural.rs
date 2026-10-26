@@ -2257,6 +2257,12 @@ impl CudaEngine {
         let shape = left.shape().to_vec();
         let len = count_i64(&shape, name)?;
         let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        // Only a floating division has its own entry: an integer division is the checked one (its
+        // status word reports a division by zero) and a complex one needs the robust complex entry,
+        // which also means the buffers hold two components per element.
+        if matches!(op, Elementwise::Div) && !matches!(dtype, DType::F32 | DType::F64) {
+            return self.division(left, right, output, kernel, dtype, len, name);
+        }
         let runtime = self.runtime().clone();
         let entry = match op {
             Elementwise::Add => Entry::Add,
@@ -2278,6 +2284,64 @@ impl CudaEngine {
         self.runtime()
             .synchronize()
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        Ok(output)
+    }
+
+    /// Division whose dtype has no plain `/` entry: integers use the checked one and observe its
+    /// status word, complex values use the robust complex division.
+    #[allow(clippy::too_many_arguments)]
+    fn division(
+        &mut self,
+        left: &Tensor,
+        right: &Tensor,
+        output: Tensor,
+        kernel: t4a_cuda_kernels::DType,
+        dtype: DType,
+        len: i64,
+        name: &'static str,
+    ) -> crate::Result<Tensor> {
+        let op = match dtype {
+            DType::I32 | DType::I64 => t4a_cuda_kernels::BinaryOp::DivChecked,
+            DType::C32 | DType::C64 => t4a_cuda_kernels::BinaryOp::DivComplex,
+            other => {
+                return Err(crate::Error::unsupported(
+                    name,
+                    format!("the division is not defined for {other:?}"),
+                ))
+            }
+        };
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Binary])?;
+        let status = runtime
+            .upload_bytes(&[0u8; 4])
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        with_scalar!(dtype, |T| {
+            dispatcher.binary(
+                op,
+                kernel,
+                t4a_cuda_kernels::ScalarSide::Both,
+                len,
+                self.allocation_of::<T>(&output, name)?,
+                self.allocation_of::<T>(left, name)?,
+                self.allocation_of::<T>(right, name)?,
+                &status,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        if matches!(dtype, DType::I32 | DType::I64) {
+            let flag = self
+                .runtime()
+                .download_bytes(&status)
+                .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+            if flag.iter().any(|byte| *byte != 0) {
+                return Err(crate::Error::unsupported(
+                    name,
+                    "the checked division reported a division by zero",
+                ));
+            }
+        }
         Ok(output)
     }
 
