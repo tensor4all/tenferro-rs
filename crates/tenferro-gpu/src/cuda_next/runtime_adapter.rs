@@ -116,6 +116,14 @@ fn input_tensor(
 
 /// Build the runtime registration for `engine`.
 ///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::cuda_next::runtime_adapter::runtime_engine_registration;
+///
+/// let _register = runtime_engine_registration;
+/// ```
+///
 /// # Errors
 ///
 /// [`RuntimeConfigError`] when the provider identity, hardware or storage class, or the

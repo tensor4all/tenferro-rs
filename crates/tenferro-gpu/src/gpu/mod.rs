@@ -165,7 +165,7 @@ pub struct StorageIdentity {
 ///
 /// ```
 /// use tenferro_gpu::gpu::{Backend, Buffer, StorageIdentity};
-/// use tenferro_tensor::{AllocationDomainId, AllocationId};
+/// use tenferro_tensor::AllocationDomainId;
 ///
 /// struct ExampleBackend;
 /// impl Backend for ExampleBackend {
@@ -173,8 +173,8 @@ pub struct StorageIdentity {
 /// }
 ///
 /// let identity = StorageIdentity {
-///     domain: AllocationDomainId::from_backend_id(1),
-///     allocation: AllocationId::from_backend_id(2),
+///     domain: AllocationDomainId::fresh(),
+///     allocation: tenferro_tensor::AllocationId::from_backend_id(2),
 ///     device: 0,
 /// };
 /// let buffer = Buffer::<ExampleBackend>::new(identity, 64, 0xdead_beef);

@@ -8,7 +8,7 @@
 //! # Examples
 //!
 //! ```no_run
-//! # fn main() -> Result<(), tenferro_gpu::cuda::CudaDeviceError> {
+//! # fn main() -> Result<(), tenferro_gpu::cuda_next::CudaEngineError> {
 //! use tenferro_gpu::cuda_next::{gpu_available, CudaDeviceId, CudaEngine};
 //!
 //! # #[cfg(feature = "cuda-next")]
