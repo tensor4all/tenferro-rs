@@ -270,13 +270,18 @@ scratch even for the direct strategy (now only a split allocates, exactly its pa
 the fixtures only ever exercised the unit strategy (now 33, 513 and 8449-long axes reach the plane
 and split strategies, plus a two-axis sum-of-squares regression).
 
+`gather` and `scatter_add` follow: three device-resident layouts each, plus the plan's arrays,
+which `pack_gather_plan`/`pack_scatter_plan` return as one packed vector — so the four (gather) or
+three (scatter) array pointers `CGatherPlanAny`/`CScatterPlanAny` take are offsets inside one
+uploaded buffer, taken from the scope's base address. A rank-9 gather (all axes collapsed, so each
+index selects one element of its batch) and an additive scatter over the same operand are the test.
+
 The remaining families, and what each needs beyond the pattern above:
 
 | Family | Geometry to pack besides the operand layouts |
 |---|---|
 | `extract_diagonal` / `embed_diagonal_copy` | the two axis ids |
 | `dynamic_slice` | nothing extra (the starts are already device-resident) |
-| `gather` / `scatter_add` | the window/offset/start-map/extent arrays of the plan |
 | `fill_zero_view` / `contiguous_to_view` / `strided_to_strided` | nothing extra |
 
 Each is a `_wide` variant of its dispatcher wrapper plus a branch in the tensor-surface caller,

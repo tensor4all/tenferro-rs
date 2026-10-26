@@ -13,9 +13,9 @@ use tenferro_tensor::{
 
 use t4a_cuda_kernels::{
     plan_broadcast_in_dim, plan_concatenate_copy, plan_dynamic_slice, plan_embed_diagonal_copy,
-    plan_extract_diagonal, plan_materialize_strided, plan_pad, plan_reduction, plan_slice,
-    plan_tril, plan_triu, CAxisValues, CLayout, Entry, GatherPlan, Layout, LayoutRef,
-    ReductionPlan, ScatterPlan,
+    plan_extract_diagonal, plan_gather, plan_materialize_strided, plan_pad, plan_reduction,
+    plan_scatter_add, plan_slice, plan_tril, plan_triu, CAxisValues, CLayout, Entry, GatherPlan,
+    Layout, LayoutRef, ReductionPlan, ScatterPlan,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -795,6 +795,301 @@ impl CudaEngine {
                         .map_err(|error| crate::Error::runtime_state_source(op, error))
                 },
             )
+        }?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+
+    /// `gather` through the general path: three device-resident layouts and the plan's packed
+    /// arrays, whose four pointers are offsets inside one uploaded buffer.
+    #[allow(clippy::too_many_arguments)]
+    fn gather_wide(
+        &mut self,
+        operand: &Tensor,
+        start_indices: &Tensor,
+        plan: &GatherPlan,
+        out_shape: &[usize],
+        kernel: t4a_cuda_kernels::DType,
+        index_kernel: t4a_cuda_kernels::DType,
+        operand_rank: u32,
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let dtype = operand.dtype();
+        let out_extents: Vec<i64> = out_shape.iter().map(|&extent| extent as i64).collect();
+        let out_strides: Vec<i64> = compact_strides(out_shape, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let operand_extents: Vec<i64> = operand
+            .shape()
+            .iter()
+            .map(|&extent| extent as i64)
+            .collect();
+        let operand_strides: Vec<i64> = self
+            .strides_of(operand, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let indices_extents: Vec<i64> = start_indices
+            .shape()
+            .iter()
+            .map(|&extent| extent as i64)
+            .collect();
+        let indices_strides: Vec<i64> = self
+            .strides_of(start_indices, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let out_len = count_i64(out_shape, op)?;
+        let operand_len = count_i64(operand.shape(), op)?;
+        let indices_len = count_i64(start_indices.shape(), op)?;
+        let out_ref = LayoutRef::new(&out_extents, &out_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let operand_ref = LayoutRef::new(&operand_extents, &operand_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let indices_ref = LayoutRef::new(&indices_extents, &indices_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let (launch, output_len) = plan_gather(
+            kernel,
+            index_kernel,
+            out_ref,
+            out_len,
+            operand_ref,
+            operand_len,
+            indices_ref,
+            indices_len,
+            plan,
+        )
+        .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let out_rank = u32::try_from(out_shape.len())
+            .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
+        let output = alloc_tensor(self.runtime(), dtype, out_shape)?;
+        let (destination, operand_buffer) = self.two_allocations(&output, operand, op)?;
+        let indices_buffer = with_scalar!(start_indices.dtype(), |I| self
+            .allocation_of::<I>(start_indices, op))?;
+        if launch.grid[0] == 0 {
+            return Ok(output);
+        }
+        let packed = t4a_cuda_kernels::pack_gather_plan(plan);
+        let plan_buffer = self.upload_i64(&packed, op)?;
+        let out_geometry = self.wide_geometry(&out_extents, &out_strides, op)?;
+        let operand_geometry = self.wide_geometry(&operand_extents, &operand_strides, op)?;
+        let indices_geometry = self.wide_geometry(&indices_extents, &indices_strides, op)?;
+        let symbol = Entry::Gather
+            .general()
+            .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
+            .name();
+        let mut modules =
+            super::launch::KernelModules::for_entries(self.runtime(), &[Entry::Gather])?;
+        let resources = vec![
+            t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&operand_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&operand_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&indices_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&indices_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&plan_buffer),
+            t4a_cuda_runtime::RawResource::Buffer(destination),
+            t4a_cuda_runtime::RawResource::Buffer(operand_buffer),
+            t4a_cuda_runtime::RawResource::Buffer(indices_buffer),
+        ];
+        // SAFETY: every address the parameters name is registered with this scope, the planner
+        // proved the map and the operand spans, and the geometry outlives the synchronise below.
+        unsafe {
+            modules.in_scope(Entry::Gather, symbol, resources, |scope, function| {
+                let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
+                let operand_mirror = operand_geometry.mirror(operand_ref, scope, op)?;
+                let indices_mirror = indices_geometry.mirror(indices_ref, scope, op)?;
+                let base = scope
+                    .device_ptr(&plan_buffer)
+                    .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+                let window = plan.window_dims.len();
+                let offsets = plan.offset_dims.len();
+                let starts = plan.start_index_map.len();
+                let at = |element: usize| (base + (element * 8) as u64) as *const i64;
+                let plan_mirror = t4a_cuda_kernels::CGatherPlanAny::new(
+                    operand_rank,
+                    out_rank,
+                    plan,
+                    at(0),
+                    at(window),
+                    at(window + offsets),
+                    at(window + offsets + starts),
+                )
+                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+                let args = [
+                    Arg::DevicePtr(destination),
+                    Arg::DevicePtr(operand_buffer),
+                    Arg::DevicePtr(indices_buffer),
+                    Arg::U32(kernel.tag() as u32),
+                    Arg::U32(index_kernel.tag() as u32),
+                    pod_arg(&out_mirror),
+                    pod_arg(&operand_mirror),
+                    pod_arg(&indices_mirror),
+                    pod_arg(&plan_mirror),
+                    Arg::U64(output_len as u64),
+                ];
+                scope
+                    .launch(
+                        function,
+                        LaunchConfig::new(launch.grid[0], launch.block[0]),
+                        &args,
+                    )
+                    .map_err(|error| crate::Error::runtime_state_source(op, error))
+            })
+        }?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+
+    /// `scatter_add` through the general path: three device-resident layouts and the plan's packed
+    /// arrays.
+    #[allow(clippy::too_many_arguments)]
+    fn scatter_wide(
+        &mut self,
+        operand: &Tensor,
+        scatter_indices: &Tensor,
+        updates: &Tensor,
+        plan: &ScatterPlan,
+        kernel: t4a_cuda_kernels::DType,
+        index_kernel: t4a_cuda_kernels::DType,
+        operand_rank: u32,
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let dtype = operand.dtype();
+        let operand_extents: Vec<i64> = operand
+            .shape()
+            .iter()
+            .map(|&extent| extent as i64)
+            .collect();
+        let operand_strides: Vec<i64> = compact_strides(operand.shape(), op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let indices_extents: Vec<i64> = scatter_indices
+            .shape()
+            .iter()
+            .map(|&extent| extent as i64)
+            .collect();
+        let indices_strides: Vec<i64> = self
+            .strides_of(scatter_indices, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let updates_extents: Vec<i64> = updates
+            .shape()
+            .iter()
+            .map(|&extent| extent as i64)
+            .collect();
+        let updates_strides: Vec<i64> = self
+            .strides_of(updates, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let operand_len = count_i64(operand.shape(), op)?;
+        let indices_len = count_i64(scatter_indices.shape(), op)?;
+        let updates_len = count_i64(updates.shape(), op)?;
+        let operand_ref = LayoutRef::new(&operand_extents, &operand_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let indices_ref = LayoutRef::new(&indices_extents, &indices_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let updates_ref = LayoutRef::new(&updates_extents, &updates_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let launch = plan_scatter_add(
+            kernel,
+            index_kernel,
+            operand_ref,
+            operand_len,
+            indices_ref,
+            indices_len,
+            updates_ref,
+            updates_len,
+            plan,
+        )
+        .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let updates_rank = u32::try_from(updates.shape().len())
+            .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
+        // Additive scatter accumulates into the operand copy, which stream order already covers.
+        let output = self.enqueue_copy(operand, operand.shape().to_vec(), op)?;
+        let (destination, _source) = self.two_allocations(&output, operand, op)?;
+        let indices_buffer = with_scalar!(scatter_indices.dtype(), |I| {
+            self.allocation_of::<I>(scatter_indices, op)
+        })?;
+        let updates_buffer = with_scalar!(dtype, |T| self.allocation_of::<T>(updates, op))?;
+        if launch.grid[0] == 0 {
+            self.runtime()
+                .synchronize()
+                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            return Ok(output);
+        }
+        let packed = t4a_cuda_kernels::pack_scatter_plan(plan);
+        let plan_buffer = self.upload_i64(&packed, op)?;
+        let operand_geometry = self.wide_geometry(&operand_extents, &operand_strides, op)?;
+        let indices_geometry = self.wide_geometry(&indices_extents, &indices_strides, op)?;
+        let updates_geometry = self.wide_geometry(&updates_extents, &updates_strides, op)?;
+        let symbol = Entry::ScatterAdd
+            .general()
+            .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
+            .name();
+        let mut modules =
+            super::launch::KernelModules::for_entries(self.runtime(), &[Entry::ScatterAdd])?;
+        let resources = vec![
+            t4a_cuda_runtime::RawResource::Buffer(&operand_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&operand_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&indices_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&indices_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&updates_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&updates_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&plan_buffer),
+            t4a_cuda_runtime::RawResource::Buffer(destination),
+            t4a_cuda_runtime::RawResource::Buffer(indices_buffer),
+            t4a_cuda_runtime::RawResource::Buffer(updates_buffer),
+        ];
+        // SAFETY: as the gather branch, for the additive scatter.
+        unsafe {
+            modules.in_scope(Entry::ScatterAdd, symbol, resources, |scope, function| {
+                let operand_mirror = operand_geometry.mirror(operand_ref, scope, op)?;
+                let indices_mirror = indices_geometry.mirror(indices_ref, scope, op)?;
+                let updates_mirror = updates_geometry.mirror(updates_ref, scope, op)?;
+                let base = scope
+                    .device_ptr(&plan_buffer)
+                    .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+                let window = plan.window_dims.len();
+                let update_window = plan.update_window_dims.len();
+                let at = |element: usize| (base + (element * 8) as u64) as *const i64;
+                let plan_mirror = t4a_cuda_kernels::CScatterPlanAny::new(
+                    operand_rank,
+                    updates_rank,
+                    plan,
+                    at(0),
+                    at(window),
+                    at(window + update_window),
+                )
+                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+                let args = [
+                    Arg::DevicePtr(destination),
+                    Arg::DevicePtr(indices_buffer),
+                    Arg::DevicePtr(updates_buffer),
+                    Arg::U32(kernel.tag() as u32),
+                    Arg::U32(index_kernel.tag() as u32),
+                    pod_arg(&operand_mirror),
+                    pod_arg(&indices_mirror),
+                    pod_arg(&updates_mirror),
+                    pod_arg(&plan_mirror),
+                    Arg::U64(updates_len as u64),
+                ];
+                scope
+                    .launch(
+                        function,
+                        LaunchConfig::new(launch.grid[0], launch.block[0]),
+                        &args,
+                    )
+                    .map_err(|error| crate::Error::runtime_state_source(op, error))
+            })
         }?;
         self.runtime()
             .synchronize()
@@ -2981,6 +3276,21 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let plan = gather_plan(config, operand_rank);
         let indices_shape = start_indices.shape().to_vec();
         let out_shape = gather_shape(&indices_shape, &plan, config)?;
+        if operand_shape.len() > t4a_cuda_kernels::MAX_RANK
+            || out_shape.len() > t4a_cuda_kernels::MAX_RANK
+            || indices_shape.len() > t4a_cuda_kernels::MAX_RANK
+        {
+            return self.gather_wide(
+                operand,
+                start_indices,
+                &plan,
+                &out_shape,
+                kernel,
+                index_kernel,
+                operand_rank,
+                op,
+            );
+        }
         let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
         let out_layout = self.layout_of(&output, op)?;
         let operand_layout = self.layout_of(operand, op)?;
@@ -3058,6 +3368,21 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
             operand_rank_axes,
         )?;
         let plan = scatter_plan(config, operand_rank);
+        if operand_shape.len() > t4a_cuda_kernels::MAX_RANK
+            || updates.shape().len() > t4a_cuda_kernels::MAX_RANK
+            || scatter_indices.shape().len() > t4a_cuda_kernels::MAX_RANK
+        {
+            return self.scatter_wide(
+                operand,
+                scatter_indices,
+                updates,
+                &plan,
+                kernel,
+                index_kernel,
+                operand_rank,
+                op,
+            );
+        }
         // Additive scatter accumulates into the operand copy. The copy is only enqueued:
         // the accumulation below is submitted on the same stream, so stream order already
         // covers it and no host wait is needed.
