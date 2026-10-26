@@ -288,3 +288,49 @@ fn mismatched_index_metadata_is_refused_before_any_device_read() {
         )
         .is_err());
 }
+
+#[test]
+fn float_indices_are_checked_for_exactness() {
+    let Some(mut engine) = engine() else { return };
+    let source = device(&engine, vec![4, 5], matrix(4, 5));
+    // An exactly representable float start is served.
+    let exact = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).expect("starts"),
+    )
+    .expect("upload starts");
+    let sliced = engine
+        .dynamic_slice(&source, &exact, &[2, 3])
+        .expect("exact float starts");
+    assert_eq!(sliced.shape(), &[2, 3]);
+
+    // A fractional start is refused with the position of the offending element.
+    let fractional = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![2], vec![1.5f32, 2.0]).expect("starts"),
+    )
+    .expect("upload starts");
+    let refused = engine.dynamic_slice(&source, &fractional, &[2, 3]);
+    assert!(refused.is_err());
+
+    // The same check guards a gather's index tensor.
+    let operand = device(&engine, vec![3, 4], matrix(3, 4));
+    let bad_index = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![2, 1], vec![0.0f64, 1.5]).expect("indices"),
+    )
+    .expect("upload indices");
+    assert!(engine
+        .gather(
+            &operand,
+            &bad_index,
+            &tenferro_tensor::GatherConfig {
+                offset_dims: vec![1],
+                collapsed_slice_dims: vec![0],
+                start_index_map: vec![0],
+                index_vector_dim: 1,
+                slice_sizes: vec![1, 2],
+            },
+        )
+        .is_err());
+}

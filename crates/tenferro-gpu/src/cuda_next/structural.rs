@@ -1485,18 +1485,90 @@ fn padded_shape(shape: &[usize], config: &tenferro_tensor::PadConfig) -> crate::
         .collect()
 }
 
-/// The index dtype of a device index tensor, or a refusal naming the missing exactness check.
+/// The index dtype of a device index tensor: an integer one, or a float one the exactness
+/// check has already accepted.
 fn index_dtype_of(index_dtype: DType, op: &'static str) -> crate::Result<DType> {
-    if matches!(index_dtype, DType::I32 | DType::I64) {
+    if matches!(
+        index_dtype,
+        DType::I32 | DType::I64 | DType::F32 | DType::F64
+    ) {
         return Ok(index_dtype);
     }
     Err(crate::Error::unsupported(
         op,
-        format!(
-            "device {index_dtype:?} indices need the exactness check this path does not run \
-             yet; pass I32 or I64 indices"
-        ),
+        format!("indices must be I32, I64, F32 or F64, not {index_dtype:?}"),
     ))
+}
+
+/// The largest integer a float index can hold exactly: `2^24` for F32, `2^53` for F64.
+fn max_exact_integer(dtype: DType) -> f64 {
+    match dtype {
+        DType::F32 => 16_777_216.0,
+        _ => 9_007_199_254_740_992.0,
+    }
+}
+
+impl CudaEngine {
+    /// Refuse a float index tensor holding a NaN, an infinity, a fraction or a value the
+    /// dtype cannot represent exactly, the way every other backend does before it indexes.
+    ///
+    /// The kernel writes the lowest offending position into the flag word, so the error names
+    /// the element instead of only the tensor.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::InvalidArgument`] for an index that is not an exact integer and
+    /// [`crate::Error::RuntimeState`] when the check cannot run.
+    fn validate_exact_indices(&mut self, indices: &Tensor, op: &'static str) -> crate::Result<()> {
+        let dtype = indices.dtype();
+        if !matches!(dtype, DType::F32 | DType::F64) {
+            return Ok(());
+        }
+        let len = count_i64(indices.shape(), op)?;
+        if len == 0 {
+            return Ok(());
+        }
+        let kernel = kernel_dtype(dtype, op)?;
+        let runtime = self.runtime().clone();
+        let flag = runtime
+            .upload_bytes(&u32::MAX.to_ne_bytes())
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        // The ABI resets a separate value slot to zero; keeping it apart from the flag word
+        // stops that write from clobbering the verdict.
+        let value = runtime
+            .upload_bytes(&[0u8; 8])
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let mut dispatcher = Dispatcher::for_entries(
+            &runtime,
+            &[Entry::InitValidation, Entry::ValidateFloatIndices],
+        )?;
+        dispatcher.init_validation(kernel, &flag, &value)?;
+        with_scalar!(dtype, |T| {
+            dispatcher.validate_float_indices(
+                kernel,
+                len,
+                max_exact_integer(dtype),
+                self.allocation_of::<T>(indices, op)?,
+                &flag,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let word = self
+            .runtime()
+            .download_bytes(&flag)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let position = u32::from_ne_bytes(word[..4].try_into().expect("4 bytes"));
+        if position != u32::MAX {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "indices",
+                format!("index element {position} is not an exactly representable integer"),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Refuse a dimension list that repeats an axis or names one past `rank`.
@@ -1643,6 +1715,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let kernel = kernel_dtype(dtype, op)?;
         let index_dtype = index_dtype_of(start_indices.dtype(), op)?;
         let index_kernel = kernel_dtype(index_dtype, op)?;
+        self.validate_exact_indices(start_indices, op)?;
         let operand_shape = operand.shape().to_vec();
         let operand_rank = u32::try_from(operand_shape.len())
             .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
@@ -1729,6 +1802,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let kernel = kernel_dtype(dtype, op)?;
         let index_dtype = index_dtype_of(scatter_indices.dtype(), op)?;
         let index_kernel = kernel_dtype(index_dtype, op)?;
+        self.validate_exact_indices(scatter_indices, op)?;
         let operand_shape = operand.shape().to_vec();
         let operand_rank = u32::try_from(operand_shape.len())
             .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
@@ -1872,6 +1946,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
             ));
         }
         let index_dtype = index_dtype_of(starts.dtype(), op)?;
+        self.validate_exact_indices(starts, op)?;
         let dtype = input.dtype();
         let kernel = kernel_dtype(dtype, op)?;
         let index_kernel = kernel_dtype(index_dtype, op)?;
@@ -2499,5 +2574,30 @@ impl tenferro_tensor::TensorDot for CudaEngine {
             output,
             op,
         )
+    }
+}
+
+impl tenferro_tensor::TensorDeviceTransfer for CudaEngine {
+    fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        let op = "download_to_host";
+        let tensor = self.device_read(tensor, op)?;
+        super::transfer::download_tensor(self.runtime(), tensor)
+    }
+
+    fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
+        let op = "upload_host_tensor";
+        let TensorRead::Tensor(tensor) = tensor else {
+            return Err(crate::Error::unsupported(
+                op,
+                "a borrowed view is not served by the structural slice",
+            ));
+        };
+        if tensor.is_backend_buffer() {
+            return Err(crate::Error::unsupported(
+                op,
+                "expected a host tensor; a device buffer already lives on this engine",
+            ));
+        }
+        super::transfer::upload_tensor(self.runtime(), tensor)
     }
 }

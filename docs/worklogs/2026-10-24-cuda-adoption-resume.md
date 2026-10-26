@@ -115,6 +115,21 @@ Fixes made after the review, each verified against the shared contract:
   cannot retain one device workspace per shape for the engine's lifetime. Reusing one
   stream-owned workspace instead of one per plan stays open and is recorded here.
 
+## Float indices are checked, the transfer surface joins the engine contract
+
+- `validate_exact_indices` runs the kernel crate's three validation entries
+  (`init_validation` → `validate_float_indices` → read the flag) before a gather, a scatter or
+  a dynamic slice reads a float index tensor, so a NaN, an infinity, a fraction or a value past
+  the dtype's exact range is refused with the offending element's position. The ABI resets a
+  separate value slot as a double: aliasing it with the flag word clobbered the verdict, which
+  the first version did and a direct probe (`flag` left at `UINT32_MAX` for exact indices,
+  `0` for a fractional one) caught.
+- `TensorDeviceTransfer` is implemented for the new engine.
+- `Engine`/`ExecutionEngine` are not: `Engine` requires `TensorBuffer`, `TensorFusion`,
+  `TensorAnalytic` and `SessionCachedDot` in addition to the traits this path has, so the
+  runtime wiring needs those four surfaces first — that is the next unit, together with the
+  decision of which runtime engine id and registration the new engine uses.
+
 ## Remaining, in order
 
 1. The float-index exactness check (`validate_float_indices` + `extract_invalid_float_index`)
