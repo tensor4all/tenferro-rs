@@ -223,10 +223,22 @@ marshalling use `LayoutRef::new` directly instead of a temporary `WideLayout`. A
 covers `reverse`, which carries negated strides and a non-zero offset, so a dropped offset would
 fail it.
 
-The other families are the same shape one at a time: each needs a `_wide` variant of its
-dispatcher wrapper that packs the geometry it names (the per-axis value arrays for slice/pad,
-the plan arrays for gather/scatter) and takes the general symbol. They are mechanical, and each
-is verified by extending the rank-9 test to that family.
+The remaining families, and what each needs beyond the pattern above:
+
+| Family | Geometry to pack besides the operand layouts |
+|---|---|
+| `broadcast_in_dim` | the destination axes array |
+| `extract_diagonal` / `embed_diagonal_copy` | the two axis ids |
+| `reduce` / `reduce_partials` | nothing extra for the direct strategy; the split strategy's partials layout is computed by the crate (`reduction_partials_layout`), so its extents and strides are packed too, and both branches need their own wide launch |
+| `slice` | the `starts` and `steps` arrays |
+| `dynamic_slice` | nothing extra (the starts are already device-resident) |
+| `pad` | the `edge_low`, `edge_high` and `interior` arrays |
+| `gather` / `scatter_add` | the window/offset/start-map/extent arrays of the plan |
+| `concatenate_copy` | nothing extra |
+| `fill_zero_view` / `contiguous_to_view` / `strided_to_strided` | nothing extra |
+
+Each is a `_wide` variant of its dispatcher wrapper plus a branch in the tensor-surface caller,
+verified by extending the rank-9 test to that family. Nothing about them is a design question.
 
 ## Remaining, in order
 
