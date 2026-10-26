@@ -444,3 +444,51 @@ fn a_nonzero_beta_accumulates_into_the_addend() {
         })
         .is_err());
 }
+
+#[test]
+fn a_new_shape_grows_one_shared_workspace() {
+    let Some(runtime) = runtime() else { return };
+    let mut cutensor = Cutensor::new(&runtime).expect("cuTENSOR");
+    // Two different shapes plan two plans; the handle keeps one workspace, not one each.
+    for (m, n, k) in [(4usize, 3usize, 2usize), (32, 16, 8)] {
+        let a = runtime
+            .upload_bytes(&bytes(&vec![1.0f64; m * k]))
+            .expect("a");
+        let b = runtime
+            .upload_bytes(&bytes(&vec![2.0f64; k * n]))
+            .expect("b");
+        let d = runtime
+            .upload_bytes(&bytes(&vec![0.0f64; m * n]))
+            .expect("d");
+        cutensor
+            .contract(&Contraction {
+                dtype: DType::F64,
+                a: Operand {
+                    buffer: &a,
+                    modes: &[0, 2],
+                    extents: &[m as i64, k as i64],
+                    strides: &[1, m as i64],
+                },
+                b: Operand {
+                    buffer: &b,
+                    modes: &[2, 1],
+                    extents: &[k as i64, n as i64],
+                    strides: &[1, k as i64],
+                },
+                c: None,
+                d: Operand {
+                    buffer: &d,
+                    modes: &[0, 1],
+                    extents: &[m as i64, n as i64],
+                    strides: &[1, m as i64],
+                },
+                alpha: (1.0, 0.0),
+                beta: (0.0, 0.0),
+                conj_a: false,
+                conj_b: false,
+            })
+            .expect("contract");
+    }
+    assert_eq!(cutensor.cold_plans(), 2);
+    assert_eq!(cutensor.cached_plans(), 2);
+}

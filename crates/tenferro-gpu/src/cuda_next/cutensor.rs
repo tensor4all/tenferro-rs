@@ -351,7 +351,7 @@ struct CachedPlan {
     plan: ct::cutensorPlan_t,
     preference: ct::cutensorPlanPreference_t,
     operation: ct::cutensorOperationDescriptor_t,
-    workspace: DeviceBuffer,
+    /// Bytes this plan needs; the handle's single workspace is at least this large.
     workspace_bytes: u64,
 }
 
@@ -361,9 +361,12 @@ pub struct Cutensor {
     handle: ct::cutensorHandle_t,
     runtime: CudaRuntime,
     plans: HashMap<Vec<i64>, CachedPlan>,
-    /// Insertion order of the cached plans, so the oldest plan (and its workspace) is the
-    /// one retired when the cache is full.
+    /// Insertion order of the cached plans, so the oldest plan retires when the cache is full.
     order: std::collections::VecDeque<Vec<i64>>,
+    /// One workspace for every plan of this handle, grown to the largest requirement seen.
+    /// A workspace per plan would keep a device allocation alive for each shape.
+    workspace: Option<DeviceBuffer>,
+    workspace_bytes: u64,
     cold_plans: u64,
     warm_hits: u64,
     library: &'static libloading::Library,
@@ -403,6 +406,8 @@ impl Cutensor {
             runtime: runtime.clone(),
             plans: HashMap::new(),
             order: std::collections::VecDeque::new(),
+            workspace: None,
+            workspace_bytes: 0,
             cold_plans: 0,
             warm_hits: 0,
             library,
@@ -469,7 +474,7 @@ impl Cutensor {
             request.c.map(|operand| operand.buffer),
             request.d.buffer,
         );
-        let workspace = &cached.workspace;
+        let workspace = self.workspace.as_ref().expect("planned with a workspace");
         let plan = cached.plan;
         let workspace_bytes = cached.workspace_bytes;
         let handle = self.handle;
@@ -648,22 +653,41 @@ impl Cutensor {
             }
         }?;
         let (workspace_bytes, operation, preference) = workspace_bytes_and_plan;
-        // The workspace outlives the plan request, so it is allocated on the runtime rather
-        // than inside the scope above.
-        let workspace = if workspace_bytes == 0 {
-            self.runtime
-                .upload_bytes(&[])
-                .map_err(|error| GpuError::Unavailable {
-                    detail: error.to_string(),
-                })?
-        } else {
-            let mut guard = self.runtime.submit();
-            guard
-                .alloc_zeroed(workspace_bytes as usize, 256)
-                .map_err(|error| GpuError::Unavailable {
-                    detail: error.to_string(),
-                })?
-        };
+        // The handle owns one workspace, grown on demand: an allocation per plan would keep a
+        // device buffer alive for every shape ever contracted.
+        if self.workspace.is_none() || workspace_bytes > self.workspace_bytes {
+            if self.workspace.is_some() {
+                // Replacing the workspace drops the buffer earlier plans ran against, so wait
+                // for the stream first. This happens only while the requirement grows.
+                self.runtime
+                    .synchronize()
+                    .map_err(|error| GpuError::Unavailable {
+                        detail: error.to_string(),
+                    })?;
+            }
+            let workspace = if workspace_bytes == 0 {
+                self.runtime
+                    .upload_bytes(&[])
+                    .map_err(|error| GpuError::Unavailable {
+                        detail: error.to_string(),
+                    })?
+            } else {
+                let mut guard = self.runtime.submit();
+                guard
+                    .alloc_zeroed(workspace_bytes as usize, 256)
+                    .map_err(|error| GpuError::Unavailable {
+                        detail: error.to_string(),
+                    })?
+            };
+            self.workspace = Some(workspace);
+            self.workspace_bytes = workspace_bytes;
+        }
+        // The workspace was grown above whenever this plan needs more than it holds, so it is
+        // present by the time the plan is created.
+        let workspace = self
+            .workspace
+            .as_ref()
+            .expect("the workspace was grown for this plan");
         let handle = self.handle;
         let plan = {
             let mut plan = std::ptr::null_mut();
@@ -672,7 +696,7 @@ impl Cutensor {
             // size was estimated for exactly this descriptor and preference.
             let status = unsafe {
                 self.runtime
-                    .with_raw_locked(vec![RawResource::Buffer(&workspace)], |_raw| {
+                    .with_raw_locked(vec![RawResource::Buffer(workspace)], |_raw| {
                         (vtable.create_plan)(
                             handle,
                             &mut plan,
@@ -693,7 +717,6 @@ impl Cutensor {
             plan,
             preference,
             operation,
-            workspace,
             workspace_bytes,
         })
     }
@@ -755,8 +778,8 @@ impl Drop for Cutensor {
                             let _ = (self.vtable.destroy_tensor_descriptor)(descriptor);
                         }
                     }
-                    drop(cached.workspace);
                 }
+                drop(self.workspace.take());
                 let _ = (self.vtable.destroy)(handle);
             });
         }

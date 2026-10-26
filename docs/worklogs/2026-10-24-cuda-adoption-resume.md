@@ -177,11 +177,14 @@ sequencing: hook → fft → linalg → the `cuda::` flip with `ExecutionEngine`
 the capability table and the CubeCL deletion. That is the bulk of what is left, and it is a
 move verified by the extension crates' own A100 tests rather than by new design.
 
-Two review findings are accepted rather than fixed now, with reasons: the pre-existing
-`Dispatcher` methods stay `pub` because `seam_dispatch` exercises them as an external crate — the
-clean fix is to fold that test target into the crate when the CI inventory is rebuilt at U6 — and
-the cuTENSOR plan cache still allocates one workspace per cached plan instead of sharing one
-per stream, which is a bounded perf item, not a correctness one.
+- The cuTENSOR handle now owns **one** workspace, grown to the largest requirement seen, instead
+  of one allocation per cached plan: a varying-shape loop used to retain a device buffer for
+  every shape. Growing it waits for the stream first, since the old buffer's plans ran against
+  it; the plan cache stays bounded at 32 plans.
+- One review finding is accepted rather than fixed now, with the reason: the pre-existing
+  `Dispatcher` methods stay `pub` because `seam_dispatch` exercises them as an external crate —
+  the clean fix is to fold that test target into the crate when the CI inventory is rebuilt at
+  U6.
 
 ## Remaining, in order
 
