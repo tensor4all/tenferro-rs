@@ -14,7 +14,7 @@ use tenferro_tensor::{
 use t4a_cuda_kernels::{
     plan_broadcast_in_dim, plan_embed_diagonal_copy, plan_extract_diagonal,
     plan_materialize_strided, plan_tril, plan_triu, CAxisValues, CLayout, Entry, GatherPlan,
-    Layout, ScatterPlan,
+    Layout, LayoutRef, ScatterPlan, WideLayout,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -388,41 +388,19 @@ impl TensorStructural for CudaEngine {
                 "the permutation must list every axis exactly once",
             ));
         }
-        let dtype = source.dtype();
-        let kernel = kernel_dtype(dtype, "transpose_read")?;
         // The output shape is the input's, permuted; the view over the source reads each
         // output axis from the input axis the permutation names.
         let out_shape: Vec<usize> = perm.iter().map(|&axis| shape[axis]).collect();
         let view_extents: Vec<i64> = out_shape.iter().map(|&extent| extent as i64).collect();
         let view_strides: Vec<i64> = perm.iter().map(|&axis| strides[axis] as i64).collect();
-        let source_len = i64::try_from(element_count(&shape)?)
-            .map_err(|_| crate::Error::unsupported("transpose_read", "count exceeds i64"))?;
-        let view = Layout::new(&view_extents, &view_strides, 0)
-            .map_err(|error| crate::Error::runtime_state_source("transpose_read", error))?;
-        let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
-        let plan = plan_materialize_strided(kernel, &view, source_len)
-            .map_err(|error| crate::Error::runtime_state_source("transpose_read", error))?;
-        let layout = CLayout::new(&view);
-        let (destination, input) = with_scalar!(dtype, |T| Ok((
-            self.allocation_of::<T>(&output, "transpose_read")? as *const _,
-            self.allocation_of::<T>(source, "transpose_read")? as *const _,
-        )))?;
-        // SAFETY: both pointers name allocations of this runtime taken above; the planner
-        // proved the view's span against the source length and the compact destination.
-        let (destination, input) = unsafe { (&*destination, &*input) };
-        self.launch_planned(
-            Entry::MaterializeStrided,
-            plan,
-            &[
-                Arg::DevicePtr(destination),
-                Arg::DevicePtr(input),
-                Arg::U32(kernel.tag() as u32),
-                layout_arg(&layout),
-                Arg::U64(source_len as u64),
-            ],
+        self.materialize_view(
+            source,
+            &view_extents,
+            &view_strides,
+            0,
+            out_shape,
             "transpose_read",
-        )?;
-        Ok(output)
+        )
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
@@ -681,6 +659,132 @@ impl CudaEngine {
             let input = self.allocation_of::<T>(source, op)?;
             Ok((destination, input))
         })
+    }
+}
+
+/// Materialize a strided view of `input` into a compact allocation of `shape`.
+///
+/// The fast entries take the view's geometry in the launch parameter block, which the ABI
+/// bounds at [`t4a_cuda_kernels::MAX_RANK`] axes; a wider view goes through the `_any` symbol,
+/// whose geometry lives in device memory.
+impl CudaEngine {
+    fn materialize_view(
+        &mut self,
+        input: &Tensor,
+        extents: &[i64],
+        strides: &[i64],
+        offset: i64,
+        shape: Vec<usize>,
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let dtype = input.dtype();
+        let kernel = kernel_dtype(dtype, op)?;
+        let source_len = count_i64(input.shape(), op)?;
+        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        if extents.len() <= t4a_cuda_kernels::MAX_RANK {
+            let view = Layout::new(extents, strides, offset)
+                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            let plan = plan_materialize_strided(kernel, &view, source_len)
+                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            let layout = CLayout::new(&view);
+            let (destination, source) = self.two_allocations(&output, input, op)?;
+            return self
+                .launch_planned(
+                    Entry::MaterializeStrided,
+                    plan,
+                    &[
+                        Arg::DevicePtr(destination),
+                        Arg::DevicePtr(source),
+                        Arg::U32(kernel.tag() as u32),
+                        layout_arg(&layout),
+                        Arg::U64(source_len as u64),
+                    ],
+                    op,
+                )
+                .map(|()| output);
+        }
+        let wide = WideLayout::new(extents.to_vec(), strides.to_vec(), offset)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let reference: LayoutRef<'_> = (&wide).into();
+        let plan = plan_materialize_strided(kernel, &wide, source_len)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        if plan.grid[0] == 0 {
+            return Ok(output);
+        }
+        let symbol = Entry::MaterializeStrided
+            .general()
+            .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
+            .name();
+        let (destination, source) = self.two_allocations(&output, input, op)?;
+        // The geometry travels in device memory; the uploads are ordered on the same stream
+        // and stay alive until the synchronize below.
+        let extents_buffer = self.upload_i64(extents, op)?;
+        let strides_buffer = self.upload_i64(strides, op)?;
+        let mut modules = super::launch::KernelModules::for_entries(
+            self.runtime(),
+            &[Entry::MaterializeStrided],
+        )?;
+        // SAFETY: the pointers name allocations of this runtime taken above, the geometry is
+        // registered with the scope, and the planner proved the view's span.
+        unsafe {
+            modules.in_scope(
+                Entry::MaterializeStrided,
+                symbol,
+                vec![
+                    t4a_cuda_runtime::RawResource::Buffer(&extents_buffer),
+                    t4a_cuda_runtime::RawResource::Buffer(&strides_buffer),
+                    t4a_cuda_runtime::RawResource::Buffer(destination),
+                    t4a_cuda_runtime::RawResource::Buffer(source),
+                ],
+                |scope, function| {
+                    let mirror = t4a_cuda_kernels::CLayoutAny::new(
+                        reference,
+                        scope
+                            .device_ptr(&extents_buffer)
+                            .map_err(|error| crate::Error::runtime_state_source(op, error))?
+                            as *const i64,
+                        scope
+                            .device_ptr(&strides_buffer)
+                            .map_err(|error| crate::Error::runtime_state_source(op, error))?
+                            as *const i64,
+                    )
+                    .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+                    let args = [
+                        Arg::DevicePtr(destination),
+                        Arg::DevicePtr(source),
+                        Arg::U32(kernel.tag() as u32),
+                        pod_arg(&mirror),
+                        Arg::U64(source_len as u64),
+                    ];
+                    scope
+                        .launch(
+                            function,
+                            LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                            &args,
+                        )
+                        .map_err(|error| crate::Error::runtime_state_source(op, error))
+                },
+            )
+        }?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+
+    /// Copy `values` into a fresh device allocation.
+    fn upload_i64(
+        &self,
+        values: &[i64],
+        op: &'static str,
+    ) -> crate::Result<t4a_cuda_runtime::Buffer> {
+        let bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|value| value.to_ne_bytes())
+            .collect();
+        self.runtime()
+            .upload_bytes(&bytes)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
     }
 }
 
@@ -2281,29 +2385,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
             view_strides[axis] = -stride;
         }
         let extents: Vec<i64> = shape.iter().map(|&extent| extent as i64).collect();
-        let view = Layout::new(&extents, &view_strides, offset)
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-        let dtype = input.dtype();
-        let kernel = kernel_dtype(dtype, op)?;
-        let source_len = count_i64(&shape, op)?;
-        let plan = plan_materialize_strided(kernel, &view, source_len)
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
-        let layout = CLayout::new(&view);
-        let (destination, source) = self.two_allocations(&output, input, op)?;
-        self.launch_planned(
-            Entry::MaterializeStrided,
-            plan,
-            &[
-                Arg::DevicePtr(destination),
-                Arg::DevicePtr(source),
-                Arg::U32(kernel.tag() as u32),
-                layout_arg(&layout),
-                Arg::U64(source_len as u64),
-            ],
-            op,
-        )?;
-        Ok(output)
+        self.materialize_view(input, &extents, &view_strides, offset, shape, op)
     }
 
     fn pad(

@@ -615,3 +615,43 @@ fn remainder_and_read_into_match_the_host() {
         )
         .is_err());
 }
+
+#[test]
+fn a_rank_nine_transpose_uses_the_general_path() {
+    let Some(mut engine) = engine() else { return };
+    // Nine axes exceed the fast ABI's rank limit, so the view's geometry travels in device
+    // memory and the launch goes through the `_any` symbol.
+    let shape = vec![2usize, 1, 1, 1, 1, 1, 1, 1, 3];
+    let len: usize = shape.iter().product();
+    let data: Vec<f64> = (0..len).map(|index| index as f64).collect();
+    let host = Tensor::from_vec_col_major(shape.clone(), data.clone()).expect("host tensor");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+
+    let perm: Vec<usize> = (0..shape.len()).rev().collect();
+    let transposed = engine
+        .transpose_read(TensorRead::from_tensor(&source), &perm)
+        .expect("rank-9 transpose");
+    let expected_shape: Vec<usize> = perm.iter().map(|&axis| shape[axis]).collect();
+    assert_eq!(transposed.shape(), &expected_shape[..]);
+
+    let observed = download_tensor(engine.runtime(), &transposed).expect("download");
+    let observed = observed.as_slice::<f64>().expect("f64 payload");
+    // Column-major: the transposed element at index `i` reads the source element whose axes
+    // are the permutation's inverse.
+    let mut expected = vec![0.0f64; len];
+    for (index, value) in expected.iter_mut().enumerate() {
+        // Decode `index` in the transposed shape, then map it back through `perm`.
+        let mut remaining = index;
+        let mut source_index = 0usize;
+        for axis in 0..shape.len() {
+            let extent = expected_shape[axis];
+            let coordinate = remaining % extent;
+            remaining /= extent;
+            // `perm[axis]` is the source axis this output axis came from.
+            let stride: usize = shape[..perm[axis]].iter().product();
+            source_index += coordinate * stride;
+        }
+        *value = data[source_index];
+    }
+    assert_eq!(observed, &expected[..]);
+}

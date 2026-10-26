@@ -205,6 +205,22 @@ before any family can use it:
 That is the same shape for every family, so it lands once in `launch.rs`/`dispatch.rs` and then
 each family converts mechanically.
 
+## The general path: rank > 8 through the `_any` entries
+
+`KernelModules` gained `in_scope` (bind a symbol from an entry's module, enumerate the launch
+inside the runtime's raw scope, where a general-path parameter can name device addresses) and
+`function_named`. `CudaEngine::materialize_view` now chooses by rank: at most
+`t4a_cuda_kernels::MAX_RANK` axes keep the fast parameter-block layout, a wider view uploads its
+extents and strides, registers them with the same scope as the operands, builds `CLayoutAny`
+from `scope.device_ptr`, and launches `Entry::general().name()`. `transpose_read` and `reverse`
+share that helper, so both serve a rank-9 view; `seam_structural`'s new
+`a_rank_nine_transpose_uses_the_general_path` proves it against a host reference.
+
+The other families are the same shape one at a time: each needs a `_wide` variant of its
+dispatcher wrapper that packs the geometry it names (the per-axis value arrays for slice/pad,
+the plan arrays for gather/scatter) and takes the general symbol. They are mechanical, and each
+is verified by extending the rank-9 test to that family.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index

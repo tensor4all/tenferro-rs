@@ -135,6 +135,66 @@ impl KernelModules {
             .expect("the bound function was just inserted"))
     }
 
+    /// Bind the general-path symbol of `entry`.
+    ///
+    /// The `_any` entries read their geometry from device memory, so the parameters that name
+    /// those addresses are only known inside the runtime's raw scope; see
+    /// [`KernelModules::in_scope`].
+    fn function_named(
+        &mut self,
+        entry: Entry,
+        name: &'static str,
+    ) -> crate::Result<&BoundFunction> {
+        if !self.functions.contains_key(name) {
+            let module = module_of(entry).ok_or_else(|| {
+                crate::Error::unsupported("cuda bind", "the entry has no translation unit")
+            })?;
+            let artifact = self.artifacts.get(module.name).ok_or_else(|| {
+                crate::Error::runtime_state("cuda bind", "the entry's module is not prepared")
+            })?;
+            let function = {
+                let mut guard = self.runtime.submit();
+                guard
+                    .bind(artifact, name)
+                    .map_err(|error| crate::Error::runtime_state_source("cuda bind", error))?
+            };
+            self.functions.insert(name, function);
+        }
+        Ok(self
+            .functions
+            .get(name)
+            .expect("the bound function was just inserted"))
+    }
+
+    /// Enqueue one launch of `symbol` (bound from `entry`'s module) inside the runtime's raw
+    /// scope.
+    ///
+    /// `resources` must list every buffer the parameters name, because a general-path launch
+    /// embeds device addresses the caller can only read through the scope.
+    ///
+    /// # Safety
+    ///
+    /// As [`KernelModules::launch`], and every address the closure embeds must stay valid for
+    /// the scope's work.
+    ///
+    /// # Errors
+    ///
+    /// As [`KernelModules::function_named`], plus the runtime's raw-scope failure.
+    pub(crate) unsafe fn in_scope<R>(
+        &mut self,
+        entry: Entry,
+        symbol: &'static str,
+        resources: Vec<t4a_cuda_runtime::RawResource<'_>>,
+        run: impl FnOnce(&t4a_cuda_runtime::RawScope<'_>, &BoundFunction) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        self.function_named(entry, symbol)?;
+        let runtime = self.runtime.clone();
+        let function = self.functions.get(symbol).expect("bound above");
+        runtime
+            .with_raw_locked(resources, |scope| run(&scope, function))
+            .and_then(|result| result)
+    }
+
     /// Enqueue one launch of `entry` with `args`.
     ///
     /// # Safety
