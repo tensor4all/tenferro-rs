@@ -118,10 +118,19 @@ fn input_tensor(
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use tenferro_gpu::cuda_next::runtime_adapter::runtime_engine_registration;
+/// use tenferro_gpu::cuda_next::{CudaDeviceId, CudaEngine};
+/// use tenferro_runtime::Runtime;
 ///
-/// let _register = runtime_engine_registration;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let engine = CudaEngine::open(CudaDeviceId::from_ordinal(0))?;
+/// let mut builder = Runtime::builder();
+/// builder.register_engine(runtime_engine_registration(&engine)?)?;
+/// let runtime = builder.build()?;
+/// let _snapshot = runtime.snapshot()?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Errors
