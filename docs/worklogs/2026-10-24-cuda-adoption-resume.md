@@ -216,6 +216,13 @@ from `scope.device_ptr`, and launches `Entry::general().name()`. `transpose_read
 share that helper, so both serve a rank-9 view; `seam_structural`'s new
 `a_rank_nine_transpose_uses_the_general_path` proves it against a host reference.
 
+Found by the independent review of that step and fixed: the wide path returned early on an empty
+launch before validating that both operands belong to this runtime; it now takes the operand
+allocations first. `KernelModules::function` delegates to `function_named`, and the planning and
+marshalling use `LayoutRef::new` directly instead of a temporary `WideLayout`. A second rank-9 test
+covers `reverse`, which carries negated strides and a non-zero offset, so a dropped offset would
+fail it.
+
 The other families are the same shape one at a time: each needs a `_wide` variant of its
 dispatcher wrapper that packs the geometry it names (the per-axis value arrays for slice/pad,
 the plan arrays for gather/scatter) and takes the general symbol. They are mechanical, and each

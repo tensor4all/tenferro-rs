@@ -114,25 +114,7 @@ impl KernelModules {
     /// [`crate::Error::RuntimeState`] when its module is not prepared, and
     /// [`crate::Error::RuntimeStateSource`] when the entry point cannot be bound.
     pub fn function(&mut self, entry: Entry) -> crate::Result<&BoundFunction> {
-        if !self.functions.contains_key(entry.name()) {
-            let module = module_of(entry).ok_or_else(|| {
-                crate::Error::unsupported("cuda bind", "the entry has no translation unit")
-            })?;
-            let artifact = self.artifacts.get(module.name).ok_or_else(|| {
-                crate::Error::runtime_state("cuda bind", "the entry's module is not prepared")
-            })?;
-            let function = {
-                let mut guard = self.runtime.submit();
-                guard
-                    .bind(artifact, entry.name())
-                    .map_err(|error| crate::Error::runtime_state_source("cuda bind", error))?
-            };
-            self.functions.insert(entry.name(), function);
-        }
-        Ok(self
-            .functions
-            .get(entry.name())
-            .expect("the bound function was just inserted"))
+        self.function_named(entry, entry.name())
     }
 
     /// Bind the general-path symbol of `entry`.

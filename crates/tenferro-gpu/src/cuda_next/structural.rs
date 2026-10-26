@@ -14,7 +14,7 @@ use tenferro_tensor::{
 use t4a_cuda_kernels::{
     plan_broadcast_in_dim, plan_embed_diagonal_copy, plan_extract_diagonal,
     plan_materialize_strided, plan_tril, plan_triu, CAxisValues, CLayout, Entry, GatherPlan,
-    Layout, LayoutRef, ScatterPlan, WideLayout,
+    Layout, LayoutRef, ScatterPlan,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -703,11 +703,13 @@ impl CudaEngine {
                 )
                 .map(|()| output);
         }
-        let wide = WideLayout::new(extents.to_vec(), strides.to_vec(), offset)
+        let reference = LayoutRef::new(extents, strides, offset)
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-        let reference: LayoutRef<'_> = (&wide).into();
-        let plan = plan_materialize_strided(kernel, &wide, source_len)
+        let plan = plan_materialize_strided(kernel, reference, source_len)
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        // Both operands are validated before any early return: an empty general-path view still
+        // has to belong to this runtime.
+        let (destination, source) = self.two_allocations(&output, input, op)?;
         if plan.grid[0] == 0 {
             return Ok(output);
         }
@@ -715,7 +717,6 @@ impl CudaEngine {
             .general()
             .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
             .name();
-        let (destination, source) = self.two_allocations(&output, input, op)?;
         // The geometry travels in device memory; the uploads are ordered on the same stream
         // and stay alive until the synchronize below.
         let extents_buffer = self.upload_i64(extents, op)?;

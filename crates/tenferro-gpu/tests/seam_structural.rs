@@ -7,7 +7,7 @@
 use tenferro_gpu::cuda_next::{
     download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine,
 };
-use tenferro_tensor::{DType, Tensor, TensorRead, TensorStructural, TensorWrite};
+use tenferro_tensor::{DType, Tensor, TensorIndexing, TensorRead, TensorStructural, TensorWrite};
 
 fn engine() -> Option<CudaEngine> {
     if !gpu_available() {
@@ -649,6 +649,39 @@ fn a_rank_nine_transpose_uses_the_general_path() {
             remaining /= extent;
             // `perm[axis]` is the source axis this output axis came from.
             let stride: usize = shape[..perm[axis]].iter().product();
+            source_index += coordinate * stride;
+        }
+        *value = data[source_index];
+    }
+    assert_eq!(observed, &expected[..]);
+}
+
+#[test]
+fn a_rank_nine_reverse_carries_its_negative_strides_and_offset() {
+    let Some(mut engine) = engine() else { return };
+    // Non-singleton axes on both ends, so a dropped offset or an unnegated stride would show.
+    let shape = vec![2usize, 1, 1, 1, 1, 1, 1, 3, 2];
+    let len: usize = shape.iter().product();
+    let data: Vec<f64> = (0..len).map(|index| index as f64 + 1.0).collect();
+    let host = Tensor::from_vec_col_major(shape.clone(), data.clone()).expect("host tensor");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+
+    let reversed = engine.reverse(&source, &[0, 7, 8]).expect("rank-9 reverse");
+    assert_eq!(reversed.shape(), &shape[..]);
+    let observed = download_tensor(engine.runtime(), &reversed).expect("download");
+    let observed = observed.as_slice::<f64>().expect("f64 payload");
+    let mut expected = vec![0.0f64; len];
+    for (index, value) in expected.iter_mut().enumerate() {
+        let mut remaining = index;
+        let mut source_index = 0usize;
+        for axis in 0..shape.len() {
+            let extent = shape[axis];
+            let mut coordinate = remaining % extent;
+            remaining /= extent;
+            if matches!(axis, 0 | 7 | 8) {
+                coordinate = extent - 1 - coordinate;
+            }
+            let stride: usize = shape[..axis].iter().product();
             source_index += coordinate * stride;
         }
         *value = data[source_index];
