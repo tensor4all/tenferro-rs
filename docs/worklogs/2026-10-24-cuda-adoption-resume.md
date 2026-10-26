@@ -232,6 +232,11 @@ the destination is allocated only after the planner has accepted the dimension m
 maps one axis past the fast limit and permutes rather than merely inserting singletons, so a
 truncated destination or a transposed map would fail it.
 
+`concatenate_copy` follows as well: the wide branch packs the destination layout once and each
+input's layout per input, plans each placement through the same planner (so the grid geometry and
+the validation come from one source), and launches `t4a_cuda_concatenate_copy_any`. A rank-9
+concatenation along the last axis is the test.
+
 The remaining families, and what each needs beyond the pattern above:
 
 | Family | Geometry to pack besides the operand layouts |
@@ -242,7 +247,6 @@ The remaining families, and what each needs beyond the pattern above:
 | `dynamic_slice` | nothing extra (the starts are already device-resident) |
 | `pad` | the `edge_low`, `edge_high` and `interior` arrays |
 | `gather` / `scatter_add` | the window/offset/start-map/extent arrays of the plan |
-| `concatenate_copy` | nothing extra |
 | `fill_zero_view` / `contiguous_to_view` / `strided_to_strided` | nothing extra |
 
 Each is a `_wide` variant of its dispatcher wrapper plus a branch in the tensor-surface caller,

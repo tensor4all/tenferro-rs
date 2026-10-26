@@ -12,7 +12,7 @@ use tenferro_tensor::{
 };
 
 use t4a_cuda_kernels::{
-    plan_broadcast_in_dim, plan_embed_diagonal_copy, plan_extract_diagonal,
+    plan_broadcast_in_dim, plan_concatenate_copy, plan_embed_diagonal_copy, plan_extract_diagonal,
     plan_materialize_strided, plan_tril, plan_triu, CAxisValues, CLayout, Entry, GatherPlan,
     Layout, LayoutRef, ScatterPlan,
 };
@@ -768,6 +768,121 @@ impl CudaEngine {
                 },
             )
         }?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+
+    /// Concatenate through the general path, whose layouts live in device memory.
+    fn concatenate_wide(
+        &mut self,
+        inputs: &[&Tensor],
+        out_shape: &[usize],
+        axis: usize,
+        dtype: DType,
+        kernel: t4a_cuda_kernels::DType,
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let output = alloc_tensor(self.runtime(), dtype, out_shape)?;
+        let out_len = count_i64(out_shape, op)?;
+        let out_extents: Vec<i64> = out_shape.iter().map(|&extent| extent as i64).collect();
+        let out_strides: Vec<i64> = compact_strides(out_shape, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let out_ref = LayoutRef::new(&out_extents, &out_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let out_geometry = self.wide_geometry(&out_extents, &out_strides, op)?;
+        let destination = with_scalar!(dtype, |T| self.allocation_of::<T>(&output, op))?;
+        let symbol = Entry::ConcatenateCopy
+            .general()
+            .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
+            .name();
+        let axis_u32 = u32::try_from(axis)
+            .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
+        let mut modules =
+            super::launch::KernelModules::for_entries(self.runtime(), &[Entry::ConcatenateCopy])?;
+        let mut offset = 0usize;
+        for input in inputs {
+            // The kernel reads a compact source, so a strided input is compacted first.
+            let compact = if compact_strides(input.shape(), op)? == self.strides_of(input, op)? {
+                None
+            } else {
+                Some(self.copy_to_fresh(input, input.shape().to_vec(), op)?)
+            };
+            let source = compact.as_ref().unwrap_or(input);
+            let in_shape = source.shape().to_vec();
+            let in_extents: Vec<i64> = in_shape.iter().map(|&extent| extent as i64).collect();
+            let in_strides: Vec<i64> = compact_strides(&in_shape, op)?
+                .iter()
+                .map(|&stride| stride as i64)
+                .collect();
+            let in_len = count_i64(&in_shape, op)?;
+            let in_ref = LayoutRef::new(&in_extents, &in_strides, 0)
+                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            let source_buffer = with_scalar!(dtype, |T| self.allocation_of::<T>(source, op))?;
+            let axis_offset = i64::try_from(offset).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "inputs",
+                    "the concatenation offset is too large",
+                )
+            })?;
+            let plan = plan_concatenate_copy(
+                kernel,
+                out_ref,
+                out_len,
+                in_ref,
+                in_len,
+                axis_u32,
+                axis_offset,
+            )
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            let in_geometry = self.wide_geometry(&in_extents, &in_strides, op)?;
+            let resources = vec![
+                t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
+                t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
+                t4a_cuda_runtime::RawResource::Buffer(&in_geometry.extents),
+                t4a_cuda_runtime::RawResource::Buffer(&in_geometry.strides),
+                t4a_cuda_runtime::RawResource::Buffer(destination),
+                t4a_cuda_runtime::RawResource::Buffer(source_buffer),
+            ];
+            // SAFETY: every address the parameters name is registered with this scope, the
+            // planner proved the placement, and the geometry outlives the synchronise below.
+            unsafe {
+                modules.in_scope(
+                    Entry::ConcatenateCopy,
+                    symbol,
+                    resources,
+                    |scope, function| {
+                        let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
+                        let in_mirror = in_geometry.mirror(in_ref, scope, op)?;
+                        let args = [
+                            Arg::DevicePtr(destination),
+                            Arg::DevicePtr(source_buffer),
+                            Arg::U32(kernel.tag() as u32),
+                            pod_arg(&out_mirror),
+                            pod_arg(&in_mirror),
+                            Arg::U32(axis_u32),
+                            Arg::U64(axis_offset as u64),
+                            Arg::U64(in_len as u64),
+                        ];
+                        scope
+                            .launch(
+                                function,
+                                LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                                &args,
+                            )
+                            .map_err(|error| crate::Error::runtime_state_source(op, error))
+                    },
+                )
+            }?;
+            offset = offset.checked_add(source.shape()[axis]).ok_or_else(|| {
+                crate::Error::invalid_argument(op, "inputs", "the concatenation offset overflows")
+            })?;
+            let _ = out_len;
+        }
         self.runtime()
             .synchronize()
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
@@ -2459,6 +2574,9 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
             })?;
         }
         let kernel = kernel_dtype(dtype, op)?;
+        if rank > t4a_cuda_kernels::MAX_RANK {
+            return self.concatenate_wide(inputs, &out_shape, axis, dtype, kernel, op);
+        }
         let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
         let out_layout = self.layout_of(&output, op)?;
         let out_len = count_i64(&out_shape, op)?;
