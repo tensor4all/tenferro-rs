@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use tenferro_tensor::{AllocationDomainId, AllocationId};
+use tenferro_tensor::AllocationDomainId;
 
 use crate::cuda::{CudaDeviceError, CudaDeviceId, CudaDeviceInfo};
 
@@ -237,7 +237,6 @@ impl CudaRuntime {
             ));
         }
         let bytes = storage.bytes();
-        let device = destination.device_ordinal();
 
         // Both runtimes participate in admission. Take their submission locks in a
         // stable order (by allocation domain) so two opposing copies cannot invert them,
@@ -247,37 +246,27 @@ impl CudaRuntime {
             let mut source_guard = self.submit();
             let mut destination_guard = destination.submit();
             let (buffer, completion, _route) = destination_guard
-                .copy_between(&mut source_guard, &storage.buffer)
+                .copy_between(&mut source_guard, storage.allocation())
                 .map_err(|error| crate::Error::runtime_state_source("cuda copy", error))?;
             (buffer, completion)
         } else {
             let mut destination_guard = destination.submit();
             let mut source_guard = self.submit();
             let (buffer, completion, _route) = destination_guard
-                .copy_between(&mut source_guard, &storage.buffer)
+                .copy_between(&mut source_guard, storage.allocation())
                 .map_err(|error| crate::Error::runtime_state_source("cuda copy", error))?;
             (buffer, completion)
         };
-        let (domain, id) = super::storage::fresh_identity(destination);
         fn rebuild<T: TensorScalar + Send + Sync + 'static>(
             value: &tenferro_tensor::Tensor,
             buffer: t4a_cuda_runtime::Buffer,
             bytes: usize,
-            device: usize,
             destination: &CudaRuntime,
-            domain: AllocationDomainId,
-            id: AllocationId,
         ) -> crate::Result<tenferro_tensor::Tensor> {
             let typed: &TypedTensor<T> = value.as_typed::<T>().ok_or_else(|| {
                 crate::Error::runtime_state("cuda copy", "expected a preset scalar")
             })?;
-            let storage = super::storage::CudaStorage {
-                buffer,
-                bytes,
-                device,
-                domain,
-                id,
-            };
+            let storage = super::storage::fresh_storage(destination, bytes, buffer);
             TypedTensor::<T>::from_buffer_col_major(
                 typed.shape().to_vec(),
                 tenferro_tensor::StorageBuffer::Backend(Box::new(storage)),
@@ -286,16 +275,12 @@ impl CudaRuntime {
             .map(tenferro_tensor::Tensor::from_typed)
         }
         match value.dtype() {
-            DType::F64 => rebuild::<f64>(value, buffer, bytes, device, destination, domain, id),
-            DType::F32 => rebuild::<f32>(value, buffer, bytes, device, destination, domain, id),
-            DType::I32 => rebuild::<i32>(value, buffer, bytes, device, destination, domain, id),
-            DType::I64 => rebuild::<i64>(value, buffer, bytes, device, destination, domain, id),
-            DType::C32 => {
-                rebuild::<Complex32>(value, buffer, bytes, device, destination, domain, id)
-            }
-            DType::C64 => {
-                rebuild::<Complex64>(value, buffer, bytes, device, destination, domain, id)
-            }
+            DType::F64 => rebuild::<f64>(value, buffer, bytes, destination),
+            DType::F32 => rebuild::<f32>(value, buffer, bytes, destination),
+            DType::I32 => rebuild::<i32>(value, buffer, bytes, destination),
+            DType::I64 => rebuild::<i64>(value, buffer, bytes, destination),
+            DType::C32 => rebuild::<Complex32>(value, buffer, bytes, destination),
+            DType::C64 => rebuild::<Complex64>(value, buffer, bytes, destination),
             DType::Bool | DType::External(_) => Err(crate::Error::unsupported(
                 "cuda copy",
                 "the transfer route does not serve this dtype",

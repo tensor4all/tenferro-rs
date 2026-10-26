@@ -21,7 +21,7 @@ use super::dispatch::{pod_arg, Dispatcher};
 use super::engine::CudaEngine;
 use super::launch::layout_arg;
 use super::runtime::CudaRuntime;
-use super::storage::{fresh_identity, CudaStorage};
+use super::storage::CudaStorage;
 
 /// Scalars the structural slice serves today.
 macro_rules! with_scalar {
@@ -77,14 +77,7 @@ pub(crate) fn alloc_tensor(
             .alloc_zeroed(bytes, 256)
             .map_err(|error| crate::Error::runtime_state_source("cuda allocate", error))?
     };
-    let (domain, id) = fresh_identity(runtime);
-    let storage = CudaStorage {
-        buffer,
-        bytes,
-        device: runtime.device_ordinal(),
-        domain,
-        id,
-    };
+    let storage = super::storage::fresh_storage(runtime, bytes, buffer);
     with_scalar!(dtype, |T| Ok(Tensor::from_typed(
         TypedTensor::<T>::from_buffer_col_major(
             shape.to_vec(),
@@ -193,7 +186,7 @@ impl CudaEngine {
                 "expected a CUDA allocation of this runtime",
             ));
         }
-        Ok(&storage.buffer)
+        Ok(storage.allocation())
     }
 
     /// A compact device copy of `source` into fresh storage of this runtime, labelled with

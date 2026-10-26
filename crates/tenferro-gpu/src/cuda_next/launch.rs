@@ -193,5 +193,5 @@ pub fn layout_arg<'a>(layout: &'a CLayout) -> Arg<'a> {
 /// runtime's own ownership checks.
 #[doc(hidden)]
 pub fn device_buffer(tensor: &tenferro_tensor::Tensor) -> Option<&t4a_cuda_runtime::Buffer> {
-    super::pending::cuda_storage(tensor).map(|storage| &storage.buffer)
+    super::pending::cuda_storage(tensor).map(|storage| storage.allocation())
 }

@@ -22,6 +22,18 @@
 
 pub use crate::cuda::{cuda_devices, CudaDeviceError, CudaDeviceId, CudaDeviceInfo};
 
+/// The CUDA backend's seam identity.
+///
+/// Its allocation is the `t4a-cuda-runtime` buffer the runtime hands out; a
+/// [`gpu::Buffer<CudaBackend>`] owns it, so no consumer reaches into tensor storage for a
+/// device address.
+#[doc(hidden)]
+pub struct CudaBackend;
+
+impl crate::gpu::Backend for CudaBackend {
+    type Allocation = t4a_cuda_runtime::Buffer;
+}
+
 /// Whether any CUDA device is usable, probed through the new runtime rather than the
 /// CubeCL path, so a new-path test cannot be skipped because the old backend failed.
 #[doc(hidden)]
