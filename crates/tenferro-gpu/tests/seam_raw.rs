@@ -85,3 +85,17 @@ fn the_runtime_runs_a_plan_setup_with_its_context_current() {
         });
     assert!(refused.is_err(), "the closure's failure is reported");
 }
+
+#[test]
+fn an_extension_reaches_the_concrete_engine_through_the_engine_trait() {
+    use tenferro_gpu::cuda_next::raw::with_cuda_engine;
+
+    let Some(mut engine) = engine() else { return };
+    let domain = engine.runtime().allocation_domain_id();
+    // As an extension does: it holds `&mut dyn Engine`, and reaches this engine's own surface.
+    let visited = with_cuda_engine(&mut engine, |concrete| {
+        concrete.runtime().allocation_domain_id()
+    })
+    .expect("the engine is this backend's");
+    assert_eq!(visited, domain);
+}

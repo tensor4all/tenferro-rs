@@ -4365,4 +4365,12 @@ impl tenferro_tensor::Engine for CudaEngine {
         let indices = self.device_read(start_indices, op)?;
         self.gather(operand, indices, config)
     }
+
+    fn native_engine(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
+        // SAFETY: the marker is crate-private and this is the only place a token carrying it is
+        // created; it points at a live `CudaEngine`, exclusively borrowed for the token's lifetime.
+        Some(unsafe {
+            tenferro_tensor::NativeSessionRef::new::<super::raw::CudaEngineMarker, _>(self)
+        })
+    }
 }

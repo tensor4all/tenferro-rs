@@ -254,6 +254,27 @@ impl<'s> Session<'s> {
     }
 }
 
+/// Marks a [`NativeSessionRef`](tenferro_tensor::NativeSessionRef) as this engine's, so an
+/// extension can reach the concrete engine through `&mut dyn Engine`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CudaEngineMarker;
+
+/// Visit this engine through the tensor crate's engine trait, as an extension does.
+///
+/// Returns `None` when `engine` is not this backend's engine.
+#[doc(hidden)]
+pub fn with_cuda_engine<B, R>(engine: &mut B, f: impl FnOnce(&mut CudaEngine) -> R) -> Option<R>
+where
+    B: tenferro_tensor::Engine + ?Sized,
+{
+    let pointer = engine
+        .native_engine()?
+        .into_marked_ptr::<CudaEngineMarker>()?;
+    // SAFETY: only this crate's `native_engine` creates a token carrying this marker, and it points
+    // that token at a live `CudaEngine`; the `&mut B` keeps the exclusive borrow for the visit.
+    Some(f(unsafe { pointer.cast::<CudaEngine>().as_mut() }))
+}
+
 impl CudaEngine {
     /// Run `f` inside this engine's raw scope.
     ///
