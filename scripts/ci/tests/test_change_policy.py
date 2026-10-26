@@ -288,6 +288,9 @@ class LocalGateTests(unittest.TestCase):
         # mechanisms with no recorded sites (the real entries would all read as
         # stale).
         shutil.copy2(ROOT / "scripts" / "audit-engine-entry.py", self.repo / "scripts")
+        # The gate asserts one version per dependency identity on every non-docs
+        # change; the fixture's stub cargo prints no tree, so it passes.
+        shutil.copy2(ROOT / "scripts" / "check-single-versions.sh", self.repo / "scripts")
         allowlist = json.loads(
             (ROOT / "scripts" / "engine-entry-allowlist.json").read_text(encoding="utf-8")
         )
