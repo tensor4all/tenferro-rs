@@ -96,7 +96,9 @@ pub(crate) fn alloc_tensor(
         TypedTensor::<T>::from_buffer_col_major(
             shape.to_vec(),
             StorageBuffer::Backend(Box::new(storage)),
-            tenferro_tensor::Placement::default(),
+            // The allocation lives on this runtime's device: the tensor's placement has to say so,
+            // or the runtime's output-residency check reads it as host memory.
+            super::transfer::placement(runtime),
         )?
     )))
 }

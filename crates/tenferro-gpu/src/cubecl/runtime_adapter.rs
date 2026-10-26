@@ -30,8 +30,8 @@ const UNKNOWN_CORE_OPERATION: &str = "unknown-core-operation";
 
 #[derive(Debug)]
 pub(crate) struct PreparedCudaRegistrationIdentity {
-    engine_id: EngineId,
-    provider_device_identity: ProviderDeviceIdentity,
+    pub(crate) engine_id: EngineId,
+    pub(crate) provider_device_identity: ProviderDeviceIdentity,
 }
 
 pub(crate) fn prepare_cuda_registration_identity(

@@ -330,6 +330,19 @@ same preparation logic instead of a second copy — the port is then the five tr
 contract that recognises this path's storage, and an integration test that prepares and runs one
 operation through `Runtime`.
 
+## A prepared program runs end to end on the new engine
+
+`cuda_next::runtime_adapter::runtime_engine_registration` builds the registration from the same
+preparation logic (this engine's context identity plus an ingress that recognises this path's own
+allocations), and `seam_runtime` now registers it with a `Runtime`, prepares `x + x` and runs it:
+the prepared plan reaches `Engine`'s elementwise hook, executes on the dispatcher, and the output
+values come back through `download_tensor`.
+
+That first run also found a real defect: `alloc_tensor` labelled every produced tensor with the
+default placement, i.e. host memory, while the storage was a device allocation. The tensor surface
+never read the label, so nothing failed; the runtime's output-residency check does read it, and
+refused the output. Every produced tensor now carries the runtime's device placement.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index

@@ -55,6 +55,7 @@ mod pending;
 mod pinned;
 mod publication;
 mod runtime;
+pub mod runtime_adapter;
 mod storage;
 mod structural;
 mod transfer;

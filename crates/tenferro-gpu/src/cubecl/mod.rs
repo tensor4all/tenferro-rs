@@ -174,7 +174,7 @@ mod permutation;
 mod plan_cache;
 pub(crate) mod raw;
 mod runtime;
-mod runtime_adapter;
+pub(crate) mod runtime_adapter;
 #[cfg(feature = "cubecl-interop")]
 pub(crate) mod session_cubecl;
 mod transfer;

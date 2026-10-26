@@ -148,3 +148,50 @@ fn the_driver_orders_a_launch_behind_its_dependency_and_retires_it() {
     second.wait().expect("the last token completes");
     assert_eq!(launches.load(Ordering::SeqCst), 2);
 }
+
+#[test]
+fn a_prepared_elementwise_program_runs_on_the_new_engine() {
+    use tenferro_gpu::cuda_next::{download_tensor, upload_tensor};
+    use tenferro_runtime::{ExecutionEngine, GraphCompiler, Output, Runtime, TracedTensor};
+    use tenferro_tensor::{DType, Tensor, TensorRead};
+
+    let Some(mut engine) = engine() else { return };
+    let registration =
+        tenferro_gpu::cuda_next::runtime_adapter::runtime_engine_registration(&engine)
+            .expect("registration");
+    let mut builder = Runtime::builder();
+    builder.register_engine(registration).expect("register");
+    let runtime = builder.build().expect("runtime");
+
+    // `x + x`, one elementwise node.
+    let input = TracedTensor::input_symbolic_shape(DType::F32, 1).expect("graph input");
+    let sum = input.add(&input).expect("graph add");
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&sum, &[(&input, DType::F32, &[4])])
+        .expect("compile");
+
+    let host =
+        Tensor::from_vec_col_major(vec![4], vec![1.0f32, 2.0, 3.0, 4.0]).expect("host input");
+    let device = upload_tensor(engine.runtime(), &host).expect("upload");
+    let target = engine.target();
+    let prepared = runtime
+        .prepare(&program, &[TensorRead::from_tensor(&device)], &[target])
+        .expect("prepare");
+    let outputs = runtime
+        .run(
+            &mut [&mut engine],
+            &prepared,
+            &[TensorRead::from_tensor(&device)],
+        )
+        .expect("run");
+    let output = outputs
+        .into_iter()
+        .next()
+        .and_then(Output::into_owned)
+        .expect("output");
+    let values = download_tensor(engine.runtime(), &output).expect("download");
+    assert_eq!(
+        values.as_slice::<f32>().expect("f32 payload"),
+        &[2.0, 4.0, 6.0, 8.0]
+    );
+}
