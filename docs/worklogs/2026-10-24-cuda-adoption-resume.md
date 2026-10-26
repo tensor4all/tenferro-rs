@@ -273,8 +273,11 @@ and split strategies, plus a two-axis sum-of-squares regression).
 `gather` and `scatter_add` follow: three device-resident layouts each, plus the plan's arrays,
 which `pack_gather_plan`/`pack_scatter_plan` return as one packed vector — so the four (gather) or
 three (scatter) array pointers `CGatherPlanAny`/`CScatterPlanAny` take are offsets inside one
-uploaded buffer, taken from the scope's base address. A rank-9 gather (all axes collapsed, so each
-index selects one element of its batch) and an additive scatter over the same operand are the test.
+uploaded buffer, taken from the scope's base address. The test's window rides operand axis 8 while the start selects axis 7, so the window,
+offset, start-map and slice-size arrays are all non-empty and distinct — the first version collapsed
+every axis, which left all four pointers at the same address and would have passed with the order
+swapped (the review caught that), and an additive scatter mirrors it with distinct window, update
+and scatter arrays.
 
 The remaining families, and what each needs beyond the pattern above:
 

@@ -506,49 +506,64 @@ fn a_rank_nine_dynamic_slice_uses_the_general_path() {
 #[test]
 fn a_rank_nine_gather_and_scatter_use_the_general_path() {
     let Some(mut engine) = engine() else { return };
-    // Nine axes on the operand, so its layout and the plan's arrays all travel in device memory.
-    // Axis 0 carries the gather window, axis 8 the batch.
-    let operand_shape = vec![3usize, 1, 1, 1, 1, 1, 1, 1, 2];
-    let operand_data: Vec<f64> = (0..6).map(|index| index as f64 + 1.0).collect();
+    // A rank-9 operand whose window rides axis 8 and whose start selects axis 7, so the plan's
+    // window, offset, start-map and slice-size arrays are all non-empty and distinct: a swapped
+    // pointer order would fail this.
+    let operand_shape = vec![3usize, 1, 1, 1, 1, 1, 1, 2, 4];
+    let operand_data: Vec<f64> = (0..24).map(|index| index as f64).collect();
     let operand = device(&engine, operand_shape.clone(), operand_data.clone());
-    let indices_host = Tensor::from_vec_col_major(vec![2, 1], vec![0i64, 2]).expect("indices");
+    // Column-major strides of the operand: axis 0 fastest, then axis 7, then axis 8.
+    let (stride_7, stride_8) = (3usize, 6);
+    let indices_host = Tensor::from_vec_col_major(vec![2, 1], vec![0i64, 1]).expect("indices");
     let indices = upload_tensor(engine.runtime(), &indices_host).expect("upload indices");
+
     let gathered = engine
         .gather(
             &operand,
             &indices,
             &tenferro_tensor::GatherConfig {
-                offset_dims: vec![],
-                collapsed_slice_dims: vec![0, 1, 2, 3, 4, 5, 6, 7, 8],
-                start_index_map: vec![0],
+                // The window rides operand axis 8 and lands on the second output axis.
+                offset_dims: vec![1],
+                collapsed_slice_dims: vec![0, 1, 2, 3, 4, 5, 6, 7],
+                start_index_map: vec![7],
                 index_vector_dim: 1,
-                slice_sizes: vec![1, 1, 1, 1, 1, 1, 1, 1, 1],
+                slice_sizes: vec![1, 1, 1, 1, 1, 1, 1, 1, 2],
             },
         )
         .expect("rank-9 gather");
-    // One batch per index; each takes the single element at that axis-0 row of its axis-8 slice.
-    assert_eq!(gathered.shape(), &[2]);
-    assert_eq!(read(&engine, &gathered), vec![1.0, 3.0]);
+    // One batch per start, each taking the two-element window along axis 8 of its axis-7 row.
+    assert_eq!(gathered.shape(), &[2, 2]);
+    let mut expected = Vec::new();
+    for window in 0..2 {
+        for batch in 0..2 {
+            expected.push(operand_data[batch * stride_7 + window * stride_8]);
+        }
+    }
+    assert_eq!(read(&engine, &gathered), expected);
 
-    // Additive scatter over the same rank-9 operand.
-    let updates = device(&engine, vec![2], vec![10.0, 20.0]);
+    // The additive scatter mirrors it: one update window per start, added into the operand copy.
+    let update_shape = vec![2usize, 2];
+    let updates_data = vec![1.0f64, 2.0, 3.0, 4.0];
+    let updates = device(&engine, update_shape, updates_data.clone());
     let scattered = engine
         .scatter(
             &operand,
             &indices,
             &updates,
             &tenferro_tensor::ScatterConfig {
-                update_window_dims: vec![],
-                inserted_window_dims: vec![0, 1, 2, 3, 4, 5, 6, 7, 8],
-                scatter_dims_to_operand_dims: vec![0],
+                update_window_dims: vec![1],
+                inserted_window_dims: vec![0, 1, 2, 3, 4, 5, 6, 7],
+                scatter_dims_to_operand_dims: vec![7],
                 index_vector_dim: 1,
             },
         )
         .expect("rank-9 scatter");
     assert_eq!(scattered.shape(), &operand_shape[..]);
-    let observed = read(&engine, &scattered);
     let mut expected = operand_data;
-    expected[0] += 10.0;
-    expected[2] += 20.0;
-    assert_eq!(observed, expected);
+    for window in 0..2 {
+        for batch in 0..2 {
+            expected[batch * stride_7 + window * stride_8] += updates_data[batch + window * 2];
+        }
+    }
+    assert_eq!(read(&engine, &scattered), expected);
 }
