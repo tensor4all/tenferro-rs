@@ -167,6 +167,21 @@ Fixes made after the review, each verified against the shared contract:
   below `2^31 - 1` inclusive, both below `2^63` exclusive, the real component of a complex
   source) and reports the offending element.
 
+## The extension hook is designed, not implemented
+
+`docs/design/cuda-extension-hook-2208.md` records what `tenferro-fft` and `tenferro-linalg`
+call on the CubeCL raw session (counted per primitive), how each maps onto
+`CudaRuntime::with_raw_locked`, the four ownership rules the hook has to keep, and the
+sequencing: hook → fft → linalg → the `cuda::` flip with `ExecutionEngine`, the registration,
+the capability table and the CubeCL deletion. That is the bulk of what is left, and it is a
+move verified by the extension crates' own A100 tests rather than by new design.
+
+Two review findings are accepted rather than fixed now, with reasons: the pre-existing
+`Dispatcher` methods stay `pub` because `seam_dispatch` exercises them as an external crate — the
+clean fix is to fold that test target into the crate when the CI inventory is rebuilt at U6 — and
+the cuTENSOR plan cache still allocates one workspace per cached plan instead of sharing one
+per stream, which is a bounded perf item, not a correctness one.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index
