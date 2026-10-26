@@ -48,6 +48,7 @@ pub use crate::gpu;
 mod cutensor;
 mod dispatch;
 mod engine;
+mod event_domain;
 mod fusion;
 mod launch;
 mod pending;

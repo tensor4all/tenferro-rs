@@ -300,6 +300,19 @@ What each remaining entry would need, for reference:
 Each is a `_wide` variant of its dispatcher wrapper plus a branch in the tensor-surface caller,
 verified by extending the rank-9 test to that family. Nothing about them is a design question.
 
+## The engine joins the runtime's prepared-program model
+
+`cuda_next::CudaEngine` now implements `ExecutionEngine`: its target names the CUDA engine id and
+the runtime's own allocation domain, it lends and takes back the runtime's extension caches, marks
+itself broken, and hands out a stream-ordered event-domain driver (`cuda_next/event_domain.rs`).
+That driver models a run as one stream position: a launch is admitted after its dependency tokens
+have completed, and the token it returns waits on the completion the runtime records afterwards, so
+ordering is the runtime's own stream order rather than a second queue. Runs retire lazily — at the
+next synchronise, past sixteen queued runs, or at drop — and the retirement is the runtime's
+synchronise. `seam_runtime` covers the target, the allocation domain and the cache hand-off; the
+driver's ordering needs an `EventDomainId`, which only a registered runtime mints, so that test
+belongs with the registration.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index

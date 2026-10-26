@@ -41,6 +41,23 @@ impl From<GpuError> for CudaEngineError {
     }
 }
 
+/// How many prepared-program runs the engine retires lazily before draining the oldest.
+const MAX_PENDING_RUNS: usize = 16;
+
+/// The runtime engine id this backend registers under.
+///
+/// The same identifier the CubeCL-backed engine uses, because both are implementations of the
+/// same backend: the cutover replaces the implementation, not the registration name.
+pub(crate) const DEFAULT_RUNTIME_ENGINE_ID: &str = "tenferro.cuda.default.v1";
+
+/// The built-in CUDA engine id, which is a valid identifier by construction.
+pub(crate) fn default_runtime_engine_id() -> tenferro_runtime::EngineId {
+    match tenferro_runtime::EngineId::new(DEFAULT_RUNTIME_ENGINE_ID) {
+        Ok(id) => id,
+        Err(_) => unreachable!("the built-in CUDA engine id is a valid identifier"),
+    }
+}
+
 /// A CUDA engine: one runtime, one numerical submission path, one module cache.
 ///
 /// `Send`, not `Sync`: submission borrows the runtime mutably on the calling thread.
@@ -54,6 +71,15 @@ pub struct CudaEngine {
     /// The cuTENSOR handle, created on the first contraction: a plan cache lives beside
     /// it, so a contraction reuses its plan instead of planning on every call.
     cutensor: Option<super::Cutensor>,
+    /// The runtime engine id this engine runs prepared programs as.
+    runtime_engine_id: tenferro_runtime::EngineId,
+    /// Extension caches the runtime lends to extension executors during a run.
+    extension_caches: tenferro_runtime::ExtensionCacheStore,
+    /// Prepared-program runs whose device work may still be in flight; they are retired at the
+    /// next synchronise, when the queue grows past [`MAX_PENDING_RUNS`], or at drop.
+    pending_runs: Vec<Box<dyn tenferro_runtime::EventDomainRun>>,
+    /// Set when the runtime reported an unrecoverable failure.
+    broken: bool,
     // `!Sync` explicitly rather than by inheritance from the runtime's auto traits.
     _not_sync: PhantomData<std::cell::Cell<()>>,
 }
@@ -89,6 +115,10 @@ impl CudaEngine {
         Ok(CudaEngine {
             runtime: CudaRuntime::new(device_id)?,
             cutensor: None,
+            runtime_engine_id: default_runtime_engine_id(),
+            extension_caches: tenferro_runtime::ExtensionCacheStore::default(),
+            pending_runs: Vec::new(),
+            broken: false,
             _not_sync: PhantomData,
         })
     }
@@ -185,5 +215,68 @@ impl Drop for CudaEngine {
         // the engine goes away. A buffer keeps the allocation domain alive; this
         // never closes a runtime that another handle still uses.
         self.runtime.synchronize_best_effort();
+    }
+}
+
+impl tenferro_runtime::ExecutionEngine for CudaEngine {
+    fn target(&self) -> tenferro_runtime::EngineTarget {
+        tenferro_runtime::EngineTarget::new(
+            self.runtime_engine_id.clone(),
+            tenferro_runtime::ExecutionContextIdentity::of::<CudaEngine>(),
+            Some(self.runtime.allocation_domain_id()),
+        )
+    }
+
+    fn take_extension_caches(&mut self) -> tenferro_runtime::ExtensionCacheStore {
+        std::mem::take(&mut self.extension_caches)
+    }
+
+    fn restore_extension_caches(&mut self, caches: tenferro_runtime::ExtensionCacheStore) {
+        self.extension_caches = caches;
+    }
+
+    fn mark_broken(&mut self) {
+        self.broken = true;
+    }
+
+    fn event_domain_driver(&self) -> std::sync::Arc<dyn tenferro_runtime::EventDomainDriver> {
+        std::sync::Arc::new(super::event_domain::StreamEventDomainDriver::new(
+            self.runtime.clone(),
+        ))
+    }
+
+    fn retire_run(
+        &mut self,
+        run: Box<dyn tenferro_runtime::EventDomainRun>,
+    ) -> tenferro_runtime::Result<()> {
+        // The run's device work stays ordered on this engine's stream, so its outputs are usable
+        // by later operations right away; it is retired at the next synchronise, at drop, or when
+        // too many accumulate.
+        self.pending_runs.push(run);
+        if self.pending_runs.len() > MAX_PENDING_RUNS {
+            let mut oldest = self.pending_runs.remove(0);
+            oldest.drain()?;
+        }
+        Ok(())
+    }
+
+    fn synchronize(&mut self) -> tenferro_runtime::Result<()> {
+        self.runtime
+            .synchronize()
+            .map_err(super::event_domain::event_domain_error)?;
+        let mut first_error = None;
+        for mut run in self.pending_runs.drain(..) {
+            if let Err(error) = run.drain() {
+                first_error.get_or_insert(error);
+            }
+        }
+        match first_error {
+            None => Ok(()),
+            Some(error) => Err(error),
+        }
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }

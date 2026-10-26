@@ -33,6 +33,7 @@
   "ExecutionEngine implementation": {
     "crates/tenferro-cpu/src/runtime_adapter.rs::CpuEngine": "CPU prepared-program target: one engine value is the runtime target for one supplied slot (#2206)",
     "crates/tenferro-gpu/src/cubecl/engine.rs::CudaEngine": "CUDA prepared-program target: one engine value is the runtime target for one supplied slot; retirement stays engine-owned (#2206)",
+    "crates/tenferro-gpu/src/cuda_next/engine.rs::CudaEngine": "the new CUDA path's prepared-program target (#2208 U6): the engine already owns the runtime, its single stream and its submission path, and the driver orders every run on that same stream — this adds no second queue",
     "crates/tenferro-gpu/src/webgpu/mod.rs::WebGpuBackend": "WebGPU prepared-program target: one engine value is the runtime target for one supplied slot (#2206)"
   }
 }
