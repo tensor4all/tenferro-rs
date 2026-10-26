@@ -65,3 +65,23 @@ fn a_tensor_of_another_engine_is_refused() {
         "a tensor of another runtime must be refused, not addressed"
     );
 }
+
+#[test]
+fn the_runtime_runs_a_plan_setup_with_its_context_current() {
+    let Some(engine) = engine() else { return };
+    // A plan is created outside any scope: the context has to be current for the vendor call, and
+    // the closure's failure has to come back unchanged.
+    let value = engine
+        .runtime()
+        .with_current_context("seam_raw", || Ok(7u32))
+        .expect("context scope");
+    assert_eq!(value, 7);
+    let refused: tenferro_tensor::Result<u32> =
+        engine.runtime().with_current_context("seam_raw", || {
+            Err(tenferro_tensor::Error::unsupported(
+                "seam_raw",
+                "the vendor refused the plan",
+            ))
+        });
+    assert!(refused.is_err(), "the closure's failure is reported");
+}

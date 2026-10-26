@@ -190,6 +190,25 @@ impl CudaRuntime {
             .map_err(|error| crate::Error::runtime_state_source("cuda raw scope", error))
     }
 
+    /// Run `f` with this runtime's CUDA context current, for a vendor call that only sets up state
+    /// (a cuFFT or cuSOLVER plan) and enqueues nothing.
+    ///
+    /// # Errors
+    ///
+    /// The closure's own failure, and the runtime's when the context cannot be activated.
+    #[doc(hidden)]
+    pub fn with_current_context<R>(
+        &self,
+        op: &'static str,
+        f: impl FnOnce() -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        // SAFETY: the scope activates this runtime's context for the closure's duration; it declares
+        // no resources, so nothing is registered against the closure's work.
+        unsafe { self.with_raw_locked(Vec::new(), |_scope| f()) }
+            .and_then(|result| result)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
+    }
+
     /// Resource counters of this runtime.
     ///
     /// The snapshot is the runtime's own: live and pooled device bytes, pending
