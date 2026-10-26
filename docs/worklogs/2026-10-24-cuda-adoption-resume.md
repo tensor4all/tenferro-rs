@@ -360,6 +360,19 @@ inside. Since both extension crates allocate inside the hook (cuFFT's per-execut
 cuSOLVER's output tensors), the hook needs one more upstream addition (`RawScope::alloc_zeroed`),
 which is recorded in `docs/design/cuda-extension-hook-2208.md` as a decision for the maintainer.
 
+## Both upstream pieces the hook needs are in
+
+t4a-gpu-backend#9 (`1b23d9a`) added `RawScope::register`, and #10 (`a3e242d`) added
+`RawScope::alloc_zeroed` — allocation through the domain the scope already owns, zero-filled on the
+scope's stream, addressable after `register`. `crates/tenferro-gpu` is pinned at `a3e242d` and
+builds. Transfers deliberately stay outside a scope: re-entering the runtime's admission from inside
+one deadlocks (the first version of #10 hung on exactly that, and the test that caught it now
+allocates and registers instead).
+
+The hook has its four primitives, so the cuFFT port can start: `alloc_bytes` → `alloc_zeroed` +
+`register`, `tensor`/`tensor_mut` → `register` + the typed pointer, `retain_tensor` → `retain`,
+`stream()` → the scope's stream.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index

@@ -74,8 +74,15 @@ its workspace per execution (`raw.alloc_bytes`) and cuSOLVER allocates every out
 align)` (and, for the extensions' uploads, `RawScope::upload(bytes)`), which allocates through the
 domain the scope already owns.
 
-That is a second, equally small change in the same repository; it should be decided together with
-this hook's shape rather than assumed, because it widens what a raw scope may do.
+Decided (route A) and landed as t4a-gpu-backend#10 (`a3e242d`, pinned): `RawScope::alloc_zeroed`
+allocates through the domain the scope already owns and zero-fills on the scope's stream; the
+result becomes addressable by registering it. Transfers stay outside the scope — their admission is
+the runtime's own and re-entering it from a scope deadlocks, which the first version of that change
+proved by hanging — so the hook's `upload`/`download` entries are built on the pre-opened runtime
+rather than inside the scope.
+
+The hook therefore has everything it needs: `alloc_zeroed` for scratch, `register` for any buffer it
+learns about mid-scope, `retain` for what a vendor call keeps reading, and the stream.
 
 ## Sequencing
 
