@@ -186,6 +186,25 @@ move verified by the extension crates' own A100 tests rather than by new design.
   the clean fix is to fold that test target into the crate when the CI inventory is rebuilt at
   U6.
 
+## What rank > 8 will cost (recorded before starting it)
+
+The kernel crate's general path does not take a wider layout in the launch parameter block: the
+`_any` entries read the geometry — extents then strides, `LayoutRef::pack` order — from
+**device memory**, and the mirrors (`CLayoutAny`, `CAxisValuesAny`, `CGatherPlanAny`) carry raw
+device pointers to those arrays. So rank > 8 needs one shared mechanism in the launch core
+before any family can use it:
+
+1. pack a layout's geometry into a device allocation and register it with the scope;
+2. open the raw scope with the operands *and* the geometry registered, so the mirrors can be
+   built from `scope.device_ptr` inside it;
+3. launch the `_any` symbol of the entry (`GeneralEntry::ALL` maps each entry to its general
+   name; `KernelModules::function` binds by the fast name today and must choose by the planned
+   `RankVariant`);
+4. keep the geometry alive until the same completion as the operands.
+
+That is the same shape for every family, so it lands once in `launch.rs`/`dispatch.rs` and then
+each family converts mechanically.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index
