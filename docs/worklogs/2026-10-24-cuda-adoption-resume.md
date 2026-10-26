@@ -347,6 +347,19 @@ residency check although the operation itself works — the lookup serves `Bool`
 comparison is the second end-to-end test. Two registration-only accessors are crate-visible instead
 of documented-public.
 
+## Route A started: mid-scope registration is upstream
+
+`t4a-gpu-backend#9` (`1b23d9a`) adds `RawScope::register(&Buffer)`: a caller that learns which
+allocation it will address while the scope is open registers it there, under the same domain rule
+as a declared resource, and `device_ptr` accepts it afterwards. `crates/tenferro-gpu` is pinned at
+that commit and builds.
+
+Writing the hook against it exposed the next constraint: the runtime's submission mutex is held for
+the whole raw closure, so nothing that re-takes it — including every allocating helper — can run
+inside. Since both extension crates allocate inside the hook (cuFFT's per-execution workspace,
+cuSOLVER's output tensors), the hook needs one more upstream addition (`RawScope::alloc_zeroed`),
+which is recorded in `docs/design/cuda-extension-hook-2208.md` as a decision for the maintainer.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index

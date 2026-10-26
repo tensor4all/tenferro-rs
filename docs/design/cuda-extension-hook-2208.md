@@ -59,6 +59,24 @@ kernel catalogue's entries, and an extension's own module needs the same
 4. **No second validation source.** The hook passes pointers and sizes; the extension crate keeps
    its own library-level validation (shape, workspace size, plan compatibility), as it does today.
 
+## What the hook cannot do with the current upstream API
+
+`RawScope::register` is in (t4a-gpu-backend#9, pinned at `1b23d9a`), so a hook can address a buffer it
+only learns about while the scope is open — which is what "the extension picks its operand at
+execution time" needed.
+
+Allocating inside the scope is still impossible: `CudaRuntime::with_raw_locked` holds the runtime's
+submission mutex for the whole closure, so any `&self` helper that takes the guard again
+(`alloc_zeroed`, `upload_bytes`, `download_bytes`, `alloc_pinned`) would deadlock, and `RawScope`
+exposes no allocator of its own. Both extension crates allocate inside the hook — cuFFT allocates
+its workspace per execution (`raw.alloc_bytes`) and cuSOLVER allocates every output tensor
+(`raw.alloc_output`) — so the hook needs one more upstream addition: `RawScope::alloc_zeroed(bytes,
+align)` (and, for the extensions' uploads, `RawScope::upload(bytes)`), which allocates through the
+domain the scope already owns.
+
+That is a second, equally small change in the same repository; it should be decided together with
+this hook's shape rather than assumed, because it widens what a raw scope may do.
+
 ## Sequencing
 
 1. `cuda_next/raw.rs`: `Session<'s>`, `StreamRef`, `DeviceBytes`, `TensorRef`, `TensorMut`,
