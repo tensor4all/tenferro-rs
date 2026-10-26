@@ -179,6 +179,10 @@ impl CudaEngine {
         input: TensorRead<'a>,
         op: &'static str,
     ) -> crate::Result<&'a Tensor> {
+        // An engine the runtime marked broken accepts no further numerical submission; the
+        // synchronise and retirement paths stay available for teardown.
+        self.ensure_healthy()
+            .map_err(|error| crate::Error::runtime_state(op, error.to_string()))?;
         match input {
             TensorRead::Tensor(tensor) if !is_host(tensor) => Ok(tensor),
             TensorRead::Tensor(_) => Err(crate::Error::unsupported(

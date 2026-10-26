@@ -309,9 +309,16 @@ That driver models a run as one stream position: a launch is admitted after its 
 have completed, and the token it returns waits on the completion the runtime records afterwards, so
 ordering is the runtime's own stream order rather than a second queue. Runs retire lazily — at the
 next synchronise, past sixteen queued runs, or at drop — and the retirement is the runtime's
-synchronise. `seam_runtime` covers the target, the allocation domain and the cache hand-off; the
-driver's ordering needs an `EventDomainId`, which only a registered runtime mints, so that test
-belongs with the registration.
+synchronise. `seam_runtime` covers the target, the allocation domain, a populated cache round trip, and the
+driver itself: a preparation-only registration mints an `EventDomainId` without any CUDA machinery,
+so a run's launch, its dependency wait and its retirement are exercised on the device. The review of
+this step found three defects, all fixed: the runtime's own synchronise can report an observation
+error before it reaches the stream barrier, so a failed drain now runs the barrier itself (through
+the runtime's raw scope) before it reports failure, which keeps retirement a boundary on the error
+path without an upstream change; a failure from the engine's synchronise no longer skips the queued
+runs' retirement; and `mark_broken` now refuses further numerical submission (every operation reads
+an operand, so `device_read` is the single gate) while leaving synchronise and retirement available
+for teardown.
 
 ## Remaining, in order
 

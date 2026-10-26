@@ -99,17 +99,45 @@ impl EventDomainRun for StreamEventDomainRun {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.runtime.synchronize().map_err(event_domain_error)
         }));
+        // Both outcomes are retirement boundaries. The runtime's own synchronise can report an
+        // observation error before it reaches the stream barrier, so an error path waits for the
+        // stream itself before the run reports failure.
+        let waited = match &result {
+            Ok(Ok(())) => true,
+            _ => self.wait_stream(),
+        };
+        if waited {
+            self.state = EventDomainRunState::Retired;
+        }
         match result {
-            Ok(Ok(())) => {
-                self.state = EventDomainRunState::Retired;
-                Ok(())
-            }
+            Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => Err(error),
             Err(_) => Err(RuntimeError::from(crate::Error::backend_source(
                 EVENT_OP,
                 std::io::Error::other("the event-domain retirement panicked"),
             ))),
         }
+    }
+}
+
+impl StreamEventDomainRun {
+    /// Wait for this runtime's stream directly, for the paths where the runtime's own
+    /// synchronise reported an error before its barrier.
+    fn wait_stream(&self) -> bool {
+        let waited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: the scope hands out this runtime's own stream and nothing else; a barrier on
+            // it neither reads nor writes an operand.
+            unsafe {
+                self.runtime
+                    .with_raw_locked(Vec::new(), |scope| {
+                        let stream =
+                            scope.stream() as usize as *mut cudarc::driver::sys::CUstream_st;
+                        cudarc::driver::sys::cuStreamSynchronize(stream)
+                    })
+                    .is_ok()
+            }
+        }));
+        matches!(waited, Ok(true))
     }
 }
 

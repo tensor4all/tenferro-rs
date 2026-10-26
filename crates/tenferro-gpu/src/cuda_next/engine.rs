@@ -174,6 +174,21 @@ impl CudaEngine {
         ))
     }
 
+    /// Refuse numerical submission on an engine the runtime marked broken.
+    ///
+    /// # Errors
+    ///
+    /// [`CudaEngineError::Seam`] with the seam's `Broken` cause after an unrecoverable failure; the
+    /// engine can still synchronise and retire, which is what teardown needs.
+    pub(crate) fn ensure_healthy(&self) -> Result<(), CudaEngineError> {
+        if self.broken {
+            return Err(CudaEngineError::Seam(crate::gpu::GpuError::Broken {
+                detail: "the runtime marked this engine broken".to_string(),
+            }));
+        }
+        Ok(())
+    }
+
     /// The engine's cuTENSOR handle, created on first use.
     ///
     /// # Errors
@@ -261,18 +276,21 @@ impl tenferro_runtime::ExecutionEngine for CudaEngine {
     }
 
     fn synchronize(&mut self) -> tenferro_runtime::Result<()> {
-        self.runtime
+        let synchronized = self
+            .runtime
             .synchronize()
-            .map_err(super::event_domain::event_domain_error)?;
+            .map_err(super::event_domain::event_domain_error);
+        // Every queued run is retired even when the runtime itself failed: otherwise a broken
+        // runtime would keep its runs queued forever.
         let mut first_error = None;
         for mut run in self.pending_runs.drain(..) {
             if let Err(error) = run.drain() {
                 first_error.get_or_insert(error);
             }
         }
-        match first_error {
-            None => Ok(()),
-            Some(error) => Err(error),
+        match (synchronized, first_error) {
+            (Ok(()), None) => Ok(()),
+            (Err(error), _) | (_, Some(error)) => Err(error),
         }
     }
 
