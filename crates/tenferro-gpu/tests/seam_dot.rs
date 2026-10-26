@@ -100,8 +100,9 @@ fn a_batched_product_matches_the_host() {
             &plain(&[2], &[1], &[0], &[0]),
         )
         .expect("batched dot_general");
-    assert_eq!(product.shape(), &[batches, m, n]);
-    let mut expected = vec![0.0f64; batches * m * n];
+    // `dot_general_output_shape` lists the free axes first and the batch axes last.
+    assert_eq!(product.shape(), &[m, n, batches]);
+    let mut expected = vec![0.0f64; m * n * batches];
     for batch in 0..batches {
         for column in 0..n {
             for row in 0..m {
@@ -110,7 +111,7 @@ fn a_batched_product_matches_the_host() {
                     sum += a[batch + row * batches + inner * batches * m]
                         * b[batch + inner * batches + column * batches * k];
                 }
-                expected[batch + row * batches + column * batches * m] = sum;
+                expected[batch * (m * n) + row + column * m] = sum;
             }
         }
     }
@@ -194,6 +195,56 @@ fn a_mispaired_configuration_is_refused() {
             TensorRead::from_tensor(&lhs),
             TensorRead::from_tensor(&rhs),
             &plain(&[2], &[0], &[], &[]),
+        )
+        .is_err());
+}
+
+#[test]
+fn an_axis_holding_two_roles_is_refused() {
+    let Some(mut engine) = engine() else { return };
+    let lhs = device(&engine, vec![2, 2], vec![1.0; 4]);
+    let rhs = device(&engine, vec![2, 2], vec![1.0; 4]);
+    // Axis 0 of `lhs` is both a batch and a contracting axis; the shared validator refuses
+    // it instead of letting one role silently overwrite the other.
+    assert!(engine
+        .dot_general_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &plain(&[0], &[1], &[0], &[0]),
+        )
+        .is_err());
+}
+
+#[test]
+fn an_empty_contraction_yields_zeros_and_refuses_to_scale_an_output() {
+    let Some(mut engine) = engine() else { return };
+    let lhs = device(&engine, vec![2, 0], Vec::new());
+    let rhs = device(&engine, vec![0, 3], Vec::new());
+    let product = engine
+        .dot_general_read(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &plain(&[1], &[0], &[], &[]),
+        )
+        .expect("empty contraction");
+    assert_eq!(product.shape(), &[2, 3]);
+    assert_eq!(read(&engine, &product), vec![0.0; 6]);
+
+    // Accumulating would have to scale the caller's output by beta, which this path does
+    // not serve; it refuses instead of leaving the output untouched.
+    let mut out = device(&engine, vec![2, 3], vec![1.0; 6]);
+    assert!(engine
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &plain(&[1], &[0], &[], &[]),
+            DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::F64(1.0),
+                beta: ContractionScalar::F64(1.0),
+            },
+            TensorWrite::from_tensor(&mut out),
         )
         .is_err());
 }

@@ -92,6 +92,29 @@ Deferred, recorded here rather than silently dropped:
   every borrowed view on this path, while the CubeCL path canonicalizes a same-device
   numeric view. The read hooks need the same treatment before the cutover.
 
+## Independent review of the `TensorDot` step (gpt-6.1-sol, post mode)
+
+Fixes made after the review, each verified against the shared contract:
+
+- **Output order was wrong.** `dot_general_output_shape` (and therefore every other backend)
+  puts the free axes first and the *batch axes last*; the mode assignment put batch first, and
+  the batched test asserted its own wrong order. Both now follow the shared order, and the
+  test's flat-index reference was corrected.
+- The configuration is validated by the shared `dot_general_output_shape`, which also refuses
+  an axis that holds two roles (a batch axis that is also a contracting axis); the local
+  per-list validation that let one role overwrite the other is gone.
+- `dot_general_read_into_accum` validates through `validate_dot_general_accumulation`, so a
+  coefficient of the wrong dtype is reported instead of being converted to a real zero.
+- An empty contraction (a zero contracted extent, or a zero output extent) returns the zeroed
+  allocation for the overwriting forms and refuses the accumulating forms, instead of reaching
+  cuTENSOR's descriptors, which require positive extents.
+- Both operand dtypes and residencies are checked before the destination allocation.
+- A vendor failure keeps the seam's classification (`Unsupported` stays `Unsupported`) instead
+  of being flattened into `RuntimeState` with a stringified source.
+- The plan cache is bounded to 32 plans with oldest-first retirement, so a varying-shape loop
+  cannot retain one device workspace per shape for the engine's lifetime. Reusing one
+  stream-owned workspace instead of one per plan stays open and is recorded here.
+
 ## Remaining, in order
 
 1. The float-index exactness check (`validate_float_indices` + `extract_invalid_float_index`)

@@ -342,6 +342,9 @@ impl Coefficient {
     }
 }
 
+/// How many contraction plans (and their device workspaces) one handle retains.
+const MAX_CACHED_PLANS: usize = 32;
+
 /// A cached plan and the workspace it was planned with.
 struct CachedPlan {
     descriptors: [ct::cutensorTensorDescriptor_t; 4],
@@ -358,6 +361,9 @@ pub struct Cutensor {
     handle: ct::cutensorHandle_t,
     runtime: CudaRuntime,
     plans: HashMap<Vec<i64>, CachedPlan>,
+    /// Insertion order of the cached plans, so the oldest plan (and its workspace) is the
+    /// one retired when the cache is full.
+    order: std::collections::VecDeque<Vec<i64>>,
     cold_plans: u64,
     warm_hits: u64,
     library: &'static libloading::Library,
@@ -396,6 +402,7 @@ impl Cutensor {
             handle,
             runtime: runtime.clone(),
             plans: HashMap::new(),
+            order: std::collections::VecDeque::new(),
             cold_plans: 0,
             warm_hits: 0,
             library,
@@ -444,7 +451,15 @@ impl Cutensor {
             self.warm_hits += 1;
         } else {
             let plan = self.build_plan(request)?;
+            // A varying shape would otherwise retain one device workspace per shape for the
+            // lifetime of the engine; the oldest plan retires instead.
+            if self.order.len() >= MAX_CACHED_PLANS {
+                if let Some(oldest) = self.order.pop_front() {
+                    self.plans.remove(&oldest);
+                }
+            }
             self.plans.insert(signature.clone(), plan);
+            self.order.push_back(signature.clone());
             self.cold_plans += 1;
         }
         let cached = self.plans.get(&signature).expect("plan inserted above");
