@@ -1313,3 +1313,466 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
         self.remainder(lhs, rhs, "rem_read")
     }
 }
+
+impl CudaEngine {
+    /// The kernel layout of an owned device tensor: its shape, element strides and no
+    /// offset.
+    fn layout_of(&self, tensor: &Tensor, op: &'static str) -> crate::Result<Layout> {
+        let extents: Vec<i64> = tensor.shape().iter().map(|&extent| extent as i64).collect();
+        let strides: Vec<i64> = self
+            .strides_of(tensor, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        Layout::new(&extents, &strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
+    }
+}
+
+/// The window a [`SliceConfig`](tenferro_tensor::SliceConfig) describes, checked the way the
+/// kernel crate's planner checks it.
+fn slice_window(
+    shape: &[usize],
+    config: &tenferro_tensor::SliceConfig,
+) -> crate::Result<Vec<usize>> {
+    let op = "slice";
+    let rank = shape.len();
+    if config.starts.len() != rank || config.limits.len() != rank || config.strides.len() != rank {
+        return Err(crate::Error::rank_mismatch(op, rank, config.starts.len()));
+    }
+    config
+        .starts
+        .iter()
+        .zip(&config.limits)
+        .zip(&config.strides)
+        .enumerate()
+        .map(|(axis, ((&start, &limit), &stride))| {
+            if start > limit {
+                return Err(crate::Error::invalid_argument(
+                    op,
+                    "configuration",
+                    format!("start exceeds limit on axis {axis}"),
+                ));
+            }
+            if limit > shape[axis] {
+                return Err(crate::Error::invalid_argument(
+                    op,
+                    "configuration",
+                    format!(
+                        "limit {limit} on axis {axis} exceeds the dimension {}",
+                        shape[axis]
+                    ),
+                ));
+            }
+            if stride == 0 {
+                return Err(crate::Error::invalid_argument(
+                    op,
+                    "configuration",
+                    format!("stride must be positive on axis {axis}"),
+                ));
+            }
+            Ok((limit - start).div_ceil(stride))
+        })
+        .collect()
+}
+
+/// The padded extents a [`PadConfig`](tenferro_tensor::PadConfig) describes.
+fn padded_shape(shape: &[usize], config: &tenferro_tensor::PadConfig) -> crate::Result<Vec<usize>> {
+    let op = "pad";
+    let rank = shape.len();
+    if config.edge_padding_low.len() != rank
+        || config.edge_padding_high.len() != rank
+        || config.interior_padding.len() != rank
+    {
+        return Err(crate::Error::rank_mismatch(
+            op,
+            rank,
+            config.interior_padding.len(),
+        ));
+    }
+    (0..rank)
+        .map(|axis| {
+            let interior = config.interior_padding[axis];
+            if interior < 0 {
+                return Err(crate::Error::invalid_argument(
+                    op,
+                    "configuration",
+                    format!("interior padding must be non-negative on axis {axis}"),
+                ));
+            }
+            // (n - 1) * (interior + 1) + 1, then the edge padding on both sides.
+            let spaced = (shape[axis] as i64 - 1)
+                .checked_mul(interior + 1)
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| {
+                    crate::Error::invalid_argument(
+                        op,
+                        "configuration",
+                        format!("the padded extent overflows on axis {axis}"),
+                    )
+                })?;
+            let extent = spaced
+                .checked_add(config.edge_padding_low[axis])
+                .and_then(|value| value.checked_add(config.edge_padding_high[axis]))
+                .ok_or_else(|| {
+                    crate::Error::invalid_argument(
+                        op,
+                        "configuration",
+                        format!("the padded extent overflows on axis {axis}"),
+                    )
+                })?;
+            usize::try_from(extent).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "configuration",
+                    format!("the padded extent is negative on axis {axis}"),
+                )
+            })
+        })
+        .collect()
+}
+
+impl tenferro_tensor::TensorIndexing for CudaEngine {
+    fn gather(
+        &mut self,
+        _operand: &Tensor,
+        _start_indices: &Tensor,
+        _config: &tenferro_tensor::GatherConfig,
+    ) -> crate::Result<Tensor> {
+        Err(crate::Error::unsupported(
+            "gather",
+            "the tensor surface's gather is not wired to the new path yet",
+        ))
+    }
+
+    fn scatter(
+        &mut self,
+        _operand: &Tensor,
+        _scatter_indices: &Tensor,
+        _updates: &Tensor,
+        _config: &tenferro_tensor::ScatterConfig,
+    ) -> crate::Result<Tensor> {
+        Err(crate::Error::unsupported(
+            "scatter",
+            "the tensor surface's scatter is not wired to the new path yet",
+        ))
+    }
+
+    fn slice(
+        &mut self,
+        input: &Tensor,
+        config: &tenferro_tensor::SliceConfig,
+    ) -> crate::Result<Tensor> {
+        let op = "slice";
+        if is_host(input) {
+            return Err(crate::Error::unsupported(
+                op,
+                "a host operand would need an implicit transfer",
+            ));
+        }
+        let shape = input.shape().to_vec();
+        let out_shape = slice_window(&shape, config)?;
+        let dtype = input.dtype();
+        let kernel = kernel_dtype(dtype, op)?;
+        let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
+        let out_layout = self.layout_of(&output, op)?;
+        let in_layout = self.layout_of(input, op)?;
+        let out_len = count_i64(&out_shape, op)?;
+        let in_len = count_i64(&shape, op)?;
+        let starts: Vec<i64> = config.starts.iter().map(|&value| value as i64).collect();
+        let steps: Vec<i64> = config.strides.iter().map(|&value| value as i64).collect();
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Slice])?;
+        with_scalar!(dtype, |T| {
+            dispatcher.slice(
+                kernel,
+                &out_layout,
+                out_len,
+                &in_layout,
+                in_len,
+                &starts,
+                &steps,
+                self.allocation_of::<T>(&output, op)?,
+                self.allocation_of::<T>(input, op)?,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+
+    fn dynamic_slice(
+        &mut self,
+        input: &Tensor,
+        starts: &Tensor,
+        slice_sizes: &[usize],
+    ) -> crate::Result<Tensor> {
+        let op = "dynamic_slice";
+        if is_host(input) || is_host(starts) {
+            return Err(crate::Error::unsupported(
+                op,
+                "a host operand would need an implicit transfer",
+            ));
+        }
+        let shape = input.shape().to_vec();
+        if slice_sizes.len() != shape.len() {
+            return Err(crate::Error::rank_mismatch(
+                op,
+                shape.len(),
+                slice_sizes.len(),
+            ));
+        }
+        if let Some(axis) = (0..shape.len()).find(|&axis| slice_sizes[axis] > shape[axis]) {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "slice_sizes",
+                format!(
+                    "extent {} on axis {axis} exceeds the dimension {}",
+                    slice_sizes[axis], shape[axis]
+                ),
+            ));
+        }
+        let index_dtype = starts.dtype();
+        if !matches!(index_dtype, DType::I32 | DType::I64) {
+            return Err(crate::Error::unsupported(
+                op,
+                format!(
+                    "device {index_dtype:?} starts need the exactness check this path does not \
+                     run yet; pass I32 or I64 starts"
+                ),
+            ));
+        }
+        let dtype = input.dtype();
+        let kernel = kernel_dtype(dtype, op)?;
+        let index_kernel = kernel_dtype(index_dtype, op)?;
+        let out_shape = slice_sizes.to_vec();
+        let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
+        let out_layout = self.layout_of(&output, op)?;
+        let in_layout = self.layout_of(input, op)?;
+        let out_len = count_i64(&out_shape, op)?;
+        let in_len = count_i64(&shape, op)?;
+        let starts_rank = u32::try_from(out_shape.len())
+            .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::DynamicSlice])?;
+        with_scalar!(index_dtype, |I| {
+            let start_buffer = self.allocation_of::<I>(starts, op)?;
+            with_scalar!(dtype, |T| {
+                dispatcher.dynamic_slice(
+                    kernel,
+                    index_kernel,
+                    &out_layout,
+                    out_len,
+                    &in_layout,
+                    in_len,
+                    starts_rank,
+                    self.allocation_of::<T>(&output, op)?,
+                    self.allocation_of::<T>(input, op)?,
+                    start_buffer,
+                )
+            })
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+
+    fn dynamic_update_slice(
+        &mut self,
+        _operand: &Tensor,
+        _update: &Tensor,
+        _starts: &Tensor,
+    ) -> crate::Result<Tensor> {
+        Err(crate::Error::unsupported(
+            "dynamic_update_slice",
+            "the CubeCL path does not serve this operation either; it needs a windowed write \
+             kernel the catalogue does not have",
+        ))
+    }
+
+    fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
+        let op = "concatenate";
+        let Some(first) = inputs.first().copied() else {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "inputs",
+                "concatenate requires at least one input",
+            ));
+        };
+        let dtype = first.dtype();
+        let shape = first.shape().to_vec();
+        let rank = shape.len();
+        if axis >= rank {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "axis",
+                format!("axis {axis} is out of range for rank {rank}"),
+            ));
+        }
+        let mut out_shape = shape.clone();
+        out_shape[axis] = 0;
+        for input in inputs {
+            if is_host(input) {
+                return Err(crate::Error::unsupported(
+                    op,
+                    "a host operand would need an implicit transfer",
+                ));
+            }
+            if input.dtype() != dtype || input.shape().len() != rank {
+                return Err(crate::Error::unsupported(
+                    op,
+                    "every input must share a dtype and a rank",
+                ));
+            }
+            for (other, (&extent, &expected)) in input.shape().iter().zip(&shape).enumerate() {
+                if other != axis && extent != expected {
+                    return Err(crate::Error::invalid_argument(
+                        op,
+                        "inputs",
+                        format!("axis {other} differs between inputs"),
+                    ));
+                }
+            }
+            out_shape[axis] += input.shape()[axis];
+        }
+        let kernel = kernel_dtype(dtype, op)?;
+        let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
+        let out_layout = self.layout_of(&output, op)?;
+        let out_len = count_i64(&out_shape, op)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::ConcatenateCopy])?;
+        let mut offset = 0i64;
+        for input in inputs {
+            // The kernel reads a compact source, so a strided input is compacted first.
+            let compact = if compact_strides(input.shape()) == self.strides_of(input, op)? {
+                None
+            } else {
+                Some(self.copy_to_fresh(input, input.shape().to_vec(), op)?)
+            };
+            let source = compact.as_ref().unwrap_or(input);
+            let in_layout = self.layout_of(source, op)?;
+            let in_len = count_i64(source.shape(), op)?;
+            let axis_u32 = u32::try_from(axis)
+                .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
+            with_scalar!(dtype, |T| {
+                dispatcher.concatenate_copy(
+                    kernel,
+                    &out_layout,
+                    out_len,
+                    &in_layout,
+                    in_len,
+                    axis_u32,
+                    offset,
+                    self.allocation_of::<T>(&output, op)?,
+                    self.allocation_of::<T>(source, op)?,
+                )
+            })?;
+            offset += source.shape()[axis] as i64;
+        }
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+
+    fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
+        let op = "reverse";
+        if is_host(input) {
+            return Err(crate::Error::unsupported(
+                op,
+                "a host operand would need an implicit transfer",
+            ));
+        }
+        let shape = input.shape().to_vec();
+        let strides = self.strides_of(input, op)?;
+        let mut view_strides: Vec<i64> = strides.iter().map(|&stride| stride as i64).collect();
+        let mut offset = 0i64;
+        for (index, &axis) in axes.iter().enumerate() {
+            if axis >= shape.len() || axes[..index].contains(&axis) {
+                return Err(crate::Error::invalid_argument(
+                    op,
+                    "axes",
+                    format!("axis {axis} is out of range or repeated"),
+                ));
+            }
+            let stride = view_strides[axis];
+            offset += (shape[axis] as i64 - 1) * stride;
+            view_strides[axis] = -stride;
+        }
+        let extents: Vec<i64> = shape.iter().map(|&extent| extent as i64).collect();
+        let view = Layout::new(&extents, &view_strides, offset)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let dtype = input.dtype();
+        let kernel = kernel_dtype(dtype, op)?;
+        let source_len = count_i64(&shape, op)?;
+        let plan = plan_materialize_strided(kernel, &view, source_len)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        let layout = CLayout::new(&view);
+        let (destination, source) = with_scalar!(dtype, |T| Ok((
+            self.allocation_of::<T>(&output, op)? as *const _,
+            self.allocation_of::<T>(input, op)? as *const _,
+        )))?;
+        // SAFETY: both pointers name allocations of this runtime taken above; the planner
+        // proved the view's span against the source length and the compact destination.
+        let (destination, source) = unsafe { (&*destination, &*source) };
+        self.launch_planned(
+            Entry::MaterializeStrided,
+            plan,
+            &[
+                Arg::DevicePtr(destination),
+                Arg::DevicePtr(source),
+                Arg::U32(kernel.tag() as u32),
+                layout_arg(&layout),
+                Arg::U64(source_len as u64),
+            ],
+            op,
+        )?;
+        Ok(output)
+    }
+
+    fn pad(
+        &mut self,
+        input: &Tensor,
+        config: &tenferro_tensor::PadConfig,
+    ) -> crate::Result<Tensor> {
+        let op = "pad";
+        if is_host(input) {
+            return Err(crate::Error::unsupported(
+                op,
+                "a host operand would need an implicit transfer",
+            ));
+        }
+        let shape = input.shape().to_vec();
+        let out_shape = padded_shape(&shape, config)?;
+        let dtype = input.dtype();
+        let kernel = kernel_dtype(dtype, op)?;
+        let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
+        let out_layout = self.layout_of(&output, op)?;
+        let in_layout = self.layout_of(input, op)?;
+        let out_len = count_i64(&out_shape, op)?;
+        let in_len = count_i64(&shape, op)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Pad])?;
+        with_scalar!(dtype, |T| {
+            dispatcher.pad(
+                kernel,
+                &out_layout,
+                out_len,
+                &in_layout,
+                in_len,
+                &config.edge_padding_low,
+                &config.edge_padding_high,
+                &config.interior_padding,
+                self.allocation_of::<T>(&output, op)?,
+                self.allocation_of::<T>(input, op)?,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+}

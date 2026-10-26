@@ -4,9 +4,10 @@
 //! validation of its own — and every argument order follows the documented ABI.
 
 use t4a_cuda_kernels::{
-    plan_binary, plan_clamp, plan_compare, plan_convert, plan_copy_exact, plan_elementwise,
-    plan_gather, plan_reduce, plan_reduction, plan_scatter_add, plan_select, plan_unary, BinaryOp,
-    DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan, UnaryOp,
+    plan_binary, plan_clamp, plan_compare, plan_concatenate_copy, plan_convert, plan_copy_exact,
+    plan_dynamic_slice, plan_elementwise, plan_gather, plan_pad, plan_reduce, plan_reduction,
+    plan_scatter_add, plan_select, plan_slice, plan_unary, BinaryOp, DType, Entry, GatherPlan,
+    Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan, UnaryOp,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -450,6 +451,189 @@ impl Dispatcher {
                 layout_arg(&updates_layout),
                 pod_arg(&mirror),
                 Arg::U64(update_len as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_slice`: the window `starts`/`steps` describes, into a compact destination.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the window, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn slice(
+        &mut self,
+        dtype: DType,
+        out: &t4a_cuda_kernels::Layout,
+        out_len: i64,
+        operand: &t4a_cuda_kernels::Layout,
+        operand_len: i64,
+        starts: &[i64],
+        steps: &[i64],
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        operand_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch = plan_slice(dtype, out, out_len, operand, operand_len, starts, steps)
+            .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let operand_layout = t4a_cuda_kernels::CLayout::new(operand);
+        let starts = t4a_cuda_kernels::CAxisValues::new(starts).map_err(plan_error)?;
+        let steps = t4a_cuda_kernels::CAxisValues::new(steps).map_err(plan_error)?;
+        self.run(
+            Entry::Slice,
+            launch,
+            &[
+                Arg::DevicePtr(out_buffer),
+                Arg::DevicePtr(operand_buffer),
+                Arg::U32(dtype.tag() as u32),
+                layout_arg(&out_layout),
+                layout_arg(&operand_layout),
+                pod_arg(&starts),
+                pod_arg(&steps),
+                Arg::U64(out_len as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_dynamic_slice`: the window whose starts are device-resident.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the window, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn dynamic_slice(
+        &mut self,
+        dtype: DType,
+        index_dtype: DType,
+        out: &t4a_cuda_kernels::Layout,
+        out_len: i64,
+        operand: &t4a_cuda_kernels::Layout,
+        operand_len: i64,
+        starts_rank: u32,
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        operand_buffer: &t4a_cuda_runtime::Buffer,
+        starts_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch = plan_dynamic_slice(
+            dtype,
+            index_dtype,
+            out,
+            out_len,
+            operand,
+            operand_len,
+            starts_rank,
+        )
+        .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let operand_layout = t4a_cuda_kernels::CLayout::new(operand);
+        self.run(
+            Entry::DynamicSlice,
+            launch,
+            &[
+                Arg::DevicePtr(out_buffer),
+                Arg::DevicePtr(operand_buffer),
+                Arg::DevicePtr(starts_buffer),
+                Arg::U32(dtype.tag() as u32),
+                Arg::U32(index_dtype.tag() as u32),
+                layout_arg(&out_layout),
+                layout_arg(&operand_layout),
+                Arg::U64(out_len as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_pad`: edge and interior padding into a compact destination.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the padding, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pad(
+        &mut self,
+        dtype: DType,
+        out: &t4a_cuda_kernels::Layout,
+        out_len: i64,
+        operand: &t4a_cuda_kernels::Layout,
+        operand_len: i64,
+        edge_low: &[i64],
+        edge_high: &[i64],
+        interior: &[i64],
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        operand_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch = plan_pad(
+            dtype,
+            out,
+            out_len,
+            operand,
+            operand_len,
+            edge_low,
+            edge_high,
+            interior,
+        )
+        .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let operand_layout = t4a_cuda_kernels::CLayout::new(operand);
+        let edge_low = t4a_cuda_kernels::CAxisValues::new(edge_low).map_err(plan_error)?;
+        let edge_high = t4a_cuda_kernels::CAxisValues::new(edge_high).map_err(plan_error)?;
+        let interior = t4a_cuda_kernels::CAxisValues::new(interior).map_err(plan_error)?;
+        self.run(
+            Entry::Pad,
+            launch,
+            &[
+                Arg::DevicePtr(out_buffer),
+                Arg::DevicePtr(operand_buffer),
+                Arg::U32(dtype.tag() as u32),
+                layout_arg(&out_layout),
+                layout_arg(&operand_layout),
+                pod_arg(&edge_low),
+                pod_arg(&edge_high),
+                pod_arg(&interior),
+                Arg::U64(out_len as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_concatenate_copy`: one compact input into `out` at `axis_offset`.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the placement, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn concatenate_copy(
+        &mut self,
+        dtype: DType,
+        out: &t4a_cuda_kernels::Layout,
+        out_len: i64,
+        input: &t4a_cuda_kernels::Layout,
+        input_len: i64,
+        axis: u32,
+        axis_offset: i64,
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        input_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch =
+            plan_concatenate_copy(dtype, out, out_len, input, input_len, axis, axis_offset)
+                .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let input_layout = t4a_cuda_kernels::CLayout::new(input);
+        let input_len = input.element_count().map_err(plan_error)?;
+        self.run(
+            Entry::ConcatenateCopy,
+            launch,
+            &[
+                Arg::DevicePtr(out_buffer),
+                Arg::DevicePtr(input_buffer),
+                Arg::U32(dtype.tag() as u32),
+                layout_arg(&out_layout),
+                layout_arg(&input_layout),
+                Arg::U32(axis),
+                Arg::U64(axis_offset as u64),
+                Arg::U64(input_len as u64),
             ],
         )
     }

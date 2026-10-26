@@ -242,6 +242,11 @@ path = "tests/seam_contraction.rs"
 required-features = ["cuda-next"]
 
 [[test]]
+name = "seam_indexing"
+path = "tests/seam_indexing.rs"
+required-features = ["cuda-next"]
+
+[[test]]
 name = "seam_structural"
 path = "tests/seam_structural.rs"
 required-features = ["cuda-next"]
