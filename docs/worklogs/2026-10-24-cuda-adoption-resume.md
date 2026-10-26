@@ -226,7 +226,11 @@ fail it.
 `broadcast_in_dim` follows: it packs both layouts and its destination-axis map, builds
 `CLayoutAny` twice plus `CAxisValuesAny`, and launches `t4a_cuda_broadcast_in_dim_any`. A rank-2
 source into a rank-9 destination is the new test. The geometry helper (`WideGeometry`) is shared
-by both families.
+by both families. Found by the independent review of that step and fixed: `compact_strides` now
+reports an overflowing extent product instead of panicking (it is shared, so every caller benefits),
+the destination is allocated only after the planner has accepted the dimension map, and the test
+maps one axis past the fast limit and permutes rather than merely inserting singletons, so a
+truncated destination or a transposed map would fail it.
 
 The remaining families, and what each needs beyond the pattern above:
 

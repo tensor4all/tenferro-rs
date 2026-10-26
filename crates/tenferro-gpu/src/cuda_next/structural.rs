@@ -514,8 +514,11 @@ impl TensorStructural for CudaEngine {
         out_shape[axis_a] = out_shape[axis_a].min(removed);
         let strides = self.strides_of(input, "extract_diagonal")?;
         let in_layout = compact_layout(&shape, &strides, "extract_diagonal")?;
-        let out_layout =
-            compact_layout(&out_shape, &compact_strides(&out_shape), "extract_diagonal")?;
+        let out_layout = compact_layout(
+            &out_shape,
+            &compact_strides(&out_shape, "extract_diagonal")?,
+            "extract_diagonal",
+        )?;
         let in_len = count_i64(&shape, "extract_diagonal")?;
         let out_len = count_i64(&out_shape, "extract_diagonal")?;
         let output = alloc_tensor(self.runtime(), input.dtype(), &out_shape)?;
@@ -570,8 +573,11 @@ impl TensorStructural for CudaEngine {
         out_shape.insert(axis_b, shape[axis_a]);
         let strides = self.strides_of(input, "embed_diagonal")?;
         let in_layout = compact_layout(&shape, &strides, "embed_diagonal")?;
-        let out_layout =
-            compact_layout(&out_shape, &compact_strides(&out_shape), "embed_diagonal")?;
+        let out_layout = compact_layout(
+            &out_shape,
+            &compact_strides(&out_shape, "embed_diagonal")?,
+            "embed_diagonal",
+        )?;
         let in_len = count_i64(&shape, "embed_diagonal")?;
         let out_len = count_i64(&out_shape, "embed_diagonal")?;
         let output = alloc_tensor(self.runtime(), input.dtype(), &out_shape)?;
@@ -781,7 +787,7 @@ impl CudaEngine {
         let in_shape = source.shape().to_vec();
         let dtype = source.dtype();
         let out_extents: Vec<i64> = shape.iter().map(|&extent| extent as i64).collect();
-        let out_strides: Vec<i64> = compact_strides(shape)
+        let out_strides: Vec<i64> = compact_strides(shape, op)?
             .iter()
             .map(|&stride| stride as i64)
             .collect();
@@ -794,17 +800,21 @@ impl CudaEngine {
         let axis_values: Vec<i64> = dims.iter().map(|&axis| axis as i64).collect();
         let out_len = count_i64(shape, op)?;
         let in_len = count_i64(&in_shape, op)?;
-        let output = alloc_tensor(self.runtime(), dtype, shape)?;
         let out_ref = LayoutRef::new(&out_extents, &out_strides, 0)
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
         let in_ref = LayoutRef::new(&in_extents, &in_strides, 0)
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        // The planner validates the dimension map; the destination is only allocated once it
+        // has accepted, so a malformed map cannot cost a large allocation first.
         let plan = plan_broadcast_in_dim(kernel, out_ref, out_len, in_ref, in_len, &axis_values)
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-        let (destination, source_buffer) = self.two_allocations(&output, source, op)?;
+        // The source is still validated for residency and domain before any early return.
+        let source_buffer = with_scalar!(dtype, |T| self.allocation_of::<T>(source, op))?;
+        let output = alloc_tensor(self.runtime(), dtype, shape)?;
         if plan.grid[0] == 0 {
             return Ok(output);
         }
+        let destination = with_scalar!(dtype, |T| self.allocation_of::<T>(&output, op))?;
         let symbol = Entry::BroadcastInDim
             .general()
             .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
@@ -923,14 +933,20 @@ impl WideGeometry {
 }
 
 /// A column-major compact stride list for `shape`.
-fn compact_strides(shape: &[usize]) -> Vec<isize> {
+fn compact_strides(shape: &[usize], op: &'static str) -> crate::Result<Vec<isize>> {
     let mut strides = Vec::with_capacity(shape.len());
     let mut stride = 1isize;
     for &extent in shape {
         strides.push(stride);
-        stride *= extent as isize;
+        stride = stride.checked_mul(extent as isize).ok_or_else(|| {
+            crate::Error::invalid_argument(
+                op,
+                "shape",
+                "the element count exceeds an addressable stride",
+            )
+        })?;
     }
-    strides
+    Ok(strides)
 }
 
 fn compact_layout(shape: &[usize], strides: &[isize], op: &'static str) -> crate::Result<Layout> {
@@ -1008,8 +1024,8 @@ impl CudaEngine {
                 next[axis] = 1;
                 next
             };
-            let out_layout = compact_layout(&out_shape, &compact_strides(&out_shape), name)?;
-            let in_layout = compact_layout(&shape, &compact_strides(&shape), name)?;
+            let out_layout = compact_layout(&out_shape, &compact_strides(&out_shape, name)?, name)?;
+            let in_layout = compact_layout(&shape, &compact_strides(&shape, name)?, name)?;
             let out_len = count_i64(&out_shape, name)?;
             let in_len = count_i64(&shape, name)?;
             let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
@@ -2451,7 +2467,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let mut offset = 0usize;
         for input in inputs {
             // The kernel reads a compact source, so a strided input is compacted first.
-            let compact = if compact_strides(input.shape()) == self.strides_of(input, op)? {
+            let compact = if compact_strides(input.shape(), op)? == self.strides_of(input, op)? {
                 None
             } else {
                 Some(self.copy_to_fresh(input, input.shape().to_vec(), op)?)
