@@ -38,6 +38,56 @@ impl std::hash::Hash for CudaRuntimeIdentity {
     }
 }
 
+std::thread_local! {
+    /// Addresses of the runtimes whose context this thread has already activated.
+    ///
+    /// The raw scope takes the runtime's submission lock, so a second activation on the same
+    /// thread would block forever; nesting is legal because the context is already current.
+    static ACTIVATED_CONTEXTS: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// One activation level of a runtime's context on this thread.
+pub(crate) struct ActivatedContext {
+    key: usize,
+    /// Whether this call found the context already active on this thread.
+    nested: bool,
+    /// `Some` when this call pushed a level; dropping it pops the level again, including on a
+    /// panic, so a leaked level cannot make a later activation silently skip the context.
+    pushed: bool,
+}
+
+impl ActivatedContext {
+    /// Enter `runtime`'s context, reporting whether this thread was already inside it.
+    fn enter(runtime: &CudaRuntime) -> ActivatedContext {
+        let key = Arc::as_ptr(&runtime.inner) as usize;
+        let nested = ACTIVATED_CONTEXTS.with(|active| {
+            let mut active = active.borrow_mut();
+            if active.contains(&key) {
+                true
+            } else {
+                active.push(key);
+                false
+            }
+        });
+        ActivatedContext {
+            key,
+            nested,
+            pushed: !nested,
+        }
+    }
+}
+
+impl Drop for ActivatedContext {
+    fn drop(&mut self) {
+        if self.pushed {
+            ACTIVATED_CONTEXTS.with(|active| {
+                active.borrow_mut().retain(|entry| *entry != self.key);
+            });
+        }
+    }
+}
+
 /// State shared by every handle to one runtime.
 pub(crate) struct CudaRuntimeState {
     /// The execution owner. Explicit transfers take this lock for one admission;
@@ -202,6 +252,14 @@ impl CudaRuntime {
         op: &'static str,
         f: impl FnOnce() -> R,
     ) -> crate::Result<R> {
+        // The scope holds the runtime's submission lock, so a nested call would deadlock on it (a
+        // cuFFT plan's rollback runs inside the same context). Nesting is tracked per thread:
+        // inside an activated context the closure simply runs, and the level is popped when this
+        // call leaves, panic included.
+        let activation = ActivatedContext::enter(self);
+        if activation.nested {
+            return Ok(f());
+        }
         // SAFETY: the scope activates this runtime's context for the closure's duration; it declares
         // no resources, so nothing is registered against the closure's work.
         unsafe { self.with_raw_locked(Vec::new(), |_scope| f()) }

@@ -433,6 +433,13 @@ ones and the resource one are fixed and covered by tests here:
 - The failed-sync fallback in the event-domain driver counted a raw-scope `Ok` as a completed
   barrier; it now requires `CUDA_SUCCESS` from `cuStreamSynchronize`.
 
+The review's other blocker is fixed as well: `with_current_context` re-enters on cuFFT's plan-rollback
+path (the guard destroys the half-built plan inside the context that created it), which waited on
+the submission lock the outer activation holds. Activation now tracks its level per thread, so a
+nested call runs inside the context that is already current, and the level is popped when the call
+leaves (panic included). `a_nested_context_activation_does_not_block` covers nesting and a later,
+fresh activation.
+
 Still open from that review, and recorded for the next unit: division always takes the float-only
 entry (integer and complex division need `DivChecked`/`DivComplex`), the safe dispatcher helpers
 trust their callers' lengths (they should be crate-private, which means folding `seam_dispatch` into

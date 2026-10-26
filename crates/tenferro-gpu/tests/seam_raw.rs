@@ -103,3 +103,23 @@ fn an_extension_reaches_the_concrete_engine_through_the_engine_trait() {
     .expect("the engine is this backend's");
     assert_eq!(visited, domain);
 }
+
+#[test]
+fn a_nested_context_activation_does_not_block() {
+    let Some(engine) = engine() else { return };
+    // A cuFFT plan's rollback runs inside the context that created it, so activation nests. Without
+    // re-entrancy tracking the inner call would wait on the submission lock the outer one holds.
+    let value = engine
+        .runtime()
+        .with_current_context("seam_raw", || {
+            engine
+                .runtime()
+                .with_current_context("seam_raw", || 41u32)
+                .map(|inner| inner + 1)
+        })
+        .expect("outer context");
+    assert!(matches!(value, Ok(42)), "the nested closure ran: {value:?}");
+    // And a later, non-nested activation still enters the context normally.
+    let later = engine.runtime().with_current_context("seam_raw", || 7u32);
+    assert!(matches!(later, Ok(7)), "a later activation starts fresh");
+}
