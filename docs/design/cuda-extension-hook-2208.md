@@ -81,8 +81,30 @@ the runtime's own and re-entering it from a scope deadlocks, which the first ver
 proved by hanging — so the hook's `upload`/`download` entries are built on the pre-opened runtime
 rather than inside the scope.
 
-The hook therefore has everything it needs: `alloc_zeroed` for scratch, `register` for any buffer it
-learns about mid-scope, `retain` for what a vendor call keeps reading, and the stream.
+The hook therefore has `alloc_zeroed` for scratch, `register` for any buffer it learns about
+mid-scope, and the stream.
+
+### The one primitive still missing: sharing an allocation
+
+`retain_tensor` — the extension's way to say "this vendor call outlives my handle, keep the
+allocation alive until it completes" — cannot be written against the current runtime. `Buffer` owns
+its `Alloc`, and `Alloc`'s `Drop` releases the device pointer, so there is no way to hold a second
+reference; `RawScope::retain` keeps a caller-owned value alive but takes `Box<dyn Any + Send>`, and a
+borrowed `&TypedTensor<T>` cannot be moved into it.
+
+Three ways out, in order of preference:
+
+1. **The hook's completion is the guard.** cuFFT already synchronizes inside its hook
+   (`raw.synchronize()`, two call sites) and cuSOLVER's providers do their work inside the closure,
+   so a hook that waits for its stream before returning makes retention unnecessary — `retain_tensor`
+   then only has to prove the tensor belongs to this runtime. This needs no upstream change and is
+   the smallest contract; it must be verified per call site rather than assumed.
+2. Upstream adds a shareable handle (`Buffer::share() -> SharedBuffer`, refcounted), which is what
+   the CubeCL path effectively had.
+3. The hook takes the value by ownership instead of by reference, which changes every call site.
+
+Recommendation: (1), with the hook documenting "a vendor call must have completed before the hook
+returns" — and, for a call site that cannot wait, (2) as the escalation.
 
 ## Sequencing
 

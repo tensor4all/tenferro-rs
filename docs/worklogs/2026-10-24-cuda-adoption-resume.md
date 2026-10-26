@@ -373,6 +373,16 @@ The hook has its four primitives, so the cuFFT port can start: `alloc_bytes` →
 `register`, `tensor`/`tensor_mut` → `register` + the typed pointer, `retain_tensor` → `retain`,
 `stream()` → the scope's stream.
 
+## The hook's last open primitive
+
+Writing the hook against the pinned runtime showed that `retain_tensor` cannot be implemented as the
+CubeCL path had it: a `Buffer` owns its allocation (`Alloc::drop` releases the pointer), so a second
+reference cannot be held, and `RawScope::retain` takes an owned `Box<dyn Any + Send>`, which a
+borrowed tensor is not. Since cuFFT already synchronizes inside its hook and the cuSOLVER providers
+work inside the closure, the smallest correct contract is "a vendor call completes before the hook
+returns"; `retain_tensor` then only proves the tensor belongs to this runtime. The three options and
+the recommendation are in `docs/design/cuda-extension-hook-2208.md`.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index
