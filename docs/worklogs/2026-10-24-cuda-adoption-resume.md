@@ -320,6 +320,16 @@ runs' retirement; and `mark_broken` now refuses further numerical submission (ev
 an operand, so `device_read` is the single gate) while leaving synchronise and retirement available
 for teardown.
 
+## The preparation logic is engine-generic
+
+The runtime's preparation witness (`prepare_cuda`, `cuda_operation_kind`, the specialization merge,
+the storage and hardware class helpers) does not depend on which backend type implements the
+engine: the only engine-specific input was the `ExecutionContextIdentity` it compares against, which
+is now a parameter. Those items are crate-visible, so the new path's registration will reuse the
+same preparation logic instead of a second copy — the port is then the five trait impls, an ingress
+contract that recognises this path's storage, and an integration test that prepares and runs one
+operation through `Runtime`.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index
