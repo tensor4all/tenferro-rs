@@ -263,7 +263,12 @@ windows now take their allocations before that early return.
 per reduced axis, the direct strategy's single launch, and the split strategy's partials pass plus
 its combining pass, whose partials layout the crate computes and which therefore needs its own
 packed geometry. A rank-9 sum over one axis, a multi-axis sum (which squeezes two unit axes) and a
-product reduction are the tests.
+product reduction are the tests. The review of that step found three real defects, all of which the
+fast path shared: a multi-axis sum of squares squared the squared sums again (now only the first
+pass folds the squares, the others add them, in both loops), every pass allocated input-sized
+scratch even for the direct strategy (now only a split allocates, exactly its partials layout), and
+the fixtures only ever exercised the unit strategy (now 33, 513 and 8449-long axes reach the plane
+and split strategies, plus a two-axis sum-of-squares regression).
 
 The remaining families, and what each needs beyond the pattern above:
 

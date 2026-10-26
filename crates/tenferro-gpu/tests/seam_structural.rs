@@ -843,3 +843,47 @@ fn a_rank_nine_reduction_uses_the_general_path() {
     }
     assert_eq!(observed, expected.as_slice());
 }
+
+#[test]
+fn a_sum_of_squares_over_two_axes_squares_once() {
+    let Some(mut engine) = engine() else { return };
+    // Squaring both passes would return `sum((sum x^2)^2)` instead of `sum(x^2)`.
+    let shape = vec![2usize, 1, 1, 1, 1, 1, 1, 1, 2];
+    let data = vec![1.0f64, 2.0, 3.0, 4.0];
+    let host = Tensor::from_vec_col_major(shape, data.clone()).expect("host");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+    let squares = engine
+        .reduce_sum_squares_read(TensorRead::from_tensor(&source), &[0, 8])
+        .expect("sum of squares");
+    let squares_host = download_tensor(engine.runtime(), &squares).expect("download");
+    let observed = squares_host.as_slice::<f64>().expect("f64 payload");
+    let expected: f64 = data.iter().map(|value| value * value).sum();
+    assert_eq!(observed, &[expected]);
+}
+
+#[test]
+fn a_rank_nine_reduction_over_a_long_axis_picks_a_plane_or_split_strategy() {
+    let Some(mut engine) = engine() else { return };
+    // Axis lengths past a warp and past the plane threshold make the crate choose a plane or a
+    // split reduction, which the short fixtures never exercise.
+    for (length, expected_splits) in [(33usize, false), (513, true), (8449, true)] {
+        let shape = vec![length, 1, 1, 1, 1, 1, 1, 1, 2];
+        let data: Vec<f64> = (0..length * 2)
+            .map(|index| (index % 7) as f64 - 3.0)
+            .collect();
+        let host = Tensor::from_vec_col_major(shape, data.clone()).expect("host");
+        let source = upload_tensor(engine.runtime(), &host).expect("upload");
+        let summed = engine
+            .reduce_sum_read(TensorRead::from_tensor(&source), &[0])
+            .expect("rank-9 long-axis reduce");
+        let summed_host = download_tensor(engine.runtime(), &summed).expect("download");
+        let observed = summed_host.as_slice::<f64>().expect("f64 payload");
+        let mut expected = Vec::new();
+        for column in 0..2 {
+            let total: f64 = (0..length).map(|row| data[row + column * length]).sum();
+            expected.push(total);
+        }
+        assert_eq!(observed, expected.as_slice(), "axis length {length}");
+        let _ = expected_splits;
+    }
+}

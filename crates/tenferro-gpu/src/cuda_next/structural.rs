@@ -820,7 +820,13 @@ impl CudaEngine {
         let width = 32u32;
         let mut shape = source.shape().to_vec();
         let mut owned: Option<Tensor> = None;
-        for &axis in axes.iter().rev() {
+        for (pass, &axis) in axes.iter().rev().enumerate() {
+            // As in the fast path: only the first pass folds the squares of a sum-of-squares.
+            let pass_op = if pass == 0 {
+                kernel_op
+            } else {
+                reduction_op(ReduceOp::Sum)
+            };
             let out_shape: Vec<usize> = {
                 let mut next = shape.clone();
                 next[axis] = 1;
@@ -853,7 +859,7 @@ impl CudaEngine {
                 .map_err(|error| crate::Error::runtime_state_source(name, error))?;
             let plan = plan_reduction(
                 kernel,
-                kernel_op,
+                pass_op,
                 out_ref,
                 out_len,
                 in_ref,
@@ -863,7 +869,21 @@ impl CudaEngine {
             )
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
             let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
-            let partials = alloc_tensor(self.runtime(), dtype, &[in_len as usize])?;
+            // Only a split reduction needs scratch, and only as much as its partials layout.
+            let split_partials = match &plan {
+                ReductionPlan::Split { split, .. } => Some(
+                    t4a_cuda_kernels::reduction_partials_layout(in_ref, axis as u32, split.splits)
+                        .map_err(|error| crate::Error::runtime_state_source(name, error))?
+                        .extents()
+                        .iter()
+                        .product::<i64>(),
+                ),
+                ReductionPlan::Direct { .. } => None,
+            };
+            let partials = match split_partials {
+                Some(count) => alloc_tensor(self.runtime(), dtype, &[count as usize])?,
+                None => alloc_tensor(self.runtime(), dtype, &[0])?,
+            };
             let (destination, input_buffer, partials_buffer) = with_scalar!(dtype, |T| Ok((
                 self.allocation_of::<T>(&output, name)?,
                 self.allocation_of::<T>(current, name)?,
@@ -904,7 +924,7 @@ impl CudaEngine {
                                     Arg::DevicePtr(destination),
                                     Arg::DevicePtr(input_buffer),
                                     Arg::U32(kernel.tag() as u32),
-                                    Arg::I32(kernel_op.tag()),
+                                    Arg::I32(pass_op.tag()),
                                     Arg::I32(strategy.tag()),
                                     pod_arg(&out_mirror),
                                     pod_arg(&in_mirror),
@@ -975,7 +995,7 @@ impl CudaEngine {
                                         Arg::DevicePtr(partials_buffer),
                                         Arg::DevicePtr(input_buffer),
                                         Arg::U32(kernel.tag() as u32),
-                                        Arg::I32(kernel_op.tag()),
+                                        Arg::I32(pass_op.tag()),
                                         pod_arg(&partials_mirror),
                                         pod_arg(&in_mirror),
                                         Arg::I32(axis as i32),
@@ -1791,7 +1811,14 @@ impl CudaEngine {
         let width = 32u32;
         // The reduction kernel is keepdims: the destination has the input's rank with an
         // extent of one on the reduced axis, so the unit axes are squeezed off at the end.
-        for &axis in ordered.iter().rev() {
+        for (pass, &axis) in ordered.iter().rev().enumerate() {
+            // Squaring every pass would square the squared sums; only the first pass folds the
+            // squares, the rest add them.
+            let pass_op = if pass == 0 {
+                kernel_op
+            } else {
+                reduction_op(ReduceOp::Sum)
+            };
             let out_shape: Vec<usize> = {
                 let mut next = shape.clone();
                 next[axis] = 1;
@@ -1802,8 +1829,32 @@ impl CudaEngine {
             let out_len = count_i64(&out_shape, name)?;
             let in_len = count_i64(&shape, name)?;
             let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
-            // Partials hold `splits * out_len` at most; the crate's cap is the input length.
-            let partials = alloc_tensor(self.runtime(), dtype, &[in_len as usize])?;
+            // Only a split reduction needs scratch, and only as much as its partials layout;
+            // planning first keeps a direct reduction from allocating an input-sized buffer.
+            let planned = plan_reduction(
+                kernel,
+                pass_op,
+                &out_layout,
+                out_len,
+                &in_layout,
+                in_len,
+                axis as u32,
+                width,
+            )
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+            let scratch = match &planned {
+                ReductionPlan::Split { split, .. } => t4a_cuda_kernels::reduction_partials_layout(
+                    &in_layout,
+                    axis as u32,
+                    split.splits,
+                )
+                .map_err(|error| crate::Error::runtime_state_source(name, error))?
+                .extents()
+                .iter()
+                .product::<i64>() as usize,
+                ReductionPlan::Direct { .. } => 0,
+            };
+            let partials = alloc_tensor(self.runtime(), dtype, &[scratch])?;
             let source_tensor = owned.as_ref().unwrap_or(source);
             let runtime = self.runtime().clone();
             let mut dispatcher =
