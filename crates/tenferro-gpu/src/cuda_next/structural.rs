@@ -18,13 +18,15 @@ use t4a_cuda_kernels::{
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
+use super::cutensor::{Contraction, Operand};
 use super::dispatch::{pod_arg, Dispatcher};
 use super::engine::CudaEngine;
 use super::launch::layout_arg;
 use super::runtime::CudaRuntime;
 use super::storage::CudaStorage;
 
-/// Scalars the structural slice serves today.
+/// Scalars the structural slice carries; a kernel family still refuses the dtypes its
+/// catalogue does not list.
 macro_rules! with_scalar {
     ($dtype:expr, |$t:ident| $body:expr) => {
         match $dtype {
@@ -51,6 +53,16 @@ macro_rules! with_scalar {
             DType::I64 => {
                 #[allow(dead_code)]
                 type $t = i64;
+                $body
+            }
+            DType::C32 => {
+                #[allow(dead_code)]
+                type $t = tenferro_tensor::Complex32;
+                $body
+            }
+            DType::C64 => {
+                #[allow(dead_code)]
+                type $t = tenferro_tensor::Complex64;
                 $body
             }
             other => Err(crate::Error::unsupported(
@@ -1331,6 +1343,22 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
     }
 }
 
+/// The kernel crate's dtype tag for a contraction, which cuTENSOR serves for all four.
+fn contraction_dtype(dtype: DType, op: &'static str) -> crate::Result<t4a_cuda_kernels::DType> {
+    Ok(match dtype {
+        DType::F32 => t4a_cuda_kernels::DType::F32,
+        DType::F64 => t4a_cuda_kernels::DType::F64,
+        DType::C32 => t4a_cuda_kernels::DType::C32,
+        DType::C64 => t4a_cuda_kernels::DType::C64,
+        other => {
+            return Err(crate::Error::unsupported(
+                op,
+                format!("a contraction serves F32, F64, C32 and C64, not {other:?}"),
+            ))
+        }
+    })
+}
+
 impl CudaEngine {
     /// The kernel layout of an owned device tensor: its shape, element strides and no
     /// offset.
@@ -1476,10 +1504,10 @@ fn require_axes(
     op: &'static str,
     argument: &'static str,
     axes: &[usize],
-    rank: u32,
+    rank: usize,
 ) -> crate::Result<()> {
     for (index, &axis) in axes.iter().enumerate() {
-        if axis as u32 >= rank {
+        if axis >= rank {
             return Err(crate::Error::invalid_argument(
                 op,
                 argument,
@@ -1622,11 +1650,16 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
             op,
             "collapsed_slice_dims",
             &config.collapsed_slice_dims,
-            operand_rank,
+            operand_rank as usize,
         )?;
         // The output rank is not known yet; `gather_shape` checks these axes against it.
-        require_axes(op, "offset_dims", &config.offset_dims, u32::MAX)?;
-        require_axes(op, "start_index_map", &config.start_index_map, operand_rank)?;
+        require_axes(op, "offset_dims", &config.offset_dims, usize::MAX)?;
+        require_axes(
+            op,
+            "start_index_map",
+            &config.start_index_map,
+            operand_rank as usize,
+        )?;
         if config.slice_sizes.len() != operand_shape.len() {
             return Err(crate::Error::rank_mismatch(
                 op,
@@ -1699,17 +1732,18 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let operand_shape = operand.shape().to_vec();
         let operand_rank = u32::try_from(operand_shape.len())
             .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
+        let operand_rank_axes = operand_rank as usize;
         require_axes(
             op,
             "inserted_window_dims",
             &config.inserted_window_dims,
-            operand_rank,
+            operand_rank_axes,
         )?;
         require_axes(
             op,
             "scatter_dims_to_operand_dims",
             &config.scatter_dims_to_operand_dims,
-            operand_rank,
+            operand_rank_axes,
         )?;
         let plan = scatter_plan(config, operand_rank);
         // Additive scatter accumulates into the operand copy. The copy is only enqueued:
@@ -2084,5 +2118,391 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
             .synchronize()
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
         Ok(output)
+    }
+}
+
+/// The cuTENSOR mode assignment of one dot-general.
+struct DotModes {
+    lhs_modes: Vec<i32>,
+    rhs_modes: Vec<i32>,
+    out_modes: Vec<i32>,
+    out_shape: Vec<usize>,
+}
+
+/// Assign one mode per axis for both operands and the destination: batch axes first, then
+/// the contracted axes shared by both operands, then each operand's free axes.
+fn dot_modes(
+    lhs_shape: &[usize],
+    rhs_shape: &[usize],
+    config: &tenferro_tensor::DotGeneralConfig,
+    op: &'static str,
+) -> crate::Result<DotModes> {
+    let (lhs_rank, rhs_rank) = (lhs_shape.len(), rhs_shape.len());
+    if config.lhs_batch_dims.len() != config.rhs_batch_dims.len()
+        || config.lhs_contracting_dims.len() != config.rhs_contracting_dims.len()
+    {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "configuration",
+            "the batch and contracting dimension lists must pair up between the operands",
+        ));
+    }
+    require_axes(op, "lhs_batch_dims", &config.lhs_batch_dims, lhs_rank)?;
+    require_axes(op, "rhs_batch_dims", &config.rhs_batch_dims, rhs_rank)?;
+    require_axes(
+        op,
+        "lhs_contracting_dims",
+        &config.lhs_contracting_dims,
+        lhs_rank,
+    )?;
+    require_axes(
+        op,
+        "rhs_contracting_dims",
+        &config.rhs_contracting_dims,
+        rhs_rank,
+    )?;
+    for (&lhs_axis, &rhs_axis) in config.lhs_batch_dims.iter().zip(&config.rhs_batch_dims) {
+        if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
+            return Err(crate::Error::shape_mismatch(
+                op,
+                vec![lhs_shape[lhs_axis]],
+                vec![rhs_shape[rhs_axis]],
+            ));
+        }
+    }
+    for (&lhs_axis, &rhs_axis) in config
+        .lhs_contracting_dims
+        .iter()
+        .zip(&config.rhs_contracting_dims)
+    {
+        if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
+            return Err(crate::Error::shape_mismatch(
+                op,
+                vec![lhs_shape[lhs_axis]],
+                vec![rhs_shape[rhs_axis]],
+            ));
+        }
+    }
+    let batches = config.lhs_batch_dims.len();
+    let contracted = config.lhs_contracting_dims.len();
+    let mut next = (batches + contracted) as i32;
+    let assign = |named: [&[usize]; 2], modes: &mut [i32], next: &mut i32| -> Vec<usize> {
+        for (index, &axis) in named[0].iter().enumerate() {
+            modes[axis] = index as i32;
+        }
+        for (index, &axis) in named[1].iter().enumerate() {
+            modes[axis] = (batches + index) as i32;
+        }
+        let mut free = Vec::new();
+        for (axis, mode) in modes.iter_mut().enumerate() {
+            if *mode < 0 {
+                *mode = *next;
+                *next += 1;
+                free.push(axis);
+            }
+        }
+        free
+    };
+    let mut lhs_modes = vec![-1i32; lhs_rank];
+    let mut rhs_modes = vec![-1i32; rhs_rank];
+    let lhs_free = assign(
+        [&config.lhs_batch_dims, &config.lhs_contracting_dims],
+        &mut lhs_modes,
+        &mut next,
+    );
+    let rhs_free = assign(
+        [&config.rhs_batch_dims, &config.rhs_contracting_dims],
+        &mut rhs_modes,
+        &mut next,
+    );
+    let mut out_modes = Vec::with_capacity(batches + lhs_free.len() + rhs_free.len());
+    let mut out_shape = Vec::with_capacity(out_modes.capacity());
+    for (index, &axis) in config.lhs_batch_dims.iter().enumerate() {
+        out_modes.push(index as i32);
+        out_shape.push(lhs_shape[axis]);
+    }
+    for &axis in &lhs_free {
+        out_modes.push(lhs_modes[axis]);
+        out_shape.push(lhs_shape[axis]);
+    }
+    for &axis in &rhs_free {
+        out_modes.push(rhs_modes[axis]);
+        out_shape.push(rhs_shape[axis]);
+    }
+    Ok(DotModes {
+        lhs_modes,
+        rhs_modes,
+        out_modes,
+        out_shape,
+    })
+}
+
+/// One contraction scalar as the `(re, im)` pair the library reads.
+fn scalar_pair(value: tenferro_tensor::ContractionScalar) -> (f64, f64) {
+    match value {
+        tenferro_tensor::ContractionScalar::F32(value) => (value as f64, 0.0),
+        tenferro_tensor::ContractionScalar::F64(value) => (value, 0.0),
+        tenferro_tensor::ContractionScalar::C32(value) => (value.re as f64, value.im as f64),
+        tenferro_tensor::ContractionScalar::C64(value) => (value.re, value.im),
+    }
+}
+
+impl CudaEngine {
+    /// Submit one dot-general into an already allocated destination and wait for it.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Validation`] for a configuration the operands' shapes do not support
+    /// and [`crate::Error::RuntimeState`] for a cuTENSOR failure.
+    #[allow(clippy::too_many_arguments)]
+    fn submit_dot(
+        &mut self,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &tenferro_tensor::DotGeneralConfig,
+        conj_a: bool,
+        conj_b: bool,
+        alpha: (f64, f64),
+        beta: (f64, f64),
+        addend: Option<&Tensor>,
+        output: &Tensor,
+        op: &'static str,
+    ) -> crate::Result<()> {
+        let dtype = lhs.dtype();
+        let kernel = contraction_dtype(dtype, op)?;
+        if rhs.dtype() != dtype {
+            return Err(crate::Error::dtype_mismatch(op, dtype, rhs.dtype()));
+        }
+        if output.dtype() != dtype {
+            return Err(crate::Error::dtype_mismatch(op, dtype, output.dtype()));
+        }
+        let modes = dot_modes(lhs.shape(), rhs.shape(), config, op)?;
+        if output.shape() != modes.out_shape.as_slice() {
+            return Err(crate::Error::shape_mismatch(
+                op,
+                modes.out_shape.clone(),
+                output.shape().to_vec(),
+            ));
+        }
+        let strides = |tensor: &Tensor, op: &'static str| -> crate::Result<Vec<i64>> {
+            Ok(self
+                .strides_of(tensor, op)?
+                .iter()
+                .map(|&stride| stride as i64)
+                .collect())
+        };
+        let lhs_strides = strides(lhs, op)?;
+        let rhs_strides = strides(rhs, op)?;
+        let out_strides = strides(output, op)?;
+        let lhs_extents: Vec<i64> = lhs.shape().iter().map(|&extent| extent as i64).collect();
+        let rhs_extents: Vec<i64> = rhs.shape().iter().map(|&extent| extent as i64).collect();
+        let out_extents: Vec<i64> = output.shape().iter().map(|&extent| extent as i64).collect();
+        let (a, b, d) = with_scalar!(dtype, |T| Ok((
+            self.allocation_of::<T>(lhs, op)?,
+            self.allocation_of::<T>(rhs, op)?,
+            self.allocation_of::<T>(output, op)?,
+        )))?;
+        let addend_parts = match addend {
+            Some(c) => {
+                if c.dtype() != dtype {
+                    return Err(crate::Error::dtype_mismatch(op, dtype, c.dtype()));
+                }
+                if c.shape() != output.shape() {
+                    return Err(crate::Error::shape_mismatch(
+                        op,
+                        output.shape().to_vec(),
+                        c.shape().to_vec(),
+                    ));
+                }
+                let buffer = with_scalar!(dtype, |T| self.allocation_of::<T>(c, op))?;
+                Some((buffer, strides(c, op)?))
+            }
+            None => None,
+        };
+        let request = Contraction {
+            dtype: kernel,
+            a: Operand {
+                buffer: a,
+                modes: &modes.lhs_modes,
+                extents: &lhs_extents,
+                strides: &lhs_strides,
+            },
+            b: Operand {
+                buffer: b,
+                modes: &modes.rhs_modes,
+                extents: &rhs_extents,
+                strides: &rhs_strides,
+            },
+            c: addend_parts.as_ref().map(|(buffer, strides)| Operand {
+                buffer,
+                modes: &modes.out_modes,
+                extents: &out_extents,
+                strides,
+            }),
+            d: Operand {
+                buffer: d,
+                modes: &modes.out_modes,
+                extents: &out_extents,
+                strides: &out_strides,
+            },
+            alpha,
+            beta,
+            conj_a,
+            conj_b,
+        };
+        self.cutensor()
+            .map_err(|error| crate::Error::runtime_state(op, error.to_string()))?
+            .contract(&request)
+            .map_err(|error| crate::Error::runtime_state(op, error.to_string()))?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
+    }
+
+    /// Allocate the destination of one dot-general, submit it and return it.
+    fn dot_general_allocating(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &tenferro_tensor::DotGeneralConfig,
+        conj_a: bool,
+        conj_b: bool,
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let left = self.device_read(lhs, op)?;
+        let right = self.device_read(rhs, op)?;
+        let dtype = left.dtype();
+        let modes = dot_modes(left.shape(), right.shape(), config, op)?;
+        let output = alloc_tensor(self.runtime(), dtype, &modes.out_shape)?;
+        self.submit_dot(
+            left,
+            right,
+            config,
+            conj_a,
+            conj_b,
+            (1.0, 0.0),
+            (0.0, 0.0),
+            None,
+            &output,
+            op,
+        )?;
+        Ok(output)
+    }
+}
+
+impl tenferro_tensor::TensorDot for CudaEngine {
+    fn dot_general_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &tenferro_tensor::DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        self.dot_general_allocating(lhs, rhs, config, false, false, "dot_general_read")
+    }
+
+    fn dot_general_read_into(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &tenferro_tensor::DotGeneralConfig,
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        let op = "dot_general_read_into";
+        let (TensorRead::Tensor(left), TensorWrite::Tensor(output)) = (lhs, out) else {
+            return Err(crate::Error::unsupported(
+                op,
+                "a borrowed view is not served by the structural slice",
+            ));
+        };
+        self.submit_dot(
+            left,
+            rhs_tensor(rhs, op)?,
+            config,
+            false,
+            false,
+            (1.0, 0.0),
+            (0.0, 0.0),
+            None,
+            output,
+            op,
+        )
+    }
+
+    fn dot_general_with_conj(
+        &mut self,
+        lhs: &Tensor,
+        rhs: &Tensor,
+        config: &tenferro_tensor::DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        self.dot_general_allocating(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            config,
+            lhs_conj,
+            rhs_conj,
+            "dot_general_with_conj",
+        )
+    }
+
+    fn dot_general_with_conj_read(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &tenferro_tensor::DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        self.dot_general_allocating(
+            lhs,
+            rhs,
+            config,
+            lhs_conj,
+            rhs_conj,
+            "dot_general_with_conj_read",
+        )
+    }
+
+    fn dot_general_read_into_accum(
+        &mut self,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &tenferro_tensor::DotGeneralConfig,
+        accumulation: tenferro_tensor::DotGeneralAccumulation,
+        out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        let op = "dot_general_read_into_accum";
+        let TensorWrite::Tensor(output) = out else {
+            return Err(crate::Error::unsupported(
+                op,
+                "a borrowed view is not served by the structural slice",
+            ));
+        };
+        let left = self.device_read(lhs, op)?;
+        let right = rhs_tensor(rhs, op)?;
+        self.submit_dot(
+            left,
+            right,
+            config,
+            accumulation.lhs_conj,
+            accumulation.rhs_conj,
+            scalar_pair(accumulation.alpha),
+            scalar_pair(accumulation.beta),
+            Some(output),
+            output,
+            op,
+        )
+    }
+}
+
+/// The device tensor behind a read operand, or the trait's refusal.
+fn rhs_tensor<'a>(input: TensorRead<'a>, op: &'static str) -> crate::Result<&'a Tensor> {
+    match input {
+        TensorRead::Tensor(tensor) => Ok(tensor),
+        TensorRead::View(_) => Err(crate::Error::unsupported(
+            op,
+            "a borrowed view is not served by the structural slice",
+        )),
     }
 }

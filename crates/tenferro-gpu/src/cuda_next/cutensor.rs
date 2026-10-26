@@ -22,7 +22,6 @@ use t4a_cuda_runtime::{Buffer as DeviceBuffer, RawResource};
 use crate::gpu::GpuError;
 
 use super::runtime::CudaRuntime;
-use super::vendor::ComplexCoefficient;
 
 /// The cuTENSOR entry points this adapter calls.
 ///
@@ -287,6 +286,60 @@ pub struct Contraction<'a> {
     pub c: Option<Operand<'a>>,
     /// Destination.
     pub d: Operand<'a>,
+    /// Scale of the product, as `(re, im)`; the library reads it at the compute type's width.
+    pub alpha: (f64, f64),
+    /// Scale of the addend, as `(re, im)`; non-zero requires `c`.
+    pub beta: (f64, f64),
+    /// Whether the left operand is conjugated.
+    pub conj_a: bool,
+    /// Whether the right operand is conjugated.
+    pub conj_b: bool,
+}
+
+impl Contraction<'_> {
+    /// The coefficient pair the library reads, at the width the compute type expects.
+    ///
+    /// For a complex dtype the library wants a two-field complex scalar, and for a real one
+    /// a single scalar of that width — passing a wider value makes it read the wrong bytes.
+    fn coefficient(dtype: DType, value: (f64, f64)) -> Result<Coefficient, GpuError> {
+        let (re, im) = value;
+        Ok(match dtype {
+            DType::F32 => Coefficient::F32([re as f32]),
+            DType::F64 => Coefficient::F64([re]),
+            DType::C32 => Coefficient::C32([re as f32, im as f32]),
+            DType::C64 => Coefficient::C64([re, im]),
+            other => {
+                return Err(GpuError::unsupported(
+                    "contract",
+                    format!("cuTENSOR serves F32, F64, C32 and C64 here, not {other:?}"),
+                ))
+            }
+        })
+    }
+}
+
+/// A cuTENSOR scalar operand, laid out as the compute type expects.
+#[derive(Clone, Copy)]
+enum Coefficient {
+    /// One `float`.
+    F32([f32; 1]),
+    /// One `double`.
+    F64([f64; 1]),
+    /// `cuFloatComplex`.
+    C32([f32; 2]),
+    /// `cuDoubleComplex`.
+    C64([f64; 2]),
+}
+
+impl Coefficient {
+    fn as_ptr(&self) -> *const std::ffi::c_void {
+        match self {
+            Coefficient::F32(value) => value.as_ptr().cast(),
+            Coefficient::F64(value) => value.as_ptr().cast(),
+            Coefficient::C32(value) => value.as_ptr().cast(),
+            Coefficient::C64(value) => value.as_ptr().cast(),
+        }
+    }
 }
 
 /// A cached plan and the workspace it was planned with.
@@ -414,8 +467,14 @@ impl Cutensor {
         if let Some(c) = c {
             resources.push(RawResource::Buffer(c));
         }
-        let alpha = coefficient(request.dtype, 1.0, 0.0);
-        let beta = coefficient(request.dtype, 0.0, 0.0);
+        if request.c.is_none() && request.beta != (0.0, 0.0) {
+            return Err(GpuError::unsupported(
+                "contract",
+                "a non-zero beta needs an addend operand",
+            ));
+        }
+        let alpha = Contraction::coefficient(request.dtype, request.alpha)?;
+        let beta = Contraction::coefficient(request.dtype, request.beta)?;
         let vtable = &self.vtable;
         // SAFETY: the raw scope registered every operand and the workspace in this
         // runtime, so the addresses belong to it and stay alive until the scope's
@@ -443,10 +502,10 @@ impl Cutensor {
                     (vtable.contract)(
                         handle,
                         plan,
-                        (&alpha as *const ComplexCoefficient).cast(),
+                        alpha.as_ptr(),
                         a,
                         b,
-                        (&beta as *const ComplexCoefficient).cast(),
+                        beta.as_ptr(),
                         c_ptr,
                         d,
                         workspace_ptr,
@@ -521,10 +580,18 @@ impl Cutensor {
                                 &mut operation,
                                 desc_a,
                                 mode(&request.a),
-                                ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY,
+                                if request.conj_a {
+                                    ct::cutensorOperator_t::CUTENSOR_OP_CONJ
+                                } else {
+                                    ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY
+                                },
                                 desc_b,
                                 mode(&request.b),
-                                ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY,
+                                if request.conj_b {
+                                    ct::cutensorOperator_t::CUTENSOR_OP_CONJ
+                                } else {
+                                    ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY
+                                },
                                 c_desc,
                                 c_modes,
                                 ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY,
@@ -697,11 +764,6 @@ fn data_type_of(dtype: DType) -> Result<ct::cudaDataType_t, GpuError> {
     })
 }
 
-fn coefficient(dtype: DType, re: f64, im: f64) -> ComplexCoefficient {
-    let _ = dtype;
-    ComplexCoefficient { re, im }
-}
-
 /// The plan cache key: dtype, then every operand's modes, extents and strides.
 fn signature_of(request: &Contraction<'_>) -> Vec<i64> {
     let mut key = Vec::with_capacity(64);
@@ -715,6 +777,8 @@ fn signature_of(request: &Contraction<'_>) -> Vec<i64> {
             0
         }
     });
+    key.push(i64::from(request.conj_a));
+    key.push(i64::from(request.conj_b));
     for operand in [Some(request.a), Some(request.b), request.c, Some(request.d)] {
         let Some(operand) = operand else {
             key.push(-1);

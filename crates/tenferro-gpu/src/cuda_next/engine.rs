@@ -51,6 +51,9 @@ impl From<GpuError> for CudaEngineError {
 #[doc(hidden)]
 pub struct CudaEngine {
     runtime: CudaRuntime,
+    /// The cuTENSOR handle, created on the first contraction: a plan cache lives beside
+    /// it, so a contraction reuses its plan instead of planning on every call.
+    cutensor: Option<super::Cutensor>,
     // `!Sync` explicitly rather than by inheritance from the runtime's auto traits.
     _not_sync: PhantomData<std::cell::Cell<()>>,
 }
@@ -85,6 +88,7 @@ impl CudaEngine {
     pub fn open(device_id: CudaDeviceId) -> Result<CudaEngine, CudaEngineError> {
         Ok(CudaEngine {
             runtime: CudaRuntime::new(device_id)?,
+            cutensor: None,
             _not_sync: PhantomData,
         })
     }
@@ -138,6 +142,20 @@ impl CudaEngine {
             frontier,
             std::sync::Arc::clone(&self.runtime.inner),
         ))
+    }
+
+    /// The engine's cuTENSOR handle, created on first use.
+    ///
+    /// # Errors
+    ///
+    /// [`CudaEngineError::Seam`] when the library cannot be loaded or the handle cannot
+    /// be created on this runtime's context.
+    pub(crate) fn cutensor(&mut self) -> Result<&mut super::Cutensor, CudaEngineError> {
+        if self.cutensor.is_none() {
+            self.cutensor =
+                Some(super::Cutensor::new(&self.runtime).map_err(CudaEngineError::from)?);
+        }
+        Ok(self.cutensor.as_mut().expect("set above"))
     }
 
     /// The runtime this engine owns.
