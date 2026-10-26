@@ -8,6 +8,7 @@ use tenferro_gpu::cuda_next::{
 };
 use tenferro_tensor::{
     Complex32, Complex64, DType, Tensor, TensorAnalytic, TensorElementwise, TensorRead,
+    TensorStructural,
 };
 
 fn engine() -> Option<CudaEngine> {
@@ -111,4 +112,132 @@ fn integer_and_boolean_dtypes_follow_the_catalogue() {
         matches!(refused, tenferro_tensor::Error::Unsupported { .. }),
         "expected an unsupported-operation refusal, got {refused:?}"
     );
+}
+
+#[test]
+fn analytic_operations_and_power_follow_the_contract() {
+    let Some(mut engine) = engine() else { return };
+    let data = vec![0.25f64, 0.5, 1.0, 4.0];
+    let source = upload(
+        &engine,
+        Tensor::from_vec_col_major(vec![4], data.clone()).expect("host"),
+    );
+
+    let exponential = engine
+        .exp_read(TensorRead::from_tensor(&source))
+        .expect("exp");
+    let observed = read::<f64>(&engine, &exponential);
+    for (observed, value) in observed.iter().zip(&data) {
+        assert!((observed - value.exp()).abs() < 1e-12);
+    }
+
+    let logarithm = engine
+        .log_read(TensorRead::from_tensor(&source))
+        .expect("log");
+    let observed = read::<f64>(&engine, &logarithm);
+    for (observed, value) in observed.iter().zip(&data) {
+        assert!((observed - value.ln()).abs() < 1e-12);
+    }
+
+    let square_root = engine
+        .sqrt_read(TensorRead::from_tensor(&source))
+        .expect("sqrt");
+    let observed = read::<f64>(&engine, &square_root);
+    for (observed, value) in observed.iter().zip(&data) {
+        assert!((observed - value.sqrt()).abs() < 1e-12);
+    }
+
+    // Float power over two same-shaped tensors, and a rank-0 exponent as the scalar side.
+    let exponent = upload(
+        &engine,
+        Tensor::from_vec_col_major(vec![4], vec![2.0f64; 4]).expect("host"),
+    );
+    let powered = engine
+        .pow_read(
+            TensorRead::from_tensor(&source),
+            TensorRead::from_tensor(&exponent),
+        )
+        .expect("pow");
+    let observed = read::<f64>(&engine, &powered);
+    for (observed, value) in observed.iter().zip(&data) {
+        assert!((observed - value.powf(2.0)).abs() < 1e-12);
+    }
+    let scalar_exponent = upload(
+        &engine,
+        Tensor::from_vec_col_major(Vec::new(), vec![3.0f64]).expect("host"),
+    );
+    let cubed = engine
+        .pow_read(
+            TensorRead::from_tensor(&source),
+            TensorRead::from_tensor(&scalar_exponent),
+        )
+        .expect("scalar pow");
+    assert_eq!(cubed.shape(), &[4]);
+    let observed = read::<f64>(&engine, &cubed);
+    for (observed, value) in observed.iter().zip(&data) {
+        assert!((observed - value.powf(3.0)).abs() < 1e-12);
+    }
+
+    // Integer power is exact where it fits, `0^0` is one, and a negative exponent is a
+    // numerical failure rather than a silent wrap.
+    let integers = upload(
+        &engine,
+        Tensor::from_vec_col_major(vec![3], vec![0i64, 2, -3]).expect("host"),
+    );
+    let three = upload(
+        &engine,
+        Tensor::from_vec_col_major(vec![3], vec![0i64, 3, 2]).expect("host"),
+    );
+    let powered = engine
+        .pow_read(
+            TensorRead::from_tensor(&integers),
+            TensorRead::from_tensor(&three),
+        )
+        .expect("integer pow");
+    assert_eq!(read::<i64>(&engine, &powered), vec![1i64, 8, 9]);
+
+    let negative = upload(
+        &engine,
+        Tensor::from_vec_col_major(vec![3], vec![-1i64, -1, -1]).expect("host"),
+    );
+    let refused = engine
+        .pow_read(
+            TensorRead::from_tensor(&three),
+            TensorRead::from_tensor(&negative),
+        )
+        .expect_err("negative exponent");
+    assert!(
+        matches!(refused.kind(), tenferro_tensor::ErrorKind::NumericalFailure),
+        "expected a numerical failure, got {refused:?}"
+    );
+}
+
+#[test]
+fn a_float_to_integer_cast_is_checked_before_it_truncates() {
+    let Some(mut engine) = engine() else { return };
+    // In-range values convert.
+    let host = Tensor::from_vec_col_major(vec![3], vec![1.75f64, -2.5, 0.0]).expect("host");
+    let source = upload(&engine, host);
+    let narrowed = engine.cast(&source, DType::I64).expect("cast");
+    assert_eq!(read::<i64>(&engine, &narrowed), vec![1i64, -2, 0]);
+
+    // A non-finite or out-of-range value is refused instead of being an undefined C++ cast.
+    for bad in [f64::NAN, f64::INFINITY, 1.0e300] {
+        let host = Tensor::from_vec_col_major(vec![2], vec![1.0f64, bad]).expect("host");
+        let source = upload(&engine, host);
+        let refused = engine.cast(&source, DType::I64).expect_err("bad cast");
+        assert!(
+            matches!(refused, tenferro_tensor::Error::Validation { .. }),
+            "expected a validation refusal for {bad}, got {refused:?}"
+        );
+    }
+
+    // The complex route judges the real component.
+    let complex = Tensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(2.0, 5.0), Complex64::new(f64::NAN, 0.0)],
+    )
+    .expect("host");
+    let source = upload(&engine, complex);
+    assert!(engine.cast(&source, DType::I32).is_err());
 }

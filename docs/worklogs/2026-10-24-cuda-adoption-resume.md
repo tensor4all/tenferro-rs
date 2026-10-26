@@ -142,11 +142,12 @@ Fixes made after the review, each verified against the shared contract:
 
 ## The engine surface and the dtype policy
 
-- `Engine` is now implementable for the new engine: `TensorAnalytic` (the eleven operations,
-  each the catalogue's own `UnaryOp`, with the complex absolute value landing in the real
-  dtype), `TensorFusion`/`TensorBuffer`/`SessionCachedDot` (defaults only), `gather_read` and
-  `native_engine` (no typed session is exposed before the cutover) are in place, so `Engine`
-  compiles. `ExecutionEngine` and the registration/preparer that the runtime's prepared-program
+- `Engine` is now implementable for the new engine: `TensorAnalytic` (ten unary operations from
+  the catalogue's own `UnaryOp` plus binary power), `TensorFusion`/`TensorBuffer`/
+  `SessionCachedDot` (defaults only) and `gather_read` are in place, so `Engine` compiles.
+  Complex absolute value lives in `TensorElementwise`, not `TensorAnalytic`, and lands in the
+  real dtype; `native_engine` keeps the trait default, since no typed session is exposed
+  before the cutover. `ExecutionEngine` and the registration/preparer that the runtime's prepared-program
   model needs are not: they replace the CubeCL preparer rather than sitting beside it, so they
   belong with the U6 cutover where there is exactly one engine id and one registration.
 - `kernel_dtype` no longer keeps a second dtype policy: it maps the seven preset dtypes and lets
@@ -154,8 +155,17 @@ Fixes made after the review, each verified against the shared contract:
   design asks for. A planner refusal about the operation or dtype now surfaces as `Unsupported`
   instead of `RuntimeState`.
 - `seam_dtype` covers the policy: complex conjugation and the complex absolute value (including
-  its real output dtype), C32 arithmetic, integer arithmetic, and an analytic operation the
-  catalogue refuses for integers reported as unsupported.
+  its real output dtype), C32 arithmetic, integer arithmetic, an analytic operation the
+  catalogue refuses for integers reported as unsupported, the analytic mappings and float,
+  scalar and integer power (including `0^0` and a negative exponent as a numerical failure),
+  and the float-to-integer cast check.
+- The cast routes needed one more guard the review caught: the ABI requires
+  `t4a_cuda_validate_real_cast` before a floating source is converted to a signed integer
+  (C++ float-to-int casts are undefined for NaN, an infinity and an out-of-range value), and
+  widening the dtype policy had made the complex routes reachable too. `cast` now runs that
+  check with the ABI's acceptance table (single precision below `2^31` exclusive, double
+  below `2^31 - 1` inclusive, both below `2^63` exclusive, the real component of a complex
+  source) and reports the offending element.
 
 ## Remaining, in order
 

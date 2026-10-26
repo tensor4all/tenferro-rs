@@ -6,8 +6,9 @@
 use t4a_cuda_kernels::{
     plan_binary, plan_clamp, plan_compare, plan_concatenate_copy, plan_convert, plan_copy_exact,
     plan_dynamic_slice, plan_elementwise, plan_gather, plan_pad, plan_reduce, plan_reduction,
-    plan_scatter_add, plan_select, plan_slice, plan_unary, plan_validate_float_indices, BinaryOp,
-    DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan, UnaryOp,
+    plan_scatter_add, plan_select, plan_slice, plan_unary, plan_validate_float_indices,
+    plan_validate_real_cast, BinaryOp, DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan,
+    ScalarSide, ScatterPlan, UnaryOp,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -631,6 +632,42 @@ impl Dispatcher {
                 Arg::DevicePtr(flag),
                 Arg::U32(dtype.tag() as u32),
                 Arg::F64(max_exact_integer),
+                Arg::U64(len as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_validate_real_cast`: record the first sampled value a cast to a signed
+    /// integer cannot represent.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn validate_real_cast(
+        &mut self,
+        dtype: DType,
+        len: i64,
+        stride: i64,
+        min: f64,
+        max: f64,
+        max_inclusive: bool,
+        input: &t4a_cuda_runtime::Buffer,
+        flag: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let plan = plan_validate_real_cast(dtype, len, stride).map_err(plan_error)?;
+        self.run(
+            Entry::ValidateRealCast,
+            plan,
+            &[
+                Arg::DevicePtr(input),
+                Arg::DevicePtr(flag),
+                Arg::U32(dtype.tag() as u32),
+                Arg::F64(min),
+                Arg::F64(max),
+                Arg::U64(stride as u64),
+                Arg::I32(i32::from(max_inclusive)),
                 Arg::U64(len as u64),
             ],
         )

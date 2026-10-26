@@ -348,6 +348,10 @@ impl TensorStructural for CudaEngine {
         let shape = input.shape().to_vec();
         let len = i64::try_from(element_count(&shape)?)
             .map_err(|_| crate::Error::unsupported("cast", "the element count exceeds i64"))?;
+        // A C++ float-to-int cast is undefined for NaN, an infinity and an out-of-range value,
+        // so the ABI requires the check below before the conversion. The complex routes read
+        // the real component of each pair, hence the stride of two.
+        self.validate_integer_cast(input, from, to, len)?;
         let output = alloc_tensor(self.runtime(), to, &shape)?;
         let runtime = self.runtime().clone();
         let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Convert])?;
@@ -1374,6 +1378,88 @@ fn contraction_dtype(dtype: DType, op: &'static str) -> crate::Result<t4a_cuda_k
 }
 
 impl CudaEngine {
+    /// Refuse a floating source whose values a signed-integer destination cannot hold.
+    ///
+    /// The acceptance table is the ABI's: a single-precision source is accepted below `2^31`
+    /// exclusive, a double below `2^31 - 1` inclusive, both below `2^63` exclusive, and a
+    /// complex source is judged on its real component.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::invalid_argument`] naming the offending element, and the runtime's own
+    /// failure when the check cannot run.
+    fn validate_integer_cast(
+        &mut self,
+        input: &Tensor,
+        from: DType,
+        to: DType,
+        len: i64,
+    ) -> crate::Result<()> {
+        const CAST: &str = "cast";
+        if len == 0 {
+            return Ok(());
+        }
+        let (stride, complex) = match from {
+            DType::F32 | DType::F64 => (1i64, false),
+            DType::C32 | DType::C64 => (2i64, true),
+            _ => return Ok(()),
+        };
+        if !matches!(to, DType::I32 | DType::I64) {
+            return Ok(());
+        }
+        let single = matches!(from, DType::F32 | DType::C32);
+        let (min, max, max_inclusive) = match (to, single) {
+            (DType::I32, true) => (-2_147_483_648.0, 2_147_483_648.0, false),
+            (DType::I32, false) => (-2_147_483_648.0, 2_147_483_647.0, true),
+            (_, true) => (
+                -9_223_372_036_854_775_808.0,
+                9_223_372_036_854_775_808.0,
+                false,
+            ),
+            (_, false) => (
+                -9_223_372_036_854_775_808.0,
+                9_223_372_036_854_775_808.0,
+                false,
+            ),
+        };
+        let runtime = self.runtime().clone();
+        let flag = runtime
+            .upload_bytes(&u32::MAX.to_ne_bytes())
+            .map_err(|error| crate::Error::runtime_state_source(CAST, error))?;
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::ValidateRealCast])?;
+        with_scalar!(from, |T| {
+            dispatcher.validate_real_cast(
+                kernel_dtype(from, CAST)?,
+                len,
+                stride,
+                min,
+                max,
+                max_inclusive,
+                self.allocation_of::<T>(input, CAST)?,
+                &flag,
+            )
+        })?;
+        let word = self
+            .runtime()
+            .download_bytes(&flag)
+            .map_err(|error| crate::Error::runtime_state_source(CAST, error))?;
+        let position = u32::from_ne_bytes(word[..4].try_into().expect("4 bytes"));
+        if position != u32::MAX {
+            // The flag holds a sampling position, one per source element.
+            let component = if complex {
+                "real component of element"
+            } else {
+                "element"
+            };
+            return Err(crate::Error::invalid_argument(
+                CAST,
+                "input",
+                format!("the {component} {position} is not representable as {to:?}"),
+            ));
+        }
+        Ok(())
+    }
+
     /// The kernel layout of an owned device tensor: its shape, element strides and no
     /// offset.
     fn layout_of(&self, tensor: &Tensor, op: &'static str) -> crate::Result<Layout> {
@@ -2275,6 +2361,16 @@ fn empty_contraction(lhs_shape: &[usize], config: &tenferro_tensor::DotGeneralCo
         .any(|&axis| lhs_shape[axis] == 0)
 }
 
+/// A numerical failure with the kind the CPU and CubeCL paths report.
+fn numerical_failure(op: &'static str, detail: &'static str) -> crate::Error {
+    crate::Error::extension(
+        op,
+        "cuda",
+        tenferro_tensor::ErrorKind::NumericalFailure,
+        std::io::Error::other(detail),
+    )
+}
+
 /// Classify a vendor failure the way the seam does: an unserved operation stays
 /// `Unsupported`, everything else is a backend failure with the library's own source.
 fn seam_error(op: &'static str, error: crate::gpu::GpuError) -> crate::Error {
@@ -2626,12 +2722,30 @@ impl CudaEngine {
     ) -> crate::Result<Tensor> {
         let left = self.device_read(lhs, name)?;
         let right = self.device_read(rhs, name)?;
-        if left.shape() != right.shape() || left.dtype() != right.dtype() {
-            return Err(crate::Error::unsupported(
+        if left.dtype() != right.dtype() {
+            return Err(crate::Error::dtype_mismatch(
                 name,
-                "both operands must share a shape and a dtype on this path",
+                left.dtype(),
+                right.dtype(),
             ));
         }
+        // A rank-0 operand is the scalar side, as in the reference backends; the result takes
+        // the other operand's shape.
+        let (shape, side) = match (left.shape().is_empty(), right.shape().is_empty()) {
+            (false, false) if left.shape() == right.shape() => {
+                (left.shape().to_vec(), t4a_cuda_kernels::ScalarSide::Both)
+            }
+            (false, true) => (left.shape().to_vec(), t4a_cuda_kernels::ScalarSide::Right),
+            (true, false) => (right.shape().to_vec(), t4a_cuda_kernels::ScalarSide::Left),
+            (true, true) => (Vec::new(), t4a_cuda_kernels::ScalarSide::Both),
+            (false, false) => {
+                return Err(crate::Error::shape_mismatch(
+                    name,
+                    left.shape().to_vec(),
+                    right.shape().to_vec(),
+                ))
+            }
+        };
         let dtype = left.dtype();
         let kernel = kernel_dtype(dtype, name)?;
         let op = match dtype {
@@ -2644,7 +2758,6 @@ impl CudaEngine {
                 ))
             }
         };
-        let shape = left.shape().to_vec();
         let len = count_i64(&shape, name)?;
         let output = alloc_tensor(self.runtime(), dtype, &shape)?;
         let runtime = self.runtime().clone();
@@ -2656,7 +2769,7 @@ impl CudaEngine {
             dispatcher.binary(
                 op,
                 kernel,
-                t4a_cuda_kernels::ScalarSide::Both,
+                side,
                 len,
                 self.allocation_of::<T>(&output, name)?,
                 self.allocation_of::<T>(left, name)?,
@@ -2664,17 +2777,25 @@ impl CudaEngine {
                 &status,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        let integral = matches!(dtype, DType::I32 | DType::I64);
+        if !integral {
+            // The floating entry never touches the status word; reading it back would wait
+            // for nothing this route needs.
+            return self
+                .runtime()
+                .synchronize()
+                .map_err(|error| crate::Error::runtime_state_source(name, error))
+                .map(|()| output);
+        }
+        // The flagged route is the checked integer one; reading the flag waits for it.
         let flag = self
             .runtime()
             .download_bytes(&status)
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
         if flag.iter().any(|byte| *byte != 0) {
-            return Err(crate::Error::unsupported(
+            return Err(numerical_failure(
                 name,
-                "the checked power reported a domain or overflow error",
+                "an integer power with a negative exponent has no integer result",
             ));
         }
         Ok(output)
@@ -2745,12 +2866,5 @@ impl tenferro_tensor::Engine for CudaEngine {
         let operand = self.device_read(operand, op)?;
         let indices = self.device_read(start_indices, op)?;
         self.gather(operand, indices, config)
-    }
-
-    fn native_engine(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
-        // The new path exposes no typed native session yet: a caller-written kernel would
-        // need this engine's module set, which stays private until the operation surface
-        // moves over (U6).
-        None
     }
 }
