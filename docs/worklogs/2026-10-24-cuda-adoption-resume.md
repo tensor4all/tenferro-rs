@@ -341,7 +341,11 @@ values come back through `download_tensor`.
 That first run also found a real defect: `alloc_tensor` labelled every produced tensor with the
 default placement, i.e. host memory, while the storage was a device allocation. The tensor surface
 never read the label, so nothing failed; the runtime's output-residency check does read it, and
-refused the output. Every produced tensor now carries the runtime's device placement.
+refused the output. Every produced tensor now carries the runtime's device placement. The review of that step found one
+more: the shared storage lookup skipped `Bool`, so a prepared comparison's Bool output failed the
+residency check although the operation itself works — the lookup serves `Bool` now, and a prepared
+comparison is the second end-to-end test. Two registration-only accessors are crate-visible instead
+of documented-public.
 
 ## Remaining, in order
 

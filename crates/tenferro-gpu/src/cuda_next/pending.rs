@@ -234,6 +234,9 @@ pub(crate) fn cuda_storage(value: &Tensor) -> Option<&CudaStorage> {
         DType::I64 => pick::<i64>(value),
         DType::C32 => pick::<Complex32>(value),
         DType::C64 => pick::<Complex64>(value),
-        DType::Bool | DType::External(_) => None,
+        // A comparison's result is a Bool allocation like any other, so the storage lookup serves
+        // it; only a caller-defined payload has no backend storage to find.
+        DType::Bool => pick::<bool>(value),
+        DType::External(_) => None,
     }
 }
