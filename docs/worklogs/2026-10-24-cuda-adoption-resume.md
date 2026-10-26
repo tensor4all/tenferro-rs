@@ -378,10 +378,15 @@ The hook has its four primitives, so the cuFFT port can start: `alloc_bytes` →
 Writing the hook against the pinned runtime showed that `retain_tensor` cannot be implemented as the
 CubeCL path had it: a `Buffer` owns its allocation (`Alloc::drop` releases the pointer), so a second
 reference cannot be held, and `RawScope::retain` takes an owned `Box<dyn Any + Send>`, which a
-borrowed tensor is not. Since cuFFT already synchronizes inside its hook and the cuSOLVER providers
-work inside the closure, the smallest correct contract is "a vendor call completes before the hook
-returns"; `retain_tensor` then only proves the tensor belongs to this runtime. The three options and
-the recommendation are in `docs/design/cuda-extension-hook-2208.md`.
+borrowed tensor is not. Reading the runtime settled it differently and better: `Domain::release` frees a dropped buffer with
+`cuMemFreeAsync` **on the same stream**, so a vendor call the hook enqueued there completes before
+the allocation is reclaimed — retention by stream order, not by a clone. The CubeCL path needed a
+retained clone only because its handles were reference-counted and reclaimed eagerly. `retain_tensor`
+therefore becomes a membership check, the hook's contract is "every vendor call is enqueued on the
+session's stream", and the one behaviour to prove with a test is that `Domain::release` stays
+stream-ordered (measured context: cuFFT synchronizes inside its hook twice, cuSOLVER has 28
+`with_raw` sites and only three that synchronize or wait — so a "wait before returning" rule would
+have meant editing 25 call sites and would not have been what makes it safe).
 
 ## Remaining, in order
 

@@ -84,27 +84,27 @@ rather than inside the scope.
 The hook therefore has `alloc_zeroed` for scratch, `register` for any buffer it learns about
 mid-scope, and the stream.
 
-### The one primitive still missing: sharing an allocation
+### Retention: the runtime's stream-ordered free is the guard
 
 `retain_tensor` — the extension's way to say "this vendor call outlives my handle, keep the
-allocation alive until it completes" — cannot be written against the current runtime. `Buffer` owns
-its `Alloc`, and `Alloc`'s `Drop` releases the device pointer, so there is no way to hold a second
-reference; `RawScope::retain` keeps a caller-owned value alive but takes `Box<dyn Any + Send>`, and a
-borrowed `&TypedTensor<T>` cannot be moved into it.
+allocation alive until it completes" — does not need a shareable buffer on this path, for a reason
+that is stronger than "the hook waits": a dropped `Buffer` releases its device pointer with
+`cuMemFreeAsync` **on the same stream** (`memory.rs::Domain::release`, whose safety comment reads
+"the free is ordered after every admitted use on this stream"). A vendor call the hook enqueued on
+that stream therefore completes before the allocation is reclaimed, even if the caller drops its
+tensor as soon as `with_raw` returns. The CubeCL path needed a retained clone because its handles
+were reference-counted and reclaimed eagerly; this runtime does not.
 
-Three ways out, in order of preference:
+So `retain_tensor` becomes a membership check (the tensor is one of this runtime's allocations), and
+the hook's contract states that every vendor call is enqueued on the session's stream. The one
+behaviour this relies on is `Domain::release` staying stream-ordered; it is worth a test on the
+hook's own path rather than an assumption (drop a buffer right after enqueuing a copy that reads it,
+then read the copy back).
 
-1. **The hook's completion is the guard.** cuFFT already synchronizes inside its hook
-   (`raw.synchronize()`, two call sites) and cuSOLVER's providers do their work inside the closure,
-   so a hook that waits for its stream before returning makes retention unnecessary — `retain_tensor`
-   then only has to prove the tensor belongs to this runtime. This needs no upstream change and is
-   the smallest contract; it must be verified per call site rather than assumed.
-2. Upstream adds a shareable handle (`Buffer::share() -> SharedBuffer`, refcounted), which is what
-   the CubeCL path effectively had.
-3. The hook takes the value by ownership instead of by reference, which changes every call site.
-
-Recommendation: (1), with the hook documenting "a vendor call must have completed before the hook
-returns" — and, for a call site that cannot wait, (2) as the escalation.
+The measurements that make this the right call: cuFFT's hook already synchronizes inside the closure
+(two sites in `tenferro-fft/src/cuda/plan.rs`), while cuSOLVER has 28 `with_raw` sites and only three
+synchronise or wait inside — so a "hook waits before returning" rule would have had to be added to
+25 call sites, and it is not what keeps the data safe anyway.
 
 ## Sequencing
 
