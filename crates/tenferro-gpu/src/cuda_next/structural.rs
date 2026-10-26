@@ -511,7 +511,10 @@ impl TensorStructural for CudaEngine {
         // smaller of the two axes.
         let mut out_shape: Vec<usize> = shape.clone();
         let removed = out_shape.remove(axis_b);
-        out_shape[axis_a] = out_shape[axis_a].min(removed);
+        // Removing `axis_b` shifts every later axis down by one, so the diagonal's output axis is
+        // derived the way the planner derives it.
+        let diag_axis = axis_a - usize::from(axis_b < axis_a);
+        out_shape[diag_axis] = out_shape[diag_axis].min(removed);
         if shape.len() > t4a_cuda_kernels::MAX_RANK {
             return self.diagonal_wide(
                 input,
@@ -877,6 +880,13 @@ impl CudaEngine {
             modules.in_scope(entry, symbol, resources, |scope, function| {
                 let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
                 let in_mirror = in_geometry.mirror(in_ref, scope, op)?;
+                // `extract` walks the destination and `embed` walks the source element by
+                // element, so the trailing length is the one each entry visits.
+                let visited = if entry == Entry::ExtractDiagonal {
+                    out_len
+                } else {
+                    in_len
+                };
                 let args = [
                     Arg::DevicePtr(destination),
                     Arg::DevicePtr(source),
@@ -885,7 +895,7 @@ impl CudaEngine {
                     pod_arg(&in_mirror),
                     Arg::I32(axis_a as i32),
                     Arg::I32(axis_b as i32),
-                    Arg::U64(out_len as u64),
+                    Arg::U64(visited as u64),
                 ];
                 scope
                     .launch(

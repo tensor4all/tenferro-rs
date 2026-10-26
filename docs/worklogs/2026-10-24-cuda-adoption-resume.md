@@ -241,7 +241,12 @@ caught that an empty input planned a zero grid the wide path still submitted —
 that — so an empty placement is planned for its validation and not submitted, keeping the running
 offset. `dynamic_slice` (two layouts, the starts already device-resident) and the diagonal pair
 (`extract_diagonal`/`embed_diagonal_copy`, two layouts and the axis ids) follow the same pattern,
-each with a rank-9 test.
+each with a rank-9 test. The review of that step found two real defects: the embed symbol walks the
+*source* elements, so its trailing length is the input length (the fast path already passed it;
+the new wide branch did not), and the extraction's output shape assumed the diagonal keeps its
+input axis — removing a lower axis shifts it down by one, which the shared derivation now accounts
+for, and the test uses `(8, 1)` with unequal extents, a spectator axis and a non-trivial diagonal
+placement so a shifted axis fails it.
 
 `slice` and `pad` follow through one helper (`window_wide`): both take two layouts and two
 per-axis value arrays through the general path, and their fast symbols' third array — pad's
