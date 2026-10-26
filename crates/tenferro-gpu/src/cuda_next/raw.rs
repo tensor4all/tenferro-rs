@@ -15,6 +15,7 @@ use super::storage::CudaStorage;
 
 /// A handle to the runtime's own stream, valid for the session's life.
 #[derive(Debug, Clone, Copy)]
+#[doc(hidden)]
 pub struct StreamRef {
     handle: u64,
 }
@@ -22,6 +23,7 @@ pub struct StreamRef {
 impl StreamRef {
     /// The raw `CUstream`, as the value a vendor binding takes.
     #[must_use]
+    #[doc(hidden)]
     pub fn raw_handle(self) -> u64 {
         self.handle
     }
@@ -29,6 +31,7 @@ impl StreamRef {
 
 /// A device address the session handed out, valid until the scope's work completes.
 #[derive(Debug, Clone, Copy)]
+#[doc(hidden)]
 pub struct DeviceBytes<'s> {
     pointer: u64,
     bytes: usize,
@@ -37,12 +40,14 @@ pub struct DeviceBytes<'s> {
 
 impl DeviceBytes<'_> {
     /// Run `f` with the device address.
+    #[doc(hidden)]
     pub fn with_ptr<R>(&self, f: impl FnOnce(*mut std::ffi::c_void) -> R) -> R {
         f(self.pointer as usize as *mut std::ffi::c_void)
     }
 
     /// Number of bytes at the address.
     #[must_use]
+    #[doc(hidden)]
     pub fn byte_len(&self) -> usize {
         self.bytes
     }
@@ -50,6 +55,7 @@ impl DeviceBytes<'_> {
 
 /// A read-only device view of a caller's tensor.
 #[derive(Debug, Clone, Copy)]
+#[doc(hidden)]
 pub struct TensorRef<'a, T> {
     pointer: u64,
     bytes: usize,
@@ -58,12 +64,14 @@ pub struct TensorRef<'a, T> {
 
 impl<T> TensorRef<'_, T> {
     /// Run `f` with the tensor's device address.
+    #[doc(hidden)]
     pub fn with_ptr<R>(&self, f: impl FnOnce(*mut std::ffi::c_void) -> R) -> R {
         f(self.pointer as usize as *mut std::ffi::c_void)
     }
 
     /// Number of bytes the tensor spans.
     #[must_use]
+    #[doc(hidden)]
     pub fn byte_len(&self) -> usize {
         self.bytes
     }
@@ -71,6 +79,7 @@ impl<T> TensorRef<'_, T> {
 
 /// A writable device view of a caller's tensor.
 #[derive(Debug, Clone, Copy)]
+#[doc(hidden)]
 pub struct TensorMut<'a, T> {
     pointer: u64,
     bytes: usize,
@@ -79,18 +88,21 @@ pub struct TensorMut<'a, T> {
 
 impl<T> TensorMut<'_, T> {
     /// Run `f` with the tensor's device address.
+    #[doc(hidden)]
     pub fn with_ptr<R>(&self, f: impl FnOnce(*mut std::ffi::c_void) -> R) -> R {
         f(self.pointer as usize as *mut std::ffi::c_void)
     }
 
     /// Number of bytes the tensor spans.
     #[must_use]
+    #[doc(hidden)]
     pub fn byte_len(&self) -> usize {
         self.bytes
     }
 }
 
 /// One raw scope, handed to an extension's closure.
+#[doc(hidden)]
 pub struct Session<'s> {
     runtime: super::CudaRuntime,
     scope: t4a_cuda_runtime::RawScope<'s>,
@@ -99,6 +111,7 @@ pub struct Session<'s> {
 impl<'s> Session<'s> {
     /// The runtime's stream, for a vendor library to bind its plan to.
     #[must_use]
+    #[doc(hidden)]
     pub fn stream(&self) -> StreamRef {
         StreamRef {
             handle: self.scope.stream(),
@@ -110,6 +123,7 @@ impl<'s> Session<'s> {
     /// # Errors
     ///
     /// [`crate::Error::RuntimeStateSource`] when the allocation or its zero fill fails.
+    #[doc(hidden)]
     pub fn alloc_bytes(&self, nbytes: usize, op: &'static str) -> crate::Result<DeviceBytes<'s>> {
         let buffer = self
             .scope
@@ -136,6 +150,7 @@ impl<'s> Session<'s> {
     /// # Errors
     ///
     /// [`crate::Error::RuntimeState`] when the tensor is not this runtime's allocation.
+    #[doc(hidden)]
     pub fn tensor<T: TensorScalar>(
         &self,
         tensor: &TypedTensor<T>,
@@ -153,6 +168,7 @@ impl<'s> Session<'s> {
     /// # Errors
     ///
     /// [`crate::Error::RuntimeState`] when the tensor is not this runtime's allocation.
+    #[doc(hidden)]
     pub fn tensor_mut<T: TensorScalar>(
         &self,
         tensor: &TypedTensor<T>,
@@ -170,6 +186,7 @@ impl<'s> Session<'s> {
     /// # Errors
     ///
     /// [`crate::Error::RuntimeState`] when the tensor is not this runtime's allocation.
+    #[doc(hidden)]
     pub fn retain_tensor<T: TensorScalar>(
         &self,
         tensor: &TypedTensor<T>,
@@ -188,6 +205,7 @@ impl<'s> Session<'s> {
     /// # Errors
     ///
     /// [`crate::Error::RuntimeStateSource`] when the stream cannot be synchronised.
+    #[doc(hidden)]
     pub fn synchronize(&self) -> crate::Result<()> {
         let stream = self.scope.stream() as usize as *mut cudarc::driver::sys::CUstream_st;
         // SAFETY: the scope hands out this runtime's own stream; a barrier on it neither reads nor
@@ -245,6 +263,7 @@ impl CudaEngine {
     /// # Errors
     ///
     /// The closure's own failure, and the runtime's when the scope cannot be opened.
+    #[doc(hidden)]
     pub fn with_raw<R>(
         &mut self,
         _op: &'static str,
