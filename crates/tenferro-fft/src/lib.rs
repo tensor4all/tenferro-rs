@@ -138,6 +138,7 @@ use tenferro_cpu::with_cpu_engine;
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda_next::raw::with_cuda_engine;
+#[cfg(feature = "cuda")]
 use tenferro_gpu::cuda_next::CudaEngine;
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::webgpu::with_webgpu_exec_session;
