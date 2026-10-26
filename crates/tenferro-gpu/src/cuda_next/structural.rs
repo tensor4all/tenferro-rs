@@ -1122,11 +1122,11 @@ impl CudaEngine {
         let mut shape = source.shape().to_vec();
         let mut owned: Option<Tensor> = None;
         for (pass, &axis) in axes.iter().rev().enumerate() {
-            // As in the fast path: only the first pass folds the squares of a sum-of-squares.
-            let pass_op = if pass == 0 {
-                kernel_op
-            } else {
+            // As in the fast path: only a sum of squares changes between passes.
+            let pass_op = if pass > 0 && matches!(op, ReduceOp::SumSquares) {
                 reduction_op(ReduceOp::Sum)
+            } else {
+                kernel_op
             };
             let out_shape: Vec<usize> = {
                 let mut next = shape.clone();
@@ -2113,12 +2113,12 @@ impl CudaEngine {
         // The reduction kernel is keepdims: the destination has the input's rank with an
         // extent of one on the reduced axis, so the unit axes are squeezed off at the end.
         for (pass, &axis) in ordered.iter().rev().enumerate() {
-            // Squaring every pass would square the squared sums; only the first pass folds the
-            // squares, the rest add them.
-            let pass_op = if pass == 0 {
-                kernel_op
-            } else {
+            // Only a sum of squares changes between passes: it folds the squares once and adds
+            // them afterwards. Every other fold composes with itself.
+            let pass_op = if pass > 0 && matches!(op, ReduceOp::SumSquares) {
                 reduction_op(ReduceOp::Sum)
+            } else {
+                kernel_op
             };
             let out_shape: Vec<usize> = {
                 let mut next = shape.clone();
@@ -2163,7 +2163,7 @@ impl CudaEngine {
             with_scalar!(dtype, |T| {
                 dispatcher.reduce_auto(
                     kernel,
-                    kernel_op,
+                    pass_op,
                     &out_layout,
                     out_len,
                     &in_layout,
@@ -3938,9 +3938,12 @@ impl CudaEngine {
             // The product has no entry to read, so the answer is `beta * output`: an
             // overwrite already holds the zero the allocation gave it, and an accumulation
             // scales what is there.
+            // An overwrite must still leave the destination zero, and a zero-beta accumulation must
+            // overwrite whatever was there (a scaled NaN would survive otherwise).
             return match addend {
+                Some(_) if beta == (0.0, 0.0) => self.zero_into(output, op),
                 Some(_) => self.scale_in_place(output, beta, op),
-                None => Ok(()),
+                None => self.zero_into(output, op),
             };
         }
         let modes = dot_modes(lhs.shape(), rhs.shape(), config);
@@ -4177,6 +4180,46 @@ impl tenferro_tensor::TensorDot for CudaEngine {
 }
 
 impl CudaEngine {
+    /// Zero every element of an owned device tensor.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Unsupported`] for a dtype the catalogue does not fill, and the runtime's own
+    /// failure.
+    fn zero_into(&mut self, tensor: &Tensor, op: &'static str) -> crate::Result<()> {
+        let dtype = tensor.dtype();
+        let len = count_i64(tensor.shape(), op)?;
+        if len == 0 {
+            return Ok(());
+        }
+        // The fill entry is dtype-agnostic over the preset scalars, so the layout is not needed.
+        let kernel = kernel_dtype(dtype, op)?;
+        let mut modules =
+            super::launch::KernelModules::for_entries(self.runtime(), &[Entry::FillZero])?;
+        let plan = t4a_cuda_kernels::plan_fill_zero(kernel, len)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let out = with_scalar!(dtype, |T| self.allocation_of::<T>(tensor, op))?;
+        if plan.grid[0] == 0 {
+            return Ok(());
+        }
+        // SAFETY: `out` names a compact allocation of this runtime that the planner accepted for
+        // `len` elements.
+        unsafe {
+            modules.launch(
+                Entry::FillZero,
+                LaunchConfig::new(plan.grid[0], plan.block[0]),
+                &[
+                    Arg::DevicePtr(out),
+                    Arg::U32(kernel.tag() as u32),
+                    Arg::U64(len as u64),
+                ],
+            )
+        }?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
+    }
+
     /// Zero-filled device storage of `shape` for `dtype`.
     ///
     /// # Errors

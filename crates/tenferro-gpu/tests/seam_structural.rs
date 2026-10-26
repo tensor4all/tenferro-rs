@@ -887,3 +887,34 @@ fn a_rank_nine_reduction_over_a_long_axis_picks_a_plane_or_split_strategy() {
         let _ = expected_splits;
     }
 }
+
+#[test]
+fn a_multi_axis_fold_keeps_its_own_operation() {
+    let Some(mut engine) = engine() else { return };
+    // A product over two axes must stay a product; only a sum of squares changes between passes.
+    let host = Tensor::from_vec_col_major(vec![2, 2], vec![1.0f64, 2.0, 3.0, 4.0]).expect("host");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+    let product = engine
+        .reduce_prod_read(TensorRead::from_tensor(&source), &[0, 1])
+        .expect("product");
+    let product_host = download_tensor(engine.runtime(), &product).expect("download");
+    assert_eq!(
+        product_host.as_slice::<f64>().expect("f64 payload"),
+        &[24.0],
+        "1 * 2 * 3 * 4"
+    );
+    let squares = engine
+        .reduce_sum_squares_read(TensorRead::from_tensor(&source), &[0, 1])
+        .expect("sum of squares");
+    let squares_host = download_tensor(engine.runtime(), &squares).expect("download");
+    assert_eq!(
+        squares_host.as_slice::<f64>().expect("f64 payload"),
+        &[30.0],
+        "1 + 4 + 9 + 16"
+    );
+    let maximum = engine
+        .reduce_max_read(TensorRead::from_tensor(&source), &[0, 1])
+        .expect("maximum");
+    let maximum_host = download_tensor(engine.runtime(), &maximum).expect("download");
+    assert_eq!(maximum_host.as_slice::<f64>().expect("f64 payload"), &[4.0]);
+}

@@ -248,3 +248,40 @@ fn an_empty_contraction_yields_zeros_or_the_scaled_output() {
         .expect("scaled accumulation");
     assert_eq!(read(&engine, &out), vec![3.0; 6]);
 }
+
+#[test]
+fn an_empty_contraction_zeroes_an_existing_destination() {
+    let Some(mut engine) = engine() else { return };
+    let lhs = device(&engine, vec![2, 0], Vec::new());
+    let rhs = device(&engine, vec![0, 3], Vec::new());
+    // `read_into` overwrites, so a prefilled destination must come back zero even though the
+    // contraction has no element to compute.
+    let mut out = device(&engine, vec![2, 3], vec![7.0; 6]);
+    engine
+        .dot_general_read_into(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &plain(&[1], &[0], &[], &[]),
+            TensorWrite::from_tensor(&mut out),
+        )
+        .expect("empty overwrite");
+    assert_eq!(read(&engine, &out), vec![0.0; 6]);
+
+    // A zero-beta accumulation also overwrites, whatever the destination held.
+    let mut out = device(&engine, vec![2, 3], vec![7.0; 6]);
+    engine
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &plain(&[1], &[0], &[], &[]),
+            DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::F64(1.0),
+                beta: ContractionScalar::F64(0.0),
+            },
+            TensorWrite::from_tensor(&mut out),
+        )
+        .expect("empty zero-beta accumulation");
+    assert_eq!(read(&engine, &out), vec![0.0; 6]);
+}

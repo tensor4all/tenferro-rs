@@ -460,7 +460,17 @@ impl Cutensor {
             // lifetime of the engine; the oldest plan retires instead.
             if self.order.len() >= MAX_CACHED_PLANS {
                 if let Some(oldest) = self.order.pop_front() {
-                    self.plans.remove(&oldest);
+                    if let Some(evicted) = self.plans.remove(&oldest) {
+                        // The plan's handles and workspace are native resources: an evicted plan
+                        // has to be destroyed, or a varying-shape workload leaks one bundle per
+                        // shape. Nothing queued may still use it, so the stream is drained first.
+                        self.runtime
+                            .synchronize()
+                            .map_err(|error| GpuError::Unavailable {
+                                detail: error.to_string(),
+                            })?;
+                        self.destroy_plan(evicted);
+                    }
                 }
             }
             self.plans.insert(signature.clone(), plan);
@@ -760,25 +770,38 @@ impl Cutensor {
     }
 }
 
+impl Cutensor {
+    /// Destroy one plan's native resources, including the descriptors it owns.
+    fn destroy_plan(&self, cached: CachedPlan) {
+        // SAFETY: the raw scope activates the context the plan belongs to, and the caller proved
+        // nothing still reads it.
+        unsafe {
+            let _ = self.runtime.with_raw_locked(Vec::new(), |_raw| {
+                let _ = (self.vtable.destroy_plan)(cached.plan);
+                let _ = (self.vtable.destroy_plan_preference)(cached.preference);
+                let _ = (self.vtable.destroy_operation_descriptor)(cached.operation);
+                for descriptor in cached.descriptors {
+                    if !descriptor.is_null() {
+                        let _ = (self.vtable.destroy_tensor_descriptor)(descriptor);
+                    }
+                }
+            });
+        }
+    }
+}
+
 impl Drop for Cutensor {
     fn drop(&mut self) {
         let handle = self.handle;
         let plans: Vec<CachedPlan> = self.plans.drain().map(|(_, plan)| plan).collect();
         self.runtime.synchronize_best_effort();
-        // SAFETY: the raw scope activates the context the handle and plans belong to, and
-        // the runtime was synchronised first so nothing still reads them.
+        for cached in plans {
+            self.destroy_plan(cached);
+        }
+        // SAFETY: the runtime was synchronised first, so nothing still reads the workspace or the
+        // handle; the scope activates the context they belong to.
         unsafe {
             let _ = self.runtime.with_raw_locked(Vec::new(), |_raw| {
-                for cached in plans {
-                    let _ = (self.vtable.destroy_plan)(cached.plan);
-                    let _ = (self.vtable.destroy_plan_preference)(cached.preference);
-                    let _ = (self.vtable.destroy_operation_descriptor)(cached.operation);
-                    for descriptor in cached.descriptors {
-                        if !descriptor.is_null() {
-                            let _ = (self.vtable.destroy_tensor_descriptor)(descriptor);
-                        }
-                    }
-                }
                 drop(self.workspace.take());
                 let _ = (self.vtable.destroy)(handle);
             });

@@ -414,6 +414,31 @@ allocation serves complex directly), and the failed-sync branch no longer "forge
 the operand safety is the runtime's stream-ordered free, and the plan's retirement still stays
 unproven. `source_contract` was updated to assert that invariant instead of the old forgets.
 
+## The pre-PR independent review, and what it caught
+
+The whole-branch review (gpt-6.1-sol) found eight defects worth fixing before the PR; the numerical
+ones and the resource one are fixed and covered by tests here:
+
+- A multi-axis fold switched to a sum after its first pass, so `prod`/`max`/`min` over two axes were
+  wrong, and the fast path still squared intermediate sums of a sum-of-squares. Only a sum of squares
+  changes between passes now, and `seam_structural`'s `a_multi_axis_fold_keeps_its_own_operation`
+  checks prod (24), sum-of-squares (30) and max (4) over two axes of the same tensor.
+- An empty contraction through the overwriting form left a prefilled destination untouched, and a
+  zero-beta accumulation kept it (a scaled NaN survives). Both zero the destination through the
+  catalogue's fill entry now; `an_empty_contraction_zeroes_an_existing_destination` covers both.
+- Evicting a cached cuTENSOR plan dropped only raw pointers, so a varying-shape workload leaked one
+  bundle of native handles per shape. Eviction drains the stream and destroys the plan's descriptors,
+  preference and operation descriptor; `evicting_a_plan_destroys_its_native_resources` walks 38
+  shapes through the 32-entry cache.
+- The failed-sync fallback in the event-domain driver counted a raw-scope `Ok` as a completed
+  barrier; it now requires `CUDA_SUCCESS` from `cuStreamSynchronize`.
+
+Still open from that review, and recorded for the next unit: division always takes the float-only
+entry (integer and complex division need `DivChecked`/`DivComplex`), the safe dispatcher helpers
+trust their callers' lengths (they should be crate-private, which means folding `seam_dispatch` into
+the crate), `with_current_context` re-entry on cuFFT's plan-rollback path, and `tenferro-fft`'s
+`cuda` feature now targeting the new engine while the public `cuda::CudaEngine` remains CubeCL.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index

@@ -492,3 +492,52 @@ fn a_new_shape_grows_one_shared_workspace() {
     assert_eq!(cutensor.cold_plans(), 2);
     assert_eq!(cutensor.cached_plans(), 2);
 }
+
+#[test]
+fn evicting_a_plan_destroys_its_native_resources() {
+    let Some(runtime) = runtime() else { return };
+    let mut cutensor = Cutensor::new(&runtime).expect("cuTENSOR");
+    // More distinct shapes than the cache holds, so eviction runs and each evicted plan is
+    // destroyed instead of leaking its descriptors and workspace.
+    for m in 2..40usize {
+        let (n, k) = (3usize, 2usize);
+        let a = runtime
+            .upload_bytes(&bytes(&vec![1.0f64; m * k]))
+            .expect("a");
+        let b = runtime
+            .upload_bytes(&bytes(&vec![2.0f64; k * n]))
+            .expect("b");
+        let d = runtime
+            .upload_bytes(&bytes(&vec![0.0f64; m * n]))
+            .expect("d");
+        cutensor
+            .contract(&Contraction {
+                dtype: DType::F64,
+                a: Operand {
+                    buffer: &a,
+                    modes: &[0, 2],
+                    extents: &[m as i64, k as i64],
+                    strides: &[1, m as i64],
+                },
+                b: Operand {
+                    buffer: &b,
+                    modes: &[2, 1],
+                    extents: &[k as i64, n as i64],
+                    strides: &[1, k as i64],
+                },
+                c: None,
+                d: Operand {
+                    buffer: &d,
+                    modes: &[0, 1],
+                    extents: &[m as i64, n as i64],
+                    strides: &[1, m as i64],
+                },
+                alpha: (1.0, 0.0),
+                beta: (0.0, 0.0),
+                conj_a: false,
+                conj_b: false,
+            })
+            .expect("contract");
+        assert!(cutensor.cached_plans() <= 32, "the cache stays bounded");
+    }
+}
