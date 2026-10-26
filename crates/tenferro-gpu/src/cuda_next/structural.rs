@@ -433,6 +433,12 @@ impl TensorStructural for CudaEngine {
         }
         let dtype = source.dtype();
         let kernel = kernel_dtype(dtype, "broadcast_in_dim_read")?;
+        let op: &'static str = "broadcast_in_dim_read";
+        // The ABI's by-value dimension map and layout arrays are bounded by `MAX_RANK`; a
+        // wider broadcast reads both from device memory instead.
+        if shape.len() > t4a_cuda_kernels::MAX_RANK || in_shape.len() > t4a_cuda_kernels::MAX_RANK {
+            return self.broadcast_wide(source, shape, dims, kernel, op);
+        }
         let out_extents: Vec<i64> = shape.iter().map(|&extent| extent as i64).collect();
         let in_extents: Vec<i64> = in_shape.iter().map(|&extent| extent as i64).collect();
         let in_strides: Vec<i64> = self
@@ -719,8 +725,13 @@ impl CudaEngine {
             .name();
         // The geometry travels in device memory; the uploads are ordered on the same stream
         // and stay alive until the synchronize below.
-        let extents_buffer = self.upload_i64(extents, op)?;
-        let strides_buffer = self.upload_i64(strides, op)?;
+        let geometry = self.wide_geometry(extents, strides, op)?;
+        let resources = vec![
+            t4a_cuda_runtime::RawResource::Buffer(&geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(destination),
+            t4a_cuda_runtime::RawResource::Buffer(source),
+        ];
         let mut modules = super::launch::KernelModules::for_entries(
             self.runtime(),
             &[Entry::MaterializeStrided],
@@ -731,31 +742,112 @@ impl CudaEngine {
             modules.in_scope(
                 Entry::MaterializeStrided,
                 symbol,
-                vec![
-                    t4a_cuda_runtime::RawResource::Buffer(&extents_buffer),
-                    t4a_cuda_runtime::RawResource::Buffer(&strides_buffer),
-                    t4a_cuda_runtime::RawResource::Buffer(destination),
-                    t4a_cuda_runtime::RawResource::Buffer(source),
-                ],
+                resources,
                 |scope, function| {
-                    let mirror = t4a_cuda_kernels::CLayoutAny::new(
-                        reference,
-                        scope
-                            .device_ptr(&extents_buffer)
-                            .map_err(|error| crate::Error::runtime_state_source(op, error))?
-                            as *const i64,
-                        scope
-                            .device_ptr(&strides_buffer)
-                            .map_err(|error| crate::Error::runtime_state_source(op, error))?
-                            as *const i64,
-                    )
-                    .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+                    let mirror = geometry.mirror(reference, scope, op)?;
                     let args = [
                         Arg::DevicePtr(destination),
                         Arg::DevicePtr(source),
                         Arg::U32(kernel.tag() as u32),
                         pod_arg(&mirror),
                         Arg::U64(source_len as u64),
+                    ];
+                    scope
+                        .launch(
+                            function,
+                            LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                            &args,
+                        )
+                        .map_err(|error| crate::Error::runtime_state_source(op, error))
+                },
+            )
+        }?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+
+    /// Broadcast `source` into `shape` through the general path, whose layouts and dimension map
+    /// live in device memory.
+    fn broadcast_wide(
+        &mut self,
+        source: &Tensor,
+        shape: &[usize],
+        dims: &[usize],
+        kernel: t4a_cuda_kernels::DType,
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let in_shape = source.shape().to_vec();
+        let dtype = source.dtype();
+        let out_extents: Vec<i64> = shape.iter().map(|&extent| extent as i64).collect();
+        let out_strides: Vec<i64> = compact_strides(shape)
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let in_extents: Vec<i64> = in_shape.iter().map(|&extent| extent as i64).collect();
+        let in_strides: Vec<i64> = self
+            .strides_of(source, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let axis_values: Vec<i64> = dims.iter().map(|&axis| axis as i64).collect();
+        let out_len = count_i64(shape, op)?;
+        let in_len = count_i64(&in_shape, op)?;
+        let output = alloc_tensor(self.runtime(), dtype, shape)?;
+        let out_ref = LayoutRef::new(&out_extents, &out_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let in_ref = LayoutRef::new(&in_extents, &in_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let plan = plan_broadcast_in_dim(kernel, out_ref, out_len, in_ref, in_len, &axis_values)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let (destination, source_buffer) = self.two_allocations(&output, source, op)?;
+        if plan.grid[0] == 0 {
+            return Ok(output);
+        }
+        let symbol = Entry::BroadcastInDim
+            .general()
+            .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
+            .name();
+        let out_geometry = self.wide_geometry(&out_extents, &out_strides, op)?;
+        let in_geometry = self.wide_geometry(&in_extents, &in_strides, op)?;
+        let dims_buffer = self.upload_i64(&axis_values, op)?;
+        let mut modules =
+            super::launch::KernelModules::for_entries(self.runtime(), &[Entry::BroadcastInDim])?;
+        let resources = vec![
+            t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&in_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&in_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&dims_buffer),
+            t4a_cuda_runtime::RawResource::Buffer(destination),
+            t4a_cuda_runtime::RawResource::Buffer(source_buffer),
+        ];
+        // SAFETY: every address the parameters name is registered with this scope, the planner
+        // proved the input's span and the compact destination, and the geometry outlives the
+        // synchronise below.
+        unsafe {
+            modules.in_scope(
+                Entry::BroadcastInDim,
+                symbol,
+                resources,
+                |scope, function| {
+                    let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
+                    let in_mirror = in_geometry.mirror(in_ref, scope, op)?;
+                    let dims_ptr = scope
+                        .device_ptr(&dims_buffer)
+                        .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+                    let dims_mirror =
+                        t4a_cuda_kernels::CAxisValuesAny::new(dims.len(), dims_ptr as *const i64)
+                            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+                    let args = [
+                        Arg::DevicePtr(destination),
+                        Arg::DevicePtr(source_buffer),
+                        Arg::U32(kernel.tag() as u32),
+                        pod_arg(&out_mirror),
+                        pod_arg(&in_mirror),
+                        pod_arg(&dims_mirror),
+                        Arg::U64(out_len as u64),
                     ];
                     scope
                         .launch(
@@ -785,6 +877,47 @@ impl CudaEngine {
             .collect();
         self.runtime()
             .upload_bytes(&bytes)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
+    }
+
+    /// Upload the geometry of a general-path layout.
+    fn wide_geometry(
+        &self,
+        extents: &[i64],
+        strides: &[i64],
+        op: &'static str,
+    ) -> crate::Result<WideGeometry> {
+        Ok(WideGeometry {
+            extents: self.upload_i64(extents, op)?,
+            strides: self.upload_i64(strides, op)?,
+        })
+    }
+}
+
+/// The device-resident geometry a general-path launch reads: a layout's extents and strides.
+///
+/// The allocations stay alive as locals until the caller synchronises, which every
+/// tensor-surface route does before it returns.
+struct WideGeometry {
+    extents: t4a_cuda_runtime::Buffer,
+    strides: t4a_cuda_runtime::Buffer,
+}
+
+impl WideGeometry {
+    /// The layout mirror for `layout`, whose addresses the scope hands out.
+    fn mirror(
+        &self,
+        layout: LayoutRef<'_>,
+        scope: &t4a_cuda_runtime::RawScope<'_>,
+        op: &'static str,
+    ) -> crate::Result<t4a_cuda_kernels::CLayoutAny> {
+        let extents = scope
+            .device_ptr(&self.extents)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let strides = scope
+            .device_ptr(&self.strides)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        t4a_cuda_kernels::CLayoutAny::new(layout, extents as *const i64, strides as *const i64)
             .map_err(|error| crate::Error::runtime_state_source(op, error))
     }
 }

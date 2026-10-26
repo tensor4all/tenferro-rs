@@ -223,11 +223,15 @@ marshalling use `LayoutRef::new` directly instead of a temporary `WideLayout`. A
 covers `reverse`, which carries negated strides and a non-zero offset, so a dropped offset would
 fail it.
 
+`broadcast_in_dim` follows: it packs both layouts and its destination-axis map, builds
+`CLayoutAny` twice plus `CAxisValuesAny`, and launches `t4a_cuda_broadcast_in_dim_any`. A rank-2
+source into a rank-9 destination is the new test. The geometry helper (`WideGeometry`) is shared
+by both families.
+
 The remaining families, and what each needs beyond the pattern above:
 
 | Family | Geometry to pack besides the operand layouts |
 |---|---|
-| `broadcast_in_dim` | the destination axes array |
 | `extract_diagonal` / `embed_diagonal_copy` | the two axis ids |
 | `reduce` / `reduce_partials` | nothing extra for the direct strategy; the split strategy's partials layout is computed by the crate (`reduction_partials_layout`), so its extents and strides are packed too, and both branches need their own wide launch |
 | `slice` | the `starts` and `steps` arrays |

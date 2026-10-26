@@ -688,3 +688,39 @@ fn a_rank_nine_reverse_carries_its_negative_strides_and_offset() {
     }
     assert_eq!(observed, &expected[..]);
 }
+
+#[test]
+fn a_rank_nine_broadcast_uses_the_general_path() {
+    let Some(mut engine) = engine() else { return };
+    // A rank-2 source into a rank-9 destination: the layout arrays and the dimension map are
+    // both wider than the by-value ABI form.
+    let source_data = vec![1.0f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let host = Tensor::from_vec_col_major(vec![2, 3], source_data.clone()).expect("host");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+    let shape = vec![2usize, 1, 1, 1, 1, 1, 1, 3, 1];
+    let dims = vec![0usize, 7];
+    let broadcast = engine
+        .broadcast_in_dim_read(TensorRead::from_tensor(&source), &shape, &dims)
+        .expect("rank-9 broadcast");
+    assert_eq!(broadcast.shape(), &shape[..]);
+
+    let observed = download_tensor(engine.runtime(), &broadcast).expect("download");
+    let observed = observed.as_slice::<f64>().expect("f64 payload");
+    let len: usize = shape.iter().product();
+    assert_eq!(observed.len(), len);
+    let mut expected = vec![0.0f64; len];
+    for (index, value) in expected.iter_mut().enumerate() {
+        let mut remaining = index;
+        let mut source_index = 0usize;
+        for (axis, &extent) in shape.iter().enumerate() {
+            let coordinate = remaining % extent;
+            remaining /= extent;
+            if let Some(source_axis) = dims.iter().position(|&mapped| mapped == axis) {
+                // Column-major strides of the `[2, 3]` source.
+                source_index += coordinate * if source_axis == 0 { 1 } else { 2 };
+            }
+        }
+        *value = source_data[source_index];
+    }
+    assert_eq!(observed, &expected[..]);
+}
