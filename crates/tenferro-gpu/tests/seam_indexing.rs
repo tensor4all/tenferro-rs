@@ -149,3 +149,142 @@ fn reverse_negates_only_the_named_axes() {
     // A repeated axis is refused rather than silently negating twice.
     assert!(engine.reverse(&source, &[1, 1]).is_err());
 }
+
+#[test]
+fn gather_reads_a_window_per_index_vector() {
+    let Some(mut engine) = engine() else { return };
+    // Operand [3, 4]: value = row + col * 3.
+    let operand = device(&engine, vec![3, 4], matrix(3, 4));
+    let indices_host = Tensor::from_vec_col_major(vec![2, 1], vec![0i64, 1]).expect("indices");
+    let indices = upload_tensor(engine.runtime(), &indices_host).expect("upload indices");
+    let gathered = engine
+        .gather(
+            &operand,
+            &indices,
+            &tenferro_tensor::GatherConfig {
+                offset_dims: vec![1],
+                collapsed_slice_dims: vec![0],
+                start_index_map: vec![0],
+                index_vector_dim: 1,
+                slice_sizes: vec![1, 2],
+            },
+        )
+        .expect("gather");
+    // Two batches of a 1x2 window, taken from rows 0 and 1, columns 0..2.
+    assert_eq!(gathered.shape(), &[2, 2]);
+    assert_eq!(read(&engine, &gathered), vec![0.0, 1.0, 3.0, 4.0]);
+}
+
+#[test]
+fn scatter_adds_each_update_into_the_operand_copy() {
+    let Some(mut engine) = engine() else { return };
+    let operand = device(&engine, vec![2, 2], vec![0.0; 4]);
+    let indices_host = Tensor::from_vec_col_major(vec![2], vec![1i64, 0]).expect("indices");
+    let indices = upload_tensor(engine.runtime(), &indices_host).expect("upload indices");
+    let updates_host = Tensor::from_vec_col_major(vec![2], vec![5.0, 7.0]).expect("updates");
+    let updates = upload_tensor(engine.runtime(), &updates_host).expect("upload updates");
+    let scattered = engine
+        .scatter(
+            &operand,
+            &indices,
+            &updates,
+            &tenferro_tensor::ScatterConfig {
+                update_window_dims: vec![],
+                inserted_window_dims: vec![0, 1],
+                scatter_dims_to_operand_dims: vec![0],
+                index_vector_dim: 1,
+            },
+        )
+        .expect("scatter");
+    assert_eq!(scattered.shape(), &[2, 2]);
+    // Row 1 column 0 gets 5, row 0 column 0 gets 7.
+    assert_eq!(read(&engine, &scattered), vec![7.0, 5.0, 0.0, 0.0]);
+    // The operand itself is untouched: scatter returns a new value.
+    assert_eq!(read(&engine, &operand), vec![0.0; 4]);
+}
+
+#[test]
+fn an_empty_window_is_refused_or_produces_an_empty_result() {
+    let Some(mut engine) = engine() else { return };
+    let source = device(&engine, vec![2, 2], matrix(2, 2));
+    // An empty window produces an empty result without launching anything.
+    let empty = engine
+        .slice(
+            &source,
+            &SliceConfig {
+                starts: vec![1, 1],
+                limits: vec![1, 2],
+                strides: vec![1, 1],
+            },
+        )
+        .expect("empty slice");
+    assert_eq!(empty.shape(), &[0, 1]);
+    assert!(read(&engine, &empty).is_empty());
+
+    // Padding an empty axis keeps the zero-extent base, so the extents are low + high.
+    let empty_source = device(&engine, vec![0], Vec::new());
+    let padded = engine
+        .pad(
+            &empty_source,
+            &PadConfig {
+                edge_padding_low: vec![1],
+                edge_padding_high: vec![1],
+                interior_padding: vec![1],
+            },
+        )
+        .expect("pad an empty axis");
+    assert_eq!(padded.shape(), &[2]);
+    assert_eq!(read(&engine, &padded), vec![0.0, 0.0]);
+}
+
+#[test]
+fn mismatched_index_metadata_is_refused_before_any_device_read() {
+    let Some(mut engine) = engine() else { return };
+    let source = device(&engine, vec![4, 5], matrix(4, 5));
+    // One start for a rank-2 operand would make the kernel read past the allocation.
+    let one_start = Tensor::from_vec_col_major(vec![1], vec![1i64]).expect("starts");
+    let one_start = upload_tensor(engine.runtime(), &one_start).expect("upload starts");
+    assert!(engine.dynamic_slice(&source, &one_start, &[2, 3]).is_err());
+
+    // A degenerate gather configuration is refused instead of panicking.
+    let scalar_index = Tensor::from_vec_col_major(vec![1], vec![0i64]).expect("index");
+    let scalar_index = upload_tensor(engine.runtime(), &scalar_index).expect("upload index");
+    assert!(engine
+        .gather(
+            &device(&engine, vec![1], vec![0.0]),
+            &scalar_index,
+            &tenferro_tensor::GatherConfig {
+                offset_dims: vec![0],
+                collapsed_slice_dims: vec![0],
+                start_index_map: vec![0],
+                index_vector_dim: 1,
+                slice_sizes: vec![1],
+            },
+        )
+        .is_err());
+
+    // Scatter refuses an update whose dtype differs from the operand's.
+    let indices = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![1], vec![0i64]).expect("indices"),
+    )
+    .expect("upload indices");
+    let wrong_updates = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![1], vec![1i32]).expect("updates"),
+    )
+    .expect("upload updates");
+    assert!(engine
+        .scatter(
+            &source,
+            &indices,
+            &wrong_updates,
+            &tenferro_tensor::ScatterConfig {
+                update_window_dims: vec![],
+                inserted_window_dims: vec![0, 1],
+                scatter_dims_to_operand_dims: vec![0],
+                index_vector_dim: 1,
+            },
+        )
+        .is_err());
+}

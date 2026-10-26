@@ -50,9 +50,53 @@ allocation, and `KernelSource<B>`/the vendor requests land with the CUDA lowerin
 vocabulary is complete. `structural.rs` then loses its `t4a` imports — that is the check
 that the shared surface is really backend-neutral.
 
+## Independent review of the indexing slice (gpt-6.1-sol, post mode)
+
+The review found one blocker and several real defects; all were verified against the source
+and fixed in the same branch, with the two new edge-case tests covering them:
+
+- `dynamic_slice` derived the starts rank from the *output* and never checked the starts
+  tensor, so a short starts tensor made the kernel read past its allocation. It now requires
+  one start per operand axis.
+- `gather` indexed an empty `window_dims` for a degenerate configuration (a panic, not an
+  error) and converted `collapsed_slice_dims`/`offset_dims`/`start_index_map` into their
+  complements unvalidated, which erased duplicate or out-of-range axes. Both lists are
+  checked before any shape is derived.
+- An empty domain reached the runtime as a zero-grid launch and was rejected; element-driven
+  families now skip it (a reduction is the exception, since its identity fill is the
+  kernel's). Padding an empty operand returns the zero-filled allocation, which is exactly
+  what padding nothing means.
+- `padded_shape` used `(n - 1) * (interior + 1) + 1` for an empty axis and evaluated
+  `interior + 1` unchecked; it now matches the kernel planner's zero-extent base with checked
+  arithmetic.
+- `concatenate` accumulated the axis extent and the running offset unchecked, and reported
+  mixed dtype/rank as `Unsupported`; it now uses checked arithmetic and the trait's
+  `dtype_mismatch`/`rank_mismatch`/`shape_mismatch`/`axis_out_of_bounds` codes.
+- `scatter` waited on the operand copy before enqueuing the accumulation; the copy is now
+  only enqueued, since stream order already covers it.
+- The seam doc claimed the transfer/publication/dispatch code is already reusable by a second
+  backend; the claim now states what is true today (the allocation passes through the seam,
+  the execution vocabulary lands with its first implementor).
+- `fresh_storage` took the byte length as an argument and could disagree with the allocation;
+  it reads the length from the allocation.
+
+Deferred, recorded here rather than silently dropped:
+
+- Every new indexing route goes through `Layout::new`, i.e. rank ≤ 8, while the kernel crate
+  already ships the `_any`/`LayoutRef` entries. Rank > 8 must be routed through the general
+  path before CubeCL is deleted.
+- CubeCL serves F32/F64 indices for gather, scatter and dynamic slice and complex data for the
+  supported indexing families; the new path refuses them until the float exactness check and
+  the complex dispatch land.
+- The inherited read methods stage borrowed views through `to_contiguous_read`, which refuses
+  every borrowed view on this path, while the CubeCL path canonicalizes a same-device
+  numeric view. The read hooks need the same treatment before the cutover.
+
 ## Remaining, in order
 
-1. `gather`/`scatter` plan mapping, and the float-start exactness check for `dynamic_slice`.
+1. The float-index exactness check (`validate_float_indices` + `extract_invalid_float_index`)
+   for gather, scatter and dynamic slice, and the rank>8 `_any` routing for the indexing
+   families.
 2. `TensorDot` on `cuda_next::Cutensor`, extending `Contraction` with `beta`.
 3. The neutral kernel/vendor vocabulary plus the CUDA lowering; `structural.rs` loses every
    `t4a` import.

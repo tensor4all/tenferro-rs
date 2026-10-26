@@ -157,8 +157,9 @@ pub struct StorageIdentity {
 /// One GPU backend: the concrete types the seam carries without naming them.
 ///
 /// The shared layer stores and passes allocations through [`Buffer`] and never reads a
-/// backend type, so a second backend supplies its own allocation handle here and reuses
-/// the transfer, publication and dispatch code unchanged.
+/// backend type. A second backend supplies its own allocation handle here; the execution
+/// vocabulary that lets it reuse the dispatch, transfer and publication code lands with
+/// that vocabulary's first implementor rather than as an unused declaration.
 ///
 /// # Examples
 ///

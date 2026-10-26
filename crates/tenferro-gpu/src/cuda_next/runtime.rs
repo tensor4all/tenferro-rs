@@ -236,7 +236,6 @@ impl CudaRuntime {
                 "the value belongs to another runtime",
             ));
         }
-        let bytes = storage.bytes();
 
         // Both runtimes participate in admission. Take their submission locks in a
         // stable order (by allocation domain) so two opposing copies cannot invert them,
@@ -260,13 +259,12 @@ impl CudaRuntime {
         fn rebuild<T: TensorScalar + Send + Sync + 'static>(
             value: &tenferro_tensor::Tensor,
             buffer: t4a_cuda_runtime::Buffer,
-            bytes: usize,
             destination: &CudaRuntime,
         ) -> crate::Result<tenferro_tensor::Tensor> {
             let typed: &TypedTensor<T> = value.as_typed::<T>().ok_or_else(|| {
                 crate::Error::runtime_state("cuda copy", "expected a preset scalar")
             })?;
-            let storage = super::storage::fresh_storage(destination, bytes, buffer);
+            let storage = super::storage::fresh_storage(destination, buffer);
             TypedTensor::<T>::from_buffer_col_major(
                 typed.shape().to_vec(),
                 tenferro_tensor::StorageBuffer::Backend(Box::new(storage)),
@@ -275,12 +273,12 @@ impl CudaRuntime {
             .map(tenferro_tensor::Tensor::from_typed)
         }
         match value.dtype() {
-            DType::F64 => rebuild::<f64>(value, buffer, bytes, destination),
-            DType::F32 => rebuild::<f32>(value, buffer, bytes, destination),
-            DType::I32 => rebuild::<i32>(value, buffer, bytes, destination),
-            DType::I64 => rebuild::<i64>(value, buffer, bytes, destination),
-            DType::C32 => rebuild::<Complex32>(value, buffer, bytes, destination),
-            DType::C64 => rebuild::<Complex64>(value, buffer, bytes, destination),
+            DType::F64 => rebuild::<f64>(value, buffer, destination),
+            DType::F32 => rebuild::<f32>(value, buffer, destination),
+            DType::I32 => rebuild::<i32>(value, buffer, destination),
+            DType::I64 => rebuild::<i64>(value, buffer, destination),
+            DType::C32 => rebuild::<Complex32>(value, buffer, destination),
+            DType::C64 => rebuild::<Complex64>(value, buffer, destination),
             DType::Bool | DType::External(_) => Err(crate::Error::unsupported(
                 "cuda copy",
                 "the transfer route does not serve this dtype",

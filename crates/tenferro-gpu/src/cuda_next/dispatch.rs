@@ -52,6 +52,16 @@ impl Dispatcher {
         plan: t4a_cuda_kernels::Launch,
         args: &[Arg<'_>],
     ) -> crate::Result<()> {
+        if plan.grid[0] == 0 {
+            // An empty domain has no element to visit: an element-driven family leaves the
+            // destination as its allocation found it. A reduction is the exception — its
+            // identity fill is the kernel's, so an empty reduction keeps whatever the
+            // planner and the runtime decide.
+            match entry {
+                Entry::Reduce | Entry::ReducePartials => {}
+                _ => return Ok(()),
+            }
+        }
         // SAFETY: every caller below builds the argument list in the documented ABI order
         // after the kernel crate's planner accepted the invocation.
         unsafe {

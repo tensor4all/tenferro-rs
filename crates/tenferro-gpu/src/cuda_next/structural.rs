@@ -13,7 +13,8 @@ use tenferro_tensor::{
 
 use t4a_cuda_kernels::{
     plan_broadcast_in_dim, plan_embed_diagonal_copy, plan_extract_diagonal,
-    plan_materialize_strided, plan_tril, plan_triu, CAxisValues, CLayout, Entry, Layout,
+    plan_materialize_strided, plan_tril, plan_triu, CAxisValues, CLayout, Entry, GatherPlan,
+    Layout, ScatterPlan,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -77,7 +78,7 @@ pub(crate) fn alloc_tensor(
             .alloc_zeroed(bytes, 256)
             .map_err(|error| crate::Error::runtime_state_source("cuda allocate", error))?
     };
-    let storage = super::storage::fresh_storage(runtime, bytes, buffer);
+    let storage = super::storage::fresh_storage(runtime, buffer);
     with_scalar!(dtype, |T| Ok(Tensor::from_typed(
         TypedTensor::<T>::from_buffer_col_major(
             shape.to_vec(),
@@ -189,9 +190,9 @@ impl CudaEngine {
         Ok(storage.allocation())
     }
 
-    /// A compact device copy of `source` into fresh storage of this runtime, labelled with
-    /// `shape` (which must hold the same element count).
-    fn copy_to_fresh(
+    /// A compact device copy of `source` into fresh storage, enqueued on the stream and
+    /// **not** waited for, for a route whose own submissions order after it.
+    fn enqueue_copy(
         &mut self,
         source: &Tensor,
         shape: Vec<usize>,
@@ -212,6 +213,18 @@ impl CudaEngine {
                 self.allocation_of::<T>(source, op)?,
             )
         })?;
+        Ok(output)
+    }
+
+    /// A compact device copy of `source` into fresh storage of this runtime, labelled with
+    /// `shape` (which must hold the same element count), complete when it returns.
+    fn copy_to_fresh(
+        &mut self,
+        source: &Tensor,
+        shape: Vec<usize>,
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let output = self.enqueue_copy(source, shape, op)?;
         // The returned tensor must be complete when the caller sees it.
         self.runtime()
             .synchronize()
@@ -229,6 +242,10 @@ impl CudaEngine {
         args: &[Arg<'_>],
         op: &'static str,
     ) -> crate::Result<()> {
+        if plan.grid[0] == 0 {
+            // Nothing to visit: the destination keeps the state the allocation left it in.
+            return Ok(());
+        }
         let mut modules = super::launch::KernelModules::for_entries(self.runtime(), &[entry])?;
         // SAFETY: the planner proved each operand's span for this dtype and geometry, and
         // both allocations belong to this runtime, so they outlive the scope's completion.
@@ -1400,17 +1417,25 @@ fn padded_shape(shape: &[usize], config: &tenferro_tensor::PadConfig) -> crate::
                     format!("interior padding must be non-negative on axis {axis}"),
                 ));
             }
-            // (n - 1) * (interior + 1) + 1, then the edge padding on both sides.
-            let spaced = (shape[axis] as i64 - 1)
-                .checked_mul(interior + 1)
-                .and_then(|value| value.checked_add(1))
-                .ok_or_else(|| {
-                    crate::Error::invalid_argument(
-                        op,
-                        "configuration",
-                        format!("the padded extent overflows on axis {axis}"),
-                    )
-                })?;
+            // (n - 1) * (interior + 1) + 1 for a non-empty axis, zero for an empty one; the
+            // kernel crate's planner derives the same base, so a mismatch is refused there.
+            let overflow = || {
+                crate::Error::invalid_argument(
+                    op,
+                    "configuration",
+                    format!("the padded extent overflows on axis {axis}"),
+                )
+            };
+            let spacing = interior.checked_add(1).ok_or_else(overflow)?;
+            let extent = shape[axis] as i64;
+            let spaced = if extent == 0 {
+                0
+            } else {
+                (extent - 1)
+                    .checked_mul(spacing)
+                    .and_then(|value| value.checked_add(1))
+                    .ok_or_else(overflow)?
+            };
             let extent = spaced
                 .checked_add(config.edge_padding_low[axis])
                 .and_then(|value| value.checked_add(config.edge_padding_high[axis]))
@@ -1432,30 +1457,298 @@ fn padded_shape(shape: &[usize], config: &tenferro_tensor::PadConfig) -> crate::
         .collect()
 }
 
+/// The index dtype of a device index tensor, or a refusal naming the missing exactness check.
+fn index_dtype_of(index_dtype: DType, op: &'static str) -> crate::Result<DType> {
+    if matches!(index_dtype, DType::I32 | DType::I64) {
+        return Ok(index_dtype);
+    }
+    Err(crate::Error::unsupported(
+        op,
+        format!(
+            "device {index_dtype:?} indices need the exactness check this path does not run \
+             yet; pass I32 or I64 indices"
+        ),
+    ))
+}
+
+/// Refuse a dimension list that repeats an axis or names one past `rank`.
+fn require_axes(
+    op: &'static str,
+    argument: &'static str,
+    axes: &[usize],
+    rank: u32,
+) -> crate::Result<()> {
+    for (index, &axis) in axes.iter().enumerate() {
+        if axis as u32 >= rank {
+            return Err(crate::Error::invalid_argument(
+                op,
+                argument,
+                format!("axis {axis} is out of range for rank {rank}"),
+            ));
+        }
+        if axes[..index].contains(&axis) {
+            return Err(crate::Error::invalid_argument(
+                op,
+                argument,
+                format!("axis {axis} is listed twice"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The gather plan the kernel crate consumes, from the tensor surface's configuration.
+fn gather_plan(config: &tenferro_tensor::GatherConfig, operand_rank: u32) -> GatherPlan {
+    let collapsed: Vec<u32> = config
+        .collapsed_slice_dims
+        .iter()
+        .map(|&axis| axis as u32)
+        .collect();
+    GatherPlan {
+        window_dims: t4a_cuda_kernels::window_dims(operand_rank, &collapsed),
+        offset_dims: config.offset_dims.iter().map(|&axis| axis as u32).collect(),
+        start_index_map: config
+            .start_index_map
+            .iter()
+            .map(|&axis| axis as u32)
+            .collect(),
+        slice_sizes: config
+            .slice_sizes
+            .iter()
+            .map(|&extent| extent as i64)
+            .collect(),
+        index_vector_dim: config.index_vector_dim as u32,
+    }
+}
+
+/// The output extents StableHLO gather produces: the window extents on the offset axes,
+/// the index batch extents on the rest.
+fn gather_shape(
+    indices_shape: &[usize],
+    plan: &GatherPlan,
+    config: &tenferro_tensor::GatherConfig,
+) -> crate::Result<Vec<usize>> {
+    let op = "gather";
+    let rank = indices_shape.len();
+    let vector_axis = config.index_vector_dim;
+    let has_vector = vector_axis < rank;
+    let out_rank = rank - usize::from(has_vector) + plan.offset_dims.len();
+    let mut batch = indices_shape
+        .iter()
+        .enumerate()
+        .filter(|(axis, _)| !has_vector || *axis != vector_axis)
+        .map(|(_, &extent)| extent);
+    let mut out_shape = Vec::with_capacity(out_rank);
+    for axis in 0..out_rank {
+        match plan
+            .offset_dims
+            .iter()
+            .position(|&dim| dim as usize == axis)
+        {
+            Some(position) => {
+                let window = plan.window_dims.get(position).copied().ok_or_else(|| {
+                    crate::Error::invalid_argument(
+                        op,
+                        "configuration",
+                        format!("the output offset axis {axis} has no operand window axis"),
+                    )
+                })?;
+                out_shape.push(config.slice_sizes[window as usize]);
+            }
+            None => out_shape.push(batch.next().ok_or_else(|| {
+                crate::Error::invalid_argument(
+                    op,
+                    "configuration",
+                    format!("the output axis {axis} has no index batch extent"),
+                )
+            })?),
+        }
+    }
+    if let Some(extra) = batch.next() {
+        return Err(crate::Error::invalid_argument(
+            op,
+            "configuration",
+            format!("the index batch extent {extra} has no output axis"),
+        ));
+    }
+    Ok(out_shape)
+}
+
+/// The scatter plan the kernel crate consumes, from the tensor surface's configuration.
+fn scatter_plan(config: &tenferro_tensor::ScatterConfig, operand_rank: u32) -> ScatterPlan {
+    let inserted: Vec<u32> = config
+        .inserted_window_dims
+        .iter()
+        .map(|&axis| axis as u32)
+        .collect();
+    ScatterPlan {
+        window_dims: t4a_cuda_kernels::window_dims(operand_rank, &inserted),
+        update_window_dims: config
+            .update_window_dims
+            .iter()
+            .map(|&axis| axis as u32)
+            .collect(),
+        scatter_dims: config
+            .scatter_dims_to_operand_dims
+            .iter()
+            .map(|&axis| axis as u32)
+            .collect(),
+        index_vector_dim: config.index_vector_dim as u32,
+    }
+}
+
 impl tenferro_tensor::TensorIndexing for CudaEngine {
     fn gather(
         &mut self,
-        _operand: &Tensor,
-        _start_indices: &Tensor,
-        _config: &tenferro_tensor::GatherConfig,
+        operand: &Tensor,
+        start_indices: &Tensor,
+        config: &tenferro_tensor::GatherConfig,
     ) -> crate::Result<Tensor> {
-        Err(crate::Error::unsupported(
-            "gather",
-            "the tensor surface's gather is not wired to the new path yet",
-        ))
+        let op = "gather";
+        if is_host(operand) || is_host(start_indices) {
+            return Err(crate::Error::unsupported(
+                op,
+                "a host operand would need an implicit transfer",
+            ));
+        }
+        let dtype = operand.dtype();
+        let kernel = kernel_dtype(dtype, op)?;
+        let index_dtype = index_dtype_of(start_indices.dtype(), op)?;
+        let index_kernel = kernel_dtype(index_dtype, op)?;
+        let operand_shape = operand.shape().to_vec();
+        let operand_rank = u32::try_from(operand_shape.len())
+            .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
+        require_axes(
+            op,
+            "collapsed_slice_dims",
+            &config.collapsed_slice_dims,
+            operand_rank,
+        )?;
+        // The output rank is not known yet; `gather_shape` checks these axes against it.
+        require_axes(op, "offset_dims", &config.offset_dims, u32::MAX)?;
+        require_axes(op, "start_index_map", &config.start_index_map, operand_rank)?;
+        if config.slice_sizes.len() != operand_shape.len() {
+            return Err(crate::Error::rank_mismatch(
+                op,
+                operand_shape.len(),
+                config.slice_sizes.len(),
+            ));
+        }
+        let plan = gather_plan(config, operand_rank);
+        let indices_shape = start_indices.shape().to_vec();
+        let out_shape = gather_shape(&indices_shape, &plan, config)?;
+        let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
+        let out_layout = self.layout_of(&output, op)?;
+        let operand_layout = self.layout_of(operand, op)?;
+        let indices_layout = self.layout_of(start_indices, op)?;
+        let out_len = count_i64(&out_shape, op)?;
+        let operand_len = count_i64(&operand_shape, op)?;
+        let indices_len = count_i64(&indices_shape, op)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Gather])?;
+        with_scalar!(index_dtype, |I| {
+            let indices_buffer = self.allocation_of::<I>(start_indices, op)?;
+            with_scalar!(dtype, |T| {
+                dispatcher.gather(
+                    kernel,
+                    index_kernel,
+                    &out_layout,
+                    out_len,
+                    &operand_layout,
+                    operand_len,
+                    &indices_layout,
+                    indices_len,
+                    &plan,
+                    self.allocation_of::<T>(&output, op)?,
+                    self.allocation_of::<T>(operand, op)?,
+                    indices_buffer,
+                )
+            })
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
     }
 
     fn scatter(
         &mut self,
-        _operand: &Tensor,
-        _scatter_indices: &Tensor,
-        _updates: &Tensor,
-        _config: &tenferro_tensor::ScatterConfig,
+        operand: &Tensor,
+        scatter_indices: &Tensor,
+        updates: &Tensor,
+        config: &tenferro_tensor::ScatterConfig,
     ) -> crate::Result<Tensor> {
-        Err(crate::Error::unsupported(
-            "scatter",
-            "the tensor surface's scatter is not wired to the new path yet",
-        ))
+        let op = "scatter";
+        if is_host(operand) || is_host(scatter_indices) || is_host(updates) {
+            return Err(crate::Error::unsupported(
+                op,
+                "a host operand would need an implicit transfer",
+            ));
+        }
+        if updates.dtype() != operand.dtype() {
+            return Err(crate::Error::dtype_mismatch(
+                op,
+                operand.dtype(),
+                updates.dtype(),
+            ));
+        }
+        let dtype = operand.dtype();
+        let kernel = kernel_dtype(dtype, op)?;
+        let index_dtype = index_dtype_of(scatter_indices.dtype(), op)?;
+        let index_kernel = kernel_dtype(index_dtype, op)?;
+        let operand_shape = operand.shape().to_vec();
+        let operand_rank = u32::try_from(operand_shape.len())
+            .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
+        require_axes(
+            op,
+            "inserted_window_dims",
+            &config.inserted_window_dims,
+            operand_rank,
+        )?;
+        require_axes(
+            op,
+            "scatter_dims_to_operand_dims",
+            &config.scatter_dims_to_operand_dims,
+            operand_rank,
+        )?;
+        let plan = scatter_plan(config, operand_rank);
+        // Additive scatter accumulates into the operand copy. The copy is only enqueued:
+        // the accumulation below is submitted on the same stream, so stream order already
+        // covers it and no host wait is needed.
+        let output = self.enqueue_copy(operand, operand_shape.clone(), op)?;
+        let out_layout = self.layout_of(&output, op)?;
+        let indices_shape = scatter_indices.shape().to_vec();
+        let updates_shape = updates.shape().to_vec();
+        let indices_layout = self.layout_of(scatter_indices, op)?;
+        let updates_layout = self.layout_of(updates, op)?;
+        let out_len = count_i64(&operand_shape, op)?;
+        let indices_len = count_i64(&indices_shape, op)?;
+        let updates_len = count_i64(&updates_shape, op)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::ScatterAdd])?;
+        with_scalar!(index_dtype, |I| {
+            let indices_buffer = self.allocation_of::<I>(scatter_indices, op)?;
+            with_scalar!(dtype, |T| {
+                dispatcher.scatter_add(
+                    kernel,
+                    index_kernel,
+                    &out_layout,
+                    out_len,
+                    &indices_layout,
+                    indices_len,
+                    &updates_layout,
+                    updates_len,
+                    &plan,
+                    self.allocation_of::<T>(&output, op)?,
+                    indices_buffer,
+                    self.allocation_of::<T>(updates, op)?,
+                )
+            })
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
     }
 
     fn slice(
@@ -1533,16 +1826,18 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 ),
             ));
         }
-        let index_dtype = starts.dtype();
-        if !matches!(index_dtype, DType::I32 | DType::I64) {
-            return Err(crate::Error::unsupported(
+        if element_count(starts.shape())? != shape.len() {
+            return Err(crate::Error::invalid_argument(
                 op,
+                "starts",
                 format!(
-                    "device {index_dtype:?} starts need the exactness check this path does not \
-                     run yet; pass I32 or I64 starts"
+                    "the starts tensor holds {} values for a rank-{} operand",
+                    element_count(starts.shape())?,
+                    shape.len()
                 ),
             ));
         }
+        let index_dtype = index_dtype_of(starts.dtype(), op)?;
         let dtype = input.dtype();
         let kernel = kernel_dtype(dtype, op)?;
         let index_kernel = kernel_dtype(index_dtype, op)?;
@@ -1605,11 +1900,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let shape = first.shape().to_vec();
         let rank = shape.len();
         if axis >= rank {
-            return Err(crate::Error::invalid_argument(
-                op,
-                "axis",
-                format!("axis {axis} is out of range for rank {rank}"),
-            ));
+            return Err(crate::Error::axis_out_of_bounds(op, axis, rank));
         }
         let mut out_shape = shape.clone();
         out_shape[axis] = 0;
@@ -1620,22 +1911,29 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                     "a host operand would need an implicit transfer",
                 ));
             }
-            if input.dtype() != dtype || input.shape().len() != rank {
-                return Err(crate::Error::unsupported(
-                    op,
-                    "every input must share a dtype and a rank",
-                ));
+            if input.dtype() != dtype {
+                return Err(crate::Error::dtype_mismatch(op, dtype, input.dtype()));
+            }
+            if input.shape().len() != rank {
+                return Err(crate::Error::rank_mismatch(op, rank, input.shape().len()));
             }
             for (other, (&extent, &expected)) in input.shape().iter().zip(&shape).enumerate() {
                 if other != axis && extent != expected {
-                    return Err(crate::Error::invalid_argument(
+                    return Err(crate::Error::shape_mismatch(
                         op,
-                        "inputs",
-                        format!("axis {other} differs between inputs"),
+                        input.shape().to_vec(),
+                        shape.clone(),
                     ));
                 }
             }
-            out_shape[axis] += input.shape()[axis];
+            let extent = out_shape[axis];
+            out_shape[axis] = extent.checked_add(input.shape()[axis]).ok_or_else(|| {
+                crate::Error::invalid_argument(
+                    op,
+                    "inputs",
+                    format!("the concatenated extent overflows on axis {axis}"),
+                )
+            })?;
         }
         let kernel = kernel_dtype(dtype, op)?;
         let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
@@ -1643,7 +1941,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let out_len = count_i64(&out_shape, op)?;
         let runtime = self.runtime().clone();
         let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::ConcatenateCopy])?;
-        let mut offset = 0i64;
+        let mut offset = 0usize;
         for input in inputs {
             // The kernel reads a compact source, so a strided input is compacted first.
             let compact = if compact_strides(input.shape()) == self.strides_of(input, op)? {
@@ -1656,6 +1954,13 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
             let in_len = count_i64(source.shape(), op)?;
             let axis_u32 = u32::try_from(axis)
                 .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
+            let axis_offset = i64::try_from(offset).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "inputs",
+                    "the concatenation offset is too large",
+                )
+            })?;
             with_scalar!(dtype, |T| {
                 dispatcher.concatenate_copy(
                     kernel,
@@ -1664,12 +1969,14 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                     &in_layout,
                     in_len,
                     axis_u32,
-                    offset,
+                    axis_offset,
                     self.allocation_of::<T>(&output, op)?,
                     self.allocation_of::<T>(source, op)?,
                 )
             })?;
-            offset += source.shape()[axis] as i64;
+            offset = offset.checked_add(source.shape()[axis]).ok_or_else(|| {
+                crate::Error::invalid_argument(op, "inputs", "the concatenation offset overflows")
+            })?;
         }
         self.runtime()
             .synchronize()
@@ -1690,11 +1997,14 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let mut view_strides: Vec<i64> = strides.iter().map(|&stride| stride as i64).collect();
         let mut offset = 0i64;
         for (index, &axis) in axes.iter().enumerate() {
-            if axis >= shape.len() || axes[..index].contains(&axis) {
+            if axis >= shape.len() {
+                return Err(crate::Error::axis_out_of_bounds(op, axis, shape.len()));
+            }
+            if axes[..index].contains(&axis) {
                 return Err(crate::Error::invalid_argument(
                     op,
                     "axes",
-                    format!("axis {axis} is out of range or repeated"),
+                    format!("axis {axis} is listed twice"),
                 ));
             }
             let stride = view_strides[axis];
@@ -1711,13 +2021,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
         let output = alloc_tensor(self.runtime(), dtype, &shape)?;
         let layout = CLayout::new(&view);
-        let (destination, source) = with_scalar!(dtype, |T| Ok((
-            self.allocation_of::<T>(&output, op)? as *const _,
-            self.allocation_of::<T>(input, op)? as *const _,
-        )))?;
-        // SAFETY: both pointers name allocations of this runtime taken above; the planner
-        // proved the view's span against the source length and the compact destination.
-        let (destination, source) = unsafe { (&*destination, &*source) };
+        let (destination, source) = self.two_allocations(&output, input, op)?;
         self.launch_planned(
             Entry::MaterializeStrided,
             plan,
@@ -1749,11 +2053,17 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let out_shape = padded_shape(&shape, config)?;
         let dtype = input.dtype();
         let kernel = kernel_dtype(dtype, op)?;
+        // An empty operand has no element to place, so every output element is padding and
+        // the zeroed allocation is already the answer — and an empty allocation has no
+        // device address to hand the kernel.
+        let in_len = count_i64(&shape, op)?;
         let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
+        if in_len == 0 {
+            return Ok(output);
+        }
         let out_layout = self.layout_of(&output, op)?;
         let in_layout = self.layout_of(input, op)?;
         let out_len = count_i64(&out_shape, op)?;
-        let in_len = count_i64(&shape, op)?;
         let runtime = self.runtime().clone();
         let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Pad])?;
         with_scalar!(dtype, |T| {

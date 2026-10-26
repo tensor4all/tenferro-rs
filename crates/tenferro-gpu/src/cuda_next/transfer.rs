@@ -48,7 +48,7 @@ fn upload_typed<T: TensorScalar + Send + Sync + 'static>(
             .upload(bytes)
             .map_err(|error| crate::Error::runtime_state_source("cuda upload", error))?
     };
-    let storage = super::storage::fresh_storage(runtime, bytes.len(), buffer);
+    let storage = super::storage::fresh_storage(runtime, buffer);
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
         StorageBuffer::Backend(Box::new(storage)),

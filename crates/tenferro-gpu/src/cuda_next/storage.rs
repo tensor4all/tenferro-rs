@@ -78,10 +78,10 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for CudaStorage {
 /// handle and its identity cannot disagree.
 pub(crate) fn fresh_storage(
     runtime: &CudaRuntime,
-    bytes: usize,
     allocation: t4a_cuda_runtime::Buffer,
 ) -> CudaStorage {
     let id = NEXT_ALLOCATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let bytes = allocation.len();
     CudaStorage {
         buffer: crate::gpu::Buffer::new(
             crate::gpu::StorageIdentity {
