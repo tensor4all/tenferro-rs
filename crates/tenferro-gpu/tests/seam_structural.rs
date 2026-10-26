@@ -724,3 +724,39 @@ fn a_rank_nine_broadcast_uses_the_general_path() {
     }
     assert_eq!(observed, &expected[..]);
 }
+
+#[test]
+fn a_rank_nine_diagonal_pair_uses_the_general_path() {
+    let Some(mut engine) = engine() else { return };
+    // Extract on a rank-9 operand, then embed back into a rank-9 shape.
+    let shape = vec![3usize, 1, 1, 1, 1, 1, 1, 1, 3];
+    let data: Vec<f64> = (0..9).map(|index| index as f64 + 1.0).collect();
+    let host = Tensor::from_vec_col_major(shape.clone(), data.clone()).expect("host");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+
+    let extracted = engine
+        .extract_diagonal(&source, 0, 8)
+        .expect("rank-9 extract diagonal");
+    assert_eq!(extracted.shape(), &[3, 1, 1, 1, 1, 1, 1, 1]);
+    let diagonal = download_tensor(engine.runtime(), &extracted).expect("download");
+    assert_eq!(
+        diagonal.as_slice::<f64>().expect("f64 payload"),
+        &[1.0, 5.0, 9.0],
+        "the diagonal of a column-major 3x3 is indices 0, 4, 8"
+    );
+
+    let embedded = engine
+        .embed_diagonal(&extracted, 0, 8)
+        .expect("rank-9 embed diagonal");
+    assert_eq!(embedded.shape(), &shape[..]);
+    let embedded_host = download_tensor(engine.runtime(), &embedded).expect("download");
+    let observed = embedded_host
+        .as_slice::<f64>()
+        .expect("f64 payload")
+        .to_vec();
+    let mut expected = vec![0.0f64; 9];
+    for (index, value) in [1.0f64, 5.0, 9.0].into_iter().enumerate() {
+        expected[index * 4] = value;
+    }
+    assert_eq!(observed, expected);
+}

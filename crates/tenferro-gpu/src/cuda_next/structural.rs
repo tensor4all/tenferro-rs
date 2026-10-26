@@ -12,9 +12,9 @@ use tenferro_tensor::{
 };
 
 use t4a_cuda_kernels::{
-    plan_broadcast_in_dim, plan_concatenate_copy, plan_embed_diagonal_copy, plan_extract_diagonal,
-    plan_materialize_strided, plan_pad, plan_slice, plan_tril, plan_triu, CAxisValues, CLayout,
-    Entry, GatherPlan, Layout, LayoutRef, ScatterPlan,
+    plan_broadcast_in_dim, plan_concatenate_copy, plan_dynamic_slice, plan_embed_diagonal_copy,
+    plan_extract_diagonal, plan_materialize_strided, plan_pad, plan_slice, plan_tril, plan_triu,
+    CAxisValues, CLayout, Entry, GatherPlan, Layout, LayoutRef, ScatterPlan,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -512,6 +512,18 @@ impl TensorStructural for CudaEngine {
         let mut out_shape: Vec<usize> = shape.clone();
         let removed = out_shape.remove(axis_b);
         out_shape[axis_a] = out_shape[axis_a].min(removed);
+        if shape.len() > t4a_cuda_kernels::MAX_RANK {
+            return self.diagonal_wide(
+                input,
+                kernel,
+                Entry::ExtractDiagonal,
+                &shape,
+                &out_shape,
+                axis_a,
+                axis_b,
+                "extract_diagonal",
+            );
+        }
         let strides = self.strides_of(input, "extract_diagonal")?;
         let in_layout = compact_layout(&shape, &strides, "extract_diagonal")?;
         let out_layout = compact_layout(
@@ -571,6 +583,18 @@ impl TensorStructural for CudaEngine {
         // zero-filled by the allocation.
         let mut out_shape = shape.clone();
         out_shape.insert(axis_b, shape[axis_a]);
+        if out_shape.len() > t4a_cuda_kernels::MAX_RANK {
+            return self.diagonal_wide(
+                input,
+                kernel,
+                Entry::EmbedDiagonalCopy,
+                &shape,
+                &out_shape,
+                axis_a,
+                axis_b,
+                "embed_diagonal",
+            );
+        }
         let strides = self.strides_of(input, "embed_diagonal")?;
         let in_layout = compact_layout(&shape, &strides, "embed_diagonal")?;
         let out_layout = compact_layout(
@@ -767,6 +791,207 @@ impl CudaEngine {
                         .map_err(|error| crate::Error::runtime_state_source(op, error))
                 },
             )
+        }?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+
+    /// `extract_diagonal` and `embed_diagonal_copy` through the general path.
+    #[allow(clippy::too_many_arguments)]
+    fn diagonal_wide(
+        &mut self,
+        input: &Tensor,
+        kernel: t4a_cuda_kernels::DType,
+        entry: Entry,
+        in_shape: &[usize],
+        out_shape: &[usize],
+        axis_a: usize,
+        axis_b: usize,
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let dtype = input.dtype();
+        let out_extents: Vec<i64> = out_shape.iter().map(|&extent| extent as i64).collect();
+        let out_strides: Vec<i64> = compact_strides(out_shape, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let in_extents: Vec<i64> = in_shape.iter().map(|&extent| extent as i64).collect();
+        let in_strides: Vec<i64> = self
+            .strides_of(input, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let out_len = count_i64(out_shape, op)?;
+        let in_len = count_i64(in_shape, op)?;
+        let out_ref = LayoutRef::new(&out_extents, &out_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let in_ref = LayoutRef::new(&in_extents, &in_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let planned = if entry == Entry::ExtractDiagonal {
+            plan_extract_diagonal(
+                kernel,
+                in_ref,
+                in_len,
+                out_ref,
+                out_len,
+                axis_a as u32,
+                axis_b as u32,
+            )
+        } else {
+            plan_embed_diagonal_copy(
+                kernel,
+                in_ref,
+                in_len,
+                out_ref,
+                out_len,
+                axis_a as u32,
+                axis_b as u32,
+            )
+        };
+        let plan = planned.map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let output = alloc_tensor(self.runtime(), dtype, out_shape)?;
+        let (destination, source) = self.two_allocations(&output, input, op)?;
+        if plan.grid[0] == 0 {
+            return Ok(output);
+        }
+        let symbol = entry
+            .general()
+            .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
+            .name();
+        let out_geometry = self.wide_geometry(&out_extents, &out_strides, op)?;
+        let in_geometry = self.wide_geometry(&in_extents, &in_strides, op)?;
+        let mut modules = super::launch::KernelModules::for_entries(self.runtime(), &[entry])?;
+        let resources = vec![
+            t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&in_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&in_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(destination),
+            t4a_cuda_runtime::RawResource::Buffer(source),
+        ];
+        // SAFETY: every address the parameters name is registered with this scope, the planner
+        // proved the diagonal map, and the geometry outlives the synchronise below.
+        unsafe {
+            modules.in_scope(entry, symbol, resources, |scope, function| {
+                let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
+                let in_mirror = in_geometry.mirror(in_ref, scope, op)?;
+                let args = [
+                    Arg::DevicePtr(destination),
+                    Arg::DevicePtr(source),
+                    Arg::U32(kernel.tag() as u32),
+                    pod_arg(&out_mirror),
+                    pod_arg(&in_mirror),
+                    Arg::I32(axis_a as i32),
+                    Arg::I32(axis_b as i32),
+                    Arg::U64(out_len as u64),
+                ];
+                scope
+                    .launch(
+                        function,
+                        LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                        &args,
+                    )
+                    .map_err(|error| crate::Error::runtime_state_source(op, error))
+            })
+        }?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+
+    /// `dynamic_slice` through the general path: two device-resident layouts, with the starts
+    /// already a device buffer.
+    #[allow(clippy::too_many_arguments)]
+    fn dynamic_slice_wide(
+        &mut self,
+        input: &Tensor,
+        starts: &Tensor,
+        kernel: t4a_cuda_kernels::DType,
+        index_kernel: t4a_cuda_kernels::DType,
+        in_shape: &[usize],
+        out_shape: &[usize],
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let dtype = input.dtype();
+        let out_extents: Vec<i64> = out_shape.iter().map(|&extent| extent as i64).collect();
+        let out_strides: Vec<i64> = compact_strides(out_shape, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let in_extents: Vec<i64> = in_shape.iter().map(|&extent| extent as i64).collect();
+        let in_strides: Vec<i64> = self
+            .strides_of(input, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let out_len = count_i64(out_shape, op)?;
+        let in_len = count_i64(in_shape, op)?;
+        let starts_rank = u32::try_from(out_shape.len())
+            .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
+        let out_ref = LayoutRef::new(&out_extents, &out_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let in_ref = LayoutRef::new(&in_extents, &in_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let plan = plan_dynamic_slice(
+            kernel,
+            index_kernel,
+            out_ref,
+            out_len,
+            in_ref,
+            in_len,
+            starts_rank,
+        )
+        .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let output = alloc_tensor(self.runtime(), dtype, out_shape)?;
+        let (destination, source) = self.two_allocations(&output, input, op)?;
+        let starts_buffer = with_scalar!(starts.dtype(), |I| self.allocation_of::<I>(starts, op))?;
+        if plan.grid[0] == 0 {
+            return Ok(output);
+        }
+        let symbol = Entry::DynamicSlice
+            .general()
+            .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
+            .name();
+        let out_geometry = self.wide_geometry(&out_extents, &out_strides, op)?;
+        let in_geometry = self.wide_geometry(&in_extents, &in_strides, op)?;
+        let mut modules =
+            super::launch::KernelModules::for_entries(self.runtime(), &[Entry::DynamicSlice])?;
+        let resources = vec![
+            t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&in_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&in_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(destination),
+            t4a_cuda_runtime::RawResource::Buffer(source),
+            t4a_cuda_runtime::RawResource::Buffer(starts_buffer),
+        ];
+        // SAFETY: every address the parameters name is registered with this scope, the planner
+        // proved the window, and the geometry outlives the synchronise below.
+        unsafe {
+            modules.in_scope(Entry::DynamicSlice, symbol, resources, |scope, function| {
+                let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
+                let in_mirror = in_geometry.mirror(in_ref, scope, op)?;
+                let args = [
+                    Arg::DevicePtr(destination),
+                    Arg::DevicePtr(source),
+                    Arg::DevicePtr(starts_buffer),
+                    Arg::U32(kernel.tag() as u32),
+                    Arg::U32(index_kernel.tag() as u32),
+                    pod_arg(&out_mirror),
+                    pod_arg(&in_mirror),
+                    Arg::U64(out_len as u64),
+                ];
+                scope
+                    .launch(
+                        function,
+                        LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                        &args,
+                    )
+                    .map_err(|error| crate::Error::runtime_state_source(op, error))
+            })
         }?;
         self.runtime()
             .synchronize()
@@ -2639,6 +2864,17 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let kernel = kernel_dtype(dtype, op)?;
         let index_kernel = kernel_dtype(index_dtype, op)?;
         let out_shape = slice_sizes.to_vec();
+        if shape.len() > t4a_cuda_kernels::MAX_RANK {
+            return self.dynamic_slice_wide(
+                input,
+                starts,
+                kernel,
+                index_kernel,
+                &shape,
+                &out_shape,
+                op,
+            );
+        }
         let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
         let out_layout = self.layout_of(&output, op)?;
         let in_layout = self.layout_of(input, op)?;

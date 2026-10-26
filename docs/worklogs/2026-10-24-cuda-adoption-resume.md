@@ -239,7 +239,9 @@ concatenation is the test, along the leading axis so the inputs interleave (a wr
 cannot pass as a flat append), with an empty input in the sequence. The review of that step also
 caught that an empty input planned a zero grid the wide path still submitted — the runtime rejects
 that — so an empty placement is planned for its validation and not submitted, keeping the running
-offset.
+offset. `dynamic_slice` (two layouts, the starts already device-resident) and the diagonal pair
+(`extract_diagonal`/`embed_diagonal_copy`, two layouts and the axis ids) follow the same pattern,
+each with a rank-9 test.
 
 `slice` and `pad` follow through one helper (`window_wide`): both take two layouts and two
 per-axis value arrays through the general path, and their fast symbols' third array — pad's

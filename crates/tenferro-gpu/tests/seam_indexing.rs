@@ -475,3 +475,30 @@ fn a_rank_nine_window_uses_the_general_path() {
         }
     }
 }
+
+#[test]
+fn a_rank_nine_dynamic_slice_uses_the_general_path() {
+    let Some(mut engine) = engine() else { return };
+    let shape = vec![4usize, 1, 1, 1, 1, 1, 1, 1, 5];
+    let data: Vec<f64> = (0..20).map(|index| index as f64).collect();
+    let source = device(&engine, shape.clone(), data.clone());
+    // One start per operand axis; the window is 2 x 1 x ... x 3.
+    let starts_host =
+        Tensor::from_vec_col_major(vec![9], vec![1i64, 0, 0, 0, 0, 0, 0, 0, 2]).expect("starts");
+    let starts = upload_tensor(engine.runtime(), &starts_host).expect("upload starts");
+    let mut sizes = vec![1usize; 9];
+    sizes[0] = 2;
+    sizes[8] = 3;
+    let sliced = engine
+        .dynamic_slice(&source, &starts, &sizes)
+        .expect("rank-9 dynamic slice");
+    assert_eq!(sliced.shape(), &sizes[..]);
+    // Rows 1..3 of columns 2..5, column-major with axis 8 outermost.
+    let mut expected = Vec::new();
+    for column in 2..5 {
+        for row in 1..3 {
+            expected.push(data[row + column * 4]);
+        }
+    }
+    assert_eq!(read(&engine, &sliced), expected);
+}
