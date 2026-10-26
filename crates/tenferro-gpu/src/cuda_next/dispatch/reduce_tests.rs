@@ -1,11 +1,16 @@
+//! The reduction family — unit and plane strategies, and the split policy with its two passes —
+//! planned by the kernel crate and matched against host references (issue #2208 U4).
+//!
+//! In-crate because the dispatcher is a crate-internal surface.
 #![cfg(feature = "cuda-next")]
 
 //! U4: the reduction family — unit and plane strategies, and the split policy with its
 //! two passes — planned by the kernel crate and matched against host references
 //! (issue #2208 U4).
 
+use super::Dispatcher;
+use crate::cuda_next::{gpu_available, CudaDeviceId, CudaEngine, CudaRuntime};
 use t4a_cuda_kernels::{DType, Entry, Layout, ReduceOp, ReduceStrategy, ReductionPlan};
-use tenferro_gpu::cuda_next::{gpu_available, CudaDeviceId, CudaEngine, CudaRuntime, Dispatcher};
 
 fn runtime() -> Option<CudaRuntime> {
     if !gpu_available() {

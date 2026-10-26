@@ -1,13 +1,19 @@
+//! The per-family dispatch paths, planned by the kernel crate and matched against host references
+//! through the elementwise, comparison, conversion, gather and scatter entries (issue #2208 U2).
+//!
+//! These are in-crate tests because the dispatcher is a crate-internal surface: its methods take
+//! device buffers and lengths the caller must have checked, so it is not part of the public API.
 #![cfg(feature = "cuda-next")]
 
 //! U2: the per-family dispatch paths are planned by the kernel crate and match host
 //! references through the elementwise, comparison, conversion, gather and scatter
 //! entries (issue #2208 U2).
 
+use super::Dispatcher;
+use crate::cuda_next::{gpu_available, CudaDeviceId, CudaEngine, CudaRuntime};
 use t4a_cuda_kernels::{
     BinaryOp, CompareOp, DType, Entry, GatherPlan, Layout, ScalarSide, ScatterPlan, UnaryOp,
 };
-use tenferro_gpu::cuda_next::{gpu_available, CudaDeviceId, CudaEngine, CudaRuntime, Dispatcher};
 
 fn runtime() -> Option<CudaRuntime> {
     if !gpu_available() {

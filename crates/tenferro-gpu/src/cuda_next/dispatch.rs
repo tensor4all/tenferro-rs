@@ -27,23 +27,13 @@ impl Dispatcher {
     ///
     /// [`crate::Error::RuntimeStateSource`] when NVRTC rejects a module or the runtime
     /// cannot prepare its artifact.
-    pub fn for_entries(
+    pub(crate) fn for_entries(
         runtime: &super::runtime::CudaRuntime,
         entries: &[Entry],
     ) -> crate::Result<Self> {
         Ok(Dispatcher {
             modules: KernelModules::for_entries(runtime, entries)?,
         })
-    }
-
-    /// The prepared module set.
-    pub fn modules(&self) -> &KernelModules {
-        &self.modules
-    }
-
-    /// The prepared module set, mutably, for a launch this module does not wrap.
-    pub fn modules_mut(&mut self) -> &mut KernelModules {
-        &mut self.modules
     }
 
     /// Enqueue one launch with the plan's own geometry.
@@ -78,7 +68,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the kernel crate's planner refuses the
     /// invocation, and [`crate::Error::RuntimeStateSource`] when binding or admitting the
     /// launch fails.
-    pub fn copy_exact(
+    pub(crate) fn copy_exact(
         &mut self,
         dtype: DType,
         len: i64,
@@ -105,7 +95,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the kernel crate's planner refuses the
     /// invocation, and [`crate::Error::RuntimeStateSource`] when binding or admitting the
     /// launch fails.
-    pub fn arithmetic(
+    pub(crate) fn arithmetic(
         &mut self,
         entry: Entry,
         dtype: DType,
@@ -136,7 +126,7 @@ impl Dispatcher {
     /// invocation, and [`crate::Error::RuntimeStateSource`] when binding or admitting the
     /// launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn clamp_buffers(
+    pub(crate) fn clamp_buffers(
         &mut self,
         dtype: DType,
         len: i64,
@@ -167,7 +157,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the kernel crate's planner refuses the
     /// invocation, and [`crate::Error::RuntimeStateSource`] when binding or admitting the
     /// launch fails.
-    pub fn unary(
+    pub(crate) fn unary(
         &mut self,
         op: UnaryOp,
         dst: DType,
@@ -201,7 +191,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn binary(
+    pub(crate) fn binary(
         &mut self,
         op: BinaryOp,
         dtype: DType,
@@ -236,7 +226,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn compare(
+    pub(crate) fn compare(
         &mut self,
         op: t4a_cuda_kernels::CompareOp,
         dtype: DType,
@@ -267,7 +257,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn select(
+    pub(crate) fn select(
         &mut self,
         dtype: DType,
         len: i64,
@@ -298,7 +288,9 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn clamp(
+    // Only the dispatch tests exercise this form; the engine clamps through the buffer entry.
+    #[allow(dead_code)]
+    pub(crate) fn clamp(
         &mut self,
         dtype: DType,
         len: i64,
@@ -328,7 +320,7 @@ impl Dispatcher {
     ///
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
-    pub fn convert(
+    pub(crate) fn convert(
         &mut self,
         dst: DType,
         src: DType,
@@ -358,7 +350,7 @@ impl Dispatcher {
     /// gather/scatter plan, and [`crate::Error::RuntimeStateSource`] when binding or
     /// admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn gather(
+    pub(crate) fn gather(
         &mut self,
         dtype: DType,
         index_dtype: DType,
@@ -415,7 +407,7 @@ impl Dispatcher {
     /// gather/scatter plan, and [`crate::Error::RuntimeStateSource`] when binding or
     /// admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn scatter_add(
+    pub(crate) fn scatter_add(
         &mut self,
         dtype: DType,
         index_dtype: DType,
@@ -473,7 +465,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the window, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn slice(
+    pub(crate) fn slice(
         &mut self,
         dtype: DType,
         out: &t4a_cuda_kernels::Layout,
@@ -514,7 +506,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the window, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn dynamic_slice(
+    pub(crate) fn dynamic_slice(
         &mut self,
         dtype: DType,
         index_dtype: DType,
@@ -562,7 +554,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the padding, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn pad(
+    pub(crate) fn pad(
         &mut self,
         dtype: DType,
         out: &t4a_cuda_kernels::Layout,
@@ -680,7 +672,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the placement, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn concatenate_copy(
+    pub(crate) fn concatenate_copy(
         &mut self,
         dtype: DType,
         out: &t4a_cuda_kernels::Layout,
@@ -754,7 +746,9 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn reduce(
+    // Only the dispatch tests exercise the explicit-strategy form; the engine uses `reduce_auto`.
+    #[allow(dead_code)]
+    pub(crate) fn reduce(
         &mut self,
         dtype: DType,
         op: ReduceOp,
@@ -810,7 +804,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting a launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn reduce_auto(
+    pub(crate) fn reduce_auto(
         &mut self,
         dtype: DType,
         op: ReduceOp,
@@ -901,3 +895,8 @@ impl Dispatcher {
         Ok(plan)
     }
 }
+
+#[cfg(test)]
+mod reduce_tests;
+#[cfg(test)]
+mod tests;
