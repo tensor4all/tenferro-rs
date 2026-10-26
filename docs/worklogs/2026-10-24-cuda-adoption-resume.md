@@ -400,6 +400,20 @@ a membership check for a vendor call that only reads (`retain_tensor`) and a str
 `seam_raw` covers it: the four addresses (scratch, read view, write view, retained) are non-zero and
 the expected ones, and a tensor of another engine is refused rather than addressed.
 
+## cuFFT runs on the new path
+
+`tenferro-fft`'s CUDA module now imports `tenferro_gpu::cuda_next` (the `cuda` feature enables
+`tenferro-gpu/cuda-next`), and all 24 of its device tests pass on the A100 — the concrete, eager,
+traced, cache, validation, zero-batch, padding and Hermitian cases. The engine-side gaps the port
+needed, each a small entry on the new path: `with_current_context` (a plan is created outside any
+scope), `runtime_identity`, `alloc_output`/`ensure_gpu_resident`, `scale_tensor_write`, and
+`with_cuda_engine` through a crate-private native-session marker. Four CubeCL escape hatches left the
+crate with it: the scalar scale went through `with_cubecl`, allocation and zero-fill collapsed into
+`alloc_output` (its real-then-cast complex workaround is gone because a zero-filled device
+allocation serves complex directly), and the failed-sync branch no longer "forgets" Copy handles —
+the operand safety is the runtime's stream-ordered free, and the plan's retirement still stays
+unproven. `source_contract` was updated to assert that invariant instead of the old forgets.
+
 ## Remaining, in order
 
 1. The rank>8 `_any`/`LayoutRef` routing for the indexing and dot families (the float-index

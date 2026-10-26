@@ -7,7 +7,7 @@
 //! C32-to-F32 IRFFT through CubeK on its existing WebGPU placement. That first
 //! GPU path supports power-of-two lengths only; unsupported operations and
 //! dtypes return an error and never fall back to CPU or transfer tensor data.
-//! With the `cuda` feature, `tenferro_gpu::cuda::CudaEngine` executes the
+//! With the `cuda` feature, `tenferro_gpu::cuda_next::CudaEngine` executes the
 //! supported one-dimensional F32/F64/C32/C64 operations through dynamically
 //! loaded cuFFT without implicit transfers or CPU fallback. The vendor call
 //! synchronizes at the cuFFT FFI boundary; subsequent CUDA postprocessing and
@@ -137,7 +137,8 @@ use tenferro_ad::semantic_extension::{
 use tenferro_cpu::with_cpu_engine;
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::{with_cuda_engine, CudaEngine};
+use tenferro_gpu::cuda_next::raw::with_cuda_engine;
+use tenferro_gpu::cuda_next::CudaEngine;
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::webgpu::with_webgpu_exec_session;
 use tenferro_ops::SymDim;

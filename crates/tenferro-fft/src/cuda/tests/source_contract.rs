@@ -72,9 +72,6 @@ fn plan_execution_stays_on_the_public_raw_session_and_forgets_workspace_on_faile
     // still be writing to (issue #967 invariant).
     assert!(execution_section.contains("raw.retain_tensor(input, OP)"));
     assert!(execution_section.contains("raw.retain_tensor(output, OP)"));
-    assert!(execution_section.contains("std::mem::forget(workspace)"));
-    assert!(execution_section.contains("std::mem::forget(input_retained)"));
-    assert!(execution_section.contains("std::mem::forget(output_retained)"));
 
     // The work-area binding helper owns the cufftSetWorkArea symbol together
     // with the match on workspace.with_ptr, outside the execution loop.
@@ -96,11 +93,13 @@ fn plan_execution_stays_on_the_public_raw_session_and_forgets_workspace_on_faile
             rest[..end].to_string()
         })
         .unwrap_or_else(|| unreachable!("synchronization_error guard should exist"));
+    // A failed barrier cannot prove vendor completion, so the plan's retirement stays unproven.
+    // The operands are not leaked on purpose: this runtime frees a dropped buffer with
+    // `cuMemFreeAsync` on the same stream, so the vendor call the session enqueued completes
+    // before the allocation is reclaimed (issue #967's invariant, satisfied structurally).
     assert!(
-        forget_block.contains("std::mem::forget(workspace)")
-            && forget_block.contains("std::mem::forget(input_retained)")
-            && forget_block.contains("std::mem::forget(output_retained)"),
-        "failed synchronization must forget workspace and both retained handles"
+        forget_block.contains("retirement_unproven.store(true"),
+        "failed synchronization must leave the plan's retirement unproven"
     );
 
     let mod_source = include_str!("../mod.rs");
@@ -111,9 +110,10 @@ fn plan_execution_stays_on_the_public_raw_session_and_forgets_workspace_on_faile
     // through the credentialed public seam, so host and foreign-runtime
     // tensors are rejected before any cache/plan work.
     assert!(mod_source.contains("ensure_gpu_resident(input, OP)"));
-    assert!(mod_source.contains("with_cubecl"));
-    assert!(mod_source.contains("alloc_zero_output"));
+    assert!(mod_source.contains("alloc_output"));
     assert!(mod_source.contains("scale_tensor_write"));
+    // The CubeCL escape hatch is gone with the backend it reached.
+    assert!(!mod_source.contains("with_cubecl"));
 }
 
 #[test]

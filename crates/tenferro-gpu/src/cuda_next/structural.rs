@@ -4176,6 +4176,68 @@ impl tenferro_tensor::TensorDot for CudaEngine {
     }
 }
 
+impl CudaEngine {
+    /// Zero-filled device storage of `shape` for `dtype`.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Unsupported`] for a dtype this surface does not allocate, and the runtime's
+    /// own failure.
+    #[doc(hidden)]
+    pub fn alloc_output(&self, dtype: DType, shape: &[usize]) -> crate::Result<Tensor> {
+        alloc_tensor(self.runtime(), dtype, shape)
+    }
+
+    /// Refuse a tensor that is not device-resident on this engine.
+    ///
+    /// This path never uploads implicitly: a host tensor is the caller's to transfer first.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] for a host tensor or another runtime's allocation.
+    #[doc(hidden)]
+    pub fn ensure_gpu_resident(&self, input: &Tensor, op: &'static str) -> crate::Result<()> {
+        if is_host(input) {
+            return Err(crate::Error::runtime_state(
+                op,
+                "a host tensor would need an implicit transfer",
+            ));
+        }
+        let storage = super::pending::cuda_storage(input).ok_or_else(|| {
+            crate::Error::runtime_state(op, "expected a CUDA allocation of this backend")
+        })?;
+        if storage.domain() != self.runtime().allocation_domain_id() {
+            return Err(crate::Error::runtime_state(
+                op,
+                "the tensor belongs to another runtime",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Scale an owned device tensor by `factor`, in place.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Unsupported`] for a dtype the catalogue does not scale, and the runtime's
+    /// own failure.
+    #[doc(hidden)]
+    pub fn scale_tensor_write(
+        &mut self,
+        output: tenferro_tensor::TensorWrite<'_>,
+        factor: f64,
+        op: &'static str,
+    ) -> crate::Result<()> {
+        let tenferro_tensor::TensorWrite::Tensor(tensor) = output else {
+            return Err(crate::Error::unsupported(
+                op,
+                "a borrowed view is not served by the structural slice",
+            ));
+        };
+        self.scale_in_place(tensor, (factor, 0.0), op)
+    }
+}
+
 impl tenferro_tensor::TensorDeviceTransfer for CudaEngine {
     fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
         let op = "download_to_host";

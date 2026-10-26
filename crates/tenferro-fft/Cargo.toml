@@ -33,6 +33,7 @@ cuda = [
     "dep:libloading",
     "dep:tenferro-gpu",
     "tenferro-gpu/cuda",
+    "tenferro-gpu/cuda-next",
     # The CUDA path scales and allocates through tenferro-gpu's CubeCL session
     # helpers, which live behind `cubecl-interop` (#2206).
     "tenferro-gpu/cubecl-interop",

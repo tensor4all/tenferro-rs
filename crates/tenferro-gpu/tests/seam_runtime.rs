@@ -157,7 +157,7 @@ fn a_prepared_elementwise_program_runs_on_the_new_engine() {
 
     let Some(mut engine) = engine() else { return };
     let registration =
-        tenferro_gpu::cuda_next::runtime_adapter::runtime_engine_registration(&engine)
+        tenferro_gpu::cuda_next::runtime_adapter::cuda_runtime_engine_registration(&engine)
             .expect("registration");
     let mut builder = Runtime::builder();
     builder.register_engine(registration).expect("register");
@@ -204,7 +204,7 @@ fn a_prepared_comparison_runs_on_the_new_engine() {
 
     let Some(mut engine) = engine() else { return };
     let registration =
-        tenferro_gpu::cuda_next::runtime_adapter::runtime_engine_registration(&engine)
+        tenferro_gpu::cuda_next::runtime_adapter::cuda_runtime_engine_registration(&engine)
             .expect("registration");
     let mut builder = Runtime::builder();
     builder.register_engine(registration).expect("register");

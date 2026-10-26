@@ -63,6 +63,12 @@ pub struct TensorRef<'a, T> {
 }
 
 impl<T> TensorRef<'_, T> {
+    /// The tensor's device address, as a vendor binding takes it.
+    #[doc(hidden)]
+    pub fn raw_ptr(&self) -> *mut std::ffi::c_void {
+        self.pointer as usize as *mut std::ffi::c_void
+    }
+
     /// Run `f` with the tensor's device address.
     #[doc(hidden)]
     pub fn with_ptr<R>(&self, f: impl FnOnce(*mut std::ffi::c_void) -> R) -> R {
@@ -87,6 +93,12 @@ pub struct TensorMut<'a, T> {
 }
 
 impl<T> TensorMut<'_, T> {
+    /// The tensor's device address, as a vendor binding takes it.
+    #[doc(hidden)]
+    pub fn raw_ptr(&self) -> *mut std::ffi::c_void {
+        self.pointer as usize as *mut std::ffi::c_void
+    }
+
     /// Run `f` with the tensor's device address.
     #[doc(hidden)]
     pub fn with_ptr<R>(&self, f: impl FnOnce(*mut std::ffi::c_void) -> R) -> R {

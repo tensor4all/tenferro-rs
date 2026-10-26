@@ -8,7 +8,7 @@ pub(crate) mod plan;
 #[cfg(test)]
 mod tests;
 
-use tenferro_gpu::cuda::CudaEngine;
+use tenferro_gpu::cuda_next::CudaEngine;
 use tenferro_tensor::{
     DType, SliceConfig, Tensor, TensorIndexing, TensorRead, TensorStructural, TensorWrite,
 };
@@ -136,10 +136,11 @@ impl FftBackend for CudaEngine {
             );
             let factor = fft_scale(spec.norm(), inverse, canonical.n);
             if factor != 1.0 {
-                self.with_cubecl(OP, |cubecl| {
-                    cubecl
-                        .scale_tensor_write(TensorWrite::from_tensor(&mut canonical_output), factor)
-                })
+                self.scale_tensor_write(
+                    TensorWrite::from_tensor(&mut canonical_output),
+                    factor,
+                    OP,
+                )
                 .map_err(|source| CudaFftError::interop("cuda_fft_scale", source))?;
             }
 
@@ -498,29 +499,9 @@ fn allocate_cuda_output(
     dtype: DType,
     shape: &[usize],
 ) -> tenferro_tensor::Result<Tensor> {
-    match dtype {
-        DType::F32 => session
-            .with_cubecl(OP, |cubecl| cubecl.alloc_output::<f32>(shape))
-            .map(Tensor::from_typed::<f32>),
-        DType::F64 => session
-            .with_cubecl(OP, |cubecl| cubecl.alloc_output::<f64>(shape))
-            .map(Tensor::from_typed::<f64>),
-        DType::C32 => session
-            .with_cubecl(OP, |cubecl| {
-                cubecl.alloc_output::<num_complex::Complex32>(shape)
-            })
-            .map(Tensor::from_typed::<tenferro_tensor::Complex32>),
-        DType::C64 => session
-            .with_cubecl(OP, |cubecl| {
-                cubecl.alloc_output::<num_complex::Complex64>(shape)
-            })
-            .map(Tensor::from_typed::<tenferro_tensor::Complex64>),
-        _ => Err(crate::tensor_unsupported_dtype(
-            OP,
-            dtype,
-            "F32, F64, C32, or C64",
-        )),
-    }
+    session.alloc_output(dtype, shape).map_err(|source| {
+        tenferro_tensor::Error::runtime_state_source(OP, CudaFftPlacementError { source })
+    })
 }
 
 fn allocate_cuda_zero_output(
@@ -528,34 +509,11 @@ fn allocate_cuda_zero_output(
     dtype: DType,
     shape: &[usize],
 ) -> tenferro_tensor::Result<Tensor> {
-    match dtype {
-        DType::F32 => session
-            .with_cubecl(OP, |cubecl| cubecl.alloc_zero_output::<f32>(shape))
-            .map(Tensor::from_typed::<f32>),
-        DType::F64 => session
-            .with_cubecl(OP, |cubecl| cubecl.alloc_zero_output::<f64>(shape))
-            .map(Tensor::from_typed::<f64>),
-        // CubeCL's generic complex fill-zero kernel is not accepted by all
-        // CUDA toolkits. Fill a same-device real tensor with the shared kernel
-        // and use the existing device conversion path for complex padding.
-        DType::C32 => {
-            let real = session
-                .with_cubecl(OP, |cubecl| cubecl.alloc_zero_output::<f32>(shape))
-                .map(Tensor::from_typed::<f32>)?;
-            session.cast(&real, DType::C32)
-        }
-        DType::C64 => {
-            let real = session
-                .with_cubecl(OP, |cubecl| cubecl.alloc_zero_output::<f64>(shape))
-                .map(Tensor::from_typed::<f64>)?;
-            session.cast(&real, DType::C64)
-        }
-        _ => Err(crate::tensor_unsupported_dtype(
-            OP,
-            dtype,
-            "F32, F64, C32, or C64",
-        )),
-    }
+    // The new path's allocation is a zero-filled device allocation for every dtype it serves,
+    // complex included, so the real-then-cast workaround CubeCL needed is gone.
+    session.alloc_output(dtype, shape).map_err(|source| {
+        tenferro_tensor::Error::runtime_state_source(OP, CudaFftPlacementError { source })
+    })
 }
 
 fn checked_shape_product(

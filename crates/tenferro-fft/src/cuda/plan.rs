@@ -22,8 +22,8 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tenferro_gpu::cuda::raw::DeviceBytes;
-use tenferro_gpu::cuda::{CudaEngine, CudaRuntime};
+use tenferro_gpu::cuda_next::raw::DeviceBytes;
+use tenferro_gpu::cuda_next::{CudaEngine, CudaRuntime};
 use tenferro_runtime::ExtensionCacheKey;
 use tenferro_tensor::{Tensor, TensorScalar, TypedTensor};
 
@@ -615,9 +615,9 @@ impl CufftPlanEntry {
         let mut synchronization_error = None;
         session
             .with_raw(OP, |raw| {
-                // SAFETY: the stream handle is valid only for this raw-session
-                // scope; it is used immediately to bind the cuFFT plan stream.
-                let stream = unsafe { raw.stream().raw_handle() };
+                // The stream handle is valid for this raw-session scope and is used immediately to
+                // bind the cuFFT plan stream.
+                let stream = raw.stream().raw_handle();
                 if let Err(error) = bind_plan_to_stream(&self.library, self.plan, stream) {
                     execution_error = Some(error);
                     return Ok::<(), tenferro_tensor::Error>(());
@@ -670,16 +670,14 @@ impl CufftPlanEntry {
                         return Ok::<(), tenferro_tensor::Error>(());
                     }
                 };
-                // SAFETY: both refs are validated device spans on this
-                // runtime; the sizes were checked against the plan descriptor.
-                let status = unsafe {
-                    call(
-                        &self.library.api,
-                        self.plan,
-                        input_ref.raw_ptr(),
-                        output_ref.raw_ptr(),
-                    )
-                };
+                // Both refs are validated device spans of this runtime and the sizes were checked
+                // against the plan descriptor.
+                let status = call(
+                    &self.library.api,
+                    self.plan,
+                    input_ref.raw_ptr(),
+                    output_ref.raw_ptr(),
+                );
                 if let Err(error) = map_cufft_status(function, status) {
                     execution_error = Some(error);
                 }
@@ -687,15 +685,12 @@ impl CufftPlanEntry {
                     synchronization_error =
                         Some(CudaFftError::interop("cufft_execute_synchronize", error));
                 }
-                // INVARIANT: failed synchronization cannot prove vendor
-                // completion, so the workspace and the input/output retention
-                // guards are forgotten. The CubeCL allocations are then
-                // intentionally retained until process exit, mirroring the
-                // retired lease-witness retention (issue #967).
+                // INVARIANT: failed synchronization cannot prove vendor completion, so the plan
+                // handle's retirement is left unproven. The session's own allocations are not
+                // leaked here: they are reclaimed in stream order, which is after any work the
+                // stream still holds.
                 if synchronization_error.is_some() {
-                    std::mem::forget(workspace);
-                    std::mem::forget(input_retained);
-                    std::mem::forget(output_retained);
+                    let _ = (workspace, input_retained, output_retained);
                     // The plan handle itself cannot be proven idle either, so
                     // its retirement leaks the handle and its witnesses.
                     self.retirement_unproven.store(true, Ordering::Relaxed);

@@ -57,6 +57,8 @@ mod publication;
 pub mod raw;
 mod runtime;
 pub mod runtime_adapter;
+
+pub use runtime_adapter::cuda_runtime_engine_registration;
 mod storage;
 mod structural;
 mod transfer;

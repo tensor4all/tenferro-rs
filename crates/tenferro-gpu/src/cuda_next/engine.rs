@@ -175,8 +175,15 @@ impl CudaEngine {
     }
 
     /// The runtime engine id this engine registers under.
-    pub(crate) fn runtime_engine_id(&self) -> &tenferro_runtime::EngineId {
+    #[doc(hidden)]
+    pub fn runtime_engine_id(&self) -> &tenferro_runtime::EngineId {
         &self.runtime_engine_id
+    }
+
+    /// Identity of the runtime this engine owns.
+    #[doc(hidden)]
+    pub fn runtime_identity(&self) -> super::runtime::CudaRuntimeIdentity {
+        self.runtime.identity().clone()
     }
 
     /// The device this engine opened.

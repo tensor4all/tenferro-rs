@@ -119,7 +119,7 @@ fn input_tensor(
 /// # Examples
 ///
 /// ```no_run
-/// use tenferro_gpu::cuda_next::runtime_adapter::runtime_engine_registration;
+/// use tenferro_gpu::cuda_next::runtime_adapter::cuda_runtime_engine_registration;
 /// use tenferro_gpu::cuda_next::{CudaDeviceId, CudaEngine};
 /// use tenferro_runtime::Runtime;
 ///
@@ -137,7 +137,7 @@ fn input_tensor(
 ///
 /// [`RuntimeConfigError`] when the provider identity, hardware or storage class, or the
 /// registration itself cannot be built.
-pub fn runtime_engine_registration(
+pub fn cuda_runtime_engine_registration(
     engine: &CudaEngine,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     let prepared = crate::cubecl::runtime_adapter::prepare_cuda_registration_identity(

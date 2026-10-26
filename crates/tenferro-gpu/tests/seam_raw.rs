@@ -73,17 +73,21 @@ fn the_runtime_runs_a_plan_setup_with_its_context_current() {
     // the closure's failure has to come back unchanged.
     let value = engine
         .runtime()
-        .with_current_context("seam_raw", || Ok(7u32))
+        .with_current_context("seam_raw", || 7u32)
         .expect("context scope");
     assert_eq!(value, 7);
-    let refused: tenferro_tensor::Result<u32> =
-        engine.runtime().with_current_context("seam_raw", || {
-            Err(tenferro_tensor::Error::unsupported(
-                "seam_raw",
-                "the vendor refused the plan",
-            ))
-        });
-    assert!(refused.is_err(), "the closure's failure is reported");
+    // The closure's own error travels inside its value: the context wrapper only reports whether
+    // the context could be activated.
+    let refused = engine.runtime().with_current_context("seam_raw", || {
+        Err::<u32, _>(tenferro_tensor::Error::unsupported(
+            "seam_raw",
+            "the vendor refused the plan",
+        ))
+    });
+    assert!(
+        matches!(refused, Ok(Err(_))),
+        "the closure's failure is reported"
+    );
 }
 
 #[test]

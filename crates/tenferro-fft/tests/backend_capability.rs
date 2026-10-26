@@ -2,7 +2,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftBackend, FftExecutor, FftNorm, TensorFftExt};
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::CudaEngine;
+use tenferro_gpu::cuda_next::CudaEngine;
 use tenferro_runtime::Runtime;
 use tenferro_tensor::{
     BackendStorageHandle, CompareDir, DType, DeviceId, DeviceKind, DotGeneralConfig,

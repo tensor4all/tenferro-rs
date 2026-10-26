@@ -200,12 +200,11 @@ impl CudaRuntime {
     pub fn with_current_context<R>(
         &self,
         op: &'static str,
-        f: impl FnOnce() -> crate::Result<R>,
+        f: impl FnOnce() -> R,
     ) -> crate::Result<R> {
         // SAFETY: the scope activates this runtime's context for the closure's duration; it declares
         // no resources, so nothing is registered against the closure's work.
         unsafe { self.with_raw_locked(Vec::new(), |_scope| f()) }
-            .and_then(|result| result)
             .map_err(|error| crate::Error::runtime_state_source(op, error))
     }
 
