@@ -246,8 +246,11 @@ per-axis value arrays through the general path, and their fast symbols' third ar
 `edge_high` — is planner-only, because `t4a_cuda_pad_any` folds that extent into the destination
 layout and does not read it (the kernel source states this; passing it as a third mirror shifted
 the whole argument list and wrote a partial window, which the rank-9 test caught before the
-commit). A rank-9 slice with a column step and a rank-9 pad with edge and interior padding are the
-two tests.
+commit). A rank-9 slice with a column step and a rank-9 pad with interior padding on a non-singleton axis
+plus edge padding on the trailing axis are the two tests (the review noted the first version of the
+pad test used zero interior padding, which would pass even if the interior array were dropped). The
+same review caught the empty-window shortcut bypassing the operand's domain validation, so both
+windows now take their allocations before that early return.
 
 The remaining families, and what each needs beyond the pattern above:
 

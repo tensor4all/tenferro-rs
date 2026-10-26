@@ -831,10 +831,12 @@ impl CudaEngine {
         let plan = planned.map_err(|error| crate::Error::runtime_state_source(op, error))?;
         // A window over an empty operand is all padding, which the zeroed allocation already is.
         let output = alloc_tensor(self.runtime(), dtype, out_shape)?;
+        // Both operands are validated before any early return: an empty window still has to
+        // belong to this runtime.
+        let (destination, source) = self.two_allocations(&output, input, op)?;
         if in_len == 0 || plan.grid[0] == 0 {
             return Ok(output);
         }
-        let (destination, source) = self.two_allocations(&output, input, op)?;
         let symbol = entry
             .general()
             .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?

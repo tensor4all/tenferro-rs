@@ -439,28 +439,36 @@ fn a_rank_nine_window_uses_the_general_path() {
     // Rows 1..3 of columns 1 and 3; the source is row + 3 * column.
     assert_eq!(read(&engine, &sliced), vec![4.0, 5.0, 10.0, 11.0]);
 
+    // Interior padding on a non-singleton axis plus edge padding on the trailing axis: the
+    // interior array must reach the kernel, and `edge_high` must not be mistaken for it.
+    let mut interior = vec![0i64; 9];
+    interior[0] = 1;
+    let mut high = vec![0i64; 9];
+    high[8] = 1;
     let padded = engine
         .pad(
             &source,
             &PadConfig {
-                edge_padding_low: vec![1, 0, 0, 0, 0, 0, 0, 0, 0],
-                edge_padding_high: vec![0, 0, 0, 0, 0, 0, 0, 0, 1],
-                interior_padding: vec![0; 9],
+                edge_padding_low: vec![0; 9],
+                edge_padding_high: high,
+                interior_padding: interior,
             },
         )
         .expect("rank-9 pad");
-    assert_eq!(padded.shape(), &[4, 1, 1, 1, 1, 1, 1, 1, 5]);
+    // Axis 0: (3 - 1) * 2 + 1 = 5; axis 8: 4 + 1 = 5.
+    assert_eq!(padded.shape(), &[5, 1, 1, 1, 1, 1, 1, 1, 5]);
     let observed = read(&engine, &padded);
-    assert_eq!(observed.len(), 20);
+    assert_eq!(observed.len(), 25);
     for column in 0..5 {
-        for row in 0..4 {
-            let expected = if column == 4 || row == 0 {
+        for row in 0..5 {
+            // Odd rows are interior padding; the last column is edge padding.
+            let expected = if column == 4 || row % 2 == 1 {
                 0.0
             } else {
-                data[(row - 1) + column * 3]
+                data[(row / 2) + column * 3]
             };
             assert_eq!(
-                observed[row + column * 4],
+                observed[row + column * 5],
                 expected,
                 "row {row} column {column}"
             );
