@@ -7,7 +7,9 @@
 use tenferro_gpu::cuda_next::{
     download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine,
 };
-use tenferro_tensor::{DType, Tensor, TensorIndexing, TensorRead, TensorStructural, TensorWrite};
+use tenferro_tensor::{
+    DType, Tensor, TensorIndexing, TensorRead, TensorReduction, TensorStructural, TensorWrite,
+};
 
 fn engine() -> Option<CudaEngine> {
     if !gpu_available() {
@@ -769,6 +771,74 @@ fn a_rank_nine_diagonal_pair_uses_the_general_path() {
         for spectator in 0..2 {
             expected[spectator + diagonal_index * 2 + diagonal_index * 6] =
                 data[spectator * stride_0 + diagonal_index * (stride_1 + stride_8)];
+        }
+    }
+    assert_eq!(observed, expected.as_slice());
+}
+
+#[test]
+fn a_rank_nine_reduction_uses_the_general_path() {
+    let Some(mut engine) = engine() else { return };
+    // Nine axes; the first reduction is a single axis and the second a multi-axis sum, so the
+    // keepdims passes and the final squeeze both run through the general path.
+    let shape = vec![3usize, 1, 1, 1, 1, 1, 1, 2, 4];
+    let data: Vec<f64> = (0..24).map(|index| index as f64 * 0.5 - 1.0).collect();
+    let host = Tensor::from_vec_col_major(shape.clone(), data.clone()).expect("host");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+    // Compact column-major strides of `[3, 1, .., 2, 4]`.
+    let strides = [1usize, 3, 3, 3, 3, 3, 3, 3, 6];
+
+    let summed = engine
+        .reduce_sum_read(TensorRead::from_tensor(&source), &[0])
+        .expect("rank-9 reduce");
+    // The reduced axes are squeezed off the result, so the keepdims passes are internal.
+    assert_eq!(summed.shape(), &[1, 1, 1, 1, 1, 1, 2, 4]);
+    let summed_host = download_tensor(engine.runtime(), &summed).expect("download");
+    let observed = summed_host.as_slice::<f64>().expect("f64 payload");
+    let mut expected = Vec::new();
+    for axis8 in 0..4 {
+        for axis7 in 0..2 {
+            let mut total = 0.0;
+            for axis0 in 0..3 {
+                total += data[axis0 * strides[0] + axis7 * strides[7] + axis8 * strides[8]];
+            }
+            expected.push(total);
+        }
+    }
+    assert_eq!(observed, expected.as_slice());
+
+    let squeezed = engine
+        .reduce_sum_read(TensorRead::from_tensor(&source), &[0, 7])
+        .expect("rank-9 multi-axis reduce");
+    assert_eq!(squeezed.shape(), &[1, 1, 1, 1, 1, 1, 4]);
+    let squeezed_host = download_tensor(engine.runtime(), &squeezed).expect("download");
+    let observed = squeezed_host.as_slice::<f64>().expect("f64 payload");
+    let mut expected = Vec::new();
+    for axis8 in 0..4 {
+        let mut total = 0.0;
+        for axis7 in 0..2 {
+            for axis0 in 0..3 {
+                total += data[axis0 * strides[0] + axis7 * strides[7] + axis8 * strides[8]];
+            }
+        }
+        expected.push(total);
+    }
+    assert_eq!(observed, expected.as_slice());
+
+    // A product reduction exercises a different fold over the same general path.
+    let product = engine
+        .reduce_prod_read(TensorRead::from_tensor(&source), &[7])
+        .expect("rank-9 product reduce");
+    assert_eq!(product.shape(), &[3, 1, 1, 1, 1, 1, 1, 4]);
+    let product_host = download_tensor(engine.runtime(), &product).expect("download");
+    let observed = product_host.as_slice::<f64>().expect("f64 payload");
+    let mut expected = Vec::new();
+    for axis8 in 0..4 {
+        for axis0 in 0..3 {
+            expected.push(
+                data[axis0 * strides[0] + axis8 * strides[8]]
+                    * data[axis0 * strides[0] + strides[7] + axis8 * strides[8]],
+            );
         }
     }
     assert_eq!(observed, expected.as_slice());

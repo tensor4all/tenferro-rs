@@ -259,12 +259,17 @@ pad test used zero interior padding, which would pass even if the interior array
 same review caught the empty-window shortcut bypassing the operand's domain validation, so both
 windows now take their allocations before that early return.
 
+`reduce` follows: the wide branch mirrors the fast one pass for pass — the keepdims destination
+per reduced axis, the direct strategy's single launch, and the split strategy's partials pass plus
+its combining pass, whose partials layout the crate computes and which therefore needs its own
+packed geometry. A rank-9 sum over one axis, a multi-axis sum (which squeezes two unit axes) and a
+product reduction are the tests.
+
 The remaining families, and what each needs beyond the pattern above:
 
 | Family | Geometry to pack besides the operand layouts |
 |---|---|
 | `extract_diagonal` / `embed_diagonal_copy` | the two axis ids |
-| `reduce` / `reduce_partials` | nothing extra for the direct strategy; the split strategy's partials layout is computed by the crate (`reduction_partials_layout`), so its extents and strides are packed too, and both branches need their own wide launch |
 | `dynamic_slice` | nothing extra (the starts are already device-resident) |
 | `gather` / `scatter_add` | the window/offset/start-map/extent arrays of the plan |
 | `fill_zero_view` / `contiguous_to_view` / `strided_to_strided` | nothing extra |

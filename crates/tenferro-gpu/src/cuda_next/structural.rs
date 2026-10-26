@@ -13,8 +13,9 @@ use tenferro_tensor::{
 
 use t4a_cuda_kernels::{
     plan_broadcast_in_dim, plan_concatenate_copy, plan_dynamic_slice, plan_embed_diagonal_copy,
-    plan_extract_diagonal, plan_materialize_strided, plan_pad, plan_slice, plan_tril, plan_triu,
-    CAxisValues, CLayout, Entry, GatherPlan, Layout, LayoutRef, ScatterPlan,
+    plan_extract_diagonal, plan_materialize_strided, plan_pad, plan_reduction, plan_slice,
+    plan_tril, plan_triu, CAxisValues, CLayout, Entry, GatherPlan, Layout, LayoutRef,
+    ReductionPlan, ScatterPlan,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -788,7 +789,7 @@ impl CudaEngine {
                     scope
                         .launch(
                             function,
-                            LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                            LaunchConfig::new(plan.grid[0], plan.block[0]),
                             &args,
                         )
                         .map_err(|error| crate::Error::runtime_state_source(op, error))
@@ -799,6 +800,265 @@ impl CudaEngine {
             .synchronize()
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
         Ok(output)
+    }
+
+    /// Reduce every axis of `axes` through the general path: each pass carries its layouts in
+    /// device memory, and a split reduction uses two passes on this engine's stream.
+    ///
+    /// The kernel is keepdims, so each pass keeps the input's rank with an extent of one on the
+    /// reduced axis; the unit axes are squeezed off at the end.
+    fn reduce_axes_wide(
+        &mut self,
+        source: &Tensor,
+        axes: &[usize],
+        op: ReduceOp,
+        name: &'static str,
+    ) -> crate::Result<Tensor> {
+        let dtype = source.dtype();
+        let kernel = kernel_dtype(dtype, name)?;
+        let kernel_op = reduction_op(op);
+        let width = 32u32;
+        let mut shape = source.shape().to_vec();
+        let mut owned: Option<Tensor> = None;
+        for &axis in axes.iter().rev() {
+            let out_shape: Vec<usize> = {
+                let mut next = shape.clone();
+                next[axis] = 1;
+                next
+            };
+            let out_extents: Vec<i64> = out_shape.iter().map(|&extent| extent as i64).collect();
+            let out_strides: Vec<i64> = compact_strides(&out_shape, name)?
+                .iter()
+                .map(|&stride| stride as i64)
+                .collect();
+            let in_extents: Vec<i64> = shape.iter().map(|&extent| extent as i64).collect();
+            let current = owned.as_ref().unwrap_or(source);
+            // The first pass reads the caller's tensor; a later pass reads a compact result.
+            let in_strides: Vec<i64> = if owned.is_none() {
+                self.strides_of(current, name)?
+                    .iter()
+                    .map(|&stride| stride as i64)
+                    .collect()
+            } else {
+                compact_strides(&shape, name)?
+                    .iter()
+                    .map(|&stride| stride as i64)
+                    .collect()
+            };
+            let in_len = count_i64(&shape, name)?;
+            let out_len = count_i64(&out_shape, name)?;
+            let out_ref = LayoutRef::new(&out_extents, &out_strides, 0)
+                .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+            let in_ref = LayoutRef::new(&in_extents, &in_strides, 0)
+                .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+            let plan = plan_reduction(
+                kernel,
+                kernel_op,
+                out_ref,
+                out_len,
+                in_ref,
+                in_len,
+                axis as u32,
+                width,
+            )
+            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+            let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
+            let partials = alloc_tensor(self.runtime(), dtype, &[in_len as usize])?;
+            let (destination, input_buffer, partials_buffer) = with_scalar!(dtype, |T| Ok((
+                self.allocation_of::<T>(&output, name)?,
+                self.allocation_of::<T>(current, name)?,
+                self.allocation_of::<T>(&partials, name)?,
+            )))?;
+            let out_geometry = self.wide_geometry(&out_extents, &out_strides, name)?;
+            let in_geometry = self.wide_geometry(&in_extents, &in_strides, name)?;
+            let mut modules = super::launch::KernelModules::for_entries(
+                self.runtime(),
+                &[Entry::Reduce, Entry::ReducePartials],
+            )?;
+            match plan {
+                ReductionPlan::Direct { strategy, launch } => {
+                    if launch.grid[0] != 0 {
+                        let symbol = Entry::Reduce
+                            .general()
+                            .ok_or_else(|| {
+                                crate::Error::unsupported(
+                                    name,
+                                    "this entry has no general-path symbol",
+                                )
+                            })?
+                            .name();
+                        let resources = wide_reduce_resources(
+                            &out_geometry,
+                            &in_geometry,
+                            destination,
+                            input_buffer,
+                        );
+                        // SAFETY: every address the parameters name is registered with this
+                        // scope, the planner proved the reduction, and the geometry outlives the
+                        // synchronise below.
+                        unsafe {
+                            modules.in_scope(Entry::Reduce, symbol, resources, |scope, function| {
+                                let out_mirror = out_geometry.mirror(out_ref, scope, name)?;
+                                let in_mirror = in_geometry.mirror(in_ref, scope, name)?;
+                                let args = [
+                                    Arg::DevicePtr(destination),
+                                    Arg::DevicePtr(input_buffer),
+                                    Arg::U32(kernel.tag() as u32),
+                                    Arg::I32(kernel_op.tag()),
+                                    Arg::I32(strategy.tag()),
+                                    pod_arg(&out_mirror),
+                                    pod_arg(&in_mirror),
+                                    Arg::I32(axis as i32),
+                                    Arg::U64(out_len as u64),
+                                ];
+                                scope
+                                    .launch(
+                                        function,
+                                        LaunchConfig::new(launch.grid[0], launch.block[0]),
+                                        &args,
+                                    )
+                                    .map_err(|error| {
+                                        crate::Error::runtime_state_source(name, error)
+                                    })
+                            })
+                        }?;
+                    }
+                }
+                ReductionPlan::Split {
+                    split,
+                    pass1,
+                    combine_strategy,
+                    combine_op,
+                    pass2,
+                } => {
+                    let partials_layout = t4a_cuda_kernels::reduction_partials_layout(
+                        in_ref,
+                        axis as u32,
+                        split.splits,
+                    )
+                    .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+                    let partials_ref = partials_layout.as_ref();
+                    let partials_geometry = self.wide_geometry(
+                        partials_layout.extents(),
+                        partials_layout.strides(),
+                        name,
+                    )?;
+                    let partials_len = partials_layout.extents().iter().product::<i64>();
+                    let _ = partials_len;
+                    if pass1.grid[0] != 0 {
+                        let symbol = Entry::ReducePartials
+                            .general()
+                            .ok_or_else(|| {
+                                crate::Error::unsupported(
+                                    name,
+                                    "this entry has no general-path symbol",
+                                )
+                            })?
+                            .name();
+                        let resources = wide_reduce_resources(
+                            &partials_geometry,
+                            &in_geometry,
+                            partials_buffer,
+                            input_buffer,
+                        );
+                        // SAFETY: as the direct branch, for the partials pass.
+                        unsafe {
+                            modules.in_scope(
+                                Entry::ReducePartials,
+                                symbol,
+                                resources,
+                                |scope, function| {
+                                    let partials_mirror =
+                                        partials_geometry.mirror(partials_ref, scope, name)?;
+                                    let in_mirror = in_geometry.mirror(in_ref, scope, name)?;
+                                    let args = [
+                                        Arg::DevicePtr(partials_buffer),
+                                        Arg::DevicePtr(input_buffer),
+                                        Arg::U32(kernel.tag() as u32),
+                                        Arg::I32(kernel_op.tag()),
+                                        pod_arg(&partials_mirror),
+                                        pod_arg(&in_mirror),
+                                        Arg::I32(axis as i32),
+                                        Arg::U64(out_len as u64),
+                                        Arg::U64(split.splits as u64),
+                                        Arg::U64(split.chunk_len as u64),
+                                    ];
+                                    scope
+                                        .launch(
+                                            function,
+                                            LaunchConfig::new(pass1.grid[0], pass1.block[0]),
+                                            &args,
+                                        )
+                                        .map_err(|error| {
+                                            crate::Error::runtime_state_source(name, error)
+                                        })
+                                },
+                            )
+                        }?;
+                    }
+                    if pass2.grid[0] != 0 {
+                        let symbol = Entry::Reduce
+                            .general()
+                            .ok_or_else(|| {
+                                crate::Error::unsupported(
+                                    name,
+                                    "this entry has no general-path symbol",
+                                )
+                            })?
+                            .name();
+                        let resources = wide_reduce_resources(
+                            &out_geometry,
+                            &partials_geometry,
+                            destination,
+                            partials_buffer,
+                        );
+                        // SAFETY: as the direct branch, for the combining pass.
+                        unsafe {
+                            modules.in_scope(Entry::Reduce, symbol, resources, |scope, function| {
+                                let out_mirror = out_geometry.mirror(out_ref, scope, name)?;
+                                let partials_mirror =
+                                    partials_geometry.mirror(partials_ref, scope, name)?;
+                                let args = [
+                                    Arg::DevicePtr(destination),
+                                    Arg::DevicePtr(partials_buffer),
+                                    Arg::U32(kernel.tag() as u32),
+                                    Arg::I32(combine_op.tag()),
+                                    Arg::I32(combine_strategy.tag()),
+                                    pod_arg(&out_mirror),
+                                    pod_arg(&partials_mirror),
+                                    Arg::I32(axis as i32),
+                                    Arg::U64(out_len as u64),
+                                ];
+                                scope
+                                    .launch(
+                                        function,
+                                        LaunchConfig::new(pass2.grid[0], pass2.block[0]),
+                                        &args,
+                                    )
+                                    .map_err(|error| {
+                                        crate::Error::runtime_state_source(name, error)
+                                    })
+                            })
+                        }?;
+                    }
+                }
+            }
+            self.runtime()
+                .synchronize()
+                .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+            drop(partials);
+            shape = out_shape;
+            owned = Some(output);
+        }
+        let intermediate = owned.expect("at least one axis was reduced");
+        let squeezed: Vec<usize> = (0..intermediate.shape().len())
+            .filter(|axis| !axes.contains(axis))
+            .map(|axis| intermediate.shape()[axis])
+            .collect();
+        if squeezed == intermediate.shape() {
+            return Ok(intermediate);
+        }
+        self.copy_to_fresh(&intermediate, squeezed, name)
     }
 
     /// `extract_diagonal` and `embed_diagonal_copy` through the general path.
@@ -900,7 +1160,7 @@ impl CudaEngine {
                 scope
                     .launch(
                         function,
-                        LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                        LaunchConfig::new(plan.grid[0], plan.block[0]),
                         &args,
                     )
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
@@ -997,7 +1257,7 @@ impl CudaEngine {
                 scope
                     .launch(
                         function,
-                        LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                        LaunchConfig::new(plan.grid[0], plan.block[0]),
                         &args,
                     )
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
@@ -1122,7 +1382,7 @@ impl CudaEngine {
                 scope
                     .launch(
                         function,
-                        LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                        LaunchConfig::new(plan.grid[0], plan.block[0]),
                         &args,
                     )
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
@@ -1235,7 +1495,7 @@ impl CudaEngine {
                             scope
                                 .launch(
                                     function,
-                                    LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                                    LaunchConfig::new(plan.grid[0], plan.block[0]),
                                     &args,
                                 )
                                 .map_err(|error| crate::Error::runtime_state_source(op, error))
@@ -1341,7 +1601,7 @@ impl CudaEngine {
                     scope
                         .launch(
                             function,
-                            LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                            LaunchConfig::new(plan.grid[0], plan.block[0]),
                             &args,
                         )
                         .map_err(|error| crate::Error::runtime_state_source(op, error))
@@ -1381,6 +1641,24 @@ impl CudaEngine {
             strides: self.upload_i64(strides, op)?,
         })
     }
+}
+
+/// The resource list one general-path reduction pass names: two geometries, the operands, and an
+/// optional third geometry.
+fn wide_reduce_resources<'a>(
+    out_geometry: &'a WideGeometry,
+    in_geometry: &'a WideGeometry,
+    out_buffer: &'a t4a_cuda_runtime::Buffer,
+    in_buffer: &'a t4a_cuda_runtime::Buffer,
+) -> Vec<t4a_cuda_runtime::RawResource<'a>> {
+    vec![
+        t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
+        t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
+        t4a_cuda_runtime::RawResource::Buffer(&in_geometry.extents),
+        t4a_cuda_runtime::RawResource::Buffer(&in_geometry.strides),
+        t4a_cuda_runtime::RawResource::Buffer(out_buffer),
+        t4a_cuda_runtime::RawResource::Buffer(in_buffer),
+    ]
 }
 
 /// The device-resident geometry a general-path launch reads: a layout's extents and strides.
@@ -1504,6 +1782,9 @@ impl CudaEngine {
         if ordered.is_empty() {
             let shape = source.shape().to_vec();
             return self.copy_to_fresh(source, shape, name);
+        }
+        if shape.len() > t4a_cuda_kernels::MAX_RANK {
+            return self.reduce_axes_wide(source, &ordered, op, name);
         }
         // The first pass reads the caller's tensor; later passes read the previous result.
         let mut owned: Option<Tensor> = None;
