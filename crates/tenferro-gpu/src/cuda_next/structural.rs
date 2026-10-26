@@ -13,8 +13,8 @@ use tenferro_tensor::{
 
 use t4a_cuda_kernels::{
     plan_broadcast_in_dim, plan_concatenate_copy, plan_embed_diagonal_copy, plan_extract_diagonal,
-    plan_materialize_strided, plan_tril, plan_triu, CAxisValues, CLayout, Entry, GatherPlan,
-    Layout, LayoutRef, ScatterPlan,
+    plan_materialize_strided, plan_pad, plan_slice, plan_tril, plan_triu, CAxisValues, CLayout,
+    Entry, GatherPlan, Layout, LayoutRef, ScatterPlan,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -774,6 +774,129 @@ impl CudaEngine {
         Ok(output)
     }
 
+    /// `slice` and `pad` through the general path: two layouts and the per-axis value arrays,
+    /// all in device memory.
+    #[allow(clippy::too_many_arguments)]
+    fn window_wide(
+        &mut self,
+        input: &Tensor,
+        kernel: t4a_cuda_kernels::DType,
+        entry: Entry,
+        in_shape: &[usize],
+        out_shape: &[usize],
+        axes: WindowAxes<'_>,
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let dtype = input.dtype();
+        let is_slice = entry == Entry::Slice;
+        let out_extents: Vec<i64> = out_shape.iter().map(|&extent| extent as i64).collect();
+        let out_strides: Vec<i64> = compact_strides(out_shape, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let in_extents: Vec<i64> = in_shape.iter().map(|&extent| extent as i64).collect();
+        let in_strides: Vec<i64> = self
+            .strides_of(input, op)?
+            .iter()
+            .map(|&stride| stride as i64)
+            .collect();
+        let out_len = count_i64(out_shape, op)?;
+        let in_len = count_i64(in_shape, op)?;
+        let out_ref = LayoutRef::new(&out_extents, &out_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let in_ref = LayoutRef::new(&in_extents, &in_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let planned = if is_slice {
+            plan_slice(
+                kernel,
+                out_ref,
+                out_len,
+                in_ref,
+                in_len,
+                axes.first,
+                axes.second,
+            )
+        } else {
+            plan_pad(
+                kernel,
+                out_ref,
+                out_len,
+                in_ref,
+                in_len,
+                axes.first,
+                axes.pad_high,
+                axes.second,
+            )
+        };
+        let plan = planned.map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        // A window over an empty operand is all padding, which the zeroed allocation already is.
+        let output = alloc_tensor(self.runtime(), dtype, out_shape)?;
+        if in_len == 0 || plan.grid[0] == 0 {
+            return Ok(output);
+        }
+        let (destination, source) = self.two_allocations(&output, input, op)?;
+        let symbol = entry
+            .general()
+            .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
+            .name();
+        let out_geometry = self.wide_geometry(&out_extents, &out_strides, op)?;
+        let in_geometry = self.wide_geometry(&in_extents, &in_strides, op)?;
+        let first = self.upload_i64(axes.first, op)?;
+        let second = self.upload_i64(axes.second, op)?;
+        let mut modules = super::launch::KernelModules::for_entries(self.runtime(), &[entry])?;
+        let resources = vec![
+            t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&in_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&in_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&first),
+            t4a_cuda_runtime::RawResource::Buffer(&second),
+            t4a_cuda_runtime::RawResource::Buffer(destination),
+            t4a_cuda_runtime::RawResource::Buffer(source),
+        ];
+        // SAFETY: every address the parameters name is registered with this scope, the planner
+        // proved the window, and the geometry outlives the synchronise below.
+        unsafe {
+            modules.in_scope(entry, symbol, resources, |scope, function| {
+                let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
+                let in_mirror = in_geometry.mirror(in_ref, scope, op)?;
+                let axis_mirror =
+                    |buffer: &t4a_cuda_runtime::Buffer,
+                     len: usize|
+                     -> crate::Result<t4a_cuda_kernels::CAxisValuesAny> {
+                        let pointer = scope
+                            .device_ptr(buffer)
+                            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+                        t4a_cuda_kernels::CAxisValuesAny::new(len, pointer as *const i64)
+                            .map_err(|error| crate::Error::runtime_state_source(op, error))
+                    };
+                let first_mirror = axis_mirror(&first, axes.first.len())?;
+                let second_mirror = axis_mirror(&second, axes.second.len())?;
+                let args = [
+                    Arg::DevicePtr(destination),
+                    Arg::DevicePtr(source),
+                    Arg::U32(kernel.tag() as u32),
+                    pod_arg(&out_mirror),
+                    pod_arg(&in_mirror),
+                    pod_arg(&first_mirror),
+                    pod_arg(&second_mirror),
+                    Arg::U64(out_len as u64),
+                ];
+                scope
+                    .launch(
+                        function,
+                        LaunchConfig::new(plan.grid[0] as u32, plan.block[0] as u32),
+                        &args,
+                    )
+                    .map_err(|error| crate::Error::runtime_state_source(op, error))
+            })
+        }?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+
     /// Concatenate through the general path, whose layouts live in device memory.
     fn concatenate_wide(
         &mut self,
@@ -1049,6 +1172,19 @@ impl WideGeometry {
         t4a_cuda_kernels::CLayoutAny::new(layout, extents as *const i64, strides as *const i64)
             .map_err(|error| crate::Error::runtime_state_source(op, error))
     }
+}
+
+/// The per-axis value arrays a windowing entry names.
+///
+/// The general-path pad symbol reads `edge_low` and `interior`; `edge_high` only defines the
+/// destination extents, so the planner takes it but the kernel does not.
+struct WindowAxes<'a> {
+    /// `slice` starts, or pad `edge_low`.
+    first: &'a [i64],
+    /// `slice` steps, or pad `interior`.
+    second: &'a [i64],
+    /// Pad `edge_high`, planner-only.
+    pad_high: &'a [i64],
 }
 
 /// A column-major compact stride list for `shape`.
@@ -2408,6 +2544,23 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let out_shape = slice_window(&shape, config)?;
         let dtype = input.dtype();
         let kernel = kernel_dtype(dtype, op)?;
+        if shape.len() > t4a_cuda_kernels::MAX_RANK {
+            let starts: Vec<i64> = config.starts.iter().map(|&value| value as i64).collect();
+            let steps: Vec<i64> = config.strides.iter().map(|&value| value as i64).collect();
+            return self.window_wide(
+                input,
+                kernel,
+                Entry::Slice,
+                &shape,
+                &out_shape,
+                WindowAxes {
+                    first: &starts,
+                    second: &steps,
+                    pad_high: &[],
+                },
+                op,
+            );
+        }
         let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
         let out_layout = self.layout_of(&output, op)?;
         let in_layout = self.layout_of(input, op)?;
@@ -2676,6 +2829,21 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let out_shape = padded_shape(&shape, config)?;
         let dtype = input.dtype();
         let kernel = kernel_dtype(dtype, op)?;
+        if shape.len() > t4a_cuda_kernels::MAX_RANK {
+            return self.window_wide(
+                input,
+                kernel,
+                Entry::Pad,
+                &shape,
+                &out_shape,
+                WindowAxes {
+                    first: &config.edge_padding_low,
+                    second: &config.interior_padding,
+                    pad_high: &config.edge_padding_high,
+                },
+                op,
+            );
+        }
         // An empty operand has no element to place, so every output element is padding and
         // the zeroed allocation is already the answer — and an empty allocation has no
         // device address to hand the kernel.

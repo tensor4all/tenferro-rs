@@ -416,3 +416,54 @@ fn a_rank_nine_concatenation_uses_the_general_path() {
     assert_eq!(joined.shape(), &out_shape[..]);
     assert_eq!(read(&engine, &joined), expected);
 }
+
+#[test]
+fn a_rank_nine_window_uses_the_general_path() {
+    let Some(mut engine) = engine() else { return };
+    // Nine axes: the layouts and the per-axis window arrays all travel in device memory.
+    let shape = vec![3usize, 1, 1, 1, 1, 1, 1, 1, 4];
+    let data: Vec<f64> = (0..12).map(|index| index as f64).collect();
+    let source = device(&engine, shape.clone(), data.clone());
+
+    let sliced = engine
+        .slice(
+            &source,
+            &SliceConfig {
+                starts: vec![1, 0, 0, 0, 0, 0, 0, 0, 1],
+                limits: vec![3, 1, 1, 1, 1, 1, 1, 1, 4],
+                strides: vec![1, 1, 1, 1, 1, 1, 1, 1, 2],
+            },
+        )
+        .expect("rank-9 slice");
+    assert_eq!(sliced.shape(), &[2, 1, 1, 1, 1, 1, 1, 1, 2]);
+    // Rows 1..3 of columns 1 and 3; the source is row + 3 * column.
+    assert_eq!(read(&engine, &sliced), vec![4.0, 5.0, 10.0, 11.0]);
+
+    let padded = engine
+        .pad(
+            &source,
+            &PadConfig {
+                edge_padding_low: vec![1, 0, 0, 0, 0, 0, 0, 0, 0],
+                edge_padding_high: vec![0, 0, 0, 0, 0, 0, 0, 0, 1],
+                interior_padding: vec![0; 9],
+            },
+        )
+        .expect("rank-9 pad");
+    assert_eq!(padded.shape(), &[4, 1, 1, 1, 1, 1, 1, 1, 5]);
+    let observed = read(&engine, &padded);
+    assert_eq!(observed.len(), 20);
+    for column in 0..5 {
+        for row in 0..4 {
+            let expected = if column == 4 || row == 0 {
+                0.0
+            } else {
+                data[(row - 1) + column * 3]
+            };
+            assert_eq!(
+                observed[row + column * 4],
+                expected,
+                "row {row} column {column}"
+            );
+        }
+    }
+}

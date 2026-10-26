@@ -241,15 +241,21 @@ caught that an empty input planned a zero grid the wide path still submitted —
 that — so an empty placement is planned for its validation and not submitted, keeping the running
 offset.
 
+`slice` and `pad` follow through one helper (`window_wide`): both take two layouts and two
+per-axis value arrays through the general path, and their fast symbols' third array — pad's
+`edge_high` — is planner-only, because `t4a_cuda_pad_any` folds that extent into the destination
+layout and does not read it (the kernel source states this; passing it as a third mirror shifted
+the whole argument list and wrote a partial window, which the rank-9 test caught before the
+commit). A rank-9 slice with a column step and a rank-9 pad with edge and interior padding are the
+two tests.
+
 The remaining families, and what each needs beyond the pattern above:
 
 | Family | Geometry to pack besides the operand layouts |
 |---|---|
 | `extract_diagonal` / `embed_diagonal_copy` | the two axis ids |
 | `reduce` / `reduce_partials` | nothing extra for the direct strategy; the split strategy's partials layout is computed by the crate (`reduction_partials_layout`), so its extents and strides are packed too, and both branches need their own wide launch |
-| `slice` | the `starts` and `steps` arrays |
 | `dynamic_slice` | nothing extra (the starts are already device-resident) |
-| `pad` | the `edge_low`, `edge_high` and `interior` arrays |
 | `gather` / `scatter_add` | the window/offset/start-map/extent arrays of the plan |
 | `fill_zero_view` / `contiguous_to_view` / `strided_to_strided` | nothing extra |
 
