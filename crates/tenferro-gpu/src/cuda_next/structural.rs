@@ -1378,6 +1378,75 @@ fn contraction_dtype(dtype: DType, op: &'static str) -> crate::Result<t4a_cuda_k
 }
 
 impl CudaEngine {
+    /// Scale every element of a device tensor by `factor`, in place.
+    ///
+    /// The catalogue's `MUL` scales through its own output, so a one-element factor buffer is
+    /// all this needs; a factor of one leaves the tensor untouched.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::unsupported`] for a dtype the catalogue does not scale.
+    fn scale_in_place(
+        &mut self,
+        tensor: &Tensor,
+        factor: (f64, f64),
+        op: &'static str,
+    ) -> crate::Result<()> {
+        if factor == (1.0, 0.0) {
+            return Ok(());
+        }
+        let dtype = tensor.dtype();
+        let kernel = kernel_dtype(dtype, op)?;
+        let len = count_i64(tensor.shape(), op)?;
+        if len == 0 {
+            return Ok(());
+        }
+        // The factor travels as one element of the tensor's own dtype.
+        let host = match dtype {
+            DType::F32 => Tensor::from_vec_col_major(Vec::new(), vec![factor.0 as f32]),
+            DType::F64 => Tensor::from_vec_col_major(Vec::new(), vec![factor.0]),
+            DType::C32 => Tensor::from_vec_col_major(
+                Vec::new(),
+                vec![tenferro_tensor::Complex32::new(
+                    factor.0 as f32,
+                    factor.1 as f32,
+                )],
+            ),
+            DType::C64 => Tensor::from_vec_col_major(
+                Vec::new(),
+                vec![tenferro_tensor::Complex64::new(factor.0, factor.1)],
+            ),
+            other => {
+                return Err(crate::Error::unsupported(
+                    op,
+                    format!("the catalogue does not scale {other:?}"),
+                ))
+            }
+        }
+        .map_err(|error| crate::Error::runtime_state(op, error.to_string()))?;
+        let scalar = super::transfer::upload_tensor(self.runtime(), &host)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = Dispatcher::for_entries(&runtime, &[Entry::Binary])?;
+        let status = runtime
+            .upload_bytes(&[0u8; 4])
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        with_scalar!(dtype, |T| {
+            dispatcher.binary(
+                t4a_cuda_kernels::BinaryOp::Mul,
+                kernel,
+                t4a_cuda_kernels::ScalarSide::Right,
+                len,
+                self.allocation_of::<T>(tensor, op)?,
+                self.allocation_of::<T>(tensor, op)?,
+                self.allocation_of::<T>(&scalar, op)?,
+                &status,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
+    }
+
     /// Refuse a floating source whose values a signed-integer destination cannot hold.
     ///
     /// The acceptance table is the ABI's: a single-precision source is accepted below `2^31`
@@ -2433,16 +2502,12 @@ impl CudaEngine {
             ));
         }
         if empty_contraction(lhs.shape(), config) || out_shape.contains(&0) {
-            // The product has no entry to read: an overwrite already holds the zero the
-            // allocation gave it, and a scaled accumulation would need a fill this path
-            // does not serve.
-            return if addend.is_some() {
-                Err(crate::Error::unsupported(
-                    op,
-                    "an empty contraction cannot scale the existing output",
-                ))
-            } else {
-                Ok(())
+            // The product has no entry to read, so the answer is `beta * output`: an
+            // overwrite already holds the zero the allocation gave it, and an accumulation
+            // scales what is there.
+            return match addend {
+                Some(_) => self.scale_in_place(output, beta, op),
+                None => Ok(()),
             };
         }
         let modes = dot_modes(lhs.shape(), rhs.shape(), config);

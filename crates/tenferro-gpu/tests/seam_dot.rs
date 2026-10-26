@@ -216,7 +216,7 @@ fn an_axis_holding_two_roles_is_refused() {
 }
 
 #[test]
-fn an_empty_contraction_yields_zeros_and_refuses_to_scale_an_output() {
+fn an_empty_contraction_yields_zeros_or_the_scaled_output() {
     let Some(mut engine) = engine() else { return };
     let lhs = device(&engine, vec![2, 0], Vec::new());
     let rhs = device(&engine, vec![0, 3], Vec::new());
@@ -230,10 +230,9 @@ fn an_empty_contraction_yields_zeros_and_refuses_to_scale_an_output() {
     assert_eq!(product.shape(), &[2, 3]);
     assert_eq!(read(&engine, &product), vec![0.0; 6]);
 
-    // Accumulating would have to scale the caller's output by beta, which this path does
-    // not serve; it refuses instead of leaving the output untouched.
+    // Accumulating with an empty product is `beta * out`, which the surface scales in place.
     let mut out = device(&engine, vec![2, 3], vec![1.0; 6]);
-    assert!(engine
+    engine
         .dot_general_read_into_accum(
             TensorRead::from_tensor(&lhs),
             TensorRead::from_tensor(&rhs),
@@ -242,9 +241,10 @@ fn an_empty_contraction_yields_zeros_and_refuses_to_scale_an_output() {
                 lhs_conj: false,
                 rhs_conj: false,
                 alpha: ContractionScalar::F64(1.0),
-                beta: ContractionScalar::F64(1.0),
+                beta: ContractionScalar::F64(3.0),
             },
             TensorWrite::from_tensor(&mut out),
         )
-        .is_err());
+        .expect("scaled accumulation");
+    assert_eq!(read(&engine, &out), vec![3.0; 6]);
 }

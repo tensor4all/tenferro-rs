@@ -106,8 +106,9 @@ Fixes made after the review, each verified against the shared contract:
 - `dot_general_read_into_accum` validates through `validate_dot_general_accumulation`, so a
   coefficient of the wrong dtype is reported instead of being converted to a real zero.
 - An empty contraction (a zero contracted extent, or a zero output extent) returns the zeroed
-  allocation for the overwriting forms and refuses the accumulating forms, instead of reaching
-  cuTENSOR's descriptors, which require positive extents.
+  allocation for the overwriting forms and `beta * output` for the accumulating ones — scaled in
+  place through the catalogue's `MUL`, which also serves the `beta = 0` fill — instead of
+  reaching cuTENSOR's descriptors, which require positive extents.
 - Both operand dtypes and residencies are checked before the destination allocation.
 - A vendor failure keeps the seam's classification (`Unsupported` stays `Unsupported`) instead
   of being flattened into `RuntimeState` with a stringified source.
