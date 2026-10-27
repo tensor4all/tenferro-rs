@@ -25,7 +25,6 @@ name = "tenferro_ops"
 default = ["autodiff"]
 autodiff = []
 cuda = []
-webgpu = []
 rocm = []
 
 [dependencies]

@@ -2135,6 +2135,15 @@ impl CudaEngine {
         }
         if ordered.is_empty() {
             let shape = source.shape().to_vec();
+            // Reducing over no axis leaves each element alone, except for the squared norm whose
+            // identity is the square.
+            if matches!(op, ReduceOp::SumSquares) {
+                use tenferro_tensor::TensorElementwise as _;
+                return self.mul_read(
+                    TensorRead::from_tensor(source),
+                    TensorRead::from_tensor(source),
+                );
+            }
             return self.copy_to_fresh(source, shape, name);
         }
         if shape.len() > t4a_cuda_kernels::MAX_RANK {

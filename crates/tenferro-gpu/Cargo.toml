@@ -60,7 +60,6 @@ criterion.workspace = true
 trybuild.workspace = true
 # Unit tests build handles that only carry tenferro's own bookkeeping; 0.11's
 # `Handle` needs the service id those handles name.
-cubecl-common.workspace = true
 
 [[example]]
 name = "cuda_quickstart"
@@ -119,12 +118,6 @@ path = "tests/storage_provider_cuda.rs"
 [[bench]]
 name = "route_matrix_gpu"
 path = "benches/route_matrix_gpu.rs"
-harness = false
-required-features = ["cuda"]
-
-[[bench]]
-name = "u7_engine_comparison"
-path = "benches/u7_engine_comparison.rs"
 harness = false
 required-features = ["cuda"]
 

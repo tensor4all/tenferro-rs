@@ -528,6 +528,10 @@ instead of rebuilding a `Dispatcher` per op. That is a contained change in the e
 plumbing with a large payoff, and it must land before the cutover, because a 15x regression on a
 single-axis reduction is not something the cutover may inherit.
 
+The harness itself was deleted with the CubeCL engine: with one engine left it can no longer compare
+two, and an aliased comparison would misreport. The numbers below were produced before the deletion,
+against `origin/main`'s CubeCL engine, by the bench body quoted above.
+
 ### The fix, and U7 after it
 
 The engine now keeps its prepared dispatchers (`PreparedDispatchers` behind a `RefCell`, extended
