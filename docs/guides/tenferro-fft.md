@@ -320,33 +320,6 @@ register the FFT execution runtime on demand and record the existing extension
 operation when gradients are enabled.
 These methods do not modify their input.
 
-<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_23 -->
-```rust
-use num_complex::Complex64;
-use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_cpu::CpuEngine;
-use tenferro_fft::{EagerSessionFftExt, FftNorm};
-
-let runtime = EagerRuntime::new()?;
-let mut engine = CpuEngine::serial();
-let x = EagerTensor::from_tensor_in(
-    Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?,
-    runtime.clone(),
-)?;
-let (spectrum, restored) = runtime.with_eager_session(&mut engine, |session| {
-    let spectrum = session.rfft(&x, None, -1, FftNorm::Backward)?;
-    let restored = session.irfft(&spectrum, Some(4), -1, FftNorm::Backward)?;
-    Ok::<_, tenferro_ad::Error>((spectrum, restored))
-})?;
-
-assert_eq!(spectrum.shape(), &[3]);
-assert_eq!(
-    restored.to_tensor(&mut engine)?.as_slice::<f64>()?,
-    &[1.0, 2.0, 3.0, 4.0]
-);
-```
-<!-- end-snippet-source -->
-
 ### CPU output reuse and consuming FFT
 
 Ordinary CPU host FFT results use the backend's existing buffer pool. Dropping
@@ -383,38 +356,6 @@ backend (TODO(#2206 webgpu)), and `AppleContext` still hands out immutable
 engine references, so there is no engine-model form to show yet. The fence below
 is the last pre-migration shape in the guides; replace it when the Apple bridge
 moves to caller-held engines. -->
-
-<!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_24 -->
-```rust
-use tenferro_fft::{FftNorm, TensorFftExt};
-use tenferro_gpu::apple::AppleContext;
-use tenferro_tensor::Tensor;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut context = AppleContext::new()?;
-    let host = Tensor::from_vec_col_major([8], vec![1.0_f32; 8])?;
-    let managed = context.upload_tensor(&host)?;
-    let after_creation = context.transfer_stats();
-
-    // The context lends both paired engines together; each FFT names the one
-    // that runs it, and the managed tensor never leaves the shared domain.
-    let cpu_spectrum = {
-        let (cpu, _metal) = context.parts();
-        managed.rfft(None, 0, FftNorm::Backward, cpu)?
-    };
-    let metal_spectrum = {
-        let (_cpu, metal) = context.parts();
-        let spectrum = managed.rfft(None, 0, FftNorm::Backward, metal)?;
-        metal.synchronize()?;
-        spectrum
-    };
-
-    assert_eq!(cpu_spectrum.shape(), metal_spectrum.shape());
-    assert_eq!(context.transfer_stats(), after_creation);
-    Ok(())
-}
-```
-<!-- end-snippet-source -->
 
 RustFFT supports managed `F32`, `F64`, `C32`, and `C64` tensors. Its CPU lane
 kernel uses reusable host staging followed by a copy into the provider-owned

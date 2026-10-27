@@ -44,7 +44,6 @@
 - [Devices and GPU](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html): Documents explicit CPU/GPU placement, transfer boundaries, CUDA/WebGPU capability coverage, and the supported versus CI-tested CUDA, cuTENSOR, cuBLAS, cuSOLVER, and cuFFT compatibility matrix.
 - [CUDA engines and pinned transfers](https://tensor4all.org/tenferro-rs/guides/engines-and-transfers.html): One caller-held `CudaEngine` per device (stream, handles and caches), prepared runs replayed on that engine, explicit flush/synchronize boundaries, pinned pending host-device transfers with caller-owned buffers and explicit readiness, and the rules, costs and unsupported combinations.
 
-- [Custom CUDA kernels](https://tensor4all.org/tenferro-rs/guides/custom-cuda-kernels.html): Downstream PTX, CUBIN, NVRTC, raw tensor borrowing, stream ordering, and launch safety through the public CUDA extension API.
 - [Troubleshooting](https://tensor4all.org/tenferro-rs/guides/troubleshooting.html): Covers feature selection, BLAS providers, CUDA setup, workspace traps, and common runtime failures.
 
 ## Specification

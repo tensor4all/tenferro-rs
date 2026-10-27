@@ -32,7 +32,7 @@ calls, and one `flush` or `synchronize` covers them.
             TensorRead::from_tensor(&state),
         )?;
     }
-    backend.flush()?;
+    backend.runtime().synchronize()?;
 ```
 <!-- end-snippet-source -->
 
