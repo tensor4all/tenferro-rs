@@ -45,6 +45,7 @@ ACTIVE_IDS = frozenset(
         "p6-reinterpret",
         "p6-reinterpret-rank-policy",
         "p7-cuda",
+        "p8-webgpu-metal",
         "p10-api-normalization",
         "p10-element-hot-path-structure",
         "p10-storage-traversal-performance",
@@ -928,8 +929,8 @@ class StorageOwnershipV2Tests(unittest.TestCase):
         )
         manifest = _replace_row_state(
             manifest,
-            "p7-cuda",
-            '{ kind = "deferred", activation_unit = "P7", promotion = { mode = "activate-in-place" } }',
+            "p8-webgpu-metal",
+            '{ kind = "deferred", activation_unit = "P8", promotion = { mode = "activate-in-place" } }',
         )
         files = _fixture_files(manifest)
         result = _run_checker(manifest, files=files, extra=("--diagnostics-json",))
