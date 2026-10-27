@@ -1321,7 +1321,9 @@ where
             let dst = raw.tensor_mut(&work)?;
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
-            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?;
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
+            };
         }
 
         let batch_total = batch_count(OP, &input.shape()[2..])?;
@@ -1507,7 +1509,9 @@ where
             let dst = raw.tensor_mut(&out)?;
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
-            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?;
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?
+            };
         }
 
         let a_ref = raw.tensor(a)?;
@@ -1706,7 +1710,9 @@ where
             let dst = raw.tensor_mut(&work)?;
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
-            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?;
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?
+            };
         }
 
         let lwork = {
@@ -1923,12 +1929,14 @@ where
         let output_ref = raw.tensor_mut(&output)?;
         // SAFETY: both spans are validated on this runtime, output is freshly
         // allocated and exclusively borrowed, and the copy is stream ordered.
-        raw.copy_bytes(
-            output_ref.raw_ptr(),
-            input_ref.raw_ptr() as *const _,
-            input_ref.byte_len(),
-            op,
-        )?;
+        unsafe {
+            raw.copy_bytes(
+                output_ref.raw_ptr(),
+                input_ref.raw_ptr() as *const _,
+                input_ref.byte_len(),
+                op,
+            )?
+        };
 
         Ok(output)
     })
@@ -2056,7 +2064,14 @@ where
                     let dst = raw.tensor_mut(&work)?;
                     // SAFETY: both spans were validated resident on this runtime
                     // and the copy is stream-ordered; `dst` is exclusively borrowed.
-                    raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?;
+                    unsafe {
+                        raw.copy_bytes(
+                            dst.raw_ptr(),
+                            src.raw_ptr() as *const _,
+                            src.byte_len(),
+                            op,
+                        )?
+                    };
                 }
 
                 let u = raw.alloc_output::<T>(&u_shape)?;
@@ -2232,12 +2247,14 @@ where
                             // SAFETY: both spans were validated resident on this
                             // runtime and the copy is stream-ordered; `dst` is
                             // exclusively borrowed.
-                            raw.copy_bytes(
-                                dst.raw_ptr(),
-                                src.raw_ptr() as *const _,
-                                src.byte_len(),
-                                op,
-                            )?;
+                            unsafe {
+                                raw.copy_bytes(
+                                    dst.raw_ptr(),
+                                    src.raw_ptr() as *const _,
+                                    src.byte_len(),
+                                    op,
+                                )?
+                            };
                         }
                         work
                     }
@@ -2514,7 +2531,14 @@ where
                     let dst = raw.tensor_mut(&work)?;
                     // SAFETY: both spans were validated resident on this runtime
                     // and the copy is stream-ordered; `dst` is exclusively borrowed.
-                    raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?;
+                    unsafe {
+                        raw.copy_bytes(
+                            dst.raw_ptr(),
+                            src.raw_ptr() as *const _,
+                            src.byte_len(),
+                            OP,
+                        )?
+                    };
                 }
 
                 let u = raw.alloc_output::<T>(&u_shape)?;
@@ -2676,12 +2700,14 @@ where
                             // SAFETY: both spans were validated resident on this
                             // runtime and the copy is stream-ordered; `dst` is
                             // exclusively borrowed.
-                            raw.copy_bytes(
-                                dst.raw_ptr(),
-                                src.raw_ptr() as *const _,
-                                src.byte_len(),
-                                OP,
-                            )?;
+                            unsafe {
+                                raw.copy_bytes(
+                                    dst.raw_ptr(),
+                                    src.raw_ptr() as *const _,
+                                    src.byte_len(),
+                                    OP,
+                                )?
+                            };
                         }
                         work
                     }
@@ -2856,7 +2882,9 @@ where
             let dst = raw.tensor_mut(&work)?;
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
-            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?;
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
+            };
         }
         let q = raw.alloc_output::<T>(&q_shape)?;
 
@@ -2973,12 +3001,14 @@ where
             // SAFETY: `batch_q` and `batch_work` are validated device spans on
             // this runtime, the copy is stream-ordered, and `batch_q` is written
             // exclusively before orgqr reads it back.
-            raw.copy_bytes(
-                batch_q,
-                batch_work.cast_const(),
-                q_stride * std::mem::size_of::<T>(),
-                OP,
-            )?;
+            unsafe {
+                raw.copy_bytes(
+                    batch_q,
+                    batch_work.cast_const(),
+                    q_stride * std::mem::size_of::<T>(),
+                    OP,
+                )?
+            };
 
             // SAFETY: `batch_q` contains the copied reflectors, `tau` and
             // workspace are live, and dimensions match the validated reduced-Q shape.
@@ -3080,7 +3110,9 @@ where
             let dst = raw.tensor_mut(&work)?;
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
-            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?;
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
+            };
         }
         let values = raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)?;
 
@@ -3396,7 +3428,9 @@ where
             let dst = raw.tensor_mut(&work)?;
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
-            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?;
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
+            };
         }
         let values = raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)?;
 
@@ -3920,7 +3954,7 @@ fn as_i32(value: usize, op: &'static str, label: &'static str) -> Result<i32> {
 unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
     // SAFETY: the caller guarantees `base` covers `offset` further `T`
     // elements inside one device allocation (see `# Safety` above).
-    base.cast::<T>().add(offset).cast()
+    unsafe { base.cast::<T>() }.add(offset).cast()
 }
 
 /// Offset an immutable device pointer by `offset` typed elements.
@@ -3933,7 +3967,7 @@ unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
 unsafe fn batch_const_ptr<T>(base: *const c_void, offset: usize) -> *const c_void {
     // SAFETY: the caller guarantees `base` covers `offset` further `T`
     // elements inside one device allocation (see `# Safety` above).
-    base.cast::<T>().add(offset).cast()
+    unsafe { base.cast::<T>() }.add(offset).cast()
 }
 
 fn zero_like_linalg_device_tensor(

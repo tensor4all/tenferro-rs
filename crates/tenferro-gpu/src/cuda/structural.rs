@@ -4640,6 +4640,149 @@ impl tenferro_tensor::Engine for CudaEngine {
             tenferro_tensor::NativeSessionRef::new::<super::raw::CudaEngineMarker, _>(self)
         })
     }
+    fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        const OP: &str = "vdot_read";
+        let (left, right) = match (lhs, rhs) {
+            (TensorRead::Tensor(left), TensorRead::Tensor(right)) => (left, right),
+            _ => {
+                return Err(crate::Error::unsupported(
+                    OP,
+                    "a borrowed view is not served by the conjugate dot",
+                ))
+            }
+        };
+        if left.shape() != right.shape() || left.dtype() != right.dtype() {
+            return Err(crate::Error::shape_mismatch(
+                OP,
+                left.shape().to_vec(),
+                right.shape().to_vec(),
+            ));
+        }
+        // The dot conjugates its left operand: `conj(lhs) * rhs`, reduced over every axis.
+        let conjugated = {
+            use tenferro_tensor::TensorElementwise as _;
+            self.conj_read(TensorRead::from_tensor(left))?
+        };
+        let product = {
+            use tenferro_tensor::TensorElementwise as _;
+            self.mul_read(
+                TensorRead::from_tensor(&conjugated),
+                TensorRead::from_tensor(right),
+            )?
+        };
+        let axes: Vec<usize> = (0..product.shape().len()).collect();
+        if axes.is_empty() {
+            return self.to_contiguous(&product);
+        }
+        self.reduce_axes(TensorRead::from_tensor(&product), &axes, ReduceOp::Sum, OP)
+    }
+
+    fn norm_squared_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        const OP: &str = "norm_squared_read";
+        let source = match input {
+            TensorRead::Tensor(tensor) => tensor,
+            TensorRead::View(_) => {
+                return Err(crate::Error::unsupported(
+                    OP,
+                    "a borrowed view is not served by the squared norm",
+                ))
+            }
+        };
+        // The squared magnitude of a complex element is real: take the modulus first, then fold
+        // the squares in the real dtype the contract promises.
+        let reduced_input = match source.dtype() {
+            DType::C32 | DType::C64 => {
+                use tenferro_tensor::TensorElementwise as _;
+                self.abs_read(TensorRead::from_tensor(source))?
+            }
+            _ => self.to_contiguous(source)?,
+        };
+        let axes: Vec<usize> = (0..reduced_input.shape().len()).collect();
+        if axes.is_empty() {
+            return self.reduce_axes(
+                TensorRead::from_tensor(&reduced_input),
+                &[],
+                ReduceOp::SumSquares,
+                OP,
+            );
+        }
+        self.reduce_axes(
+            TensorRead::from_tensor(&reduced_input),
+            &axes,
+            ReduceOp::SumSquares,
+            OP,
+        )
+    }
+
+    fn axpby_read_into_accum(
+        &mut self,
+        alpha: tenferro_tensor::ContractionScalar,
+        x: TensorRead<'_>,
+        beta: tenferro_tensor::ContractionScalar,
+        y: tenferro_tensor::TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        const OP: &str = "axpby_read_into_accum";
+        let (source, destination) = match (x, y) {
+            (TensorRead::Tensor(source), TensorWrite::Tensor(destination)) => {
+                (source, &*destination)
+            }
+            _ => {
+                return Err(crate::Error::unsupported(
+                    OP,
+                    "a borrowed view is not served by the fused update",
+                ))
+            }
+        };
+        let dtype = destination.dtype();
+        if source.dtype() != dtype || source.shape() != destination.shape() {
+            return Err(crate::Error::shape_mismatch(
+                OP,
+                destination.shape().to_vec(),
+                source.shape().to_vec(),
+            ));
+        }
+        let (left, right) = match (alpha, beta) {
+            (a, b) if a.dtype() == dtype && b.dtype() == dtype => (a, b),
+            _ => {
+                return Err(crate::Error::unsupported(
+                    OP,
+                    "the coefficients must carry the destination's dtype",
+                ))
+            }
+        };
+        let kernel = kernel_dtype(dtype, OP)?;
+        let out_layout = self.layout_of(destination, OP)?;
+        let in_layout = self.layout_of(source, OP)?;
+        let out_len = count_i64(destination.shape(), OP)?;
+        let in_len = count_i64(source.shape(), OP)?;
+        // The coefficients are two elements of `dtype` in one device buffer.
+        let coefficients = self
+            .runtime()
+            .upload_bytes(&coefficient_bytes(left, right, dtype)?)
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        let mut dispatcher = self.dispatcher(&[Entry::CombinedStrided])?;
+        with_scalar!(dtype, |T| {
+            dispatcher.combined_strided(
+                t4a_cuda_kernels::StridedOp::Axpby,
+                kernel,
+                &out_layout,
+                out_len,
+                &in_layout,
+                in_len,
+                // `AXPBY` may run in place on `b`: the ABI allows it exactly when the two layouts
+                // are identical, which they are here.
+                &out_layout,
+                out_len,
+                self.allocation_of::<T>(destination, OP)?,
+                self.allocation_of::<T>(source, OP)?,
+                self.allocation_of::<T>(destination, OP)?,
+                &coefficients,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))
+    }
 }
 
 /// The linalg auxiliaries the cuSOLVER providers schedule between vendor calls.
@@ -5883,4 +6026,51 @@ impl CudaEngine {
         )?;
         Ok(output)
     }
+}
+
+/// The two `AXPBY` coefficients as the destination dtype's bytes.
+fn coefficient_bytes(
+    alpha: tenferro_tensor::ContractionScalar,
+    beta: tenferro_tensor::ContractionScalar,
+    dtype: DType,
+) -> crate::Result<Vec<u8>> {
+    const OP: &str = "axpby_read_into_accum";
+    let element_size = match dtype {
+        DType::F32 | DType::I32 => 4,
+        DType::F64 | DType::I64 | DType::C32 => 8,
+        DType::C64 => 16,
+        DType::Bool => 1,
+        other => {
+            return Err(crate::Error::unsupported(
+                OP,
+                format!("no fused update for {other:?}"),
+            ))
+        }
+    };
+    let mut bytes = Vec::with_capacity(2 * element_size);
+    for value in [alpha, beta] {
+        match (dtype, value) {
+            (DType::F32, tenferro_tensor::ContractionScalar::F32(value)) => {
+                bytes.extend_from_slice(&value.to_ne_bytes());
+            }
+            (DType::F64, tenferro_tensor::ContractionScalar::F64(value)) => {
+                bytes.extend_from_slice(&value.to_ne_bytes());
+            }
+            (DType::C32, tenferro_tensor::ContractionScalar::C32(value)) => {
+                bytes.extend_from_slice(&value.re.to_ne_bytes());
+                bytes.extend_from_slice(&value.im.to_ne_bytes());
+            }
+            (DType::C64, tenferro_tensor::ContractionScalar::C64(value)) => {
+                bytes.extend_from_slice(&value.re.to_ne_bytes());
+                bytes.extend_from_slice(&value.im.to_ne_bytes());
+            }
+            (other, _) => {
+                return Err(crate::Error::unsupported(
+                    OP,
+                    format!("no fused update for {other:?}"),
+                ))
+            }
+        }
+    }
+    Ok(bytes)
 }

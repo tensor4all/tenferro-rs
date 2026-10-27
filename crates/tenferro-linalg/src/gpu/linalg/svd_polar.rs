@@ -61,12 +61,12 @@ where
         let s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
         let info = raw.alloc_output::<i32>(&[batches])?;
         let retained = [
-            raw.retain_tensor(input, op)?,
-            raw.retain_tensor(&work, op)?,
-            raw.retain_tensor(&u, op)?,
-            raw.retain_tensor(&v, op)?,
-            raw.retain_tensor(&s, op)?,
-            raw.retain_tensor(&info, op)?,
+            unsafe { raw.retain_tensor(input, op)? },
+            unsafe { raw.retain_tensor(&work, op)? },
+            unsafe { raw.retain_tensor(&u, op)? },
+            unsafe { raw.retain_tensor(&v, op)? },
+            unsafe { raw.retain_tensor(&s, op)? },
+            unsafe { raw.retain_tensor(&info, op)? },
         ];
         let src = raw.tensor(input)?;
         let a_ref = raw.tensor_mut(&work)?;
@@ -119,7 +119,7 @@ where
         let computation = (|| -> Result<()> {
             // SAFETY: source/destination cover the same validated shape and do
             // not alias; retained allocations survive until the barrier below.
-            raw.copy_bytes(a_ptr, src.raw_ptr().cast_const(), src.byte_len(), op)?;
+            unsafe { raw.copy_bytes(a_ptr, src.raw_ptr().cast_const(), src.byte_len(), op)? };
 
             for (batch, sigma) in err_sigma.iter_mut().enumerate() {
                 let a_offset = checked_batch_offset(op, "Xgesvdp input offset", batch, a_stride)?;

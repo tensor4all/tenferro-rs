@@ -721,6 +721,56 @@ impl Dispatcher {
         )
     }
 
+    /// `t4a_cuda_combined_strided`: one logical domain re-addressed through each operand layout.
+    ///
+    /// `AXPBY` computes `out = coefficients[0] * a + coefficients[1] * b`, and the ABI allows it in
+    /// place on `b` when the two layouts are identical.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the layouts, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn combined_strided(
+        &mut self,
+        op: t4a_cuda_kernels::StridedOp,
+        dtype: DType,
+        out: &t4a_cuda_kernels::Layout,
+        out_len: i64,
+        a: &t4a_cuda_kernels::Layout,
+        a_len: i64,
+        b: &t4a_cuda_kernels::Layout,
+        b_len: i64,
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        a_buffer: &t4a_cuda_runtime::Buffer,
+        b_buffer: &t4a_cuda_runtime::Buffer,
+        coefficients: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch =
+            t4a_cuda_kernels::plan_combined_strided(op, dtype, out, out_len, a, a_len, b, b_len)
+                .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let a_layout = t4a_cuda_kernels::CLayout::new(a);
+        let b_layout = t4a_cuda_kernels::CLayout::new(b);
+        let out_count = out.element_count().map_err(plan_error)?;
+        self.run(
+            Entry::CombinedStrided,
+            launch,
+            &[
+                Arg::DevicePtr(out_buffer),
+                Arg::DevicePtr(a_buffer),
+                Arg::DevicePtr(b_buffer),
+                Arg::DevicePtr(coefficients),
+                layout_arg(&out_layout),
+                layout_arg(&a_layout),
+                layout_arg(&b_layout),
+                Arg::U32(dtype.tag() as u32),
+                Arg::I32(op.tag()),
+                Arg::U64(out_count as u64),
+            ],
+        )
+    }
+
     /// `t4a_cuda_concatenate_copy`: one compact input into `out` at `axis_offset`.
     ///
     /// # Errors

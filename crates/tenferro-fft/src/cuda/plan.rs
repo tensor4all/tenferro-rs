@@ -638,7 +638,7 @@ impl CufftPlanEntry {
                 // and output allocation handles. On a failed synchronization
                 // barrier they are forgotten below so the allocations cannot be
                 // reclaimed while the vendor may still be writing to them.
-                let input_retained = match raw.retain_tensor(input, OP) {
+                let input_retained = match unsafe { raw.retain_tensor(input, OP) } {
                     Ok(guard) => guard,
                     Err(error) => {
                         execution_error =
@@ -646,7 +646,7 @@ impl CufftPlanEntry {
                         return Ok::<(), tenferro_tensor::Error>(());
                     }
                 };
-                let output_retained = match raw.retain_tensor(output, OP) {
+                let output_retained = match unsafe { raw.retain_tensor(output, OP) } {
                     Ok(guard) => guard,
                     Err(error) => {
                         execution_error =

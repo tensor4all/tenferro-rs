@@ -30,8 +30,9 @@ fn the_session_hands_out_scratch_and_tensor_addresses() {
             assert_eq!(scratch.byte_len(), 256);
             let read = session.tensor(input.as_typed::<f32>().expect("f32 input"))?;
             let write = session.tensor_mut(output.as_typed::<f32>().expect("f32 output"))?;
-            let retained =
-                session.retain_tensor(input.as_typed::<f32>().expect("f32 input"), "seam_raw")?;
+            let retained = unsafe {
+                session.retain_tensor(input.as_typed::<f32>().expect("f32 input"), "seam_raw")?
+            };
             Ok((
                 scratch.with_ptr(|pointer| pointer as usize),
                 read.with_ptr(|pointer| pointer as usize),
@@ -57,7 +58,7 @@ fn a_tensor_of_another_engine_is_refused() {
     // Each engine owns its runtime, so each has its own allocation domain.
     let foreign = device(&other, vec![1.0f32, 2.0]);
 
-    let refused = engine.with_raw("seam_raw", |session| {
+    let refused = engine.with_raw("seam_raw", |session| unsafe {
         session.retain_tensor(foreign.as_typed::<f32>().expect("f32 input"), "seam_raw")
     });
     assert!(
@@ -135,7 +136,9 @@ fn the_session_copies_uploads_and_downloads() {
         .with_raw("seam_raw", |session| {
             let from = session.tensor(source.as_typed::<f32>().expect("f32 source"))?;
             let to = session.tensor_mut(destination.as_typed::<f32>().expect("f32 destination"))?;
-            session.copy_bytes(to.raw_ptr(), from.raw_ptr(), from.byte_len(), "seam_raw")?;
+            unsafe {
+                session.copy_bytes(to.raw_ptr(), from.raw_ptr(), from.byte_len(), "seam_raw")?
+            };
             session.download_tensor(
                 destination.as_typed::<f32>().expect("f32 destination"),
                 "seam_raw",

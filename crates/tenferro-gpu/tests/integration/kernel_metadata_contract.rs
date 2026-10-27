@@ -1,6 +1,5 @@
 use std::{fs, path::Path};
 
-
 fn scatter_kernel_names(source: &str) -> Vec<&str> {
     const PREFIX: &str = "pub fn scatter_";
 

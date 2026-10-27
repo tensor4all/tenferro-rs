@@ -168,7 +168,13 @@ impl<'s> Session<'s> {
     ///
     /// [`crate::Error::RuntimeState`] when the driver refuses the copy.
     #[doc(hidden)]
-    pub fn copy_bytes(
+    /// # Safety
+    ///
+    /// `destination` and `source` must be device addresses this session's engine owns, `bytes`
+    /// must not exceed either allocation, and the ranges must not overlap unless
+    /// `cuMemcpyDtoDAsync` allows it. The copy is enqueued on this session's stream, so the
+    /// allocations must outlive the point where that work retires.
+    pub unsafe fn copy_bytes(
         &self,
         destination: *mut std::ffi::c_void,
         source: *const std::ffi::c_void,
@@ -340,7 +346,11 @@ impl<'s> Session<'s> {
     ///
     /// [`crate::Error::RuntimeState`] when the tensor is not this runtime's allocation.
     #[doc(hidden)]
-    pub fn retain_tensor<T: TensorScalar>(
+    /// # Safety
+    ///
+    /// The returned address stays valid only while `tensor`'s allocation is resident on this
+    /// engine; the caller must not outlive it.
+    pub unsafe fn retain_tensor<T: TensorScalar>(
         &self,
         tensor: &TypedTensor<T>,
         op: &'static str,

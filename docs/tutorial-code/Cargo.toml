@@ -56,6 +56,8 @@ cuda = [
     "dep:tenferro-tensor",
     "tenferro-fft/cuda",
     "tenferro-gpu/cuda",
+    "tenferro-einsum/cuda",
+    "tenferro-linalg/cuda",
 ]
 
 [dependencies]
@@ -166,11 +168,6 @@ required-features = ["cuda"]
 [[bin]]
 name = "cuda_vendor_interop"
 path = "src/bin/cuda_vendor_interop.rs"
-required-features = ["cuda"]
-
-[[bin]]
-name = "custom_cuda_kernels"
-path = "src/bin/custom_cuda_kernels.rs"
 required-features = ["cuda"]
 
 [[test]]

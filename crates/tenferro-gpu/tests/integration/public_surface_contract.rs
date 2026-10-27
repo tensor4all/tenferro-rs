@@ -7,7 +7,6 @@ fn repo_file(path: &str) -> String {
     std::fs::read_to_string(root).expect("source file must be readable")
 }
 
-
 #[cfg(all(feature = "cuda", not(feature = "cuda")))]
 #[test]
 fn cuda_public_api_requires_typed_device_and_caller_selected_engine() {

@@ -358,40 +358,56 @@ where
         let output_coeff_ref = raw.tensor_mut(&output_coeff)?;
         // SAFETY: output layouts concatenate two validated compact column-major
         // matrices/vectors, all offsets and byte lengths stay in live spans.
-        raw.copy_bytes(
-            output_ref.raw_ptr(),
-            packed_ref.raw_ptr() as *const _,
-            packed_ref.byte_len(),
-            op,
-        )?;
-        raw.copy_bytes(
-            // SAFETY: the offset is within the allocation this call owns; `byte_len` is the
-            // length of the first factor, so the sum stays inside the second.
-            unsafe { output_ref.raw_ptr().cast::<u8>().add(packed_ref.byte_len()) }.cast(),
-            block_ref.raw_ptr() as *const _,
-            block_ref.byte_len(),
-            op,
-        )?;
-        raw.copy_bytes(
-            output_coeff_ref.raw_ptr(),
-            coeff_ref.raw_ptr() as *const _,
-            coeff_ref.byte_len(),
-            op,
-        )?;
-        raw.copy_bytes(
-            // SAFETY: the offset is within the allocation this call owns; `byte_len` is the
-            // length of the first factor, so the sum stays inside the second.
-            unsafe {
-                output_coeff_ref
-                    .raw_ptr()
-                    .cast::<u8>()
-                    .add(coeff_ref.byte_len())
-            }
-            .cast(),
-            trailing_ref.raw_ptr() as *const _,
-            trailing_ref.byte_len(),
-            op,
-        )?;
+        // SAFETY: both pointers come from device spans of tensors this call owns, and the byte
+        // length is the source's own length, so the destination covers it.
+        unsafe {
+            raw.copy_bytes(
+                output_ref.raw_ptr(),
+                packed_ref.raw_ptr() as *const _,
+                packed_ref.byte_len(),
+                op,
+            )?
+        };
+        // SAFETY: the offset is inside the allocation this call owns: the second factor starts
+        // exactly after the first, and `block_ref` is no longer than the remaining bytes.
+        unsafe {
+            raw.copy_bytes(
+                // SAFETY: the offset is within the allocation this call owns; `byte_len` is the
+                // length of the first factor, so the sum stays inside the second.
+                unsafe { output_ref.raw_ptr().cast::<u8>().add(packed_ref.byte_len()) }.cast(),
+                block_ref.raw_ptr() as *const _,
+                block_ref.byte_len(),
+                op,
+            )?
+        };
+        // SAFETY: both pointers come from device spans of tensors this call owns, and the byte
+        // length is the source's own length.
+        unsafe {
+            raw.copy_bytes(
+                output_coeff_ref.raw_ptr(),
+                coeff_ref.raw_ptr() as *const _,
+                coeff_ref.byte_len(),
+                op,
+            )?
+        };
+        // SAFETY: the offset is inside the allocation this call owns: the coefficient block
+        // starts exactly after the packed factor.
+        unsafe {
+            raw.copy_bytes(
+                // SAFETY: the offset is within the allocation this call owns; `byte_len` is the
+                // length of the first factor, so the sum stays inside the second.
+                unsafe {
+                    output_coeff_ref
+                        .raw_ptr()
+                        .cast::<u8>()
+                        .add(coeff_ref.byte_len())
+                }
+                .cast(),
+                trailing_ref.raw_ptr() as *const _,
+                trailing_ref.byte_len(),
+                op,
+            )?
+        };
 
         Ok((output, output_coeff))
     })
@@ -685,7 +701,9 @@ where
             let dst = raw.tensor_mut(&packed)?;
             // SAFETY: source/destination spans are validated on this runtime,
             // destination is exclusive, and the copy is stream ordered.
-            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?;
+            unsafe {
+                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?
+            };
         }
         let coeff = raw.alloc_output::<T>(&[k])?;
         let lwork = {
