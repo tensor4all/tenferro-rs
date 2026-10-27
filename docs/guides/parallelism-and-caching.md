@@ -59,7 +59,7 @@ tenferro-owned CPU kernels and fallback paths.
 
 The `CpuEngine` owns the workspace and the buffer pool; the pool it computes on
 is the `Pool` the caller passed to `CpuEngine::new`. Each operation mints one
-placement token (`strided_exec::Exec`) from that pool. The operation starts on
+placement token (`threadteam::Exec`) from that pool. The operation starts on
 the calling thread and the token enters the pool only when an entry splits the
 work into more than one task. No ambient pool is ever an implicit fallback, and
 `CpuEngine::serial` never enters any pool. External BLAS/LAPACK

@@ -6,15 +6,15 @@ computation needs it. Thread count, affinity and nesting are properties of the
 pool you build.
 
 One mechanism decides where CPU work runs and how many tasks run at once: the
-placement token `strided_exec::Exec`, a reference to the engine's pool plus a
+placement token `threadteam::Exec`, a reference to the engine's pool plus a
 thread budget. The engine mints one token for each operation; every kernel that
 can fan out takes it as its last parameter and splits it (`fork`,
 `for_ranges`, `external`). A token cannot be copied and every parallel entry
 consumes it, so the number of tasks running at once under one operation is at
-most its budget, at every nesting depth. `strided-exec` is the only crate of the
+most its budget, at every nesting depth. `threadteam` is the only crate of the
 stack that starts tasks; `tenferro-cpu` re-exports `Pool` and `PoolBuilder`, and the
-`strided_exec` crate itself, so the token is named
-`tenferro_cpu::strided_exec::Exec` and you need no separate dependency. (It is
+`threadteam` crate itself, so the token is named
+`tenferro_cpu::threadteam::Exec` and you need no separate dependency. (It is
 not re-exported at the root: `CpuEngine::exec` returns the different
 `tcontract_exec::Exec` bundle.)
 

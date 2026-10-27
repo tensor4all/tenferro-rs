@@ -159,7 +159,7 @@ diff-scoped review bot must be listed in that script's `ALWAYS_SECTIONS` or
 
 Execution entry is a caller-held engine. `Engine` is the only operation
 surface and `ExecutionEngine` is the prepared-program target: a caller builds a
-`Pool` (`tenferro_cpu::Pool`, the `strided_exec::Pool`) and hands it to
+`Pool` (`tenferro_cpu::Pool`, the `threadteam::Pool`) and hands it to
 `CpuEngine::new` (or uses `CpuEngine::serial()`), or
 opens a device as a `CudaEngine`, then passes `&mut` to every operation or
 `&mut [&mut dyn ExecutionEngine]` to `Runtime::run`. Rust's `&mut` borrow is the
@@ -687,7 +687,7 @@ Tests follow implementation ownership.
   slot, or per-handle provider selection. `blas` is a compiled adapter, not a
   vendor-only execution world, and keeps the native path for declined steps.
 - Tensor-sized CPU kernels run through the repository CPU threading policy:
-  only `strided-exec` starts tasks (`Exec::fork` / `for_ranges` / `external`;
+  only `threadteam` starts tasks (`Exec::fork` / `for_ranges` / `external`;
   no other crate depends on `rayon`, see `deny.toml`). `strided-kernel` is
   compiled with its `parallel` feature. CPU contraction and linalg call
   cpueinsum/tcontract and tlinalg with the engine's `tcontract_exec::Exec`

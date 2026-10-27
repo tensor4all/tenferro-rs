@@ -1,6 +1,6 @@
 # CPU Engine Execution Contract
 
-`CpuEngine` is a caller-held execution value. It owns one `strided_exec::Pool` (or none
+`CpuEngine` is a caller-held execution value. It owns one `threadteam::Pool` (or none
 for `CpuEngine::serial()`), the buffer pool that recycles outputs, the N-ary
 contraction scratch, the plan cache and the accounting of memory that unfinished
 work retains. The caller builds the pool, hands it over, and passes `&mut` to
@@ -36,7 +36,7 @@ only; it is not a dispatch key.
   permit, execution scope, held session or resource arbiter; concurrent
   computations use separate engines and separate pools.
 - Every operation starts on the calling thread with one placement token minted
-  from the engine's pool (`strided_exec::Exec`, budget = the pool's width). The
+  from the engine's pool (`threadteam::Exec`, budget = the pool's width). The
   token enters the pool only when an entry splits the work into more than one
   task.
 - The token is correct from a plain thread, from a worker of the engine's own
@@ -50,7 +50,7 @@ only; it is not a dispatch key.
 ## The Lower-Library Seam
 
 The `tcontract_exec::Exec` bundle is the one engine-scoped interop seam: a
-`strided_exec::Exec` placement token over the engine's pool (or the serial
+`threadteam::Exec` placement token over the engine's pool (or the serial
 token), the engine's workspace and the resolved batch policy. cpueinsum,
 tcontract, and tlinalg take it by `&mut` (`*_workspace` queries by `&`). The
 lower library owns lane selection, vendor batching, scratch, and scheduling
@@ -60,7 +60,7 @@ lifetime.
 
 Strided-rs kernels, FFT lanes and every other tenferro fan-out take the same
 token by value, last, and split it with `fork`, `for_ranges` or `external`;
-`strided-exec` is the only crate that starts tasks. tenferro never installs the
+`threadteam` is the only crate that starts tasks. tenferro never installs the
 caller's continuation.
 
 A caller that wants concurrent numerical work holds several engines over several

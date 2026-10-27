@@ -38,7 +38,7 @@ no graph, gradient or differentiation state. Prepared programs store target
   `&mut [&mut dyn ExecutionEngine]`; slot `i` of a prepared program binds to the
   `i`-th supplied engine for that call only.
 - `CpuEngine::serial()` has no pool and runs on the calling thread. `CpuEngine::new(pool)`
-  takes a caller-built `Pool` (`tenferro_cpu::Pool`, the `strided_exec::Pool`) by
+  takes a caller-built `Pool` (`tenferro_cpu::Pool`, the `threadteam::Pool`) by
   value, so one pool can never back two engines. `Pool::builder()` reserves the
   worker stack that provider recursion needs.
 - `CudaEngine::open(device)` opens the caller-selected device and owns its
