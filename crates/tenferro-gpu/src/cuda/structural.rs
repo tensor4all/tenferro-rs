@@ -5002,34 +5002,35 @@ impl tenferro_tensor::Engine for CudaEngine {
         let source = self.device_read(input, OP)?;
         // The squared magnitude of a complex element is real: take the modulus first, then fold
         // the squares in the real dtype the contract promises.
-        let reduced_input = match source.dtype() {
+        // Only a complex operand needs a pass to reach the real width; a real one folds in place,
+        // and the fold itself stages a view, so no copy is taken here.
+        let magnitude = match source.dtype() {
             DType::C32 | DType::C64 => {
                 use tenferro_tensor::TensorElementwise as _;
-                self.abs_read(TensorRead::from_tensor(&source))?
+                Some(self.abs_read(TensorRead::from_tensor(&source))?)
             }
-            _ => self.to_contiguous(&source)?,
+            _ => None,
         };
-        if element_count(reduced_input.shape())? == 0 {
+        let (shape, dtype) = match &magnitude {
+            Some(tensor) => (tensor.shape(), tensor.dtype()),
+            None => (source.shape(), source.dtype()),
+        };
+        let shape = shape.to_vec();
+        if element_count(&shape)? == 0 {
             // Nothing to fold: the squared norm of an empty vector is its additive identity.
-            let output = alloc_tensor(self.runtime(), reduced_input.dtype(), &[])?;
+            let output = alloc_tensor(self.runtime(), dtype, &[])?;
             self.zero_into(&output, OP)?;
             return Ok(output);
         }
-        let axes: Vec<usize> = (0..reduced_input.shape().len()).collect();
+        let read = match &magnitude {
+            Some(tensor) => TensorRead::from_tensor(tensor),
+            None => TensorRead::from_tensor(&source),
+        };
+        let axes: Vec<usize> = (0..shape.len()).collect();
         if axes.is_empty() {
-            return self.reduce_axes(
-                TensorRead::from_tensor(&reduced_input),
-                &[],
-                ReduceOp::SumSquares,
-                OP,
-            );
+            return self.reduce_axes(read, &[], ReduceOp::SumSquares, OP);
         }
-        self.reduce_axes(
-            TensorRead::from_tensor(&reduced_input),
-            &axes,
-            ReduceOp::SumSquares,
-            OP,
-        )
+        self.reduce_axes(read, &axes, ReduceOp::SumSquares, OP)
     }
 
     fn axpby_read_into_accum(
