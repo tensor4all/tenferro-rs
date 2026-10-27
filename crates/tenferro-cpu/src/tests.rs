@@ -10,7 +10,6 @@ use crate::{
     reduce_min, reduce_prod, reduce_sum, reduce_sum_squares, rem, reshape, scatter, select, sign,
     transpose, tril, triu, with_cpu_engine, CpuEngine, Error,
 };
-use strided_exec::Exec;
 #[cfg(feature = "blas")]
 use tenferro_tensor::StridedSliceSpec;
 use tenferro_tensor::{
@@ -24,6 +23,7 @@ use tenferro_tensor::{
     DType, Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensor,
     TypedTensorView, TypedTensorViewMut,
 };
+use threadteam::Exec;
 
 pub(crate) use crate::test_support::with_cpu_session;
 
@@ -452,7 +452,9 @@ pub(crate) mod native_participants {
     use std::thread::ThreadId;
     use std::time::Duration;
 
-    const LARGE_NATIVE_TEST_LEN: usize = 1 << 17;
+    /// Large enough that the token's width gate (serial time of a `Map`-class
+    /// region against the dispatch cost) forks on every host class.
+    pub(crate) const LARGE_NATIVE_TEST_LEN: usize = 1 << 22;
 
     #[derive(Default)]
     pub(crate) struct NativeParticipants {
@@ -495,6 +497,9 @@ pub(crate) mod native_participants {
                             !self.rendezvous_released.load(Ordering::Acquire)
                         })
                         .unwrap();
+                    // A map that never fans out waits once, not once per element;
+                    // the caller's `max_active` assertion then reports it.
+                    self.rendezvous_released.store(true, Ordering::Release);
                 }
             }
             for _ in 0..32 {
@@ -521,7 +526,7 @@ pub(crate) mod native_participants {
     pub(crate) fn run_native_map_of_len(
         len: usize,
         require_two: bool,
-        exec: strided_exec::Exec<'_>,
+        exec: threadteam::Exec<'_>,
     ) -> (Arc<NativeParticipants>, Vec<f64>) {
         let source =
             strided_kernel::StridedArray::<f64>::from_fn_col_major(&[len], |index| index[0] as f64);
@@ -550,7 +555,7 @@ pub(crate) mod native_participants {
 
     pub(crate) fn run_unscoped_native_map(
         require_two: bool,
-        exec: strided_exec::Exec<'_>,
+        exec: threadteam::Exec<'_>,
     ) -> Arc<NativeParticipants> {
         run_native_map_of_len(LARGE_NATIVE_TEST_LEN, require_two, exec).0
     }

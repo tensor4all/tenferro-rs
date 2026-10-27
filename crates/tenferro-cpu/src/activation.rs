@@ -17,7 +17,7 @@ use tenferro_tensor::{ActivationOp, DType, Tensor, TensorRead, TensorScalar};
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::materialize_tensor_read;
 use crate::parallel::run_chunks;
-use strided_exec::Exec;
+use threadteam::Exec;
 
 /// Elements per unit of work handed to one worker; a multiple of every SIMD
 /// width, so no task ends on a partial vector except the last.

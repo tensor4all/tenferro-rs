@@ -1,5 +1,5 @@
 //! The CPU execution engine: a caller-held value that owns one
-//! [`strided_exec::Pool`] (or none) and the workspace every operation on it
+//! [`threadteam::Pool`] (or none) and the workspace every operation on it
 //! writes.
 //!
 //! tenferro never builds threads. The caller builds the pool with
@@ -43,7 +43,7 @@ pub enum CpuEngineError {
 
 /// A caller-held CPU execution engine.
 ///
-/// The engine owns one [`strided_exec::Pool`] (or none for [`CpuEngine::serial`]) and the
+/// The engine owns one [`threadteam::Pool`] (or none for [`CpuEngine::serial`]) and the
 /// workspace operations write: the buffer pool that recycles outputs, the
 /// contraction scratch, and a handle to a [`CpuPlanCache`]. It implements
 /// [`tenferro_tensor::Engine`], so every operation takes it as `&mut`.
@@ -402,7 +402,7 @@ impl CpuEngine {
     }
 
     /// Ledger roots of every placement token the engine minted since the last
-    /// call, so a test can read `strided_exec::ledger` for the operation it just
+    /// call, so a test can read `threadteam::ledger` for the operation it just
     /// ran (`max_live`, `installs`).
     ///
     /// Available with the `ledger` cargo feature, which is test support.
@@ -422,7 +422,7 @@ impl CpuEngine {
     pub fn take_ledger_installs(&self) -> usize {
         self.take_ledger_roots()
             .into_iter()
-            .map(strided_exec::ledger::installs)
+            .map(threadteam::ledger::installs)
             .sum()
     }
 
@@ -436,7 +436,7 @@ impl CpuEngine {
     pub fn take_ledger_max_live(&self) -> usize {
         self.take_ledger_roots()
             .into_iter()
-            .map(strided_exec::ledger::max_live)
+            .map(threadteam::ledger::max_live)
             .max()
             .unwrap_or(0)
     }

@@ -39,7 +39,7 @@ fn the_shared_elementwise_entry_point_serves_bfloat16() {
         &mut destination,
         &lhs,
         &rhs,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("addition through the shared entry point");
     assert_eq!(widened(&destination), vec![3.0, 7.0]);
@@ -50,7 +50,7 @@ fn the_shared_elementwise_entry_point_serves_bfloat16() {
         &mut difference,
         &rhs,
         &lhs,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("subtraction through the shared entry point");
     assert_eq!(widened(&difference), vec![1.0, 1.0]);
@@ -61,7 +61,7 @@ fn the_shared_elementwise_entry_point_serves_bfloat16() {
         &mut product,
         &lhs,
         &rhs,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("multiplication through the shared entry point");
     assert_eq!(widened(&product), vec![2.0, 12.0]);
@@ -79,7 +79,7 @@ fn a_single_operation_rounds_once() {
         &mut destination,
         &lhs,
         &rhs,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("addition through the shared entry point");
     assert_eq!(widened(&destination), vec![1.0]);
@@ -97,7 +97,7 @@ fn the_shared_fold_rounds_at_every_step() {
         "sum",
         &ones,
         Bf16::zero(),
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("shared fold");
     assert!(

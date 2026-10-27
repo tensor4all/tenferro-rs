@@ -194,7 +194,7 @@ impl CpuEngine {
     /// Kernels split the token and take it by value, last.
     fn run_native_with_exec<R>(
         &mut self,
-        op: impl FnOnce(strided_exec::Exec<'_>, &mut BufferPool) -> crate::Result<R>,
+        op: impl FnOnce(threadteam::Exec<'_>, &mut BufferPool) -> crate::Result<R>,
     ) -> crate::Result<R> {
         self.check_entry("CpuEngine")?;
         let (exec, buffers, _, broken) = self.parts();
@@ -203,7 +203,7 @@ impl CpuEngine {
 
     fn run_native_with_plans<R>(
         &mut self,
-        op: impl FnOnce(strided_exec::Exec<'_>, &mut BufferPool, &CpuPlanCache) -> crate::Result<R>,
+        op: impl FnOnce(threadteam::Exec<'_>, &mut BufferPool, &CpuPlanCache) -> crate::Result<R>,
     ) -> crate::Result<R> {
         self.check_entry("CpuEngine")?;
         let (exec, buffers, plans, broken) = self.parts();
@@ -343,7 +343,7 @@ impl TensorStructural for CpuEngine {
                 "CpuEngine::to_contiguous_read",
                 input,
                 domain.as_deref(),
-                strided_exec::Exec::serial(),
+                threadteam::Exec::serial(),
             );
         }
         self.run_native_with_exec(|exec, buffers| {
@@ -371,23 +371,18 @@ impl TensorStructural for CpuEngine {
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
         self.check_entry("CpuEngine::reshape_read")?;
-        if let TensorRead::Tensor(tensor) = &input {
-            // INVARIANT: a compact input keeps the serial host copy and its typed
-            // refusal for an external payload, without the engine entry or a
-            // pool buffer, unless a parallel-capable context can run the copy
-            // above the strided scheduler's parallel threshold. Such a copy
-            // materializes on the pool; `run_native` (not `run_native_fresh`)
-            // keeps the input placement that the copy puts on the output, as the
-            // reshape contract requires.
-            let parallel = self.thread_budget().get() > 1;
-            if !structural::reshape_uses_pool(tensor, parallel)? {
-                return structural::reshape(tensor, shape);
-            }
-            return self.run_native_with_exec(|exec, buffers| {
-                structural::reshape_read_with_pool(buffers, input, shape, exec)
-            });
-        }
+        // INVARIANT: a compact input keeps the serial host copy and its typed
+        // refusal for an external payload, without a pool buffer, unless the
+        // token's width for the copy (`reshape_uses_pool`) is above one. Such a
+        // copy materializes on the pool; `run_native_with_exec` keeps the input
+        // placement that the copy puts on the output, as the reshape contract
+        // requires.
         self.run_native_with_exec(|exec, buffers| {
+            if let TensorRead::Tensor(tensor) = &input {
+                if !structural::reshape_uses_pool(tensor, &exec)? {
+                    return structural::reshape(tensor, shape);
+                }
+            }
             structural::reshape_read_with_pool(buffers, input, shape, exec)
         })
     }

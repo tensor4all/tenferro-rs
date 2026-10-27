@@ -587,7 +587,7 @@ fn test_cpu_elementwise_fusion_executes_add_mul_plan() {
         &mut buffers,
         &[&lhs, &rhs],
         &fusion_plan,
-        strided_exec::Exec::serial(),
+        threadteam::Exec::serial(),
     )
     .unwrap()
     .expect("the CPU fused executor should execute supported plans");
@@ -640,7 +640,7 @@ fn test_cpu_elementwise_fusion_executes_broadcast_chain_plan() {
         &mut buffers,
         &[&lhs, &rhs],
         &fusion_plan,
-        strided_exec::Exec::serial(),
+        threadteam::Exec::serial(),
     )
     .unwrap()
     .expect("the CPU fused executor should execute broadcast input views");
@@ -689,7 +689,7 @@ fn test_cpu_elementwise_fusion_broadcasts_mapped_unit_axes() {
         &mut buffers,
         &[&lhs, &rhs],
         &fusion_plan,
-        strided_exec::Exec::serial(),
+        threadteam::Exec::serial(),
     )
     .unwrap()
     .expect("the CPU fused executor should broadcast mapped unit axes");

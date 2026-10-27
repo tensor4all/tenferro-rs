@@ -48,7 +48,7 @@ fn operation_from_a_worker_of_a_different_pool_runs_on_the_engine() {
             .spawn(|| {
                 // `Pool` has no `install`; hand the closure to its only worker
                 // through a token fork on a one-slot token.
-                let token = strided_exec::Exec::new(&outer, 1).unwrap();
+                let token = threadteam::Exec::new(&outer, 1).unwrap();
                 let slot = std::sync::Mutex::new(None);
                 token.fork(1, |_, _| {
                     *slot.lock().unwrap() = Some(
@@ -130,7 +130,7 @@ fn nested_engines_keep_their_pools_independent_and_match_the_serial_result() {
     use std::collections::HashSet;
     use std::sync::Barrier;
 
-    const LARGE: usize = 1 << 17;
+    const LARGE: usize = crate::tests::native_participants::LARGE_NATIVE_TEST_LEN;
     let mut serial = CpuEngine::serial();
     let (_, expected) = serial
         .with_linalg_pool(|exec, _| {
@@ -231,7 +231,7 @@ fn a_small_strided_operation_stays_on_the_calling_thread_without_a_pool_entry() 
         let roots = engine.take_ledger_roots();
         assert!(!roots.is_empty());
         for root in roots {
-            assert_eq!(strided_exec::ledger::installs(root), 0);
+            assert_eq!(threadteam::ledger::installs(root), 0);
         }
     }
     assert_eq!(std::thread::current().id(), caller);

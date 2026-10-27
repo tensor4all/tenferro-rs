@@ -1,5 +1,5 @@
-# Only `strided-exec` starts tasks on a thread pool. Every tenferro crate reaches
-# parallelism through `strided_exec::Exec` (re-exported by `tenferro-cpu`), so a
+# Only `threadteam` starts tasks on a thread pool. Every tenferro crate reaches
+# parallelism through `threadteam::Exec` (re-exported by `tenferro-cpu`), so a
 # direct `rayon` dependency (normal, dev or build) is rejected. The exceptions
 # are the vendor crates of t4a-faer and third-party crates (the einsum path
 # optimizer `omeco`, `criterion`) that bring rayon in themselves; they are listed
@@ -13,7 +13,7 @@ multiple-versions = "allow"
 wildcards = "allow"
 deny = [
     { crate = "rayon", wrappers = [
-        "strided-exec",
+        "threadteam",
         # t4a-faer and the gemm crates it uses (faer's scheduling is tensor4all/faer#59).
         "t4a-faer",
         "spindle",

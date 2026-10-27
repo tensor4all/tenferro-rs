@@ -90,7 +90,7 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
         .build()
         .expect("one-worker pool");
     // Pool construction returns before workers finish allocating startup state.
-    tenferro_cpu::strided_exec::Exec::new(&pool, 1)
+    tenferro_cpu::threadteam::Exec::new(&pool, 1)
         .expect("one-slot token")
         .broadcast(|_| ())
         .expect("a root token called from a plain thread co-schedules");
@@ -271,7 +271,7 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
                 &mut out,
                 &lhs,
                 &rhs,
-                tenferro_cpu::strided_exec::Exec::serial(),
+                tenferro_cpu::threadteam::Exec::serial(),
             )
         });
         result.unwrap();
@@ -301,7 +301,7 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
         .threads(2)
         .build()
         .expect("two-worker pool");
-    tenferro_cpu::strided_exec::Exec::new(&pool, 2)
+    tenferro_cpu::threadteam::Exec::new(&pool, 2)
         .expect("two-slot token")
         .broadcast(|_| ())
         .expect("a root token called from a plain thread co-schedules");

@@ -152,7 +152,7 @@ impl LowerContractionError for cpueinsum_blas::BlasError {
 // Exactly one retained wrapper per pool: the engine owns the pool and its
 // provider wrapper (the scratch arena) together, so the arena is never split from
 // the pool it serves. The wrapper starts no task; placement is the
-// `strided_exec::Exec` token the engine mints from it for each operation.
+// `threadteam::Exec` token the engine mints from it for each operation.
 pub(crate) struct ExecutionResources {
     pool: Option<Pool<'static>>,
     serial: ArenaProvider,
@@ -176,7 +176,7 @@ impl fmt::Debug for ExecutionResources {
 }
 impl ExecutionResources {
     /// Take over `pool`, or run serially without one.
-    pub(crate) fn new(pool: Option<strided_exec::Pool>) -> Self {
+    pub(crate) fn new(pool: Option<threadteam::Pool>) -> Self {
         Self {
             pool: pool.map(Pool::owned),
             serial: ArenaProvider::new(),

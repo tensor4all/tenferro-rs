@@ -1,8 +1,8 @@
 use super::*;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::test_support::with_cpu_session;
-use strided_exec::Exec;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorRead, TensorWrite, TypedTensor};
+use threadteam::Exec;
 
 mod batch_policy;
 
@@ -55,7 +55,7 @@ fn native_kernel_modules_take_placement_only_from_the_token() {
                 && !source.contains("with_execution_pool(")
                 && !source.contains("ExecContext")
                 && !source.contains("thread_local!"),
-            "{name} must take its placement from the strided_exec::Exec token"
+            "{name} must take its placement from the threadteam::Exec token"
         );
         assert!(
             !source.contains("rayon::") && !source.contains("into_par_iter("),

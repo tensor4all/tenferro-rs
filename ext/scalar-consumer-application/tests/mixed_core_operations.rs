@@ -110,7 +110,7 @@ fn the_core_operations_run_in_the_mixed_configuration() {
         &mut sum,
         &leading,
         &increment,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("addition in the extended scalar");
     let difference = sum.as_slice()[0] - Df64::from_f64(1.0);
@@ -127,7 +127,7 @@ fn the_core_operations_run_in_the_mixed_configuration() {
         "sum",
         &values,
         Df64::zero(),
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("reduction in the extended scalar");
     assert_eq!(reduced - Df64::from_f64(1.0), Df64 { hi: low, lo: 0.0 });
@@ -140,7 +140,7 @@ fn the_core_operations_run_in_the_mixed_configuration() {
         "sum",
         &ordinary,
         0.0_f64,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("f64 sum");
     assert_eq!(

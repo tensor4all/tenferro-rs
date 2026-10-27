@@ -14,7 +14,7 @@ use std::mem::MaybeUninit;
 use std::num::NonZeroUsize;
 
 use strided_basic::execution::SendPtr;
-use strided_exec::Exec;
+use threadteam::Exec;
 
 /// Minimum amount of work (in bytes) that justifies one worker.
 pub(crate) const MIN_BYTES_PER_TASK: usize = 32 * 1024;
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn small_problem_on_a_wide_token_is_one_task_without_a_pool_entry() {
-        let pool = strided_exec::Pool::builder().threads(4).build().unwrap();
+        let pool = threadteam::Pool::builder().threads(4).build().unwrap();
         let exec = Exec::new(&pool, 4).unwrap();
         #[cfg(feature = "ledger")]
         let root = exec.ledger_root().expect("a token from `new` is a root");
@@ -109,14 +109,14 @@ mod tests {
         );
         #[cfg(feature = "ledger")]
         {
-            assert_eq!(strided_exec::ledger::installs(root), 0);
-            assert_eq!(strided_exec::ledger::max_live(root), 1);
+            assert_eq!(threadteam::ledger::installs(root), 0);
+            assert_eq!(threadteam::ledger::max_live(root), 1);
         }
     }
 
     #[test]
     fn large_problem_covers_every_element_within_the_budget() {
-        let pool = strided_exec::Pool::builder().threads(4).build().unwrap();
+        let pool = threadteam::Pool::builder().threads(4).build().unwrap();
         let exec = Exec::new(&pool, 3).unwrap();
         #[cfg(feature = "ledger")]
         let root = exec.ledger_root().expect("a token from `new` is a root");
@@ -129,6 +129,6 @@ mod tests {
         let dst: &[f32] = unsafe { std::slice::from_raw_parts(dst.as_ptr().cast(), n) };
         assert_eq!(dst, &src[..]);
         #[cfg(feature = "ledger")]
-        assert!(strided_exec::ledger::max_live(root) <= 3);
+        assert!(threadteam::ledger::max_live(root) <= 3);
     }
 }
