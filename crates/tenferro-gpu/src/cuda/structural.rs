@@ -563,7 +563,10 @@ impl CudaEngine {
 }
 
 impl CudaEngine {
-    /// Launch one planned kernel on `out`/`input` through this engine's own module set.
+    /// Launch one planned kernel through this engine's prepared dispatcher.
+    ///
+    /// The module set and its bound functions are the engine's, so an auxiliary that launches
+    /// in a loop (the RRQR pivot scan, the reflector sequence) prepares and binds once.
     fn launch_planned(
         &self,
         entry: Entry,
@@ -575,11 +578,10 @@ impl CudaEngine {
             // Nothing to visit: the destination keeps the state the allocation left it in.
             return Ok(());
         }
-        let mut modules = super::launch::KernelModules::for_entries(self.runtime(), &[entry])?;
-        // SAFETY: the planner proved each operand's span for this dtype and geometry, and
-        // both allocations belong to this runtime, so they outlive the scope's completion.
-        unsafe { modules.launch(entry, LaunchConfig::new(plan.grid[0], plan.block[0]), args) }
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        {
+            let mut dispatcher = self.dispatcher(&[entry])?;
+            dispatcher.run_planned(entry, plan, args)?;
+        }
         self.runtime()
             .synchronize()
             .map_err(|error| crate::Error::runtime_state_source(op, error))

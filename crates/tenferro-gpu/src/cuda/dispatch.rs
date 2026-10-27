@@ -117,6 +117,20 @@ impl Dispatcher {
         }
     }
 
+    /// Enqueue one launch the caller planned itself.
+    ///
+    /// The raw auxiliary paths (`structural.rs`) plan with the kernel crate directly, but the
+    /// module set and its bound functions still come from this prepared dispatcher, so a
+    /// repeated launch costs a lookup instead of a fresh module set and a fresh bind.
+    pub(crate) fn run_planned(
+        &mut self,
+        entry: Entry,
+        plan: t4a_cuda_kernels::Launch,
+        args: &[Arg<'_>],
+    ) -> crate::Result<()> {
+        self.run(entry, plan, args)
+    }
+
     /// `t4a_cuda_copy_exact`: a compact-to-compact byte copy of `len` elements.
     ///
     /// # Errors
