@@ -372,17 +372,31 @@ impl TensorStructural for CpuEngine {
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
         self.check_entry("CpuEngine::reshape_read")?;
         // INVARIANT: a compact input keeps the serial host copy and its typed
-        // refusal for an external payload, without a pool buffer, unless the
-        // token's width for the copy (`reshape_uses_pool`) is above one. Such a
-        // copy materializes on the pool; `run_native_with_exec` keeps the input
-        // placement that the copy puts on the output, as the reshape contract
-        // requires.
-        self.run_native_with_exec(|exec, buffers| {
-            if let TensorRead::Tensor(tensor) = &input {
-                if !structural::reshape_uses_pool(tensor, &exec)? {
-                    return structural::reshape(tensor, shape);
-                }
+        // refusal for an external payload, without the engine entry, a token or
+        // a pool buffer, unless the copy can pay for a fork. The pre-entry gate
+        // (`reshape_may_use_pool`) asks the same predicate as the in-entry gate
+        // with the cheapest dispatch cost any token could charge, so a `false`
+        // there is final; otherwise the token decides (`reshape_uses_pool`).
+        // `run_native_with_exec` (not a fresh run) keeps the input placement
+        // that the copy puts on the output, as the reshape contract requires.
+        if let TensorRead::Tensor(tensor) = &input {
+            if !structural::reshape_may_use_pool(
+                tensor,
+                self.thread_budget(),
+                self.dispatch_costs(),
+            )? {
+                return structural::reshape(tensor, shape);
             }
+            return self.run_native_with_exec(|exec, buffers| {
+                if let TensorRead::Tensor(tensor) = &input {
+                    if !structural::reshape_uses_pool(tensor, &exec)? {
+                        return structural::reshape(tensor, shape);
+                    }
+                }
+                structural::reshape_read_with_pool(buffers, input, shape, exec)
+            });
+        }
+        self.run_native_with_exec(|exec, buffers| {
             structural::reshape_read_with_pool(buffers, input, shape, exec)
         })
     }

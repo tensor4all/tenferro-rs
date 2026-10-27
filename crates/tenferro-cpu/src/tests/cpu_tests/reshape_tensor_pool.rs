@@ -150,3 +150,43 @@ fn reshape_read_reads_a_non_contiguous_view_in_logical_order() {
         );
     }
 }
+
+#[cfg(feature = "ledger")]
+#[test]
+fn a_small_compact_reshape_on_a_multi_thread_engine_takes_no_engine_entry() {
+    // The pre-entry gate keeps a copy that cannot pay for a fork off the engine
+    // entry: no token is minted (the ledger records every minted token's root),
+    // the output matches the serial copy, and no pool buffer is taken.
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![4, 6], (0..24).map(f64::from).collect()).unwrap(),
+    );
+    let mut backend = crate::test_support::cpu_engine(4).unwrap();
+    let _ = backend.take_ledger_roots();
+    let out = crate::test_support::on_engine(&mut backend, |session| {
+        session.reshape_read(TensorRead::from_tensor(&input), &[6, 4])
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(out.shape(), &[6, 4]);
+    assert_eq!(
+        out.as_slice::<f64>().unwrap(),
+        input.as_slice::<f64>().unwrap()
+    );
+    assert!(
+        backend.take_ledger_roots().is_empty(),
+        "a small compact reshape must not mint a token"
+    );
+    drop(out);
+    assert_eq!(backend.buffer_pool_len(), 0);
+
+    // A payload that pays does enter the engine and mint a token.
+    let big = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2048, 1024], vec![1.0; 2048 * 1024]).unwrap(),
+    );
+    let _ = crate::test_support::on_engine(&mut backend, |session| {
+        session.reshape_read(TensorRead::from_tensor(&big), &[1024, 2048])
+    })
+    .unwrap()
+    .unwrap();
+    assert!(!backend.take_ledger_roots().is_empty());
+}

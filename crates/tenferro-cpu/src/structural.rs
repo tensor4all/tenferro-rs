@@ -463,27 +463,62 @@ pub(crate) fn reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> 
     dispatch_tensor_unary_result!(input, |t| typed_reshape(t, shape))
 }
 
+/// Whether a flat `Copy`-class region of `elements` elements pays for a fork on
+/// `budget` slots whose section costs `cost(width)`: the width `strided-basic`
+/// would pick (`parallel_width`) is above one. The one predicate behind both
+/// reshape gates below.
+fn reshape_copy_pays(
+    elements: usize,
+    budget: std::num::NonZeroUsize,
+    cost: impl Fn(std::num::NonZeroUsize) -> std::time::Duration,
+) -> bool {
+    use strided_kernel::execution::KernelClass;
+    threadteam::width_for_by(KernelClass::Copy.estimate(elements), 1, budget, cost).get() > 1
+}
+
 /// Whether an owned `reshape` of `input` should run the copy on the pool.
 ///
 /// The serial host copy is kept whenever the token's width for the copy is one:
 /// `strided-basic` decides a flat copy's width from its serial time (elements
-/// times the `Copy` class rate) against the token's dispatch cost
-/// (`parallel_width`), so a copy the strided scheduler would keep sequential
-/// also skips the pooled engine entry and does not take a pool buffer. The
-/// session entry and the entered execution-context seam both decide with this
-/// predicate, so a change to the gate reaches both callers.
+/// times the `Copy` class rate) against the token's dispatch cost, so a copy
+/// the strided scheduler would keep sequential also skips the pooled engine
+/// entry and does not take a pool buffer. This is the in-entry decision, made
+/// on the token the engine minted; the entered execution-context seam uses it
+/// directly.
 pub(crate) fn reshape_uses_pool(input: &Tensor, exec: &Exec<'_>) -> crate::Result<bool> {
     if exec.is_serial() {
         return Ok(false);
     }
     let elements = checked_shape_product("reshape", "input shape", input.shape())?;
-    Ok(strided_kernel::execution::parallel_width(
-        exec,
-        strided_kernel::execution::KernelClass::Copy,
-        elements,
-    )
-    .get()
-        > 1)
+    Ok(reshape_copy_pays(elements, exec.budget(), |width| {
+        exec.dispatch_cost(width)
+    }))
+}
+
+/// The pre-entry form of [`reshape_uses_pool`], decided without minting a token.
+///
+/// A token charges one of the pool's [`threadteam::DispatchCosts`] kinds, which
+/// depends on the calling thread, so the width cannot be known before the
+/// token exists. This asks the same predicate with the cheapest cost any kind
+/// could charge (`min_cost`), so `false` here implies `false` in
+/// [`reshape_uses_pool`] and the copy can skip the engine entry. `true` only
+/// means "ask the token".
+pub(crate) fn reshape_may_use_pool(
+    input: &Tensor,
+    budget: std::num::NonZeroUsize,
+    costs: &threadteam::DispatchCosts,
+) -> crate::Result<bool> {
+    use threadteam::DispatchKind::{InPool, Outside, Team};
+    if budget.get() == 1 {
+        return Ok(false);
+    }
+    let cheapest = [Team, InPool, Outside]
+        .into_iter()
+        .map(|kind| costs.min_cost(kind))
+        .min()
+        .unwrap_or(std::time::Duration::MAX);
+    let elements = checked_shape_product("reshape", "input shape", input.shape())?;
+    Ok(reshape_copy_pays(elements, budget, |_| cheapest))
 }
 
 pub(crate) fn reshape_read_with_pool(

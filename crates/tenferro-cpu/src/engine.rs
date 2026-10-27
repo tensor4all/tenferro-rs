@@ -281,6 +281,10 @@ impl CpuEngine {
         self.resources.thread_budget()
     }
 
+    pub(crate) fn dispatch_costs(&self) -> &threadteam::DispatchCosts {
+        self.resources.dispatch_costs()
+    }
+
     /// Whether an earlier operation broke this engine (see
     /// [`CpuEngineError::Broken`]).
     ///
