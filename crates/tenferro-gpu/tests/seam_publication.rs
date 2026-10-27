@@ -1,10 +1,10 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U1 seam publication evidence: a published value keeps its allocation, exposes a
 //! frontier a reader can wait on, and the drop/forget/rejection semantics (issue #2208
 //! U1).
 
-use tenferro_gpu::cuda_next::{
+use tenferro_gpu::cuda::{
     download_tensor, gpu_available, upload_pending, upload_tensor, CudaDeviceId, CudaEngine,
     CudaRuntime, PinnedHostBuffer, PublicationAdmissionError,
 };

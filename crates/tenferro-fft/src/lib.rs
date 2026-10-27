@@ -7,7 +7,7 @@
 //! C32-to-F32 IRFFT through CubeK on its existing WebGPU placement. That first
 //! GPU path supports power-of-two lengths only; unsupported operations and
 //! dtypes return an error and never fall back to CPU or transfer tensor data.
-//! With the `cuda` feature, `tenferro_gpu::cuda_next::CudaEngine` executes the
+//! With the `cuda` feature, `tenferro_gpu::cuda::CudaEngine` executes the
 //! supported one-dimensional F32/F64/C32/C64 operations through dynamically
 //! loaded cuFFT without implicit transfers or CPU fallback. The vendor call
 //! synchronizes at the cuFFT FFI boundary; subsequent CUDA postprocessing and
@@ -137,11 +137,9 @@ use tenferro_ad::semantic_extension::{
 use tenferro_cpu::with_cpu_engine;
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda_next::raw::with_cuda_engine;
+use tenferro_gpu::cuda::raw::with_cuda_engine;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda_next::CudaEngine;
-#[cfg(feature = "webgpu")]
-use tenferro_gpu::webgpu::with_webgpu_exec_session;
+use tenferro_gpu::cuda::CudaEngine;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{
     apply, ExtensionCacheStore, ExtensionExecutionContext, ExtensionOp,
@@ -162,8 +160,6 @@ mod eager_ext;
 mod eager_in_place;
 pub mod prelude;
 mod spec;
-#[cfg(feature = "webgpu")]
-mod webgpu;
 
 pub use backend::{FftBackend, FftExecutionCache};
 pub use cache::{
@@ -1018,11 +1014,6 @@ fn with_fft_exec_session<X>(
         return with_cuda_engine(session, |exec| f(exec as &mut dyn FftBackend))
             .expect("marker probe matched a CUDA execution session");
     }
-    #[cfg(feature = "webgpu")]
-    if with_webgpu_exec_session(session, |_| ()).is_some() {
-        return with_webgpu_exec_session(session, |exec| f(exec as &mut dyn FftBackend))
-            .expect("marker probe matched a WebGPU execution session");
-    }
     Err(tenferro_tensor::Error::unsupported(
         op,
         "selected backend session does not expose an FFT execution capability",
@@ -1530,12 +1521,6 @@ fn execute_fft_extension_reads_on_session(
     }
     #[cfg(feature = "cuda")]
     if let Some(result) = with_cuda_engine(session, |session| {
-        execute_fft_extension_reads_for_capability(op, inputs, session, caches)
-    }) {
-        return result;
-    }
-    #[cfg(feature = "webgpu")]
-    if let Some(result) = with_webgpu_exec_session(session, |session| {
         execute_fft_extension_reads_for_capability(op, inputs, session, caches)
     }) {
         return result;

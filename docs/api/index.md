@@ -34,8 +34,6 @@ For contributors, internal crate APIs are also available in the
   eager helpers, extension runtime, and optional linalg AD rules
 - [tenferro-fft](./tenferro_fft/index.html): FFT extension runtime and
   public concrete/traced FFT APIs
-- [cubecl-kernel-sample](./cubecl_kernel_sample/index.html): sample CUDA
-  CubeCL kernel exercising the public `raw`/`cubecl` session seams
 
 ## Extension and Consumer Crates
 

@@ -1,11 +1,9 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! The dtype policy of the new engine's tensor surface: what the kernel catalogue serves
 //! through the shared traits, and what it refuses (issue #2208 U5/U6 dtype scope).
 
-use tenferro_gpu::cuda_next::{
-    download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine,
-};
+use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_tensor::{
     Complex32, Complex64, DType, Tensor, TensorAnalytic, TensorElementwise, TensorRead,
     TensorStructural,

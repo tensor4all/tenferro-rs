@@ -86,8 +86,6 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "--features autodiff",
         f"cargo check --manifest-path samples/kdv-pinn/Cargo.toml {_CARGO_TEST_PROFILE} "
         "--all-targets",
-        f"cargo test --manifest-path samples/cubecl-kernel/Cargo.toml {_CARGO_TEST_PROFILE} "
-        "--all-targets",
     ),
     "docs": (
         "python3 scripts/test-check-docs-site.py",

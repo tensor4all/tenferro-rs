@@ -1,10 +1,10 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U1 seam cross-engine copy evidence: a value transfers between two runtimes on one
 //! device, the producer moves on immediately, and the copy outlives its producer
 //! (issue #2208 U1).
 
-use tenferro_gpu::cuda_next::{
+use tenferro_gpu::cuda::{
     download_pending, download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine,
     PinnedHostBuffer,
 };

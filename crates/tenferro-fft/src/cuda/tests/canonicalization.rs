@@ -1,7 +1,5 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_gpu::cuda_next::{
-    download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine,
-};
+use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_tensor::Tensor;
 
 use super::super::{

@@ -1,10 +1,10 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! The new engine's runtime surface: its prepared-program target and the caches the runtime lends
 //! it (issue #2208 U5/U6). The event-domain driver itself needs an [`EventDomainId`], which only
 //! a registered runtime mints, so its ordering is exercised where the registration lands.
 
-use tenferro_gpu::cuda_next::{gpu_available, CudaDeviceId, CudaEngine};
+use tenferro_gpu::cuda::{gpu_available, CudaDeviceId, CudaEngine};
 use tenferro_runtime::ExecutionEngine;
 
 fn engine() -> Option<CudaEngine> {
@@ -151,13 +151,13 @@ fn the_driver_orders_a_launch_behind_its_dependency_and_retires_it() {
 
 #[test]
 fn a_prepared_elementwise_program_runs_on_the_new_engine() {
-    use tenferro_gpu::cuda_next::{download_tensor, upload_tensor};
+    use tenferro_gpu::cuda::{download_tensor, upload_tensor};
     use tenferro_runtime::{ExecutionEngine, GraphCompiler, Output, Runtime, TracedTensor};
     use tenferro_tensor::{DType, Tensor, TensorRead};
 
     let Some(mut engine) = engine() else { return };
     let registration =
-        tenferro_gpu::cuda_next::runtime_adapter::cuda_runtime_engine_registration(&engine)
+        tenferro_gpu::cuda::runtime_adapter::cuda_runtime_engine_registration(&engine)
             .expect("registration");
     let mut builder = Runtime::builder();
     builder.register_engine(registration).expect("register");
@@ -198,13 +198,13 @@ fn a_prepared_elementwise_program_runs_on_the_new_engine() {
 
 #[test]
 fn a_prepared_comparison_runs_on_the_new_engine() {
-    use tenferro_gpu::cuda_next::{download_tensor, upload_tensor};
+    use tenferro_gpu::cuda::{download_tensor, upload_tensor};
     use tenferro_runtime::{ExecutionEngine, GraphCompiler, Output, Runtime, TracedTensor};
     use tenferro_tensor::{DType, Tensor, TensorRead};
 
     let Some(mut engine) = engine() else { return };
     let registration =
-        tenferro_gpu::cuda_next::runtime_adapter::cuda_runtime_engine_registration(&engine)
+        tenferro_gpu::cuda::runtime_adapter::cuda_runtime_engine_registration(&engine)
             .expect("registration");
     let mut builder = Runtime::builder();
     builder.register_engine(registration).expect("register");

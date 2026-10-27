@@ -187,6 +187,6 @@ CPU numerical implementation.
 ## See also
 
 - [Devices and GPU](devices-and-gpu.md) for device selection and the CUDA compatibility matrix.
-- [Custom CUDA kernels](custom-cuda-kernels.md) for raw/CubeCL interop inside an engine.
+- [Devices and GPU](devices-and-gpu.md) for the raw session boundary inside an engine.
 - [Dispatch and engine cost](dispatch-and-engine-cost.md) for the CPU counterpart and the
   measured per-call costs.

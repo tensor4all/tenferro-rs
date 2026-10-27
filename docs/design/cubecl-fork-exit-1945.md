@@ -98,7 +98,7 @@ exceeds maintaining a backend — the replacement surface is bounded and identif
 | Streams, events, stream slotting, event domains | cubecl-runtime / cubecl-cuda (`StreamId`, `drop_queue`, event domain ids) | Moderate: our runtime already identifies streams, events and domains by captured logical ids |
 | Graph/execution-engine contract, compiled-kernel cache | cubecl-runtime (`KernelId`, memory management, scheduler) | Bounded: our runtime and plan cache already own the tenferro-side contracts |
 | cudarc / driver bindings | cudarc directly in `tenferro-gpu` (FFI, cuBLAS, cuSOLVER, events, pinned host memory) | Already ours; unaffected by the fork |
-| Extension/sample API | our `unsafe` bindings plus `samples/cubecl-kernel` | Small: it is our surface already |
+| Extension/sample API | our `unsafe` bindings | Small: it is our surface already |
 
 The migration is a backend swap behind our own types, which is why every contract added for #1945 —
 held sessions, pending transfers, publications — deliberately mentions no cubecl type in its public API.

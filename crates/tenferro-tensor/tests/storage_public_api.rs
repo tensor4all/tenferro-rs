@@ -55,18 +55,8 @@ fn dtype_erased_views_have_explicit_duplicate_boundaries() {
 fn provider_exports_and_transfer_defaults_are_normalized() {
     let gpu_lib = source("../tenferro-gpu/src/lib.rs");
     assert!(gpu_lib.contains("pub mod cuda"));
-    assert!(gpu_lib.contains("pub mod apple"));
     assert!(!gpu_lib.contains("pub mod cuda_interop"));
     assert!(!gpu_lib.contains("pub use cubecl::{"));
-
-    let webgpu_mod = source("../tenferro-gpu/src/webgpu/mod.rs");
-    assert!(webgpu_mod.contains("#[doc(hidden)]\npub mod interop"));
-    let webgpu_interop = source("../tenferro-gpu/src/webgpu/interop.rs");
-    assert!(webgpu_interop.contains("WebGpuFftOutput"));
-    assert!(!webgpu_interop.contains("pub fn allocate_raw"));
-    assert!(!webgpu_interop.contains("pub fn finish_"));
-    assert!(!webgpu_interop.contains("pub fn client"));
-    assert!(!webgpu_interop.contains("pub fn c32_input_parts"));
 
     let backend = source("src/backend.rs");
     let transfer = &backend[backend

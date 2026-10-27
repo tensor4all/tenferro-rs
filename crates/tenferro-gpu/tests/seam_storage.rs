@@ -1,4 +1,4 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U1 seam storage evidence: identity, allocation freshness and the absence of a safe
 //! unscoped pointer accessor on the new path (issue #2208).
@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::Path;
 
-use tenferro_gpu::cuda_next::{gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
+use tenferro_gpu::cuda::{gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor};
 
 fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
@@ -84,7 +84,7 @@ fn seam_provider_does_not_expose_safe_unscoped_pointer_access() {
         "storage.rs",
         "transfer.rs",
     ] {
-        let path = root.join("src/cuda_next").join(entry);
+        let path = root.join("src/cuda").join(entry);
         sources.push_str(
             &fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {path:?}: {error}")),
         );

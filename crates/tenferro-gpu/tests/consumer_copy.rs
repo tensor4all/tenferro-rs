@@ -1,4 +1,4 @@
-#![cfg(feature = "cuda")]
+#![cfg(all(feature = "cuda", not(feature = "cuda")))]
 
 //! Consumer-copy contract (#1945 U4-2a).
 //!

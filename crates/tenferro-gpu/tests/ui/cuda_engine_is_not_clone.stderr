@@ -2,11 +2,11 @@ error[E0308]: mismatched types
  --> tests/ui/cuda_engine_is_not_clone.rs:6:5
   |
 5 | fn duplicate(engine: &CudaEngine) -> CudaEngine {
-  |                                      ---------- expected `CudaEngine` because of return type
+  |                                      ---------- expected `tenferro_gpu::cuda::CudaEngine` because of return type
 6 |     engine.clone()
   |     ^^^^^^^^^^^^^^ expected `CudaEngine`, found `&CudaEngine`
   |
-note: `CudaEngine` does not implement `Clone`, so `&CudaEngine` was cloned instead
+note: `tenferro_gpu::cuda::CudaEngine` does not implement `Clone`, so `&tenferro_gpu::cuda::CudaEngine` was cloned instead
  --> tests/ui/cuda_engine_is_not_clone.rs:6:5
   |
 6 |     engine.clone()

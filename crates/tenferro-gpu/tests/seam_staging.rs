@@ -1,9 +1,9 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U1 seam staging evidence: payloads around the runtime's staging chunk round-trip and
 //! the runtime's own counters move (issue #2208 U1).
 
-use tenferro_gpu::cuda_next::{
+use tenferro_gpu::cuda::{
     download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine, CudaRuntime,
 };
 

@@ -108,32 +108,6 @@ class RunProfileTests(unittest.TestCase):
             "--cargo-profile ci --no-clean --json --output-path coverage.json",
         )
 
-    def test_macos_compiles_only_apple_targets_with_accelerate(self) -> None:
-        commands = commands_for("macos-accelerate")
-        self.assertEqual(len(commands), 1)
-        args = shlex.split(commands[0])
-        self.assertIn("--no-default-features", args)
-        self.assertEqual(
-            args[args.index("--features") + 1],
-            "blas-accelerate,webgpu,tenferro-linalg/autodiff",
-        )
-        targets = [args[i + 1] for i, arg in enumerate(args) if arg == "--test"]
-        self.assertEqual(targets, ["apple_context", "apple_cpu", "webgpu_metal_fft", "apple_accelerate"])
-        self.assertNotIn("--workspace", args)
-        self.assertNotIn("--doc", args)
-        self.assertNotIn("native", commands[0])
-        cpu_manifest = tomllib.loads((ROOT / "crates/tenferro-cpu/Cargo.toml").read_text())
-        self.assertNotIn("cblas-src", cpu_manifest["dependencies"])
-        linalg_features = tomllib.loads((ROOT / "crates/tenferro-linalg/Cargo.toml").read_text())["features"]
-        for provider in ("blas-accelerate", "blas-openblas", "blas-mkl"):
-            self.assertIn("blas", linalg_features[provider])
-        self.assertIn("tenferro-ad?/webgpu", linalg_features["webgpu"])
-        with patch.dict("os.environ", {}, clear=True), patch(
-            "scripts.ci.run_profile.subprocess.run"
-        ) as run:
-            run_profiles(["macos-accelerate"], dry_run=False, output=io.StringIO())
-        self.assertEqual(run.call_args.kwargs["env"]["TENFERRO_REQUIRE_METAL"], "1")
-
     def test_hosted_parallelism_uses_cpu_count_with_build_cap(self) -> None:
         for cpus, builds in ((3, "3"), (4, "4"), (32, "16")):
             with self.subTest(cpus=cpus), patch.dict(

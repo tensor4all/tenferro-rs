@@ -1,12 +1,10 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U5 tail: the `TensorIndexing` surface on the new engine — windowing, padding,
 //! concatenation and reversal, through the trait rather than the typed dispatcher
 //! (issue #2208 U5).
 
-use tenferro_gpu::cuda_next::{
-    download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine,
-};
+use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_tensor::{PadConfig, SliceConfig, Tensor, TensorIndexing};
 
 fn engine() -> Option<CudaEngine> {

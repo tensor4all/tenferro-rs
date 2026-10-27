@@ -13,8 +13,6 @@ use tenferro_ad::{EagerSession, EagerTensor};
 use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::CudaEngine;
-#[cfg(feature = "webgpu")]
-use tenferro_gpu::webgpu::WebGpuBackend;
 use tenferro_runtime::{ErrorPhase, ExecutionEngine, ExtensionModule};
 
 use crate::eager_composites;
@@ -988,10 +986,6 @@ fn eager_extension_module(target: EagerExtensionTarget) -> Result<Arc<dyn Extens
         #[cfg(feature = "cuda")]
         EagerExtensionBackendKind::Cuda => {
             extension_module::<CudaEngine>(engine_id).map_err(eager_runtime_config_error)
-        }
-        #[cfg(feature = "webgpu")]
-        EagerExtensionBackendKind::WebGpu => {
-            extension_module::<WebGpuBackend>(engine_id).map_err(eager_runtime_config_error)
         }
     }
 }

@@ -99,7 +99,7 @@ fn gpu_dependency_is_owned_by_opt_in_backend_features() {
         "tenferro-gpu must not be an unconditional dev-dependency"
     );
 
-    for feature in ["cuda", "webgpu", "rocm"] {
+    for feature in ["cuda", "rocm"] {
         let feature_start = format!("{feature} = ");
         let feature_body = manifest
             .split_once(&feature_start)

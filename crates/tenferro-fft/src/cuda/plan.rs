@@ -22,8 +22,8 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tenferro_gpu::cuda_next::raw::DeviceBytes;
-use tenferro_gpu::cuda_next::{CudaEngine, CudaRuntime};
+use tenferro_gpu::cuda::raw::DeviceBytes;
+use tenferro_gpu::cuda::{CudaEngine, CudaRuntime};
 use tenferro_runtime::ExtensionCacheKey;
 use tenferro_tensor::{Tensor, TensorScalar, TypedTensor};
 

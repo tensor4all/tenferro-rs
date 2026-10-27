@@ -217,50 +217,6 @@ class BuildArtifactContracts(unittest.TestCase):
             {"driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"},
         )
 
-    def test_cubek_does_not_impose_a_cuda_runtime_floor(self) -> None:
-        manifest = tomllib.loads(
-            (ROOT / "crates" / "tenferro-gpu" / "Cargo.toml").read_text()
-        )
-        features = manifest["features"]
-
-        self.assertFalse(any("cubek" in item for item in features["cuda"]))
-        self.assertIn("dep:cubek-matmul", features["webgpu"])
-        self.assertIn("dep:cubek-std", features["webgpu"])
-
-    def test_sample_workspace_requires_the_workspace_cubecl_release(self) -> None:
-        """`samples/cubecl-kernel` sits outside the root workspace, so nothing but
-        its own manifest holds it to the same CubeCL release `tenferro-gpu`
-        resolves through the workspace. When the two drift apart, two copies of
-        the CubeCL runtime land in one dependency graph, and the sample fails
-        against same-named types from different crate versions: an `E0308`
-        mismatch on `ComputeClient` and `CubeDim` rather than a legible version
-        conflict. Comparing the manifests catches that at the source.
-        """
-        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())
-        expected = workspace["workspace"]["dependencies"]["cubecl"]["version"]
-        self.assertEqual(expected, "=0.11.0")
-
-        for sample in ("cubecl-kernel",):
-            manifest = tomllib.loads(
-                (ROOT / "samples" / sample / "Cargo.toml").read_text()
-            )
-            dependencies = manifest["dependencies"]
-            for name, package in (
-                ("cubecl", "t4a-cubecl"),
-                ("cubecl-cuda", "t4a-cubecl-cuda"),
-            ):
-                with self.subTest(dependency=name):
-                    spec = dependencies[name]
-                    self.assertEqual(spec.get("package"), package)
-                    self.assertNotIn("git", spec)
-                    self.assertEqual(
-                        spec.get("version"),
-                        expected,
-                        f"samples/{sample} requires {name} at {spec.get('version')}, "
-                        f"but the workspace requires {expected}; both versions would "
-                        "end up in one dependency graph",
-                    )
-
 
 if __name__ == "__main__":
     unittest.main()

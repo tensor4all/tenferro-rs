@@ -474,3 +474,109 @@ the crate), `with_current_context` re-entry on cuFFT's plan-rollback path, and `
 7. U6: delete CubeCL, cut the feature/CI/doc/doctest surface over, fold the seam tests into
    the CI inventory.
 8. U7: full local A100 gate, the 1-thread/1-worker comparison, independent review, one PR.
+
+## U7 engine comparison (before the CubeCL deletion)
+
+`crates/tenferro-gpu/benches/u7_engine_comparison.rs` runs one workload on the engine that ships
+today (`cuda::CudaEngine`, CubeCL) and on its replacement (`cuda_next::CudaEngine`), with the same
+calls, a device barrier inside every timed body so both sides measure completion rather than
+enqueue, `RAYON_NUM_THREADS=1`, one worker, the bench pinned to L3 domain `0-7` and the observing
+shell pinned to `48-63` (AMD EPYC 7713P, 64 CPUs, 8-CPU L3 domains).
+
+Host: NVIDIA A100 80GB PCIe, driver 580.126.09, CUDA 12.6, cuTENSOR 2.5.0.
+Command: `taskset -c 0-7 ./target/debug/deps/u7_engine_comparison-*`
+(median of 7, 2 warmups; debug profile, so the numbers compare the two engines, not absolute peak).
+
+| cell | today (ms) | replacement (ms) | delta | residual |
+|---|---|---|---|---|
+| matmul_512_f64 | 0.193 | 0.186 | -3.7% | 0.000e0 |
+| add_1m_f64 | 0.577 | 0.894 | +54.8% | 0.000e0 |
+| reduce_4096x256_f64 | 0.404 | 5.684 | +1308.0% | 0.000e0 |
+
+Residuals are zero: the replacements agree bit for bit on this workload. The first run, without a
+barrier on the CubeCL side, read 0.140/0.139/0.174 ms there and was discarded as an unfair
+comparison (enqueue-only).
+
+Open finding, recorded before the deletion rather than after it: the replacement is at parity on
+the cuTENSOR matmul but slower on the plain kernels, and 14x slower on a single-axis reduction.
+That points at per-call dispatch cost in `CudaEngine::reduce_axes` (dispatcher resolution, the
+scratch allocation and a synchronize per pass) rather than at the kernel itself, and it is the
+first thing the cutover must fix or justify; the deletion does not remove today's engine until
+this is resolved.
+
+### What the U7 numbers turned out to be
+
+Batching eight reductions into one timed body, a 16x larger reduction and a 128x smaller one all
+cost the replacement the *same* ~4-5 ms, so the gap is a fixed per-call cost, not bandwidth:
+
+| cell | today (ms) | replacement (ms) |
+|---|---|---|
+| reduce 4096x8 (32 K elements) | 0.25 | 4.1 |
+| reduce 4096x256 (1 M) | 0.24 | 4.2 |
+| reduce 65536x256 (16.8 M) | 1.01 | 4.8 |
+
+Splitting the path on the device: `reduce_sum_read(&[])`, which is only a device copy into fresh
+storage, costs 2.0 ms for those 32 K elements, while an elementwise `add` over the same tensor
+costs 0.36 ms. `KernelModules::for_entries` prepares a module artifact (`compile` through the
+runtime) on **every** call that builds a `Dispatcher`, so each op pays the module preparation of
+its own translation unit: `CopyExact` and `Reduce` modules are paid in full per call, and the
+reduce path pays it twice (copy plus reduction) on top of its squeeze copy.
+
+Fix direction, and the reason this is recorded rather than fixed in this step: the engine should
+cache its prepared `KernelModules` per module set (as it already caches extension resources)
+instead of rebuilding a `Dispatcher` per op. That is a contained change in the engine's dispatch
+plumbing with a large payoff, and it must land before the cutover, because a 15x regression on a
+single-axis reduction is not something the cutover may inherit.
+
+### The fix, and U7 after it
+
+The engine now keeps its prepared dispatchers (`PreparedDispatchers` behind a `RefCell`, extended
+when an operation needs an entry the set does not cover) instead of building a `Dispatcher` per
+operation, which paid a runtime round trip per module set (measured: 1.25 ms for `CopyExact`,
+1.27 ms for `Reduce`, 0.25 ms for `Add`). Same command, same pinning, medians of 7:
+
+| cell | today (ms) | replacement (ms) | delta | residual |
+|---|---|---|---|---|
+| matmul_512_f64 | 0.165 | 0.156 | -4.9% | 0.000e0 |
+| add_1m_f64 | 0.525 | 0.348 | -33.7% | 0.000e0 |
+| reduce_4096x256_f64 | 0.304 | 0.216 | -28.9% | 0.000e0 |
+| reduce_65536x256_f64 | 1.087 | 0.942 | -13.3% | 0.000e0 |
+| reduce_4096x8_f64 | 0.529 | 0.173 | -67.2% | 0.000e0 |
+| reduce_x8_per_op | 0.265 | 0.201 | -24.2% | 0.000e0 |
+
+The replacement is now faster than the engine it replaces on every cell, with bit-identical
+results, so the deletion no longer inherits a regression. Device suites after the change: the
+`seam_*` engine tests and all 64 ignored linalg device tests pass.
+
+## The cutover and the deletion
+
+`tenferro_gpu::cuda` now names the engine over the kernel catalogue, and the CubeCL engine is gone
+with everything that existed only to serve it (its kernels, dispatch, fusion, session, interop, its
+tests and benches, the WebGPU/Metal lane, the `apple` namespace, the CubeCL Cargo dependencies, the
+`webgpu` and `cubecl-interop` features). The feature is plainly named `cuda`, and `tenferro-linalg`
+carries no CubeCL import at all.
+
+What was retired with it, deliberately:
+
+- the source contracts that asserted the deleted implementation's internals (they read files that
+  no longer exist); the ones asserting surviving invariants — read entry points, raw-pointer
+  scoping, provider feature wiring, the device partition — were retargeted at the engine that
+  remains;
+- the CI contracts that policed the Apple lane and the CubeCL benchmark, and the tutorial Apple
+  binaries;
+- `scripts/ci/cuda_test_partition.tsv` regenerated against the four packages the CUDA archive
+  builds: 1206 tests (275 device, 929 host, 2 compile-only). The `two-gpu` and `benchmark` lanes
+  are empty because their only members were CubeCL tests.
+
+**Capability removed, recorded for review:** the public CubeCL session (`cuda::cubecl::Session`,
+`cubecl-interop`) was the documented way for downstream code to compile and launch its own CUDA
+kernel (`samples/cubecl-kernel`, `docs/guides/custom-cuda-kernels.md`). The new raw session exposes
+stream, device bytes, tensor borrows, byte copies and vendor resources, but not an NVRTC/launch
+surface, so that workflow has no replacement yet. The sample, its guide and the one test that
+exercised it (`gpu_raw_constant_binding`) are deleted rather than left pointing at a removed API.
+
+Evidence after the deletion: `cargo test --workspace` passes; `tenferro-gpu`, `tenferro-linalg` and
+`tenferro-fft` pass with `--features cuda` (including all 64 `#[ignore]`d linalg device tests);
+`cargo clippy --workspace --all-targets -- -D warnings` is clean; the repository rules review, the
+public-error-docs check and the engine-entry audit pass; `cargo test --doc` passes for the
+workspace and for `tenferro-gpu --features cuda`.

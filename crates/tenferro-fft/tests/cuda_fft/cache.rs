@@ -6,7 +6,7 @@ use super::common::*;
 use super::support;
 use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftExecutor, FftNorm, FftPlanCache};
-use tenferro_gpu::cuda_next::{gpu_available, CudaRuntimeIdentity};
+use tenferro_gpu::cuda::{gpu_available, CudaRuntimeIdentity};
 use tenferro_runtime::ExtensionCacheLimits;
 use tenferro_tensor::TensorRead;
 

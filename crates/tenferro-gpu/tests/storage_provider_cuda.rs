@@ -42,44 +42,6 @@ fn cuda_tensor_view_keeps_the_single_root_identity() {
     assert_eq!(view.allocation_id(), allocation);
 }
 
-#[cfg(feature = "cubecl-interop")]
-#[test]
-#[ignore = "requires CUDA"]
-fn cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping() {
-    use tenferro_gpu::cuda::with_cuda_engine;
-
-    assert!(gpu_available(), "CUDA test requires an available device");
-
-    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
-    let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-    let input = upload_tensor(backend.runtime(), &host).unwrap();
-    let Some(tensor) = input.as_typed::<f32>() else {
-        panic!("provider test uses f32 tensors")
-    };
-
-    let prepared = tensor
-        .prepare_device_read("storage_provider_cuda")
-        .expect("CUDA device preparation");
-    assert!(
-        tensor.host_data().is_err(),
-        "device preparation must not create a host mapping"
-    );
-    drop(prepared);
-
-    let binding = backend
-        .run(|session| {
-            with_cuda_engine(session, |sess| {
-                sess.with_cubecl("storage_provider_cuda", |cubecl| unsafe {
-                    cubecl.tensor_binding(tensor, "storage_provider_cuda")
-                })
-            })
-            .expect("CUDA session")
-        })
-        .unwrap()
-        .expect("the CUDA binding must consume the provider-prepared state");
-    drop(binding);
-}
-
 #[test]
 #[ignore = "requires CUDA"]
 fn cuda_duplicate_is_explicit_same_placement_allocation() {
@@ -103,20 +65,16 @@ fn cuda_duplicate_is_explicit_same_placement_allocation() {
 fn cuda_provider_does_not_expose_safe_unscoped_raw_access() {
     let lib = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))
         .expect("CUDA provider source must be readable");
-    let interop =
-        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cubecl/interop.rs"))
-            .expect("CUDA interop source must be readable");
-
     assert!(
         !lib.contains("pub fn handle(") && !lib.contains("pub fn device_ptr("),
         "CUDA provider handles and pointers must not be safe unscoped accessors"
     );
-    // The hidden cuda::interop bridge no longer exposes a callback boundary;
-    // device pointers are now reachable only through the public raw session's
-    // `unsafe fn raw_ptr` on a session-lifetime-scoped TensorRef/TensorMut.
+    // Device pointers are reachable only through the raw session's `unsafe fn raw_ptr` on a
+    // session-lifetime-scoped TensorRef/TensorMut.
+    let raw = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cuda/raw.rs"))
+        .expect("the raw session source must be readable");
     assert!(
-        !interop.contains("pub fn with_typed_device_ptr")
-            && !interop.contains("pub fn typed_device_ptr("),
-        "CUDA interop must not expose a typed device-pointer function"
+        !raw.contains("pub fn with_typed_device_ptr") && !raw.contains("pub fn typed_device_ptr("),
+        "the raw session must not expose a typed device-pointer function"
     );
 }

@@ -1,4 +1,4 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U1 seam transfer evidence: pending upload/download semantics, drop/forget, rejected
 //! packages and pinned round-trips (issue #2208 U1).
@@ -6,7 +6,7 @@
 //! Every device test returns early without a CUDA device, so the suite is safe on a CPU
 //! host; running it on the local A100 is what the worklog records.
 
-use tenferro_gpu::cuda_next::{
+use tenferro_gpu::cuda::{
     download_pending, download_tensor, gpu_available, upload_pending, upload_tensor, CudaDeviceId,
     CudaEngine, CudaRuntime, PinnedHostBuffer, TransferSubmitError,
 };

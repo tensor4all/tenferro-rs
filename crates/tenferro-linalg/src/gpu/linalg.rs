@@ -2,9 +2,6 @@ use std::ffi::c_void;
 use std::ops::Neg;
 use std::os::raw::c_char;
 
-use cubecl::prelude::{
-    ComplexCore, CubeElement, CubeMul, CubeNeg, CubePartialOrd, CubePrimitive, Scalar,
-};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
@@ -12,12 +9,9 @@ use super::ffi::cusolver::{
     CublasDiagType, CublasFillMode, CublasOperation, CublasPointerMode, CublasSideMode,
     CudaDataType, CudaLinalgHandles, CudaStream, CusolverEigMode,
 };
-use super::kernels as cubecl_linalg;
 use crate::backend::CompactQrResult;
 use crate::extension::{EighDriver, QrGauge, QrOptions, SvdDriver};
-use tenferro_gpu::{
-    cuda::cubecl::Session as CubeclSession, cuda::download_tensor, cuda::CudaEngine,
-};
+use tenferro_gpu::cuda::{download_tensor, CudaEngine};
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
     DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorRead, TensorReduction,
@@ -26,10 +20,8 @@ use tenferro_tensor::{
 
 type Result<T> = tenferro_tensor::Result<T>;
 
-trait LinalgScalar:
-    CubeElement + CubePrimitive + Copy + Clone + One + Zero + Neg<Output = Self>
-{
-    type Real: TensorScalar + CubeElement + CubePrimitive + Scalar + Copy + Clone + Zero + Into<f64>;
+trait LinalgScalar: TensorScalar + Copy + Clone + One + Zero + Neg<Output = Self> {
+    type Real: TensorScalar + Copy + Clone + Zero + Into<f64>;
 
     const DATA_TYPE: CudaDataType;
     const NEEDS_RWORK: bool;
@@ -260,37 +252,37 @@ fn ensure_supported_linalg_pair(op: &'static str, lhs: &Tensor, rhs: &Tensor) ->
     }
 }
 
-fn ensure_cubecl_resident_tensor(op: &'static str, input: &Tensor) -> Result<()> {
+fn ensure_device_resident_tensor(op: &'static str, input: &Tensor) -> Result<()> {
     match input.dtype() {
-        DType::F32 => ensure_cubecl_resident_typed(op, typed_host::<f32>(op, input)?),
-        DType::F64 => ensure_cubecl_resident_typed(op, typed_host::<f64>(op, input)?),
-        DType::I32 => ensure_cubecl_resident_typed(op, typed_host::<i32>(op, input)?),
-        DType::I64 => ensure_cubecl_resident_typed(op, typed_host::<i64>(op, input)?),
-        DType::Bool => ensure_cubecl_resident_typed(op, typed_host::<bool>(op, input)?),
-        DType::C32 => ensure_cubecl_resident_typed(op, typed_host::<Complex32>(op, input)?),
-        DType::C64 => ensure_cubecl_resident_typed(op, typed_host::<Complex64>(op, input)?),
+        DType::F32 => ensure_device_resident_typed(op, typed_host::<f32>(op, input)?),
+        DType::F64 => ensure_device_resident_typed(op, typed_host::<f64>(op, input)?),
+        DType::I32 => ensure_device_resident_typed(op, typed_host::<i32>(op, input)?),
+        DType::I64 => ensure_device_resident_typed(op, typed_host::<i64>(op, input)?),
+        DType::Bool => ensure_device_resident_typed(op, typed_host::<bool>(op, input)?),
+        DType::C32 => ensure_device_resident_typed(op, typed_host::<Complex32>(op, input)?),
+        DType::C64 => ensure_device_resident_typed(op, typed_host::<Complex64>(op, input)?),
         DType::External(_) => Err(unsupported_linalg_dtype(op, input)),
     }
 }
 
-/// Validate that a tensor is CubeCL-resident using only public tensor
+/// Validate that a tensor is device-resident using only public tensor
 /// metadata (no runtime or launch), so the guard lives entirely on the
 /// credentialed public seam.
-fn ensure_cubecl_resident_typed<T: 'static>(
+fn ensure_device_resident_typed<T: 'static>(
     op: &'static str,
     input: &TypedTensor<T>,
 ) -> Result<()> {
     match input.buffer() {
         StorageBuffer::Host(_) => Err(Error::runtime_state(
             op,
-            "expected CubeCL GPU tensor, got host tensor. \
+            "expected a CUDA tensor, got a host tensor. \
                       Use upload_tensor() to transfer to GPU before calling GPU ops.",
         )),
-        StorageBuffer::Backend(buffer) if buffer.backend_family() == "cubecl" => Ok(()),
+        StorageBuffer::Backend(buffer) if buffer.backend_family() == "cuda" => Ok(()),
         StorageBuffer::Backend(buffer) => Err(Error::runtime_state(
             op,
             format!(
-                "expected CubeCL GPU tensor, got backend buffer family `{}`",
+                "expected a CUDA tensor, got backend buffer family `{}`",
                 buffer.backend_family()
             ),
         )),
@@ -725,31 +717,15 @@ fn upper_trapezoidal_violation_typed<T>(
     op: &'static str,
 ) -> Result<TypedTensor<i32>>
 where
-    T: LinalgScalar + TensorScalar + PartialEq + Scalar,
+    T: LinalgScalar + TensorScalar + PartialEq,
 {
-    backend.with_cubecl(op, |cubecl| {
-        let output = cubecl.alloc_output::<i32>(input.shape())?;
-        if output.n_elements() == 0 {
-            return Ok(output);
-        }
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let output_arg = unsafe { cubecl.tensor_binding(&output, op) }?;
-        let input_arg = unsafe { cubecl.tensor_binding(input, op) }?;
-        let launch_count = cubecl.cube_count_1d(output.n_elements())?;
-        // SAFETY: bindings are live device tensors and each thread writes one
-        // independent validation flag.
-        unsafe {
-            cubecl_linalg::upper_trapezoidal_violation::launch_unchecked::<T>(
-                cubecl.client(),
-                launch_count,
-                cubecl.cube_dim_1d(),
-                output_arg.into_tensor_arg(),
-                input_arg.into_tensor_arg(),
-            );
-        }
-        Ok(output)
-    })
+    let output = backend.alloc_output(DType::I32, input.shape())?;
+    if input.shape().iter().all(|&extent| extent != 0) {
+        backend.linalg_upper_trapezoidal_violation(input, &output, op)?;
+    }
+    output
+        .into_typed::<i32>()
+        .map_err(|_| Error::Internal("upper trapezoid output changed dtype".into()))
 }
 
 fn validate_upper_trapezoidal_gpu(
@@ -779,7 +755,10 @@ fn validate_upper_trapezoidal_gpu(
     };
     let flags = Tensor::from_typed::<i32>(flags);
     let maximum = backend.reduce_max_read(TensorRead::from_tensor(&flags), &[0, 1])?;
-    backend.runtime().synchronize()?;
+    backend
+        .runtime()
+        .synchronize()
+        .map_err(|error| Error::Internal(format!("{op}: stream barrier failed: {error}")))?;
     let host = download_tensor(backend.runtime(), &maximum)?;
     let value = host.into_typed::<i32>().map_err(|_| {
         Error::Internal(format!(
@@ -1193,8 +1172,8 @@ pub(super) fn eig(_backend: &mut CudaEngine, _input: &Tensor) -> Result<Vec<Tens
 pub(super) fn solve(backend: &mut CudaEngine, a: &Tensor, b: &Tensor) -> Result<Tensor> {
     const OP: &str = "solve";
 
-    ensure_cubecl_resident_tensor(OP, a)?;
-    ensure_cubecl_resident_tensor(OP, b)?;
+    ensure_device_resident_tensor(OP, a)?;
+    ensure_device_resident_tensor(OP, b)?;
     ensure_supported_linalg_pair(OP, a, b)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         return zero_like_linalg_device_tensor(backend, b, OP);
@@ -1248,10 +1227,10 @@ pub(super) fn lu_solve_prepared(
 ) -> Result<Tensor> {
     const OP: &str = "lu_solve_prepared";
 
-    ensure_cubecl_resident_tensor(OP, a)?;
-    ensure_cubecl_resident_tensor(OP, packed_lu)?;
-    ensure_cubecl_resident_tensor(OP, pivots)?;
-    ensure_cubecl_resident_tensor(OP, b)?;
+    ensure_device_resident_tensor(OP, a)?;
+    ensure_device_resident_tensor(OP, packed_lu)?;
+    ensure_device_resident_tensor(OP, pivots)?;
+    ensure_device_resident_tensor(OP, b)?;
     ensure_supported_linalg_pair(OP, a, b)?;
     ensure_supported_linalg_pair(OP, a, packed_lu)?;
     if !matches!(pivots.dtype(), DType::I32) {
@@ -1310,7 +1289,7 @@ pub(super) fn lu_solve_prepared(
 
 fn cholesky_typed<T>(backend: &mut CudaEngine, input: &TypedTensor<T>) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "cholesky";
 
@@ -1332,19 +1311,17 @@ where
         let handles = raw.resource(CudaLinalgHandles::load)?;
         // SAFETY: the stream handle is valid only for this raw-session scope;
         // it is used immediately to bind the cuSOLVER handle and not retained.
-        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        let stream = raw.stream().raw_handle() as usize as CudaStream;
         handles.cusolver().set_stream(stream, OP)?;
 
         // Clone `input` into a fresh work matrix on the session stream.
-        let mut work = raw.alloc_output::<T>(input.shape())?;
+        let work = raw.alloc_output::<T>(input.shape())?;
         {
             let src = raw.tensor(input)?;
-            let dst = raw.tensor_mut(&mut work)?;
+            let dst = raw.tensor_mut(&work)?;
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
-            unsafe {
-                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
-            };
+            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?;
         }
 
         let batch_total = batch_count(OP, &input.shape()[2..])?;
@@ -1358,7 +1335,7 @@ where
                 n_i32,
                 // SAFETY: `first_ref` is a validated device span on this
                 // runtime; cuSOLVER only queries the leading dimension here.
-                unsafe { first_ref.raw_ptr() },
+                first_ref.raw_ptr(),
                 lda,
                 OP,
             )?
@@ -1379,15 +1356,15 @@ where
         let mut workspace_ptr = std::ptr::null_mut::<c_void>();
         workspace.with_ptr(|ptr| workspace_ptr = ptr);
 
-        let mut info = raw.alloc_output::<i32>(&[batch_total])?;
-        let info_ref = raw.tensor_mut(&mut info)?;
+        let info = raw.alloc_output::<i32>(&[batch_total])?;
+        let info_ref = raw.tensor_mut(&info)?;
         // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let info_ptr = unsafe { info_ref.raw_ptr() };
+        let info_ptr = info_ref.raw_ptr();
         let matrix_stride = checked_mul_usize(OP, "cholesky matrix stride", n, n)?;
 
-        let first_ref = raw.tensor_mut(&mut work)?;
+        let first_ref = raw.tensor_mut(&work)?;
         // SAFETY: `first_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let first_ptr = unsafe { first_ref.raw_ptr() };
+        let first_ptr = first_ref.raw_ptr();
         for batch in 0..batch_total {
             let a_offset =
                 checked_batch_offset(OP, "cholesky matrix batch offset", batch, matrix_stride)?;
@@ -1414,8 +1391,8 @@ where
                     lwork as i32,
                     batch_info,
                     OP,
-                )?;
-            }
+                )
+            }?;
         }
 
         // Host barrier (only for reading the solver diagnostics).
@@ -1426,7 +1403,10 @@ where
         Ok(work)
     })?;
 
-    backend.linalg_tril_typed(&work, 0)
+    backend
+        .linalg_triangular(&work, 0, true, "potrf")?
+        .into_typed::<T>()
+        .map_err(|_| Error::Internal("cholesky triangle changed dtype".into()))
 }
 
 fn triangular_solve_typed<T>(
@@ -1472,8 +1452,8 @@ fn triangular_solve_typed_with_op<T>(
 where
     T: LinalgScalar + TensorScalar,
 {
-    ensure_cubecl_resident_typed(op, a)?;
-    ensure_cubecl_resident_typed(op, b)?;
+    ensure_device_resident_typed(op, a)?;
+    ensure_device_resident_typed(op, b)?;
     let n = square_matrix_dim(op, a.shape())?;
     validate_triangular_rhs(op, a.shape(), b.shape(), left_side)?;
     let side = if left_side {
@@ -1508,7 +1488,7 @@ where
         let handles = raw.resource(CudaLinalgHandles::load)?;
         // SAFETY: the stream handle is valid only for this raw-session scope;
         // it is used immediately to bind the cuBLAS handle and not retained.
-        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        let stream = raw.stream().raw_handle() as usize as CudaStream;
         handles.cublas().set_stream(stream, op)?;
 
         // The fast path still validates residency before allocating the empty
@@ -1521,23 +1501,21 @@ where
         }
 
         // Clone `b` into a fresh output tensor on the session stream.
-        let mut out = raw.alloc_output::<T>(b.shape())?;
+        let out = raw.alloc_output::<T>(b.shape())?;
         {
             let src = raw.tensor(b)?;
-            let dst = raw.tensor_mut(&mut out)?;
+            let dst = raw.tensor_mut(&out)?;
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
-            unsafe {
-                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?
-            };
+            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?;
         }
 
         let a_ref = raw.tensor(a)?;
-        let out_ref = raw.tensor_mut(&mut out)?;
+        let out_ref = raw.tensor_mut(&out)?;
         // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let a_ptr = unsafe { a_ref.raw_ptr() };
+        let a_ptr = a_ref.raw_ptr();
         // SAFETY: `out_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let out_ptr = unsafe { out_ref.raw_ptr() };
+        let out_ptr = out_ref.raw_ptr();
 
         if batch_total > 1 {
             let mut a_pointers = Vec::with_capacity(batch_total);
@@ -1645,7 +1623,7 @@ fn lu_typed<T>(
     TypedTensor<T>,
 )>
 where
-    T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "lu";
 
@@ -1662,7 +1640,7 @@ fn lu_factor_typed<T>(
     op: &'static str,
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)>
 where
-    T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
     let (packed_lu, pivots) = lu_factor_core(backend, input, op, true)?;
     let (m, n) = matrix_dims(op, input.shape())?;
@@ -1680,7 +1658,7 @@ fn lu_factor_for_solve_typed<T>(
     op: &'static str,
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>)>
 where
-    T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
     lu_factor_core(backend, input, op, false)
 }
@@ -1697,9 +1675,9 @@ fn lu_factor_core<T>(
     check_status: bool,
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>)>
 where
-    T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
-    ensure_cubecl_resident_typed(op, input)?;
+    ensure_device_resident_typed(op, input)?;
     let (m, n) = matrix_dims(op, input.shape())?;
     let k = m.min(n);
     if has_zero_dim(input.shape()) {
@@ -1718,19 +1696,17 @@ where
         let handles = raw.resource(CudaLinalgHandles::load)?;
         // SAFETY: the stream handle is valid only for this raw-session scope;
         // it is used immediately to bind the cuSOLVER handle and not retained.
-        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        let stream = raw.stream().raw_handle() as usize as CudaStream;
         handles.cusolver().set_stream(stream, op)?;
 
         // Clone `input` into a fresh work matrix on the session stream.
-        let mut work = raw.alloc_output::<T>(input.shape())?;
+        let work = raw.alloc_output::<T>(input.shape())?;
         {
             let src = raw.tensor(input)?;
-            let dst = raw.tensor_mut(&mut work)?;
+            let dst = raw.tensor_mut(&work)?;
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
-            unsafe {
-                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?
-            };
+            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?;
         }
 
         let lwork = {
@@ -1741,7 +1717,7 @@ where
                 n_i32,
                 // SAFETY: `a_ref` is a validated device span on this runtime;
                 // cuSOLVER only queries the leading dimension here.
-                unsafe { a_ref.raw_ptr() },
+                a_ref.raw_ptr(),
                 lda,
                 op,
             )?
@@ -1762,17 +1738,17 @@ where
         let mut workspace_ptr = std::ptr::null_mut::<c_void>();
         workspace.with_ptr(|ptr| workspace_ptr = ptr);
 
-        let mut pivots = raw.alloc_output::<i32>(&pivot_shape)?;
-        let mut info = raw.alloc_output::<i32>(&[batch_total])?;
-        let a_ref = raw.tensor_mut(&mut work)?;
+        let pivots = raw.alloc_output::<i32>(&pivot_shape)?;
+        let info = raw.alloc_output::<i32>(&[batch_total])?;
+        let a_ref = raw.tensor_mut(&work)?;
         // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let a_ptr = unsafe { a_ref.raw_ptr() };
-        let pivots_ref = raw.tensor_mut(&mut pivots)?;
+        let a_ptr = a_ref.raw_ptr();
+        let pivots_ref = raw.tensor_mut(&pivots)?;
         // SAFETY: `pivots_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let pivots_ptr = unsafe { pivots_ref.raw_ptr() };
-        let info_ref = raw.tensor_mut(&mut info)?;
+        let pivots_ptr = pivots_ref.raw_ptr();
+        let info_ref = raw.tensor_mut(&info)?;
         // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let info_ptr = unsafe { info_ref.raw_ptr() };
+        let info_ptr = info_ref.raw_ptr();
 
         for batch in 0..batch_total {
             let a_offset =
@@ -1800,8 +1776,8 @@ where
                     batch_pivots.cast::<i32>(),
                     batch_info.cast::<i32>(),
                     op,
-                )?;
-            }
+                )
+            }?;
         }
 
         if check_status {
@@ -1840,13 +1816,13 @@ fn lu_solve_prepared_typed<T>(
     conjugate_a: bool,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "lu_solve_prepared";
 
-    ensure_cubecl_resident_typed(OP, packed_lu)?;
-    ensure_cubecl_resident_typed(OP, pivots)?;
-    ensure_cubecl_resident_typed(OP, b)?;
+    ensure_device_resident_typed(OP, packed_lu)?;
+    ensure_device_resident_typed(OP, pivots)?;
+    ensure_device_resident_typed(OP, b)?;
     validate_lu_solve_prepared_shapes(packed_lu.shape(), pivots.shape(), b.shape())?;
     if has_zero_dim(packed_lu.shape()) || has_zero_dim(b.shape()) {
         return backend.with_raw(OP, |raw| {
@@ -1910,13 +1886,12 @@ fn copy_matrix_adjoint_real<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
-    backend.with_cubecl(op, |cubecl| {
-        let vt = cubecl.alloc_output::<T>(vt_shape)?;
-        launch_matrix_adjoint_real(cubecl, v, &vt, op)?;
-        Ok(vt)
-    })
+    let vt = backend.alloc_output(T::dtype(), vt_shape)?;
+    backend.linalg_matrix_adjoint(v, &vt, op)?;
+    vt.into_typed::<T>()
+        .map_err(|_| Error::Internal("matrix adjoint changed dtype".into()))
 }
 
 fn copy_matrix_adjoint_complex<T>(
@@ -1926,13 +1901,12 @@ fn copy_matrix_adjoint_complex<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar + ComplexCore,
+    T: LinalgScalar + TensorScalar,
 {
-    backend.with_cubecl(op, |cubecl| {
-        let vt = cubecl.alloc_output::<T>(vt_shape)?;
-        launch_matrix_adjoint_complex(cubecl, v, &vt, op)?;
-        Ok(vt)
-    })
+    let vt = backend.alloc_output(T::dtype(), vt_shape)?;
+    backend.linalg_matrix_adjoint(v, &vt, op)?;
+    vt.into_typed::<T>()
+        .map_err(|_| Error::Internal("matrix adjoint changed dtype".into()))
 }
 
 fn clone_device_tensor<T>(
@@ -1944,19 +1918,18 @@ where
     T: LinalgScalar + TensorScalar,
 {
     backend.with_raw(op, |raw| {
-        let mut output = raw.alloc_output::<T>(input.shape())?;
+        let output = raw.alloc_output::<T>(input.shape())?;
         let input_ref = raw.tensor(input)?;
-        let output_ref = raw.tensor_mut(&mut output)?;
+        let output_ref = raw.tensor_mut(&output)?;
         // SAFETY: both spans are validated on this runtime, output is freshly
         // allocated and exclusively borrowed, and the copy is stream ordered.
-        unsafe {
-            raw.copy_bytes(
-                output_ref.raw_ptr(),
-                input_ref.raw_ptr() as *const _,
-                input_ref.byte_len(),
-                op,
-            )?;
-        }
+        raw.copy_bytes(
+            output_ref.raw_ptr(),
+            input_ref.raw_ptr() as *const _,
+            input_ref.byte_len(),
+            op,
+        )?;
+
         Ok(output)
     })
 }
@@ -1969,62 +1942,17 @@ fn apply_positive_qr_gauge_real<T>(
     op: &'static str,
 ) -> Result<()>
 where
-    T: LinalgScalar
-        + TensorScalar
-        + CubeMul
-        + CubeNeg
-        + CubePartialOrd
-        + PartialOrd
-        + std::ops::Mul<Output = T>
-        + Scalar,
+    T: LinalgScalar + TensorScalar + PartialOrd + std::ops::Mul<Output = T>,
 {
-    backend.with_cubecl(op, |cubecl| {
-        let mut phase_shape = vec![r.shape()[0]];
-        phase_shape.extend_from_slice(&r.shape()[2..]);
-        let phase = cubecl.alloc_output::<T>(&phase_shape)?;
-        let launch_len = q.n_elements().max(r.n_elements());
-        if launch_len == 0 {
-            return Ok(());
-        }
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let phase_output_arg = unsafe { cubecl.tensor_binding(&phase, op) }?;
-        let r_input_arg = unsafe { cubecl.tensor_binding(r, op) }?;
-        let phase_count = cubecl.cube_count_1d(phase.n_elements())?;
-        // SAFETY: phase/R bindings are live and phase_count covers each batch diagonal.
-        unsafe {
-            cubecl_linalg::qr_phase_real::launch_unchecked::<T>(
-                cubecl.client(),
-                phase_count,
-                cubecl.cube_dim_1d(),
-                phase_output_arg.into_tensor_arg(),
-                r_input_arg.into_tensor_arg(),
-                r.shape().len(),
-            );
-        }
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let phase_arg = unsafe { cubecl.tensor_binding(&phase, op) }?;
-        let q_arg = unsafe { cubecl.tensor_binding(q, op) }?;
-        // SAFETY: the bindings in this block are created for tensors this call owns.
-        let r_arg = unsafe { cubecl.tensor_binding(r, op) }?;
-        let launch_count = cubecl.cube_count_1d(launch_len)?;
-        // SAFETY: phase computation is stream-ordered before scaling, Q/R are
-        // live mutable outputs, and the launch covers both domains.
-        unsafe {
-            cubecl_linalg::qr_apply_phase_real::launch_unchecked::<T>(
-                cubecl.client(),
-                launch_count,
-                cubecl.cube_dim_1d(),
-                q_arg.into_tensor_arg(),
-                r_arg.into_tensor_arg(),
-                phase_arg.into_tensor_arg(),
-                q_start,
-                r.shape().len(),
-            );
-        }
-        Ok(())
-    })
+    let mut phase_shape = vec![r.shape()[0]];
+    phase_shape.extend_from_slice(&r.shape()[2..]);
+    // An empty Q has no column to phase: the factor the caller keeps here is scratch.
+    if q.n_elements() != 0 && r.n_elements() != 0 {
+        let phase = backend.alloc_output(T::dtype(), &phase_shape)?;
+        backend.linalg_qr_phase(r, &phase, op)?;
+        backend.linalg_qr_apply_phase(q, r, &phase, q_start as i64, op)?;
+    }
+    Ok(())
 }
 
 fn apply_positive_qr_gauge_c32(
@@ -2034,53 +1962,15 @@ fn apply_positive_qr_gauge_c32(
     q_start: usize,
     op: &'static str,
 ) -> Result<()> {
-    backend.with_cubecl(op, |cubecl| {
-        let mut phase_shape = vec![r.shape()[0]];
-        phase_shape.extend_from_slice(&r.shape()[2..]);
-        let phase = cubecl.alloc_output::<Complex32>(&phase_shape)?;
-        let launch_len = q.n_elements().max(r.n_elements());
-        if launch_len == 0 {
-            return Ok(());
-        }
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let phase_output_arg = unsafe { cubecl.tensor_binding(&phase, op) }?;
-        let r_input_arg = unsafe { cubecl.tensor_binding(r, op) }?;
-        let phase_count = cubecl.cube_count_1d(phase.n_elements())?;
-        // SAFETY: phase/R bindings are live and phase_count covers each batch diagonal.
-        unsafe {
-            cubecl_linalg::qr_phase_c32::launch_unchecked(
-                cubecl.client(),
-                phase_count,
-                cubecl.cube_dim_1d(),
-                phase_output_arg.into_tensor_arg(),
-                r_input_arg.into_tensor_arg(),
-                r.shape().len(),
-            );
-        }
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let phase_arg = unsafe { cubecl.tensor_binding(&phase, op) }?;
-        let q_arg = unsafe { cubecl.tensor_binding(q, op) }?;
-        // SAFETY: the bindings in this block are created for tensors this call owns.
-        let r_arg = unsafe { cubecl.tensor_binding(r, op) }?;
-        let launch_count = cubecl.cube_count_1d(launch_len)?;
-        // SAFETY: phase computation is stream-ordered before scaling and the
-        // second launch covers Q/R exactly.
-        unsafe {
-            cubecl_linalg::qr_apply_phase_complex::launch_unchecked::<Complex32>(
-                cubecl.client(),
-                launch_count,
-                cubecl.cube_dim_1d(),
-                q_arg.into_tensor_arg(),
-                r_arg.into_tensor_arg(),
-                phase_arg.into_tensor_arg(),
-                q_start,
-                r.shape().len(),
-            );
-        }
-        Ok(())
-    })
+    let mut phase_shape = vec![r.shape()[0]];
+    phase_shape.extend_from_slice(&r.shape()[2..]);
+    // An empty Q has no column to phase: the factor the caller keeps here is scratch.
+    if q.n_elements() != 0 && r.n_elements() != 0 {
+        let phase = backend.alloc_output(DType::C32, &phase_shape)?;
+        backend.linalg_qr_phase(r, &phase, op)?;
+        backend.linalg_qr_apply_phase(q, r, &phase, q_start as i64, op)?;
+    }
+    Ok(())
 }
 
 fn apply_positive_qr_gauge_c64(
@@ -2090,115 +1980,13 @@ fn apply_positive_qr_gauge_c64(
     q_start: usize,
     op: &'static str,
 ) -> Result<()> {
-    backend.with_cubecl(op, |cubecl| {
-        let mut phase_shape = vec![r.shape()[0]];
-        phase_shape.extend_from_slice(&r.shape()[2..]);
-        let phase = cubecl.alloc_output::<Complex64>(&phase_shape)?;
-        let launch_len = q.n_elements().max(r.n_elements());
-        if launch_len == 0 {
-            return Ok(());
-        }
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let phase_output_arg = unsafe { cubecl.tensor_binding(&phase, op) }?;
-        let r_input_arg = unsafe { cubecl.tensor_binding(r, op) }?;
-        let phase_count = cubecl.cube_count_1d(phase.n_elements())?;
-        // SAFETY: phase/R bindings are live and phase_count covers each batch diagonal.
-        unsafe {
-            cubecl_linalg::qr_phase_c64::launch_unchecked(
-                cubecl.client(),
-                phase_count,
-                cubecl.cube_dim_1d(),
-                phase_output_arg.into_tensor_arg(),
-                r_input_arg.into_tensor_arg(),
-                r.shape().len(),
-            );
-        }
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let phase_arg = unsafe { cubecl.tensor_binding(&phase, op) }?;
-        let q_arg = unsafe { cubecl.tensor_binding(q, op) }?;
-        // SAFETY: the bindings in this block are created for tensors this call owns.
-        let r_arg = unsafe { cubecl.tensor_binding(r, op) }?;
-        let launch_count = cubecl.cube_count_1d(launch_len)?;
-        // SAFETY: phase computation is stream-ordered before scaling and the
-        // second launch covers Q/R exactly.
-        unsafe {
-            cubecl_linalg::qr_apply_phase_complex::launch_unchecked::<Complex64>(
-                cubecl.client(),
-                launch_count,
-                cubecl.cube_dim_1d(),
-                q_arg.into_tensor_arg(),
-                r_arg.into_tensor_arg(),
-                phase_arg.into_tensor_arg(),
-                q_start,
-                r.shape().len(),
-            );
-        }
-        Ok(())
-    })
-}
-
-fn launch_matrix_adjoint_real<T>(
-    cubecl: &CubeclSession<'_>,
-    v: &TypedTensor<T>,
-    vt: &TypedTensor<T>,
-    op: &'static str,
-) -> Result<()>
-where
-    T: LinalgScalar + TensorScalar + Scalar,
-{
-    if vt.n_elements() == 0 {
-        return Ok(());
-    }
-    // SAFETY: every binding here is created for a tensor this call owns, and the
-    // kernel writes only into those buffers.
-    let vt_arg = unsafe { cubecl.tensor_binding(vt, op) }?;
-    let v_arg = unsafe { cubecl.tensor_binding(v, op) }?;
-    let launch_count = cubecl.cube_count_1d(vt.n_elements())?;
-    // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
-    // covers exactly the output domain for the matrix-adjoint copy kernel.
-    unsafe {
-        cubecl_linalg::matrix_adjoint_real::launch_unchecked::<T>(
-            cubecl.client(),
-            launch_count,
-            cubecl.cube_dim_1d(),
-            vt_arg.into_tensor_arg(),
-            v_arg.into_tensor_arg(),
-            vt.shape().len(),
-        );
-    }
-    Ok(())
-}
-
-fn launch_matrix_adjoint_complex<T>(
-    cubecl: &CubeclSession<'_>,
-    v: &TypedTensor<T>,
-    vt: &TypedTensor<T>,
-    op: &'static str,
-) -> Result<()>
-where
-    T: LinalgScalar + TensorScalar + ComplexCore,
-{
-    if vt.n_elements() == 0 {
-        return Ok(());
-    }
-    // SAFETY: every binding here is created for a tensor this call owns, and the
-    // kernel writes only into those buffers.
-    let vt_arg = unsafe { cubecl.tensor_binding(vt, op) }?;
-    let v_arg = unsafe { cubecl.tensor_binding(v, op) }?;
-    let launch_count = cubecl.cube_count_1d(vt.n_elements())?;
-    // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
-    // covers exactly the output domain for the conjugating matrix-adjoint kernel.
-    unsafe {
-        cubecl_linalg::matrix_adjoint_complex::launch_unchecked::<T>(
-            cubecl.client(),
-            launch_count,
-            cubecl.cube_dim_1d(),
-            vt_arg.into_tensor_arg(),
-            v_arg.into_tensor_arg(),
-            vt.shape().len(),
-        );
+    let mut phase_shape = vec![r.shape()[0]];
+    phase_shape.extend_from_slice(&r.shape()[2..]);
+    // An empty Q has no column to phase: the factor the caller keeps here is scratch.
+    if q.n_elements() != 0 && r.n_elements() != 0 {
+        let phase = backend.alloc_output(DType::C64, &phase_shape)?;
+        backend.linalg_qr_phase(r, &phase, op)?;
+        backend.linalg_qr_apply_phase(q, r, &phase, q_start as i64, op)?;
     }
     Ok(())
 }
@@ -2219,7 +2007,7 @@ where
 {
     let op: &'static str = if full { "svd_full" } else { "svd" };
 
-    ensure_cubecl_resident_typed(op, input)?;
+    ensure_device_resident_typed(op, input)?;
     let (m, n) = matrix_dims(op, input.shape())?;
     let k = m.min(n);
     // The full variant keeps square factors: `U` is `m x m` and `Vt` is
@@ -2258,29 +2046,22 @@ where
                 let handles = raw.resource(CudaLinalgHandles::load)?;
                 // SAFETY: the stream handle is valid only for this raw-session
                 // scope; it is used immediately to bind cuSOLVER and not retained.
-                let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+                let stream = raw.stream().raw_handle() as usize as CudaStream;
                 handles.cusolver().set_stream(stream, op)?;
 
                 // Clone `input` into a fresh work matrix on the session stream.
-                let mut work = raw.alloc_output::<T>(input.shape())?;
+                let work = raw.alloc_output::<T>(input.shape())?;
                 {
                     let src = raw.tensor(input)?;
-                    let dst = raw.tensor_mut(&mut work)?;
+                    let dst = raw.tensor_mut(&work)?;
                     // SAFETY: both spans were validated resident on this runtime
                     // and the copy is stream-ordered; `dst` is exclusively borrowed.
-                    unsafe {
-                        raw.copy_bytes(
-                            dst.raw_ptr(),
-                            src.raw_ptr() as *const _,
-                            src.byte_len(),
-                            op,
-                        )?
-                    };
+                    raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), op)?;
                 }
 
-                let mut u = raw.alloc_output::<T>(&u_shape)?;
-                let mut v = raw.alloc_output::<T>(&v_shape)?;
-                let mut s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
+                let u = raw.alloc_output::<T>(&u_shape)?;
+                let v = raw.alloc_output::<T>(&v_shape)?;
+                let s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
 
                 let m_i32 = as_i32(m, op, "m")?;
                 let n_i32 = as_i32(n, op, "n")?;
@@ -2301,15 +2082,15 @@ where
                         n_i32,
                         // SAFETY: all spans are validated device allocations on
                         // this runtime; only leading dimensions are queried here.
-                        unsafe { a_ref.raw_ptr().cast_const() },
+                        a_ref.raw_ptr().cast_const(),
                         lda,
                         // SAFETY: `s_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                        unsafe { s_ref.raw_ptr().cast_const() },
+                        s_ref.raw_ptr().cast_const(),
                         // SAFETY: `u_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                        unsafe { u_ref.raw_ptr().cast_const() },
+                        u_ref.raw_ptr().cast_const(),
                         ldu,
                         // SAFETY: `v_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                        unsafe { v_ref.raw_ptr().cast_const() },
+                        v_ref.raw_ptr().cast_const(),
                         ldv,
                         &params,
                         op,
@@ -2331,22 +2112,22 @@ where
                 let mut workspace_ptr = std::ptr::null_mut::<c_void>();
                 workspace.with_ptr(|ptr| workspace_ptr = ptr);
 
-                let mut info = raw.alloc_output::<i32>(&[batch_total])?;
-                let a_ref = raw.tensor_mut(&mut work)?;
+                let info = raw.alloc_output::<i32>(&[batch_total])?;
+                let a_ref = raw.tensor_mut(&work)?;
                 // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let a_ptr = unsafe { a_ref.raw_ptr() };
-                let u_ref = raw.tensor_mut(&mut u)?;
+                let a_ptr = a_ref.raw_ptr();
+                let u_ref = raw.tensor_mut(&u)?;
                 // SAFETY: `u_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let u_ptr = unsafe { u_ref.raw_ptr() };
-                let s_ref = raw.tensor_mut(&mut s)?;
+                let u_ptr = u_ref.raw_ptr();
+                let s_ref = raw.tensor_mut(&s)?;
                 // SAFETY: `s_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let s_ptr = unsafe { s_ref.raw_ptr() };
-                let v_ref = raw.tensor_mut(&mut v)?;
+                let s_ptr = s_ref.raw_ptr();
+                let v_ref = raw.tensor_mut(&v)?;
                 // SAFETY: `v_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let v_ptr = unsafe { v_ref.raw_ptr() };
-                let info_ref = raw.tensor_mut(&mut info)?;
+                let v_ptr = v_ref.raw_ptr();
+                let info_ref = raw.tensor_mut(&info)?;
                 // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let info_ptr = unsafe { info_ref.raw_ptr() };
+                let info_ptr = info_ref.raw_ptr();
                 let u_stride = checked_mul_usize(op, "svd u stride", m, u_cols)?;
                 let v_stride = checked_mul_usize(op, "svd v stride", n, vt_rows)?;
 
@@ -2393,8 +2174,8 @@ where
                             batch_info,
                             &params,
                             op,
-                        )?;
-                    }
+                        )
+                    }?;
                 }
 
                 // Host barrier (only for reading the solver diagnostics).
@@ -2436,49 +2217,47 @@ where
                 let handles = raw.resource(CudaLinalgHandles::load)?;
                 // SAFETY: the stream handle is valid only for this raw-session
                 // scope; it is used immediately to bind cuSOLVER and not retained.
-                let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+                let stream = raw.stream().raw_handle() as usize as CudaStream;
                 handles.cusolver().set_stream(stream, op)?;
 
                 // `work` is either the CubeCL-adjointed input (m < n) or a
                 // clone of `input` made on the session stream.
-                let mut work = match transposed_work {
+                let work = match transposed_work {
                     Some(work) => work,
                     None => {
-                        let mut work = raw.alloc_output::<T>(input.shape())?;
+                        let work = raw.alloc_output::<T>(input.shape())?;
                         {
                             let src = raw.tensor(input)?;
-                            let dst = raw.tensor_mut(&mut work)?;
+                            let dst = raw.tensor_mut(&work)?;
                             // SAFETY: both spans were validated resident on this
                             // runtime and the copy is stream-ordered; `dst` is
                             // exclusively borrowed.
-                            unsafe {
-                                raw.copy_bytes(
-                                    dst.raw_ptr(),
-                                    src.raw_ptr() as *const _,
-                                    src.byte_len(),
-                                    op,
-                                )?
-                            };
+                            raw.copy_bytes(
+                                dst.raw_ptr(),
+                                src.raw_ptr() as *const _,
+                                src.byte_len(),
+                                op,
+                            )?;
                         }
                         work
                     }
                 };
-                let mut s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
-                let mut gesvd_u = raw.alloc_output::<T>(&gesvd_u_shape)?;
-                let mut gesvd_vt = raw.alloc_output::<T>(&gesvd_vt_shape)?;
+                let s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
+                let gesvd_u = raw.alloc_output::<T>(&gesvd_u_shape)?;
+                let gesvd_vt = raw.alloc_output::<T>(&gesvd_vt_shape)?;
 
-                let a_ref = raw.tensor_mut(&mut work)?;
+                let a_ref = raw.tensor_mut(&work)?;
                 // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let a_ptr = unsafe { a_ref.raw_ptr() };
-                let u_ref = raw.tensor_mut(&mut gesvd_u)?;
+                let a_ptr = a_ref.raw_ptr();
+                let u_ref = raw.tensor_mut(&gesvd_u)?;
                 // SAFETY: `u_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let u_ptr = unsafe { u_ref.raw_ptr() };
-                let s_ref = raw.tensor_mut(&mut s)?;
+                let u_ptr = u_ref.raw_ptr();
+                let s_ref = raw.tensor_mut(&s)?;
                 // SAFETY: `s_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let s_ptr = unsafe { s_ref.raw_ptr() };
-                let vt_ref = raw.tensor_mut(&mut gesvd_vt)?;
+                let s_ptr = s_ref.raw_ptr();
+                let vt_ref = raw.tensor_mut(&gesvd_vt)?;
                 // SAFETY: `vt_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let vt_ptr = unsafe { vt_ref.raw_ptr() };
+                let vt_ptr = vt_ref.raw_ptr();
                 let gesvd_m_i32 = as_i32(gesvd_m, op, "gesvd m")?;
                 let gesvd_n_i32 = as_i32(gesvd_n, op, "gesvd n")?;
                 let lda = gesvd_m_i32;
@@ -2523,10 +2302,10 @@ where
                     let rwork = raw.alloc_bytes(rwork_nbytes, op)?;
                     rwork.with_ptr(|ptr| rwork_ptr = ptr);
                 }
-                let mut info = raw.alloc_output::<i32>(&[batch_total])?;
-                let info_ref = raw.tensor_mut(&mut info)?;
+                let info = raw.alloc_output::<i32>(&[batch_total])?;
+                let info_ref = raw.tensor_mut(&info)?;
                 // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let info_ptr = unsafe { info_ref.raw_ptr() };
+                let info_ptr = info_ref.raw_ptr();
                 let u_stride = checked_mul_usize(op, "svd gesvd u stride", gesvd_m, gesvd_u_cols)?;
                 let vt_stride =
                     checked_mul_usize(op, "svd gesvd vt stride", gesvd_vt_rows, gesvd_n)?;
@@ -2577,8 +2356,8 @@ where
                             rwork_ptr,
                             batch_info,
                             op,
-                        )?;
-                    }
+                        )
+                    }?;
                 }
 
                 // Host barrier (only for reading the solver diagnostics).
@@ -2693,7 +2472,7 @@ where
 {
     const OP: &str = "svd_values";
 
-    ensure_cubecl_resident_typed(OP, input)?;
+    ensure_device_resident_typed(OP, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
     let batch_shape = &input.shape()[2..];
@@ -2721,33 +2500,26 @@ where
             u_shape.extend_from_slice(batch_shape);
             let mut v_shape = vec![n, k];
             v_shape.extend_from_slice(batch_shape);
-            let s = backend.with_raw(OP, |raw| {
+            backend.with_raw(OP, |raw| {
                 let handles = raw.resource(CudaLinalgHandles::load)?;
                 // SAFETY: the stream handle is valid only for this raw-session
                 // scope; it is used immediately to bind cuSOLVER and not retained.
-                let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+                let stream = raw.stream().raw_handle() as usize as CudaStream;
                 handles.cusolver().set_stream(stream, OP)?;
 
                 // Clone `input` into a fresh work matrix on the session stream.
-                let mut work = raw.alloc_output::<T>(input.shape())?;
+                let work = raw.alloc_output::<T>(input.shape())?;
                 {
                     let src = raw.tensor(input)?;
-                    let dst = raw.tensor_mut(&mut work)?;
+                    let dst = raw.tensor_mut(&work)?;
                     // SAFETY: both spans were validated resident on this runtime
                     // and the copy is stream-ordered; `dst` is exclusively borrowed.
-                    unsafe {
-                        raw.copy_bytes(
-                            dst.raw_ptr(),
-                            src.raw_ptr() as *const _,
-                            src.byte_len(),
-                            OP,
-                        )?
-                    };
+                    raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?;
                 }
 
-                let mut u = raw.alloc_output::<T>(&u_shape)?;
-                let mut v = raw.alloc_output::<T>(&v_shape)?;
-                let mut s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
+                let u = raw.alloc_output::<T>(&u_shape)?;
+                let v = raw.alloc_output::<T>(&v_shape)?;
+                let s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
 
                 let m_i32 = as_i32(m, OP, "m")?;
                 let n_i32 = as_i32(n, OP, "n")?;
@@ -2766,15 +2538,15 @@ where
                         n_i32,
                         // SAFETY: all spans are validated device allocations on
                         // this runtime; only leading dimensions are queried here.
-                        unsafe { a_ref.raw_ptr().cast_const() },
+                        a_ref.raw_ptr().cast_const(),
                         lda,
                         // SAFETY: `s_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                        unsafe { s_ref.raw_ptr().cast_const() },
+                        s_ref.raw_ptr().cast_const(),
                         // SAFETY: `u_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                        unsafe { u_ref.raw_ptr().cast_const() },
+                        u_ref.raw_ptr().cast_const(),
                         lda,
                         // SAFETY: `v_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                        unsafe { v_ref.raw_ptr().cast_const() },
+                        v_ref.raw_ptr().cast_const(),
                         n_i32,
                         &params,
                         OP,
@@ -2796,22 +2568,22 @@ where
                 let mut workspace_ptr = std::ptr::null_mut::<c_void>();
                 workspace.with_ptr(|ptr| workspace_ptr = ptr);
 
-                let mut info = raw.alloc_output::<i32>(&[batch_total])?;
-                let a_ref = raw.tensor_mut(&mut work)?;
+                let info = raw.alloc_output::<i32>(&[batch_total])?;
+                let a_ref = raw.tensor_mut(&work)?;
                 // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let a_ptr = unsafe { a_ref.raw_ptr() };
-                let s_ref = raw.tensor_mut(&mut s)?;
+                let a_ptr = a_ref.raw_ptr();
+                let s_ref = raw.tensor_mut(&s)?;
                 // SAFETY: `s_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let s_ptr = unsafe { s_ref.raw_ptr() };
-                let u_ref = raw.tensor_mut(&mut u)?;
+                let s_ptr = s_ref.raw_ptr();
+                let u_ref = raw.tensor_mut(&u)?;
                 // SAFETY: `u_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let u_ptr = unsafe { u_ref.raw_ptr() };
-                let v_ref = raw.tensor_mut(&mut v)?;
+                let u_ptr = u_ref.raw_ptr();
+                let v_ref = raw.tensor_mut(&v)?;
                 // SAFETY: `v_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let v_ptr = unsafe { v_ref.raw_ptr() };
-                let info_ref = raw.tensor_mut(&mut info)?;
+                let v_ptr = v_ref.raw_ptr();
+                let info_ref = raw.tensor_mut(&info)?;
                 // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let info_ptr = unsafe { info_ref.raw_ptr() };
+                let info_ptr = info_ref.raw_ptr();
                 let u_stride = checked_mul_usize(OP, "svd_values u stride", m, k)?;
                 let v_stride = checked_mul_usize(OP, "svd_values v stride", n, k)?;
 
@@ -2860,8 +2632,8 @@ where
                             batch_info,
                             &params,
                             OP,
-                        )?;
-                    }
+                        )
+                    }?;
                 }
 
                 // Host barrier (only for reading the solver diagnostics).
@@ -2870,8 +2642,7 @@ where
                     check_solver_info(OP, "cusolverDn*gesvdj", value)?;
                 }
                 Ok(s)
-            })?;
-            Ok(s)
+            })
         }
         CusolverSvdRoutine::Gesvd => {
             let (gesvd_m, gesvd_n) = if m < n { (n, m) } else { (m, n) };
@@ -2890,41 +2661,39 @@ where
                 let handles = raw.resource(CudaLinalgHandles::load)?;
                 // SAFETY: the stream handle is valid only for this raw-session
                 // scope; it is used immediately to bind cuSOLVER and not retained.
-                let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+                let stream = raw.stream().raw_handle() as usize as CudaStream;
                 handles.cusolver().set_stream(stream, OP)?;
 
                 // `work` is either the CubeCL-adjointed input (m < n) or a
                 // clone of `input` made on the session stream.
-                let mut work = match transposed_work {
+                let work = match transposed_work {
                     Some(work) => work,
                     None => {
-                        let mut work = raw.alloc_output::<T>(input.shape())?;
+                        let work = raw.alloc_output::<T>(input.shape())?;
                         {
                             let src = raw.tensor(input)?;
-                            let dst = raw.tensor_mut(&mut work)?;
+                            let dst = raw.tensor_mut(&work)?;
                             // SAFETY: both spans were validated resident on this
                             // runtime and the copy is stream-ordered; `dst` is
                             // exclusively borrowed.
-                            unsafe {
-                                raw.copy_bytes(
-                                    dst.raw_ptr(),
-                                    src.raw_ptr() as *const _,
-                                    src.byte_len(),
-                                    OP,
-                                )?
-                            };
+                            raw.copy_bytes(
+                                dst.raw_ptr(),
+                                src.raw_ptr() as *const _,
+                                src.byte_len(),
+                                OP,
+                            )?;
                         }
                         work
                     }
                 };
-                let mut s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
+                let s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
 
-                let a_ref = raw.tensor_mut(&mut work)?;
+                let a_ref = raw.tensor_mut(&work)?;
                 // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let a_ptr = unsafe { a_ref.raw_ptr() };
-                let s_ref = raw.tensor_mut(&mut s)?;
+                let a_ptr = a_ref.raw_ptr();
+                let s_ref = raw.tensor_mut(&s)?;
                 // SAFETY: `s_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let s_ptr = unsafe { s_ref.raw_ptr() };
+                let s_ptr = s_ref.raw_ptr();
                 let gesvd_m_i32 = as_i32(gesvd_m, OP, "gesvd m")?;
                 let gesvd_n_i32 = as_i32(gesvd_n, OP, "gesvd n")?;
                 let lda = gesvd_m_i32;
@@ -2967,10 +2736,10 @@ where
                     let rwork = raw.alloc_bytes(rwork_nbytes, OP)?;
                     rwork.with_ptr(|ptr| rwork_ptr = ptr);
                 }
-                let mut info = raw.alloc_output::<i32>(&[batch_total])?;
-                let info_ref = raw.tensor_mut(&mut info)?;
+                let info = raw.alloc_output::<i32>(&[batch_total])?;
+                let info_ref = raw.tensor_mut(&info)?;
                 // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-                let info_ptr = unsafe { info_ref.raw_ptr() };
+                let info_ptr = info_ref.raw_ptr();
                 let job = b'N' as c_char;
 
                 for batch in 0..batch_total {
@@ -3040,11 +2809,11 @@ fn qr_typed<T>(
     input: &TypedTensor<T>,
 ) -> Result<(TypedTensor<T>, TypedTensor<T>)>
 where
-    T: LinalgScalar + TensorScalar + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
     const OP: &str = "qr";
 
-    ensure_cubecl_resident_typed(OP, input)?;
+    ensure_device_resident_typed(OP, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
     let batch_shape = &input.shape()[2..];
@@ -3077,21 +2846,19 @@ where
         let handles = raw.resource(CudaLinalgHandles::load)?;
         // SAFETY: the stream handle is valid only for this raw-session scope;
         // it is used immediately to bind the cuSOLVER handle and not retained.
-        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        let stream = raw.stream().raw_handle() as usize as CudaStream;
         handles.cusolver().set_stream(stream, OP)?;
 
         // Clone `input` into a fresh work matrix on the session stream.
-        let mut work = raw.alloc_output::<T>(input.shape())?;
+        let work = raw.alloc_output::<T>(input.shape())?;
         {
             let src = raw.tensor(input)?;
-            let dst = raw.tensor_mut(&mut work)?;
+            let dst = raw.tensor_mut(&work)?;
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
-            unsafe {
-                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
-            };
+            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?;
         }
-        let mut q = raw.alloc_output::<T>(&q_shape)?;
+        let q = raw.alloc_output::<T>(&q_shape)?;
 
         let geqrf_lwork = {
             let work_ref = raw.tensor(&work)?;
@@ -3101,7 +2868,7 @@ where
                 n_i32,
                 // SAFETY: `work_ref` is a validated device span on this
                 // runtime; cuSOLVER only queries the leading dimension here.
-                unsafe { work_ref.raw_ptr() },
+                work_ref.raw_ptr(),
                 lda,
                 OP,
             )?
@@ -3135,7 +2902,7 @@ where
                 k_i32,
                 // SAFETY: `q_ref` and `tau_ptr` are validated device spans on
                 // this runtime; only the leading dimensions are queried here.
-                unsafe { q_ref.raw_ptr().cast_const() },
+                q_ref.raw_ptr().cast_const(),
                 lda,
                 tau_ptr.cast_const(),
                 OP,
@@ -3157,20 +2924,20 @@ where
         let mut orgqr_workspace_ptr = std::ptr::null_mut::<c_void>();
         orgqr_workspace.with_ptr(|ptr| orgqr_workspace_ptr = ptr);
 
-        let mut geqrf_info = raw.alloc_output::<i32>(&[batch_total])?;
-        let mut orgqr_info = raw.alloc_output::<i32>(&[batch_total])?;
-        let work_ref = raw.tensor_mut(&mut work)?;
+        let geqrf_info = raw.alloc_output::<i32>(&[batch_total])?;
+        let orgqr_info = raw.alloc_output::<i32>(&[batch_total])?;
+        let work_ref = raw.tensor_mut(&work)?;
         // SAFETY: `work_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let work_ptr = unsafe { work_ref.raw_ptr() };
-        let q_ref = raw.tensor_mut(&mut q)?;
+        let work_ptr = work_ref.raw_ptr();
+        let q_ref = raw.tensor_mut(&q)?;
         // SAFETY: `q_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let q_ptr = unsafe { q_ref.raw_ptr() };
-        let geqrf_info_ref = raw.tensor_mut(&mut geqrf_info)?;
+        let q_ptr = q_ref.raw_ptr();
+        let geqrf_info_ref = raw.tensor_mut(&geqrf_info)?;
         // SAFETY: `geqrf_info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let geqrf_info_ptr = unsafe { geqrf_info_ref.raw_ptr() };
-        let orgqr_info_ref = raw.tensor_mut(&mut orgqr_info)?;
+        let geqrf_info_ptr = geqrf_info_ref.raw_ptr();
+        let orgqr_info_ref = raw.tensor_mut(&orgqr_info)?;
         // SAFETY: `orgqr_info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let orgqr_info_ptr = unsafe { orgqr_info_ref.raw_ptr() };
+        let orgqr_info_ptr = orgqr_info_ref.raw_ptr();
 
         for batch in 0..batch_total {
             let work_offset = checked_batch_offset(OP, "qr work batch offset", batch, work_stride)?;
@@ -3199,21 +2966,20 @@ where
                     geqrf_lwork,
                     batch_geqrf_info,
                     OP,
-                )?;
-            }
+                )
+            }?;
 
             // Copy the reflectors from `work` into `q` on the session stream.
             // SAFETY: `batch_q` and `batch_work` are validated device spans on
             // this runtime, the copy is stream-ordered, and `batch_q` is written
             // exclusively before orgqr reads it back.
-            unsafe {
-                raw.copy_bytes(
-                    batch_q,
-                    batch_work.cast_const(),
-                    q_stride * std::mem::size_of::<T>(),
-                    OP,
-                )?;
-            }
+            raw.copy_bytes(
+                batch_q,
+                batch_work.cast_const(),
+                q_stride * std::mem::size_of::<T>(),
+                OP,
+            )?;
+
             // SAFETY: `batch_q` contains the copied reflectors, `tau` and
             // workspace are live, and dimensions match the validated reduced-Q shape.
             unsafe {
@@ -3229,8 +2995,8 @@ where
                     orgqr_lwork,
                     batch_orgqr_info,
                     OP,
-                )?;
-            }
+                )
+            }?;
         }
 
         // The vendor status flags stay on the device: reading them is a host
@@ -3243,8 +3009,11 @@ where
         Ok((q, work))
     })?;
 
-    let r_input = backend.linalg_slice_typed(&work, &matrix_slice_config(input.shape(), k, n))?;
-    let r = backend.linalg_triu_typed(&r_input, 0)?;
+    let r_input = backend.linalg_slice(&work, &matrix_slice_config(input.shape(), k, n), "qr")?;
+    let r = backend
+        .linalg_triangular(&r_input, 0, false, "qr")?
+        .into_typed::<T>()
+        .map_err(|_| Error::Internal("qr: the triangular factor changed dtype".into()))?;
     Ok((q, r))
 }
 
@@ -3258,7 +3027,7 @@ where
 {
     const OP: &str = "eigh";
 
-    ensure_cubecl_resident_typed(OP, input)?;
+    ensure_device_resident_typed(OP, input)?;
     let n = square_matrix_dim(OP, input.shape())?;
     let batch_shape = &input.shape()[2..];
     let mut values_shape = vec![n];
@@ -3290,7 +3059,7 @@ where
         let handles = raw.resource(CudaLinalgHandles::load)?;
         // SAFETY: the stream handle is valid only for this raw-session scope;
         // it is used immediately to bind the cuSOLVER handle and not retained.
-        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        let stream = raw.stream().raw_handle() as usize as CudaStream;
         handles.cusolver().set_stream(stream, OP)?;
         // The Jacobi routine needs a parameter object: it is queried for the
         // workspace size and reused by every call below. It outlives the
@@ -3305,17 +3074,15 @@ where
         };
 
         // Clone `input` into a fresh work matrix on the session stream.
-        let mut work = raw.alloc_output::<T>(input.shape())?;
+        let work = raw.alloc_output::<T>(input.shape())?;
         {
             let src = raw.tensor(input)?;
-            let dst = raw.tensor_mut(&mut work)?;
+            let dst = raw.tensor_mut(&work)?;
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
-            unsafe {
-                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
-            };
+            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?;
         }
-        let mut values = raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)?;
+        let values = raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)?;
 
         // The batched divide-and-conquer entry point reports byte sizes, so
         // its query is separate from the element-count query below.
@@ -3324,9 +3091,9 @@ where
             let values_ref = raw.tensor(&values)?;
             // SAFETY: both spans are validated device allocations on this
             // runtime; only the leading dimensions are queried here.
-            let a_ptr = unsafe { a_ref.raw_ptr().cast_const() };
+            let a_ptr = a_ref.raw_ptr().cast_const();
             // SAFETY: `values_ref` is a validated device span on this runtime.
-            let values_ptr = unsafe { values_ref.raw_ptr().cast_const() };
+            let values_ptr = values_ref.raw_ptr().cast_const();
             Some(handles.cusolver().xsyev_batched_buffer_size(
                 T::DATA_TYPE,
                 CusolverEigMode::Vector,
@@ -3348,9 +3115,9 @@ where
             let values_ref = raw.tensor(&values)?;
             // SAFETY: both spans are validated device allocations on this
             // runtime; only the leading dimensions are queried here.
-            let a_ptr = unsafe { a_ref.raw_ptr().cast_const() };
+            let a_ptr = a_ref.raw_ptr().cast_const();
             // SAFETY: `values_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-            let values_ptr = unsafe { values_ref.raw_ptr().cast_const() };
+            let values_ptr = values_ref.raw_ptr().cast_const();
             match &syevj_params {
                 None => handles.cusolver().syevd_buffer_size(
                     T::DATA_TYPE,
@@ -3425,16 +3192,16 @@ where
             host_workspace.as_mut_ptr().cast::<c_void>()
         };
 
-        let mut info = raw.alloc_output::<i32>(&[batch_total])?;
-        let a_ref = raw.tensor_mut(&mut work)?;
+        let info = raw.alloc_output::<i32>(&[batch_total])?;
+        let a_ref = raw.tensor_mut(&work)?;
         // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let a_ptr = unsafe { a_ref.raw_ptr() };
-        let values_ref = raw.tensor_mut(&mut values)?;
+        let a_ptr = a_ref.raw_ptr();
+        let values_ref = raw.tensor_mut(&values)?;
         // SAFETY: `values_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let values_ptr = unsafe { values_ref.raw_ptr() };
-        let info_ref = raw.tensor_mut(&mut info)?;
+        let values_ptr = values_ref.raw_ptr();
+        let info_ref = raw.tensor_mut(&info)?;
         // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let info_ptr = unsafe { info_ref.raw_ptr() };
+        let info_ptr = info_ref.raw_ptr();
 
         if routine == CusolverEighRoutine::SyevjBatched {
             let params = syevj_params.as_ref().ok_or_else(|| {
@@ -3461,8 +3228,8 @@ where
                     params,
                     batch_total_i32,
                     OP,
-                )?;
-            }
+                )
+            }?;
         }
         if routine == CusolverEighRoutine::XsyevBatched {
             // SAFETY: the batch-wide matrix, eigenvalue, and info allocations
@@ -3484,8 +3251,8 @@ where
                     info_ptr.cast::<i32>(),
                     batch_total_i64,
                     OP,
-                )?;
-            }
+                )
+            }?;
         }
         // The batched launch above already covered every matrix.
         let per_matrix_batches = match routine {
@@ -3510,39 +3277,45 @@ where
                 // SAFETY: batch pointers, workspace, dimensions, and
                 // stream-bound handle satisfy cuSOLVER syevd's vector
                 // eigensolver contract.
-                None => unsafe {
-                    handles.cusolver().syevd(
-                        T::DATA_TYPE,
-                        CusolverEigMode::Vector,
-                        CublasFillMode::Lower,
-                        n_i32,
-                        batch_a,
-                        lda,
-                        batch_w,
-                        workspace_ptr,
-                        lwork,
-                        batch_info,
-                        OP,
-                    )?;
-                },
+                None => {
+                    // SAFETY: the batch pointers, dimensions, workspace, and the stream-bound handle
+                    // satisfy cuSOLVER's syevd contract for this arm.
+                    unsafe {
+                        handles.cusolver().syevd(
+                            T::DATA_TYPE,
+                            CusolverEigMode::Vector,
+                            CublasFillMode::Lower,
+                            n_i32,
+                            batch_a,
+                            lda,
+                            batch_w,
+                            workspace_ptr,
+                            lwork,
+                            batch_info,
+                            OP,
+                        )
+                    }?;
+                }
                 // SAFETY: as above, plus `params` is the same object the
                 // workspace size was queried with.
-                Some(params) => unsafe {
-                    handles.cusolver().syevj(
-                        T::DATA_TYPE,
-                        CusolverEigMode::Vector,
-                        CublasFillMode::Lower,
-                        n_i32,
-                        batch_a,
-                        lda,
-                        batch_w,
-                        workspace_ptr,
-                        lwork,
-                        batch_info,
-                        params,
-                        OP,
-                    )?;
-                },
+                Some(params) => {
+                    unsafe {
+                        handles.cusolver().syevj(
+                            T::DATA_TYPE,
+                            CusolverEigMode::Vector,
+                            CublasFillMode::Lower,
+                            n_i32,
+                            batch_a,
+                            lda,
+                            batch_w,
+                            workspace_ptr,
+                            lwork,
+                            batch_info,
+                            params,
+                            OP,
+                        )
+                    }?;
+                }
             }
         }
 
@@ -3573,7 +3346,7 @@ where
 {
     const OP: &str = "eigh_values";
 
-    ensure_cubecl_resident_typed(OP, input)?;
+    ensure_device_resident_typed(OP, input)?;
     let n = square_matrix_dim(OP, input.shape())?;
     let batch_shape = &input.shape()[2..];
     let mut values_shape = vec![n];
@@ -3602,7 +3375,7 @@ where
         let handles = raw.resource(CudaLinalgHandles::load)?;
         // SAFETY: the stream handle is valid only for this raw-session scope;
         // it is used immediately to bind the cuSOLVER handle and not retained.
-        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        let stream = raw.stream().raw_handle() as usize as CudaStream;
         handles.cusolver().set_stream(stream, OP)?;
         // The Jacobi routine needs a parameter object: it is queried for the
         // workspace size and reused by every call below. It outlives the
@@ -3617,17 +3390,15 @@ where
         };
 
         // Clone `input` into a fresh work matrix on the session stream.
-        let mut work = raw.alloc_output::<T>(input.shape())?;
+        let work = raw.alloc_output::<T>(input.shape())?;
         {
             let src = raw.tensor(input)?;
-            let dst = raw.tensor_mut(&mut work)?;
+            let dst = raw.tensor_mut(&work)?;
             // SAFETY: both spans were validated resident on this runtime and
             // the copy is stream-ordered; `dst` is exclusively borrowed.
-            unsafe {
-                raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?
-            };
+            raw.copy_bytes(dst.raw_ptr(), src.raw_ptr() as *const _, src.byte_len(), OP)?;
         }
-        let mut values = raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)?;
+        let values = raw.alloc_output::<<T as LinalgScalar>::Real>(&values_shape)?;
 
         // The batched divide-and-conquer entry point reports byte sizes, so
         // its query is separate from the element-count query below.
@@ -3636,9 +3407,9 @@ where
             let values_ref = raw.tensor(&values)?;
             // SAFETY: both spans are validated device allocations on this
             // runtime; only the leading dimensions are queried here.
-            let a_ptr = unsafe { a_ref.raw_ptr().cast_const() };
+            let a_ptr = a_ref.raw_ptr().cast_const();
             // SAFETY: `values_ref` is a validated device span on this runtime.
-            let values_ptr = unsafe { values_ref.raw_ptr().cast_const() };
+            let values_ptr = values_ref.raw_ptr().cast_const();
             Some(handles.cusolver().xsyev_batched_buffer_size(
                 T::DATA_TYPE,
                 CusolverEigMode::NoVector,
@@ -3660,9 +3431,9 @@ where
             let values_ref = raw.tensor(&values)?;
             // SAFETY: both spans are validated device allocations on this
             // runtime; only the leading dimensions are queried here.
-            let a_ptr = unsafe { a_ref.raw_ptr().cast_const() };
+            let a_ptr = a_ref.raw_ptr().cast_const();
             // SAFETY: `values_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-            let values_ptr = unsafe { values_ref.raw_ptr().cast_const() };
+            let values_ptr = values_ref.raw_ptr().cast_const();
             match &syevj_params {
                 None => handles.cusolver().syevd_buffer_size(
                     T::DATA_TYPE,
@@ -3737,16 +3508,16 @@ where
             host_workspace.as_mut_ptr().cast::<c_void>()
         };
 
-        let mut info = raw.alloc_output::<i32>(&[batch_total])?;
-        let a_ref = raw.tensor_mut(&mut work)?;
+        let info = raw.alloc_output::<i32>(&[batch_total])?;
+        let a_ref = raw.tensor_mut(&work)?;
         // SAFETY: `a_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let a_ptr = unsafe { a_ref.raw_ptr() };
-        let values_ref = raw.tensor_mut(&mut values)?;
+        let a_ptr = a_ref.raw_ptr();
+        let values_ref = raw.tensor_mut(&values)?;
         // SAFETY: `values_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let values_ptr = unsafe { values_ref.raw_ptr() };
-        let info_ref = raw.tensor_mut(&mut info)?;
+        let values_ptr = values_ref.raw_ptr();
+        let info_ref = raw.tensor_mut(&info)?;
         // SAFETY: `info_ref` is a validated device span on this runtime; the pointer is used only within the raw-session scope.
-        let info_ptr = unsafe { info_ref.raw_ptr() };
+        let info_ptr = info_ref.raw_ptr();
 
         if routine == CusolverEighRoutine::SyevjBatched {
             let params = syevj_params.as_ref().ok_or_else(|| {
@@ -3773,8 +3544,8 @@ where
                     params,
                     batch_total_i32,
                     OP,
-                )?;
-            }
+                )
+            }?;
         }
         if routine == CusolverEighRoutine::XsyevBatched {
             // SAFETY: the batch-wide matrix, eigenvalue, and info allocations
@@ -3796,8 +3567,8 @@ where
                     info_ptr.cast::<i32>(),
                     batch_total_i64,
                     OP,
-                )?;
-            }
+                )
+            }?;
         }
         // The batched launch above already covered every matrix.
         let per_matrix_batches = match routine {
@@ -3822,39 +3593,45 @@ where
                 // SAFETY: batch pointers, workspace, dimensions, and
                 // stream-bound handle satisfy cuSOLVER syevd's no-vector
                 // eigensolver contract.
-                None => unsafe {
-                    handles.cusolver().syevd(
-                        T::DATA_TYPE,
-                        CusolverEigMode::NoVector,
-                        CublasFillMode::Lower,
-                        n_i32,
-                        batch_a,
-                        lda,
-                        batch_w,
-                        workspace_ptr,
-                        lwork,
-                        batch_info,
-                        OP,
-                    )?;
-                },
+                None => {
+                    // SAFETY: the batch pointers, dimensions, workspace, and the stream-bound handle
+                    // satisfy cuSOLVER's syevd contract for this arm.
+                    unsafe {
+                        handles.cusolver().syevd(
+                            T::DATA_TYPE,
+                            CusolverEigMode::NoVector,
+                            CublasFillMode::Lower,
+                            n_i32,
+                            batch_a,
+                            lda,
+                            batch_w,
+                            workspace_ptr,
+                            lwork,
+                            batch_info,
+                            OP,
+                        )
+                    }?;
+                }
                 // SAFETY: as above, plus `params` is the same object the
                 // workspace size was queried with.
-                Some(params) => unsafe {
-                    handles.cusolver().syevj(
-                        T::DATA_TYPE,
-                        CusolverEigMode::NoVector,
-                        CublasFillMode::Lower,
-                        n_i32,
-                        batch_a,
-                        lda,
-                        batch_w,
-                        workspace_ptr,
-                        lwork,
-                        batch_info,
-                        params,
-                        OP,
-                    )?;
-                },
+                Some(params) => {
+                    unsafe {
+                        handles.cusolver().syevj(
+                            T::DATA_TYPE,
+                            CusolverEigMode::NoVector,
+                            CublasFillMode::Lower,
+                            n_i32,
+                            batch_a,
+                            lda,
+                            batch_w,
+                            workspace_ptr,
+                            lwork,
+                            batch_info,
+                            params,
+                            OP,
+                        )
+                    }?;
+                }
             }
         }
 
@@ -3890,7 +3667,7 @@ fn build_lu_outputs_device<T>(
     TypedTensor<T>,
 )>
 where
-    T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
     let k = m.min(n);
     let mut p_shape = vec![m, m];
@@ -3899,48 +3676,24 @@ where
     l_shape.extend_from_slice(batch_shape);
     let mut u_shape = vec![k, n];
     u_shape.extend_from_slice(batch_shape);
-    let parity_shape = batch_shape.to_vec();
 
-    backend.with_cubecl("lu", |cubecl| {
-        let p = cubecl.alloc_output::<T>(&p_shape)?;
-        let l = cubecl.alloc_output::<T>(&l_shape)?;
-        let u = cubecl.alloc_output::<T>(&u_shape)?;
-        let parity = cubecl.alloc_output::<T>(&parity_shape)?;
-        let launch_len = p
-            .n_elements()
-            .max(l.n_elements())
-            .max(u.n_elements())
-            .max(parity.n_elements());
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let p_arg = unsafe { cubecl.tensor_binding(&p, "lu") }?;
-        let l_arg = unsafe { cubecl.tensor_binding(&l, "lu") }?;
-        // SAFETY: the bindings in this block are created for tensors this call owns.
-        let u_arg = unsafe { cubecl.tensor_binding(&u, "lu") }?;
-        let parity_arg = unsafe { cubecl.tensor_binding(&parity, "lu") }?;
-        let work_arg = unsafe { cubecl.tensor_binding(lu, "lu") }?;
-        // SAFETY: the bindings in this block are created for tensors this call owns.
-        let pivots_arg = unsafe { cubecl.array_arg(pivots, "lu") }?;
-        let launch_count = cubecl.cube_count_1d(launch_len)?;
-        // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
-        // covers the maximum P/L/U/parity output domain consumed by the kernel.
-        unsafe {
-            cubecl_linalg::lu_extract_outputs::launch_unchecked::<T>(
-                cubecl.client(),
-                launch_count,
-                cubecl.cube_dim_1d(),
-                p_arg.into_tensor_arg(),
-                l_arg.into_tensor_arg(),
-                u_arg.into_tensor_arg(),
-                parity_arg.into_tensor_arg(),
-                work_arg.into_tensor_arg(),
-                pivots_arg,
-                k,
-                lu.shape().len(),
-            );
-        }
-        Ok((p, l, u, parity))
-    })
+    let dtype = T::dtype();
+    let p = backend.alloc_output(dtype, &p_shape)?;
+    let l = backend.alloc_output(dtype, &l_shape)?;
+    let u = backend.alloc_output(dtype, &u_shape)?;
+    let parity = backend.alloc_output(dtype, batch_shape)?;
+    backend.linalg_lu_extract_outputs(&p, &l, &u, &parity, lu, pivots, k as i64, "lu")?;
+    let converted = |tensor: Tensor, what: &str| {
+        tensor
+            .into_typed::<T>()
+            .map_err(|_| Error::Internal(format!("LU {what} changed dtype")))
+    };
+    Ok((
+        converted(p, "P")?,
+        converted(l, "L")?,
+        converted(u, "U")?,
+        converted(parity, "parity")?,
+    ))
 }
 
 fn build_lu_parity_device<T>(
@@ -3950,29 +3703,14 @@ fn build_lu_parity_device<T>(
     batch_shape: &[usize],
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar + CubeNeg + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
-    backend.with_cubecl("lu_factor", |cubecl| {
-        let parity = cubecl.alloc_output::<T>(batch_shape)?;
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let parity_arg = unsafe { cubecl.tensor_binding(&parity, "lu_factor") }?;
-        let pivots_arg = unsafe { cubecl.array_arg(pivots, "lu_factor") }?;
-        let launch_count = cubecl.cube_count_1d(parity.n_elements())?;
-        // SAFETY: tensor bindings describe live CUDA tensors, and `launch_count`
-        // covers exactly the parity output domain.
-        unsafe {
-            cubecl_linalg::lu_parity::launch_unchecked::<T>(
-                cubecl.client(),
-                launch_count,
-                cubecl.cube_dim_1d(),
-                parity_arg.into_tensor_arg(),
-                pivots_arg,
-                k,
-            );
-        }
-        Ok(parity)
-    })
+    let batches = batch_shape.iter().product::<usize>() as i64;
+    let parity = backend.alloc_output(T::dtype(), batch_shape)?;
+    backend.linalg_lu_parity(&parity, pivots, k as i64, batches, "lu_factor")?;
+    parity
+        .into_typed::<T>()
+        .map_err(|_| Error::Internal("LU parity changed dtype".into()))
 }
 
 fn fill_one_device_tensor<T>(
@@ -3981,26 +3719,12 @@ fn fill_one_device_tensor<T>(
     op: &'static str,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
-    backend.with_cubecl(op, |cubecl| {
-        let out = cubecl.alloc_output::<T>(shape)?;
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let out_arg = unsafe { cubecl.tensor_binding(&out, op) }?;
-        let launch_count = cubecl.cube_count_1d(out.n_elements())?;
-        // SAFETY: `out_arg` describes a live CUDA output tensor, and
-        // `launch_count` covers every output element exactly once.
-        unsafe {
-            cubecl_linalg::fill_one_kernel::launch_unchecked::<T>(
-                cubecl.client(),
-                launch_count,
-                cubecl.cube_dim_1d(),
-                out_arg.into_tensor_arg(),
-            );
-        }
-        Ok(out)
-    })
+    let out = backend.alloc_output(T::dtype(), shape)?;
+    backend.linalg_fill_one(&out, op)?;
+    out.into_typed::<T>()
+        .map_err(|_| Error::Internal("fill-one changed dtype".into()))
 }
 
 fn apply_lu_pivots_typed<T>(
@@ -4010,38 +3734,16 @@ fn apply_lu_pivots_typed<T>(
     inverse: bool,
 ) -> Result<TypedTensor<T>>
 where
-    T: LinalgScalar + TensorScalar + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
-    backend.with_cubecl("lu_solve_prepared", |cubecl| {
-        let out = cubecl.alloc_output::<T>(input.shape())?;
-        if out.n_elements() == 0 {
-            return Ok(out);
-        }
-        let k = pivots.shape()[0];
-        // SAFETY: every binding here is created for a tensor this call owns, and the
-        // kernel writes only into those buffers.
-        let out_arg = unsafe { cubecl.tensor_binding(&out, "lu_solve_prepared") }?;
-        let input_arg = unsafe { cubecl.tensor_binding(input, "lu_solve_prepared") }?;
-        // SAFETY: the bindings in this block are created for tensors this call owns.
-        let pivots_arg = unsafe { cubecl.array_arg(pivots, "lu_solve_prepared") }?;
-        let launch_count = cubecl.cube_count_1d(out.n_elements())?;
-        // SAFETY: tensor bindings describe live CUDA tensors, pivot metadata
-        // matches the validated LU shape, and `launch_count` covers the output domain.
-        unsafe {
-            cubecl_linalg::lu_apply_pivots::launch_unchecked::<T>(
-                cubecl.client(),
-                launch_count,
-                cubecl.cube_dim_1d(),
-                out_arg.into_tensor_arg(),
-                input_arg.into_tensor_arg(),
-                pivots_arg,
-                k,
-                input.shape().len(),
-                inverse,
-            );
-        }
-        Ok(out)
-    })
+    let out = backend.alloc_output(T::dtype(), input.shape())?;
+    if input.shape().iter().all(|&extent| extent != 0) {
+        // One pivot per factorisation step, as the packed LU stores them.
+        let k = pivots.shape()[0] as i64;
+        backend.linalg_lu_apply_pivots(&out, input, pivots, k, inverse, "lu_solve_prepared")?;
+    }
+    out.into_typed::<T>()
+        .map_err(|_| Error::Internal("LU pivot application changed dtype".into()))
 }
 
 fn zero_sized_lu_factor_pair<T>(
@@ -4049,18 +3751,22 @@ fn zero_sized_lu_factor_pair<T>(
     shape: &[usize],
 ) -> Result<(TypedTensor<T>, TypedTensor<i32>)>
 where
-    T: LinalgScalar + TensorScalar + Scalar,
+    T: LinalgScalar + TensorScalar,
 {
     let m = shape[0];
     let n = shape[1];
     let k = m.min(n);
     let mut pivot_shape = vec![k];
     pivot_shape.extend_from_slice(&shape[2..]);
-    let lu = backend.with_cubecl("lu_factor", |cubecl| cubecl.alloc_output::<T>(shape))?;
-    let pivots = backend.with_cubecl("lu_factor", |cubecl| {
-        cubecl.alloc_output::<i32>(&pivot_shape)
-    })?;
-    Ok((lu, pivots))
+    let lu = backend.alloc_output(T::dtype(), shape)?;
+    let pivots = backend.alloc_output(DType::I32, &pivot_shape)?;
+    Ok((
+        lu.into_typed::<T>()
+            .map_err(|_| Error::Internal("zero-sized LU changed dtype".into()))?,
+        pivots
+            .into_typed::<i32>()
+            .map_err(|_| Error::Internal("zero-sized LU pivots changed dtype".into()))?,
+    ))
 }
 
 fn matrix_slice_config(shape: &[usize], row_limit: usize, col_limit: usize) -> SliceConfig {
@@ -4214,7 +3920,7 @@ fn as_i32(value: usize, op: &'static str, label: &'static str) -> Result<i32> {
 unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
     // SAFETY: the caller guarantees `base` covers `offset` further `T`
     // elements inside one device allocation (see `# Safety` above).
-    unsafe { base.cast::<T>().add(offset).cast() }
+    base.cast::<T>().add(offset).cast()
 }
 
 /// Offset an immutable device pointer by `offset` typed elements.
@@ -4227,44 +3933,15 @@ unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
 unsafe fn batch_const_ptr<T>(base: *const c_void, offset: usize) -> *const c_void {
     // SAFETY: the caller guarantees `base` covers `offset` further `T`
     // elements inside one device allocation (see `# Safety` above).
-    unsafe { base.cast::<T>().add(offset).cast() }
+    base.cast::<T>().add(offset).cast()
 }
 
 fn zero_like_linalg_device_tensor(
     backend: &mut CudaEngine,
     input: &Tensor,
-    op: &'static str,
+    _op: &'static str,
 ) -> Result<Tensor> {
-    match input.dtype() {
-        DType::F32 => Ok(Tensor::from_typed::<f32>(
-            backend.with_cubecl(op, |cubecl| {
-                cubecl.alloc_output::<f32>(typed_host::<f32>(op, input)?.shape())
-            })?,
-        )),
-        DType::F64 => Ok(Tensor::from_typed::<f64>(
-            backend.with_cubecl(op, |cubecl| {
-                cubecl.alloc_output::<f64>(typed_host::<f64>(op, input)?.shape())
-            })?,
-        )),
-        DType::C32 => Ok(Tensor::from_typed::<Complex32>(backend.with_cubecl(
-            op,
-            |cubecl| {
-                cubecl.alloc_output::<num_complex::Complex32>(
-                    typed_host::<Complex32>(op, input)?.shape(),
-                )
-            },
-        )?)),
-        DType::C64 => Ok(Tensor::from_typed::<Complex64>(backend.with_cubecl(
-            op,
-            |cubecl| {
-                cubecl.alloc_output::<num_complex::Complex64>(
-                    typed_host::<Complex64>(op, input)?.shape(),
-                )
-            },
-        )?)),
-        DType::I32 | DType::I64 | DType::Bool => Err(unsupported_linalg_dtype(op, input)),
-        DType::External(_) => Err(unsupported_linalg_dtype(op, input)),
-    }
+    backend.alloc_output(input.dtype(), input.shape())
 }
 
 fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {

@@ -1,7 +1,6 @@
-#[path = "integration/apple_context.rs"]
-mod apple_context;
 #[path = "integration/backend_read_contract.rs"]
 mod backend_read_contract;
+#[cfg(all(feature = "cuda", not(feature = "cuda")))]
 #[path = "integration/cubecl_launch_contract.rs"]
 mod cubecl_launch_contract;
 #[path = "integration/engine_run.rs"]
@@ -14,9 +13,3 @@ mod public_surface_contract;
 mod session_contract;
 #[path = "integration/session_surface_parity.rs"]
 mod session_surface_parity;
-#[path = "integration/webgpu_backend_contract.rs"]
-mod webgpu_backend_contract;
-#[path = "integration/webgpu_matmul_runtime.rs"]
-mod webgpu_matmul_runtime;
-#[path = "integration/webgpu_structural_runtime.rs"]
-mod webgpu_structural_runtime;

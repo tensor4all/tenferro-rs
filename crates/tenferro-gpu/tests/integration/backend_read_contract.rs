@@ -72,9 +72,8 @@ fn cuda_backend_implements_every_required_read_entry_point() {
         "the trait scan should find the required read entry points, found {entry_points:?}"
     );
 
-    // The CUDA operation bodies now live in the `ops` module as free functions, so
-    // the owner scan follows them there.
-    let backend = fs::read_to_string("src/cubecl/ops.rs")
+    // The CUDA operation bodies live on the engine's tensor surface.
+    let backend = fs::read_to_string("src/cuda/structural.rs")
         .expect("the CUDA operation-body source should be readable");
 
     let missing_backend: Vec<&String> = entry_points

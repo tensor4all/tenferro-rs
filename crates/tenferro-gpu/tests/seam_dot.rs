@@ -1,11 +1,9 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U5 tail: `TensorDot` on the new engine — plain, batched, conjugated and accumulating
 //! contractions against host references (issue #2208 U5).
 
-use tenferro_gpu::cuda_next::{
-    download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine,
-};
+use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_tensor::{
     Complex64, ContractionScalar, DotGeneralAccumulation, DotGeneralConfig, Tensor, TensorDot,
     TensorRead, TensorWrite,

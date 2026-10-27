@@ -68,11 +68,12 @@ class GpuTestPartitionTests(unittest.TestCase):
     def test_reviewed_exclusions_are_reported_not_passed(self):
         cuda = read_partition(ROOT / "scripts/ci/cuda_test_partition.tsv")
         pjrt = read_partition(ROOT / "scripts/ci/pjrt_test_partition.tsv")
-        self.assertEqual(sum(v == "two-gpu" for v in cuda.values()), 1)
+        # The deletion of the CubeCL engine removed the only two-GPU and benchmark rows.
+        self.assertEqual(sum(v == "two-gpu" for v in cuda.values()), 0)
         self.assertEqual(sum(v == "compile-only" for v in cuda.values()), 2)
-        self.assertEqual(sum(v == "benchmark" for v in cuda.values()), 3)
+        self.assertEqual(sum(v == "benchmark" for v in cuda.values()), 0)
         self.assertEqual(sum(v == "external-tool" for v in pjrt.values()), 3)
-        self.assertIn("NOT RUN (two-gpu):", report(cuda, "gpu"))
+        self.assertNotIn("NOT RUN (two-gpu):", report(cuda, "gpu"))
         self.assertIn("NOT RUN (external-tool):", report(pjrt, "host"))
         self.assertNotIn("PASS", report(cuda, "gpu"))
 

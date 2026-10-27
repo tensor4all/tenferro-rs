@@ -153,10 +153,8 @@ cargo build -p tenferro-tutorial-code --no-default-features \
 ```
 
 The example downloads the result back to CPU and asserts the expected values.
-For downstream PTX, CUBIN, NVRTC, or device-library kernels, see
-[Custom CUDA kernels](custom-cuda-kernels.md). That guide uses only the public
-`CudaEngine::with_raw` / `CudaEngine::with_cubecl` and `cuda::raw` extension
-boundary.
+An extension reaches the CUDA driver through the public `CudaEngine::with_raw`
+and `cuda::raw` session boundary described below.
 
 `TensorStructural::copy_read_into` can reuse an already allocated CUDA
 destination. Both operands may be arbitrary-stride region views at a nonzero

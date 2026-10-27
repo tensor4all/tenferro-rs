@@ -10,7 +10,7 @@ use tenferro_runtime::extension::ExtensionOp;
 use tenferro_tensor::{DType, Engine, Error, ErrorKind, Tensor, TensorRead};
 
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::with_cuda_engine;
+use tenferro_gpu::cuda::raw::with_cuda_engine;
 
 use crate::backend::LinalgBackend;
 use crate::RankRevealingQrOptions;

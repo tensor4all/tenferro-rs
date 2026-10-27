@@ -56,7 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             TensorRead::from_tensor(&state),
         )?;
     }
-    backend.flush()?;
+    backend.runtime().synchronize()?;
     // snippet-end:cuda_held_session
     assert_eq!(state.shape(), &[4]);
 

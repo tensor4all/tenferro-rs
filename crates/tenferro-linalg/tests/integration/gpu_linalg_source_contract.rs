@@ -129,7 +129,7 @@ fn compact_householder_cuda_uses_incremental_device_native_paths() {
     assert_eq!(apply.matches(".gemm(").count(), 3);
     assert!(!apply.contains("for reflector"));
     assert!(!apply.contains("copy_bytes"));
-    assert!(source.contains("householder_explicit_v::launch_unchecked"));
+    assert!(source.contains("linalg_householder_explicit_v"));
 
     let from_factors = source_section(
         &source,
@@ -188,10 +188,10 @@ fn tenferro_gpu_no_longer_owns_linalg_specific_ffi_or_kernels() {
         );
     }
 
-    let cubecl_mod = read_workspace_source("tenferro-gpu/src/cubecl/mod.rs");
+    let cuda_mod = read_workspace_source("tenferro-gpu/src/cuda/structural.rs");
     for needle in ["CudaLinalgHandles", "linalg_handles", "cusolver", "cublas"] {
         assert!(
-            !cubecl_mod.contains(needle),
+            !cuda_mod.contains(needle),
             "CudaEngine should not expose linalg-specific state: found {needle}"
         );
     }
@@ -294,8 +294,6 @@ fn gpu_zero_sized_lu_factor_parity_is_filled_on_device() {
         "fn lu_factor_typed",
         "fn lu_factor_for_solve_typed",
     );
-    let kernels = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
-
     for needle in [
         "upload_host_tensor",
         "vec![T::one()",
@@ -312,8 +310,8 @@ fn gpu_zero_sized_lu_factor_parity_is_filled_on_device() {
         "zero-sized GPU LU factor parity should be initialized by a device fill helper"
     );
     assert!(
-        kernels.contains("pub fn fill_one_kernel"),
-        "GPU linalg kernels should expose a one-fill kernel for scalar/empty-shape fast paths"
+        source.contains("linalg_fill_one"),
+        "the one-fill auxiliary should serve the scalar and empty-shape fast paths"
     );
 }
 
@@ -402,7 +400,7 @@ fn cuda_rrqr_has_no_payload_download_or_cpu_fallback() {
             "CUDA RRQR must not use payload host access, CPU fallback, or a single-worker launch: {banned}"
         );
     }
-    assert!(source.contains("Tensor::from_typed::<i64>(status)"));
+    assert!(source.contains("download_tensor(backend.runtime(), &status_tensor)"));
     assert!(source.contains("rank remain device-resident"));
 }
 
@@ -415,7 +413,7 @@ fn cubecl_linalg_overrides_svd_read_with_backend_canonicalization() {
         "fn svd_values_read_with_driver",
     );
     for needle in [
-        "session.to_contiguous(&view)?",
+        "session.to_contiguous_view(&view)?",
         "let input = Tensor::from_typed::<f64>(compact);",
         "linalg::svd(session, &input, driver)",
     ] {
@@ -459,7 +457,7 @@ fn cubecl_linalg_overrides_qr_read_with_backend_canonicalization() {
     let qr_read_source = source_section(&source, "fn qr_read", "fn eigh");
 
     for needle in [
-        "self.to_contiguous(&view)?",
+        "self.to_contiguous_view(&view)?",
         "let input = Tensor::from_typed::<f64>(compact);",
         "self.qr(&input)",
     ] {
@@ -479,7 +477,7 @@ fn cubecl_linalg_overrides_eigh_read_with_backend_canonicalization() {
         "fn eigh_values_read_with_driver",
     );
     for needle in [
-        "session.to_contiguous(&view)?",
+        "session.to_contiguous_view(&view)?",
         "let input = Tensor::from_typed::<f64>(compact);",
         "linalg::eigh(session, &input, driver)",
     ] {
@@ -579,13 +577,13 @@ fn gpu_solver_info_checks_are_batched_outside_kernel_loops() {
         (
             "fn cholesky_typed",
             "fn triangular_solve_typed",
-            "let mut info = raw.alloc_output::<i32>(&[batch_total])?;",
+            "let info = raw.alloc_output::<i32>(&[batch_total])?;",
             "raw.download_tensor::<i32>(&info, OP)?",
         ),
         (
             "fn svd_typed",
             "fn empty_svd_outputs",
-            "let mut info = raw.alloc_output::<i32>(&[batch_total])?;",
+            "let info = raw.alloc_output::<i32>(&[batch_total])?;",
             // `svd_typed` serves both the thin and the full variant, so its op
             // tag is a runtime binding rather than the module-level constant.
             "raw.download_tensor::<i32>(&info, op)?",
@@ -593,13 +591,13 @@ fn gpu_solver_info_checks_are_batched_outside_kernel_loops() {
         (
             "fn svd_values_typed",
             "fn qr_typed",
-            "let mut info = raw.alloc_output::<i32>(&[batch_total])?;",
+            "let info = raw.alloc_output::<i32>(&[batch_total])?;",
             "raw.download_tensor::<i32>(&info, OP)?",
         ),
         (
             "fn eigh_typed",
             "fn build_lu_outputs_device",
-            "let mut info = raw.alloc_output::<i32>(&[batch_total])?;",
+            "let info = raw.alloc_output::<i32>(&[batch_total])?;",
             "raw.download_tensor::<i32>(&info, OP)?",
         ),
     ] {
@@ -657,8 +655,8 @@ fn gpu_solve_paths_validate_residency_before_dtype_and_zero_fast_paths() {
     );
 
     for needle in [
-        "ensure_cubecl_resident_tensor(OP, a)?",
-        "ensure_cubecl_resident_tensor(OP, b)?",
+        "ensure_device_resident_tensor(OP, a)?",
+        "ensure_device_resident_tensor(OP, b)?",
     ] {
         assert_before(solve, needle, "ensure_supported_linalg_pair(OP, a, b)?");
         assert_before(
@@ -669,10 +667,10 @@ fn gpu_solve_paths_validate_residency_before_dtype_and_zero_fast_paths() {
     }
 
     for needle in [
-        "ensure_cubecl_resident_tensor(OP, a)?",
-        "ensure_cubecl_resident_tensor(OP, packed_lu)?",
-        "ensure_cubecl_resident_tensor(OP, pivots)?",
-        "ensure_cubecl_resident_tensor(OP, b)?",
+        "ensure_device_resident_tensor(OP, a)?",
+        "ensure_device_resident_tensor(OP, packed_lu)?",
+        "ensure_device_resident_tensor(OP, pivots)?",
+        "ensure_device_resident_tensor(OP, b)?",
     ] {
         assert_before(
             lu_solve_prepared,
@@ -703,7 +701,6 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
     let svd = source_section(&source, "fn svd_typed", "fn empty_svd_outputs");
     let svd_values = source_section(&source, "fn svd_values_typed", "fn qr_typed");
     let ffi = read_workspace_source("tenferro-linalg/src/gpu/ffi/cusolver.rs");
-    let kernels = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
     let polar = read_workspace_source("tenferro-linalg/src/gpu/linalg/svd_polar.rs");
     assert!(svd.contains("svd_polar::svd_polar_typed(backend, input, full, true, op)"));
     assert!(svd_values.contains("svd_polar::svd_polar_typed(backend, input, false, false, OP)"));
@@ -766,8 +763,8 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
     }
 
     for needle in [
-        "let mut u = raw.alloc_output::<T>(&u_shape)?;",
-        "let mut v = raw.alloc_output::<T>(&v_shape)?;",
+        "let u = raw.alloc_output::<T>(&u_shape)?;",
+        "let v = raw.alloc_output::<T>(&v_shape)?;",
         "CusolverEigMode::NoVector",
         "batch_u",
         "batch_v",
@@ -793,16 +790,10 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
         "GPU SVD should not route gesvdj V-to-VT conversion through borrowed-view typed helpers"
     );
 
-    for needle in [
-        "pub fn matrix_adjoint_real",
-        "pub fn matrix_adjoint_complex",
-        ".conj()",
-    ] {
-        assert!(
-            kernels.contains(needle),
-            "GPU SVD kernels should expose real and complex V-to-VT copies: missing {needle}"
-        );
-    }
+    assert!(
+        source.contains("linalg_matrix_adjoint"),
+        "the V-to-VT copy should be the catalogue's matrix adjoint"
+    );
 
     for needle in [
         "let transpose_for_gesvd = m < n;",
@@ -925,7 +916,7 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
         (
             "fn lu_factor_core",
             "fn lu_solve_prepared_typed",
-            "ensure_cubecl_resident_typed(op, input)?;",
+            "ensure_device_resident_typed(op, input)?;",
             "if has_zero_dim",
         ),
         // SVD's zero-dim contract is split across two functions: `svd_typed`
@@ -934,7 +925,7 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
         (
             "fn svd_typed",
             "fn empty_svd_outputs",
-            "ensure_cubecl_resident_typed(op, input)?;",
+            "ensure_device_resident_typed(op, input)?;",
             "if has_zero_dim",
         ),
         (
@@ -946,13 +937,13 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
         (
             "fn qr_typed",
             "fn eigh_typed",
-            "ensure_cubecl_resident_typed(OP, input)?;",
+            "ensure_device_resident_typed(OP, input)?;",
             "if has_zero_dim",
         ),
         (
             "fn eigh_typed",
             "fn eigh_values_typed",
-            "ensure_cubecl_resident_typed(OP, input)?;",
+            "ensure_device_resident_typed(OP, input)?;",
             "if has_zero_dim",
         ),
     ] {
@@ -966,12 +957,12 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
     // `raw.tensor` before allocating the empty output.
     assert_before(
         triangular,
-        "ensure_cubecl_resident_typed(op, a)?;",
+        "ensure_device_resident_typed(op, a)?;",
         "let zero_dim = has_zero_dim(a.shape()) || has_zero_dim(b.shape());",
     );
     assert_before(
         triangular,
-        "ensure_cubecl_resident_typed(op, b)?;",
+        "ensure_device_resident_typed(op, b)?;",
         "let zero_dim = has_zero_dim(a.shape()) || has_zero_dim(b.shape());",
     );
     assert_before(triangular, "raw.tensor(a)?;", "raw.alloc_output");
@@ -984,12 +975,12 @@ fn gpu_linalg_zero_dim_fast_paths_validate_residency_before_allocating_outputs()
     );
     assert_before(
         solve,
-        "ensure_cubecl_resident_tensor(OP, a)?;",
+        "ensure_device_resident_tensor(OP, a)?;",
         "if has_zero_dim",
     );
     assert_before(
         solve,
-        "ensure_cubecl_resident_tensor(OP, b)?;",
+        "ensure_device_resident_tensor(OP, b)?;",
         "if has_zero_dim",
     );
     assert!(
@@ -1049,36 +1040,13 @@ fn gpu_solve_skips_the_singularity_scan_and_solver_status_readback() {
 
 #[test]
 fn gpu_lu_shape_extent_k_is_runtime_not_compile_time_specialized() {
-    let source = read_workspace_source("tenferro-linalg/src/gpu/kernels.rs");
-    let lu_kernels = source_section(
-        &source,
-        "#[cube(launch_unchecked)]\npub fn lu_extract_outputs",
-        "fn zero_sized_lu_factor_pair",
-    );
-
+    // The LU extraction is the catalogue's `lu_extract_outputs`, whose extent `k` is a launch
+    // parameter rather than a specialization of the kernel.
+    let source = linalg_source();
     assert!(
-        !lu_kernels.contains("#[comptime] k: usize"),
-        "LU kernels must not specialize on matrix-size extent k"
+        source.contains("linalg_lu_extract_outputs"),
+        "the LU outputs should come from the catalogue auxiliary"
     );
-    assert!(
-        !lu_kernels.contains("#[unroll]\n        for step in 0usize..k"),
-        "LU kernels must not unroll loops over matrix-size extent k"
-    );
-    assert!(
-        !lu_kernels.contains("#[unroll]\n            for step in 0usize..k"),
-        "LU kernels must not unroll nested loops over matrix-size extent k"
-    );
-    assert!(
-        !lu_kernels.contains("#[unroll]\n            for offset in 0usize..k"),
-        "LU kernels must not unroll reverse loops over matrix-size extent k"
-    );
-
-    for needle in ["while step < k", "while step > 0usize"] {
-        assert!(
-            lu_kernels.contains(needle),
-            "LU kernels should iterate over runtime k with {needle}"
-        );
-    }
 }
 
 #[test]
@@ -1087,7 +1055,7 @@ fn cubecl_linalg_overrides_cholesky_read_with_backend_canonicalization() {
     let cholesky_read_source = source_section(&source, "fn cholesky_read", "fn lu_read");
 
     for needle in [
-        "self.to_contiguous(&view)?",
+        "self.to_contiguous_view(&view)?",
         "let input = Tensor::from_typed::<f64>(compact);",
         "self.cholesky(&input)",
     ] {
@@ -1104,7 +1072,7 @@ fn cubecl_linalg_overrides_lu_read_with_backend_canonicalization() {
     let lu_read_source = source_section(&source, "fn lu_read", "fn full_piv_lu_read");
 
     for needle in [
-        "self.to_contiguous(&view)?",
+        "self.to_contiguous_view(&view)?",
         "let input = Tensor::from_typed::<f64>(compact);",
         "self.lu(&input)",
     ] {
@@ -1121,7 +1089,7 @@ fn cubecl_linalg_overrides_full_piv_lu_read_with_backend_canonicalization() {
     let full_piv_lu_read_source = source_section(&source, "fn full_piv_lu_read", "fn eig_read");
 
     for needle in [
-        "self.to_contiguous(&view)?",
+        "self.to_contiguous_view(&view)?",
         "let input = Tensor::from_typed::<f64>(compact);",
         "self.full_piv_lu(&input)",
     ] {
@@ -1138,7 +1106,7 @@ fn cubecl_linalg_overrides_eig_read_with_backend_canonicalization() {
     let eig_read_source = source_section(&source, "fn eig_read", "fn eigh_values");
 
     for needle in [
-        "self.to_contiguous(&view)?",
+        "self.to_contiguous_view(&view)?",
         "let input = Tensor::from_typed::<f64>(compact);",
         "self.eig(&input)",
     ] {

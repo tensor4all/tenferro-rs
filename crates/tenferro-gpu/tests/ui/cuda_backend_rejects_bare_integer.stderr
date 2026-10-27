@@ -7,4 +7,7 @@ error[E0308]: mismatched types
   |             arguments to this function are incorrect
   |
 note: associated function defined here
- --> src/cubecl/mod.rs:860:11
+ --> src/cuda/engine.rs
+  |
+  |     pub fn open(device_id: CudaDeviceId) -> Result<CudaEngine, CudaEngineError> {
+  |            ^^^^

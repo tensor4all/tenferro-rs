@@ -17,7 +17,7 @@ documentation = "https://docs.rs/tenferro-einsum"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["autodiff", "native", "cuda", "webgpu"]
+features = ["autodiff", "native", "cuda"]
 
 [features]
 # Test support, off by default (see `tenferro-cpu`): placement-ledger assertions.
@@ -56,12 +56,6 @@ cuda = [
     "tenferro-internal-ops/cuda",
     "dep:tenferro-gpu",
     "tenferro-gpu/cuda",
-]
-webgpu = [
-    "tenferro-ad?/webgpu",
-    "tenferro-internal-ops/webgpu",
-    "dep:tenferro-gpu",
-    "tenferro-gpu/webgpu",
 ]
 rocm = [
     "tenferro-ad?/rocm",

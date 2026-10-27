@@ -45,10 +45,3 @@ fn eager_runtime_grad_accumulation_keeps_slot_locked_through_update() {
         "gradient accumulation must not stage slot updates after releasing the per-slot lock"
     );
 }
-
-#[cfg(feature = "webgpu")]
-#[test]
-fn eager_runtime_accepts_webgpu_backend_constructor() {
-    let _ctor: fn(WebGpuBackend) -> tenferro_ad::Result<std::sync::Arc<EagerRuntime>> =
-        EagerRuntime::with_webgpu_backend;
-}

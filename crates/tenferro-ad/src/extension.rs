@@ -48,9 +48,6 @@ pub enum EagerExtensionBackendKind {
     /// The eager runtime owns a CUDA backend.
     #[cfg(feature = "cuda")]
     Cuda,
-    /// The eager runtime owns a WebGPU backend.
-    #[cfg(feature = "webgpu")]
-    WebGpu,
 }
 
 /// Exact engine target selected by the eager runtime owner.

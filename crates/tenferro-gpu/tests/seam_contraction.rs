@@ -1,10 +1,10 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U4: cuTENSOR contraction with shape-keyed plans, matched against host references
 //! (issue #2208 U4).
 
 use t4a_cuda_kernels::DType;
-use tenferro_gpu::cuda_next::{
+use tenferro_gpu::cuda::{
     gpu_available, Contraction, CudaDeviceId, CudaEngine, CudaRuntime, Cutensor, Operand,
 };
 

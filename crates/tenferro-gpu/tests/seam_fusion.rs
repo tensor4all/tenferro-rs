@@ -1,13 +1,13 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U3: a fused region is emitted, compiled once per runtime, bound and launched, and a
 //! warm run performs no NVRTC compilation (issue #2208 U3).
 
 use t4a_cuda_kernels::fusion::{FusionInstruction, FusionOp, FusionOperand, FusionPlan};
 use t4a_cuda_kernels::DType;
-use tenferro_gpu::cuda_next::{gpu_available, CudaDeviceId, CudaEngine, PreparedFusion};
+use tenferro_gpu::cuda::{gpu_available, CudaDeviceId, CudaEngine, PreparedFusion};
 
-fn runtime() -> Option<tenferro_gpu::cuda_next::CudaRuntime> {
+fn runtime() -> Option<tenferro_gpu::cuda::CudaRuntime> {
     if !gpu_available() {
         return None;
     }

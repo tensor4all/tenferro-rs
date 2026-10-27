@@ -98,14 +98,6 @@ fn tutorial_binaries_run_successfully() {
     // would fail to link when no provider library is present.
     #[cfg(feature = "blas-openblas")]
     run_tutorial("blas_interop", env!("CARGO_BIN_EXE_blas_interop"));
-    #[cfg(feature = "apple-shared")]
-    {
-        run_tutorial("apple_shared_fft", env!("CARGO_BIN_EXE_apple_shared_fft"));
-        run_tutorial(
-            "apple_shared_cholesky",
-            env!("CARGO_BIN_EXE_apple_shared_cholesky"),
-        );
-    }
     #[cfg(feature = "cuda")]
     run_tutorial("cuda_fft", env!("CARGO_BIN_EXE_cuda_fft"));
 }

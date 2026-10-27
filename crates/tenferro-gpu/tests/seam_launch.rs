@@ -1,4 +1,4 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U2 first increment: the kernel catalogue is prepared once, bound on demand and
 //! launched on the runtime's stream, proved against a host reference through the
@@ -9,7 +9,7 @@ use t4a_cuda_kernels::{
     plan_materialize_strided, CLayout, DType, Entry, Layout,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
-use tenferro_gpu::cuda_next::{
+use tenferro_gpu::cuda::{
     device_buffer, download_tensor, gpu_available, layout_arg, upload_tensor, CudaDeviceId,
     CudaEngine, KernelModules,
 };
