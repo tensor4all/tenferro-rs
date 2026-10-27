@@ -472,15 +472,15 @@ Audit hints:
 
 ## CPU Threading Contract
 
-- A CPU engine owns exactly one `strided_exec::Pool`, or none for
+- A CPU engine owns exactly one `threadteam::Pool`, or none for
   `CpuEngine::serial()`. The caller builds the pool (with `Pool::builder()`, which
   `tenferro-cpu` re-exports) and hands it over; tenferro never starts a hidden or
   global pool, keeps no process-wide registry of engines, and does not
   arbitrate between callers. `&mut engine` is the exclusivity mechanism.
   Concurrent computations use separate engines and separate pools, each on its
   own calling thread.
-- Only `strided-exec` starts tasks. Where CPU work runs and how many tasks run at
-  once is decided by one borrowed token, `strided_exec::Exec`: a pool reference
+- Only `threadteam` starts tasks. Where CPU work runs and how many tasks run at
+  once is decided by one borrowed token, `threadteam::Exec`: a pool reference
   plus a budget. It is neither `Clone` nor `Copy`, every parallel entry
   consumes it, and a split (`fork`, `for_ranges`) gives each child a share of
   the budget, so the tasks running at once under one operation never exceed its
@@ -539,7 +539,7 @@ Audit hints:
   rejects a direct `rayon` dependency anywhere in the workspace;
   `scripts/check-no-public-rayon.sh` (`cargo public-api`) fails when a `rayon::`
   path appears in `tenferro-cpu`'s public API; tests read the
-  `strided_exec::ledger` through `CpuEngine::take_ledger_*` (feature `ledger`)
+  `threadteam::ledger` through `CpuEngine::take_ledger_*` (feature `ledger`)
   for `max_live <= budget` and for zero pool installs on small operations, and
   a test binary of its own asserts `ledger::global_pool_unstarted()`.
 

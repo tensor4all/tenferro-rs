@@ -220,7 +220,7 @@ fn in_place_typed<T: CachedFftPlanScalar + TensorScalar>(
     spec: &FftPlanSpec,
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
-    exec: tenferro_cpu::strided_exec::Exec<'_>,
+    exec: tenferro_cpu::threadteam::Exec<'_>,
 ) -> tenferro_tensor::Result<()>
 where
     Complex<T>: TensorScalar + PoolScalar,
@@ -299,7 +299,7 @@ fn execute_fft_with_plans(
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
     domain: Option<&dyn SharedTensorAllocationDomain>,
-    exec: tenferro_cpu::strided_exec::Exec<'_>,
+    exec: tenferro_cpu::threadteam::Exec<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     macro_rules! transform {
         ($input:expr, $kind:ident, $variant:ident, $project:expr) => {
@@ -372,7 +372,7 @@ fn transform<I: TensorScalar, T: CachedFftPlanScalar + PoolScalar, O: PoolScalar
     domain: Option<&dyn SharedTensorAllocationDomain>,
     wrap: for<'a> fn(&'a [I]) -> lanes::Input<'a, T>,
     project: impl Fn(Complex<T>) -> O + Sync,
-    exec: tenferro_cpu::strided_exec::Exec<'_>,
+    exec: tenferro_cpu::threadteam::Exec<'_>,
 ) -> tenferro_tensor::Result<TypedTensor<O>>
 where
     Complex<T>: PoolScalar,
@@ -447,7 +447,7 @@ fn pooled_transform<T: CachedFftPlanScalar + PoolScalar, O: PoolScalar>(
     plans: &mut (impl FftPlanProvider + ?Sized),
     buffers: &mut BufferPool,
     project: impl Fn(Complex<T>) -> O + Sync,
-    exec: tenferro_cpu::strided_exec::Exec<'_>,
+    exec: tenferro_cpu::threadteam::Exec<'_>,
 ) -> tenferro_tensor::Result<TypedTensor<O>>
 where
     Complex<T>: PoolScalar,

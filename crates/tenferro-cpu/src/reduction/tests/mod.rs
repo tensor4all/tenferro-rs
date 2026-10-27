@@ -5,8 +5,8 @@ use super::{
     reduce_sum_read, reduce_sum_squares, typed_input,
 };
 use num_complex::{Complex32, Complex64};
-use strided_exec::Exec;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensor};
+use threadteam::Exec;
 
 fn tensor<T: tenferro_tensor::TensorScalar + Copy>(values: Vec<T>) -> Tensor {
     Tensor::from_vec_col_major(vec![values.len()], values).unwrap()

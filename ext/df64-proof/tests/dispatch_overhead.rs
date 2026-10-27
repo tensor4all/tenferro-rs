@@ -236,7 +236,7 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
             "total",
             &stored,
             Df64::zero(),
-            tenferro_cpu::strided_exec::Exec::serial(),
+            tenferro_cpu::threadteam::Exec::serial(),
         )
         .expect("the body's own reduction");
         std::hint::black_box(total);

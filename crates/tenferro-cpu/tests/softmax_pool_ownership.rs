@@ -48,7 +48,7 @@ fn fast_paths_never_enter_the_global_rayon_pool() {
     // no engine-held operation may do (`--features ledger`, in this binary alone).
     #[cfg(feature = "ledger")]
     assert!(
-        strided_exec::ledger::global_pool_unstarted(),
+        threadteam::ledger::global_pool_unstarted(),
         "a CPU fast path entered Rayon's global pool"
     );
 }
@@ -65,7 +65,7 @@ fn fast_paths_stay_within_the_engine_budget() {
         assert!(!roots.is_empty(), "{op} minted a token");
         for root in roots {
             assert!(
-                strided_exec::ledger::max_live(root) <= 3,
+                threadteam::ledger::max_live(root) <= 3,
                 "{op} ran more than 3 tasks at once"
             );
         }

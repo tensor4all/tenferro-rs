@@ -47,15 +47,15 @@ fn patterned<T>(len: usize, make: impl Fn(usize) -> T) -> Vec<T> {
 
 #[test]
 fn reshape_tensor_is_exact_for_every_preset_dtype_above_the_threshold() {
-    // Every dtype must round-trip a patterned payload larger than the serial
-    // threshold: the four-thread session takes the pooled copy and the
-    // one-thread session keeps the serial copy, so both branches are checked
-    // for exact column-major values.
+    // Every dtype must round-trip a patterned payload with exact column-major
+    // values on a one-thread and a four-thread session. Which branch the
+    // four-thread session takes is the token's call (`reshape_uses_pool`); the
+    // payload is exact on either, and the pooled branch is pinned by size in
+    // `reshape_tensor_recycles_a_pool_buffer_only_on_the_parallel_branch`.
     const N: usize = 256;
     let from = [N, N];
     let to = [2 * N, N / 2];
     let len = N * N;
-    assert!(len > crate::structural::SERIAL_RESHAPE_MAX_ELEMS);
     for threads in [1, 4] {
         assert_exact::<f32>(threads, &from, &to, patterned(len, |i| i as f32));
         assert_exact::<f64>(threads, &from, &to, patterned(len, |i| i as f64));
@@ -84,10 +84,21 @@ fn reshape_tensor_recycles_a_pool_buffer_only_on_the_parallel_branch() {
     // when the output drops on a parallel-capable context, and must not touch
     // the pool on a one-thread context. Reverting `reshape_tensor` to the
     // serial `to_vec` copy leaves the pool empty in both cases and fails here.
-    const N: usize = 256;
-    let values: Vec<f64> = (0..N * N).map(|i| i as f64).collect();
+    // The payload is sized so a four-thread token's width for the copy is above
+    // one on every host class; the first assertion checks that premise.
+    const R: usize = 2048;
+    const C: usize = 1024;
+    let values: Vec<f64> = (0..R * C).map(|i| i as f64).collect();
     let input =
-        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![N, N], values).unwrap());
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![R, C], values).unwrap());
+    {
+        let pool = threadteam::Pool::builder().threads(4).build().unwrap();
+        let token = threadteam::Exec::new(&pool, 4).unwrap();
+        assert!(
+            crate::structural::reshape_uses_pool(&input, &token).unwrap(),
+            "the payload must pay for a four-thread fork"
+        );
+    }
     for (threads, expect_checkout) in [(1usize, false), (4usize, true)] {
         let mut backend = crate::test_support::cpu_engine(threads).unwrap();
         assert_eq!(
@@ -95,8 +106,8 @@ fn reshape_tensor_recycles_a_pool_buffer_only_on_the_parallel_branch() {
             0,
             "threads={threads}: a fresh engine pool starts empty"
         );
-        let out = reshape_via_context(&mut backend, &input, &[512, 128]).unwrap();
-        assert_eq!(out.as_slice::<f64>().unwrap().len(), N * N);
+        let out = reshape_via_context(&mut backend, &input, &[C, R]).unwrap();
+        assert_eq!(out.as_slice::<f64>().unwrap().len(), R * C);
         drop(out);
         let retained = backend.buffer_pool_len();
         assert_eq!(
@@ -138,4 +149,44 @@ fn reshape_read_reads_a_non_contiguous_view_in_logical_order() {
             "threads={threads}"
         );
     }
+}
+
+#[cfg(feature = "ledger")]
+#[test]
+fn a_small_compact_reshape_on_a_multi_thread_engine_takes_no_engine_entry() {
+    // The pre-entry gate keeps a copy that cannot pay for a fork off the engine
+    // entry: no token is minted (the ledger records every minted token's root),
+    // the output matches the serial copy, and no pool buffer is taken.
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![4, 6], (0..24).map(f64::from).collect()).unwrap(),
+    );
+    let mut backend = crate::test_support::cpu_engine(4).unwrap();
+    let _ = backend.take_ledger_roots();
+    let out = crate::test_support::on_engine(&mut backend, |session| {
+        session.reshape_read(TensorRead::from_tensor(&input), &[6, 4])
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(out.shape(), &[6, 4]);
+    assert_eq!(
+        out.as_slice::<f64>().unwrap(),
+        input.as_slice::<f64>().unwrap()
+    );
+    assert!(
+        backend.take_ledger_roots().is_empty(),
+        "a small compact reshape must not mint a token"
+    );
+    drop(out);
+    assert_eq!(backend.buffer_pool_len(), 0);
+
+    // A payload that pays does enter the engine and mint a token.
+    let big = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2048, 1024], vec![1.0; 2048 * 1024]).unwrap(),
+    );
+    let _ = crate::test_support::on_engine(&mut backend, |session| {
+        session.reshape_read(TensorRead::from_tensor(&big), &[1024, 2048])
+    })
+    .unwrap()
+    .unwrap();
+    assert!(!backend.take_ledger_roots().is_empty());
 }

@@ -222,10 +222,10 @@ fn faer_solve_on_zero_copy_views() -> tenferro_tensor::Result<()> {
     let a_view = MatRef::from_column_major_slice(a.as_slice()?, 2, 2);
     let b_view = MatRef::from_column_major_slice(b.as_slice()?, 2, 1);
 
-    let lu = a_view.partial_piv_lu();
+    let lu = a_view.partial_piv_lu(Par::Seq);
     let mut x = Mat::<f64>::zeros(2, 1);
     x.as_mut().copy_from(b_view);
-    lu.solve_in_place(x.as_mut());
+    lu.solve_in_place(x.as_mut(), Par::Seq);
 
     // Verify A x == b. Exact solution: x = [1.2, 1.4] (3*1.2+1.4 == 5,
     // 1.2+2*1.4 == 4). Check both the solution and the reconstruction.

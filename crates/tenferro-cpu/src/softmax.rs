@@ -17,7 +17,7 @@ use tenferro_tensor::{DType, Tensor, TensorRead};
 use crate::activation::fill_pooled;
 use crate::buffer_pool::BufferPool;
 use crate::materialize_tensor_read;
-use strided_exec::Exec;
+use threadteam::Exec;
 
 /// Fused softmax over axis 0 for a host `F32`/`F64` tensor, if supported.
 ///

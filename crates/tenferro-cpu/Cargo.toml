@@ -24,11 +24,11 @@ name = "tenferro_cpu"
 
 [features]
 default = ["native"]
-# Test support, off by default: the engine reports the `strided_exec::ledger` root of every
+# Test support, off by default: the engine reports the `threadteam::ledger` root of every
 # token it mints (`CpuEngine::take_ledger_*`), so tests assert placement invariants. The ledger
 # allocates per token, so allocation-counting tests run without it; the CI placement job runs
 # the ledger tests with `--features ledger` in a build of their own.
-ledger = ["strided-exec/ledger"]
+ledger = ["threadteam/ledger"]
 native = ["dep:faer"]
 blas = ["dep:cpueinsum-blas", "dep:cblas-sys", "dep:lapack"]
 # Each supported provider exports CBLAS; no separate Netlib CBLAS build is needed.
@@ -65,7 +65,7 @@ num-complex.workspace = true
 num-traits.workspace = true
 smallvec.workspace = true
 tinyvec.workspace = true
-strided-exec.workspace = true
+threadteam.workspace = true
 strided-kernel.workspace = true
 strided-basic = { workspace = true, features = ["parallel"] }
 strided-nn.workspace = true

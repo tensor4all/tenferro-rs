@@ -9,11 +9,11 @@ use super::typed_view;
 use super::{typed_view_from_view, PooledUninitOutput};
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::simd_math::{self, VectorKernel};
-use strided_exec::Exec;
 use tenferro_tensor::{
     BackendId, CapabilityAxis, DType, Tensor, TensorRank, TensorRead, TensorScalar, TensorView,
     TypedTensor, TypedTensorView,
 };
+use threadteam::Exec;
 
 trait UnaryAnalyticElem: Copy + Clone + One + Zero {
     fn exp_elem(self) -> Self;
@@ -397,8 +397,13 @@ fn replay_pow_left<T: PowElem + PoolScalar>(
     scalar: T,
     exec: Exec<'_>,
 ) -> crate::Result<()> {
-    map_into(out, input, |x| MaybeUninit::new(scalar.pow_elem(x)), exec)
-        .map_err(|err| crate::Error::backend_source(op, err))
+    map_into(
+        out,
+        input,
+        |x: T| MaybeUninit::new(scalar.pow_elem(x)),
+        exec,
+    )
+    .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 fn replay_pow_right<T: PowElem + PoolScalar>(
@@ -408,8 +413,13 @@ fn replay_pow_right<T: PowElem + PoolScalar>(
     scalar: T,
     exec: Exec<'_>,
 ) -> crate::Result<()> {
-    map_into(out, input, |x| MaybeUninit::new(x.pow_elem(scalar)), exec)
-        .map_err(|err| crate::Error::backend_source(op, err))
+    map_into(
+        out,
+        input,
+        |x: T| MaybeUninit::new(x.pow_elem(scalar)),
+        exec,
+    )
+    .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 fn typed_pow_view_with_pool<T, L, R>(

@@ -152,9 +152,12 @@ impl LowerContractionError for cpueinsum_blas::BlasError {
 // Exactly one retained wrapper per pool: the engine owns the pool and its
 // provider wrapper (the scratch arena) together, so the arena is never split from
 // the pool it serves. The wrapper starts no task; placement is the
-// `strided_exec::Exec` token the engine mints from it for each operation.
+// `threadteam::Exec` token the engine mints from it for each operation.
 pub(crate) struct ExecutionResources {
     pool: Option<Pool<'static>>,
+    /// The owned pool's dispatch costs (host default without a pool), kept for the
+    /// pre-entry gates that decide before a token is minted.
+    costs: threadteam::DispatchCosts,
     serial: ArenaProvider,
     pub(crate) nary: ContractionWorkspaces,
     /// Reads canonicalized out of a view through `to_contiguous_read`, which is
@@ -176,8 +179,14 @@ impl fmt::Debug for ExecutionResources {
 }
 impl ExecutionResources {
     /// Take over `pool`, or run serially without one.
-    pub(crate) fn new(pool: Option<strided_exec::Pool>) -> Self {
+    pub(crate) fn new(pool: Option<threadteam::Pool>) -> Self {
+        let costs = pool
+            .as_ref()
+            .map_or_else(threadteam::DispatchCosts::host_default, |pool| {
+                pool.dispatch_costs()
+            });
         Self {
+            costs,
             pool: pool.map(Pool::owned),
             serial: ArenaProvider::new(),
             nary: ContractionWorkspaces::default(),
@@ -214,6 +223,10 @@ impl ExecutionResources {
     pub(crate) fn thread_budget(&self) -> std::num::NonZeroUsize {
         std::num::NonZeroUsize::new(self.pool.as_ref().map_or(1, Pool::size))
             .unwrap_or(std::num::NonZeroUsize::MIN)
+    }
+    /// Dispatch costs of the owned pool, for decisions made before a token exists.
+    pub(crate) fn dispatch_costs(&self) -> &threadteam::DispatchCosts {
+        &self.costs
     }
     fn workspace(&self) -> &ArenaProvider {
         self.pool.as_ref().map_or(&self.serial, Pool::workspace)
