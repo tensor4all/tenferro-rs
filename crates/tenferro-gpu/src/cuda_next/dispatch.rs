@@ -4,9 +4,11 @@
 //! validation of its own — and every argument order follows the documented ABI.
 
 use t4a_cuda_kernels::{
-    plan_binary, plan_clamp, plan_compare, plan_convert, plan_copy_exact, plan_elementwise,
-    plan_gather, plan_reduce, plan_reduction, plan_scatter_add, plan_select, plan_unary, BinaryOp,
-    DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan, UnaryOp,
+    plan_binary, plan_clamp, plan_compare, plan_concatenate_copy, plan_convert, plan_copy_exact,
+    plan_dynamic_slice, plan_elementwise, plan_gather, plan_pad, plan_reduce, plan_reduction,
+    plan_scatter_add, plan_select, plan_slice, plan_unary, plan_validate_float_indices,
+    plan_validate_real_cast, BinaryOp, DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan,
+    ScalarSide, ScatterPlan, UnaryOp,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -25,23 +27,13 @@ impl Dispatcher {
     ///
     /// [`crate::Error::RuntimeStateSource`] when NVRTC rejects a module or the runtime
     /// cannot prepare its artifact.
-    pub fn for_entries(
+    pub(crate) fn for_entries(
         runtime: &super::runtime::CudaRuntime,
         entries: &[Entry],
     ) -> crate::Result<Self> {
         Ok(Dispatcher {
             modules: KernelModules::for_entries(runtime, entries)?,
         })
-    }
-
-    /// The prepared module set.
-    pub fn modules(&self) -> &KernelModules {
-        &self.modules
-    }
-
-    /// The prepared module set, mutably, for a launch this module does not wrap.
-    pub fn modules_mut(&mut self) -> &mut KernelModules {
-        &mut self.modules
     }
 
     /// Enqueue one launch with the plan's own geometry.
@@ -51,6 +43,16 @@ impl Dispatcher {
         plan: t4a_cuda_kernels::Launch,
         args: &[Arg<'_>],
     ) -> crate::Result<()> {
+        if plan.grid[0] == 0 {
+            // An empty domain has no element to visit: an element-driven family leaves the
+            // destination as its allocation found it. A reduction is the exception — its
+            // identity fill is the kernel's, so an empty reduction keeps whatever the
+            // planner and the runtime decide.
+            match entry {
+                Entry::Reduce | Entry::ReducePartials => {}
+                _ => return Ok(()),
+            }
+        }
         // SAFETY: every caller below builds the argument list in the documented ABI order
         // after the kernel crate's planner accepted the invocation.
         unsafe {
@@ -66,7 +68,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the kernel crate's planner refuses the
     /// invocation, and [`crate::Error::RuntimeStateSource`] when binding or admitting the
     /// launch fails.
-    pub fn copy_exact(
+    pub(crate) fn copy_exact(
         &mut self,
         dtype: DType,
         len: i64,
@@ -93,7 +95,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the kernel crate's planner refuses the
     /// invocation, and [`crate::Error::RuntimeStateSource`] when binding or admitting the
     /// launch fails.
-    pub fn arithmetic(
+    pub(crate) fn arithmetic(
         &mut self,
         entry: Entry,
         dtype: DType,
@@ -124,7 +126,7 @@ impl Dispatcher {
     /// invocation, and [`crate::Error::RuntimeStateSource`] when binding or admitting the
     /// launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn clamp_buffers(
+    pub(crate) fn clamp_buffers(
         &mut self,
         dtype: DType,
         len: i64,
@@ -155,7 +157,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the kernel crate's planner refuses the
     /// invocation, and [`crate::Error::RuntimeStateSource`] when binding or admitting the
     /// launch fails.
-    pub fn unary(
+    pub(crate) fn unary(
         &mut self,
         op: UnaryOp,
         dst: DType,
@@ -189,7 +191,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn binary(
+    pub(crate) fn binary(
         &mut self,
         op: BinaryOp,
         dtype: DType,
@@ -224,7 +226,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn compare(
+    pub(crate) fn compare(
         &mut self,
         op: t4a_cuda_kernels::CompareOp,
         dtype: DType,
@@ -255,7 +257,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn select(
+    pub(crate) fn select(
         &mut self,
         dtype: DType,
         len: i64,
@@ -286,7 +288,9 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn clamp(
+    // Only the dispatch tests exercise this form; the engine clamps through the buffer entry.
+    #[allow(dead_code)]
+    pub(crate) fn clamp(
         &mut self,
         dtype: DType,
         len: i64,
@@ -316,7 +320,7 @@ impl Dispatcher {
     ///
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
-    pub fn convert(
+    pub(crate) fn convert(
         &mut self,
         dst: DType,
         src: DType,
@@ -346,7 +350,7 @@ impl Dispatcher {
     /// gather/scatter plan, and [`crate::Error::RuntimeStateSource`] when binding or
     /// admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn gather(
+    pub(crate) fn gather(
         &mut self,
         dtype: DType,
         index_dtype: DType,
@@ -403,7 +407,7 @@ impl Dispatcher {
     /// gather/scatter plan, and [`crate::Error::RuntimeStateSource`] when binding or
     /// admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn scatter_add(
+    pub(crate) fn scatter_add(
         &mut self,
         dtype: DType,
         index_dtype: DType,
@@ -453,11 +457,266 @@ impl Dispatcher {
             ],
         )
     }
+
+    /// `t4a_cuda_slice`: the window `starts`/`steps` describes, into a compact destination.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the window, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn slice(
+        &mut self,
+        dtype: DType,
+        out: &t4a_cuda_kernels::Layout,
+        out_len: i64,
+        operand: &t4a_cuda_kernels::Layout,
+        operand_len: i64,
+        starts: &[i64],
+        steps: &[i64],
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        operand_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch = plan_slice(dtype, out, out_len, operand, operand_len, starts, steps)
+            .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let operand_layout = t4a_cuda_kernels::CLayout::new(operand);
+        let starts = t4a_cuda_kernels::CAxisValues::new(starts).map_err(plan_error)?;
+        let steps = t4a_cuda_kernels::CAxisValues::new(steps).map_err(plan_error)?;
+        self.run(
+            Entry::Slice,
+            launch,
+            &[
+                Arg::DevicePtr(out_buffer),
+                Arg::DevicePtr(operand_buffer),
+                Arg::U32(dtype.tag() as u32),
+                layout_arg(&out_layout),
+                layout_arg(&operand_layout),
+                pod_arg(&starts),
+                pod_arg(&steps),
+                Arg::U64(out_len as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_dynamic_slice`: the window whose starts are device-resident.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the window, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn dynamic_slice(
+        &mut self,
+        dtype: DType,
+        index_dtype: DType,
+        out: &t4a_cuda_kernels::Layout,
+        out_len: i64,
+        operand: &t4a_cuda_kernels::Layout,
+        operand_len: i64,
+        starts_rank: u32,
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        operand_buffer: &t4a_cuda_runtime::Buffer,
+        starts_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch = plan_dynamic_slice(
+            dtype,
+            index_dtype,
+            out,
+            out_len,
+            operand,
+            operand_len,
+            starts_rank,
+        )
+        .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let operand_layout = t4a_cuda_kernels::CLayout::new(operand);
+        self.run(
+            Entry::DynamicSlice,
+            launch,
+            &[
+                Arg::DevicePtr(out_buffer),
+                Arg::DevicePtr(operand_buffer),
+                Arg::DevicePtr(starts_buffer),
+                Arg::U32(dtype.tag() as u32),
+                Arg::U32(index_dtype.tag() as u32),
+                layout_arg(&out_layout),
+                layout_arg(&operand_layout),
+                Arg::U64(out_len as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_pad`: edge and interior padding into a compact destination.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the padding, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn pad(
+        &mut self,
+        dtype: DType,
+        out: &t4a_cuda_kernels::Layout,
+        out_len: i64,
+        operand: &t4a_cuda_kernels::Layout,
+        operand_len: i64,
+        edge_low: &[i64],
+        edge_high: &[i64],
+        interior: &[i64],
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        operand_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch = plan_pad(
+            dtype,
+            out,
+            out_len,
+            operand,
+            operand_len,
+            edge_low,
+            edge_high,
+            interior,
+        )
+        .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let operand_layout = t4a_cuda_kernels::CLayout::new(operand);
+        let edge_low = t4a_cuda_kernels::CAxisValues::new(edge_low).map_err(plan_error)?;
+        let edge_high = t4a_cuda_kernels::CAxisValues::new(edge_high).map_err(plan_error)?;
+        let interior = t4a_cuda_kernels::CAxisValues::new(interior).map_err(plan_error)?;
+        self.run(
+            Entry::Pad,
+            launch,
+            &[
+                Arg::DevicePtr(out_buffer),
+                Arg::DevicePtr(operand_buffer),
+                Arg::U32(dtype.tag() as u32),
+                layout_arg(&out_layout),
+                layout_arg(&operand_layout),
+                pod_arg(&edge_low),
+                pod_arg(&edge_high),
+                pod_arg(&interior),
+                Arg::U64(out_len as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_validate_float_indices`: record the lowest index that is not an exact
+    /// integer.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    pub(crate) fn validate_float_indices(
+        &mut self,
+        dtype: DType,
+        len: i64,
+        max_exact_integer: f64,
+        indices: &t4a_cuda_runtime::Buffer,
+        flag: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let plan = plan_validate_float_indices(dtype, len).map_err(plan_error)?;
+        self.run(
+            Entry::ValidateFloatIndices,
+            plan,
+            &[
+                Arg::DevicePtr(indices),
+                Arg::DevicePtr(flag),
+                Arg::U32(dtype.tag() as u32),
+                Arg::F64(max_exact_integer),
+                Arg::U64(len as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_validate_real_cast`: record the first sampled value a cast to a signed
+    /// integer cannot represent.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn validate_real_cast(
+        &mut self,
+        dtype: DType,
+        len: i64,
+        stride: i64,
+        min: f64,
+        max: f64,
+        max_inclusive: bool,
+        input: &t4a_cuda_runtime::Buffer,
+        flag: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let plan = plan_validate_real_cast(dtype, len, stride).map_err(plan_error)?;
+        self.run(
+            Entry::ValidateRealCast,
+            plan,
+            &[
+                Arg::DevicePtr(input),
+                Arg::DevicePtr(flag),
+                Arg::U32(dtype.tag() as u32),
+                Arg::F64(min),
+                Arg::F64(max),
+                Arg::U64(stride as u64),
+                Arg::I32(i32::from(max_inclusive)),
+                Arg::U64(len as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_concatenate_copy`: one compact input into `out` at `axis_offset`.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the placement, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn concatenate_copy(
+        &mut self,
+        dtype: DType,
+        out: &t4a_cuda_kernels::Layout,
+        out_len: i64,
+        input: &t4a_cuda_kernels::Layout,
+        input_len: i64,
+        axis: u32,
+        axis_offset: i64,
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        input_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch =
+            plan_concatenate_copy(dtype, out, out_len, input, input_len, axis, axis_offset)
+                .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let input_layout = t4a_cuda_kernels::CLayout::new(input);
+        let input_len = input.element_count().map_err(plan_error)?;
+        self.run(
+            Entry::ConcatenateCopy,
+            launch,
+            &[
+                Arg::DevicePtr(out_buffer),
+                Arg::DevicePtr(input_buffer),
+                Arg::U32(dtype.tag() as u32),
+                layout_arg(&out_layout),
+                layout_arg(&input_layout),
+                Arg::U32(axis),
+                Arg::U64(axis_offset as u64),
+                Arg::U64(input_len as u64),
+            ],
+        )
+    }
 }
 
 /// A planner refusal as the seam's typed cause.
 fn plan_error(error: t4a_cuda_kernels::Error) -> crate::Error {
-    crate::Error::runtime_state("cuda plan", error.to_string())
+    match error {
+        // A planner refusal about the operation or dtype is the backend not serving the
+        // request, not a runtime failure; keep the two classes apart for the caller.
+        t4a_cuda_kernels::Error::UnsupportedDType | t4a_cuda_kernels::Error::UnsupportedOp => {
+            crate::Error::unsupported("cuda plan", error.to_string())
+        }
+        error => crate::Error::runtime_state("cuda plan", error.to_string()),
+    }
 }
 
 /// A by-value parameter view of a plain-data ABI struct, borrowing it for the launch.
@@ -487,7 +746,9 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn reduce(
+    // Only the dispatch tests exercise the explicit-strategy form; the engine uses `reduce_auto`.
+    #[allow(dead_code)]
+    pub(crate) fn reduce(
         &mut self,
         dtype: DType,
         op: ReduceOp,
@@ -543,7 +804,7 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting a launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn reduce_auto(
+    pub(crate) fn reduce_auto(
         &mut self,
         dtype: DType,
         op: ReduceOp,
@@ -634,3 +895,8 @@ impl Dispatcher {
         Ok(plan)
     }
 }
+
+#[cfg(test)]
+mod reduce_tests;
+#[cfg(test)]
+mod tests;

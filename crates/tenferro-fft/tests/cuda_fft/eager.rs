@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
 use tenferro_fft::{EagerSessionFftExt, FftNorm};
-use tenferro_gpu::cuda::gpu_available;
+use tenferro_gpu::cuda_next::gpu_available;
 use tenferro_runtime::{ExtensionCacheLimits, Tensor};
 use tenferro_tensor::{TensorDeviceTransfer, TensorRead};
 
@@ -36,7 +36,7 @@ fn cuda_eager_registration_missing(error: &tenferro_ad::Error) -> bool {
 #[cfg(feature = "autodiff")]
 fn cuda_leaf(
     ctx: &std::sync::Arc<EagerRuntime>,
-    engine: &mut tenferro_gpu::cuda::CudaEngine,
+    engine: &mut tenferro_gpu::cuda_next::CudaEngine,
     tensor: Tensor,
 ) -> Option<EagerTensor> {
     match ctx.with_eager_session(engine, |session| session.constant_from(tensor)) {

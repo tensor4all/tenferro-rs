@@ -7,7 +7,7 @@ use tenferro_ad::extension::{
 use tenferro_ad::{EagerSession, EagerTensor};
 use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::CudaEngine;
+use tenferro_gpu::cuda_next::CudaEngine;
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::webgpu::WebGpuBackend;
 use tenferro_runtime::{ErrorPhase, ExecutionEngine, ExtensionModule};

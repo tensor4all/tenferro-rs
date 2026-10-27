@@ -3,6 +3,9 @@
   "CUDA raw scope": {
     "crates/tenferro-fft/src/cuda/plan.rs::CufftPlanEntry::execute_pair": "cuFFT plan execution on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
     "crates/tenferro-gpu/src/cubecl/transfer.rs::SourcePublication::copy_into": "source publication writes through the engine-owned stream: the raw scope orders the copy and restores the caller context on exit (#2206)",
+    "crates/tenferro-gpu/src/cuda_next/runtime.rs::CudaRuntime::with_raw_locked": "the new CUDA path's one raw-scope entry (#2208 U1/U4): it holds the runtime's submission lock and hands the caller the runtime's own stream and registered addresses, so vendor libraries and future kernels run ordered on it",
+    "crates/tenferro-gpu/src/cuda_next/transfer.rs::submit_download": "explicit device-to-host transfer into a pinned buffer (#2208 U1): the raw scope carries the runtime's own stream and orders the copy, and the pinned destination stays alive in the pending package until its completion is observed",
+    "crates/tenferro-gpu/src/cuda_next/transfer.rs::upload_pending": "explicit host-to-device transfer into an existing allocation (#2208 U1): the raw scope carries the runtime's own stream and orders the copy, and the pinned source stays alive in the pending package until its completion is observed",
     "crates/tenferro-linalg/src/gpu/linalg.rs::cholesky_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
     "crates/tenferro-linalg/src/gpu/linalg.rs::clone_device_tensor": "device-to-device copy on the engine stream: the raw scope keeps the allocation pinned and restores the caller context on exit (#2206)",
     "crates/tenferro-linalg/src/gpu/linalg.rs::eigh_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
@@ -19,19 +22,18 @@
     "crates/tenferro-linalg/src/gpu/linalg/householder_qr.rs::concatenate_compact_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
     "crates/tenferro-linalg/src/gpu/linalg/householder_qr.rs::gemm_nn_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
     "crates/tenferro-linalg/src/gpu/linalg/householder_qr.rs::geqrf_trailing_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
-    "crates/tenferro-linalg/src/gpu/linalg/svd_polar.rs::svd_polar_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)",
-    "crates/tenferro-gpu/src/cuda_next/transfer.rs::upload_pending": "explicit host-to-device transfer into an existing allocation (#2208 U1): the raw scope carries the runtime's own stream and orders the copy, and the pinned source stays alive in the pending package until its completion is observed",
-    "crates/tenferro-gpu/src/cuda_next/transfer.rs::submit_download": "explicit device-to-host transfer into a pinned buffer (#2208 U1): the raw scope carries the runtime's own stream and orders the copy, and the pinned destination stays alive in the pending package until its completion is observed",
-    "crates/tenferro-gpu/src/cuda_next/runtime.rs::CudaRuntime::with_raw_locked": "the new CUDA path's one raw-scope entry (#2208 U1/U4): it holds the runtime's submission lock and hands the caller the runtime's own stream and registered addresses, so vendor libraries and future kernels run ordered on it"
+    "crates/tenferro-linalg/src/gpu/linalg/svd_polar.rs::svd_polar_typed": "CUDA linalg provider call (cuSOLVER/cuBLAS) on the engine stream: the raw scope pins the caller-held engine context for the vendor call and restores it on exit (#2206)"
   },
   "Engine implementation": {
     "crates/tenferro-cpu/src/exec_session.rs::CpuEngine": "CPU engine implementation: the caller-held CPU operation surface over its own Rayon pool, buffer pool and workspace (#2206)",
     "crates/tenferro-gpu/src/cubecl/exec_session.rs::CudaEngine": "CUDA engine implementation: every operation runs on the caller-held engine and its logical stream (#2206)",
+    "crates/tenferro-gpu/src/cuda_next/structural.rs::CudaEngine": "the new CUDA path's own operation surface (#2208 U5): the engine already owns one stream and one submission path, and this impl adds no second one — it delegates every operation to the same dispatcher and vendor adapters the tensor traits use",
     "crates/tenferro-gpu/src/webgpu/exec_session.rs::WebGpuBackend": "WebGPU engine implementation: the caller-held WebGPU backend now implements Engine on its own logical stream (#2206)"
   },
   "ExecutionEngine implementation": {
     "crates/tenferro-cpu/src/runtime_adapter.rs::CpuEngine": "CPU prepared-program target: one engine value is the runtime target for one supplied slot (#2206)",
     "crates/tenferro-gpu/src/cubecl/engine.rs::CudaEngine": "CUDA prepared-program target: one engine value is the runtime target for one supplied slot; retirement stays engine-owned (#2206)",
+    "crates/tenferro-gpu/src/cuda_next/engine.rs::CudaEngine": "the new CUDA path's prepared-program target (#2208 U6): the engine already owns the runtime, its single stream and its submission path, and the driver orders every run on that same stream — this adds no second queue",
     "crates/tenferro-gpu/src/webgpu/mod.rs::WebGpuBackend": "WebGPU prepared-program target: one engine value is the runtime target for one supplied slot (#2206)"
   }
 }

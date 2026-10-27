@@ -1,11 +1,11 @@
-//! Backend-neutral GPU seam: storage identity, the transfer protocol and the two
-//! provider traits every GPU backend implements.
+//! Backend-neutral GPU seam: storage identity, the allocation a buffer carries, and the
+//! failure vocabulary every GPU backend reports through.
 //!
-//! Nothing here names a CUDA (or any other vendor) type. A backend supplies the
-//! concrete storage handle behind [`Buffer`]'s private enum, one [`KernelSource`]
-//! for its kernel catalogue and one [`VendorOps`] for its vendor libraries. The
-//! seam exists so a second backend (ROCm/HIP, then Metal) is added without touching
-//! the dispatch, transfer or publication code.
+//! Nothing here names a CUDA (or any other vendor) type. A backend implements [`Backend`]
+//! to name its own allocation handle; the shared layer stores and passes allocations as
+//! [`Buffer<B>`] and never reads a vendor type. The seam exists so a second backend
+//! (ROCm/HIP, then Metal) is added without touching the dispatch, transfer or publication
+//! code.
 //!
 //! # Examples
 //!
@@ -154,22 +154,60 @@ pub struct StorageIdentity {
     pub device: usize,
 }
 
-/// A backend allocation handle the seam knows only by identity.
+/// One GPU backend: the concrete types the seam carries without naming them.
 ///
-/// A backend keeps its concrete handle in its own module; the seam carries the
-/// identity every consumer needs (domain, allocation, device) and the byte length.
-#[derive(Debug)]
-#[doc(hidden)]
-pub struct Buffer {
-    identity: StorageIdentity,
-    bytes: usize,
+/// The shared layer stores and passes allocations through [`Buffer`] and never reads a
+/// backend type. A second backend supplies its own allocation handle here; the execution
+/// vocabulary that lets it reuse the dispatch, transfer and publication code lands with
+/// that vocabulary's first implementor rather than as an unused declaration.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_gpu::gpu::{Backend, Buffer, StorageIdentity};
+/// use tenferro_tensor::AllocationDomainId;
+///
+/// struct ExampleBackend;
+/// impl Backend for ExampleBackend {
+///     type Allocation = u64;
+/// }
+///
+/// let identity = StorageIdentity {
+///     domain: AllocationDomainId::fresh(),
+///     allocation: tenferro_tensor::AllocationId::from_backend_id(2),
+///     device: 0,
+/// };
+/// let buffer = Buffer::<ExampleBackend>::new(identity, 64, 0xdead_beef);
+/// assert_eq!(buffer.len(), 64);
+/// assert_eq!(*buffer.allocation(), 0xdead_beef);
+/// ```
+pub trait Backend: Send + 'static {
+    /// One device allocation. The [`Buffer`] that carries it owns it.
+    type Allocation: Send + 'static;
 }
 
-impl Buffer {
-    /// Build a seam buffer from a backend's identity and byte length.
+/// A backend allocation the seam carries by identity, owning the handle itself.
+///
+/// The handle is the backend's; the seam carries the identity every consumer needs
+/// (domain, allocation, device), the byte length, and the allocation the adapter serves
+/// vendor and kernel calls with. A constructor is the backend allocator's, so identity
+/// and handle cannot disagree.
+#[doc(hidden)]
+pub struct Buffer<B: Backend> {
+    identity: StorageIdentity,
+    bytes: usize,
+    allocation: B::Allocation,
+}
+
+impl<B: Backend> Buffer<B> {
+    /// Build a seam buffer from a backend's identity, byte length and allocation.
     #[doc(hidden)]
-    pub fn new(identity: StorageIdentity, bytes: usize) -> Buffer {
-        Buffer { identity, bytes }
+    pub fn new(identity: StorageIdentity, bytes: usize, allocation: B::Allocation) -> Buffer<B> {
+        Buffer {
+            identity,
+            bytes,
+            allocation,
+        }
     }
 
     /// The allocation's identity.
@@ -189,68 +227,20 @@ impl Buffer {
     pub fn is_empty(&self) -> bool {
         self.bytes == 0
     }
-}
 
-/// A plan for one operation, produced by a [`KernelSource`].
-///
-/// The concrete representation is the backend's: a bound module function plus the
-/// prepared artifact key for CUDA. It stays opaque here so no backend type crosses
-/// the seam.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[doc(hidden)]
-pub struct Program {
-    /// Symbol the program launches.
-    pub entry: &'static str,
-    /// Identity of the prepared artifact, part of any cache key.
-    pub artifact: u64,
-}
-
-/// One runtime's source of launchable programs.
-///
-/// `Send` is required because an engine moves between threads; the trait is not
-/// `Sync`, because planning borrows the backend's mutable caches.
-#[doc(hidden)]
-pub trait KernelSource: Send {
-    /// Plan one operation into a launchable program.
-    ///
-    /// # Errors
-    ///
-    /// [`GpuError::Unsupported`] for an operation this backend does not serve and
-    /// [`GpuError::Closed`] after teardown.
+    /// The backend's own allocation handle.
     #[doc(hidden)]
-    fn plan(&mut self, op: &OpDescriptor) -> Result<Program, GpuError>;
+    pub fn allocation(&self) -> &B::Allocation {
+        &self.allocation
+    }
 }
 
-/// Description of one operation to plan.
-///
-/// The concrete tags live with the dispatch layer; the seam only needs an identity
-/// to key a plan by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[doc(hidden)]
-pub struct OpDescriptor {
-    /// Family name, for diagnostics.
-    pub family: &'static str,
-    /// Stable tag of the operation inside its family.
-    pub tag: u32,
-}
-
-/// The vendor libraries one backend serves.
-///
-/// The concrete request types land with the operation dispatch that calls them (U5): the
-/// seam's [`Buffer`] carries an allocation identity today, and a vendor call additionally
-/// needs the backend's device handle, which is the storage-handle decision the parent
-/// design leaves to the private enum behind `Buffer`. Until then the CUDA adapter exposes
-/// typed methods ([`Cublas`](crate::cuda_next::Cublas)) and this trait stays the declared
-/// seam, not a second dispatch path.
-///
-/// `Send` for the same reason as [`KernelSource`].
-pub trait VendorOps: Send {
-    /// Serve one vendor operation described by `op` over `buffers`.
-    ///
-    /// # Errors
-    ///
-    /// [`GpuError::Unsupported`] when the adapter does not serve the operation, plus the
-    /// backend's typed vendor failures.
-    #[doc(hidden)]
-    fn serve(&mut self, op: &OpDescriptor, buffers: &[&Buffer]) -> Result<(), GpuError>;
+impl<B: Backend> std::fmt::Debug for Buffer<B> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Buffer")
+            .field("identity", &self.identity)
+            .field("bytes", &self.bytes)
+            .finish_non_exhaustive()
+    }
 }

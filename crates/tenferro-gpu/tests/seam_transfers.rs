@@ -345,11 +345,15 @@ fn two_pending_downloads_in_flight_complete_independently() {
 }
 
 #[test]
-fn an_unserved_dtype_is_rejected_and_returns_the_package() {
+fn boolean_payloads_round_trip_through_the_transfer_route() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);
-    // A Bool payload has no CUDA transfer route in U1.
-    let device_bool =
-        Tensor::from_vec_col_major(vec![4], vec![true, false, true, false]).expect("bool tensor");
-    assert!(upload_tensor(&runtime, &device_bool).is_err());
+    // A comparison's result is a Bool tensor, so the transfer route serves it.
+    let host = Tensor::from_vec_col_major(vec![4], vec![true, false, true, false]).expect("bool");
+    let device = upload_tensor(&runtime, &host).expect("bool upload");
+    let back = download_tensor(&runtime, &device).expect("bool download");
+    assert_eq!(
+        back.as_slice::<bool>().expect("host bool"),
+        &[true, false, true, false]
+    );
 }

@@ -30,8 +30,8 @@ const UNKNOWN_CORE_OPERATION: &str = "unknown-core-operation";
 
 #[derive(Debug)]
 pub(crate) struct PreparedCudaRegistrationIdentity {
-    engine_id: EngineId,
-    provider_device_identity: ProviderDeviceIdentity,
+    pub(crate) engine_id: EngineId,
+    pub(crate) provider_device_identity: ProviderDeviceIdentity,
 }
 
 pub(crate) fn prepare_cuda_registration_identity(
@@ -155,9 +155,9 @@ pub fn cuda_runtime_engine_registration(
 
 /// Stateless CUDA preparation witness: preparation reads no engine state.
 #[derive(Debug, Clone, Copy, Default)]
-struct CudaPreparer;
+pub(crate) struct CudaPreparer;
 
-fn cuda_provider_device_identity(
+pub(crate) fn cuda_provider_device_identity(
     device_id: super::CudaDeviceId,
 ) -> Result<ProviderDeviceIdentity, RuntimeConfigError> {
     Ok(ProviderDeviceIdentity::new(
@@ -166,7 +166,7 @@ fn cuda_provider_device_identity(
     )?)
 }
 
-fn cuda_input_signature(
+pub(crate) fn cuda_input_signature(
     placement: &Placement,
     backend_family: Option<&'static str>,
     allocation_domain: Option<tenferro_tensor::AllocationDomainId>,
@@ -178,7 +178,7 @@ fn cuda_input_signature(
         && allocation_domain == Some(expected_domain)
 }
 
-fn cuda_input_placement(placement: &Placement, device_ordinal: usize) -> bool {
+pub(crate) fn cuda_input_placement(placement: &Placement, device_ordinal: usize) -> bool {
     placement.memory_kind == MemoryKind::Device
         && matches!(
             &placement.device,
@@ -302,12 +302,12 @@ fn cubecl_view_has_owner<T: 'static>(
 #[path = "tests/runtime_adapter.rs"]
 mod tests;
 
-fn cuda_runtime_storage_class() -> Result<StorageClass, RuntimeConfigError> {
+pub(crate) fn cuda_runtime_storage_class() -> Result<StorageClass, RuntimeConfigError> {
     StorageClass::new(CUDA_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CudaPreparedKind {
+pub(crate) enum CudaPreparedKind {
     Elementwise,
     Reduction,
     Indexing,
@@ -316,7 +316,7 @@ enum CudaPreparedKind {
 }
 
 #[derive(Debug)]
-struct CudaPreparedOperation {
+pub(crate) struct CudaPreparedOperation {
     binding: PreparedOperationBinding,
     specialization: SpecializationProjection,
     #[allow(dead_code, reason = "bounded Debug records the selected CUDA family")]
@@ -346,6 +346,7 @@ impl ElementwiseRuntime for CudaPreparer {
             request.operation(),
             request.context(),
             CudaPreparedKind::Elementwise,
+            ExecutionContextIdentity::of::<CudaEngine>(),
         )
     }
 }
@@ -359,6 +360,7 @@ impl ReductionRuntime for CudaPreparer {
             request.operation(),
             request.context(),
             CudaPreparedKind::Reduction,
+            ExecutionContextIdentity::of::<CudaEngine>(),
         )
     }
 }
@@ -372,6 +374,7 @@ impl IndexingRuntime for CudaPreparer {
             request.operation(),
             request.context(),
             CudaPreparedKind::Indexing,
+            ExecutionContextIdentity::of::<CudaEngine>(),
         )
     }
 }
@@ -385,6 +388,7 @@ impl DotGeneralPreparation for CudaPreparer {
             request.operation(),
             request.context(),
             CudaPreparedKind::DotGeneral,
+            ExecutionContextIdentity::of::<CudaEngine>(),
         )
     }
 }
@@ -398,16 +402,18 @@ impl LayoutRuntime for CudaPreparer {
             request.operation(),
             request.context(),
             CudaPreparedKind::Layout,
+            ExecutionContextIdentity::of::<CudaEngine>(),
         )
     }
 }
 
-fn prepare_cuda(
+pub(crate) fn prepare_cuda(
     operation: SemanticOperationView<'_>,
     context: &CorePrepareContext<'_>,
     expected_kind: CudaPreparedKind,
+    expected_context: ExecutionContextIdentity,
 ) -> Result<PrepareCapability, PrepareError> {
-    validate_cuda_runtime_context(context)?;
+    validate_cuda_runtime_context(context, expected_context)?;
     let SemanticOpRef::Core(op) = operation.op() else {
         return Err(wrong_family_error(expected_kind, "extension"));
     };
@@ -438,8 +444,10 @@ fn prepare_cuda(
     ))
 }
 
-fn validate_cuda_runtime_context(context: &CorePrepareContext<'_>) -> Result<(), PrepareError> {
-    let expected_context = ExecutionContextIdentity::of::<CudaEngine>();
+fn validate_cuda_runtime_context(
+    context: &CorePrepareContext<'_>,
+    expected_context: ExecutionContextIdentity,
+) -> Result<(), PrepareError> {
     if context.binding().context_identity() != expected_context {
         return Err(PrepareError::ProviderContract {
             source: ProviderContractError::WrongOperationFamily {
@@ -466,7 +474,7 @@ fn validate_cuda_runtime_context(context: &CorePrepareContext<'_>) -> Result<(),
     Ok(())
 }
 
-fn cuda_operation_kind(op: &CoreSemanticOp) -> Option<CudaPreparedKind> {
+pub(crate) fn cuda_operation_kind(op: &CoreSemanticOp) -> Option<CudaPreparedKind> {
     Some(match op {
         CoreSemanticOp::Add
         | CoreSemanticOp::Sub

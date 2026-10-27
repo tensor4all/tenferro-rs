@@ -48,14 +48,7 @@ fn upload_typed<T: TensorScalar + Send + Sync + 'static>(
             .upload(bytes)
             .map_err(|error| crate::Error::runtime_state_source("cuda upload", error))?
     };
-    let (domain, id) = super::storage::fresh_identity(runtime);
-    let storage = CudaStorage {
-        bytes: bytes.len(),
-        buffer,
-        device: runtime.device_ordinal(),
-        domain,
-        id,
-    };
+    let storage = super::storage::fresh_storage(runtime, buffer);
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
         StorageBuffer::Backend(Box::new(storage)),
@@ -147,7 +140,7 @@ pub fn download_tensor(runtime: &CudaRuntime, tensor: &Tensor) -> crate::Result<
         let bytes = {
             let mut guard = runtime.submit();
             let mut pending = guard
-                .download(&storage.buffer)
+                .download(storage.allocation())
                 .map_err(|error| crate::Error::runtime_state_source("cuda download", error))?;
             pending
                 .wait()
@@ -231,9 +224,9 @@ pub fn upload_pending(
             // allocation and the host pointer addresses `bytes` pinned bytes that the
             // package keeps alive until the copy's completion is observed.
             guard.with_raw(
-                vec![t4a_cuda_runtime::RawResource::Buffer(&storage.buffer)],
+                vec![t4a_cuda_runtime::RawResource::Buffer(storage.allocation())],
                 |raw| {
-                    let device = raw.device_ptr(&storage.buffer).map_err(|error| {
+                    let device = raw.device_ptr(storage.allocation()).map_err(|error| {
                         crate::Error::runtime_state_source("cuda transfer", error)
                     })?;
                     let stream = raw.stream() as usize as *mut cudarc::driver::sys::CUstream_st;
@@ -334,9 +327,9 @@ pub(crate) fn submit_download(
             // allocation and the host pointer addresses at least `bytes` pinned bytes
             // that the package keeps alive until the copy's completion is observed.
             guard.with_raw(
-                vec![t4a_cuda_runtime::RawResource::Buffer(&storage.buffer)],
+                vec![t4a_cuda_runtime::RawResource::Buffer(storage.allocation())],
                 |raw| {
-                    let device = raw.device_ptr(&storage.buffer).map_err(|error| {
+                    let device = raw.device_ptr(storage.allocation()).map_err(|error| {
                         crate::Error::runtime_state_source("cuda transfer", error)
                     })?;
                     let stream = raw.stream() as usize as *mut cudarc::driver::sys::CUstream_st;

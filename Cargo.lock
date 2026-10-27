@@ -4998,7 +4998,7 @@ source = "git+https://github.com/tensor4all/t4a-cuda-kernels?rev=5019c713c14c1f5
 [[package]]
 name = "t4a-cuda-runtime"
 version = "0.0.0"
-source = "git+https://github.com/tensor4all/t4a-gpu-backend?rev=0a101bf19207e0abb2ea169721f63f50af8669b0#0a101bf19207e0abb2ea169721f63f50af8669b0"
+source = "git+https://github.com/tensor4all/t4a-gpu-backend?rev=a3e242d744692c345cef6aeb350eef627950ee72#a3e242d744692c345cef6aeb350eef627950ee72"
 dependencies = [
  "cudarc",
  "thiserror 2.0.21",

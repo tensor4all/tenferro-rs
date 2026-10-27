@@ -1,4 +1,4 @@
-use tenferro_gpu::cuda::{download_tensor, upload_tensor, CudaDeviceId, CudaEngine};
+use tenferro_gpu::cuda_next::{download_tensor, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_runtime::{ExecutionEngine, ExtensionCacheStore, Tensor};
 use tenferro_tensor::TensorRead;
 

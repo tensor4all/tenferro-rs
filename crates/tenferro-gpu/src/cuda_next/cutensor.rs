@@ -22,7 +22,6 @@ use t4a_cuda_runtime::{Buffer as DeviceBuffer, RawResource};
 use crate::gpu::GpuError;
 
 use super::runtime::CudaRuntime;
-use super::vendor::ComplexCoefficient;
 
 /// The cuTENSOR entry points this adapter calls.
 ///
@@ -287,7 +286,64 @@ pub struct Contraction<'a> {
     pub c: Option<Operand<'a>>,
     /// Destination.
     pub d: Operand<'a>,
+    /// Scale of the product, as `(re, im)`; the library reads it at the compute type's width.
+    pub alpha: (f64, f64),
+    /// Scale of the addend, as `(re, im)`; non-zero requires `c`.
+    pub beta: (f64, f64),
+    /// Whether the left operand is conjugated.
+    pub conj_a: bool,
+    /// Whether the right operand is conjugated.
+    pub conj_b: bool,
 }
+
+impl Contraction<'_> {
+    /// The coefficient pair the library reads, at the width the compute type expects.
+    ///
+    /// For a complex dtype the library wants a two-field complex scalar, and for a real one
+    /// a single scalar of that width — passing a wider value makes it read the wrong bytes.
+    fn coefficient(dtype: DType, value: (f64, f64)) -> Result<Coefficient, GpuError> {
+        let (re, im) = value;
+        Ok(match dtype {
+            DType::F32 => Coefficient::F32([re as f32]),
+            DType::F64 => Coefficient::F64([re]),
+            DType::C32 => Coefficient::C32([re as f32, im as f32]),
+            DType::C64 => Coefficient::C64([re, im]),
+            other => {
+                return Err(GpuError::unsupported(
+                    "contract",
+                    format!("cuTENSOR serves F32, F64, C32 and C64 here, not {other:?}"),
+                ))
+            }
+        })
+    }
+}
+
+/// A cuTENSOR scalar operand, laid out as the compute type expects.
+#[derive(Clone, Copy)]
+enum Coefficient {
+    /// One `float`.
+    F32([f32; 1]),
+    /// One `double`.
+    F64([f64; 1]),
+    /// `cuFloatComplex`.
+    C32([f32; 2]),
+    /// `cuDoubleComplex`.
+    C64([f64; 2]),
+}
+
+impl Coefficient {
+    fn as_ptr(&self) -> *const std::ffi::c_void {
+        match self {
+            Coefficient::F32(value) => value.as_ptr().cast(),
+            Coefficient::F64(value) => value.as_ptr().cast(),
+            Coefficient::C32(value) => value.as_ptr().cast(),
+            Coefficient::C64(value) => value.as_ptr().cast(),
+        }
+    }
+}
+
+/// How many contraction plans (and their device workspaces) one handle retains.
+const MAX_CACHED_PLANS: usize = 32;
 
 /// A cached plan and the workspace it was planned with.
 struct CachedPlan {
@@ -295,7 +351,7 @@ struct CachedPlan {
     plan: ct::cutensorPlan_t,
     preference: ct::cutensorPlanPreference_t,
     operation: ct::cutensorOperationDescriptor_t,
-    workspace: DeviceBuffer,
+    /// Bytes this plan needs; the handle's single workspace is at least this large.
     workspace_bytes: u64,
 }
 
@@ -305,6 +361,12 @@ pub struct Cutensor {
     handle: ct::cutensorHandle_t,
     runtime: CudaRuntime,
     plans: HashMap<Vec<i64>, CachedPlan>,
+    /// Insertion order of the cached plans, so the oldest plan retires when the cache is full.
+    order: std::collections::VecDeque<Vec<i64>>,
+    /// One workspace for every plan of this handle, grown to the largest requirement seen.
+    /// A workspace per plan would keep a device allocation alive for each shape.
+    workspace: Option<DeviceBuffer>,
+    workspace_bytes: u64,
     cold_plans: u64,
     warm_hits: u64,
     library: &'static libloading::Library,
@@ -343,6 +405,9 @@ impl Cutensor {
             handle,
             runtime: runtime.clone(),
             plans: HashMap::new(),
+            order: std::collections::VecDeque::new(),
+            workspace: None,
+            workspace_bytes: 0,
             cold_plans: 0,
             warm_hits: 0,
             library,
@@ -391,7 +456,25 @@ impl Cutensor {
             self.warm_hits += 1;
         } else {
             let plan = self.build_plan(request)?;
+            // A varying shape would otherwise retain one device workspace per shape for the
+            // lifetime of the engine; the oldest plan retires instead.
+            if self.order.len() >= MAX_CACHED_PLANS {
+                if let Some(oldest) = self.order.pop_front() {
+                    if let Some(evicted) = self.plans.remove(&oldest) {
+                        // The plan's handles and workspace are native resources: an evicted plan
+                        // has to be destroyed, or a varying-shape workload leaks one bundle per
+                        // shape. Nothing queued may still use it, so the stream is drained first.
+                        self.runtime
+                            .synchronize()
+                            .map_err(|error| GpuError::Unavailable {
+                                detail: error.to_string(),
+                            })?;
+                        self.destroy_plan(evicted);
+                    }
+                }
+            }
             self.plans.insert(signature.clone(), plan);
+            self.order.push_back(signature.clone());
             self.cold_plans += 1;
         }
         let cached = self.plans.get(&signature).expect("plan inserted above");
@@ -401,7 +484,7 @@ impl Cutensor {
             request.c.map(|operand| operand.buffer),
             request.d.buffer,
         );
-        let workspace = &cached.workspace;
+        let workspace = self.workspace.as_ref().expect("planned with a workspace");
         let plan = cached.plan;
         let workspace_bytes = cached.workspace_bytes;
         let handle = self.handle;
@@ -414,8 +497,14 @@ impl Cutensor {
         if let Some(c) = c {
             resources.push(RawResource::Buffer(c));
         }
-        let alpha = coefficient(request.dtype, 1.0, 0.0);
-        let beta = coefficient(request.dtype, 0.0, 0.0);
+        if request.c.is_none() && request.beta != (0.0, 0.0) {
+            return Err(GpuError::unsupported(
+                "contract",
+                "a non-zero beta needs an addend operand",
+            ));
+        }
+        let alpha = Contraction::coefficient(request.dtype, request.alpha)?;
+        let beta = Contraction::coefficient(request.dtype, request.beta)?;
         let vtable = &self.vtable;
         // SAFETY: the raw scope registered every operand and the workspace in this
         // runtime, so the addresses belong to it and stay alive until the scope's
@@ -443,10 +532,10 @@ impl Cutensor {
                     (vtable.contract)(
                         handle,
                         plan,
-                        (&alpha as *const ComplexCoefficient).cast(),
+                        alpha.as_ptr(),
                         a,
                         b,
-                        (&beta as *const ComplexCoefficient).cast(),
+                        beta.as_ptr(),
                         c_ptr,
                         d,
                         workspace_ptr,
@@ -521,10 +610,18 @@ impl Cutensor {
                                 &mut operation,
                                 desc_a,
                                 mode(&request.a),
-                                ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY,
+                                if request.conj_a {
+                                    ct::cutensorOperator_t::CUTENSOR_OP_CONJ
+                                } else {
+                                    ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY
+                                },
                                 desc_b,
                                 mode(&request.b),
-                                ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY,
+                                if request.conj_b {
+                                    ct::cutensorOperator_t::CUTENSOR_OP_CONJ
+                                } else {
+                                    ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY
+                                },
                                 c_desc,
                                 c_modes,
                                 ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY,
@@ -566,22 +663,41 @@ impl Cutensor {
             }
         }?;
         let (workspace_bytes, operation, preference) = workspace_bytes_and_plan;
-        // The workspace outlives the plan request, so it is allocated on the runtime rather
-        // than inside the scope above.
-        let workspace = if workspace_bytes == 0 {
-            self.runtime
-                .upload_bytes(&[])
-                .map_err(|error| GpuError::Unavailable {
-                    detail: error.to_string(),
-                })?
-        } else {
-            let mut guard = self.runtime.submit();
-            guard
-                .alloc_zeroed(workspace_bytes as usize, 256)
-                .map_err(|error| GpuError::Unavailable {
-                    detail: error.to_string(),
-                })?
-        };
+        // The handle owns one workspace, grown on demand: an allocation per plan would keep a
+        // device buffer alive for every shape ever contracted.
+        if self.workspace.is_none() || workspace_bytes > self.workspace_bytes {
+            if self.workspace.is_some() {
+                // Replacing the workspace drops the buffer earlier plans ran against, so wait
+                // for the stream first. This happens only while the requirement grows.
+                self.runtime
+                    .synchronize()
+                    .map_err(|error| GpuError::Unavailable {
+                        detail: error.to_string(),
+                    })?;
+            }
+            let workspace = if workspace_bytes == 0 {
+                self.runtime
+                    .upload_bytes(&[])
+                    .map_err(|error| GpuError::Unavailable {
+                        detail: error.to_string(),
+                    })?
+            } else {
+                let mut guard = self.runtime.submit();
+                guard
+                    .alloc_zeroed(workspace_bytes as usize, 256)
+                    .map_err(|error| GpuError::Unavailable {
+                        detail: error.to_string(),
+                    })?
+            };
+            self.workspace = Some(workspace);
+            self.workspace_bytes = workspace_bytes;
+        }
+        // The workspace was grown above whenever this plan needs more than it holds, so it is
+        // present by the time the plan is created.
+        let workspace = self
+            .workspace
+            .as_ref()
+            .expect("the workspace was grown for this plan");
         let handle = self.handle;
         let plan = {
             let mut plan = std::ptr::null_mut();
@@ -590,7 +706,7 @@ impl Cutensor {
             // size was estimated for exactly this descriptor and preference.
             let status = unsafe {
                 self.runtime
-                    .with_raw_locked(vec![RawResource::Buffer(&workspace)], |_raw| {
+                    .with_raw_locked(vec![RawResource::Buffer(workspace)], |_raw| {
                         (vtable.create_plan)(
                             handle,
                             &mut plan,
@@ -611,7 +727,6 @@ impl Cutensor {
             plan,
             preference,
             operation,
-            workspace,
             workspace_bytes,
         })
     }
@@ -655,26 +770,39 @@ impl Cutensor {
     }
 }
 
+impl Cutensor {
+    /// Destroy one plan's native resources, including the descriptors it owns.
+    fn destroy_plan(&self, cached: CachedPlan) {
+        // SAFETY: the raw scope activates the context the plan belongs to, and the caller proved
+        // nothing still reads it.
+        unsafe {
+            let _ = self.runtime.with_raw_locked(Vec::new(), |_raw| {
+                let _ = (self.vtable.destroy_plan)(cached.plan);
+                let _ = (self.vtable.destroy_plan_preference)(cached.preference);
+                let _ = (self.vtable.destroy_operation_descriptor)(cached.operation);
+                for descriptor in cached.descriptors {
+                    if !descriptor.is_null() {
+                        let _ = (self.vtable.destroy_tensor_descriptor)(descriptor);
+                    }
+                }
+            });
+        }
+    }
+}
+
 impl Drop for Cutensor {
     fn drop(&mut self) {
         let handle = self.handle;
         let plans: Vec<CachedPlan> = self.plans.drain().map(|(_, plan)| plan).collect();
         self.runtime.synchronize_best_effort();
-        // SAFETY: the raw scope activates the context the handle and plans belong to, and
-        // the runtime was synchronised first so nothing still reads them.
+        for cached in plans {
+            self.destroy_plan(cached);
+        }
+        // SAFETY: the runtime was synchronised first, so nothing still reads the workspace or the
+        // handle; the scope activates the context they belong to.
         unsafe {
             let _ = self.runtime.with_raw_locked(Vec::new(), |_raw| {
-                for cached in plans {
-                    let _ = (self.vtable.destroy_plan)(cached.plan);
-                    let _ = (self.vtable.destroy_plan_preference)(cached.preference);
-                    let _ = (self.vtable.destroy_operation_descriptor)(cached.operation);
-                    for descriptor in cached.descriptors {
-                        if !descriptor.is_null() {
-                            let _ = (self.vtable.destroy_tensor_descriptor)(descriptor);
-                        }
-                    }
-                    drop(cached.workspace);
-                }
+                drop(self.workspace.take());
                 let _ = (self.vtable.destroy)(handle);
             });
         }
@@ -697,11 +825,6 @@ fn data_type_of(dtype: DType) -> Result<ct::cudaDataType_t, GpuError> {
     })
 }
 
-fn coefficient(dtype: DType, re: f64, im: f64) -> ComplexCoefficient {
-    let _ = dtype;
-    ComplexCoefficient { re, im }
-}
-
 /// The plan cache key: dtype, then every operand's modes, extents and strides.
 fn signature_of(request: &Contraction<'_>) -> Vec<i64> {
     let mut key = Vec::with_capacity(64);
@@ -715,6 +838,8 @@ fn signature_of(request: &Contraction<'_>) -> Vec<i64> {
             0
         }
     });
+    key.push(i64::from(request.conj_a));
+    key.push(i64::from(request.conj_b));
     for operand in [Some(request.a), Some(request.b), request.c, Some(request.d)] {
         let Some(operand) = operand else {
             key.push(-1);

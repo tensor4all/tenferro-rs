@@ -4,7 +4,7 @@ use num_complex::{Complex32, Complex64};
 use std::error::Error as StdError;
 use tenferro_cpu::CpuEngine;
 use tenferro_fft::FftNorm;
-use tenferro_gpu::cuda::gpu_available;
+use tenferro_gpu::cuda_next::gpu_available;
 
 use tenferro_runtime::{DType, Error, ErrorPhase, PrepareError, Tensor};
 use tenferro_tensor::TensorRead;

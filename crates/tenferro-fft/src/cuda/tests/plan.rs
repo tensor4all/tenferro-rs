@@ -7,7 +7,7 @@ use std::mem::size_of;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use tenferro_gpu::cuda::CudaRuntime;
+use tenferro_gpu::cuda_next::CudaRuntime;
 
 use super::super::descriptor::{
     CufftDirection, CufftPlanDescriptor, CufftPlanKey, CufftTransformKind,

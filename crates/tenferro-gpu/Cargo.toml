@@ -81,7 +81,7 @@ cubek-fft = { workspace = true, optional = true }
 # The standalone CUDA runtime the U1 seam is built on (issue #2208). Both upstream
 # crates are `publish = false`, so the dependency is a pinned git revision, recorded
 # in docs/design/cuda-seam-u1-2208.md.
-t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "0a101bf19207e0abb2ea169721f63f50af8669b0", optional = true }
+t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "a3e242d744692c345cef6aeb350eef627950ee72", optional = true }
 # The kernel catalogue and its NVRTC sources (ABI revision 10).
 t4a-cuda-kernels = { git = "https://github.com/tensor4all/t4a-cuda-kernels", rev = "5019c713c14c1f5d59ea2cf03bbfff08c40f167e", optional = true }
 cudarc = { workspace = true, optional = true, features = ["cublas", "cutensor"] }
@@ -217,18 +217,8 @@ path = "tests/seam_launch.rs"
 required-features = ["cuda-next"]
 
 [[test]]
-name = "seam_dispatch"
-path = "tests/seam_dispatch.rs"
-required-features = ["cuda-next"]
-
-[[test]]
 name = "seam_fusion"
 path = "tests/seam_fusion.rs"
-required-features = ["cuda-next"]
-
-[[test]]
-name = "seam_reduce"
-path = "tests/seam_reduce.rs"
 required-features = ["cuda-next"]
 
 [[test]]
@@ -239,6 +229,31 @@ required-features = ["cuda-next"]
 [[test]]
 name = "seam_contraction"
 path = "tests/seam_contraction.rs"
+required-features = ["cuda-next"]
+
+[[test]]
+name = "seam_indexing"
+path = "tests/seam_indexing.rs"
+required-features = ["cuda-next"]
+
+[[test]]
+name = "seam_dtype"
+path = "tests/seam_dtype.rs"
+required-features = ["cuda-next"]
+
+[[test]]
+name = "seam_dot"
+path = "tests/seam_dot.rs"
+required-features = ["cuda-next"]
+
+[[test]]
+name = "seam_raw"
+path = "tests/seam_raw.rs"
+required-features = ["cuda-next"]
+
+[[test]]
+name = "seam_runtime"
+path = "tests/seam_runtime.rs"
 required-features = ["cuda-next"]
 
 [[test]]

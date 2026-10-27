@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use tenferro_tensor::{AllocationDomainId, AllocationId};
+use tenferro_tensor::AllocationDomainId;
 
 use crate::cuda::{CudaDeviceError, CudaDeviceId, CudaDeviceInfo};
 
@@ -35,6 +35,56 @@ impl std::hash::Hash for CudaRuntimeIdentity {
         // The marker allocation is retained by every clone, so its address is
         // move- and clone-invariant while an identity is witnessed.
         state.write_usize(Arc::as_ptr(&self.marker) as usize);
+    }
+}
+
+std::thread_local! {
+    /// Addresses of the runtimes whose context this thread has already activated.
+    ///
+    /// The raw scope takes the runtime's submission lock, so a second activation on the same
+    /// thread would block forever; nesting is legal because the context is already current.
+    static ACTIVATED_CONTEXTS: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// One activation level of a runtime's context on this thread.
+pub(crate) struct ActivatedContext {
+    key: usize,
+    /// Whether this call found the context already active on this thread.
+    nested: bool,
+    /// `Some` when this call pushed a level; dropping it pops the level again, including on a
+    /// panic, so a leaked level cannot make a later activation silently skip the context.
+    pushed: bool,
+}
+
+impl ActivatedContext {
+    /// Enter `runtime`'s context, reporting whether this thread was already inside it.
+    fn enter(runtime: &CudaRuntime) -> ActivatedContext {
+        let key = Arc::as_ptr(&runtime.inner) as usize;
+        let nested = ACTIVATED_CONTEXTS.with(|active| {
+            let mut active = active.borrow_mut();
+            if active.contains(&key) {
+                true
+            } else {
+                active.push(key);
+                false
+            }
+        });
+        ActivatedContext {
+            key,
+            nested,
+            pushed: !nested,
+        }
+    }
+}
+
+impl Drop for ActivatedContext {
+    fn drop(&mut self) {
+        if self.pushed {
+            ACTIVATED_CONTEXTS.with(|active| {
+                active.borrow_mut().retain(|entry| *entry != self.key);
+            });
+        }
     }
 }
 
@@ -190,6 +240,32 @@ impl CudaRuntime {
             .map_err(|error| crate::Error::runtime_state_source("cuda raw scope", error))
     }
 
+    /// Run `f` with this runtime's CUDA context current, for a vendor call that only sets up state
+    /// (a cuFFT or cuSOLVER plan) and enqueues nothing.
+    ///
+    /// # Errors
+    ///
+    /// The closure's own failure, and the runtime's when the context cannot be activated.
+    #[doc(hidden)]
+    pub fn with_current_context<R>(
+        &self,
+        op: &'static str,
+        f: impl FnOnce() -> R,
+    ) -> crate::Result<R> {
+        // The scope holds the runtime's submission lock, so a nested call would deadlock on it (a
+        // cuFFT plan's rollback runs inside the same context). Nesting is tracked per thread:
+        // inside an activated context the closure simply runs, and the level is popped when this
+        // call leaves, panic included.
+        let activation = ActivatedContext::enter(self);
+        if activation.nested {
+            return Ok(f());
+        }
+        // SAFETY: the scope activates this runtime's context for the closure's duration; it declares
+        // no resources, so nothing is registered against the closure's work.
+        unsafe { self.with_raw_locked(Vec::new(), |_scope| f()) }
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
+    }
+
     /// Resource counters of this runtime.
     ///
     /// The snapshot is the runtime's own: live and pooled device bytes, pending
@@ -236,8 +312,6 @@ impl CudaRuntime {
                 "the value belongs to another runtime",
             ));
         }
-        let bytes = storage.bytes();
-        let device = destination.device_ordinal();
 
         // Both runtimes participate in admission. Take their submission locks in a
         // stable order (by allocation domain) so two opposing copies cannot invert them,
@@ -247,37 +321,26 @@ impl CudaRuntime {
             let mut source_guard = self.submit();
             let mut destination_guard = destination.submit();
             let (buffer, completion, _route) = destination_guard
-                .copy_between(&mut source_guard, &storage.buffer)
+                .copy_between(&mut source_guard, storage.allocation())
                 .map_err(|error| crate::Error::runtime_state_source("cuda copy", error))?;
             (buffer, completion)
         } else {
             let mut destination_guard = destination.submit();
             let mut source_guard = self.submit();
             let (buffer, completion, _route) = destination_guard
-                .copy_between(&mut source_guard, &storage.buffer)
+                .copy_between(&mut source_guard, storage.allocation())
                 .map_err(|error| crate::Error::runtime_state_source("cuda copy", error))?;
             (buffer, completion)
         };
-        let (domain, id) = super::storage::fresh_identity(destination);
         fn rebuild<T: TensorScalar + Send + Sync + 'static>(
             value: &tenferro_tensor::Tensor,
             buffer: t4a_cuda_runtime::Buffer,
-            bytes: usize,
-            device: usize,
             destination: &CudaRuntime,
-            domain: AllocationDomainId,
-            id: AllocationId,
         ) -> crate::Result<tenferro_tensor::Tensor> {
             let typed: &TypedTensor<T> = value.as_typed::<T>().ok_or_else(|| {
                 crate::Error::runtime_state("cuda copy", "expected a preset scalar")
             })?;
-            let storage = super::storage::CudaStorage {
-                buffer,
-                bytes,
-                device,
-                domain,
-                id,
-            };
+            let storage = super::storage::fresh_storage(destination, buffer);
             TypedTensor::<T>::from_buffer_col_major(
                 typed.shape().to_vec(),
                 tenferro_tensor::StorageBuffer::Backend(Box::new(storage)),
@@ -286,16 +349,12 @@ impl CudaRuntime {
             .map(tenferro_tensor::Tensor::from_typed)
         }
         match value.dtype() {
-            DType::F64 => rebuild::<f64>(value, buffer, bytes, device, destination, domain, id),
-            DType::F32 => rebuild::<f32>(value, buffer, bytes, device, destination, domain, id),
-            DType::I32 => rebuild::<i32>(value, buffer, bytes, device, destination, domain, id),
-            DType::I64 => rebuild::<i64>(value, buffer, bytes, device, destination, domain, id),
-            DType::C32 => {
-                rebuild::<Complex32>(value, buffer, bytes, device, destination, domain, id)
-            }
-            DType::C64 => {
-                rebuild::<Complex64>(value, buffer, bytes, device, destination, domain, id)
-            }
+            DType::F64 => rebuild::<f64>(value, buffer, destination),
+            DType::F32 => rebuild::<f32>(value, buffer, destination),
+            DType::I32 => rebuild::<i32>(value, buffer, destination),
+            DType::I64 => rebuild::<i64>(value, buffer, destination),
+            DType::C32 => rebuild::<Complex32>(value, buffer, destination),
+            DType::C64 => rebuild::<Complex64>(value, buffer, destination),
             DType::Bool | DType::External(_) => Err(crate::Error::unsupported(
                 "cuda copy",
                 "the transfer route does not serve this dtype",

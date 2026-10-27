@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use tenferro_gpu::cuda::CudaRuntimeIdentity;
+use tenferro_gpu::cuda_next::CudaRuntimeIdentity;
 
 use super::error::CudaFftError;
 

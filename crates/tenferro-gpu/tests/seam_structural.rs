@@ -7,7 +7,9 @@
 use tenferro_gpu::cuda_next::{
     download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine,
 };
-use tenferro_tensor::{DType, Tensor, TensorRead, TensorStructural, TensorWrite};
+use tenferro_tensor::{
+    DType, Tensor, TensorIndexing, TensorRead, TensorReduction, TensorStructural, TensorWrite,
+};
 
 fn engine() -> Option<CudaEngine> {
     if !gpu_available() {
@@ -614,4 +616,305 @@ fn remainder_and_read_into_match_the_host() {
             TensorWrite::from_tensor(&mut destination),
         )
         .is_err());
+}
+
+#[test]
+fn a_rank_nine_transpose_uses_the_general_path() {
+    let Some(mut engine) = engine() else { return };
+    // Nine axes exceed the fast ABI's rank limit, so the view's geometry travels in device
+    // memory and the launch goes through the `_any` symbol.
+    let shape = vec![2usize, 1, 1, 1, 1, 1, 1, 1, 3];
+    let len: usize = shape.iter().product();
+    let data: Vec<f64> = (0..len).map(|index| index as f64).collect();
+    let host = Tensor::from_vec_col_major(shape.clone(), data.clone()).expect("host tensor");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+
+    let perm: Vec<usize> = (0..shape.len()).rev().collect();
+    let transposed = engine
+        .transpose_read(TensorRead::from_tensor(&source), &perm)
+        .expect("rank-9 transpose");
+    let expected_shape: Vec<usize> = perm.iter().map(|&axis| shape[axis]).collect();
+    assert_eq!(transposed.shape(), &expected_shape[..]);
+
+    let observed = download_tensor(engine.runtime(), &transposed).expect("download");
+    let observed = observed.as_slice::<f64>().expect("f64 payload");
+    // Column-major: the transposed element at index `i` reads the source element whose axes
+    // are the permutation's inverse.
+    let mut expected = vec![0.0f64; len];
+    for (index, value) in expected.iter_mut().enumerate() {
+        // Decode `index` in the transposed shape, then map it back through `perm`.
+        let mut remaining = index;
+        let mut source_index = 0usize;
+        for axis in 0..shape.len() {
+            let extent = expected_shape[axis];
+            let coordinate = remaining % extent;
+            remaining /= extent;
+            // `perm[axis]` is the source axis this output axis came from.
+            let stride: usize = shape[..perm[axis]].iter().product();
+            source_index += coordinate * stride;
+        }
+        *value = data[source_index];
+    }
+    assert_eq!(observed, &expected[..]);
+}
+
+#[test]
+fn a_rank_nine_reverse_carries_its_negative_strides_and_offset() {
+    let Some(mut engine) = engine() else { return };
+    // Non-singleton axes on both ends, so a dropped offset or an unnegated stride would show.
+    let shape = vec![2usize, 1, 1, 1, 1, 1, 1, 3, 2];
+    let len: usize = shape.iter().product();
+    let data: Vec<f64> = (0..len).map(|index| index as f64 + 1.0).collect();
+    let host = Tensor::from_vec_col_major(shape.clone(), data.clone()).expect("host tensor");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+
+    let reversed = engine.reverse(&source, &[0, 7, 8]).expect("rank-9 reverse");
+    assert_eq!(reversed.shape(), &shape[..]);
+    let observed = download_tensor(engine.runtime(), &reversed).expect("download");
+    let observed = observed.as_slice::<f64>().expect("f64 payload");
+    let mut expected = vec![0.0f64; len];
+    for (index, value) in expected.iter_mut().enumerate() {
+        let mut remaining = index;
+        let mut source_index = 0usize;
+        for axis in 0..shape.len() {
+            let extent = shape[axis];
+            let mut coordinate = remaining % extent;
+            remaining /= extent;
+            if matches!(axis, 0 | 7 | 8) {
+                coordinate = extent - 1 - coordinate;
+            }
+            let stride: usize = shape[..axis].iter().product();
+            source_index += coordinate * stride;
+        }
+        *value = data[source_index];
+    }
+    assert_eq!(observed, &expected[..]);
+}
+
+#[test]
+fn a_rank_nine_broadcast_uses_the_general_path() {
+    let Some(mut engine) = engine() else { return };
+    // A rank-2 source into a rank-9 destination: the destination layout is wider than the
+    // by-value ABI form, and one mapped axis (8) is past the fast limit too.
+    let source_data = vec![1.0f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let host = Tensor::from_vec_col_major(vec![3, 2], source_data.clone()).expect("host");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+    let shape = vec![2usize, 1, 1, 1, 1, 1, 1, 1, 3];
+    let dims = vec![8usize, 0];
+    let broadcast = engine
+        .broadcast_in_dim_read(TensorRead::from_tensor(&source), &shape, &dims)
+        .expect("rank-9 broadcast");
+    assert_eq!(broadcast.shape(), &shape[..]);
+
+    let observed = download_tensor(engine.runtime(), &broadcast).expect("download");
+    let observed = observed.as_slice::<f64>().expect("f64 payload");
+    let len: usize = shape.iter().product();
+    assert_eq!(observed.len(), len);
+    let mut expected = vec![0.0f64; len];
+    for (index, value) in expected.iter_mut().enumerate() {
+        let mut remaining = index;
+        let mut source_index = 0usize;
+        for (axis, &extent) in shape.iter().enumerate() {
+            let coordinate = remaining % extent;
+            remaining /= extent;
+            if let Some(source_axis) = dims.iter().position(|&mapped| mapped == axis) {
+                // Column-major strides of the `[3, 2]` source.
+                source_index += coordinate * if source_axis == 0 { 1 } else { 3 };
+            }
+        }
+        *value = source_data[source_index];
+    }
+    assert_eq!(observed, &expected[..]);
+}
+
+#[test]
+fn a_rank_nine_diagonal_pair_uses_the_general_path() {
+    let Some(mut engine) = engine() else { return };
+    // Unequal diagonal extents, a non-singleton spectator axis, and the lower axis removed
+    // first, so the diagonal's output axis is not the input axis: a shifted axis or a transposed
+    // destination would fail.
+    let shape = vec![2usize, 3, 1, 1, 1, 1, 1, 1, 4];
+    let data: Vec<f64> = (0..24).map(|index| index as f64 + 1.0).collect();
+    let host = Tensor::from_vec_col_major(shape.clone(), data.clone()).expect("host");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+    // Column-major strides of the source: axis 0 is fastest, axis 1 next, axis 8 last.
+    let (stride_0, stride_1, stride_8) = (1usize, 2, 6);
+
+    // The diagonal of axes (8, 1): extent min(4, 3) = 3, axis 1 removed, so it lands on output
+    // axis 7. An element pairs both axes, hence the stride sum below.
+    let extracted = engine
+        .extract_diagonal(&source, 8, 1)
+        .expect("rank-9 extract diagonal");
+    assert_eq!(extracted.shape(), &[2, 1, 1, 1, 1, 1, 1, 3]);
+    let diagonal_host = download_tensor(engine.runtime(), &extracted).expect("download");
+    let diagonal = diagonal_host.as_slice::<f64>().expect("f64 payload");
+    let mut expected = Vec::new();
+    for diagonal_index in 0..3 {
+        for spectator in 0..2 {
+            expected.push(data[spectator * stride_0 + diagonal_index * (stride_1 + stride_8)]);
+        }
+    }
+    assert_eq!(diagonal, expected.as_slice());
+
+    // Embedding the diagonal back at position 1 inserts an axis of extent 3, and every
+    // off-diagonal entry stays zero.
+    let embedded = engine
+        .embed_diagonal(&extracted, 7, 1)
+        .expect("rank-9 embed diagonal");
+    assert_eq!(embedded.shape(), &[2, 3, 1, 1, 1, 1, 1, 1, 3]);
+    let embedded_host = download_tensor(engine.runtime(), &embedded).expect("download");
+    let observed = embedded_host.as_slice::<f64>().expect("f64 payload");
+    let mut expected = vec![0.0f64; 18];
+    // The destination is `[2, 3, 1, .., 3]`: axis 0 is fastest, the inserted axis second, the
+    // diagonal axis last.
+    for diagonal_index in 0..3 {
+        for spectator in 0..2 {
+            expected[spectator + diagonal_index * 2 + diagonal_index * 6] =
+                data[spectator * stride_0 + diagonal_index * (stride_1 + stride_8)];
+        }
+    }
+    assert_eq!(observed, expected.as_slice());
+}
+
+#[test]
+fn a_rank_nine_reduction_uses_the_general_path() {
+    let Some(mut engine) = engine() else { return };
+    // Nine axes; the first reduction is a single axis and the second a multi-axis sum, so the
+    // keepdims passes and the final squeeze both run through the general path.
+    let shape = vec![3usize, 1, 1, 1, 1, 1, 1, 2, 4];
+    let data: Vec<f64> = (0..24).map(|index| index as f64 * 0.5 - 1.0).collect();
+    let host = Tensor::from_vec_col_major(shape.clone(), data.clone()).expect("host");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+    // Compact column-major strides of `[3, 1, .., 2, 4]`.
+    let strides = [1usize, 3, 3, 3, 3, 3, 3, 3, 6];
+
+    let summed = engine
+        .reduce_sum_read(TensorRead::from_tensor(&source), &[0])
+        .expect("rank-9 reduce");
+    // The reduced axes are squeezed off the result, so the keepdims passes are internal.
+    assert_eq!(summed.shape(), &[1, 1, 1, 1, 1, 1, 2, 4]);
+    let summed_host = download_tensor(engine.runtime(), &summed).expect("download");
+    let observed = summed_host.as_slice::<f64>().expect("f64 payload");
+    let mut expected = Vec::new();
+    for axis8 in 0..4 {
+        for axis7 in 0..2 {
+            let mut total = 0.0;
+            for axis0 in 0..3 {
+                total += data[axis0 * strides[0] + axis7 * strides[7] + axis8 * strides[8]];
+            }
+            expected.push(total);
+        }
+    }
+    assert_eq!(observed, expected.as_slice());
+
+    let squeezed = engine
+        .reduce_sum_read(TensorRead::from_tensor(&source), &[0, 7])
+        .expect("rank-9 multi-axis reduce");
+    assert_eq!(squeezed.shape(), &[1, 1, 1, 1, 1, 1, 4]);
+    let squeezed_host = download_tensor(engine.runtime(), &squeezed).expect("download");
+    let observed = squeezed_host.as_slice::<f64>().expect("f64 payload");
+    let mut expected = Vec::new();
+    for axis8 in 0..4 {
+        let mut total = 0.0;
+        for axis7 in 0..2 {
+            for axis0 in 0..3 {
+                total += data[axis0 * strides[0] + axis7 * strides[7] + axis8 * strides[8]];
+            }
+        }
+        expected.push(total);
+    }
+    assert_eq!(observed, expected.as_slice());
+
+    // A product reduction exercises a different fold over the same general path.
+    let product = engine
+        .reduce_prod_read(TensorRead::from_tensor(&source), &[7])
+        .expect("rank-9 product reduce");
+    assert_eq!(product.shape(), &[3, 1, 1, 1, 1, 1, 1, 4]);
+    let product_host = download_tensor(engine.runtime(), &product).expect("download");
+    let observed = product_host.as_slice::<f64>().expect("f64 payload");
+    let mut expected = Vec::new();
+    for axis8 in 0..4 {
+        for axis0 in 0..3 {
+            expected.push(
+                data[axis0 * strides[0] + axis8 * strides[8]]
+                    * data[axis0 * strides[0] + strides[7] + axis8 * strides[8]],
+            );
+        }
+    }
+    assert_eq!(observed, expected.as_slice());
+}
+
+#[test]
+fn a_sum_of_squares_over_two_axes_squares_once() {
+    let Some(mut engine) = engine() else { return };
+    // Squaring both passes would return `sum((sum x^2)^2)` instead of `sum(x^2)`.
+    let shape = vec![2usize, 1, 1, 1, 1, 1, 1, 1, 2];
+    let data = vec![1.0f64, 2.0, 3.0, 4.0];
+    let host = Tensor::from_vec_col_major(shape, data.clone()).expect("host");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+    let squares = engine
+        .reduce_sum_squares_read(TensorRead::from_tensor(&source), &[0, 8])
+        .expect("sum of squares");
+    let squares_host = download_tensor(engine.runtime(), &squares).expect("download");
+    let observed = squares_host.as_slice::<f64>().expect("f64 payload");
+    let expected: f64 = data.iter().map(|value| value * value).sum();
+    assert_eq!(observed, &[expected]);
+}
+
+#[test]
+fn a_rank_nine_reduction_over_a_long_axis_picks_a_plane_or_split_strategy() {
+    let Some(mut engine) = engine() else { return };
+    // Axis lengths past a warp and past the plane threshold make the crate choose a plane or a
+    // split reduction, which the short fixtures never exercise.
+    for (length, expected_splits) in [(33usize, false), (513, true), (8449, true)] {
+        let shape = vec![length, 1, 1, 1, 1, 1, 1, 1, 2];
+        let data: Vec<f64> = (0..length * 2)
+            .map(|index| (index % 7) as f64 - 3.0)
+            .collect();
+        let host = Tensor::from_vec_col_major(shape, data.clone()).expect("host");
+        let source = upload_tensor(engine.runtime(), &host).expect("upload");
+        let summed = engine
+            .reduce_sum_read(TensorRead::from_tensor(&source), &[0])
+            .expect("rank-9 long-axis reduce");
+        let summed_host = download_tensor(engine.runtime(), &summed).expect("download");
+        let observed = summed_host.as_slice::<f64>().expect("f64 payload");
+        let mut expected = Vec::new();
+        for column in 0..2 {
+            let total: f64 = (0..length).map(|row| data[row + column * length]).sum();
+            expected.push(total);
+        }
+        assert_eq!(observed, expected.as_slice(), "axis length {length}");
+        let _ = expected_splits;
+    }
+}
+
+#[test]
+fn a_multi_axis_fold_keeps_its_own_operation() {
+    let Some(mut engine) = engine() else { return };
+    // A product over two axes must stay a product; only a sum of squares changes between passes.
+    let host = Tensor::from_vec_col_major(vec![2, 2], vec![1.0f64, 2.0, 3.0, 4.0]).expect("host");
+    let source = upload_tensor(engine.runtime(), &host).expect("upload");
+    let product = engine
+        .reduce_prod_read(TensorRead::from_tensor(&source), &[0, 1])
+        .expect("product");
+    let product_host = download_tensor(engine.runtime(), &product).expect("download");
+    assert_eq!(
+        product_host.as_slice::<f64>().expect("f64 payload"),
+        &[24.0],
+        "1 * 2 * 3 * 4"
+    );
+    let squares = engine
+        .reduce_sum_squares_read(TensorRead::from_tensor(&source), &[0, 1])
+        .expect("sum of squares");
+    let squares_host = download_tensor(engine.runtime(), &squares).expect("download");
+    assert_eq!(
+        squares_host.as_slice::<f64>().expect("f64 payload"),
+        &[30.0],
+        "1 + 4 + 9 + 16"
+    );
+    let maximum = engine
+        .reduce_max_read(TensorRead::from_tensor(&source), &[0, 1])
+        .expect("maximum");
+    let maximum_host = download_tensor(engine.runtime(), &maximum).expect("download");
+    assert_eq!(maximum_host.as_slice::<f64>().expect("f64 payload"), &[4.0]);
 }

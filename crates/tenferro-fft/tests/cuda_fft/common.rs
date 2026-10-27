@@ -1,7 +1,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftExecutor, FftNorm, TensorFftExt, TracedTensorFftExt};
-use tenferro_gpu::cuda::{cuda_runtime_engine_registration, CudaEngine};
+use tenferro_gpu::cuda_next::{cuda_runtime_engine_registration, CudaEngine};
 use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Runtime, Tensor, TracedTensor};
 use tenferro_tensor::TensorRead;
 
