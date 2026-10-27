@@ -145,6 +145,11 @@ impl KernelModules {
 
     /// Enqueue one launch of `entry` with `args`.
     ///
+    /// # Panics
+    ///
+    /// Only if binding the entry succeeded and its function is then missing from the map, which
+    /// is an internal invariant of the call above.
+    ///
     /// # Safety
     ///
     /// The arguments must match the entry's ABI exactly; the planners are the validation

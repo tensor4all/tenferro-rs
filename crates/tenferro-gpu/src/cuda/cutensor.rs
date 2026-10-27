@@ -434,6 +434,13 @@ impl Cutensor {
     ///
     /// # Errors
     ///
+    /// # Panics
+    ///
+    /// Only if the plan cache and the workspace it just stored disagree, which is an internal
+    /// invariant: the plan is inserted before it is read back.
+    ///
+    /// # Errors
+    ///
     /// [`GpuError::Unsupported`] for operands whose mode, extent and stride lists disagree
     /// or whose signature is already cached with a different workspace, and the library's
     /// typed failure.

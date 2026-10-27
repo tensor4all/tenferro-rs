@@ -388,6 +388,11 @@ impl<'s> Session<'s> {
     /// # }
     /// ```
     ///
+    /// # Panics
+    ///
+    /// Only if storing the initialised resource succeeded and it is then missing from the cache,
+    /// which is an internal invariant of the store above.
+    ///
     /// # Errors
     ///
     /// The initialiser's failure, and the engine's when the cache is poisoned.
