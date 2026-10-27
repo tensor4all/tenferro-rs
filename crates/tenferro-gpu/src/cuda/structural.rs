@@ -5100,7 +5100,6 @@ impl CudaEngine {
             "matrix_adjoint",
             op,
             |kernel, out, out_len, v, v_len| plan_matrix_adjoint(kernel, out, out_len, v, v_len),
-            LinalgAuxArgs::Two,
         )
     }
 
@@ -5244,6 +5243,9 @@ impl CudaEngine {
         if operand_is_empty(work) || operand_is_empty(permutation) || operand_is_empty(pivots) {
             return Ok(());
         }
+        // The kernel reads and writes `long long` index arrays here, whatever the work dtype is.
+        expect_operand_dtype(permutation, DType::I64, op)?;
+        expect_operand_dtype(pivots, DType::I64, op)?;
         let dtype = work.operand_dtype();
         let kernel = kernel_dtype(dtype, op)?;
         let work_layout = self.operand_layout(work, op)?;
@@ -5283,13 +5285,6 @@ impl CudaEngine {
     }
 }
 
-/// How many layout operands one linalg auxiliary names.
-#[derive(Clone, Copy)]
-enum LinalgAuxArgs {
-    /// One destination and one source.
-    Two,
-}
-
 impl CudaEngine {
     /// One linalg auxiliary whose only parameters are a destination layout and a source layout.
     #[allow(clippy::too_many_arguments)]
@@ -5301,7 +5296,6 @@ impl CudaEngine {
         plan_name: &'static str,
         op: &'static str,
         plan: F,
-        _args: LinalgAuxArgs,
     ) -> crate::Result<()>
     where
         F: FnOnce(
@@ -5312,6 +5306,9 @@ impl CudaEngine {
             i64,
         ) -> Result<t4a_cuda_kernels::Launch, t4a_cuda_kernels::Error>,
     {
+        // The kernel is dtype-tagged once and addresses both sides with it: a destination of
+        // another dtype would be reinterpreted element by element.
+        expect_operand_dtype(output, input.operand_dtype(), op)?;
         let dtype = output.operand_dtype();
         let kernel = kernel_dtype(dtype, op)?;
         let out_layout = self.operand_layout(output, op)?;
@@ -5360,7 +5357,6 @@ impl CudaEngine {
             |kernel, out, out_len, packed, packed_len| {
                 plan_householder_explicit_v(kernel, out, out_len, packed, packed_len)
             },
-            LinalgAuxArgs::Two,
         )
     }
 
@@ -5383,7 +5379,6 @@ impl CudaEngine {
             "qr_phase",
             op,
             |kernel, phase, phase_len, r, r_len| plan_qr_phase(kernel, phase, phase_len, r, r_len),
-            LinalgAuxArgs::Two,
         )
     }
 
@@ -5869,6 +5864,14 @@ impl CudaEngine {
         // dtype is fixed here; the pivot array is whatever the caller's factorization wrote.
         let dtype = parity.operand_dtype();
         let kernel = kernel_dtype(dtype, op)?;
+        // One parity word per batch is written, so a shorter destination would be overrun.
+        let parity_len = count_i64(parity.operand_shape(), op)?;
+        if parity_len < batches {
+            return Err(crate::Error::unsupported(
+                op,
+                format!("the parity destination holds {parity_len} words for {batches} batches"),
+            ));
+        }
         let pivots_len = i64::try_from(column_pivot_len(pivots, op)?)
             .map_err(|_| crate::Error::unsupported(op, "the pivot array exceeds i64"))?;
         let plan = plan_lu_parity(kernel, pivots_len, batches, k)
@@ -5929,7 +5932,17 @@ impl CudaEngine {
         let parity_len = count_i64(parity.operand_shape(), op)?;
         let pivots_len = i64::try_from(column_pivot_len(pivots, op)?)
             .map_err(|_| crate::Error::unsupported(op, "the pivot array exceeds i64"))?;
-        let batches = count_i64(&work.operand_shape()[2..], op)?;
+        let work_shape = work.operand_shape();
+        if work_shape.len() < 2 {
+            return Err(crate::Error::unsupported(
+                op,
+                format!(
+                    "expected a matrix or batched matrix in `work`, got rank {}",
+                    work_shape.len()
+                ),
+            ));
+        }
+        let batches = count_i64(&work_shape[2..], op)?;
         let plan = plan_lu_extract_outputs(
             kernel,
             &p_layout,

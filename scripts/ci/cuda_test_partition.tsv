@@ -651,6 +651,7 @@ gpu	tenferro-gpu	cuda::dispatch::tests::gather_matches_the_host_reference
 gpu	tenferro-gpu	cuda::dispatch::tests::scatter_add_matches_the_host_reference
 gpu	tenferro-gpu	cuda::dispatch::tests::unary_matches_the_host_reference
 host	tenferro-gpu	cuda::structural::tests::the_element_count_checks_both_extremes
+host	tenferro-gpu	cuda::runtime::tests::the_environment_names_the_persistent_artifact_directory
 host	tenferro-gpu	event_retirement::tests::explicit_retirement_then_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_retirement_contains_provider_panic

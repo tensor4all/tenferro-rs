@@ -80,7 +80,9 @@ const fn dot_native(dtype: DType) -> OperationCapability {
         // A borrowed operand reaches cuBLAS through a compact copy: cuBLAS takes no strides.
         read_inputs: F,
         write_output: N,
-        strided_output: N,
+        // The dotted result is written into an owned output only; a strided destination region
+        // is refused by both `dot_general_read_into` entries.
+        strided_output: U,
         accumulation: N,
     }
 }
