@@ -140,7 +140,9 @@ fn every_claimed_entry_matches_what_the_engine_does() {
 
 #[test]
 fn the_descriptor_names_this_backend_and_its_dtype_pairs() {
-    let engine = engine().expect("CUDA engine");
+    // This one needs an engine, and a host without a device skips it like its siblings (the GPU
+    // lane runs it with `TENFERRO_REQUIRE_GPU=1`, where a missing device fails).
+    let Some(engine) = engine() else { return };
     assert_eq!(
         engine.backend_id(),
         tenferro_tensor::BackendId::Cuda,

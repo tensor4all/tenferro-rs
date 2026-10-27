@@ -59,9 +59,16 @@ impl crate::gpu::Backend for CudaBackend {
 /// CubeCL path, so a new-path test cannot be skipped because the old backend failed.
 #[doc(hidden)]
 pub fn gpu_available() -> bool {
-    t4a_cuda_runtime::device_count()
+    let available = t4a_cuda_runtime::device_count()
         .map(|count| count > 0)
-        .unwrap_or(false)
+        .unwrap_or(false);
+    // The GPU lane sets `TENFERRO_REQUIRE_GPU=1`: there a missing device must fail the test
+    // rather than skip it, so a hardware lane cannot report success without hardware.
+    assert!(
+        available || std::env::var_os("TENFERRO_REQUIRE_GPU").is_none(),
+        "TENFERRO_REQUIRE_GPU is set but no CUDA device is usable"
+    );
+    available
 }
 /// The seam this adapter implements.
 pub use crate::gpu;
