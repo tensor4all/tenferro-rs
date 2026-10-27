@@ -185,32 +185,29 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertTrue(dependencies["faer"]["optional"])
         self.assertTrue(dependencies["lapack"]["optional"])
 
-    def test_cubecl_dependencies_share_cudarc_contract(self) -> None:
-        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
-        dependencies = manifest["workspace"]["dependencies"]
+    def test_cuda_dependencies_are_pinned_revisions(self) -> None:
+        """The CUDA engine's two upstream crates are `publish = false` git checkouts.
 
-        # Released as `t4a-cubecl* 0.11.0`: the ported upstream 0.11 content plus
-        # the migration's fixes, on the fork's `release/t4a-cubecl-0.11.0` branch.
-        # The 0.10.2 line and its `Client::check_errors` patch (#27) are retired -
-        # 0.11 reports a failed launch on the buffers it never wrote, so the raw
-        # publication boundaries use the buffer-scoped claim instead
-        # (`docs/design/cubecl-011-check-errors-disposition.md`).
-        for name in (
-            "cubecl",
-            "cubecl-cuda",
-            "cubecl-common",
-            "cubecl-environment",
-            "cubecl-runtime",
-            "cubecl-wgpu",
-        ):
+        A branch or a loose version would let the tested kernel ABI change under the
+        build, so both stay exact revisions, and `cudarc` keeps one feature set so a
+        single CUDA binding resolves in the graph.
+        """
+        manifest = tomllib.loads(
+            (ROOT / "crates" / "tenferro-gpu" / "Cargo.toml").read_text()
+        )
+        dependencies = manifest["dependencies"]
+        for name in ("t4a-cuda-runtime", "t4a-cuda-kernels"):
             with self.subTest(dependency=name):
                 spec = dependencies[name]
-                self.assertNotIn("git", spec)
-                # Exact, so a newer registry release cannot replace the tested content,
-                # and one copy of the CubeCL runtime stays in the graph.
-                self.assertEqual(spec["version"], "=0.11.0")
+                self.assertIn("git", spec)
+                self.assertNotIn("branch", spec)
+                self.assertNotIn("tag", spec)
+                self.assertTrue(spec.get("optional"))
+                self.assertEqual(len(spec["rev"]), 40, "an exact revision")
 
-        cudarc = dependencies["cudarc"]
+        cudarc = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"][
+            "dependencies"
+        ]["cudarc"]
         self.assertFalse(cudarc["default-features"])
         self.assertEqual(
             set(cudarc["features"]),

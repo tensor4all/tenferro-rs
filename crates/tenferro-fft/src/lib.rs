@@ -2,19 +2,12 @@
 //!
 //! This crate is an out-of-tree `ExtensionOp` package with an explicit
 //! [`FftBackend`] capability. [`tenferro_cpu::CpuEngine`] implements the
-//! capability through RustFFT. With the `webgpu` feature,
-//! `tenferro_gpu::webgpu::WebGpuBackend` executes C32 CFFT, F32 one-sided RFFT, and
-//! C32-to-F32 IRFFT through CubeK on its existing WebGPU placement. That first
-//! GPU path supports power-of-two lengths only; unsupported operations and
-//! dtypes return an error and never fall back to CPU or transfer tensor data.
-//! With the `cuda` feature, `tenferro_gpu::cuda::CudaEngine` executes the
+//! capability through RustFFT. With the `cuda` feature,
+//! `tenferro_gpu::cuda::CudaEngine` executes the
 //! supported one-dimensional F32/F64/C32/C64 operations through dynamically
 //! loaded cuFFT without implicit transfers or CPU fallback. The vendor call
 //! synchronizes at the cuFFT FFI boundary; subsequent CUDA postprocessing and
-//! explicit download remain stream-managed. On macOS,
-//! `tenferro_gpu::apple::AppleContext` pairs that Metal backend with a
-//! domain-bound CPU RustFFT backend. Backend choice remains explicit, while
-//! matching managed tensors can be used without an intervening download.
+//! explicit download remain stream-managed. Backend choice remains explicit.
 //! Concrete non-AD execution uses
 //! [`TensorFftExt`] and [`TensorReadFftExt`]. Eager FFTs use
 //! `EagerSessionFftExt` on a borrowed session when `autodiff` is enabled;
@@ -28,7 +21,6 @@
 //! | `native` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
 //! | `autodiff` | The eager surface (`EagerSessionFftExt`, `EagerTensorFftExt`) and AD rules. Adds the `tenferro-ad` dependency. |
 //! | `cuda` | CUDA execution through `tenferro-gpu`. |
-//! | `webgpu` | WebGPU/Metal execution through `tenferro-gpu` (a subset of operations). |
 //! | `rocm` | Placeholder; HIP/ROCm is not implemented. |
 //!
 //! For transforms without AD, use [`TensorFftExt`] / [`TensorReadFftExt`] on
@@ -79,32 +71,45 @@
 //! ```
 //!
 //! ```
-//! # #[cfg(all(feature = "webgpu", target_os = "macos"))]
-//! # {
-//! use num_complex::Complex32;
-//! // TODO(#2206 webgpu): rewritten with the Apple/WebGPU engine migration.
-//! use tenferro_fft::{FftNorm, TensorFftExt};
-//! use tenferro_gpu::apple::AppleContext;
-//! use tenferro_tensor::Tensor;
+//! use num_complex::Complex64;
+//! use tenferro_cpu::CpuEngine;
+//! use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+//! use tenferro_fft::{FftNorm, TracedTensorFftExt};
 //!
-//! if let Ok(context) = AppleContext::new() {
-//!     let host = Tensor::from_vec_col_major(
-//!         vec![4],
-//!         vec![Complex32::new(1.0, 0.0); 4],
-//!     ).unwrap();
-//!     let input = context.upload_tensor(&host).unwrap();
-//!     let after_creation = context.transfer_stats();
-//!     let mut cpu = context.cpu_backend().clone();
-//!     let cpu_output = input.fft(None, 0, FftNorm::Backward, &mut cpu).unwrap();
-//!     let mut metal = context.metal_backend().clone();
-//!     let output = input.fft(None, 0, FftNorm::Backward, &mut metal).unwrap();
-//!     metal.synchronize().unwrap();
-//!     assert_eq!(output.shape(), &[4]);
-//!     assert_eq!(cpu_output.shape(), output.shape());
-//!     assert_eq!(context.transfer_stats(), after_creation);
-//! }
-//! # }
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! let x = TracedTensor::from_vec_col_major(
+//!     vec![4],
+//!     vec![
+//!         Complex64::new(1.0, 0.0),
+//!         Complex64::new(2.0, 0.0),
+//!         Complex64::new(3.0, 0.0),
+//!         Complex64::new(4.0, 0.0),
+//!     ],
+//! )
+//! .unwrap();
+//! let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+//!
+//! let mut compiler = GraphCompiler::new();
+//! let program = compiler.compile(&y).unwrap();
+//! let mut engine = CpuEngine::serial();
+//! let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+//! let mut builder = Runtime::builder();
+//! builder
+//!     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
+//!     .unwrap();
+//! builder
+//!     .install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id).unwrap())
+//!     .unwrap();
+//! let runtime = builder.build().unwrap();
+//! let prepared = runtime.prepare(&program, &[], &[engine.target()]).unwrap();
+//! let out = runtime
+//!     .run(&mut [&mut engine], &prepared, &[])
+//!     .unwrap()
+//!     .pop()
+//!     .unwrap()
+//!     .into_tensor(&mut engine)
+//!     .unwrap();
+//! assert_eq!(out.shape(), &[4]);
+//! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
 //! ```
 //!
 //! ```

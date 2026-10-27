@@ -516,6 +516,9 @@ jobs:
       - name: Run CUDA tests from archive
         env:
           NEXTEST_TEST_THREADS: "1"
+          # Every test is its own process, so without a persistent directory each one
+          # recompiles the kernel modules it touches (about 8 s per module on an A100).
+          TENFERRO_CUDA_ARTIFACT_CACHE: ${{ runner.temp }}/t4a-cuda-artifacts
         run: |
           set -euo pipefail
           # trybuild starts nested Cargo and is compile-only; regular CI owns it.

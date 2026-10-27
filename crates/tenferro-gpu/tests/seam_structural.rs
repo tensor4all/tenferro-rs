@@ -916,3 +916,58 @@ fn a_multi_axis_fold_keeps_its_own_operation() {
     let maximum_host = download_tensor(engine.runtime(), &maximum).expect("download");
     assert_eq!(maximum_host.as_slice::<f64>().expect("f64 payload"), &[4.0]);
 }
+
+/// A borrowed view materializes the region it names, and a stride-0 broadcast view repeats its
+/// element across every destination position.
+///
+/// The materializing kernel writes one destination element per logical position, so a region
+/// smaller than its allocation must fill exactly `element_count` entries (no overrun into a
+/// compact destination), and a view whose strides are all zero must not collapse to its first
+/// element.
+#[test]
+fn a_borrowed_view_materializes_its_own_region() {
+    let Some(mut engine) = engine() else { return };
+
+    // The middle three of a five-element allocation: compact, at a nonzero offset.
+    let data = vec![99.0f64, 1.0, 2.0, 3.0, 98.0];
+    let wide = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![5], data.clone()).expect("vector"),
+    )
+    .expect("upload");
+    let region = wide
+        .as_typed::<f64>()
+        .expect("f64 payload")
+        .backend_region_view(vec![3], vec![1], 1)
+        .expect("region view");
+    let materialized = engine
+        .to_contiguous_read(TensorRead::from_view(tenferro_tensor::TensorView::F64(
+            region,
+        )))
+        .expect("materialize the region");
+    assert_eq!(materialized.shape(), &[3]);
+    let back = download_tensor(engine.runtime(), &materialized).expect("download");
+    assert_eq!(back.as_slice::<f64>().expect("f64 payload"), &data[1..4]);
+
+    // A rank-0 source broadcast through a metadata view: every axis has stride 0.
+    let scalar = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![], vec![2.5f64]).expect("scalar"),
+    )
+    .expect("upload");
+    let broadcast = scalar
+        .as_typed::<f64>()
+        .expect("f64 payload")
+        .backend_region_view(vec![2, 3], vec![0, 0], 0)
+        .expect("broadcast view");
+    let materialized = engine
+        .to_contiguous_read(TensorRead::from_view(tenferro_tensor::TensorView::F64(
+            broadcast,
+        )))
+        .expect("materialize the broadcast");
+    let back = download_tensor(engine.runtime(), &materialized).expect("download");
+    assert_eq!(
+        back.as_slice::<f64>().expect("f64 payload"),
+        &[2.5f64; 6][..]
+    );
+}

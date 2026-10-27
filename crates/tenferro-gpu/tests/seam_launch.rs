@@ -33,18 +33,42 @@ fn threads(plan: &t4a_cuda_kernels::Launch) -> (u32, u32) {
     (plan.grid[0], plan.block[0])
 }
 
+/// A dispatch prepares only the translation units its entries name, and each one is
+/// compiled once per runtime however often it is asked for.
+///
+/// NVRTC dominates a test process's wall clock (about 8 s per module on the A100), so the
+/// count is the contract: repeating an entry costs nothing, and an unused module is never
+/// compiled.
 #[test]
-fn the_catalogue_prepares_every_module_once() {
+fn each_module_is_compiled_once_per_runtime() {
     let Some(engine) = engine() else { return };
-    let modules = KernelModules::new(engine.runtime()).expect("prepare");
-    assert!(
-        modules.modules() >= 10,
-        "every translation unit is prepared, got {}",
-        modules.modules()
+    let entries = [Entry::CopyExact, Entry::Reduce, Entry::CopyExact];
+    let mut modules: Vec<&'static str> = entries
+        .iter()
+        .filter_map(|entry| t4a_cuda_kernels::source::module_of(*entry))
+        .map(|module| module.name)
+        .collect();
+    modules.sort_unstable();
+    modules.dedup();
+    let expected = modules.len() as u64;
+
+    let before = engine.runtime().compile_attempts();
+    let prepared = KernelModules::for_entries(engine.runtime(), &entries).expect("prepare");
+    assert_eq!(
+        prepared.modules(),
+        expected as usize,
+        "one artifact per module"
     );
+    // A persistent artifact directory may serve every image, so this is an upper bound: at
+    // most one compile per distinct module.
+    assert!(
+        engine.runtime().compile_attempts() - before <= expected,
+        "no module compiles twice"
+    );
+
     // A second preparation for the same runtime serves the artifact cache.
     let before = engine.runtime().compile_attempts();
-    let _second = KernelModules::new(engine.runtime()).expect("prepare again");
+    let _second = KernelModules::for_entries(engine.runtime(), &entries).expect("prepare again");
     assert_eq!(
         engine.runtime().compile_attempts(),
         before,
@@ -60,7 +84,7 @@ fn copy_exact_reads_back_the_same_bytes() {
     let source = upload_tensor(&runtime, &vector(&data)).expect("upload");
     let destination = upload_tensor(&runtime, &vector(&vec![0.0; 1024])).expect("destination");
 
-    let mut modules = KernelModules::new(&runtime).expect("prepare");
+    let mut modules = KernelModules::for_entries(&runtime, &[Entry::CopyExact]).expect("prepare");
     let len = 1024i64;
     let plan = plan_copy_exact(DType::F64, len).expect("plan");
     let (grid, block) = threads(&plan);
@@ -103,7 +127,8 @@ fn materialize_strided_gathers_a_transposed_view() {
     let layout = CLayout::new(&view);
     let plan = plan_materialize_strided(DType::F64, &view, len).expect("plan");
     let (grid, block) = threads(&plan);
-    let mut modules = KernelModules::new(&runtime).expect("prepare");
+    let mut modules =
+        KernelModules::for_entries(&runtime, &[Entry::MaterializeStrided]).expect("prepare");
     // SAFETY: the plan proves the view's span and `len` is its element count.
     unsafe {
         modules
@@ -140,7 +165,15 @@ fn fill_zero_and_contiguous_to_view_cover_the_movement_family() {
     let runtime = engine.runtime().clone();
     let len: i64 = 8;
     let destination = upload_tensor(&runtime, &vector(&vec![7.0; len as usize])).expect("output");
-    let mut modules = KernelModules::new(&runtime).expect("prepare");
+    let mut modules = KernelModules::for_entries(
+        &runtime,
+        &[
+            Entry::FillZero,
+            Entry::ContiguousToView,
+            Entry::FillZeroView,
+        ],
+    )
+    .expect("prepare");
 
     let plan = plan_fill_zero(DType::F64, len).expect("plan");
     let (grid, block) = threads(&plan);

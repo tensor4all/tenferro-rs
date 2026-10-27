@@ -352,7 +352,7 @@ pub(crate) fn eager_extension_module(
         #[cfg(feature = "cuda")]
         EagerExtensionBackendKind::Cuda => {
             extension_module::<CudaEngine>(engine_id).map_err(eager_runtime_config_error)
-        } // TODO(#2206 webgpu): the WebGPU engine is migrated in a later unit.
+        }
     }
 }
 

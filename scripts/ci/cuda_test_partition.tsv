@@ -745,7 +745,7 @@ gpu	tenferro-gpu::seam_indexing	scatter_adds_each_update_into_the_operand_copy
 gpu	tenferro-gpu::seam_launch	copy_exact_reads_back_the_same_bytes
 gpu	tenferro-gpu::seam_launch	fill_zero_and_contiguous_to_view_cover_the_movement_family
 gpu	tenferro-gpu::seam_launch	materialize_strided_gathers_a_transposed_view
-gpu	tenferro-gpu::seam_launch	the_catalogue_prepares_every_module_once
+gpu	tenferro-gpu::seam_launch	each_module_is_compiled_once_per_runtime
 gpu	tenferro-gpu::seam_linalg_aux	the_column_norms_measure_the_trailing_columns
 gpu	tenferro-gpu::seam_linalg_aux	the_lu_pivots_permute_rows_and_the_parity_is_read
 gpu	tenferro-gpu::seam_linalg_aux	the_matrix_adjoint_transposes_each_batch
@@ -759,6 +759,7 @@ gpu	tenferro-gpu::seam_publication	a_rejected_publication_returns_the_value
 gpu	tenferro-gpu::seam_publication	dropping_a_publication_detaches_and_retires_it
 gpu	tenferro-gpu::seam_publication	forgetting_a_publication_leaks_it_in_place
 gpu	tenferro-gpu::seam_publication	the_frontier_outlives_a_copy_that_reads_it
+gpu	tenferro-gpu::seam_publication	a_value_from_another_allocation_domain_is_rejected
 gpu	tenferro-gpu::seam_raw	a_borrowed_view_canonicalizes_into_owned_storage
 gpu	tenferro-gpu::seam_raw	a_nested_context_activation_does_not_block
 gpu	tenferro-gpu::seam_raw	a_session_allocates_a_typed_output_the_extension_owns
@@ -781,6 +782,7 @@ gpu	tenferro-gpu::seam_storage	seam_provider_does_not_expose_safe_unscoped_point
 gpu	tenferro-gpu::seam_storage	seam_upload_allocates_a_fresh_allocation_per_value
 gpu	tenferro-gpu::seam_storage	seam_upload_keeps_the_single_root_identity
 gpu	tenferro-gpu::seam_structural	a_broadcast_in_dim_read_matches_the_host
+gpu	tenferro-gpu::seam_structural	a_borrowed_view_materializes_its_own_region
 gpu	tenferro-gpu::seam_structural	a_cast_converts_on_the_device
 gpu	tenferro-gpu::seam_structural	a_device_tensor_materializes_into_fresh_storage
 gpu	tenferro-gpu::seam_structural	a_diagonal_extract_and_embed_round_trip

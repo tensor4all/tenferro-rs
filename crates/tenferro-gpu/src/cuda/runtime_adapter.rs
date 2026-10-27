@@ -117,8 +117,13 @@ fn input_tensor(
         TensorRead::Tensor(tensor) => super::pending::cuda_storage(tensor).is_some_and(|storage| {
             storage.domain() == expected_domain && storage.device_ordinal() == device_ordinal
         }),
-        // This path serves no borrowed view, so a view is never an accepted input.
-        TensorRead::View(_) => false,
+        // A borrowed view is a region of the same allocation, and the read path materializes it,
+        // so it stays resident here exactly when its backing allocation is this engine's.
+        TensorRead::View(view) => super::structural::region_of(view, "cuda runtime input")
+            .is_ok_and(|region| {
+                region.storage.domain() == expected_domain
+                    && region.storage.device_ordinal() == device_ordinal
+            }),
     }
 }
 

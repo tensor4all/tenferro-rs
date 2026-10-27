@@ -159,7 +159,11 @@ impl CudaEngine {
                 },
             )));
         };
-        if storage.device_ordinal() != self.runtime.device_ordinal() {
+        // A reader waits on *this* engine's stream frontier, so a value from another
+        // allocation domain (a second engine on the same ordinal included) is not ordered by it.
+        if storage.device_ordinal() != self.runtime.device_ordinal()
+            || storage.domain() != self.runtime().allocation_domain_id()
+        {
             return Err(PublicationAdmissionError::Rejected(Box::new(
                 RejectedPublication {
                     value,

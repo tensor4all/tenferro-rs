@@ -77,7 +77,8 @@ const fn dot_native(dtype: DType) -> OperationCapability {
         dtype,
         output_dtype: dtype,
         result: N,
-        read_inputs: N,
+        // A borrowed operand reaches cuBLAS through a compact copy: cuBLAS takes no strides.
+        read_inputs: F,
         write_output: N,
         strided_output: N,
         accumulation: N,

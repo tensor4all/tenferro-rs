@@ -8,7 +8,7 @@
 
 use tenferro_tensor::{
     DType, MemoryKind, StorageBuffer, Tensor, TensorRead, TensorScalar, TensorStructural,
-    TensorWrite, TypedTensor,
+    TensorView, TensorWrite, TypedTensor,
 };
 
 use t4a_cuda_kernels::{
@@ -148,6 +148,217 @@ fn storage_of<'a, T: TensorScalar>(
     }
 }
 
+/// A read operand the engine can serve.
+///
+/// The read surface consumes owned tensors, and a borrowed view names a region of someone
+/// else's allocation, so a view is materialized once into a compact tensor of this runtime
+/// and the copy stays alive for the operation.
+enum Resolved<'a> {
+    Borrowed(&'a Tensor),
+    Owned(Box<Tensor>),
+}
+
+impl Resolved<'_> {
+    fn tensor(&self) -> &Tensor {
+        match self {
+            Self::Borrowed(tensor) => tensor,
+            Self::Owned(tensor) => tensor,
+        }
+    }
+}
+
+impl std::ops::Deref for Resolved<'_> {
+    type Target = Tensor;
+
+    fn deref(&self) -> &Tensor {
+        self.tensor()
+    }
+}
+
+/// One device region named by a borrowed view: the allocation it reads and its geometry.
+pub(super) struct Region<'v> {
+    pub(super) storage: &'v CudaStorage,
+    dtype: DType,
+    shape: Vec<usize>,
+    extents: Vec<i64>,
+    strides: Vec<i64>,
+    offset: i64,
+}
+
+impl Region<'_> {
+    /// The catalogue's layout for this region.
+    fn layout(&self, op: &'static str) -> crate::Result<Layout> {
+        Layout::new(&self.extents, &self.strides, self.offset)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
+    }
+
+    /// The element capacity of the whole allocation the region reads.
+    fn len(&self, op: &'static str) -> crate::Result<i64> {
+        allocation_len(self.storage, self.dtype, op)
+    }
+}
+
+/// One operand of the strided-update family: the allocation it touches and its layout.
+struct StridedOperand<'v> {
+    storage: &'v CudaStorage,
+    dtype: DType,
+    layout: Layout,
+    len: i64,
+}
+
+/// The device region a read view names, or a typed refusal for a host view.
+pub(super) fn region_of<'v>(
+    view: &'v TensorView<'v>,
+    op: &'static str,
+) -> crate::Result<Region<'v>> {
+    match view {
+        TensorView::F32(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::F32,
+            op,
+        ),
+        TensorView::F64(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::F64,
+            op,
+        ),
+        TensorView::I32(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::I32,
+            op,
+        ),
+        TensorView::I64(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::I64,
+            op,
+        ),
+        TensorView::Bool(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::Bool,
+            op,
+        ),
+        TensorView::C32(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::C32,
+            op,
+        ),
+        TensorView::C64(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::C64,
+            op,
+        ),
+    }
+}
+
+/// Validate one view's storage and geometry, whichever view flavour carries it.
+fn typed_region<'v, T: TensorScalar + 'static>(
+    buffer: Option<&'v dyn tenferro_tensor::BackendStorage<T>>,
+    shape: &[usize],
+    strides: &[isize],
+    offset: isize,
+    dtype: DType,
+    op: &'static str,
+) -> crate::Result<Region<'v>> {
+    let buffer = buffer.ok_or_else(|| {
+        crate::Error::unsupported(op, "a host view would need an implicit transfer")
+    })?;
+    let storage = buffer
+        .as_any()
+        .downcast_ref::<CudaStorage>()
+        .ok_or_else(|| {
+            crate::Error::runtime_state(op, "expected a CUDA allocation of this backend")
+        })?;
+    let shape = shape.to_vec();
+    let extents: Vec<i64> = shape
+        .iter()
+        .map(|&extent| {
+            i64::try_from(extent)
+                .map_err(|_| crate::Error::unsupported(op, "a view extent exceeds the ABI's int"))
+        })
+        .collect::<crate::Result<_>>()?;
+    let strides: Vec<i64> = strides
+        .iter()
+        .map(|&stride| {
+            i64::try_from(stride)
+                .map_err(|_| crate::Error::unsupported(op, "a view stride exceeds the ABI's int"))
+        })
+        .collect::<crate::Result<_>>()?;
+    let offset = i64::try_from(offset)
+        .map_err(|_| crate::Error::unsupported(op, "a view offset exceeds the ABI's int"))?;
+    Ok(Region {
+        storage,
+        dtype,
+        shape,
+        extents,
+        strides,
+        offset,
+    })
+}
+
+/// The element capacity of `storage` read as `dtype`.
+///
+/// The planners bound a layout's reachable span by the allocation's capacity, not by the
+/// number of elements a view is meant to touch.
+fn allocation_len(storage: &CudaStorage, dtype: DType, op: &'static str) -> crate::Result<i64> {
+    let element = kernel_dtype(dtype, op)?.size().max(1);
+    i64::try_from(storage.bytes() / element)
+        .map_err(|_| crate::Error::unsupported(op, "the allocation exceeds i64 elements"))
+}
+
+/// The real dtype that holds a magnitude or a norm for `dtype`.
+fn real_dtype(dtype: DType, op: &'static str) -> crate::Result<DType> {
+    match dtype {
+        DType::F32 | DType::C32 => Ok(DType::F32),
+        DType::F64 | DType::C64 => Ok(DType::F64),
+        other => Err(crate::Error::unsupported(
+            op,
+            format!("no real width for {other:?}"),
+        )),
+    }
+}
+
+/// `operand`, or a typed refusal when the kernel writes a fixed payload there.
+///
+/// The `linalg_*` helpers are safe functions: a destination of the wrong dtype would be
+/// reinterpreted by the kernel, not converted, so it is refused before any launch.
+fn expect_operand_dtype(
+    operand: &impl DeviceOperand,
+    dtype: DType,
+    op: &'static str,
+) -> crate::Result<()> {
+    if operand.operand_dtype() != dtype {
+        return Err(crate::Error::unsupported(
+            op,
+            format!(
+                "the destination must be {dtype:?}, got {:?}",
+                operand.operand_dtype()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// The kernel crate's dtype tag for a tensor dtype.
 fn kernel_dtype(dtype: DType, op: &'static str) -> crate::Result<t4a_cuda_kernels::DType> {
     // The dtype policy belongs to the kernel crate's planners, which check it per entry; this
@@ -180,27 +391,118 @@ impl CudaEngine {
         })
     }
 
-    /// The device tensor behind `input`, or a typed refusal for a view or host tensor.
+    /// The tensor behind `input`, materializing the region a borrowed view names.
+    ///
+    /// A view borrows another allocation, so it is resolved into a compact device copy that the
+    /// returned value owns for as long as the operation reads it.
+    ///
+    /// # The accepted view set
+    ///
+    /// Any device view of this runtime is served: a nonzero offset, arbitrary element strides
+    /// (including zero and negative), and any rank (a view wider than
+    /// [`t4a_cuda_kernels::MAX_RANK`] takes the catalogue's general path). The geometry is the
+    /// catalogue planners' contract; this engine resolves the region and materializes it, so a
+    /// geometry they refuse is refused here too.
+    ///
+    /// Two refusals are the interface: a view over *host* storage, which would need an implicit
+    /// transfer, and a view whose allocation belongs to another runtime or allocation domain.
+    ///
+    /// Serving a view costs one compact copy; only an entry whose own layout argument can address
+    /// a strided operand (`CombinedStrided`, which `axpby` uses) reads it without one.
     fn device_read<'a>(
-        &self,
+        &mut self,
         input: TensorRead<'a>,
         op: &'static str,
-    ) -> crate::Result<&'a Tensor> {
+    ) -> crate::Result<Resolved<'a>> {
         // An engine the runtime marked broken accepts no further numerical submission; the
         // synchronise and retirement paths stay available for teardown.
         self.ensure_healthy()
             .map_err(|error| crate::Error::runtime_state(op, error.to_string()))?;
         match input {
-            TensorRead::Tensor(tensor) if !is_host(tensor) => Ok(tensor),
+            TensorRead::Tensor(tensor) if !is_host(tensor) => {
+                // The engine serves its own runtime only; the check lives here so no read path,
+                // including an empty-input shortcut, can accept a foreign allocation.
+                let storage = super::pending::cuda_storage(tensor).ok_or_else(|| {
+                    crate::Error::runtime_state(op, "expected a CUDA allocation of this backend")
+                })?;
+                self.own_storage(storage, op)?;
+                Ok(Resolved::Borrowed(tensor))
+            }
             TensorRead::Tensor(_) => Err(crate::Error::unsupported(
                 op,
                 "a host tensor would need an implicit transfer",
             )),
-            TensorRead::View(_) => Err(crate::Error::unsupported(
-                op,
-                "a borrowed view is not served by the structural slice",
-            )),
+            TensorRead::View(view) => self
+                .materialize_region(view, op)
+                .map(|tensor| Resolved::Owned(Box::new(tensor))),
         }
+    }
+
+    /// `storage`, or a typed refusal when it belongs to another runtime.
+    fn own_storage<'a>(
+        &self,
+        storage: &'a CudaStorage,
+        op: &'static str,
+    ) -> crate::Result<&'a CudaStorage> {
+        if storage.domain() != self.runtime().allocation_domain_id() {
+            return Err(crate::Error::runtime_state(
+                op,
+                "expected a CUDA allocation of this runtime",
+            ));
+        }
+        Ok(storage)
+    }
+
+    /// The allocation and layout one operand names: an owned tensor's compact layout, or the
+    /// region a borrowed view reads.
+    fn read_operand<'v>(
+        &self,
+        input: &'v TensorRead<'v>,
+        op: &'static str,
+    ) -> crate::Result<StridedOperand<'v>> {
+        match input {
+            TensorRead::Tensor(tensor) => {
+                let storage = super::pending::cuda_storage(tensor).ok_or_else(|| {
+                    crate::Error::runtime_state(op, "expected a CUDA allocation of this backend")
+                })?;
+                let storage = self.own_storage(storage, op)?;
+                Ok(StridedOperand {
+                    storage,
+                    dtype: tensor.dtype(),
+                    layout: self.layout_of(tensor, op)?,
+                    len: allocation_len(storage, tensor.dtype(), op)?,
+                })
+            }
+            TensorRead::View(view) => {
+                let region = region_of(view, op)?;
+                let storage = self.own_storage(region.storage, op)?;
+                Ok(StridedOperand {
+                    storage,
+                    dtype: region.dtype,
+                    layout: region.layout(op)?,
+                    len: region.len(op)?,
+                })
+            }
+        }
+    }
+
+    /// Materialize the region `view` names into a compact tensor of this runtime.
+    fn materialize_region(
+        &mut self,
+        view: TensorView<'_>,
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let region = region_of(&view, op)?;
+        self.materialize_storage(
+            region.storage,
+            region.len(op)?,
+            region.dtype,
+            &region.extents,
+            &region.strides,
+            region.offset,
+            region.shape,
+            op,
+        )
     }
 
     fn allocation_of<'a, T: TensorScalar>(
@@ -286,45 +588,44 @@ impl CudaEngine {
 
 impl TensorStructural for CudaEngine {
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        match input {
-            TensorRead::Tensor(tensor) => {
-                if is_host(tensor) {
-                    return tensor.duplicate();
-                }
-                let shape = tensor.shape().to_vec();
-                self.copy_to_fresh(tensor, shape, "to_contiguous_read")
+        const OP: &str = "to_contiguous_read";
+        // A host tensor is already compact; duplicating it needs no transfer.
+        if let TensorRead::Tensor(tensor) = input {
+            if is_host(tensor) {
+                return tensor.duplicate();
             }
-            TensorRead::View(view) => Err(crate::Error::unsupported(
-                "to_contiguous_read",
-                format!(
-                    "a borrowed {} view is not served by the structural slice",
-                    view.backend_family().map_or("host", |_| "backend")
-                ),
-            )),
+        }
+        match self.device_read(input, OP)? {
+            Resolved::Borrowed(tensor) => {
+                let shape = tensor.shape().to_vec();
+                self.copy_to_fresh(tensor, shape, OP)
+            }
+            // A view was materialized into a compact tensor of this runtime.
+            Resolved::Owned(tensor) => Ok(*tensor),
         }
     }
 
     fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
-        let (source, destination) = match (src, dst) {
-            (TensorRead::Tensor(source), TensorWrite::Tensor(destination)) => {
-                (source, &*destination)
-            }
-            _ => {
-                return Err(crate::Error::unsupported(
-                    "copy_read_into",
-                    "a borrowed view is not served by the structural slice",
-                ))
-            }
-        };
-        if is_host(source) || is_host(destination) {
+        const OP: &str = "copy_read_into";
+        // The read half resolves a borrowed view; only a writable region has no stride-addressed
+        // copy entry yet, so a view destination is refused below.
+        let source = self.device_read(src, OP)?;
+        let TensorWrite::Tensor(destination) = dst else {
             return Err(crate::Error::unsupported(
-                "copy_read_into",
+                OP,
+                "a borrowed view destination is not served by the structural slice",
+            ));
+        };
+        let destination = &*destination;
+        if is_host(destination) {
+            return Err(crate::Error::unsupported(
+                OP,
                 "a host operand would need an implicit transfer",
             ));
         }
         if source.dtype() != destination.dtype() || source.shape() != destination.shape() {
             return Err(crate::Error::unsupported(
-                "copy_read_into",
+                OP,
                 "source and destination must share dtype and shape",
             ));
         }
@@ -337,8 +638,8 @@ impl TensorStructural for CudaEngine {
             dispatcher.copy_exact(
                 kernel,
                 len,
-                self.allocation_of::<T>(destination, "copy_read_into")?,
-                self.allocation_of::<T>(source, "copy_read_into")?,
+                self.allocation_of::<T>(destination, OP)?,
+                self.allocation_of::<T>(&source, OP)?,
             )
         })?;
         self.runtime()
@@ -385,7 +686,7 @@ impl TensorStructural for CudaEngine {
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
         let source = self.device_read(input, "transpose_read")?;
         let shape = source.shape().to_vec();
-        let strides = self.strides_of(source, "transpose_read")?;
+        let strides = self.strides_of(&source, "transpose_read")?;
         let rank = shape.len();
         if perm.len() != rank || {
             let mut seen = vec![false; rank];
@@ -403,7 +704,7 @@ impl TensorStructural for CudaEngine {
         let view_extents: Vec<i64> = out_shape.iter().map(|&extent| extent as i64).collect();
         let view_strides: Vec<i64> = perm.iter().map(|&axis| strides[axis] as i64).collect();
         self.materialize_view(
-            source,
+            &source,
             &view_extents,
             &view_strides,
             0,
@@ -423,7 +724,7 @@ impl TensorStructural for CudaEngine {
         }
         // A compact copy carries the same elements in the same order; only the destination
         // allocation's label changes, so the copy is taken at the new shape.
-        self.copy_to_fresh(source, shape.to_vec(), "reshape_read")
+        self.copy_to_fresh(&source, shape.to_vec(), "reshape_read")
     }
 
     fn broadcast_in_dim_read(
@@ -446,12 +747,12 @@ impl TensorStructural for CudaEngine {
         // The ABI's by-value dimension map and layout arrays are bounded by `MAX_RANK`; a
         // wider broadcast reads both from device memory instead.
         if shape.len() > t4a_cuda_kernels::MAX_RANK || in_shape.len() > t4a_cuda_kernels::MAX_RANK {
-            return self.broadcast_wide(source, shape, dims, kernel, op);
+            return self.broadcast_wide(&source, shape, dims, kernel, op);
         }
         let out_extents: Vec<i64> = shape.iter().map(|&extent| extent as i64).collect();
         let in_extents: Vec<i64> = in_shape.iter().map(|&extent| extent as i64).collect();
         let in_strides: Vec<i64> = self
-            .strides_of(source, "broadcast_in_dim_read")?
+            .strides_of(&source, "broadcast_in_dim_read")?
             .iter()
             .map(|&stride| i64::try_from(stride).unwrap_or(i64::MAX))
             .collect();
@@ -478,7 +779,7 @@ impl TensorStructural for CudaEngine {
         .map_err(|error| crate::Error::runtime_state_source("broadcast_in_dim_read", error))?;
         let (destination, source_ptr) = with_scalar!(dtype, |T| Ok((
             self.allocation_of::<T>(&output, "broadcast_in_dim_read")? as *const _,
-            self.allocation_of::<T>(source, "broadcast_in_dim_read")? as *const _,
+            self.allocation_of::<T>(&source, "broadcast_in_dim_read")? as *const _,
         )))?;
         // SAFETY: both pointers name allocations of this runtime taken above; the planner
         // proved the input's span and the compact destination.
@@ -758,6 +1059,9 @@ impl CudaEngine {
             ));
         }
         let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        // The kernel writes one destination element per logical position; `source_len` bounds the
+        // view's reachable span inside the whole allocation and is not that count.
+        let len = count_i64(&shape, op)?;
         if extents.len() <= t4a_cuda_kernels::MAX_RANK {
             let view = Layout::new(extents, strides, offset)
                 .map_err(|error| crate::Error::runtime_state_source(op, error))?;
@@ -775,7 +1079,7 @@ impl CudaEngine {
                         Arg::DevicePtr(source),
                         Arg::U32(kernel.tag() as u32),
                         layout_arg(&layout),
-                        Arg::U64(source_len as u64),
+                        Arg::U64(len as u64),
                     ],
                     op,
                 )
@@ -823,7 +1127,7 @@ impl CudaEngine {
                         Arg::DevicePtr(source),
                         Arg::U32(kernel.tag() as u32),
                         pod_arg(&mirror),
-                        Arg::U64(source_len as u64),
+                        Arg::U64(len as u64),
                     ];
                     scope
                         .launch(
@@ -2133,6 +2437,15 @@ impl CudaEngine {
                 format!("axis {axis} is outside the tensor's rank {}", shape.len()),
             ));
         }
+        // An empty fold has no identity to report: the CPU surface refuses it, and the kernel
+        // planners only report it as a negative count.
+        if let Some(&axis) = ordered.iter().find(|&&axis| shape[axis] == 0) {
+            return Err(crate::Error::invalid_argument(
+                name,
+                "axes",
+                format!("cannot reduce over zero-length axis {axis}"),
+            ));
+        }
         if ordered.is_empty() {
             let shape = source.shape().to_vec();
             // Reducing over no axis leaves each element alone, except for the squared norm whose
@@ -2140,14 +2453,14 @@ impl CudaEngine {
             if matches!(op, ReduceOp::SumSquares) {
                 use tenferro_tensor::TensorElementwise as _;
                 return self.mul_read(
-                    TensorRead::from_tensor(source),
-                    TensorRead::from_tensor(source),
+                    TensorRead::from_tensor(&source),
+                    TensorRead::from_tensor(&source),
                 );
             }
-            return self.copy_to_fresh(source, shape, name);
+            return self.copy_to_fresh(&source, shape, name);
         }
         if shape.len() > t4a_cuda_kernels::MAX_RANK {
-            return self.reduce_axes_wide(source, &ordered, op, name);
+            return self.reduce_axes_wide(&source, &ordered, op, name);
         }
         // The first pass reads the caller's tensor; later passes read the previous result.
         let mut owned: Option<Tensor> = None;
@@ -2204,7 +2517,7 @@ impl CudaEngine {
             } else {
                 Some(alloc_tensor(self.runtime(), dtype, &[scratch])?)
             };
-            let source_tensor = owned.as_ref().unwrap_or(source);
+            let source_tensor: &Tensor = owned.as_ref().map_or(source.tensor(), |tensor| tensor);
             // Preparing an entry binds its translation unit, so ask only for the one the plan uses.
             let entries: &[Entry] = match &planned {
                 ReductionPlan::Split { .. } => &[Entry::Reduce, Entry::ReducePartials],
@@ -2312,7 +2625,7 @@ impl CudaEngine {
         // status word reports a division by zero) and a complex one needs the robust complex entry,
         // which also means the buffers hold two components per element.
         if matches!(op, Elementwise::Div) && !matches!(dtype, DType::F32 | DType::F64) {
-            return self.division(left, right, output, kernel, dtype, len, name);
+            return self.division(&left, &right, output, kernel, dtype, len, name);
         }
         let entry = match op {
             Elementwise::Add => Entry::Add,
@@ -2327,8 +2640,8 @@ impl CudaEngine {
                 kernel,
                 len,
                 self.allocation_of::<T>(&output, name)?,
-                self.allocation_of::<T>(left, name)?,
-                self.allocation_of::<T>(right, name)?,
+                self.allocation_of::<T>(&left, name)?,
+                self.allocation_of::<T>(&right, name)?,
             )
         })?;
         self.runtime()
@@ -2425,7 +2738,7 @@ impl CudaEngine {
                     kernel,
                     len,
                     out,
-                    self.allocation_of::<S>(source, name)?,
+                    self.allocation_of::<S>(&source, name)?,
                 )
             })
         })?;
@@ -2470,8 +2783,8 @@ impl CudaEngine {
                 t4a_cuda_kernels::ScalarSide::Both,
                 len,
                 self.allocation_of::<T>(&output, name)?,
-                self.allocation_of::<T>(left, name)?,
-                self.allocation_of::<T>(right, name)?,
+                self.allocation_of::<T>(&left, name)?,
+                self.allocation_of::<T>(&right, name)?,
                 &status,
             )
         })?;
@@ -2528,8 +2841,8 @@ impl CudaEngine {
                 t4a_cuda_kernels::ScalarSide::Both,
                 len,
                 self.allocation_of::<T>(&output, name)?,
-                self.allocation_of::<T>(left, name)?,
-                self.allocation_of::<T>(right, name)?,
+                self.allocation_of::<T>(&left, name)?,
+                self.allocation_of::<T>(&right, name)?,
                 &status,
             )
         })?;
@@ -2575,10 +2888,10 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
         // Conjugation is the identity on a real dtype; only the complex widths have the entry.
         let source = self.device_read(input, "conj_read")?;
         if !matches!(source.dtype(), DType::C32 | DType::C64) {
-            return self.to_contiguous(source);
+            return self.to_contiguous(&source);
         }
         self.elementwise_unary(
-            TensorRead::from_tensor(source),
+            TensorRead::from_tensor(&source),
             t4a_cuda_kernels::UnaryOp::Conj,
             "conj_read",
         )
@@ -2631,9 +2944,9 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                 kernel,
                 len,
                 self.allocation_of::<T>(&output, name)?,
-                self.allocation_of::<T>(source, name)?,
-                self.allocation_of::<T>(low, name)?,
-                self.allocation_of::<T>(high, name)?,
+                self.allocation_of::<T>(&source, name)?,
+                self.allocation_of::<T>(&low, name)?,
+                self.allocation_of::<T>(&high, name)?,
             )
         })?;
         self.runtime()
@@ -2678,8 +2991,8 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                 kernel,
                 len,
                 out,
-                self.allocation_of::<T>(left, name)?,
-                self.allocation_of::<T>(right, name)?,
+                self.allocation_of::<T>(&left, name)?,
+                self.allocation_of::<T>(&right, name)?,
             )
         })?;
         self.runtime()
@@ -2722,15 +3035,15 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
         let len = count_i64(&shape, name)?;
         let output = alloc_tensor(self.runtime(), dtype, &shape)?;
         let mut dispatcher = self.dispatcher(&[Entry::Select])?;
-        let predicate_buffer = self.allocation_of::<bool>(predicate, name)?;
+        let predicate_buffer = self.allocation_of::<bool>(&predicate, name)?;
         with_scalar!(dtype, |T| {
             dispatcher.select(
                 kernel,
                 len,
                 self.allocation_of::<T>(&output, name)?,
                 predicate_buffer,
-                self.allocation_of::<T>(when_true, name)?,
-                self.allocation_of::<T>(when_false, name)?,
+                self.allocation_of::<T>(&when_true, name)?,
+                self.allocation_of::<T>(&when_false, name)?,
             )
         })?;
         self.runtime()
@@ -2781,7 +3094,7 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                 ),
             ));
         }
-        let sources: Vec<&Tensor> = inputs
+        let sources: Vec<Resolved<'_>> = inputs
             .iter()
             .map(|input| self.device_read(input.clone(), name))
             .collect::<crate::Result<_>>()?;
@@ -2803,7 +3116,7 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                         kernel,
                         len,
                         self.allocation_of::<T>(destination, name)?,
-                        self.allocation_of::<T>(sources[0], name)?,
+                        self.allocation_of::<T>(&sources[0], name)?,
                     )
                 })?;
             }
@@ -2816,7 +3129,7 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                         kernel,
                         len,
                         self.allocation_of::<T>(destination, name)?,
-                        self.allocation_of::<T>(sources[0], name)?,
+                        self.allocation_of::<T>(&sources[0], name)?,
                     )
                 })?;
             }
@@ -2834,8 +3147,8 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                         kernel,
                         len,
                         self.allocation_of::<T>(destination, name)?,
-                        self.allocation_of::<T>(sources[0], name)?,
-                        self.allocation_of::<T>(sources[1], name)?,
+                        self.allocation_of::<T>(&sources[0], name)?,
+                        self.allocation_of::<T>(&sources[1], name)?,
                     )
                 })?;
             }
@@ -4166,8 +4479,8 @@ impl CudaEngine {
         )?;
         let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
         self.submit_dot(
-            left,
-            right,
+            &left,
+            &right,
             config,
             conj_a,
             conj_b,
@@ -4206,9 +4519,10 @@ impl tenferro_tensor::TensorDot for CudaEngine {
             ));
         };
         let left = self.device_read(lhs, op)?;
+        let right = self.device_read(rhs, op)?;
         self.submit_dot(
-            left,
-            self.device_read(rhs, op)?,
+            &left,
+            &right,
             config,
             false,
             false,
@@ -4282,8 +4596,8 @@ impl tenferro_tensor::TensorDot for CudaEngine {
         let left = self.device_read(lhs, op)?;
         let right = self.device_read(rhs, op)?;
         self.submit_dot(
-            left,
-            right,
+            &left,
+            &right,
             config,
             accumulation.lhs_conj,
             accumulation.rhs_conj,
@@ -4462,7 +4776,7 @@ impl tenferro_tensor::TensorDeviceTransfer for CudaEngine {
                 "expected a device tensor; a host tensor is already on the host",
             ));
         }
-        super::transfer::download_tensor(self.runtime(), tensor)
+        super::transfer::download_tensor(self.runtime(), &tensor)
     }
 
     fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -4546,8 +4860,8 @@ impl CudaEngine {
                 side,
                 len,
                 self.allocation_of::<T>(&output, name)?,
-                self.allocation_of::<T>(left, name)?,
-                self.allocation_of::<T>(right, name)?,
+                self.allocation_of::<T>(&left, name)?,
+                self.allocation_of::<T>(&right, name)?,
                 &status,
             )
         })?;
@@ -4639,7 +4953,7 @@ impl tenferro_tensor::Engine for CudaEngine {
         let op = "gather_read";
         let operand = self.device_read(operand, op)?;
         let indices = self.device_read(start_indices, op)?;
-        self.gather(operand, indices, config)
+        self.gather(&operand, &indices, config)
     }
 
     fn native_engine(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
@@ -4651,32 +4965,26 @@ impl tenferro_tensor::Engine for CudaEngine {
     }
     fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         const OP: &str = "vdot_read";
-        let (left, right) = match (lhs, rhs) {
-            (TensorRead::Tensor(left), TensorRead::Tensor(right)) => (left, right),
-            _ => {
-                return Err(crate::Error::unsupported(
-                    OP,
-                    "a borrowed view is not served by the conjugate dot",
-                ))
-            }
-        };
-        if left.shape() != right.shape() || left.dtype() != right.dtype() {
-            return Err(crate::Error::shape_mismatch(
-                OP,
-                left.shape().to_vec(),
-                right.shape().to_vec(),
-            ));
+        tenferro_tensor::backend::validate_vdot_read(&lhs, &rhs)?;
+        let left = self.device_read(lhs, OP)?;
+        let right = self.device_read(rhs, OP)?;
+        if element_count(left.shape())? == 0 {
+            // Nothing to fold: the conjugate dot of an empty vector is its additive identity,
+            // which is what the CPU surface returns for the same operand.
+            let output = alloc_tensor(self.runtime(), left.dtype(), &[])?;
+            self.zero_into(&output, OP)?;
+            return Ok(output);
         }
         // The dot conjugates its left operand: `conj(lhs) * rhs`, reduced over every axis.
         let conjugated = {
             use tenferro_tensor::TensorElementwise as _;
-            self.conj_read(TensorRead::from_tensor(left))?
+            self.conj_read(TensorRead::from_tensor(&left))?
         };
         let product = {
             use tenferro_tensor::TensorElementwise as _;
             self.mul_read(
                 TensorRead::from_tensor(&conjugated),
-                TensorRead::from_tensor(right),
+                TensorRead::from_tensor(&right),
             )?
         };
         let axes: Vec<usize> = (0..product.shape().len()).collect();
@@ -4688,24 +4996,23 @@ impl tenferro_tensor::Engine for CudaEngine {
 
     fn norm_squared_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         const OP: &str = "norm_squared_read";
-        let source = match input {
-            TensorRead::Tensor(tensor) => tensor,
-            TensorRead::View(_) => {
-                return Err(crate::Error::unsupported(
-                    OP,
-                    "a borrowed view is not served by the squared norm",
-                ))
-            }
-        };
+        tenferro_tensor::backend::validate_norm_squared_read(&input)?;
+        let source = self.device_read(input, OP)?;
         // The squared magnitude of a complex element is real: take the modulus first, then fold
         // the squares in the real dtype the contract promises.
         let reduced_input = match source.dtype() {
             DType::C32 | DType::C64 => {
                 use tenferro_tensor::TensorElementwise as _;
-                self.abs_read(TensorRead::from_tensor(source))?
+                self.abs_read(TensorRead::from_tensor(&source))?
             }
-            _ => self.to_contiguous(source)?,
+            _ => self.to_contiguous(&source)?,
         };
+        if element_count(reduced_input.shape())? == 0 {
+            // Nothing to fold: the squared norm of an empty vector is its additive identity.
+            let output = alloc_tensor(self.runtime(), reduced_input.dtype(), &[])?;
+            self.zero_into(&output, OP)?;
+            return Ok(output);
+        }
         let axes: Vec<usize> = (0..reduced_input.shape().len()).collect();
         if axes.is_empty() {
             return self.reduce_axes(
@@ -4731,63 +5038,36 @@ impl tenferro_tensor::Engine for CudaEngine {
         y: tenferro_tensor::TensorWrite<'_>,
     ) -> crate::Result<()> {
         const OP: &str = "axpby_read_into_accum";
-        let (source, destination) = match (x, y) {
-            (TensorRead::Tensor(source), TensorWrite::Tensor(destination)) => {
-                (source, &*destination)
-            }
-            _ => {
-                return Err(crate::Error::unsupported(
-                    OP,
-                    "a borrowed view is not served by the fused update",
-                ))
-            }
-        };
-        let dtype = destination.dtype();
-        if source.dtype() != dtype || source.shape() != destination.shape() {
-            return Err(crate::Error::shape_mismatch(
-                OP,
-                destination.shape().to_vec(),
-                source.shape().to_vec(),
-            ));
-        }
-        let (left, right) = match (alpha, beta) {
-            (a, b) if a.dtype() == dtype && b.dtype() == dtype => (a, b),
-            _ => {
-                return Err(crate::Error::unsupported(
-                    OP,
-                    "the coefficients must carry the destination's dtype",
-                ))
-            }
-        };
+        tenferro_tensor::backend::validate_axpby_read_into_accum(alpha, &x, beta, &y)?;
+        // Both operands keep their own layout: the update kernel addresses a strided region of a
+        // larger allocation, which is how a Krylov loop hands it a basis slice.
+        let destination_read = y.as_read();
+        let source = self.read_operand(&x, OP)?;
+        let destination = self.read_operand(&destination_read, OP)?;
+        let dtype = destination.dtype;
         let kernel = kernel_dtype(dtype, OP)?;
-        let out_layout = self.layout_of(destination, OP)?;
-        let in_layout = self.layout_of(source, OP)?;
-        let out_len = count_i64(destination.shape(), OP)?;
-        let in_len = count_i64(source.shape(), OP)?;
         // The coefficients are two elements of `dtype` in one device buffer.
         let coefficients = self
             .runtime()
-            .upload_bytes(&coefficient_bytes(left, right, dtype)?)
+            .upload_bytes(&coefficient_bytes(alpha, beta, dtype)?)
             .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
         let mut dispatcher = self.dispatcher(&[Entry::CombinedStrided])?;
-        with_scalar!(dtype, |T| {
-            dispatcher.combined_strided(
-                t4a_cuda_kernels::StridedOp::Axpby,
-                kernel,
-                &out_layout,
-                out_len,
-                &in_layout,
-                in_len,
-                // `AXPBY` may run in place on `b`: the ABI allows it exactly when the two layouts
-                // are identical, which they are here.
-                &out_layout,
-                out_len,
-                self.allocation_of::<T>(destination, OP)?,
-                self.allocation_of::<T>(source, OP)?,
-                self.allocation_of::<T>(destination, OP)?,
-                &coefficients,
-            )
-        })?;
+        dispatcher.combined_strided(
+            t4a_cuda_kernels::StridedOp::Axpby,
+            kernel,
+            &destination.layout,
+            destination.len,
+            &source.layout,
+            source.len,
+            // `AXPBY` may run in place on `b`: the ABI allows it exactly when the two layouts
+            // are identical, which they are here.
+            &destination.layout,
+            destination.len,
+            destination.storage.allocation(),
+            source.storage.allocation(),
+            destination.storage.allocation(),
+            &coefficients,
+        )?;
         self.runtime()
             .synchronize()
             .map_err(|error| crate::Error::runtime_state_source(OP, error))
@@ -4839,6 +5119,8 @@ impl CudaEngine {
             return Ok(());
         }
         let dtype = work.operand_dtype();
+        // Lanes fold a magnitude into the real width: a complex work buffer writes a real norm.
+        expect_operand_dtype(norms, real_dtype(dtype, op)?, op)?;
         let kernel = kernel_dtype(dtype, op)?;
         let work_layout = self.operand_layout(work, op)?;
         let norms_layout = self.operand_layout(norms, op)?;
@@ -4895,6 +5177,10 @@ impl CudaEngine {
         {
             return Ok(());
         }
+        // The scan writes column indices and a flag; only `norms` carries the work dtype.
+        expect_operand_dtype(permutation, DType::I64, op)?;
+        expect_operand_dtype(pivots, DType::I64, op)?;
+        expect_operand_dtype(status, DType::I64, op)?;
         let dtype = norms.operand_dtype();
         let kernel = kernel_dtype(dtype, op)?;
         let norms_layout = self.operand_layout(norms, op)?;
@@ -5376,6 +5662,8 @@ impl CudaEngine {
         if operand_is_empty(r) || operand_is_empty(rank) || operand_is_empty(status) {
             return Ok(());
         }
+        expect_operand_dtype(rank, DType::I64, op)?;
+        expect_operand_dtype(status, DType::I64, op)?;
         let dtype = r.operand_dtype();
         let kernel = kernel_dtype(dtype, op)?;
         let r_layout = self.operand_layout(r, op)?;
@@ -5575,6 +5863,8 @@ impl CudaEngine {
         if operand_is_empty(parity) || operand_is_empty(pivots) {
             return Ok(());
         }
+        // LU pivots are I32 column indices while RRQR's are I64, so only the parity output's
+        // dtype is fixed here; the pivot array is whatever the caller's factorization wrote.
         let dtype = parity.operand_dtype();
         let kernel = kernel_dtype(dtype, op)?;
         let pivots_len = i64::try_from(column_pivot_len(pivots, op)?)
@@ -5741,6 +6031,7 @@ impl CudaEngine {
         }
         // The violation word is an I32 tensor whatever the input's dtype is, so this entry
         // marshals its own argument list.
+        expect_operand_dtype(violation, DType::I32, op)?;
         let dtype = input.operand_dtype();
         let kernel = kernel_dtype(dtype, op)?;
         let violation_layout = self.operand_layout(violation, op)?;
@@ -5900,6 +6191,9 @@ impl CudaEngine {
         n: i64,
         op: &'static str,
     ) -> crate::Result<()> {
+        // The entry carries no dtype tag: it writes `long long`, so any other payload would be
+        // reinterpreted rather than converted.
+        expect_operand_dtype(permutation, DType::I64, op)?;
         let len = count_i64(permutation.operand_shape(), op)?;
         if len == 0 {
             return Ok(());

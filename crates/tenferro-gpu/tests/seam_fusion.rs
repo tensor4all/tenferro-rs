@@ -62,9 +62,12 @@ fn a_fused_region_matches_the_host_and_prepares_once() {
 
     let prepared = PreparedFusion::prepare(&runtime, &multiply_then_add()).expect("prepare");
     let cold = prepared.counters();
-    assert_eq!(
-        cold.compile_attempts, 1,
-        "a cold prepare compiles the emitted source exactly once"
+    // A persistent artifact directory may already hold this source, so the bound is "never
+    // more than once".
+    assert!(
+        cold.compile_attempts <= 1,
+        "a cold prepare compiles the emitted source at most once, got {}",
+        cold.compile_attempts
     );
     assert_eq!(cold.module_loads, 1, "the emitted entry loads one module");
 

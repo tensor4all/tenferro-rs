@@ -31,7 +31,6 @@
 //! | `native` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
 //! | `autodiff` | The eager surface (`EagerSessionEinsumExt`) and AD rules. Adds the `tenferro-ad` dependency. |
 //! | `cuda` | CUDA execution through `tenferro-gpu`. |
-//! | `webgpu` | WebGPU/Metal execution through `tenferro-gpu` (a subset of operations). |
 //! | `rocm` | Placeholder; HIP/ROCm is not implemented. |
 //!
 //! For contractions without AD, use the concrete [`TensorEinsumExt`] /

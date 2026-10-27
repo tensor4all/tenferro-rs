@@ -22,44 +22,10 @@ pub struct KernelModules {
 }
 
 impl KernelModules {
-    /// Prepare every translation unit for `runtime` and bind nothing yet.
+    /// Prepare the distinct modules that export `entries` and bind nothing yet.
     ///
-    /// One NVRTC compilation per module; the runtime's artifact cache serves repeated
-    /// calls, so a second `KernelModules` for the same runtime compiles nothing.
-    ///
-    /// # Errors
-    ///
-    /// [`crate::Error::RuntimeStateSource`] when NVRTC rejects a module or its cubin, and
-    /// [`crate::Error::RuntimeStateSource`] when the runtime cannot prepare the artifact.
-    pub fn new(runtime: &CudaRuntime) -> crate::Result<KernelModules> {
-        // The entries use double atomics and other sm_60+ intrinsics, so the artifacts
-        // target the device's own architecture rather than a virtual one.
-        let capability = runtime.device_info().compute_capability();
-        let arch = format!("sm_{}{}", capability.major, capability.minor);
-        let mut artifacts = HashMap::with_capacity(MODULES.len());
-        {
-            let mut guard = runtime.submit();
-            for module in MODULES {
-                let mut request = CompileRequest::new(module.name, compose(module));
-                request.output = OutputKind::Cubin;
-                request.arch = Some(arch.clone());
-                let artifact = guard
-                    .compile(&request)
-                    .map_err(|error| crate::Error::runtime_state_source("cuda prepare", error))?;
-                artifacts.insert(module.name, artifact);
-            }
-        }
-        Ok(KernelModules {
-            runtime: runtime.clone(),
-            artifacts,
-            functions: HashMap::new(),
-        })
-    }
-
-    /// Prepare only the modules `entries` need.
-    ///
-    /// The eager [`KernelModules::new`] compiles every translation unit; this compiles the
-    /// distinct modules that export `entries`, which is what a dispatch path wants.
+    /// A dispatch names the entries its operation launches, so a run compiles only the
+    /// translation units it touches. The runtime's artifact cache serves repeats.
     ///
     /// # Errors
     ///

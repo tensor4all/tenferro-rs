@@ -117,6 +117,33 @@ pub(crate) struct Detached {
 /// The handle carries no submission authority of its own: explicit host transfers
 /// take the runtime's submission lock for the duration of one admission, and
 /// numerical submission belongs to the [`CudaEngine`](super::CudaEngine) that owns
+/// The runtime configuration this build opens with.
+///
+/// `TENFERRO_CUDA_ARTIFACT_CACHE` names a directory that persists compiled kernel images, so a
+/// later process reads them back instead of paying NVRTC again: a whole module is about 8 s per
+/// process on an A100, and a warm read is a few milliseconds. Unset keeps the in-memory cache
+/// only; `none`, `off` and `memory` say so explicitly; any other value is the directory, created
+/// on the first write.
+fn default_config() -> t4a_cuda_runtime::Config {
+    t4a_cuda_runtime::Config {
+        artifact_cache_dir: artifact_cache_dir(
+            std::env::var_os("TENFERRO_CUDA_ARTIFACT_CACHE")
+                .as_deref()
+                .and_then(std::ffi::OsStr::to_str),
+        ),
+        ..t4a_cuda_runtime::Config::default()
+    }
+}
+
+/// The persistent artifact directory named by `value`, or `None` for memory only.
+fn artifact_cache_dir(value: Option<&str>) -> Option<std::path::PathBuf> {
+    let value = value?.trim();
+    if value.is_empty() || matches!(value, "none" | "off" | "memory") {
+        return None;
+    }
+    Some(std::path::PathBuf::from(value))
+}
+
 /// the same state.
 #[derive(Clone)]
 #[doc(hidden)]
@@ -132,7 +159,7 @@ impl CudaRuntime {
     /// [`CudaDeviceError`] when the device is unknown or the driver cannot open it.
     #[doc(hidden)]
     pub fn new(device_id: CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> {
-        Self::with_config(device_id, t4a_cuda_runtime::Config::default())
+        Self::with_config(device_id, default_config())
     }
 
     /// Open the CUDA runtime on `device_id` with an explicit configuration.
@@ -569,3 +596,6 @@ impl std::fmt::Debug for CudaRuntime {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests;

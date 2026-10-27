@@ -3,10 +3,6 @@
 //! This crate owns the graph-facing linalg op payloads and runtime
 //! registration. Tensor-facing operations are exposed through extension traits.
 //! CPU backend kernels live in this crate behind the linalg backend trait.
-//! A CPU backend paired by `tenferro_gpu::apple::AppleContext` additionally supports
-//! guarded rank-2 Cholesky on matching Apple managed `F32`, `F64`, `C32`, and
-//! `C64` tensors. This is an explicit CPU selection and is not a general
-//! managed-memory fallback for other linalg operations.
 //!
 //! # Examples
 //!
@@ -51,7 +47,6 @@
 //! | `native` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
 //! | `autodiff` | The eager surface (`EagerSessionLinalgExt`, `EagerTensorLinalgExt`) and AD rules. Adds the `tenferro-ad` dependency. |
 //! | `cuda` | CUDA execution through `tenferro-gpu`. |
-//! | `webgpu` | WebGPU/Metal execution through `tenferro-gpu` (a subset of operations). |
 //! | `rocm` | Placeholder; HIP/ROCm is not implemented. |
 //!
 //! `autodiff` is not a heavy dependency switch: `tenferro-ad` is the crate that

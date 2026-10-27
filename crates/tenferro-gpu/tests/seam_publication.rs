@@ -170,6 +170,26 @@ fn a_rejected_publication_returns_the_value() {
     }
 }
 
+/// A second engine on the same device is a different allocation domain, and its frontier does
+/// not order this engine's readers.
+#[test]
+fn a_value_from_another_allocation_domain_is_rejected() {
+    let Some(mut engine) = engine() else { return };
+    let other = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("second engine");
+    let foreign = upload_tensor(other.runtime(), &vector(&values(16))).expect("value");
+
+    match engine.publish(foreign) {
+        Err(PublicationAdmissionError::Rejected(rejected)) => {
+            assert_eq!(rejected.value.shape(), &[16]);
+            assert!(!rejected.reason.is_empty());
+        }
+        other => panic!(
+            "a value of another allocation domain must be refused, got {}",
+            other.is_err()
+        ),
+    }
+}
+
 #[test]
 fn the_frontier_outlives_a_copy_that_reads_it() {
     let Some(mut engine) = engine() else { return };

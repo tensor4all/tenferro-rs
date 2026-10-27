@@ -1,9 +1,9 @@
-//! The CUDA adapter over `t4a-cuda-runtime` (issue #2208 unit U1).
+//! The CUDA backend: one engine over `t4a-cuda-runtime` and the `t4a-cuda-kernels`
+//! catalogue (issue #2208).
 //!
-//! This module is the new backend path: one [`CudaRuntime`] per engine, storage with
-//! an allocation-domain identity, transfers and pending handles. It is private until
-//! the operation surface moves over (U2-U6); the public `cuda::` names keep the
-//! CubeCL implementation until then.
+//! One [`CudaRuntime`] per engine owns the stream, the allocation domain, transfers and
+//! pending handles; every operation reaches the kernel catalogue through the engine's typed
+//! dispatchers, and the vendor libraries through [`raw::Session`].
 //!
 //! # Examples
 //!

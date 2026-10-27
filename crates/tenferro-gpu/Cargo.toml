@@ -42,7 +42,7 @@ tenferro-runtime = { path = "../tenferro-runtime", version = "0.7.1", default-fe
 # The standalone CUDA runtime the U1 seam is built on (issue #2208). Both upstream
 # crates are `publish = false`, so the dependency is a pinned git revision, recorded
 # in docs/design/cuda-seam-u1-2208.md.
-t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "a3e242d744692c345cef6aeb350eef627950ee72", optional = true }
+t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "77173c73989afb2852759ce8a9919bd27545cdb6", optional = true }
 # The kernel catalogue and its NVRTC sources (ABI revision 10).
 t4a-cuda-kernels = { git = "https://github.com/tensor4all/t4a-cuda-kernels", rev = "5019c713c14c1f5d59ea2cf03bbfff08c40f167e", optional = true }
 cudarc = { workspace = true, optional = true, features = ["cublas", "cutensor"] }
