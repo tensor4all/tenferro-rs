@@ -29,8 +29,10 @@ fn f64_bytes(values: &[f64]) -> Vec<u8> {
 
 fn from_f64_bytes(bytes: &[u8]) -> Vec<f64> {
     bytes
-        .chunks_exact(8)
-        .map(|word| f64::from_le_bytes(word.try_into().expect("8 bytes")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|word| f64::from_le_bytes(*word))
         .collect()
 }
 

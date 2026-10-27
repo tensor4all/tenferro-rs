@@ -25,8 +25,10 @@ fn bytes(values: &[f64]) -> Vec<u8> {
 
 fn values(bytes: &[u8]) -> Vec<f64> {
     bytes
-        .chunks_exact(8)
-        .map(|word| f64::from_le_bytes(word.try_into().expect("8 bytes")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|word| f64::from_le_bytes(*word))
         .collect()
 }
 
@@ -349,7 +351,9 @@ fn a_complex_contraction_scales_by_its_complex_alpha() {
     let observed: Vec<(f32, f32)> = runtime
         .download_bytes(&d_buf)
         .expect("download")
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|word| {
             (
                 f32::from_ne_bytes(word[0..4].try_into().expect("re")),
