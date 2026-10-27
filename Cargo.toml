@@ -81,12 +81,12 @@ strided-view = "0.7.0"
 strided-traits = "0.7.0"
 threadteam = "0.1.0"
 strided-perm = { version = "0.8.0", features = ["parallel"] }
-# The CPU provider stack is on the strided 0.8 / tcontract 0.6 release train; one
+# The CPU provider stack is on the strided 0.8 / tcontract 0.7 release train; one
 # `tcontract-exec` (check `cargo tree -i tcontract-exec`) keeps `Exec` one type.
-cpueinsum = "0.6.0"
-cpueinsum-blas = "0.6.0"
-tcontract-exec = "0.6.0"
-tlinalg = "0.6.0"
+cpueinsum = "0.7.0"
+cpueinsum-blas = "0.7.0"
+tcontract-exec = "0.7.0"
+tlinalg = "0.7.0"
 tlinalg-blas = "0.5.0"
 strided-basic = { version = "0.8.0", default-features = false }
 # Fused NN kernels moved out of this repository (#2272): axis-0 softmax with a
@@ -100,7 +100,7 @@ libloading = "0.8"
 # secular-root stagnation (tensor4all/faer#28); later patch fixes need only a
 # targeted lock update, not another manifest-bump cascade. Keep the `faer` key
 # and library name: tenferro-cpu re-exports this build as `tenferro_cpu::faer`.
-faer = { package = "t4a-faer", version = "0.25.0", default-features = false, features = ["std", "rayon"] }
+faer = { package = "t4a-faer", version = "0.25.0", default-features = false, features = ["std", "rayon", "threadteam"] }
 cblas-sys = "0.1"
 cblas-inject = "0.1.1"
 blas-src = { version = "0.14", default-features = false }

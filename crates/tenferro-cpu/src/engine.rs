@@ -79,6 +79,7 @@ impl std::fmt::Debug for CpuEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CpuEngine")
             .field("num_threads", &self.num_threads())
+            .field("has_team", &self.has_team())
             .field("batch_policy", &self.batch_policy)
             .field("allocation_domain", &self.allocation_domain())
             .field("broken", &self.broken)
@@ -275,6 +276,28 @@ impl CpuEngine {
     /// ```
     pub fn num_threads(&self) -> usize {
         self.thread_budget().get()
+    }
+
+    /// Whether the engine runs its parallel work on a reserved
+    /// `threadteam::Team`.
+    ///
+    /// `true` for an engine built from a pool of two or more workers whose
+    /// members were reserved. `false` for [`CpuEngine::serial`], for a
+    /// one-worker pool, and for a pool whose members could not be reserved
+    /// within about ten seconds of construction (the engine then runs serially
+    /// and [`CpuEngine::num_threads`] reports one). Benchmarks should assert
+    /// this after construction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert!(!tenferro_cpu::CpuEngine::serial().has_team());
+    /// let pool = tenferro_cpu::Pool::builder().threads(2).build()?;
+    /// assert!(tenferro_cpu::CpuEngine::new(pool).has_team());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn has_team(&self) -> bool {
+        self.resources.has_team()
     }
 
     pub(crate) fn thread_budget(&self) -> NonZeroUsize {

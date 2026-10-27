@@ -159,9 +159,9 @@ checksum = "450efd17194c59515cc81b1eb553d98c59e407c095a918c84aefbd71bec1eecc"
 
 [[package]]
 name = "cpueinsum"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4889208813a6961cb3c5934c3ebdc7fb9461058d7185eb4b38b86bd1a1846455"
+checksum = "c10dc3812ac8258efc67bc896c4edd04c98bcb7837ca766ab56e0b8816cedd9e"
 dependencies = [
  "num-complex",
  "strided-view",
@@ -1380,9 +1380,9 @@ dependencies = [
 
 [[package]]
 name = "tcontract"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7751329c90dea1d89e5e3a7abc947cbcf74971c1f42812bc0716ae0e7a71c2cc"
+checksum = "c4bf337293f760e34b1755fee484d55de4686d5fae8cbe5cac8783ac43adedf1"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1398,9 +1398,9 @@ dependencies = [
 
 [[package]]
 name = "tcontract-exec"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85236a88bda76ad961516f67b15098b28bbc3b1be2ac3f65ca79d867edaa0e76"
+checksum = "2494cdc0d84b859777ec623426116ead0a12775acce03cb6c2f9e17cae8e4a5f"
 dependencies = [
  "thiserror 1.0.69",
  "threadteam",
