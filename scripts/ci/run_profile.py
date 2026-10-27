@@ -68,12 +68,11 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "--features blas --bin blas_interop",
     ),
     "macos-accelerate": (
-        # Select targets, not just test-name filters: do not compile the full workspace.
+        # The WebGPU/Metal lane retired with the CUDA cutover (#2208), so macOS runs these
+        # crates' tests with Accelerate BLAS instead of the four Apple/Metal targets.
         "cargo nextest run -p tenferro-gpu -p tenferro-fft -p tenferro-linalg "
         f"{_NEXTEST_PROFILE} --no-default-features "
-        "--features blas-accelerate,webgpu,tenferro-linalg/autodiff "
-        "--test apple_context --test apple_cpu --test webgpu_metal_fft "
-        "--test apple_accelerate --no-fail-fast",
+        "--features blas-accelerate,tenferro-linalg/autodiff --no-fail-fast",
     ),
     "blas-inject": (
         f"cargo test -p tenferro-cpu {_CARGO_TEST_PROFILE} --no-default-features "
@@ -237,8 +236,6 @@ def run_profiles(
                 continue
             environment = environment_base.copy()
             environment["PYTHON"] = sys.executable
-            if profile == "macos-accelerate":
-                environment["TENFERRO_REQUIRE_METAL"] = "1"
             if profile == "workspace-blas":
                 rustflags = "-l dylib=openblas -l dylib=lapack"
                 environment["RUSTFLAGS"] = rustflags
