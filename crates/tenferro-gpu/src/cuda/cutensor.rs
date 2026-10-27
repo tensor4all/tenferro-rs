@@ -432,8 +432,6 @@ impl Cutensor {
 
     /// Execute one contraction, planning it only if its signature is new.
     ///
-    /// # Errors
-    ///
     /// # Panics
     ///
     /// Only if the plan cache and the workspace it just stored disagree, which is an internal
