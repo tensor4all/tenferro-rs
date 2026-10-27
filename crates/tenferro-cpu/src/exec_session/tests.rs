@@ -114,13 +114,13 @@ fn native_operation_starts_on_the_caller_and_fans_out_on_the_engine_pool() {
         })
     })
     .unwrap();
-    // The operation itself stays on the calling thread (#2206); the token
-    // enters the engine's two-worker pool only for the part that fans out.
+    // The operation itself stays on the calling thread (#2206); the engine's
+    // team section runs on the caller (its leader) and the one reserved member.
     assert!(same_thread);
     assert_eq!(participants.max_active(), 2);
     assert_eq!(participants.thread_count(), 2);
     assert!(
-        !participants.thread_ids().contains(&caller),
-        "the fan-out ran on the engine's workers, not on the caller"
+        participants.thread_ids().contains(&caller),
+        "the caller leads the team section"
     );
 }

@@ -48,7 +48,7 @@ fn operation_from_a_worker_of_a_different_pool_runs_on_the_engine() {
             .spawn(|| {
                 // `Pool` has no `install`; hand the closure to its only worker
                 // through a token fork on a one-slot token.
-                let token = strided_exec::Exec::new(&outer, 1).unwrap();
+                let token = threadteam::Exec::new(&outer, 1).unwrap();
                 let slot = std::sync::Mutex::new(None);
                 token.fork(1, |_, _| {
                     *slot.lock().unwrap() = Some(
@@ -130,7 +130,7 @@ fn nested_engines_keep_their_pools_independent_and_match_the_serial_result() {
     use std::collections::HashSet;
     use std::sync::Barrier;
 
-    const LARGE: usize = 1 << 17;
+    const LARGE: usize = crate::tests::native_participants::LARGE_NATIVE_TEST_LEN;
     let mut serial = CpuEngine::serial();
     let (_, expected) = serial
         .with_linalg_pool(|exec, _| {
@@ -231,7 +231,7 @@ fn a_small_strided_operation_stays_on_the_calling_thread_without_a_pool_entry() 
         let roots = engine.take_ledger_roots();
         assert!(!roots.is_empty());
         for root in roots {
-            assert_eq!(strided_exec::ledger::installs(root), 0);
+            assert_eq!(threadteam::ledger::installs(root), 0);
         }
     }
     assert_eq!(std::thread::current().id(), caller);
@@ -334,4 +334,94 @@ fn fast_paths_refuse_a_broken_engine_before_touching_storage() {
     for error in [upload, download, reshape] {
         assert_eq!(engine_error(&error), Some(CpuEngineError::Broken));
     }
+}
+
+fn carries_team(engine: &mut CpuEngine) -> bool {
+    engine
+        .with_linalg_pool(|exec, _| Ok(exec.token().carries_team()))
+        .expect("token")
+}
+
+#[test]
+fn a_multi_thread_engine_mints_team_tokens_and_smaller_engines_do_not() {
+    for (mut engine, team) in [
+        (CpuEngine::new(pool(3)), true),
+        (CpuEngine::new(pool(1)), false),
+        (CpuEngine::serial(), false),
+    ] {
+        assert_eq!(engine.has_team(), team);
+        assert_eq!(carries_team(&mut engine), team);
+    }
+}
+
+#[test]
+fn a_reentrant_token_request_runs_serially_instead_of_panicking() {
+    let resources = crate::contraction::ExecutionResources::new(Some(pool(3)));
+    let policy = crate::CpuBatchPolicy::default();
+    let mut outer = resources.exec(policy);
+    assert!(outer.token().carries_team());
+    assert_eq!(outer.budget(), 3);
+    // Same thread, token alive: serial token, no panic, no wait.
+    let mut inner = resources.exec(policy);
+    assert!(!inner.token().carries_team());
+    assert_eq!(inner.budget(), 1);
+    drop(inner);
+    drop(outer);
+    // The team is free again.
+    assert!(resources.exec(policy).token().carries_team());
+}
+
+#[test]
+fn a_second_thread_waits_for_the_leader_instead_of_taking_a_second_team() {
+    let resources = crate::contraction::ExecutionResources::new(Some(pool(3)));
+    let policy = crate::CpuBatchPolicy::default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let mut leader = resources.exec(policy);
+        assert!(leader.token().carries_team());
+        scope.spawn(|| {
+            let mut exec = resources.exec(policy);
+            tx.send(exec.token().carries_team()).unwrap();
+        });
+        // The second caller blocks while this thread leads.
+        assert!(rx
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_err());
+        drop(leader);
+        // Once the leader is gone it gets the team, not a fallback.
+        assert!(rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap());
+    });
+}
+
+#[test]
+fn two_engines_on_two_threads_each_lead_their_own_team_at_once() {
+    // The per-lane pattern: engines are built on one thread and led from
+    // scoped threads that are not workers of any engine's pool.
+    let engines = [CpuEngine::new(pool(2)), CpuEngine::new(pool(2))];
+    let barrier = std::sync::Barrier::new(2);
+    let a = vector(&(0..4096).map(f64::from).collect::<Vec<_>>());
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = engines
+            .into_iter()
+            .map(|mut engine| {
+                let (barrier, a) = (&barrier, &a);
+                scope.spawn(move || {
+                    // Both teams are led at the same moment.
+                    let team = engine
+                        .with_linalg_pool(|exec, _| {
+                            let team = exec.token().carries_team();
+                            barrier.wait();
+                            Ok(team)
+                        })
+                        .expect("token");
+                    let sum = engine
+                        .add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(a))
+                        .expect("add");
+                    (team, sum.as_slice::<f64>().expect("f64")[4095])
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(results, vec![(true, 8190.0), (true, 8190.0)]);
 }

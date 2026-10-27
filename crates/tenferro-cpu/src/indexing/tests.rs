@@ -4,8 +4,8 @@ use super::{
     dynamic_slice, f32_index_to_i64, f64_index_to_i64, inline_col_major_strides, typed_concatenate,
     BufferPool,
 };
-use strided_exec::Exec;
 use tenferro_tensor::{Error, ErrorKind, Tensor, TypedTensor, ValidationError, ValidationKind};
+use threadteam::Exec;
 
 #[test]
 fn typed_concatenate_rejects_empty_typed_inputs_without_panicking() {

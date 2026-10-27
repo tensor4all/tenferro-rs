@@ -131,8 +131,8 @@ use strided_kernel::col_major_strides as kernel_col_major_strides;
 use strided_kernel::StridedArray;
 
 use crate::buffer_pool::BufferPool;
-use strided_exec::Exec;
 pub(crate) use tenferro_tensor::*;
+use threadteam::Exec;
 
 /// Stable provider identity of the compile-time-selected CPU backend.
 #[doc(hidden)]
@@ -186,19 +186,19 @@ pub use runtime_adapter::{
     runtime_engine_id, runtime_engine_registration, runtime_engine_registration_with_id,
     runtime_hardware_class,
 };
-/// The placement types of the CPU stack, re-exported so callers need no separate
-/// dependency: build a [`Pool`] with [`Pool::builder`] and hand it to
-/// [`CpuEngine::new`]. The token every fan-out entry takes is
-/// `tenferro_cpu::strided_exec::Exec`; it is not re-exported at the root because
-/// [`CpuEngine::exec`] returns the different `tcontract_exec::Exec` bundle.
-pub use strided_exec;
-pub use strided_exec::{Pool, PoolBuilder};
 /// Ordinary CPU entry points that take a caller-provided destination and the
 /// caller's own arithmetic instead of the typed pool.
 pub use tenferro_internal_cpu_kernels::scalar_ops::{
     scalar_binary_into, scalar_fold, AddOp, BinaryScalarOp, MulOp, SubOp,
 };
 pub use tenferro_internal_cpu_kernels::{same_variant_pair, same_variant_unary};
+/// The placement types of the CPU stack, re-exported so callers need no separate
+/// dependency: build a [`Pool`] with [`Pool::builder`] and hand it to
+/// [`CpuEngine::new`]. The token every fan-out entry takes is
+/// `tenferro_cpu::threadteam::Exec`; it is not re-exported at the root because
+/// [`CpuEngine::exec`] returns the different `tcontract_exec::Exec` bundle.
+pub use threadteam;
+pub use threadteam::{Pool, PoolBuilder};
 
 /// Visit the [`CpuEngine`] behind a type-erased engine, if it is one.
 ///
@@ -242,9 +242,10 @@ where
 /// Spelling the call through this path still resolves the exact build tenferro
 /// links, which avoids compiling a second faer into one binary; an application
 /// that must control the faer version itself can add a direct dependency
-/// instead. For work that should use the engine's threads, take the width from
-/// the engine's token (`engine.exec()?.into_token().external(..)`) and pass
-/// `faer::Par::rayon(width)` inside it; keep `Par::Seq` otherwise.
+/// instead. For work that should use the engine's threads, take the engine's
+/// token (`engine.exec()?`): a multi-thread engine's token carries its
+/// `threadteam::Team` (`token.carries_team()`), and `token.team(|team| ..)` hands
+/// faer `Par::Team(team)`. Keep `Par::Seq` otherwise; `Par::rayon` is never used.
 ///
 /// # Examples
 ///

@@ -57,7 +57,7 @@ fn the_required_extended_precision_example_runs_end_to_end() {
         destination_for(&mut sum),
         payload_of(&one),
         payload_of(&tiny),
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("addition succeeds");
     assert_eq!(values_of(&sum), &[Df64 { hi: 1.0, lo: low }]);
@@ -69,7 +69,7 @@ fn the_required_extended_precision_example_runs_end_to_end() {
         destination_for(&mut difference),
         payload_of(&sum),
         payload_of(&one),
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("subtraction succeeds");
 

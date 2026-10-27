@@ -59,10 +59,10 @@ fn test_reshape() {
 
 #[test]
 fn reshape_read_owned_input_above_parallel_threshold_preserves_order() {
-    // 256 x 256 is above the strided parallel threshold, so a two-thread
-    // session materializes the owned reshape through the pool instead of the
-    // serial host copy. Column-major order must be preserved element for
-    // element.
+    // Whether the two-thread session materializes this owned reshape through
+    // the pool or keeps the serial host copy is the token's width gate
+    // (`reshape_uses_pool`); column-major order must be preserved element for
+    // element either way.
     let n = 256 * 256;
     let data: Vec<f64> = (0..n).map(|i| i as f64).collect();
     let input = Tensor::from_vec_col_major(vec![256, 256], data.clone()).unwrap();
@@ -974,10 +974,14 @@ fn test_reduce_prod_matches_sequential_across_routes() {
             .collect()
     }
 
-    // Contiguous one-axis reduction, f64 and f32, one and four threads. `len =
-    // 40000` exceeds MINTHREADLENGTH (2^15), so the full reduction really splits
-    // across parallel workers.
-    for len in [1000usize, 40000] {
+    // Contiguous one-axis reduction, f64 and f32, one and four threads. The f64
+    // length `1_000_000` is large enough for a four-thread token to fork the
+    // full reduction (serial time above the dispatch-cost gate), so it really
+    // splits across parallel workers. The f32 data alternates 1.001 and 0.999,
+    // so a SIMD lane that takes only one of the two values leaves f32 range
+    // past about 10^5 elements (`inf * 0`); f32 therefore stays at 40000 and
+    // whether it forks is the token's call.
+    for len in [1000usize, 1_000_000] {
         let factors = near_one_f64(len);
         let reference = fold_f64(factors.iter().copied());
         let t = tensor_of::<f64>(vec![len], factors);
@@ -989,7 +993,8 @@ fn test_reduce_prod_matches_sequential_across_routes() {
                 got[0]
             );
         }
-
+    }
+    for len in [1000usize, 40000] {
         let factors = near_one_f32(len);
         let reference = fold_f32(factors.iter().copied());
         let t = tensor_of::<f32>(vec![len], factors);

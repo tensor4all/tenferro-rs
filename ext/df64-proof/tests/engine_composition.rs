@@ -57,7 +57,7 @@ fn an_external_scalar_composes_with_ordinary_operations_on_one_engine() {
         &mut destination,
         payload::<Df64>(&lhs),
         payload::<Df64>(&rhs),
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("extension addition");
 

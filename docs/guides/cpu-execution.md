@@ -6,15 +6,15 @@ computation needs it. Thread count, affinity and nesting are properties of the
 pool you build.
 
 One mechanism decides where CPU work runs and how many tasks run at once: the
-placement token `strided_exec::Exec`, a reference to the engine's pool plus a
+placement token `threadteam::Exec`, a reference to the engine's pool plus a
 thread budget. The engine mints one token for each operation; every kernel that
 can fan out takes it as its last parameter and splits it (`fork`,
 `for_ranges`, `external`). A token cannot be copied and every parallel entry
 consumes it, so the number of tasks running at once under one operation is at
-most its budget, at every nesting depth. `strided-exec` is the only crate of the
+most its budget, at every nesting depth. `threadteam` is the only crate of the
 stack that starts tasks; `tenferro-cpu` re-exports `Pool` and `PoolBuilder`, and the
-`strided_exec` crate itself, so the token is named
-`tenferro_cpu::strided_exec::Exec` and you need no separate dependency. (It is
+`threadteam` crate itself, so the token is named
+`tenferro_cpu::threadteam::Exec` and you need no separate dependency. (It is
 not re-exported at the root: `CpuEngine::exec` returns the different
 `tcontract_exec::Exec` bundle.)
 
@@ -26,7 +26,9 @@ For the dispatch cost of an operation once the engine exists, see
 `CpuEngine` has exactly two construction modes:
 
 - `CpuEngine::new(pool)` takes over a `tenferro_cpu::Pool` you built. Every
-  operation may use all of its workers.
+  operation may use all of its workers; a pool of two or more workers becomes a
+  `threadteam::Team` owned by the engine (if its members cannot be reserved the
+  engine runs serially, never on Rayon).
 - `CpuEngine::serial()` has no pool at all: every operation runs on the calling
   thread, and no pool is started or entered.
 
@@ -83,27 +85,41 @@ assert_eq!(engine.num_threads(), 1);
 ```
 <!-- end-snippet-source -->
 
-## Direct faer calls on the engine's pool
+## Direct faer calls on the engine's team
 
 Downstream code that needs a faer routine not exposed by tenferro calls faer on
-the host slices it borrows from the tensor. `CpuEngine::exec` lends the engine's
-provider bundle; its token hands the budget to faer as a plain width with
-`Exec::external`, which enters the engine's pool once (inline for a serial
-engine or a width of one):
+the host slices it borrows from the tensor. A multi-thread `CpuEngine` moves its
+pool into a `threadteam::Team` at construction, so its members stay reserved
+for the engine's lifetime. `CpuEngine::exec` lends the engine's provider bundle;
+its token carries the team, and faer runs on it as `Par::Team`. A serial or
+one-worker engine carries no team and stays `Par::Seq`. tenferro never uses
+`Par::rayon`:
 
 ```text
-engine.exec()?.into_token().external(|width| {
-    let par = if width.get() == 1 { Par::Seq } else { Par::rayon(width.get()) };
-    faer_operation(..., par)
-});
+let mut exec = engine.exec()?;
+let mut token = exec.token();
+if token.carries_team() {
+    token.team(|team| faer_operation(..., Par::Team(team)))?;
+} else {
+    faer_operation(..., Par::Seq);
+}
 ```
 
-This keeps direct faer work on the same threads as tenferro's own operations,
-and a small sequential call never enters a pool. tenferro hands out no
-`faer::Par`; spell the types with `tenferro_cpu::faer` (the build tenferro
-links) to avoid compiling a second faer into one binary. How faer divides the
-width it receives is faer's concern; this guarantee does not extend to workers
-created internally by OpenBLAS, MKL, Accelerate, or OpenMP.
+This keeps direct faer work on the same threads as tenferro's own operations.
+tenferro hands out no `faer::Par`; spell the types with `tenferro_cpu::faer`
+(the build tenferro links) to avoid compiling a second faer into one binary.
+This guarantee does not extend to workers created internally by OpenBLAS, MKL,
+Accelerate, or OpenMP.
+
+A team has one leader at a time, so an engine is single-threaded by contract:
+operations take `&mut CpuEngine`. Build one engine per thread (for example one
+per lane) and let each thread lead its own engine; an engine moves between
+threads freely, one thread at a time. A call made while a token of the same
+engine is alive on the same thread (a re-entrant call) runs serially instead of
+waiting for itself, and a thread that reaches an engine another thread is
+leading waits for it. Idle team members spin for 200 ms after the last
+operation, then park without using CPU; they stay reserved until the engine is
+dropped.
 
 ## Vendor BLAS/LAPACK
 

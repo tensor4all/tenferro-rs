@@ -1,8 +1,8 @@
 //! Pool helpers shared by the CPU engine's operations.
 
 use num_complex::{Complex32, Complex64};
-use strided_exec::Exec;
 use tenferro_tensor::{DType, ElementwiseReadOp};
+use threadteam::Exec;
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::{Tensor, TensorRead, TensorWrite, TypedTensor};

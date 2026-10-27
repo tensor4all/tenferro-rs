@@ -95,7 +95,7 @@ faer = { workspace = true, optional = true }
 # The extracted tensor-free linalg providers, both from the tlinalg-rs workspace: `tlinalg` (faer)
 # and `tlinalg-blas` (LAPACK/BLAS). Neither depends on the other; the interface they are adapted to
 # lives in this crate. Their requirements live in the workspace manifest, next to the rest of the
-# CPU stack: tlinalg 0.5 takes the engine's `tcontract_exec::Exec` bundle by `&mut` (`*_workspace`
+# CPU stack: tlinalg 0.6 takes the engine's `tcontract_exec::Exec` bundle by `&mut` (`*_workspace`
 # entries by `&`) and forks its batch lanes over that token.
 tlinalg = { workspace = true, optional = true }
 tlinalg-blas = { workspace = true, optional = true }

@@ -29,7 +29,7 @@ use tenferro_tensor::{
 };
 
 use crate::buffer_pool::BufferPool;
-use strided_exec::Exec;
+use threadteam::Exec;
 
 pub(crate) fn validate_cpu_read(op: &'static str, input: &TensorRead<'_>) -> crate::Result<()> {
     if input.backend_family().is_some() || input.placement().memory_kind == MemoryKind::Device {

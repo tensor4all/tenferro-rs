@@ -203,7 +203,7 @@ fn a_sum_reduction_over_a_view_retains_low_order_information() {
         "sum",
         &dense,
         Df64::zero(),
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("reduction");
     // 1 + 2^-80 + 2^-80 = 1 + 2^-79 exactly.

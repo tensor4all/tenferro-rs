@@ -112,10 +112,10 @@ fn faer_solve_on_zero_copy_views() -> tenferro_tensor::Result<()> {
     let a_view = MatRef::from_column_major_slice(a.as_slice()?, 2, 2);
     let b_view = MatRef::from_column_major_slice(b.as_slice()?, 2, 1);
 
-    let lu = a_view.partial_piv_lu();
+    let lu = a_view.partial_piv_lu(Par::Seq);
     let mut x = Mat::<f64>::zeros(2, 1);
     x.as_mut().copy_from(b_view);
-    lu.solve_in_place(x.as_mut());
+    lu.solve_in_place(x.as_mut(), Par::Seq);
 
     // Verify A x == b. Exact solution: x = [1.2, 1.4] (3*1.2+1.4 == 5,
     // 1.2+2*1.4 == 4). Check both the solution and the reconstruction.
@@ -140,22 +140,24 @@ fn faer_parallelism_from_engine() -> tenferro_tensor::Result<()> {
     let mut engine = CpuEngine::new(pool);
     let mut product = Mat::<f64>::zeros(2, 2);
 
-    // The engine's token hands its budget to faer as a plain width and enters
-    // the engine's pool once: faer's `Par::rayon` schedules on the calling
-    // thread's pool, so the direct call runs on the engine's workers and
-    // never on Rayon's global pool. A serial engine's token hands over a width
-    // of one, which maps to `Par::Seq`.
+    // A multi-thread engine owns its pool as a `threadteam::Team`: the token
+    // carries the team, and faer runs on its members as `Par::Team`, never on
+    // Rayon. A serial engine's token carries no team, which maps to `Par::Seq`.
     let (a_data, b_data) = (a.as_slice()?, b.as_slice()?);
-    engine.exec()?.into_token().external(|width| {
+    let mut exec = engine.exec()?;
+    let mut token = exec.token();
+    let mut multiply = |par: Par<'_>| {
         let a_view = MatRef::from_column_major_slice(a_data, 2, 2);
         let b_view = MatRef::from_column_major_slice(b_data, 2, 2);
-        let par = if width.get() == 1 {
-            Par::Seq
-        } else {
-            Par::rayon(width.get())
-        };
         matmul(product.as_mut(), Accum::Replace, a_view, b_view, 1.0, par);
-    });
+    };
+    if token.carries_team() {
+        token
+            .team(|team| multiply(Par::Team(team)))
+            .expect("a team token carries its team");
+    } else {
+        multiply(Par::Seq);
+    }
 
     let product = product.as_ref();
     assert_close(*product.get(0, 0), 19.0, "A * B (0,0)");

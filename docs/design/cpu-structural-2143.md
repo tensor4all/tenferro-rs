@@ -63,8 +63,58 @@ separate work.
 
 ## 2. Materializing reshape copy (#2029)
 
-The pooled, thread-scaling copy for owned reshapes above
-`SERIAL_RESHAPE_MAX_ELEMS` (`strided_kernel::execution::MINTHREADLENGTH`) is
+The pooled, thread-scaling copy for owned reshapes (gated by
+`structural::reshape_uses_pool`: the token's `parallel_width` for a `Copy`-class
+region, which replaced the fixed element count `SERIAL_RESHAPE_MAX_ELEMS`) is
+already on `main`; the item needs its paired thread and PyTorch evidence. | not measured |
+| 3 | #2040 | Remove the removable per-call allocation in `slice_view` and pin the metadata-allocation count with a test. | implemented and asserted |
+| 4 | #1838 | Relax the shared destination contract from compact to write-injective, and add a strided-destination path on CPU and CUDA over the pinned `strided-rs` update primitive. | code and CPU tests done, CUDA verification pending |
+| 5 | #2039 | Keep the cached plan, remove the per-call lane allocation and one full pass, and record the engine difference as the reviewed reason for the residual. | implemented, timing evidence pending |
+| 6 | #2145 | The tensor keeps its cached compact layout so the per-op view helper borrows it and allocates nothing. Upstream landed the same fix as #2149; this branch keeps the follow-up it did not cover. | implemented and asserted |
+
+## 1. The eager implicit broadcast is a view (#2021)
+
+`tenferro-runtime::typed_tensor::broadcast_to_in_read` called
+`session.broadcast_in_dim_read`, which materializes the full broadcast tensor on
+CPU, and the composite softmax/normalization broadcasts called it again through
+`SessionComposite::broadcast_in_dim`. Every consumer reads the operand.
+
+Decision: the broadcast is metadata on both surfaces.
+
+- `TensorRead::broadcast_in_dim_view` (new `#[doc(hidden)]` boundary in
+  `tenferro-tensor`) rebuilds a read's layout with stride 0 on expanding axes,
+  keeping the same buffer, retained root and placement. It reuses
+  `TensorLayout::broadcast_in_dim_view`, and it refuses a caller-owned
+  (`DType::External`) payload with a typed unsupported-dtype error instead of
+  reaching the view conversion that has no arm for it.
+- `broadcast_to_in_read` maps **all** source axes right-aligned onto the target
+  axes. It no longer runs the traced/AD `broadcast_input_plan`, whose
+  singleton-removal source shape forced a materializing `reshape_read`. The
+  failure vocabulary is unchanged (same `BroadcastError` variants).
+- The composite surface gains `CompositeOps::broadcast_in_dim_owned`, whose
+  default forwards to the existing materializing `broadcast_in_dim`.
+  `SessionComposite` overrides it to return a `ReadInput::Borrowed` view for a
+  borrowed read and a new `ReadInput::Value(TensorValue)` for a value it owns, so
+  a broadcast of an owned intermediate is a layout change over storage that value
+  already owns, not a copy. Call sites that only hold a borrow (the masked-softmax
+  and `apply_affine` paths) keep the materializing method. `finish`/`materialized`
+  materialize a non-compact owner at the ownership boundary.
+- `broadcast_in_dim_read` keeps its owned-result contract and its documentation:
+  a session read returns `Tensor`, so a caller that can consume a read-only
+  operand must use the view route instead. That is the documented way to ask for
+  a view.
+
+Allocation boundary: `TensorLayout::broadcast_in_dim_view` still allocates one
+rank-sized `seen` buffer per call, so this is "no tensor-sized materialization",
+not "zero allocation". Removing that buffer with a bounded metadata pattern is
+separate work.
+
+## 2. Materializing reshape copy (#2029)
+
+The pooled, thread-scaling copy for owned reshapes whose serial time pays for
+a fork
+`structural::reshape_uses_pool` (the token's `parallel_width` for a `Copy`-class
+region, replacing the fixed `SERIAL_RESHAPE_MAX_ELEMS` element count) is
 already on `main` (`3870047bb`, `crates/tenferro-cpu/src/exec_session.rs`), and
 the branch below it is deliberately serial.
 

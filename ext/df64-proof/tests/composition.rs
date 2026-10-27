@@ -22,7 +22,7 @@ fn external_scalar_sum_retains_low_order_information() {
         "sum",
         &values,
         Df64::zero(),
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("reduction succeeds");
     let difference = total - Df64::from_f64(1.0);
@@ -46,7 +46,7 @@ fn external_scalar_runs_through_the_elementwise_entry_point() {
         &mut destination,
         &lhs,
         &rhs,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("addition succeeds");
 
@@ -68,7 +68,7 @@ fn external_scalar_keeps_low_order_information_through_the_elementwise_entry_poi
         &mut destination,
         &lhs,
         &rhs,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect("addition succeeds");
 
@@ -92,7 +92,7 @@ fn preset_scalar_f64_uses_the_same_entry_points() {
         &mut destination,
         &lhs,
         &rhs,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .unwrap();
     assert_eq!(destination.as_slice(), &[11.0, 22.0]);
@@ -101,7 +101,7 @@ fn preset_scalar_f64_uses_the_same_entry_points() {
         "sum",
         &destination,
         0.0_f64,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .unwrap();
     assert_eq!(total, 33.0);
@@ -121,7 +121,7 @@ fn mutable_borrow_through_the_public_tensor_type_reaches_the_entry_point() {
         &mut destination,
         &values,
         &lhs,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .unwrap();
 
@@ -142,7 +142,7 @@ fn mismatched_shapes_are_rejected_without_touching_the_destination() {
         &mut destination,
         &lhs,
         &rhs,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .expect_err("shape mismatch is rejected");
 
@@ -166,7 +166,7 @@ fn empty_input_folds_to_the_initial_value() {
         "sum",
         &empty,
         Df64::zero(),
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .unwrap();
     assert_eq!(total, Df64::zero());
@@ -272,7 +272,7 @@ fn erased_values_carry_a_scalar_tenferro_does_not_define() {
         "sum",
         typed,
         Df64::zero(),
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .unwrap();
     assert_eq!(total, Df64::from_f64(2.0));
@@ -322,7 +322,7 @@ fn two_sets_containing_the_same_scalar_share_one_numerical_instantiation() {
         &mut out,
         &from_default,
         &from_extended,
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .unwrap();
 

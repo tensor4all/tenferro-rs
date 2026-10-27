@@ -50,7 +50,7 @@ pub fn with_materialized_tensor_read<R>(
 /// Small inputs and a serial `exec` keep the serial host copy. A large input
 /// under a parallel `exec` materializes through the same pooled strided copy the
 /// session's `reshape_read` uses, sharing `structural::reshape_uses_pool` and
-/// its threshold rather than a second copy of either. The pooled branch takes a
+/// its gate rather than a second copy of either. The pooled branch takes a
 /// buffer from the caller's pool.
 ///
 /// # Errors
@@ -64,7 +64,7 @@ pub fn reshape_tensor(
     input: &Tensor,
     shape: &[usize],
 ) -> tenferro_tensor::Result<Tensor> {
-    if crate::structural::reshape_uses_pool(input, !exec.token().is_serial())? {
+    if crate::structural::reshape_uses_pool(input, &exec.token())? {
         return crate::structural::reshape_read_with_pool(
             buffers,
             TensorRead::from_tensor(input),

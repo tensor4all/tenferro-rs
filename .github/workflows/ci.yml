@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - name: Only strided-exec (and vendor wrappers) depend on rayon
+      - name: Only threadteam (and vendor wrappers) depend on rayon
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check bans

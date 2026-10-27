@@ -2182,7 +2182,7 @@ fn total_of(
         "df64_total",
         payload,
         Df64::zero(),
-        tenferro_cpu::strided_exec::Exec::serial(),
+        tenferro_cpu::threadteam::Exec::serial(),
     )
     .map_err(tenferro_runtime::Error::from)?;
     let output = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![], vec![total])

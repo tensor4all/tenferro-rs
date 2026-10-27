@@ -110,7 +110,7 @@ class BuildArtifactContracts(unittest.TestCase):
 
         faer = dependencies["faer"]
         self.assertFalse(faer["default-features"])
-        self.assertEqual(set(faer["features"]), {"std", "rayon"})
+        self.assertEqual(set(faer["features"]), {"std", "rayon", "threadteam"})
         self.assertRegex(faer["version"], r"^\^?\d+\.\d+\.\d+$")
 
         # The registry strided release line the CPU contraction/linalg stack is
@@ -127,7 +127,6 @@ class BuildArtifactContracts(unittest.TestCase):
             "strided-fused",
             "strided-kernel",
         )
-        required: set[str] = set()
         for name in strided:
             with self.subTest(dependency=name):
                 spec = dependency_spec(dependencies[name])
@@ -137,17 +136,27 @@ class BuildArtifactContracts(unittest.TestCase):
                     isinstance(version, str) and version[:1].isdigit(),
                     f"{name} must be a caret registry requirement, got {version!r}",
                 )
-                required.add(version)
-        # One release *line* for all of them, so the provider crates (cpueinsum,
-        # tlinalg) can meet this crate's `StridedView` at a crate boundary. The family
-        # publishes independent patches -- `strided-basic 0.6.4` with the core at 0.6.0
-        # -- so the condition is the release line, not one identical string; the
-        # resolved graph and the compiled type boundaries are checked by the build.
-        self.assertEqual(
-            len({version.rsplit(".", 1)[0] for version in required}),
-            1,
-            f"strided requirements are not one release line: {required}",
-        )
+        # The family publishes its crates on independent lines (`strided-view` and
+        # `strided-traits` stay at 0.7 while the kernel crates are at 0.8), so the
+        # requirements are not one release line. The invariant is that the provider
+        # crates (cpueinsum, tlinalg) meet this crate's `StridedView` at a crate
+        # boundary, which needs exactly one copy of each strided crate in the
+        # resolved graph: the committed lock must hold one version per name.
+        lock = tomllib.loads((ROOT / "Cargo.lock").read_text())
+        resolved: dict[str, list[str]] = {}
+        for package in lock["package"]:
+            if package["name"].startswith("strided-"):
+                resolved.setdefault(package["name"], []).append(package["version"])
+        for name in strided:
+            with self.subTest(locked=name):
+                self.assertEqual(
+                    len(resolved.get(name, [])),
+                    1,
+                    f"{name} must resolve to exactly one version, got {resolved.get(name)}",
+                )
+        for name, versions in resolved.items():
+            with self.subTest(locked_duplicate=name):
+                self.assertEqual(len(versions), 1, f"duplicate {name}: {versions}")
 
         self.assertNotIn("strided-einsum2", dependencies)
 

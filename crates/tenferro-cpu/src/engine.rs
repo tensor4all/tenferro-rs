@@ -1,5 +1,5 @@
 //! The CPU execution engine: a caller-held value that owns one
-//! [`strided_exec::Pool`] (or none) and the workspace every operation on it
+//! [`threadteam::Pool`] (or none) and the workspace every operation on it
 //! writes.
 //!
 //! tenferro never builds threads. The caller builds the pool with
@@ -43,7 +43,7 @@ pub enum CpuEngineError {
 
 /// A caller-held CPU execution engine.
 ///
-/// The engine owns one [`strided_exec::Pool`] (or none for [`CpuEngine::serial`]) and the
+/// The engine owns one [`threadteam::Pool`] (or none for [`CpuEngine::serial`]) and the
 /// workspace operations write: the buffer pool that recycles outputs, the
 /// contraction scratch, and a handle to a [`CpuPlanCache`]. It implements
 /// [`tenferro_tensor::Engine`], so every operation takes it as `&mut`.
@@ -79,6 +79,7 @@ impl std::fmt::Debug for CpuEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CpuEngine")
             .field("num_threads", &self.num_threads())
+            .field("has_team", &self.has_team())
             .field("batch_policy", &self.batch_policy)
             .field("allocation_domain", &self.allocation_domain())
             .field("broken", &self.broken)
@@ -277,8 +278,34 @@ impl CpuEngine {
         self.thread_budget().get()
     }
 
+    /// Whether the engine runs its parallel work on a reserved
+    /// `threadteam::Team`.
+    ///
+    /// `true` for an engine built from a pool of two or more workers whose
+    /// members were reserved. `false` for [`CpuEngine::serial`], for a
+    /// one-worker pool, and for a pool whose members could not be reserved
+    /// within about ten seconds of construction (the engine then runs serially
+    /// and [`CpuEngine::num_threads`] reports one). Benchmarks should assert
+    /// this after construction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert!(!tenferro_cpu::CpuEngine::serial().has_team());
+    /// let pool = tenferro_cpu::Pool::builder().threads(2).build()?;
+    /// assert!(tenferro_cpu::CpuEngine::new(pool).has_team());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn has_team(&self) -> bool {
+        self.resources.has_team()
+    }
+
     pub(crate) fn thread_budget(&self) -> NonZeroUsize {
         self.resources.thread_budget()
+    }
+
+    pub(crate) fn dispatch_costs(&self) -> &threadteam::DispatchCosts {
+        self.resources.dispatch_costs()
     }
 
     /// Whether an earlier operation broke this engine (see
@@ -402,7 +429,7 @@ impl CpuEngine {
     }
 
     /// Ledger roots of every placement token the engine minted since the last
-    /// call, so a test can read `strided_exec::ledger` for the operation it just
+    /// call, so a test can read `threadteam::ledger` for the operation it just
     /// ran (`max_live`, `installs`).
     ///
     /// Available with the `ledger` cargo feature, which is test support.
@@ -422,7 +449,7 @@ impl CpuEngine {
     pub fn take_ledger_installs(&self) -> usize {
         self.take_ledger_roots()
             .into_iter()
-            .map(strided_exec::ledger::installs)
+            .map(threadteam::ledger::installs)
             .sum()
     }
 
@@ -436,7 +463,7 @@ impl CpuEngine {
     pub fn take_ledger_max_live(&self) -> usize {
         self.take_ledger_roots()
             .into_iter()
-            .map(strided_exec::ledger::max_live)
+            .map(threadteam::ledger::max_live)
             .max()
             .unwrap_or(0)
     }

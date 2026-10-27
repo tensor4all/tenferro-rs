@@ -35,23 +35,27 @@ system OpenBLAS (`blas` with the native library linked through
 `RUSTFLAGS`) so that native symbol linkage is verified without rebuilding
 OpenBLAS from source.
 
-For direct faer work that should remain parallel, take the width from the
-engine's placement token. `CpuEngine::exec` lends the engine's provider bundle;
-`Exec::external` enters the engine's pool once and hands the budget over as a
-plain width, and faer's `Par::rayon` schedules on the calling thread's pool:
+For direct faer work that should remain parallel, use the engine's placement
+token. `CpuEngine::exec` lends the engine's provider bundle; a multi-thread
+engine's token carries its `threadteam::Team`, and faer runs on it as
+`Par::Team`. A token without a team (a serial engine, or a re-entrant call)
+takes `Par::Seq`:
 
 ```text
-engine.exec()?.into_token().external(|width| {
-    let par = if width.get() == 1 { Par::Seq } else { Par::rayon(width.get()) };
-    faer_operation(..., par)
-});
+let mut exec = engine.exec()?;
+let mut token = exec.token();
+if token.carries_team() {
+    token.team(|team| faer_operation(..., Par::Team(team)))?;
+} else {
+    faer_operation(..., Par::Seq);
+}
 ```
 
 tenferro hands out no `faer::Par`, so no faer value crosses a tenferro boundary
 and a separately pinned `faer` cannot meet a confusing type mismatch (#1939).
 Spell the types with `tenferro_cpu::faer`, the re-exported build, to keep one
 faer in the binary; a direct dependency remains safe because only plain
-column-major slices cross the boundary. A serial engine has no pool and takes
+column-major slices cross the boundary. A serial engine has no team and takes
 `Par::Seq` directly. This route is CPU/faer-specific and does not claim affinity
 for external BLAS/OpenMP workers.
 
@@ -222,10 +226,10 @@ fn faer_solve_on_zero_copy_views() -> tenferro_tensor::Result<()> {
     let a_view = MatRef::from_column_major_slice(a.as_slice()?, 2, 2);
     let b_view = MatRef::from_column_major_slice(b.as_slice()?, 2, 1);
 
-    let lu = a_view.partial_piv_lu();
+    let lu = a_view.partial_piv_lu(Par::Seq);
     let mut x = Mat::<f64>::zeros(2, 1);
     x.as_mut().copy_from(b_view);
-    lu.solve_in_place(x.as_mut());
+    lu.solve_in_place(x.as_mut(), Par::Seq);
 
     // Verify A x == b. Exact solution: x = [1.2, 1.4] (3*1.2+1.4 == 5,
     // 1.2+2*1.4 == 4). Check both the solution and the reconstruction.
@@ -452,11 +456,11 @@ its width, its buffer pool, and (for faer) its selected faer parallelism. Direct
 external calls deliberately sit outside that context:
 
 - A direct faer call with `Par::Seq` runs inline on the calling thread.
-- A direct faer call with `Par::rayon(n)` made outside any pool uses rayon's
-  **global** thread pool. That is not the pool the engine computes on: the
-  engine uses only the pool the caller passed to `CpuEngine::new`. Take the
-  width from the engine's token (`Exec::external`, above) to run on the
-  engine's pool and within its budget.
+- A direct faer call that does not use the engine's token (`Par::rayon(n)`, for
+  example) uses rayon's **global** thread pool. That is not the team the engine
+  computes on: the engine uses only the pool the caller passed to
+  `CpuEngine::new`. Use the engine's token (`Par::Team`, above) to run on the
+  engine's team and within its budget.
 - A direct BLAS/LAPACK call runs on the provider's own threads as described
   above.
 
