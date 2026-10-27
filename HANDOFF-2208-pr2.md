@@ -13,6 +13,38 @@ Diff against `origin/main`: **260 files, +8612 / −73889** (`git diff --stat -M
 The `cuda_next` → `cuda` move is detected as a rename, so the substance to review is roughly the
 engine under `crates/tenferro-gpu/src/cuda/**`, `crates/tenferro-linalg/**` and the wiring files.
 
+## Status update (2026-10-28, later): PR open, merged with main, review folded in
+
+**PR: https://github.com/tensor4all/tenferro-rs/pull/2291** — branch rebased onto `origin/main`
+through one merge commit (`#2289` strided 0.8 / tcontract 0.6 / threadteam / t4a-faer, `#2290` CPU
+threadteam). The lockfile was settled by the resolver: main's CubeCL/WebGPU subtrees drop out.
+
+On top of the view work:
+
+- **Persistent artifact cache** in `t4a-gpu-backend` (merged: `77173c7`, PR #11), pin bumped;
+  `TENFERRO_CUDA_ARTIFACT_CACHE` (unset/`none`/`off`/`memory` = memory only) wired in
+  `cuda/runtime.rs`, CI sets `${RUNNER_TEMP}/t4a-cuda-artifacts`. Measured: `seam_structural`
+  22 tests 58.07 s → 0.45 s; `seam_launch` 440 s → 47 s after `KernelModules::new` was deleted.
+- `launch_planned` runs through the engine's prepared dispatcher (one prepare/bind per loop).
+- `publish` checks the allocation domain, not only the ordinal.
+- `linalg_*` refusals, from the post-review of the finished diff: the layout-operand auxiliaries
+  require one dtype on both sides, `swap_columns` requires I64 index arrays, `lu_parity` checks the
+  parity capacity against `batches`, `lu_extract_outputs` validates the work rank before slicing.
+  `dot_native.strided_output` is `Unsupported` (both `*_into` entries refuse a strided
+  destination). `LinalgAuxArgs` deleted; `norm_squared_read` no longer copies a real operand.
+- New partition rows for the two added tests.
+
+Verification on the merged tree: workspace 5552 passed / 0 failed (188 suites); the CUDA device
+binaries green (`blas1_cuda` 12/12, linalg 64/64, fft 24/24, ad 11/11); doc tests; clippy
+`-D warnings`; `fmt --check`; `scripts/ci` 414 OK.
+
+Known red, not from this work: `session_contract::execution_session_capability_…` (trybuild fails
+under kache's cargo wrapper; CI runs it in its own environment) and
+`cuda::explicit_duplicate_has_new_identity_in_the_same_cuda_domain` (`cast(F32→F32)` →
+"operand extents do not match"; the cast path is untouched).
+
+Still open: hosted CI on the PR (workspace, CI_gpu, rules review), then merge.
+
 ## Status update (2026-10-28): borrowed views landed, device lanes green
 
 Uncommitted delta on top of the three commits above (12 files, +543/−246; `git diff`).
