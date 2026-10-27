@@ -242,9 +242,10 @@ where
 /// Spelling the call through this path still resolves the exact build tenferro
 /// links, which avoids compiling a second faer into one binary; an application
 /// that must control the faer version itself can add a direct dependency
-/// instead. For work that should use the engine's threads, take the width from
-/// the engine's token (`engine.exec()?.into_token().external(..)`) and pass
-/// `faer::Par::rayon(width)` inside it; keep `Par::Seq` otherwise.
+/// instead. For work that should use the engine's threads, take the engine's
+/// token (`engine.exec()?`): a multi-thread engine's token carries its
+/// `threadteam::Team` (`token.carries_team()`), and `token.team(|team| ..)` hands
+/// faer `Par::Team(team)`. Keep `Par::Seq` otherwise; `Par::rayon` is never used.
 ///
 /// # Examples
 ///

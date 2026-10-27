@@ -130,27 +130,33 @@ macro_rules! impl_faer_linalg {
                 let width = exec
                     .batch_decision(&tcontract_exec::BatchQuery::new(1, muladds))
                     .item_threads;
-                // `external` enters the pool once for a width above one and runs
-                // inline otherwise; faer's `Par::rayon` then schedules on that pool.
-                exec.token()
-                    .limit(
-                        std::num::NonZeroUsize::new(width).unwrap_or(std::num::NonZeroUsize::MIN),
-                    )
-                    .external(|granted| {
-                        let par = if granted.get() == 1 {
-                            faer::Par::Seq
-                        } else {
-                            faer::Par::rayon(granted.get())
-                        };
-                        faer::linalg::matmul::matmul(
-                            out,
-                            faer::Accum::Replace,
-                            lhs,
-                            rhs,
-                            $faer_one,
-                            par,
-                        );
+                // A team token hands its members to faer as `Par::Team`; a
+                // width of one (or a token without a team) stays `Par::Seq`.
+                // Nothing here reaches Rayon.
+                let mut token = exec.token().limit(
+                    std::num::NonZeroUsize::new(width).unwrap_or(std::num::NonZeroUsize::MIN),
+                );
+                let mut run = Some(|par: faer::Par<'_>| {
+                    faer::linalg::matmul::matmul(
+                        out,
+                        faer::Accum::Replace,
+                        lhs,
+                        rhs,
+                        $faer_one,
+                        par,
+                    );
+                });
+                if width > 1 && token.carries_team() {
+                    // A team token returns its carried team without acquisition.
+                    let _ = token.team(|team| {
+                        if let Some(run) = run.take() {
+                            run(faer::Par::Team(team));
+                        }
                     });
+                }
+                if let Some(run) = run.take() {
+                    run(faer::Par::Seq);
+                }
                 Ok(())
             }
 
