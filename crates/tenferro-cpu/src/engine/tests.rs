@@ -344,9 +344,14 @@ fn carries_team(engine: &mut CpuEngine) -> bool {
 
 #[test]
 fn a_multi_thread_engine_mints_team_tokens_and_smaller_engines_do_not() {
-    assert!(carries_team(&mut CpuEngine::new(pool(3))));
-    assert!(!carries_team(&mut CpuEngine::new(pool(1))));
-    assert!(!carries_team(&mut CpuEngine::serial()));
+    for (mut engine, team) in [
+        (CpuEngine::new(pool(3)), true),
+        (CpuEngine::new(pool(1)), false),
+        (CpuEngine::serial(), false),
+    ] {
+        assert_eq!(engine.has_team(), team);
+        assert_eq!(carries_team(&mut engine), team);
+    }
 }
 
 #[test]

@@ -230,24 +230,28 @@ impl ExecutionResources {
         }
     }
 
-    /// Reserve every member of `pool` for the engine. Workers that were
-    /// started a moment ago may not have reached their idle state yet (a busy
-    /// host, several engines built at once), and a refused reservation hands the
-    /// pool back, so retry briefly before giving up and running serially.
+    /// Reserve every member of `pool` for the engine. A pool's default
+    /// acquisition timeout is 2 ms, so a reservation made right after the
+    /// workers were started, or on a busy host, can be refused. A refusal hands
+    /// the pool back, so retry for up to ten seconds (the acquisition timeout
+    /// the provider test suites use) before running serially: a silently serial
+    /// engine would ruin a measurement, which `CpuEngine::has_team` makes
+    /// visible.
     fn reserve_team(mut pool: threadteam::Pool) -> Placement {
-        const ATTEMPTS: u32 = 50;
-        const PAUSE: std::time::Duration = std::time::Duration::from_millis(10);
+        const BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+        const PAUSE: std::time::Duration = std::time::Duration::from_millis(5);
         let width = pool.width().get();
-        for attempt in 0..ATTEMPTS {
+        let deadline = std::time::Instant::now() + BUDGET;
+        loop {
             match pool.into_team(width) {
                 Ok(team) => return Placement::Team(team),
                 Err(refused) => pool = refused.into_pool(),
             }
-            if attempt + 1 < ATTEMPTS {
-                std::thread::sleep(PAUSE);
+            if std::time::Instant::now() >= deadline {
+                return Placement::Serial;
             }
+            std::thread::sleep(PAUSE);
         }
-        Placement::Serial
     }
 
     pub(crate) fn count_read_staging(&self) {
@@ -286,6 +290,10 @@ impl ExecutionResources {
     }
     fn workspace(&self) -> &ArenaProvider {
         &self.workspace
+    }
+    /// Whether the engine holds a reserved team.
+    pub(crate) fn has_team(&self) -> bool {
+        matches!(self.placement, Placement::Team(_))
     }
     /// Mint the one provider bundle of an operation: every member of the team
     /// as the budget, the workspace, and `policy`. A serial or one-worker
