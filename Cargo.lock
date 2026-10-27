@@ -715,9 +715,9 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cpueinsum"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4889208813a6961cb3c5934c3ebdc7fb9461058d7185eb4b38b86bd1a1846455"
+checksum = "c10dc3812ac8258efc67bc896c4edd04c98bcb7837ca766ab56e0b8816cedd9e"
 dependencies = [
  "num-complex",
  "strided-view",
@@ -728,9 +728,9 @@ dependencies = [
 
 [[package]]
 name = "cpueinsum-blas"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "487c8df03a90a3abbd777029f6bb717ccc16ab45633d745a480dbbee885d61b8"
+checksum = "bab8e60b50b9846dd9bec3fcd35910a87abc270a4afc9301272f3919c3bfab0a"
 dependencies = [
  "cblas-sys",
  "cpueinsum",
@@ -5076,9 +5076,9 @@ checksum = "876fef147edbcbddc8ac5cbbba92c7b86519e314e86638596c09673b2ed01e7f"
 
 [[package]]
 name = "tcontract"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7751329c90dea1d89e5e3a7abc947cbcf74971c1f42812bc0716ae0e7a71c2cc"
+checksum = "c4bf337293f760e34b1755fee484d55de4686d5fae8cbe5cac8783ac43adedf1"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -5094,9 +5094,9 @@ dependencies = [
 
 [[package]]
 name = "tcontract-exec"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85236a88bda76ad961516f67b15098b28bbc3b1be2ac3f65ca79d867edaa0e76"
+checksum = "2494cdc0d84b859777ec623426116ead0a12775acce03cb6c2f9e17cae8e4a5f"
 dependencies = [
  "thiserror 1.0.69",
  "threadteam",
@@ -5634,9 +5634,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tlinalg"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e28d34aa6415e409d6de1b8af8cd7d46e164d756cc30d8a7aa6830b110d2c425"
+checksum = "3707b44c5565b61fd0207bfd0271d48695a3b2c50559ee3442722e6794d43f67"
 dependencies = [
  "num-complex",
  "strided-view",

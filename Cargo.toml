@@ -81,12 +81,12 @@ strided-view = "0.7.0"
 strided-traits = "0.7.0"
 threadteam = "0.1.0"
 strided-perm = { version = "0.8.0", features = ["parallel"] }
-# The CPU provider stack is on the strided 0.8 / tcontract 0.6 release train; one
+# The CPU provider stack is on the strided 0.8 / tcontract 0.7 release train; one
 # `tcontract-exec` (check `cargo tree -i tcontract-exec`) keeps `Exec` one type.
-cpueinsum = "0.6.0"
-cpueinsum-blas = "0.6.0"
-tcontract-exec = "0.6.0"
-tlinalg = "0.6.0"
+cpueinsum = "0.7.0"
+cpueinsum-blas = "0.7.0"
+tcontract-exec = "0.7.0"
+tlinalg = "0.7.0"
 tlinalg-blas = "0.5.0"
 strided-basic = { version = "0.8.0", default-features = false }
 # Fused NN kernels moved out of this repository (#2272): axis-0 softmax with a

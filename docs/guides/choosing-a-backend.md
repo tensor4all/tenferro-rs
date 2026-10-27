@@ -45,9 +45,9 @@ handle. `native` (the default) links the tenferro-owned faer/cpueinsum/
 tcontract/tlinalg kernels; `blas` adds the vendor adapters.
 
 The faer provider is the default because it gives tenferro the most control:
-the operation's placement token hands faer a plain width (`Exec::external`),
-which becomes `Par::Seq` or `Par::rayon(n)`, and every worker runs inside the
-pool the caller handed the engine.
+the operation's placement token carries the engine's `threadteam::Team`, which
+faer runs on as `Par::Team` (or `Par::Seq` for a serial token), and every worker
+belongs to the pool the caller handed the engine. Nothing goes through Rayon.
 
 External BLAS providers own their worker pools. Provider workers inherit the
 calling thread's mask, but tenferro cannot bound the provider's fan-out, and
@@ -109,7 +109,7 @@ caller thread
       -> enters the caller's pool only when an entry splits into > 1 task
          (one token: at most its budget of tasks at once; a fork gives each
          child a share of the budget)
-      -> faer ops (width from Exec::external, Par::rayon on the same pool)
+      -> faer ops (Par::Team on the engine's team, Par::Seq for a serial token)
 
 Panel B: external BLAS (provider-owned pool)
 caller thread
