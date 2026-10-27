@@ -450,6 +450,16 @@ Audit hints:
   aggregate stats APIs in addition to cache-specific controls.
 - Engine resource pools such as buffer pools may live on the engine but still
   need explicit limit/clear controls, stats APIs, and documentation.
+- A pooled destination larger than the engine's retained-capacity limit is not
+  recycled: `CpuEngine`'s buffer pool defaults to 100 MiB, so an eager output
+  above that size is allocated fresh on every call and its first-touch page
+  cost is paid inside the operation (about 110 ms for a fresh 256 MiB
+  destination on a 1-thread x86-64 benchmark host with 4 KiB pages). When
+  operations produce large tensors repeatedly, size the limit to the
+  steady-state outputs with `CpuEngine::set_buffer_pool_limit_bytes`, or set
+  `TENFERRO_BUFFER_POOL_MAX_RETAINED_BYTES` (read once, when the first default
+  buffer pool is created). The limit stays a bound; only its value is
+  workload-specific.
 - Engines owning resource pools or runtime contexts, including `CpuEngine`'s
   buffer pool, workspace and caller-supplied `Pool`, and CUDA engines'
   runtime client/context, are construct-once-and-reuse values. Examples should
