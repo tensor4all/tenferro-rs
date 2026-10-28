@@ -249,11 +249,10 @@ acceptance signals are the allocation counters (items 3, 4, 6), the byte
 preservation and materialization counters (item 4), and the timing rows for items
 1, 2, 3 and 5. Raw paired evidence stays in `tensor4all/tenferro-benchmark`.
 
-Known local-only failure: `tenferro-tensor --test storage_compile_contract`
-(`storage_ui_compile_contracts`) fails on this machine on pristine `origin/main` as well,
-because the local build goes through `kache` and trybuild's expected `.stderr` files were
-generated without that path rewriting. With the wrapper disabled
-(`CARGO_BUILD_RUSTC_WRAPPER=""`) it reports `2 passed; 0 failed` on this branch.
+`tenferro-tensor --test storage_compile_contract` passes locally with and without the
+`kache` wrapper; an earlier note here blamed the wrapper for a failure that does not
+reproduce (#2299). Trybuild `.stderr` fixtures do drift with rustc's diagnostic rendering,
+so a removed-name check is a source-contract assertion instead (#2299).
 
 Non-goals: no `strided-rs` change, no pin bump, no new provider or
 `CpuContext`/`Pool` surface, no GPU FFT.

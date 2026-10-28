@@ -680,6 +680,7 @@ host	tenferro-gpu::integration	public_surface_contract::downstream_gpu_features_
 host	tenferro-gpu::integration	public_surface_contract::gpu_backend_features_are_explicit_and_additive
 host	tenferro-gpu::integration	session_contract::cuda_engine_exposes_engine_operations
 compile-only	tenferro-gpu::integration	session_contract::execution_session_capability_cannot_project_or_escape_owner_borrow
+host	tenferro-gpu::integration	session_contract::removed_runtime_engine_names_are_not_exported
 host	tenferro-gpu::integration	session_surface_parity::cpu_engine_exposes_the_common_surface
 host	tenferro-gpu::integration	session_surface_parity::cuda_engine_exposes_the_common_surface
 gpu	tenferro-gpu::pending_download	a_rejected_transfer_returns_the_submitted_package
