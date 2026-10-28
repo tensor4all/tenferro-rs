@@ -63,6 +63,10 @@
   `tenferro-gpu`'s `staged_reads` unit test on the same entries; no single
   cross-crate assertion exists, by choice (no new public surface in this phase).
   The remaining staging boundaries are outside that claim: `tril`/`triu` keep the
-  compact-only kernel and the read-default copy, index operands (gather/scatter
-  indices, dynamic-slice and dynamic-update-slice starts) are still materialized
-  for the index kernel, and `Convert`/`cast` takes an owned tensor.
+  compact-only kernel and the read-default copy, `Convert`/`cast` takes an owned
+  tensor, and an index operand (gather/scatter indices, dynamic-slice and
+  dynamic-update-slice starts) keeps one compact copy only when its view is not one
+  contiguous span or is wider than the by-value layout rank. A compact-strides index
+  view is read in place from its own allocation, an offset included (see the
+  index-operand note in
+  [the native read entries record](2026-10-28-cuda-native-read-entries.md)).

@@ -12,7 +12,8 @@
 use super::{Dispatcher, IndexPointer};
 use crate::cuda::{gpu_available, CudaDeviceId, CudaEngine, CudaRuntime};
 use t4a_cuda_kernels::{
-    BinaryOp, CompareOp, DType, Entry, GatherPlan, Layout, ScalarSide, ScatterPlan, UnaryOp,
+    plan_gather, BinaryOp, CompareOp, DType, Entry, GatherPlan, Layout, ScalarSide, ScatterPlan,
+    UnaryOp,
 };
 
 fn runtime() -> Option<CudaRuntime> {
@@ -225,17 +226,28 @@ fn gather_matches_the_host_reference() {
         index_vector_dim: 0,
     };
     let mut dispatch = Dispatcher::for_entries(&runtime, &[Entry::Gather]).expect("prepare");
+    let (launch, output_len) = plan_gather(
+        DType::F64,
+        DType::I32,
+        &out_layout,
+        2,
+        &operand_layout,
+        9,
+        &index_layout,
+        1,
+        &plan,
+    )
+    .expect("gather plan");
     dispatch
         .gather(
             DType::F64,
             DType::I32,
             &out_layout,
-            2,
             &operand_layout,
-            9,
             &index_layout,
-            1,
             &plan,
+            launch,
+            output_len,
             &out,
             &operand,
             IndexPointer::Direct(&indices),

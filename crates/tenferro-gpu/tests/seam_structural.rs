@@ -1405,11 +1405,11 @@ fn copy_read_into_writes_a_compact_offset_destination_from_a_reversed_source() {
         &mut engine,
         &mut root,
         shape.clone(),
-        vec![1, 6],
+        vec![1, 2],
         6,
         |engine, out| engine.copy_read_into(TensorRead::from_view(source_view), out),
     );
-    let destination_region = region_indices(&shape, &[1, 6], 6);
+    let destination_region = region_indices(&shape, &[1, 2], 6);
     assert_eq!(
         observed,
         expected_root(&destination_region, &expected),

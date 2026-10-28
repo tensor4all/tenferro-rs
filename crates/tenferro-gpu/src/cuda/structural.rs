@@ -240,23 +240,6 @@ impl IndexOperand<'_> {
         }
     }
 
-    /// The compact layout the catalogue's index planner takes.
-    ///
-    /// An owned or staged tensor is compact and offset zero by construction, so the layout of
-    /// its extents is the one its storage already has. A by-value planner only asks for this
-    /// after it has accepted the operand's rank.
-    fn layout(&self, op: &'static str) -> crate::Result<Layout> {
-        match self {
-            Self::Tensor { tensor } => {
-                let extents = catalogue_extents(tensor.shape(), op)?;
-                Layout::compact(&extents)
-                    .map_err(|error| crate::Error::runtime_state_source(op, error))
-            }
-            Self::Compact { region } => Layout::compact(&region.extents)
-                .map_err(|error| crate::Error::runtime_state_source(op, error)),
-        }
-    }
-
     /// The kernel pointer for this operand.
     fn pointer(&self, op: &'static str) -> crate::Result<IndexPointer<'_>> {
         match self {
@@ -2594,8 +2577,6 @@ impl CudaEngine {
             ];
             // An empty input places no element; plan it for the validation, submit nothing.
             if plan.grid[0] != 0 {
-                // The copy above takes the engine's CopyExact dispatcher, so this one is taken
-                // only after it has returned.
                 let mut dispatcher = self.dispatcher(&[Entry::ConcatenateCopy])?;
                 // SAFETY: every address the parameters name is registered with this scope and the
                 // planner proved the placement. The geometry drops at the end of this iteration,
@@ -4290,9 +4271,10 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
     /// The index operand must be `I32`, `I64`, `F32` or `F64`; a float index is checked for an
     /// exactly representable integer value before the launch. The planner validates the axis
     /// lists, the index vector size, the batch extents shared by the index and the update
-    /// windows, and the output extents; the kernel clamps each scattered start to
-    /// `[0, extent - window]`, the baseline's own out-of-range behaviour. A compact index view is
-    /// read in place from its own allocation; see `index_operand`.
+    /// windows, and the output extents, before the output is allocated or the operand copied; the
+    /// kernel clamps each scattered start to `[0, extent - window]`, the baseline's own
+    /// out-of-range behaviour. A compact index view is read in place from its own allocation; see
+    /// `index_operand`.
     fn scatter_read(
         &mut self,
         operand: TensorRead<'_>,
@@ -4312,10 +4294,13 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
             return Err(crate::Error::dtype_mismatch(OP, dtype, update_region.dtype));
         }
         let kernel = kernel_dtype(dtype, OP)?;
-        let indices = self.index_operand(&scatter_indices, OP)?;
-        let index_dtype = index_dtype_of(indices.dtype(), OP)?;
+        // The planner takes an index operand as the compact layout of its logical extents,
+        // whether the entry reads it in place or stages a copy, so the read target's own shape
+        // and dtype are everything the configuration validation below needs — and neither of
+        // those resolves or copies the operand.
+        let index_shape = scatter_indices.shape();
+        let index_dtype = index_dtype_of(scatter_indices.dtype(), OP)?;
         let index_kernel = kernel_dtype(index_dtype, OP)?;
-        self.validate_exact_indices(&indices, OP)?;
         let operand_rank = u32::try_from(operand_shape.len())
             .map_err(|_| crate::Error::unsupported(OP, "the rank exceeds the ABI's int"))?;
         let operand_rank_axes = operand_rank as usize;
@@ -4333,17 +4318,22 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         )?;
         let plan = scatter_plan(config, operand_rank);
         if operand_shape.len() > t4a_cuda_kernels::MAX_RANK
-            || indices.shape().len() > t4a_cuda_kernels::MAX_RANK
+            || index_shape.len() > t4a_cuda_kernels::MAX_RANK
             || update_region.shape.len() > t4a_cuda_kernels::MAX_RANK
         {
             // ponytail: ceiling = the catalogue's by-value layout rank, as for `gather_read`.
+            // The general path stages every operand anyway, so it resolves the index operand and
+            // runs the float exactness check before that copy, as the by-value path does after
+            // its own plan validation.
+            let indices = self.index_operand(&scatter_indices, OP)?;
+            self.validate_exact_indices(&indices, OP)?;
             let staged_operand = self.device_read(operand, OP)?;
             let staged_updates = self.device_read(updates, OP)?;
             let staged_indices;
             let indices_tensor = match &indices {
                 IndexOperand::Tensor { tensor, .. } => tensor.tensor(),
                 IndexOperand::Compact { .. } => {
-                    staged_indices = self.device_read(scatter_indices.clone(), OP)?;
+                    staged_indices = self.device_read(scatter_indices, OP)?;
                     staged_indices.tensor()
                 }
             };
@@ -4358,9 +4348,34 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 OP,
             );
         }
-        let output = alloc_tensor(self.runtime(), dtype, &operand_shape)?;
-        let out_layout = self.layout_of(&output, OP)?;
+        // Every layout and the plan are validated before the output is allocated or the operand
+        // copied, so a refused configuration and a bad index dtype cost one error and nothing
+        // else; the planner's own refusals reach the caller here.
+        let out_extents = catalogue_extents(&operand_shape, OP)?;
+        let out_layout = Layout::compact(&out_extents)
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
         let out_len = count_i64(&operand_shape, OP)?;
+        let indices_extents = catalogue_extents(index_shape, OP)?;
+        let indices_layout = Layout::compact(&indices_extents)
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        let indices_len = count_i64(index_shape, OP)?;
+        let updates_layout = update_region.layout(OP)?;
+        let updates_len = update_region.len(OP)?;
+        plan_scatter_add(
+            kernel,
+            index_kernel,
+            &out_layout,
+            out_len,
+            &indices_layout,
+            indices_len,
+            &updates_layout,
+            updates_len,
+            &plan,
+        )
+        .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        let indices = self.index_operand(&scatter_indices, OP)?;
+        self.validate_exact_indices(&indices, OP)?;
+        let output = alloc_tensor(self.runtime(), dtype, &operand_shape)?;
         let operand_layout = region.layout(OP)?;
         let operand_len = region.len(OP)?;
         {
@@ -4379,11 +4394,6 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 )
             })?;
         }
-        let indices_shape = indices.shape().to_vec();
-        let indices_layout = indices.layout(OP)?;
-        let updates_layout = update_region.layout(OP)?;
-        let indices_len = count_i64(&indices_shape, OP)?;
-        let updates_len = update_region.len(OP)?;
         let indices_pointer = indices.pointer(OP)?;
         let mut dispatcher = self.dispatcher(&[Entry::ScatterAdd])?;
         with_scalar!(dtype, |T| {
@@ -5171,12 +5181,14 @@ impl tenferro_tensor::TensorDot for CudaEngine {
             view @ TensorWrite::View(_) => {
                 // cuTENSOR is handed one destination, so the product lands in a compact scratch
                 // of the caller's shape and `ContiguousToView` writes the region once. The
-                // shared validator settles dtype and shape against the destination before any
-                // allocation or launch.
+                // shared validator settles dtype and shape against the destination, and the
+                // contraction dtype is refused before either operand is staged or the scratch is
+                // allocated: cuTENSOR serves four dtypes and nothing else.
                 let destination = self.write_region(&view, op)?;
                 let out_shape = tenferro_tensor::backend::validate_dot_general_read_into(
                     &lhs, &rhs, config, &view, op,
                 )?;
+                contraction_dtype(lhs.dtype(), op)?;
                 let left = self.device_read(lhs, op)?;
                 let right = self.device_read(rhs, op)?;
                 let scratch = alloc_tensor(self.runtime(), left.dtype(), &out_shape)?;
@@ -5445,14 +5457,16 @@ impl CudaEngine {
     ///
     /// An owned tensor takes the flat in-place multiply; a borrowed view is scaled where it
     /// lives through `CombinedStrided`'s `MUL`, with a broadcast factor, so it costs no
-    /// copy-out/copy-back. A factor of one leaves the target untouched, but only after the write
-    /// boundary has accepted the target: a host or foreign destination is refused whatever the
-    /// factor, so a unit scale is not a validation bypass.
+    /// copy-out/copy-back. Both flavours pass the write boundary first, whatever the factor and
+    /// whatever the tensor's size — an empty destination included — so a unit scale is not a
+    /// validation bypass: a host or foreign destination is refused before the flat kernel's
+    /// shortcuts.
     ///
     /// # Errors
     ///
-    /// [`crate::Error::Unsupported`] for a dtype the catalogue does not scale, the write
-    /// boundary's own refusals for a borrowed view, and the runtime's failure.
+    /// [`crate::Error::Unsupported`] for a host destination or a dtype the catalogue does not
+    /// scale, [`crate::Error::RuntimeState`] for a destination of another runtime or a broken
+    /// engine, and the runtime's failure.
     #[doc(hidden)]
     pub fn scale_tensor_write(
         &mut self,
@@ -5460,12 +5474,16 @@ impl CudaEngine {
         factor: f64,
         op: &'static str,
     ) -> crate::Result<()> {
-        match output {
+        // Both destination flavours pass the same write boundary before the factor and length
+        // shortcuts, so a host, foreign or unhealthy destination is refused whatever the factor
+        // and whatever the tensor's size. The owned arm keeps its flat kernel: the region is the
+        // proof that a kernel may write there, not a layout it needs.
+        let destination = self.write_region(&output, op)?;
+        match &output {
             tenferro_tensor::TensorWrite::Tensor(tensor) => {
                 self.scale_in_place(tensor, (factor, 0.0), op)
             }
-            view @ tenferro_tensor::TensorWrite::View(_) => {
-                let destination = self.write_region(&view, op)?;
+            tenferro_tensor::TensorWrite::View(_) => {
                 self.scale_region_in_place(&destination, (factor, 0.0), op)
             }
         }
@@ -5671,10 +5689,13 @@ impl tenferro_tensor::Engine for CudaEngine {
         let region = self.read_region(&operand, OP)?;
         let (operand_shape, dtype) = (region.shape.clone(), region.dtype);
         let kernel = kernel_dtype(dtype, OP)?;
-        let indices = self.index_operand(&start_indices, OP)?;
-        let index_dtype = index_dtype_of(indices.dtype(), OP)?;
+        // The planner takes an index operand as the compact layout of its logical extents,
+        // whether the entry reads it in place or stages a copy, so the read target's own shape
+        // and dtype are everything the configuration validation below needs — and neither of
+        // those resolves or copies the operand.
+        let indices_shape = start_indices.shape();
+        let index_dtype = index_dtype_of(start_indices.dtype(), OP)?;
         let index_kernel = kernel_dtype(index_dtype, OP)?;
-        self.validate_exact_indices(&indices, OP)?;
         let operand_rank = u32::try_from(operand_shape.len())
             .map_err(|_| crate::Error::unsupported(OP, "the rank exceeds the ABI's int"))?;
         require_axes(
@@ -5699,14 +5720,17 @@ impl tenferro_tensor::Engine for CudaEngine {
             ));
         }
         let plan = gather_plan(config, operand_rank);
-        let indices_shape = indices.shape().to_vec();
-        let out_shape = gather_shape(&indices_shape, &plan, config)?;
+        let out_shape = gather_shape(indices_shape, &plan, config)?;
         if operand_shape.len() > t4a_cuda_kernels::MAX_RANK
             || out_shape.len() > t4a_cuda_kernels::MAX_RANK
             || indices_shape.len() > t4a_cuda_kernels::MAX_RANK
         {
             // ponytail: ceiling = the catalogue's by-value layout rank. A wider operand keeps
-            // one staging copy and the device-geometry gather.
+            // one staging copy and the device-geometry gather. It resolves the index operand
+            // and runs the float exactness check before that copy, as the by-value path does
+            // after its own plan validation.
+            let indices = self.index_operand(&start_indices, OP)?;
+            self.validate_exact_indices(&indices, OP)?;
             let staged = self.device_read(operand, OP)?;
             let staged_indices;
             let indices_tensor = match &indices {
@@ -5727,15 +5751,36 @@ impl tenferro_tensor::Engine for CudaEngine {
                 OP,
             );
         }
-        let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
-        let out_layout = self.layout_of(&output, OP)?;
+        // The three by-value layouts and the plan are validated before the index operand is
+        // resolved, the exactness check is launched or the output is allocated, so a refused
+        // configuration costs one error and nothing else. The launch uses this same plan.
+        let out_extents = catalogue_extents(&out_shape, OP)?;
+        let out_layout = Layout::compact(&out_extents)
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        let out_len = count_i64(&out_shape, OP)?;
         let operand_layout = region.layout(OP)?;
         // The planner bounds the operand layout's reachable span by its whole allocation, which
         // is what a region view of a larger buffer needs.
         let operand_len = region.len(OP)?;
-        let indices_layout = indices.layout(OP)?;
-        let out_len = count_i64(&out_shape, OP)?;
-        let indices_len = count_i64(&indices_shape, OP)?;
+        let indices_extents = catalogue_extents(indices_shape, OP)?;
+        let indices_layout = Layout::compact(&indices_extents)
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        let indices_len = count_i64(indices_shape, OP)?;
+        let (launch, output_len) = plan_gather(
+            kernel,
+            index_kernel,
+            &out_layout,
+            out_len,
+            &operand_layout,
+            operand_len,
+            &indices_layout,
+            indices_len,
+            &plan,
+        )
+        .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        let indices = self.index_operand(&start_indices, OP)?;
+        self.validate_exact_indices(&indices, OP)?;
+        let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
         let indices_pointer = indices.pointer(OP)?;
         let mut dispatcher = self.dispatcher(&[Entry::Gather])?;
         with_scalar!(dtype, |T| {
@@ -5743,12 +5788,11 @@ impl tenferro_tensor::Engine for CudaEngine {
                 kernel,
                 index_kernel,
                 &out_layout,
-                out_len,
                 &operand_layout,
-                operand_len,
                 &indices_layout,
-                indices_len,
                 &plan,
+                launch,
+                output_len,
                 self.allocation_of::<T>(&output, OP)?,
                 region.storage.allocation(),
                 indices_pointer,

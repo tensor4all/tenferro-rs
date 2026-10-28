@@ -5,10 +5,10 @@
 
 use t4a_cuda_kernels::{
     plan_binary, plan_clamp, plan_compare, plan_contiguous_to_view, plan_convert, plan_copy_exact,
-    plan_dynamic_slice, plan_elementwise, plan_gather, plan_pad, plan_reduce, plan_reduction,
-    plan_scatter_add, plan_select, plan_slice, plan_unary, plan_validate_float_indices,
-    plan_validate_real_cast, BinaryOp, DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan,
-    ScalarSide, ScatterPlan, UnaryOp,
+    plan_dynamic_slice, plan_elementwise, plan_pad, plan_reduce, plan_reduction, plan_scatter_add,
+    plan_select, plan_slice, plan_unary, plan_validate_float_indices, plan_validate_real_cast,
+    BinaryOp, DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan,
+    UnaryOp,
 };
 use t4a_cuda_runtime::{Arg, BoundFunction, LaunchConfig};
 
@@ -542,41 +542,30 @@ impl Dispatcher {
         )
     }
 
-    /// `t4a_cuda_gather`: the XLA-style gather described by `plan`.
+    /// `t4a_cuda_gather`: the XLA-style gather described by `plan`, launched with the geometry
+    /// and output element count the caller planned.
+    ///
+    /// The caller runs `plan_gather` and passes its result, so the plan the entry validated is
+    /// exactly the one launched.
     ///
     /// # Errors
     ///
-    /// [`crate::Error::RuntimeState`] when the planner refuses the invocation or the
-    /// gather/scatter plan, and [`crate::Error::RuntimeStateSource`] when binding or
-    /// admitting the launch fails.
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn gather(
         &mut self,
         dtype: DType,
         index_dtype: DType,
         out: &t4a_cuda_kernels::Layout,
-        out_len: i64,
         operand: &t4a_cuda_kernels::Layout,
-        operand_len: i64,
         indices: &t4a_cuda_kernels::Layout,
-        indices_len: i64,
         plan: &GatherPlan,
+        launch: t4a_cuda_kernels::Launch,
+        output_len: i64,
         out_buffer: &t4a_cuda_runtime::Buffer,
         operand_buffer: &t4a_cuda_runtime::Buffer,
         indices_buffer: IndexPointer<'_>,
     ) -> crate::Result<()> {
-        let (launch, output_len) = plan_gather(
-            dtype,
-            index_dtype,
-            out,
-            out_len,
-            operand,
-            operand_len,
-            indices,
-            indices_len,
-            plan,
-        )
-        .map_err(plan_error)?;
         let out_layout = t4a_cuda_kernels::CLayout::new(out);
         let operand_layout = t4a_cuda_kernels::CLayout::new(operand);
         let indices_layout = t4a_cuda_kernels::CLayout::new(indices);

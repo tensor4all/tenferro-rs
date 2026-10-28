@@ -639,3 +639,223 @@ fn scale_tensor_write_refuses_a_host_view_whatever_the_factor() {
         "a refused scale changed the host view"
     );
 }
+
+/// An owned destination takes the same write boundary as a view, whatever the factor and
+/// whatever the tensor's size: the flat kernel's factor-of-one and empty shortcuts must not run
+/// before the destination is proved device-resident.
+#[test]
+#[ignore = "requires CUDA"]
+fn scale_tensor_write_refuses_a_host_owned_destination_whatever_the_factor_and_size() {
+    let Some(mut engine) = engine() else { return };
+    for factor in [1.0, 2.5] {
+        let mut host = Tensor::from_vec_col_major(vec![2], vec![1.0f64, 2.0]).expect("host tensor");
+        let error = engine
+            .scale_tensor_write(
+                TensorWrite::from_tensor(&mut host),
+                factor,
+                "scale_tensor_write test",
+            )
+            .expect_err("a host tensor destination must be refused");
+        assert!(
+            format!("{error}").contains("a host tensor would need an implicit transfer"),
+            "factor {factor} was not refused by the write boundary: {error}"
+        );
+        assert_eq!(
+            host.as_slice::<f64>().expect("f64 payload"),
+            &[1.0, 2.0],
+            "a refused scale changed the host tensor"
+        );
+
+        // An empty destination is refused too: the write boundary runs before the flat kernel's
+        // length shortcut, not after it.
+        let mut empty = Tensor::from_vec_col_major(vec![0], Vec::<f64>::new()).expect("empty host");
+        let error = engine
+            .scale_tensor_write(
+                TensorWrite::from_tensor(&mut empty),
+                factor,
+                "scale_tensor_write test",
+            )
+            .expect_err("an empty host tensor destination must be refused");
+        assert!(
+            format!("{error}").contains("a host tensor would need an implicit transfer"),
+            "factor {factor} on an empty destination was not refused: {error}"
+        );
+    }
+}
+
+/// The scatter planner's own validation runs before the output allocation and the operand copy:
+/// an update axis past the update rank is one error that stages and allocates nothing.
+#[test]
+#[ignore = "requires CUDA"]
+fn scatter_read_refuses_a_bad_update_axis_before_allocating_or_staging() {
+    let Some(mut engine) = engine() else { return };
+    let operand = device(&engine, vec![2, 2], vec![0.0; 4]);
+    let updates = device(&engine, vec![2], vec![5.0, 7.0]);
+    // Four index values in the allocation, so the strided two-element view below stays inside it.
+    let indices_host = Tensor::from_vec_col_major(vec![4], vec![1i64, 0, 1, 0]).expect("indices");
+    let indices = upload_tensor(engine.runtime(), &indices_host).expect("upload indices");
+    let config = tenferro_tensor::ScatterConfig {
+        // The update rank is one, so axis 99 cannot be an update window axis.
+        update_window_dims: vec![99],
+        inserted_window_dims: vec![0, 1],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+    // A strided index view would take one staging copy if the entry resolved it first; the
+    // counter proves the configuration validation came before that resolution.
+    let view = indices
+        .as_typed::<i64>()
+        .expect("i64 payload")
+        .backend_region_view(vec![2], vec![2], 0)
+        .expect("region view");
+    let before_staged = engine.staged_reads();
+    let before = engine.runtime().stats();
+    let error = engine
+        .scatter_read(
+            TensorRead::from_tensor(&operand),
+            TensorRead::from_view(TensorView::I64(view)),
+            TensorRead::from_tensor(&updates),
+            &config,
+        )
+        .expect_err("an update axis past the update rank must be refused");
+    assert!(
+        format!("{error}").contains("axis outside the operand rank"),
+        "unexpected refusal: {error}"
+    );
+    assert_eq!(
+        engine.staged_reads(),
+        before_staged,
+        "a refused scatter must not stage the index operand"
+    );
+    let after = engine.runtime().stats();
+    assert_eq!(
+        after.live_allocations, before.live_allocations,
+        "a refused scatter must not allocate its output"
+    );
+    assert_eq!(
+        (after.module_entries, after.artifact_entries),
+        (before.module_entries, before.artifact_entries),
+        "a refused scatter must not prepare a launch"
+    );
+}
+
+/// The destination-view contraction refuses a dtype cuTENSOR does not serve before staging an
+/// operand or allocating the scratch.
+#[test]
+#[ignore = "requires CUDA"]
+fn dot_general_read_into_refuses_an_integer_dtype_before_staging_the_scratch() {
+    use tenferro_tensor::{DotGeneralConfig, TensorDot as _};
+
+    let Some(mut engine) = engine() else { return };
+    let lhs_host = Tensor::from_vec_col_major(vec![2, 2], vec![1i32, 2, 3, 4]).expect("lhs");
+    let rhs_host = Tensor::from_vec_col_major(vec![2, 2], vec![5i32, 6, 7, 8]).expect("rhs");
+    let lhs = upload_tensor(engine.runtime(), &lhs_host).expect("upload lhs");
+    let rhs = upload_tensor(engine.runtime(), &rhs_host).expect("upload rhs");
+    let root_host = Tensor::from_vec_col_major(vec![2, 2], vec![0i32; 4]).expect("destination");
+    let mut root = upload_tensor(engine.runtime(), &root_host).expect("upload destination");
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: [0].into_iter().collect(),
+        rhs_contracting_dims: [0].into_iter().collect(),
+        lhs_batch_dims: [].into_iter().collect(),
+        rhs_batch_dims: [].into_iter().collect(),
+    };
+    // A transposed lhs view would be staged by the read boundary, so the counter proves the
+    // contraction dtype was refused first.
+    let borrowed = lhs
+        .as_typed::<i32>()
+        .expect("i32 payload")
+        .backend_region_view(vec![2, 2], vec![2, 1], 0)
+        .expect("region view");
+    let before_staged = engine.staged_reads();
+    let before = engine.runtime().stats();
+    let error = {
+        let view = root
+            .as_typed_mut::<i32>()
+            .expect("i32 payload")
+            .backend_region_view_mut(vec![2, 2], vec![2, 1], 0)
+            .expect("mutable region view");
+        engine
+            .dot_general_read_into(
+                TensorRead::from_view(TensorView::I32(borrowed)),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                TensorWrite::from_view(TensorViewMut::I32(view)),
+            )
+            .expect_err("an integer contraction is not served")
+    };
+    assert!(
+        format!("{error}").contains("a contraction serves F32, F64, C32 and C64"),
+        "unexpected refusal: {error}"
+    );
+    assert_eq!(
+        error.kind(),
+        tenferro_tensor::ErrorKind::Unsupported,
+        "a contraction dtype cuTENSOR does not serve is an unsupported request"
+    );
+    assert_eq!(
+        engine.staged_reads(),
+        before_staged,
+        "a refused contraction must not stage an operand"
+    );
+    let after = engine.runtime().stats();
+    assert_eq!(
+        after.live_allocations, before.live_allocations,
+        "a refused contraction must not allocate the scratch"
+    );
+}
+
+/// The gather planner's own slice-size check runs before the index operand is staged, the float
+/// exactness check is launched or the output is allocated: one refused configuration costs one
+/// error and nothing else.
+#[test]
+#[ignore = "requires CUDA"]
+fn gather_read_refuses_an_oversized_slice_before_staging_or_allocating() {
+    let Some(mut engine) = engine() else { return };
+    let operand = device(&engine, vec![2, 2], vec![0.0; 4]);
+    // A float index view that is not one contiguous span: resolving it would stage a copy and
+    // then run the exactness check, so the counters prove the plan was validated first.
+    let indices_host = Tensor::from_vec_col_major(vec![4], vec![0.0f64; 4]).expect("index values");
+    let indices = upload_tensor(engine.runtime(), &indices_host).expect("upload indices");
+    let config = tenferro_tensor::GatherConfig {
+        // The window axis 0's slice is larger than the operand extent. `gather_shape` derives
+        // the output without consulting the operand, so only `plan_gather` rejects this config.
+        offset_dims: vec![0, 1],
+        collapsed_slice_dims: vec![],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![3, 1],
+    };
+    let view = indices
+        .as_typed::<f64>()
+        .expect("f64 payload")
+        .backend_region_view(vec![2], vec![2], 0)
+        .expect("region view");
+    let before_staged = engine.staged_reads();
+    let before = engine.runtime().stats();
+    let error = engine
+        .gather_read(
+            TensorRead::from_tensor(&operand),
+            TensorRead::from_view(TensorView::F64(view)),
+            &config,
+        )
+        .expect_err("a slice larger than the operand must be refused");
+    assert!(
+        format!("{error}").contains("operand extents do not match the operation"),
+        "unexpected refusal: {error}"
+    );
+    assert_eq!(
+        engine.staged_reads(),
+        before_staged,
+        "a refused gather must not stage the index operand"
+    );
+    let after = engine.runtime().stats();
+    assert_eq!(
+        after.live_allocations, before.live_allocations,
+        "a refused gather must not allocate its output"
+    );
+    assert_eq!(
+        (after.module_entries, after.artifact_entries),
+        (before.module_entries, before.artifact_entries),
+        "a refused gather must not prepare a launch"
+    );
+}
