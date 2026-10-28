@@ -1261,3 +1261,310 @@ fn complex_diagonal_reads_follow_a_view_layout() {
         read_complex(&engine, &expected)
     );
 }
+
+// --- Write-side views: the destination region is written where it lives (#2223 item 3) ---
+
+use tenferro_tensor::TensorViewMut;
+
+/// The three destination flavours the write-side tests use: a transposed stride pair, a
+/// nonzero offset and a negative stride, all over a `6 x 5` column-major root of thirty
+/// sentinel entries. Each covers six entries, so the other twenty-four must survive untouched.
+fn write_view_flavours() -> Vec<(&'static str, Vec<usize>, Vec<isize>, isize)> {
+    vec![
+        ("transposed", vec![2, 3], vec![5, 1], 2),
+        ("offset", vec![2, 3], vec![1, 6], 7),
+        ("negative", vec![2, 3], vec![-1, 6], 5),
+    ]
+}
+
+fn sentinel(index: usize) -> f64 {
+    100.0 + index as f64
+}
+
+/// A `6 x 5` column-major device tensor of sentinels.
+fn write_root(engine: &CudaEngine) -> Tensor {
+    let data: Vec<f64> = (0..30).map(sentinel).collect();
+    upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![6, 5], data).expect("root"),
+    )
+    .expect("upload")
+}
+
+/// The root's linear indices in logical column-major order for one region.
+fn region_indices(shape: &[usize], strides: &[isize], offset: isize) -> Vec<usize> {
+    let count: usize = shape.iter().product();
+    (0..count)
+        .map(|flat| {
+            let mut remaining = flat;
+            let mut index = offset;
+            for (&extent, &stride) in shape.iter().zip(strides) {
+                let coordinate = remaining % extent;
+                remaining /= extent;
+                index += coordinate as isize * stride;
+            }
+            usize::try_from(index).expect("the region starts at a nonnegative element")
+        })
+        .collect()
+}
+
+/// The root a write should have produced: `written` at the region and the sentinel elsewhere.
+fn expected_root(region: &[usize], written: &[f64]) -> Vec<f64> {
+    assert_eq!(region.len(), written.len());
+    let mut root: Vec<f64> = (0..30).map(sentinel).collect();
+    for (&index, &value) in region.iter().zip(written) {
+        root[index] = value;
+    }
+    root
+}
+
+/// Write through one destination region of `root`, then read the whole root back.
+fn write_through_view(
+    engine: &mut CudaEngine,
+    root: &mut Tensor,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+    write: impl FnOnce(&mut CudaEngine, TensorWrite<'_>) -> tenferro_tensor::Result<()>,
+) -> Vec<f64> {
+    {
+        let region = root
+            .as_typed_mut::<f64>()
+            .expect("f64 payload")
+            .backend_region_view_mut(shape, strides, offset)
+            .expect("mutable region view");
+        write(engine, TensorWrite::from_view(TensorViewMut::F64(region)))
+            .expect("write through the destination view");
+    }
+    read(engine, root)
+}
+
+/// A `[2, 3]` device tensor whose entries are far from the root's sentinels.
+fn write_operand(engine: &CudaEngine, offset: f64) -> Tensor {
+    let data: Vec<f64> = (0..6).map(|index| offset + index as f64).collect();
+    upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![2, 3], data).expect("operand"),
+    )
+    .expect("upload")
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn copy_read_into_writes_a_strided_destination_view() {
+    let Some(mut engine) = engine() else { return };
+    for (flavour, shape, strides, offset) in write_view_flavours() {
+        let mut root = write_root(&engine);
+        let source = write_operand(&engine, 1000.0);
+        let expected = read(&engine, &source);
+        let observed = write_through_view(
+            &mut engine,
+            &mut root,
+            shape.clone(),
+            strides.clone(),
+            offset,
+            |engine, out| engine.copy_read_into(TensorRead::from_tensor(&source), out),
+        );
+        let region = region_indices(&shape, &strides, offset);
+        assert_eq!(
+            observed,
+            expected_root(&region, &expected),
+            "the {flavour} destination"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn copy_read_into_writes_a_compact_offset_destination_from_a_reversed_source() {
+    let Some(mut engine) = engine() else { return };
+    // A reversed, offset source view: two rows of three sentinels, walking the source's first
+    // axis backwards from entry five.
+    let shape = vec![2, 3];
+    let strides = vec![-1, 6];
+    let offset = 5;
+    let source = write_root(&engine);
+    let source_data = read(&engine, &source);
+    let source_region = region_indices(&shape, &strides, offset);
+    let expected: Vec<f64> = source_region
+        .iter()
+        .map(|&index| source_data[index])
+        .collect();
+    let source_view = TensorView::F64(
+        source
+            .as_typed::<f64>()
+            .expect("f64 payload")
+            .backend_region_view(shape.clone(), strides.clone(), offset)
+            .expect("source region view"),
+    );
+
+    // A destination whose strides are compact for its extents but whose offset is not zero: one
+    // contiguous span, which `StridedToStrided` addresses through the region's own layout.
+    let mut root = write_root(&engine);
+    let observed = write_through_view(
+        &mut engine,
+        &mut root,
+        shape.clone(),
+        vec![1, 6],
+        6,
+        |engine, out| engine.copy_read_into(TensorRead::from_view(source_view), out),
+    );
+    let destination_region = region_indices(&shape, &[1, 6], 6);
+    assert_eq!(
+        observed,
+        expected_root(&destination_region, &expected),
+        "the compact-offset destination"
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn copy_read_into_serves_a_flat_and_an_empty_destination_view() {
+    let Some(mut engine) = engine() else { return };
+
+    // A flat destination view: offset zero and compact strides, which the exact copy addresses
+    // without a layout parameter.
+    let source = write_operand(&engine, 1000.0);
+    let expected = read(&engine, &source);
+    let mut root = write_root(&engine);
+    let observed = write_through_view(
+        &mut engine,
+        &mut root,
+        vec![2, 3],
+        vec![1, 2],
+        0,
+        |engine, out| engine.copy_read_into(TensorRead::from_tensor(&source), out),
+    );
+    assert_eq!(
+        observed,
+        expected_root(&region_indices(&[2, 3], &[1, 2], 0), &expected),
+        "the flat destination"
+    );
+
+    // An empty destination view carries no element: both regions were validated, so the copy is
+    // a no-op that leaves all thirty sentinels in place.
+    let empty = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![0], Vec::<f64>::new()).expect("empty source"),
+    )
+    .expect("upload the empty source");
+    let mut root = write_root(&engine);
+    let observed = write_through_view(
+        &mut engine,
+        &mut root,
+        vec![0],
+        vec![1],
+        0,
+        |engine, out| engine.copy_read_into(TensorRead::from_tensor(&empty), out),
+    );
+    assert_eq!(
+        observed,
+        (0..30).map(sentinel).collect::<Vec<f64>>(),
+        "an empty copy changed the root"
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn elementwise_read_into_writes_a_strided_destination_view() {
+    use tenferro_tensor::{ElementwiseReadOp, TensorElementwise as _};
+
+    let Some(mut engine) = engine() else { return };
+    for (flavour, shape, strides, offset) in write_view_flavours() {
+        let mut root = write_root(&engine);
+        let lhs = write_operand(&engine, -2.0);
+        let rhs = write_operand(&engine, 3.5);
+        let lhs_data = read(&engine, &lhs);
+        let rhs_data = read(&engine, &rhs);
+        let region = region_indices(&shape, &strides, offset);
+
+        // The binary arm: `out = lhs + rhs`.
+        let summed: Vec<f64> = lhs_data
+            .iter()
+            .zip(&rhs_data)
+            .map(|(left, right)| left + right)
+            .collect();
+        let observed = write_through_view(
+            &mut engine,
+            &mut root,
+            shape.clone(),
+            strides.clone(),
+            offset,
+            |engine, out| {
+                engine.elementwise_read_into(
+                    ElementwiseReadOp::Add,
+                    &[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+                    out,
+                )
+            },
+        );
+        assert_eq!(
+            observed,
+            expected_root(&region, &summed),
+            "the {flavour} destination"
+        );
+
+        // The unary arm: `out = -lhs`.
+        let mut root = write_root(&engine);
+        let negated: Vec<f64> = lhs_data.iter().map(|value| -value).collect();
+        let observed = write_through_view(
+            &mut engine,
+            &mut root,
+            shape.clone(),
+            strides.clone(),
+            offset,
+            |engine, out| {
+                engine.elementwise_read_into(
+                    ElementwiseReadOp::Negate,
+                    &[TensorRead::from_tensor(&lhs)],
+                    out,
+                )
+            },
+        );
+        assert_eq!(
+            observed,
+            expected_root(&region, &negated),
+            "the {flavour} destination"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn scale_tensor_write_scales_a_strided_destination_view_in_place() {
+    let Some(mut engine) = engine() else { return };
+    for (flavour, shape, strides, offset) in write_view_flavours() {
+        let mut root = write_root(&engine);
+        let region = region_indices(&shape, &strides, offset);
+        let scaled: Vec<f64> = region.iter().map(|&index| 2.5 * sentinel(index)).collect();
+        let observed = write_through_view(
+            &mut engine,
+            &mut root,
+            shape.clone(),
+            strides.clone(),
+            offset,
+            |engine, out| engine.scale_tensor_write(out, 2.5, "scale_tensor_write test"),
+        );
+        assert_eq!(
+            observed,
+            expected_root(&region, &scaled),
+            "the {flavour} destination"
+        );
+    }
+
+    // A factor of one leaves the region untouched, exactly as for an owned tensor.
+    let mut root = write_root(&engine);
+    let observed = write_through_view(
+        &mut engine,
+        &mut root,
+        vec![2, 3],
+        vec![1, 6],
+        7,
+        |engine, out| engine.scale_tensor_write(out, 1.0, "scale_tensor_write test"),
+    );
+    assert_eq!(
+        observed,
+        (0..30).map(sentinel).collect::<Vec<f64>>(),
+        "a unit factor changed the root"
+    );
+}
