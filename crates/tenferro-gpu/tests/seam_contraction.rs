@@ -290,8 +290,10 @@ fn an_f32_contraction_reads_its_scalars_at_the_float_width() {
     let observed: Vec<f32> = runtime
         .download_bytes(&d_buf)
         .expect("download")
-        .chunks_exact(4)
-        .map(|word| f32::from_ne_bytes(word.try_into().expect("4 bytes")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| f32::from_ne_bytes(*word))
         .collect();
     let mut expected = vec![0.0f32; m * n];
     for column in 0..n {

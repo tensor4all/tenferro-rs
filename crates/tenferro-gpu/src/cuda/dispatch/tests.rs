@@ -193,8 +193,10 @@ fn clamp_and_convert_match_the_host_reference() {
         .expect("convert");
     let bytes = runtime.download_bytes(&converted).expect("download");
     let observed: Vec<f32> = bytes
-        .chunks_exact(4)
-        .map(|word| f32::from_le_bytes(word.try_into().expect("4 bytes")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| f32::from_le_bytes(*word))
         .collect();
     let expected: Vec<f32> = data.iter().map(|value| *value as f32).collect();
     assert_eq!(observed, expected);
