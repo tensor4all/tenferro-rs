@@ -82,6 +82,7 @@ host	tenferro-ad	eager_exec::tests::dynamic_truncate_rejects_non_scalar_size
 host	tenferro-ad	eager_exec::tests::dynamic_truncate_rounds_non_integer_size
 host	tenferro-ad	eager_exec::tests::eager_input_promotion_plan_covers_all_promoted_families
 host	tenferro-ad	eager_exec::tests::eager_read_dispatch_only_materializes_when_the_operation_requires_it
+host	tenferro-ad	eager_exec::tests::eager_read_entries_consume_borrowed_views_without_staging
 host	tenferro-ad	eager_exec::tests::eager_shape_expr_resolution_returns_error_instead_of_panicking
 host	tenferro-ad	eager_exec::tests::extension_op_requires_installed_extension_module_runtime
 host	tenferro-ad	eager_exec::tests::generated_outputs_use_the_callers_borrowed_session
@@ -318,6 +319,7 @@ gpu	tenferro-ad::integration	gpu_ad_tests::eager_op_f64_decode_add_host_cost_ben
 gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_borrowed_concat_gather_and_index_select_stay_resident
 gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_borrowed_reduce_sum_preserves_residency_and_gradient
 gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_eager_backward_smoke
+gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_eager_structural_reads_agree_on_a_strided_device_view
 gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_matmul_vjp
 gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_scale_real_and_scale_complex_match_cpu
 gpu	tenferro-ad::integration	gpu_f32_fusion::test_f32_gpu_fusion_chain_e2e
@@ -413,6 +415,7 @@ host	tenferro-ad::integration	primitive_ops::traced_index_select_rejects_invalid
 host	tenferro-ad::integration	primitive_ops::traced_stack_positive_axis_promotes_mixed_input_dtypes
 host	tenferro-ad::integration	primitive_ops::traced_stack_rejects_empty_mismatched_invalid_axis_and_symbolic_shapes
 host	tenferro-ad::integration	primitive_ops::traced_stack_trailing_axis_and_index_select_feed_batched_dot_general
+host	tenferro-ad::integration	read_entry_parity::eager_and_traced_agree_on_a_borrowed_view_operand
 host	tenferro-ad::integration	runtime_execution::checkpoint_gradient_runs_through_runtime
 host	tenferro-ad::integration	runtime_execution::checkpoint_reuses_existing_cached_data_without_recompiling
 host	tenferro-ad::integration	runtime_execution::checkpoint_uses_explicit_compiler_and_runtime
