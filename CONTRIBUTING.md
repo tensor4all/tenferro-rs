@@ -168,27 +168,47 @@ for the durable design and trust boundaries.
 
 ### Local GPU validation instead of the paid gate
 
-The `CI GPU gate` normally needs a RunPod pod. When RunPod cannot deliver one, or
-when the change was already exercised on a local GPU, a repository admin or
-maintainer may label the PR `gpu-validated-locally` and record the evidence as a
-PR comment containing a line that starts with `Local GPU validation:`:
+The `CI GPU gate` normally needs a RunPod pod. A repository admin or maintainer
+with a local NVIDIA GPU can satisfy it instead, with no pod at all:
 
-```text
-Local GPU validation: NVIDIA A100 80GB PCIe, CUDA 12.6, commit <sha>
-  cargo test -j 16 -p tenferro-gpu --features cuda --lib -- --ignored   # 188 passed
-  cargo test -j 16 -p tenferro-gpu --features cuda --lib <new_test>     # passed
-```
+1. Label the PR `gpu-validated-locally`. For a labelled same-repository PR the
+   RunPod workflow runs no job and publishes no `CI GPU gate`, and the
+   PR-attached gate waits for the local publication instead.
+2. At the exact commit you push, on the GPU host, with a clean worktree:
 
-The workflow then skips every paid step for that PR, so no pod is created, and
-publishes `CI GPU gate` as passed only after verifying that the comment exists and
-its author is an admin or maintainer. Use this only when the local run covers the
-changed GPU behavior; it is not a way to skip GPU validation for code that never
-ran on a GPU. When RunPod delivers runners, the paid gate is the required path.
+   ```bash
+   CUDA_PATH=/usr/local/cuda-12.6 \
+   TENFERRO_LOCAL_PJRT_ROOT=<site-packages with jax_plugins/xla_cuda12, nvidia/cudnn, nvidia/cuda_nvcc> \
+     python3 scripts/ci/local_gpu_gate.py run --jobs 4
+   ```
 
-Implementation note: the label decision is applied inside a step of the paid
-workflow, because job-level `if` conditions in a called workflow do not see the
-caller's inputs (measured). Keep new paid steps gated on
-`steps.local_gpu_validation.outputs.skip`.
+   This builds the archives the hosted CUDA archive job builds and runs the same
+   lanes: the CUDA and PJRT host and device partitions
+   (`scripts/ci/gpu_test_partition.py`) and the CUDA tutorial.
+   `TENFERRO_CUDA_ARTIFACT_CACHE` defaults to `~/.cache/tenferro/t4a-cuda-artifacts`
+   so later runs reuse compiled kernels. The evidence (GPU, driver and toolkit
+   versions, every command, the nextest summaries) is written to
+   `target/local-gpu-gate/<sha>.json`. Do not touch the worktree while it runs: a
+   changed HEAD or tree voids the evidence. The script refuses to start while
+   another process uses the GPU (`--allow-busy-gpu` overrides).
+3. After the commit is the PR head:
+
+   ```bash
+   python3 scripts/ci/local_gpu_gate.py publish --pr <number>
+   ```
+
+   It posts the evidence as a PR comment and dispatches
+   `.github/workflows/local-gpu-gate.yml` on `main`. That workflow verifies that
+   the dispatching account is an admin or maintainer, the PR is open, from this
+   repository and labelled, its head is the tested SHA, and the comment is that
+   account's passing record for that SHA, then publishes `CI GPU gate` on the head
+   with the evidence as the check body.
+
+The gate is bound to the tested SHA: after any push, run and publish again. Fork
+PRs keep the hosted gate. Removing the label after a push leaves no publisher;
+recover through the paid gate with `scripts/ci/recover_runpod_pr.py`. The
+publication must come from an Actions run because branch protection pins
+`CI GPU gate` to the GitHub Actions app.
 
 ## Prototype code and provenance
 

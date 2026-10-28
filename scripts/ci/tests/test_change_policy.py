@@ -116,8 +116,10 @@ class ChangePolicyTests(unittest.TestCase):
         """
         for path in (
             ".github/workflows/CI_gpu.yml",
+            ".github/workflows/local-gpu-gate.yml",
             ".github/workflows/runpod-reap.yml",
             "scripts/ci/gpu_gate_reuse.py",
+            "scripts/ci/local_gpu_gate.py",
             "scripts/ci/runpod_pricing.py",
             "scripts/ci/runpod_cost.py",
             "scripts/ci/runpod_reap.py",

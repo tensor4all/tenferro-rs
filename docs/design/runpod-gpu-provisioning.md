@@ -271,28 +271,33 @@ GPU policy.
 
 ## Local GPU validation instead of provisioning
 
-When the provider cannot deliver a runner, the paid path otherwise fails after
-spending pods, and every retry spends more. The intended substitute is a
-maintainer decision recorded on the PR: the `gpu-validated-locally` label plus a
-PR comment containing a line that starts with `Local GPU validation:`, naming the
-GPU, the commit, the commands, and the observed result.
+A maintainer with a local GPU can stand in for the pod: the PR carries the
+`gpu-validated-locally` label, and `scripts/ci/local_gpu_gate.py` runs the GPU
+lane (the CUDA and PJRT host and device partitions plus the CUDA tutorial, from
+the same archives) at the commit that is pushed, posts the SHA-bound evidence as a
+PR comment, and dispatches `local-gpu-gate.yml` on `main`. That workflow holds no
+secret and runs no PR code; it re-verifies the dispatcher's role (admin or
+maintain, like `check_permission`), the PR's state, origin, label and head SHA,
+and the comment (author, PR, first-line marker for that SHA), reads the PR a
+second time, and publishes `CI GPU gate` on the head with external_id
+`local-gpu-gate:v1:<sha>`, which `gpu_gate_reuse.py` never treats as reusable.
 
-`authorize` reads the label and publishes `local_gpu_validation`. Passing that
-decision to the paid workflow through `workflow_call` inputs did not work: a live
-labelled dispatch still scheduled `start-runpod` with the boolean input
-comparison and again after switching to a textual one, because job-level `if`
-conditions in a called workflow do not see the caller's inputs. The same dispatch
-showed `inputs` *is* populated inside steps (`Revalidate queued PR before
-provisioning`, gated on `inputs.pr_number`, ran), so the decision is applied in a
-step: `start-runpod` reads the PR's label, publishes `paid_path_skipped`, skips
-the provisioning step, and `run-gpu-tests` refuses to wait for a runner that will
-never exist. A labelled PR therefore creates no pod, and `ci-gpu-gate` publishes
-success from the recorded evidence. Until #2002, `authorize` printed the label
-decision to stdout instead of `GITHUB_OUTPUT`, so the gate never saw it and
-passed labelled PRs without checking the evidence comment; the decision now
-reaches the gate. The paid gate remains
-the required path whenever a runner is available, and #1907's early stop bounds
-the spend when the provider is down.
+The relay exists because branch protection pins `CI GPU gate` to the GitHub
+Actions app: an account token can create neither a check run nor a status that
+satisfies it.
+
+For a labelled PR `authorize` publishes `local_gpu_validation`, every RunPod job
+after it is skipped, and `ci-gpu-gate` publishes nothing (it re-reads the label,
+which may have been added after `authorize`), so the RunPod workflow can never
+override the local publication. `CI_gpu.yml`'s PR-attached gate accepts only the
+`local-gpu-gate:v1:<head>` check for a labelled PR and waits up to 330 minutes for
+it. Inside the paid workflow the label is still applied in a step: job-level `if`
+conditions in a called workflow do not see the caller's inputs (a live labelled
+dispatch scheduled `start-runpod` with both boolean and textual comparisons), so
+`start-runpod` reads the label itself and publishes `paid_path_skipped`.
+
+An earlier version accepted any `Local GPU validation:` comment by a maintainer
+as the evidence, which bound it to no commit; it is replaced by the flow above.
 
 ## Runner image selection
 

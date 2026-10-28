@@ -190,15 +190,12 @@ jobs:
             done < "${changed_paths}"
             python3 scripts/ci/change_policy.py "${policy_args[@]}"
 
-            # A maintainer-recorded local GPU run substitutes for the paid
-            # RunPod gate for this PR (REPOSITORY_RULES.md, CI Cost
-            # Discipline). The label only takes effect together with an
-            # evidence comment from a repository admin/maintainer, which the
-            # gate job verifies before it publishes a passing check, so the
-            # label alone cannot waive GPU validation.
+            # A labelled PR takes its CI GPU gate from a maintainer's local GPU
+            # run on its head, published by local-gpu-gate.yml
+            # (REPOSITORY_RULES.md, CI Cost Discipline); every job after this
+            # one skips and the gate job publishes nothing.
             # Written to GITHUB_OUTPUT: printed to stdout, the decision never
-            # reached the gate, which then passed a labelled PR without
-            # verifying the evidence comment.
+            # reached the jobs it gates.
             local_labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pr_number}/labels" --jq '.[].name')"
             if grep -Fxq "gpu-validated-locally" <<<"${local_labels}"; then
               echo "local_gpu_validation=true" >> "${GITHUB_OUTPUT}"
@@ -355,7 +352,7 @@ jobs:
   runpod-contract:
     name: Validate RunPod request contract
     needs: authorize
-    if: needs.authorize.outputs.gpu_required == 'true'
+    if: needs.authorize.outputs.gpu_required == 'true' && needs.authorize.outputs.local_gpu_validation != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
 
@@ -370,7 +367,7 @@ jobs:
   pre-runpod-gate:
     name: Wait for rustfmt and clippy
     needs: authorize
-    if: needs.authorize.outputs.gpu_required == 'true'
+    if: needs.authorize.outputs.gpu_required == 'true' && needs.authorize.outputs.local_gpu_validation != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -474,7 +471,7 @@ jobs:
     needs:
       - authorize
       - runpod-contract
-    if: needs.authorize.outputs.gpu_required == 'true'
+    if: needs.authorize.outputs.gpu_required == 'true' && needs.authorize.outputs.local_gpu_validation != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -780,7 +777,7 @@ jobs:
   gpu-runtime:
     name: Prepare GPU execution dependencies
     needs: [authorize, runpod-contract]
-    if: needs.authorize.outputs.gpu_required == 'true'
+    if: needs.authorize.outputs.gpu_required == 'true' && needs.authorize.outputs.local_gpu_validation != 'true'
     uses: ./.github/workflows/runpod-gpu-runtime.yml
     with:
       tenferro_ref: ${{ needs.authorize.outputs.tenferro_ref }}
@@ -875,43 +872,30 @@ jobs:
             fi
           }
 
-          local_gpu_note=""
-
-          record_evidence_failure() {
-            echo "::error::$1"
-            echo "- $2" >> "${failures_file}"
-          }
-
-          # Accept a local GPU run only from a repository admin/maintainer:
-          # the label decides that the paid path is skipped, the recorded
-          # evidence decides whether the requirement is actually satisfied.
-          verify_local_gpu_evidence() {
-            local evidence evidence_login evidence_role evidence_url
-            evidence="$(gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
-              --jq '.[] | select(.body | contains("Local GPU validation:")) | "\(.user.login)\t\(.html_url)"' \
-              | tail -1)"
-            evidence_login="${evidence%%$'\t'*}"
-            evidence_url="${evidence##*$'\t'}"
-            if [ -z "${evidence_login}" ]; then
-              record_evidence_failure \
-                "Label gpu-validated-locally has no 'Local GPU validation:' comment." \
-                "local GPU evidence: missing"
-              return 0
-            fi
-            evidence_role="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${evidence_login}/permission" --jq .role_name)"
-            case "${evidence_role}" in
-              admin|maintain)
-                local_gpu_note="Local GPU validation recorded by ${evidence_login}: ${evidence_url}"
-                echo "Local GPU validation evidence accepted from ${evidence_login} (${evidence_role})."
-                ;;
-              *)
-                record_evidence_failure \
-                  "Local GPU evidence author ${evidence_login} has role '${evidence_role}'." \
-                  "local GPU evidence author: ${evidence_role} (requires admin or maintain)"
-                ;;
-            esac
-          }
+          # A PR labelled gpu-validated-locally takes its CI GPU gate from a
+          # maintainer's local GPU run on exactly its head SHA, published by
+          # local-gpu-gate.yml (REPOSITORY_RULES.md, CI Cost Discipline). This
+          # workflow then runs no job and publishes nothing, so it can never
+          # override that publication. The label is read again here because it
+          # may have been added after authorize ran.
+          labels=""
+          if [ "${LOCAL_GPU_VALIDATION}" != true ] && [ -n "${PR_NUMBER}" ] && [ "${PR_NUMBER}" != 0 ]; then
+            # A failed lookup must not read as "unlabelled": that would publish
+            # over a local gate. Without an answer this job publishes nothing.
+            attempt=1
+            until labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '.[].name')"; do
+              if [ "${attempt}" -ge 5 ]; then
+                echo "::error::Could not read the labels of PR #${PR_NUMBER}; publishing no CI GPU gate."
+                exit 1
+              fi
+              sleep $((attempt * 5))
+              attempt=$((attempt + 1))
+            done
+          fi
+          if [ "${LOCAL_GPU_VALIDATION}" = true ] || grep -Fxq "gpu-validated-locally" <<<"${labels}"; then
+            echo "PR #${PR_NUMBER} is labelled gpu-validated-locally: CI GPU gate is published by local-gpu-gate.yml, not here."
+            exit 0
+          fi
 
           record_result "authorize" "${AUTHORIZE_RESULT}"
           if [ "${GPU_REQUIRED}" = true ]; then
@@ -919,25 +903,10 @@ jobs:
             record_result "pre-runpod-gate" "${PRE_RUNPOD_RESULT}"
             record_result "cuda-archive" "${ARCHIVE_RESULT}"
             record_result "gpu-runtime" "${RUNTIME_RESULT}"
-            if [ "${LOCAL_GPU_VALIDATION}" = true ]; then
-              # The label decides that the paid path is skipped; the recorded
-              # evidence decides whether the requirement is satisfied, so a
-              # local run is verified even if a pod happened to run anyway.
-              verify_local_gpu_evidence
-              if [ "${GPU_EXECUTION_RESULT}" = "success" ]; then
-                echo "The paid path also completed successfully."
-              elif [ "${GPU_EXECUTION_RESULT}" != "skipped" ]; then
-                record_evidence_failure \
-                  "Expected the paid path to be skipped for ${PR_NUMBER}; got ${GPU_EXECUTION_RESULT}." \
-                  "paid GPU path: ${GPU_EXECUTION_RESULT}"
-              fi
-            else
-              record_result "gpu-execution (including cleanup)" "${GPU_EXECUTION_RESULT}"
-              if [ "${PAID_PATH_DECISION}" = "reuse" ] && [ -z "${REUSED_CHECK_URL}" ]; then
-                record_evidence_failure \
-                  "The paid path reused an earlier gate but named none." \
-                  "reused CI GPU gate: missing"
-              fi
+            record_result "gpu-execution (including cleanup)" "${GPU_EXECUTION_RESULT}"
+            if [ "${PAID_PATH_DECISION}" = "reuse" ] && [ -z "${REUSED_CHECK_URL}" ]; then
+              echo "::error::The paid path reused an earlier gate but named none."
+              echo "- reused CI GPU gate: missing" >> "${failures_file}"
             fi
           elif [ "${GPU_REQUIRED}" = false ]; then
             echo "GPU validation not required: ${POLICY_REASON}"
@@ -960,11 +929,6 @@ jobs:
             kind="reused"
             title="RunPod CI GPU gate passed (reused)"
             summary="Tested ref ${TESTED_REF} already passed the paid RunPod GPU validation: ${REUSED_CHECK_URL}. No pod was provisioned again."
-          fi
-          if [ -n "${local_gpu_note}" ]; then
-            kind="local"
-            title="RunPod CI GPU gate passed (local GPU validation)"
-            summary="The paid RunPod path was skipped for this PR. ${local_gpu_note}"
           fi
           if [ "${GPU_REQUIRED}" = false ]; then
             kind="not-required"
