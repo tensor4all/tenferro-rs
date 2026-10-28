@@ -1119,14 +1119,11 @@ impl CudaEngine {
             t4a_cuda_runtime::RawResource::Buffer(destination),
             t4a_cuda_runtime::RawResource::Buffer(source),
         ];
-        let mut modules = super::launch::KernelModules::for_entries(
-            self.runtime(),
-            &[Entry::MaterializeStrided],
-        )?;
+        let mut dispatcher = self.dispatcher(&[Entry::MaterializeStrided])?;
         // SAFETY: the pointers name allocations of this runtime taken above, the geometry is
         // registered with the scope, and the planner proved the view's span.
         unsafe {
-            modules.in_scope(
+            dispatcher.in_scope(
                 Entry::MaterializeStrided,
                 symbol,
                 resources,
@@ -1234,8 +1231,7 @@ impl CudaEngine {
             .general()
             .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
             .name();
-        let mut modules =
-            super::launch::KernelModules::for_entries(self.runtime(), &[Entry::Gather])?;
+        let mut dispatcher = self.dispatcher(&[Entry::Gather])?;
         let resources = vec![
             t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
             t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
@@ -1251,7 +1247,7 @@ impl CudaEngine {
         // SAFETY: every address the parameters name is registered with this scope, the planner
         // proved the map and the operand spans, and the geometry outlives the synchronise below.
         unsafe {
-            modules.in_scope(Entry::Gather, symbol, resources, |scope, function| {
+            dispatcher.in_scope(Entry::Gather, symbol, resources, |scope, function| {
                 let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
                 let operand_mirror = operand_geometry.mirror(operand_ref, scope, op)?;
                 let indices_mirror = indices_geometry.mirror(indices_ref, scope, op)?;
@@ -1388,8 +1384,7 @@ impl CudaEngine {
             .general()
             .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
             .name();
-        let mut modules =
-            super::launch::KernelModules::for_entries(self.runtime(), &[Entry::ScatterAdd])?;
+        let mut dispatcher = self.dispatcher(&[Entry::ScatterAdd])?;
         let resources = vec![
             t4a_cuda_runtime::RawResource::Buffer(&operand_geometry.extents),
             t4a_cuda_runtime::RawResource::Buffer(&operand_geometry.strides),
@@ -1404,7 +1399,7 @@ impl CudaEngine {
         ];
         // SAFETY: as the gather branch, for the additive scatter.
         unsafe {
-            modules.in_scope(Entry::ScatterAdd, symbol, resources, |scope, function| {
+            dispatcher.in_scope(Entry::ScatterAdd, symbol, resources, |scope, function| {
                 let operand_mirror = operand_geometry.mirror(operand_ref, scope, op)?;
                 let indices_mirror = indices_geometry.mirror(indices_ref, scope, op)?;
                 let updates_mirror = updates_geometry.mirror(updates_ref, scope, op)?;
@@ -1539,10 +1534,6 @@ impl CudaEngine {
             )))?;
             let out_geometry = self.wide_geometry(&out_extents, &out_strides, name)?;
             let in_geometry = self.wide_geometry(&in_extents, &in_strides, name)?;
-            let mut modules = super::launch::KernelModules::for_entries(
-                self.runtime(),
-                &[Entry::Reduce, Entry::ReducePartials],
-            )?;
             match plan {
                 ReductionPlan::Direct { strategy, launch } => {
                     if launch.grid[0] != 0 {
@@ -1561,34 +1552,40 @@ impl CudaEngine {
                             destination,
                             input_buffer,
                         );
+                        let mut dispatcher = self.dispatcher(&[Entry::Reduce])?;
                         // SAFETY: every address the parameters name is registered with this
                         // scope, the planner proved the reduction, and the geometry outlives the
                         // synchronise below.
                         unsafe {
-                            modules.in_scope(Entry::Reduce, symbol, resources, |scope, function| {
-                                let out_mirror = out_geometry.mirror(out_ref, scope, name)?;
-                                let in_mirror = in_geometry.mirror(in_ref, scope, name)?;
-                                let args = [
-                                    Arg::DevicePtr(destination),
-                                    Arg::DevicePtr(input_buffer),
-                                    Arg::U32(kernel.tag() as u32),
-                                    Arg::I32(pass_op.tag()),
-                                    Arg::I32(strategy.tag()),
-                                    pod_arg(&out_mirror),
-                                    pod_arg(&in_mirror),
-                                    Arg::I32(axis as i32),
-                                    Arg::U64(out_len as u64),
-                                ];
-                                scope
-                                    .launch(
-                                        function,
-                                        LaunchConfig::new(launch.grid[0], launch.block[0]),
-                                        &args,
-                                    )
-                                    .map_err(|error| {
-                                        crate::Error::runtime_state_source(name, error)
-                                    })
-                            })
+                            dispatcher.in_scope(
+                                Entry::Reduce,
+                                symbol,
+                                resources,
+                                |scope, function| {
+                                    let out_mirror = out_geometry.mirror(out_ref, scope, name)?;
+                                    let in_mirror = in_geometry.mirror(in_ref, scope, name)?;
+                                    let args = [
+                                        Arg::DevicePtr(destination),
+                                        Arg::DevicePtr(input_buffer),
+                                        Arg::U32(kernel.tag() as u32),
+                                        Arg::I32(pass_op.tag()),
+                                        Arg::I32(strategy.tag()),
+                                        pod_arg(&out_mirror),
+                                        pod_arg(&in_mirror),
+                                        Arg::I32(axis as i32),
+                                        Arg::U64(out_len as u64),
+                                    ];
+                                    scope
+                                        .launch(
+                                            function,
+                                            LaunchConfig::new(launch.grid[0], launch.block[0]),
+                                            &args,
+                                        )
+                                        .map_err(|error| {
+                                            crate::Error::runtime_state_source(name, error)
+                                        })
+                                },
+                            )
                         }?;
                     }
                 }
@@ -1629,9 +1626,10 @@ impl CudaEngine {
                             partials_buffer,
                             input_buffer,
                         );
+                        let mut dispatcher = self.dispatcher(&[Entry::ReducePartials])?;
                         // SAFETY: as the direct branch, for the partials pass.
                         unsafe {
-                            modules.in_scope(
+                            dispatcher.in_scope(
                                 Entry::ReducePartials,
                                 symbol,
                                 resources,
@@ -1680,33 +1678,39 @@ impl CudaEngine {
                             destination,
                             partials_buffer,
                         );
+                        let mut dispatcher = self.dispatcher(&[Entry::Reduce])?;
                         // SAFETY: as the direct branch, for the combining pass.
                         unsafe {
-                            modules.in_scope(Entry::Reduce, symbol, resources, |scope, function| {
-                                let out_mirror = out_geometry.mirror(out_ref, scope, name)?;
-                                let partials_mirror =
-                                    partials_geometry.mirror(partials_ref, scope, name)?;
-                                let args = [
-                                    Arg::DevicePtr(destination),
-                                    Arg::DevicePtr(partials_buffer),
-                                    Arg::U32(kernel.tag() as u32),
-                                    Arg::I32(combine_op.tag()),
-                                    Arg::I32(combine_strategy.tag()),
-                                    pod_arg(&out_mirror),
-                                    pod_arg(&partials_mirror),
-                                    Arg::I32(axis as i32),
-                                    Arg::U64(out_len as u64),
-                                ];
-                                scope
-                                    .launch(
-                                        function,
-                                        LaunchConfig::new(pass2.grid[0], pass2.block[0]),
-                                        &args,
-                                    )
-                                    .map_err(|error| {
-                                        crate::Error::runtime_state_source(name, error)
-                                    })
-                            })
+                            dispatcher.in_scope(
+                                Entry::Reduce,
+                                symbol,
+                                resources,
+                                |scope, function| {
+                                    let out_mirror = out_geometry.mirror(out_ref, scope, name)?;
+                                    let partials_mirror =
+                                        partials_geometry.mirror(partials_ref, scope, name)?;
+                                    let args = [
+                                        Arg::DevicePtr(destination),
+                                        Arg::DevicePtr(partials_buffer),
+                                        Arg::U32(kernel.tag() as u32),
+                                        Arg::I32(combine_op.tag()),
+                                        Arg::I32(combine_strategy.tag()),
+                                        pod_arg(&out_mirror),
+                                        pod_arg(&partials_mirror),
+                                        Arg::I32(axis as i32),
+                                        Arg::U64(out_len as u64),
+                                    ];
+                                    scope
+                                        .launch(
+                                            function,
+                                            LaunchConfig::new(pass2.grid[0], pass2.block[0]),
+                                            &args,
+                                        )
+                                        .map_err(|error| {
+                                            crate::Error::runtime_state_source(name, error)
+                                        })
+                                },
+                            )
                         }?;
                     }
                 }
@@ -1793,7 +1797,7 @@ impl CudaEngine {
             .name();
         let out_geometry = self.wide_geometry(&out_extents, &out_strides, op)?;
         let in_geometry = self.wide_geometry(&in_extents, &in_strides, op)?;
-        let mut modules = super::launch::KernelModules::for_entries(self.runtime(), &[entry])?;
+        let mut dispatcher = self.dispatcher(&[entry])?;
         let resources = vec![
             t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
             t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
@@ -1805,7 +1809,7 @@ impl CudaEngine {
         // SAFETY: every address the parameters name is registered with this scope, the planner
         // proved the diagonal map, and the geometry outlives the synchronise below.
         unsafe {
-            modules.in_scope(entry, symbol, resources, |scope, function| {
+            dispatcher.in_scope(entry, symbol, resources, |scope, function| {
                 let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
                 let in_mirror = in_geometry.mirror(in_ref, scope, op)?;
                 // `extract` walks the destination and `embed` walks the source element by
@@ -1895,8 +1899,7 @@ impl CudaEngine {
             .name();
         let out_geometry = self.wide_geometry(&out_extents, &out_strides, op)?;
         let in_geometry = self.wide_geometry(&in_extents, &in_strides, op)?;
-        let mut modules =
-            super::launch::KernelModules::for_entries(self.runtime(), &[Entry::DynamicSlice])?;
+        let mut dispatcher = self.dispatcher(&[Entry::DynamicSlice])?;
         let resources = vec![
             t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
             t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
@@ -1909,7 +1912,7 @@ impl CudaEngine {
         // SAFETY: every address the parameters name is registered with this scope, the planner
         // proved the window, and the geometry outlives the synchronise below.
         unsafe {
-            modules.in_scope(Entry::DynamicSlice, symbol, resources, |scope, function| {
+            dispatcher.in_scope(Entry::DynamicSlice, symbol, resources, |scope, function| {
                 let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
                 let in_mirror = in_geometry.mirror(in_ref, scope, op)?;
                 let args = [
@@ -2008,7 +2011,7 @@ impl CudaEngine {
         let in_geometry = self.wide_geometry(&in_extents, &in_strides, op)?;
         let first = self.upload_i64(axes.first, op)?;
         let second = self.upload_i64(axes.second, op)?;
-        let mut modules = super::launch::KernelModules::for_entries(self.runtime(), &[entry])?;
+        let mut dispatcher = self.dispatcher(&[entry])?;
         let resources = vec![
             t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
             t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
@@ -2022,7 +2025,7 @@ impl CudaEngine {
         // SAFETY: every address the parameters name is registered with this scope, the planner
         // proved the window, and the geometry outlives the synchronise below.
         unsafe {
-            modules.in_scope(entry, symbol, resources, |scope, function| {
+            dispatcher.in_scope(entry, symbol, resources, |scope, function| {
                 let out_mirror = out_geometry.mirror(out_ref, scope, op)?;
                 let in_mirror = in_geometry.mirror(in_ref, scope, op)?;
                 let axis_mirror =
@@ -2089,8 +2092,6 @@ impl CudaEngine {
             .name();
         let axis_u32 = u32::try_from(axis)
             .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
-        let mut modules =
-            super::launch::KernelModules::for_entries(self.runtime(), &[Entry::ConcatenateCopy])?;
         let mut offset = 0usize;
         for input in inputs {
             // The kernel reads a compact source, so a strided input is compacted first.
@@ -2138,12 +2139,15 @@ impl CudaEngine {
             ];
             // An empty input places no element; plan it for the validation, submit nothing.
             if plan.grid[0] != 0 {
+                // The copy above takes the engine's CopyExact dispatcher, so this one is taken
+                // only after it has returned.
+                let mut dispatcher = self.dispatcher(&[Entry::ConcatenateCopy])?;
                 // SAFETY: every address the parameters name is registered with this scope and the
                 // planner proved the placement. The geometry drops at the end of this iteration,
                 // and the runtime's same-stream free ordering keeps the allocation alive until the
                 // queued copy has run.
                 unsafe {
-                    modules.in_scope(
+                    dispatcher.in_scope(
                         Entry::ConcatenateCopy,
                         symbol,
                         resources,
@@ -2229,8 +2233,7 @@ impl CudaEngine {
         let out_geometry = self.wide_geometry(&out_extents, &out_strides, op)?;
         let in_geometry = self.wide_geometry(&in_extents, &in_strides, op)?;
         let dims_buffer = self.upload_i64(&axis_values, op)?;
-        let mut modules =
-            super::launch::KernelModules::for_entries(self.runtime(), &[Entry::BroadcastInDim])?;
+        let mut dispatcher = self.dispatcher(&[Entry::BroadcastInDim])?;
         let resources = vec![
             t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
             t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
@@ -2244,7 +2247,7 @@ impl CudaEngine {
         // proved the input's span and the compact destination, and the geometry outlives the
         // synchronise below.
         unsafe {
-            modules.in_scope(
+            dispatcher.in_scope(
                 Entry::BroadcastInDim,
                 symbol,
                 resources,
@@ -4689,27 +4692,24 @@ impl CudaEngine {
         }
         // The fill entry is dtype-agnostic over the preset scalars, so the layout is not needed.
         let kernel = kernel_dtype(dtype, op)?;
-        let mut modules =
-            super::launch::KernelModules::for_entries(self.runtime(), &[Entry::FillZero])?;
+        let mut dispatcher = self.dispatcher(&[Entry::FillZero])?;
         let plan = t4a_cuda_kernels::plan_fill_zero(kernel, len)
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
         let out = with_scalar!(dtype, |T| self.allocation_of::<T>(tensor, op))?;
         if plan.grid[0] == 0 {
             return Ok(());
         }
-        // SAFETY: `out` names a compact allocation of this runtime that the planner accepted for
-        // `len` elements.
-        unsafe {
-            modules.launch(
-                Entry::FillZero,
-                LaunchConfig::new(plan.grid[0], plan.block[0]),
-                &[
-                    Arg::DevicePtr(out),
-                    Arg::U32(kernel.tag() as u32),
-                    Arg::U64(len as u64),
-                ],
-            )
-        }?;
+        // `out` names a compact allocation of this runtime that the planner accepted for `len`
+        // elements, which is the argument list `run_planned` forwards.
+        dispatcher.run_planned(
+            Entry::FillZero,
+            plan,
+            &[
+                Arg::DevicePtr(out),
+                Arg::U32(kernel.tag() as u32),
+                Arg::U64(len as u64),
+            ],
+        )?;
         self.runtime()
             .synchronize()
             .map_err(|error| crate::Error::runtime_state_source(op, error))

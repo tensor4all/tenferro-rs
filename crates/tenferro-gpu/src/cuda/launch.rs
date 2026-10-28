@@ -33,20 +33,42 @@ impl KernelModules {
     /// [`crate::Error::RuntimeStateSource`] when NVRTC rejects a module, and
     /// [`crate::Error::RuntimeState`] when the runtime cannot prepare its artifact.
     pub fn for_entries(runtime: &CudaRuntime, entries: &[Entry]) -> crate::Result<KernelModules> {
+        let mut modules = KernelModules {
+            runtime: runtime.clone(),
+            artifacts: HashMap::new(),
+            functions: HashMap::new(),
+        };
+        modules.prepare(entries)?;
+        Ok(modules)
+    }
+
+    /// Prepare the translation units `entries` name that this set does not hold yet.
+    ///
+    /// The artifacts already prepared and the functions already bound stay as they are, so an
+    /// engine that serves an interleaved sequence of auxiliary launches only ever extends its
+    /// prepared set instead of replacing it.
+    ///
+    /// # Errors
+    ///
+    /// As [`KernelModules::for_entries`].
+    pub(crate) fn prepare(&mut self, entries: &[Entry]) -> crate::Result<()> {
         let mut needed: Vec<&'static str> = Vec::new();
         for entry in entries {
             let module = module_of(*entry).ok_or_else(|| {
                 crate::Error::unsupported("cuda prepare", "the entry has no translation unit")
             })?;
-            if !needed.contains(&module.name) {
+            if !self.artifacts.contains_key(module.name) && !needed.contains(&module.name) {
                 needed.push(module.name);
             }
         }
-        let capability = runtime.device_info().compute_capability();
+        if needed.is_empty() {
+            return Ok(());
+        }
+        let capability = self.runtime.device_info().compute_capability();
         let arch = format!("sm_{}{}", capability.major, capability.minor);
-        let mut artifacts = HashMap::with_capacity(needed.len());
+        let mut artifacts = Vec::with_capacity(needed.len());
         {
-            let mut guard = runtime.submit();
+            let mut guard = self.runtime.submit();
             for module in MODULES
                 .iter()
                 .filter(|module| needed.contains(&module.name))
@@ -57,19 +79,24 @@ impl KernelModules {
                 let artifact = guard
                     .compile(&request)
                     .map_err(|error| crate::Error::runtime_state_source("cuda prepare", error))?;
-                artifacts.insert(module.name, artifact);
+                artifacts.push((module.name, artifact));
             }
         }
-        Ok(KernelModules {
-            runtime: runtime.clone(),
-            artifacts,
-            functions: HashMap::new(),
-        })
+        for (name, artifact) in artifacts {
+            self.artifacts.insert(name, artifact);
+        }
+        Ok(())
     }
 
     /// Number of prepared modules.
     pub fn modules(&self) -> usize {
         self.artifacts.len()
+    }
+
+    /// Number of bound functions.
+    #[cfg(test)]
+    pub(crate) fn bound_functions(&self) -> usize {
+        self.functions.len()
     }
 
     /// Bind `entry` if it is not bound yet and return its function.

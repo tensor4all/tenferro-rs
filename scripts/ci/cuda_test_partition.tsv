@@ -641,6 +641,7 @@ host	tenferro-fft::fft_ops	rfft_f64_returns_onesided_spectrum
 host	tenferro-fft::fft_ops	traced_fft_rejects_invalid_dtype_axis_and_length
 host	tenferro-fft::fft_ops	traced_tensor_fft_ext_exposes_fft
 host	tenferro-fft::prelude	prelude_calls_concrete_fft_operation
+gpu	tenferro-gpu	cuda::dispatch::prepare_tests::interleaved_auxiliary_launches_extend_the_prepared_set
 gpu	tenferro-gpu	cuda::dispatch::reduce_tests::a_short_axis_reduces_directly
 gpu	tenferro-gpu	cuda::dispatch::reduce_tests::the_split_policy_runs_both_passes
 gpu	tenferro-gpu	cuda::dispatch::reduce_tests::unit_and_plane_reductions_match_the_host

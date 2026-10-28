@@ -10,7 +10,7 @@ use t4a_cuda_kernels::{
     plan_validate_real_cast, BinaryOp, DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan,
     ScalarSide, ScatterPlan, UnaryOp,
 };
-use t4a_cuda_runtime::{Arg, LaunchConfig};
+use t4a_cuda_runtime::{Arg, BoundFunction, LaunchConfig};
 
 use super::engine::CudaEngine;
 use super::launch::{layout_arg, KernelModules};
@@ -33,21 +33,26 @@ pub(crate) struct PreparedDispatchers {
 
 impl PreparedDispatchers {
     /// A dispatcher that covers `entries`, extending the prepared set when it does not yet.
+    ///
+    /// Extending keeps the artifacts and bound functions the set already holds, so an
+    /// interleaved sequence of auxiliary launches binds each function once instead of replacing
+    /// the whole dispatcher whenever a new entry appears.
     fn ensure(
         &mut self,
         runtime: &super::runtime::CudaRuntime,
         entries: &[Entry],
     ) -> crate::Result<&mut Dispatcher> {
-        let covered = entries.iter().all(|entry| self.entries.contains(entry));
-        if !covered {
-            let mut wanted = self.entries.clone();
-            for entry in entries {
-                if !wanted.contains(entry) {
-                    wanted.push(*entry);
-                }
+        let missing: Vec<Entry> = entries
+            .iter()
+            .filter(|entry| !self.entries.contains(entry))
+            .copied()
+            .collect();
+        if !missing.is_empty() {
+            match self.dispatcher.as_mut() {
+                Some(dispatcher) => dispatcher.prepare(&missing)?,
+                None => self.dispatcher = Some(Dispatcher::for_entries(runtime, &missing)?),
             }
-            self.dispatcher = Some(Dispatcher::for_entries(runtime, &wanted)?);
-            self.entries = wanted;
+            self.entries.extend(missing);
         }
         self.dispatcher
             .as_mut()
@@ -90,6 +95,41 @@ impl Dispatcher {
         Ok(Dispatcher {
             modules: KernelModules::for_entries(runtime, entries)?,
         })
+    }
+
+    /// Prepare the modules of `entries` this dispatcher does not hold yet, keeping the
+    /// artifacts and bound functions it already has.
+    ///
+    /// # Errors
+    ///
+    /// As [`KernelModules::prepare`].
+    pub(crate) fn prepare(&mut self, entries: &[Entry]) -> crate::Result<()> {
+        self.modules.prepare(entries)
+    }
+
+    /// Enqueue one launch of `symbol` (bound from `entry`'s module) inside the runtime's raw
+    /// scope, from this dispatcher's prepared module set.
+    ///
+    /// `resources` must list every buffer the parameters name, because a general-path launch
+    /// embeds device addresses the caller can only read through the scope.
+    ///
+    /// # Safety
+    ///
+    /// As [`KernelModules::in_scope`], and every address the closure embeds must stay valid for
+    /// the scope's work.
+    ///
+    /// # Errors
+    ///
+    /// As [`KernelModules::in_scope`].
+    pub(crate) unsafe fn in_scope<R>(
+        &mut self,
+        entry: Entry,
+        symbol: &'static str,
+        resources: Vec<t4a_cuda_runtime::RawResource<'_>>,
+        run: impl FnOnce(&t4a_cuda_runtime::RawScope<'_>, &BoundFunction) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        // SAFETY: forwarded to the caller's contract.
+        unsafe { self.modules.in_scope(entry, symbol, resources, run) }
     }
 
     /// Enqueue one launch with the plan's own geometry.
@@ -1016,6 +1056,8 @@ impl Dispatcher {
     }
 }
 
+#[cfg(test)]
+mod prepare_tests;
 #[cfg(test)]
 mod reduce_tests;
 #[cfg(test)]
