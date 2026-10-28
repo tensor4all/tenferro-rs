@@ -106,6 +106,23 @@ The measurements that make this the right call: cuFFT's hook already synchronize
 synchronise or wait inside — so a "hook waits before returning" rule would have had to be added to
 25 call sites, and it is not what keeps the data safe anyway.
 
+### What part 2 (the cuSOLVER port) still needs from the session
+
+Part 1 shipped the session with `stream`, `alloc_bytes`, `tensor`/`tensor_mut`, `retain_tensor` and
+`synchronize` — everything cuFFT uses. The cuSOLVER providers use five more entries, and each has to
+respect the same rule (no re-entry into the runtime's admission):
+
+| entry | how it has to work inside the scope |
+|---|---|
+| `copy_bytes(dst, src, bytes)` | `cuMemcpyDtoDAsync` on the session's stream; both pointers are registered spans. |
+| `upload_bytes(bytes, op)` | device allocation from the scope plus `cuMemcpyHtoDAsync` from a **pinned** host buffer that the scope retains; `RawScope::upload` cannot be used because the runtime's transfer takes the admission the scope holds (t4a-gpu-backend#10's first version hung on exactly that). |
+| `download_tensor(t)` | the mirror image: `cuMemcpyDtoHAsync` into a pinned buffer the scope retains, then a stream barrier before the host bytes are read. |
+| `resource(init)` | a per-engine typed cache for vendor handles. The engine already owns the runtime's `ExtensionCacheStore`; the session needs a borrowed handle to it, which is why this one lands with the cuSOLVER port rather than before it. |
+| `len()` | not a session entry: the single `raw.len()` call site is a CPU test. |
+
+The 14 `#[cube]` kernels are the other half of the port; the catalogue's matching entries are listed
+above, and each kernel swap is verified against the existing numeric tests.
+
 ## Sequencing
 
 1. `cuda_next/raw.rs`: `Session<'s>`, `StreamRef`, `DeviceBytes`, `TensorRef`, `TensorMut`,

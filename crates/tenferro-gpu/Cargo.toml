@@ -11,13 +11,13 @@ repository.workspace = true
 homepage.workspace = true
 description = "CubeCL-backed CUDA and WebGPU provider backends for tenferro tensors."
 rust-version.workspace = true
-keywords = ["tensor", "gpu", "cuda", "webgpu"]
+keywords = ["tensor", "gpu", "cuda"]
 categories = ["science", "hardware-support", "mathematics"]
 documentation = "https://docs.rs/tenferro-gpu"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["native", "cuda", "webgpu"]
+features = ["native", "cuda"]
 
 [lib]
 name = "tenferro_gpu"
@@ -30,38 +30,13 @@ blas-openblas = ["tenferro-cpu/blas-openblas"]
 blas-accelerate = ["tenferro-cpu/blas-accelerate"]
 blas-mkl = ["tenferro-cpu/blas-mkl"]
 cpu-reference = []
-cuda = [
-    "dep:cubecl",
-    "dep:lru",
-    "cubecl/std",
-    "cubecl/stdlib",
-    "cubecl/cuda",
-    "dep:cubecl-cuda",
-    "dep:cubecl-runtime",
-    "dep:cubecl-environment",
-    "dep:cudarc",
-]
-# Exposes CubeCL launch types (client, bindings) for running caller-written
-# `#[cube]` kernels on a CudaEngine's stream. The only feature under which
-# CubeCL types are public; it changes when tenferro replaces CubeCL's runtime.
+# The CUDA engine: the operation surface over the kernel catalogue, plus the vendor bindings.
+cuda = ["dep:t4a-cuda-runtime", "dep:t4a-cuda-kernels", "dep:cudarc"]
+# Deprecated alias kept for the cutover window: the trusted-base CUDA archive workflow on `main`
+# still builds with `tenferro-gpu/cubecl-interop`, and a gate that runs the base revision's
+# workflow cannot see this branch's workflow edits. It selects the same one CUDA path; remove it
+# once the workflow no longer names it.
 cubecl-interop = ["cuda"]
-# The backend-neutral `gpu/` seam and its CUDA adapter over `t4a-cuda-runtime`
-# (issue #2208 U1). Private surface: the public `cuda::` names keep the CubeCL
-# implementation until the operation surface moves over (U2-U6).
-cuda-next = ["cuda", "dep:t4a-cuda-runtime", "dep:t4a-cuda-kernels"]
-webgpu = [
-    "dep:cubecl",
-    "cubecl/std",
-    "cubecl/stdlib",
-    "cubecl/wgpu",
-    "dep:cubecl-common",
-    "dep:cubecl-runtime",
-    "dep:cubecl-environment",
-    "dep:cubecl-wgpu",
-    "dep:cubek-matmul",
-    "dep:cubek-std",
-    "dep:cubek-fft",
-]
 rocm = []
 
 [dependencies]
@@ -69,19 +44,10 @@ tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.7.1" }
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.7.1", default-features = false }
 tenferro-cpu = { path = "../tenferro-cpu", version = "0.7.1", default-features = false }
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.7.1", default-features = false }
-cubecl = { workspace = true, optional = true }
-cubecl-cuda = { workspace = true, optional = true }
-cubecl-common = { workspace = true, optional = true }
-cubecl-environment = { workspace = true, optional = true }
-cubecl-runtime = { workspace = true, optional = true }
-cubecl-wgpu = { workspace = true, optional = true }
-cubek-matmul = { workspace = true, optional = true }
-cubek-std = { workspace = true, optional = true }
-cubek-fft = { workspace = true, optional = true }
 # The standalone CUDA runtime the U1 seam is built on (issue #2208). Both upstream
 # crates are `publish = false`, so the dependency is a pinned git revision, recorded
 # in docs/design/cuda-seam-u1-2208.md.
-t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "a3e242d744692c345cef6aeb350eef627950ee72", optional = true }
+t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "77173c73989afb2852759ce8a9919bd27545cdb6", optional = true }
 # The kernel catalogue and its NVRTC sources (ABI revision 10).
 t4a-cuda-kernels = { git = "https://github.com/tensor4all/t4a-cuda-kernels", rev = "5019c713c14c1f5d59ea2cf03bbfff08c40f167e", optional = true }
 cudarc = { workspace = true, optional = true, features = ["cublas", "cutensor"] }
@@ -99,7 +65,6 @@ criterion.workspace = true
 trybuild.workspace = true
 # Unit tests build handles that only carry tenferro's own bookkeeping; 0.11's
 # `Handle` needs the service id those handles name.
-cubecl-common.workspace = true
 
 [[example]]
 name = "cuda_quickstart"
@@ -112,11 +77,6 @@ required-features = ["cuda"]
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
-
-[[test]]
-name = "apple_context"
-path = "tests/integration/apple_context.rs"
-required-features = ["webgpu"]
 
 [[test]]
 name = "blas1_cuda"
@@ -160,103 +120,93 @@ path = "tests/storage_provider_cuda_progress.rs"
 name = "storage_provider_cuda"
 path = "tests/storage_provider_cuda.rs"
 
-[[test]]
-name = "storage_provider_webgpu"
-path = "tests/storage_provider_webgpu.rs"
-
-[[test]]
-name = "storage_provider_webgpu_progress"
-path = "tests/storage_provider_webgpu_progress.rs"
-
 [[bench]]
 name = "route_matrix_gpu"
 path = "benches/route_matrix_gpu.rs"
 harness = false
 required-features = ["cuda"]
 
-[[bench]]
-name = "transfer_paths"
-path = "benches/transfer_paths.rs"
-harness = false
-required-features = ["cuda"]
-
-[[bench]]
-name = "cutensor_plan_cache"
-path = "benches/cutensor_plan_cache.rs"
-harness = false
-required-features = ["cuda"]
-
 [[test]]
 name = "seam_storage"
 path = "tests/seam_storage.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_transfers"
 path = "tests/seam_transfers.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_publication"
 path = "tests/seam_publication.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_staging"
 path = "tests/seam_staging.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_copy"
 path = "tests/seam_copy.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_launch"
 path = "tests/seam_launch.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_fusion"
 path = "tests/seam_fusion.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_vendor"
 path = "tests/seam_vendor.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_contraction"
 path = "tests/seam_contraction.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_indexing"
 path = "tests/seam_indexing.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
+
+[[test]]
+name = "seam_capability"
+path = "tests/seam_capability.rs"
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_dtype"
 path = "tests/seam_dtype.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_dot"
 path = "tests/seam_dot.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
+
+[[test]]
+name = "seam_linalg_aux"
+path = "tests/seam_linalg_aux.rs"
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_raw"
 path = "tests/seam_raw.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_runtime"
 path = "tests/seam_runtime.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]
 
 [[test]]
 name = "seam_structural"
 path = "tests/seam_structural.rs"
-required-features = ["cuda-next"]
+required-features = ["cuda"]

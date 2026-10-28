@@ -1,11 +1,9 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! The dtype policy of the new engine's tensor surface: what the kernel catalogue serves
 //! through the shared traits, and what it refuses (issue #2208 U5/U6 dtype scope).
 
-use tenferro_gpu::cuda_next::{
-    download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine,
-};
+use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_tensor::{
     Complex32, Complex64, DType, Tensor, TensorAnalytic, TensorElementwise, TensorRead,
     TensorStructural,
@@ -31,6 +29,7 @@ fn read<T: tenferro_tensor::TensorScalar + Clone>(engine: &CudaEngine, tensor: &
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn complex_elementwise_and_the_complex_absolute_value() {
     let Some(mut engine) = engine() else { return };
     let host = Tensor::from_vec_col_major(
@@ -91,6 +90,7 @@ fn complex_elementwise_and_the_complex_absolute_value() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn integer_and_boolean_dtypes_follow_the_catalogue() {
     let Some(mut engine) = engine() else { return };
     // Integer elementwise arithmetic is served.
@@ -115,6 +115,7 @@ fn integer_and_boolean_dtypes_follow_the_catalogue() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn analytic_operations_and_power_follow_the_contract() {
     let Some(mut engine) = engine() else { return };
     let data = vec![0.25f64, 0.5, 1.0, 4.0];
@@ -213,6 +214,7 @@ fn analytic_operations_and_power_follow_the_contract() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_float_to_integer_cast_is_checked_before_it_truncates() {
     let Some(mut engine) = engine() else { return };
     // In-range values convert.
@@ -243,6 +245,7 @@ fn a_float_to_integer_cast_is_checked_before_it_truncates() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn integer_and_complex_division_use_their_own_entries() {
     let Some(mut engine) = engine() else { return };
     // Integer division is the checked one: exact where it divides, and a reported failure where it

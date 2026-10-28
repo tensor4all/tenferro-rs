@@ -8,7 +8,7 @@ pub(crate) mod plan;
 #[cfg(test)]
 mod tests;
 
-use tenferro_gpu::cuda_next::CudaEngine;
+use tenferro_gpu::cuda::CudaEngine;
 use tenferro_tensor::{
     DType, SliceConfig, Tensor, TensorIndexing, TensorRead, TensorStructural, TensorWrite,
 };

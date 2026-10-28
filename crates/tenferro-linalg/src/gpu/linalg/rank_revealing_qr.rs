@@ -1,4 +1,3 @@
-use cubecl::prelude::{CubeCount, CubeDim, Scalar, TensorBinding};
 use tenferro_tensor::DType;
 
 use super::*;
@@ -29,485 +28,6 @@ macro_rules! preset_scalar {
     };
 }
 const OP: &str = "rank_revealing_qr";
-const RRQR_PLANE_WIDTH: u32 = 32;
-
-type CudaTensorBinding = TensorBinding;
-
-trait CudaRrqrScalar: LinalgScalar + TensorScalar {
-    fn device_imaginary_unit(backend: &mut CudaEngine) -> Result<Option<TypedTensor<Self>>>;
-
-    fn launch_norms(
-        cubecl: &CubeclSession<'_>,
-        work: &TypedTensor<Self>,
-        norms: &TypedTensor<<Self as LinalgScalar>::Real>,
-        count: CubeCount,
-        step: usize,
-        m: usize,
-        n: usize,
-    ) -> Result<()>;
-
-    #[allow(clippy::too_many_arguments)]
-    fn launch_pivot(
-        cubecl: &CubeclSession<'_>,
-        norms: &TypedTensor<<Self as LinalgScalar>::Real>,
-        permutation: &TypedTensor<i64>,
-        pivots: &TypedTensor<i64>,
-        status: &TypedTensor<i64>,
-        count: CubeCount,
-        step: usize,
-        n: usize,
-    ) -> Result<()>;
-
-    #[allow(clippy::too_many_arguments)]
-    fn launch_reflector(
-        cubecl: &CubeclSession<'_>,
-        work: &TypedTensor<Self>,
-        coeff: &TypedTensor<Self>,
-        count: CubeCount,
-        step: usize,
-        m: usize,
-        n: usize,
-        k: usize,
-    ) -> Result<()>;
-
-    #[allow(clippy::too_many_arguments)]
-    fn launch_apply(
-        cubecl: &CubeclSession<'_>,
-        packed: &TypedTensor<Self>,
-        target: &TypedTensor<Self>,
-        coeff: &TypedTensor<Self>,
-        imaginary_unit: Option<&TypedTensor<Self>>,
-        count: CubeCount,
-        step: usize,
-        first_column: usize,
-        column_count: usize,
-        m: usize,
-        packed_columns: usize,
-        target_columns: usize,
-        k: usize,
-    ) -> Result<()>;
-
-    #[allow(clippy::too_many_arguments)]
-    fn launch_rank(
-        cubecl: &CubeclSession<'_>,
-        r: &TypedTensor<Self>,
-        rank: &TypedTensor<i64>,
-        status: &TypedTensor<i64>,
-        count: CubeCount,
-        k: usize,
-        n: usize,
-        options: RankRevealingQrOptions,
-    ) -> Result<()>;
-}
-
-fn rrqr_binding<T>(cubecl: &CubeclSession<'_>, tensor: &TypedTensor<T>) -> Result<CudaTensorBinding>
-where
-    T: cubecl::prelude::CubeElement + TensorScalar + Clone + Scalar,
-{
-    unsafe { cubecl.tensor_binding(tensor, OP) }
-}
-
-macro_rules! impl_cuda_rrqr_real {
-    ($scalar:ty, $variant:ident) => {
-        impl CudaRrqrScalar for $scalar {
-            fn device_imaginary_unit(
-                _backend: &mut CudaEngine,
-            ) -> Result<Option<TypedTensor<Self>>> {
-                Ok(None)
-            }
-
-            fn launch_norms(
-                cubecl: &CubeclSession<'_>,
-                work: &TypedTensor<Self>,
-                norms: &TypedTensor<<Self as LinalgScalar>::Real>,
-                count: CubeCount,
-                step: usize,
-                m: usize,
-                n: usize,
-            ) -> Result<()> {
-                let work = rrqr_binding(cubecl, work)?;
-                let norms = rrqr_binding(cubecl, norms)?;
-                // SAFETY: dense same-runtime bindings are live for this launch;
-                // one plane owns each (trailing column, batch) norm.
-                unsafe {
-                    cubecl_linalg::column_norms_real::launch_unchecked::<Self>(
-                        cubecl.client(),
-                        count,
-                        rrqr_cube_dim(),
-                        work.into_tensor_arg(),
-                        norms.into_tensor_arg(),
-                        step,
-                        m,
-                        n,
-                    );
-                }
-                Ok(())
-            }
-
-            fn launch_pivot(
-                cubecl: &CubeclSession<'_>,
-                norms: &TypedTensor<<Self as LinalgScalar>::Real>,
-                permutation: &TypedTensor<i64>,
-                pivots: &TypedTensor<i64>,
-                status: &TypedTensor<i64>,
-                count: CubeCount,
-                step: usize,
-                n: usize,
-            ) -> Result<()> {
-                launch_pivot_real::<Self>(
-                    cubecl,
-                    norms,
-                    permutation,
-                    pivots,
-                    status,
-                    count,
-                    step,
-                    n,
-                )
-            }
-
-            fn launch_reflector(
-                cubecl: &CubeclSession<'_>,
-                work: &TypedTensor<Self>,
-                coeff: &TypedTensor<Self>,
-                count: CubeCount,
-                step: usize,
-                m: usize,
-                n: usize,
-                k: usize,
-            ) -> Result<()> {
-                let work = rrqr_binding(cubecl, work)?;
-                let coeff = rrqr_binding(cubecl, coeff)?;
-                // SAFETY: one plane owns each batch reflector and lanes write
-                // disjoint entries of its packed vector.
-                unsafe {
-                    cubecl_linalg::reflector_real::launch_unchecked::<Self>(
-                        cubecl.client(),
-                        count,
-                        rrqr_cube_dim(),
-                        work.into_tensor_arg(),
-                        coeff.into_tensor_arg(),
-                        step,
-                        m,
-                        n,
-                        k,
-                    );
-                }
-                Ok(())
-            }
-
-            fn launch_apply(
-                cubecl: &CubeclSession<'_>,
-                packed: &TypedTensor<Self>,
-                target: &TypedTensor<Self>,
-                coeff: &TypedTensor<Self>,
-                _imaginary_unit: Option<&TypedTensor<Self>>,
-                count: CubeCount,
-                step: usize,
-                first_column: usize,
-                column_count: usize,
-                m: usize,
-                packed_columns: usize,
-                target_columns: usize,
-                k: usize,
-            ) -> Result<()> {
-                let packed = rrqr_binding(cubecl, packed)?;
-                let target = rrqr_binding(cubecl, target)?;
-                let coeff = rrqr_binding(cubecl, coeff)?;
-                // SAFETY: one plane owns each (target column, batch) update;
-                // target columns never overlap the packed reflector column.
-                unsafe {
-                    cubecl_linalg::apply_reflector_real::launch_unchecked::<Self>(
-                        cubecl.client(),
-                        count,
-                        rrqr_cube_dim(),
-                        packed.into_tensor_arg(),
-                        target.into_tensor_arg(),
-                        step,
-                        first_column,
-                        column_count,
-                        m,
-                        packed_columns,
-                        target_columns,
-                        k,
-                        coeff.into_tensor_arg(),
-                    );
-                }
-                Ok(())
-            }
-
-            fn launch_rank(
-                cubecl: &CubeclSession<'_>,
-                r: &TypedTensor<Self>,
-                rank: &TypedTensor<i64>,
-                status: &TypedTensor<i64>,
-                count: CubeCount,
-                k: usize,
-                n: usize,
-                options: RankRevealingQrOptions,
-            ) -> Result<()> {
-                let r = rrqr_binding(cubecl, r)?;
-                let rank = rrqr_binding(cubecl, rank)?;
-                let status = rrqr_binding(cubecl, status)?;
-                // SAFETY: one plane owns each batch rank and scans disjoint
-                // diagonal subsequences before a plane minimum reduction.
-                unsafe {
-                    cubecl_linalg::prefix_rank_real::launch_unchecked::<Self>(
-                        cubecl.client(),
-                        count,
-                        rrqr_cube_dim(),
-                        r.into_tensor_arg(),
-                        rank.into_tensor_arg(),
-                        status.into_tensor_arg(),
-                        k,
-                        n,
-                        options.rtol as $scalar,
-                        options.atol as $scalar,
-                    );
-                }
-                Ok(())
-            }
-        }
-    };
-}
-
-impl_cuda_rrqr_real!(f32, F32);
-impl_cuda_rrqr_real!(f64, F64);
-
-#[allow(clippy::too_many_arguments)]
-fn launch_pivot_real<F>(
-    cubecl: &CubeclSession<'_>,
-    norms: &TypedTensor<F>,
-    permutation: &TypedTensor<i64>,
-    pivots: &TypedTensor<i64>,
-    status: &TypedTensor<i64>,
-    count: CubeCount,
-    step: usize,
-    n: usize,
-) -> Result<()>
-where
-    F: cubecl::prelude::Float
-        + cubecl::prelude::CubeElement
-        + cubecl::prelude::CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>
-        + TensorScalar
-        + Clone,
-{
-    let norms = rrqr_binding(cubecl, norms)?;
-    let permutation = rrqr_binding(cubecl, permutation)?;
-    let pivots = rrqr_binding(cubecl, pivots)?;
-    let status = rrqr_binding(cubecl, status)?;
-    // SAFETY: one plane owns each batch pivot/status output; permutation is
-    // read-only and the lowest original index resolves exact norm ties.
-    unsafe {
-        cubecl_linalg::select_pivot::launch_unchecked::<F>(
-            cubecl.client(),
-            count,
-            rrqr_cube_dim(),
-            norms.into_tensor_arg(),
-            permutation.into_tensor_arg(),
-            pivots.into_tensor_arg(),
-            status.into_tensor_arg(),
-            step,
-            n,
-        );
-    }
-    Ok(())
-}
-
-macro_rules! impl_cuda_rrqr_complex {
-    ($scalar:ty, $variant:ident, $real:ty, $norms:ident, $reflector:ident, $apply:ident, $rank_kernel:ident) => {
-        impl CudaRrqrScalar for $scalar {
-            fn device_imaginary_unit(
-                backend: &mut CudaEngine,
-            ) -> Result<Option<TypedTensor<Self>>> {
-                let host = Tensor::from_typed::<preset_scalar!($variant)>(
-                    TypedTensor::from_vec_col_major(
-                        vec![1],
-                        vec![<$scalar>::new(0.0 as $real, 1.0 as $real)],
-                    )?,
-                );
-                tenferro_gpu::cuda::upload_tensor(backend.runtime(), &host)?
-                    .into_typed::<preset_scalar!($variant)>()
-                    .map(Some)
-                    .map_err(|_| Error::Internal("RRQR constant upload changed dtype".into()))
-            }
-
-            fn launch_norms(
-                cubecl: &CubeclSession<'_>,
-                work: &TypedTensor<Self>,
-                norms: &TypedTensor<<Self as LinalgScalar>::Real>,
-                count: CubeCount,
-                step: usize,
-                m: usize,
-                n: usize,
-            ) -> Result<()> {
-                let work = rrqr_binding(cubecl, work)?;
-                let norms = rrqr_binding(cubecl, norms)?;
-                // SAFETY: one plane owns each (trailing column, batch) norm.
-                unsafe {
-                    cubecl_linalg::$norms::launch_unchecked(
-                        cubecl.client(),
-                        count,
-                        rrqr_cube_dim(),
-                        work.into_tensor_arg(),
-                        norms.into_tensor_arg(),
-                        step,
-                        m,
-                        n,
-                    );
-                }
-                Ok(())
-            }
-
-            fn launch_pivot(
-                cubecl: &CubeclSession<'_>,
-                norms: &TypedTensor<<Self as LinalgScalar>::Real>,
-                permutation: &TypedTensor<i64>,
-                pivots: &TypedTensor<i64>,
-                status: &TypedTensor<i64>,
-                count: CubeCount,
-                step: usize,
-                n: usize,
-            ) -> Result<()> {
-                launch_pivot_real::<$real>(
-                    cubecl,
-                    norms,
-                    permutation,
-                    pivots,
-                    status,
-                    count,
-                    step,
-                    n,
-                )
-            }
-
-            fn launch_reflector(
-                cubecl: &CubeclSession<'_>,
-                work: &TypedTensor<Self>,
-                coeff: &TypedTensor<Self>,
-                count: CubeCount,
-                step: usize,
-                m: usize,
-                n: usize,
-                k: usize,
-            ) -> Result<()> {
-                let work = rrqr_binding(cubecl, work)?;
-                let coeff = rrqr_binding(cubecl, coeff)?;
-                // SAFETY: one plane owns each batch reflector and lanes write
-                // disjoint entries of its packed vector.
-                unsafe {
-                    cubecl_linalg::$reflector::launch_unchecked(
-                        cubecl.client(),
-                        count,
-                        rrqr_cube_dim(),
-                        work.into_tensor_arg(),
-                        coeff.into_tensor_arg(),
-                        step,
-                        m,
-                        n,
-                        k,
-                    );
-                }
-                Ok(())
-            }
-
-            fn launch_apply(
-                cubecl: &CubeclSession<'_>,
-                packed: &TypedTensor<Self>,
-                target: &TypedTensor<Self>,
-                coeff: &TypedTensor<Self>,
-                imaginary_unit: Option<&TypedTensor<Self>>,
-                count: CubeCount,
-                step: usize,
-                first_column: usize,
-                column_count: usize,
-                m: usize,
-                packed_columns: usize,
-                target_columns: usize,
-                k: usize,
-            ) -> Result<()> {
-                let packed = rrqr_binding(cubecl, packed)?;
-                let target = rrqr_binding(cubecl, target)?;
-                let coeff = rrqr_binding(cubecl, coeff)?;
-                let imaginary_unit = imaginary_unit.ok_or_else(|| {
-                    Error::Internal("complex RRQR requires an imaginary-unit constant".into())
-                })?;
-                let imaginary_unit = rrqr_binding(cubecl, imaginary_unit)?;
-                // SAFETY: one plane owns each (target column, batch) update;
-                // target columns never overlap the packed reflector column.
-                unsafe {
-                    cubecl_linalg::$apply::launch_unchecked(
-                        cubecl.client(),
-                        count,
-                        rrqr_cube_dim(),
-                        packed.into_tensor_arg(),
-                        target.into_tensor_arg(),
-                        step,
-                        first_column,
-                        column_count,
-                        m,
-                        packed_columns,
-                        target_columns,
-                        k,
-                        coeff.into_tensor_arg(),
-                        imaginary_unit.into_tensor_arg(),
-                    );
-                }
-                Ok(())
-            }
-
-            fn launch_rank(
-                cubecl: &CubeclSession<'_>,
-                r: &TypedTensor<Self>,
-                rank: &TypedTensor<i64>,
-                status: &TypedTensor<i64>,
-                count: CubeCount,
-                k: usize,
-                n: usize,
-                options: RankRevealingQrOptions,
-            ) -> Result<()> {
-                let r = rrqr_binding(cubecl, r)?;
-                let rank = rrqr_binding(cubecl, rank)?;
-                let status = rrqr_binding(cubecl, status)?;
-                // SAFETY: one plane owns each batch rank and status output.
-                unsafe {
-                    cubecl_linalg::$rank_kernel::launch_unchecked(
-                        cubecl.client(),
-                        count,
-                        rrqr_cube_dim(),
-                        r.into_tensor_arg(),
-                        rank.into_tensor_arg(),
-                        status.into_tensor_arg(),
-                        k,
-                        n,
-                        options.rtol as $real,
-                        options.atol as $real,
-                    );
-                }
-                Ok(())
-            }
-        }
-    };
-}
-
-impl_cuda_rrqr_complex!(
-    Complex32,
-    C32,
-    f32,
-    column_norms_c32,
-    reflector_c32,
-    apply_reflector_c32,
-    prefix_rank_c32
-);
-impl_cuda_rrqr_complex!(
-    Complex64,
-    C64,
-    f64,
-    column_norms_c64,
-    reflector_c64,
-    apply_reflector_c64,
-    prefix_rank_c64
-);
 
 pub(super) fn rank_revealing_qr(
     backend: &mut CudaEngine,
@@ -591,15 +111,14 @@ fn rank_revealing_qr_typed<T>(
     TypedTensor<i64>,
 )>
 where
-    T: CudaRrqrScalar + RrqrTensorVariant + Scalar,
-    <T as LinalgScalar>::Real: Scalar,
+    T: LinalgScalar + RrqrTensorVariant + TensorScalar,
 {
-    ensure_cubecl_resident_typed(OP, input)?;
+    ensure_device_resident_typed(OP, input)?;
     let (m, n) = matrix_dims(OP, input.shape())?;
     let k = m.min(n);
     let batch_shape = &input.shape()[2..];
     let actual_batch_count = checked_shape_product(OP, "batch shape", batch_shape)?;
-    let batch_total = actual_batch_count.max(1);
+    let _batch_total = actual_batch_count.max(1);
     u32::try_from(n).map_err(|_| {
         Error::invalid_argument(OP, "column count", "column index exceeds u32 range")
     })?;
@@ -610,123 +129,72 @@ where
     let permutation_shape = vector_shape(n, batch_shape);
     let rank_shape = batch_shape.to_vec();
 
+    let dtype = T::dtype();
     if m == 0 || n == 0 || actual_batch_count == 0 {
-        return backend.with_cubecl(OP, |cubecl| {
-            let q = cubecl.alloc_output::<T>(&q_shape)?;
-            let r = cubecl.alloc_output::<T>(&r_shape)?;
-            let permutation = cubecl.alloc_output::<i64>(&permutation_shape)?;
-            let rank = cubecl.alloc_zero_output::<i64>(&rank_shape)?;
-            if permutation.n_elements() > 0 {
-                launch_initialize_permutation(cubecl, &permutation, n)?;
-            }
-            Ok((q, r, permutation, rank))
-        });
+        let q = backend.alloc_output(dtype, &q_shape)?;
+        let r = backend.alloc_output(dtype, &r_shape)?;
+        let permutation = backend.alloc_output(DType::I64, &permutation_shape)?;
+        let rank = backend.alloc_output(DType::I64, &rank_shape)?;
+        backend.linalg_initialize_permutation(&permutation, n as i64, OP)?;
+        return Ok((
+            typed::<T>(q, OP)?,
+            typed::<T>(r, OP)?,
+            typed::<i64>(permutation, OP)?,
+            typed::<i64>(rank, OP)?,
+        ));
     }
 
-    let imaginary_unit = T::device_imaginary_unit(backend)?;
     let work = clone_device_tensor(backend, input, OP)?;
-    let (q, r, permutation, rank, status) = backend.with_cubecl(OP, |cubecl| {
-        let coeff = cubecl.alloc_output::<T>(&vector_shape(k, batch_shape))?;
-        let norms =
-            cubecl.alloc_output::<<T as LinalgScalar>::Real>(&vector_shape(n, batch_shape))?;
-        let pivots = cubecl.alloc_output::<i64>(&rank_shape)?;
-        let status = cubecl.alloc_zero_output::<i64>(&rank_shape)?;
-        let permutation = cubecl.alloc_output::<i64>(&permutation_shape)?;
-        launch_initialize_permutation(cubecl, &permutation, n)?;
+    let coeff = backend.alloc_output(dtype, &vector_shape(k, batch_shape))?;
+    let norms = backend.alloc_output(
+        <T as LinalgScalar>::Real::dtype(),
+        &vector_shape(n, batch_shape),
+    )?;
+    let pivots = backend.alloc_output(DType::I64, &rank_shape)?;
+    let status = backend.alloc_output(DType::I64, &rank_shape)?;
+    let permutation = backend.alloc_output(DType::I64, &permutation_shape)?;
+    backend.linalg_initialize_permutation(&permutation, n as i64, OP)?;
 
-        let batch_planes = rrqr_cube_count(batch_total)?;
-        for step in 0..k {
-            let norm_planes = rrqr_cube_count(checked_mul_usize(
-                OP,
-                "RRQR norm planes",
-                n - step,
-                batch_total,
-            )?)?;
-            T::launch_norms(cubecl, &work, &norms, norm_planes, step, m, n)?;
-            T::launch_pivot(
-                cubecl,
-                &norms,
-                &permutation,
-                &pivots,
-                &status,
-                batch_planes.clone(),
-                step,
-                n,
-            )?;
-            launch_swap_columns(
-                cubecl,
+    for step in 0..k {
+        backend.linalg_column_norms(&work, &norms, step as i64, OP)?;
+        backend.linalg_select_pivot(&norms, &permutation, &pivots, &status, step as i64, OP)?;
+        backend.linalg_swap_columns(&work, &permutation, &pivots, step as i64, OP)?;
+        backend.linalg_reflector(&work, &coeff, step as i64, OP)?;
+        let trailing = n - step - 1;
+        if trailing > 0 {
+            // The reflector lives in column `step`, so writing columns `step + 1..` of the same
+            // matrix leaves its write set disjoint.
+            backend.linalg_apply_reflector(
                 &work,
-                &permutation,
-                &pivots,
-                step,
-                m,
-                n,
-                batch_total,
-            )?;
-            T::launch_reflector(cubecl, &work, &coeff, batch_planes.clone(), step, m, n, k)?;
-            let trailing = n - step - 1;
-            if trailing > 0 {
-                let apply_planes = rrqr_cube_count(checked_mul_usize(
-                    OP,
-                    "RRQR trailing update planes",
-                    trailing,
-                    batch_total,
-                )?)?;
-                T::launch_apply(
-                    cubecl,
-                    &work,
-                    &work,
-                    &coeff,
-                    imaginary_unit.as_ref(),
-                    apply_planes,
-                    step,
-                    step + 1,
-                    trailing,
-                    m,
-                    n,
-                    n,
-                    k,
-                )?;
-            }
-        }
-
-        let r = cubecl.alloc_output::<T>(&r_shape)?;
-        launch_extract_r(cubecl, &work, &r, m, n, k)?;
-        let q = cubecl.alloc_output::<T>(&q_shape)?;
-        launch_initialize_q(cubecl, &q, m, k)?;
-        for step in (0..k).rev() {
-            let q_planes = rrqr_cube_count(checked_mul_usize(
-                OP,
-                "RRQR Q update planes",
-                k,
-                batch_total,
-            )?)?;
-            T::launch_apply(
-                cubecl,
                 &work,
-                &q,
                 &coeff,
-                imaginary_unit.as_ref(),
-                q_planes,
-                step,
-                0,
-                k,
-                m,
-                n,
-                k,
-                k,
+                step as i64,
+                (step + 1) as i64,
+                trailing as i64,
+                OP,
             )?;
         }
+    }
 
-        let rank = cubecl.alloc_output::<i64>(&rank_shape)?;
-        T::launch_rank(cubecl, &r, &rank, &status, batch_planes, k, n, options)?;
-        Ok((q, r, permutation, rank, status))
-    })?;
+    let r = backend.alloc_output(dtype, &r_shape)?;
+    backend.linalg_extract_r(&work, &r, OP)?;
+    let q = backend.alloc_output(dtype, &q_shape)?;
+    backend.linalg_identity_shifted(&q, 0, OP)?;
+    for step in (0..k).rev() {
+        backend.linalg_apply_reflector(&work, &q, &coeff, step as i64, 0, k as i64, OP)?;
+    }
+
+    let rank = backend.alloc_output(DType::I64, &rank_shape)?;
+    backend.linalg_prefix_rank(&r, &rank, &status, options.rtol, options.atol, OP)?;
+    let status_tensor = status;
 
     // The only CUDA-to-host read is this bounded provider-status vector. Matrix
     // payloads, norms, pivots, permutation, and rank remain device-resident.
-    backend.runtime().synchronize()?;
-    let host_status = download_tensor(backend.runtime(), &Tensor::from_typed::<i64>(status))?
+    backend
+        .runtime()
+        .synchronize()
+        .map_err(|error| Error::Internal(format!("{OP}: stream barrier failed: {error}")))?;
+    let host_status = download_tensor(backend.runtime(), &status_tensor)?
         .into_typed::<i64>()
         .map_err(|_| {
             Error::Internal("rank_revealing_qr: unexpected provider-status dtype".into())
@@ -741,137 +209,21 @@ where
         ));
     }
 
-    let mut factors = vec![wrap_tensor(q), wrap_tensor(r)];
+    let mut factors = vec![
+        wrap_tensor(typed::<T>(q, OP)?),
+        wrap_tensor(typed::<T>(r, OP)?),
+    ];
     if options.gauge == QrGauge::PositiveDiagonal {
         apply_qr_gauge_device(backend, &mut factors, 0, OP)?;
     }
     let q = unwrap_tensor(factors.remove(0))?;
     let r = unwrap_tensor(factors.remove(0))?;
-    Ok((q, r, permutation, rank))
-}
-
-fn launch_initialize_permutation(
-    cubecl: &CubeclSession<'_>,
-    permutation: &TypedTensor<i64>,
-    n: usize,
-) -> Result<()> {
-    let permutation_arg = rrqr_binding(cubecl, permutation)?;
-    let count = cubecl.cube_count_1d(permutation.n_elements())?;
-    // SAFETY: each worker initializes one distinct permutation element.
-    unsafe {
-        cubecl_linalg::initialize_permutation::launch_unchecked(
-            cubecl.client(),
-            count,
-            cubecl.cube_dim_1d(),
-            permutation_arg.into_tensor_arg(),
-            n,
-        );
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn launch_swap_columns<T>(
-    cubecl: &CubeclSession<'_>,
-    work: &TypedTensor<T>,
-    permutation: &TypedTensor<i64>,
-    pivots: &TypedTensor<i64>,
-    step: usize,
-    m: usize,
-    n: usize,
-    batch_total: usize,
-) -> Result<()>
-where
-    T: CudaRrqrScalar + Scalar,
-{
-    let work_arg = rrqr_binding(cubecl, work)?;
-    let permutation_arg = rrqr_binding(cubecl, permutation)?;
-    let pivots_arg = rrqr_binding(cubecl, pivots)?;
-    let len = checked_mul_usize(OP, "RRQR swap domain", m, batch_total)?;
-    let count = cubecl.cube_count_1d(len)?;
-    // SAFETY: each worker swaps one row in one batch; only row zero updates
-    // that batch's permutation, and pivot indices came from the bounded scan.
-    unsafe {
-        cubecl_linalg::swap_columns::launch_unchecked::<T>(
-            cubecl.client(),
-            count,
-            cubecl.cube_dim_1d(),
-            work_arg.into_tensor_arg(),
-            permutation_arg.into_tensor_arg(),
-            pivots_arg.into_tensor_arg(),
-            step,
-            m,
-            n,
-        );
-    }
-    Ok(())
-}
-
-fn launch_initialize_q<T>(
-    cubecl: &CubeclSession<'_>,
-    q: &TypedTensor<T>,
-    m: usize,
-    k: usize,
-) -> Result<()>
-where
-    T: CudaRrqrScalar + Scalar,
-{
-    let q_arg = rrqr_binding(cubecl, q)?;
-    let count = cubecl.cube_count_1d(q.n_elements())?;
-    // SAFETY: each worker initializes one distinct Q element.
-    unsafe {
-        cubecl_linalg::initialize_q::launch_unchecked::<T>(
-            cubecl.client(),
-            count,
-            cubecl.cube_dim_1d(),
-            q_arg.into_tensor_arg(),
-            m,
-            k,
-        );
-    }
-    Ok(())
-}
-
-fn launch_extract_r<T>(
-    cubecl: &CubeclSession<'_>,
-    work: &TypedTensor<T>,
-    r: &TypedTensor<T>,
-    m: usize,
-    n: usize,
-    k: usize,
-) -> Result<()>
-where
-    T: CudaRrqrScalar + Scalar,
-{
-    let work_arg = rrqr_binding(cubecl, work)?;
-    let r_arg = rrqr_binding(cubecl, r)?;
-    let count = cubecl.cube_count_1d(r.n_elements())?;
-    // SAFETY: each worker writes one R element from the corresponding packed
-    // upper trapezoid or writes zero below it.
-    unsafe {
-        cubecl_linalg::extract_r::launch_unchecked::<T>(
-            cubecl.client(),
-            count,
-            cubecl.cube_dim_1d(),
-            work_arg.into_tensor_arg(),
-            r_arg.into_tensor_arg(),
-            m,
-            n,
-            k,
-        );
-    }
-    Ok(())
-}
-
-fn rrqr_cube_count(planes: usize) -> Result<CubeCount> {
-    let planes = u32::try_from(planes).map_err(|_| {
-        Error::invalid_argument(OP, "launch domain", "plane count exceeds u32 range")
-    })?;
-    Ok(CubeCount::Static(planes.max(1), 1, 1))
-}
-
-fn rrqr_cube_dim() -> CubeDim {
-    CubeDim::new_1d(RRQR_PLANE_WIDTH)
+    Ok((
+        q,
+        r,
+        typed::<i64>(permutation, OP)?,
+        typed::<i64>(rank, OP)?,
+    ))
 }
 
 fn matrix_shape(rows: usize, columns: usize, batch_shape: &[usize]) -> Vec<usize> {
@@ -925,4 +277,11 @@ fn wrap_tensor<T: RrqrTensorVariant>(tensor: TypedTensor<T>) -> Tensor {
 
 fn unwrap_tensor<T: RrqrTensorVariant>(tensor: Tensor) -> Result<TypedTensor<T>> {
     T::unwrap(tensor)
+}
+
+/// A freshly allocated tensor as its typed form.
+fn typed<T: TensorScalar>(tensor: Tensor, op: &'static str) -> Result<TypedTensor<T>> {
+    tensor
+        .into_typed::<T>()
+        .map_err(|_| Error::Internal(format!("{op}: an allocation changed its dtype")))
 }

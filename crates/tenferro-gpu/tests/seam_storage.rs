@@ -1,4 +1,4 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U1 seam storage evidence: identity, allocation freshness and the absence of a safe
 //! unscoped pointer accessor on the new path (issue #2208).
@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::Path;
 
-use tenferro_gpu::cuda_next::{gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
+use tenferro_gpu::cuda::{gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_tensor::{AllocationDomainId, AllocationId, Tensor};
 
 fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId>) {
@@ -20,6 +20,7 @@ fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn seam_upload_keeps_the_single_root_identity() {
     if !gpu_available() {
         return;
@@ -38,6 +39,7 @@ fn seam_upload_keeps_the_single_root_identity() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn seam_upload_allocates_a_fresh_allocation_per_value() {
     if !gpu_available() {
         return;
@@ -56,6 +58,7 @@ fn seam_upload_allocates_a_fresh_allocation_per_value() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn seam_engine_is_send_and_reports_its_device() {
     if !gpu_available() {
         return;
@@ -84,7 +87,7 @@ fn seam_provider_does_not_expose_safe_unscoped_pointer_access() {
         "storage.rs",
         "transfer.rs",
     ] {
-        let path = root.join("src/cuda_next").join(entry);
+        let path = root.join("src/cuda").join(entry);
         sources.push_str(
             &fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {path:?}: {error}")),
         );

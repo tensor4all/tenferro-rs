@@ -1,9 +1,9 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U1 seam staging evidence: payloads around the runtime's staging chunk round-trip and
 //! the runtime's own counters move (issue #2208 U1).
 
-use tenferro_gpu::cuda_next::{
+use tenferro_gpu::cuda::{
     download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine, CudaRuntime,
 };
 
@@ -43,6 +43,7 @@ fn round_trip(engine: &CudaEngine, bytes: usize) -> (u64, u64) {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn payloads_around_the_staging_chunk_round_trip() {
     let Some(engine) = engine() else { return };
     // Exactly one chunk, one element under, one over, and several chunks.
@@ -67,6 +68,7 @@ fn payloads_around_the_staging_chunk_round_trip() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_small_payload_leaves_no_pending_host_bytes() {
     let Some(engine) = engine() else { return };
     let runtime = engine.runtime();
@@ -85,6 +87,7 @@ fn a_small_payload_leaves_no_pending_host_bytes() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_small_staging_budget_forces_chunking_and_drains() {
     if !gpu_available() {
         return;

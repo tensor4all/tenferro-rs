@@ -68,12 +68,11 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "--features blas --bin blas_interop",
     ),
     "macos-accelerate": (
-        # Select targets, not just test-name filters: do not compile the full workspace.
+        # The WebGPU/Metal lane retired with the CUDA cutover (#2208), so macOS runs these
+        # crates' tests with Accelerate BLAS instead of the four Apple/Metal targets.
         "cargo nextest run -p tenferro-gpu -p tenferro-fft -p tenferro-linalg "
         f"{_NEXTEST_PROFILE} --no-default-features "
-        "--features blas-accelerate,webgpu,tenferro-linalg/autodiff "
-        "--test apple_context --test apple_cpu --test webgpu_metal_fft "
-        "--test apple_accelerate --no-fail-fast",
+        "--features blas-accelerate,tenferro-linalg/autodiff --no-fail-fast",
     ),
     "blas-inject": (
         f"cargo test -p tenferro-cpu {_CARGO_TEST_PROFILE} --no-default-features "
@@ -85,8 +84,6 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         f"cargo test --manifest-path ext/sparse/Cargo.toml {_CARGO_TEST_PROFILE} "
         "--features autodiff",
         f"cargo check --manifest-path samples/kdv-pinn/Cargo.toml {_CARGO_TEST_PROFILE} "
-        "--all-targets",
-        f"cargo test --manifest-path samples/cubecl-kernel/Cargo.toml {_CARGO_TEST_PROFILE} "
         "--all-targets",
     ),
     "docs": (
@@ -107,9 +104,11 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         f"RUSTFLAGS='-l dylib=openblas -l dylib=lapack' cargo run -p tenferro-tutorial-code "
         f"{_CARGO_TEST_PROFILE} --no-default-features --features blas --bin blas_interop",
         # Issue #1724: compile the source-backed raw CUDA examples on GPU-less
-        # docs CI; hardware execution remains in the CUDA test lane.
+        # docs CI; hardware execution remains in the CUDA test lane. The custom
+        # NVRTC-launch tutorial retired with the CubeCL session (#2208), so the
+        # surviving vendor-interop binary is the one checked here.
         f"cargo check -p tenferro-tutorial-code {_CARGO_TEST_PROFILE} --no-default-features "
-        "--features cuda,native --bin custom_cuda_kernels",
+        "--features cuda,native --bin cuda_vendor_interop",
         "bash scripts/build_docs_site.sh",
     ),
     "coverage": (
@@ -239,8 +238,6 @@ def run_profiles(
                 continue
             environment = environment_base.copy()
             environment["PYTHON"] = sys.executable
-            if profile == "macos-accelerate":
-                environment["TENFERRO_REQUIRE_METAL"] = "1"
             if profile == "workspace-blas":
                 rustflags = "-l dylib=openblas -l dylib=lapack"
                 environment["RUSTFLAGS"] = rustflags

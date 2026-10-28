@@ -17,7 +17,7 @@ documentation = "https://docs.rs/tenferro-linalg"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["autodiff", "native", "cuda", "webgpu"]
+features = ["autodiff", "native", "cuda"]
 
 [features]
 # Test support, off by default (see `tenferro-cpu`): placement-ledger assertions.
@@ -70,19 +70,14 @@ provider-inject = [
     "tlinalg-blas/provider-inject",
 ]
 cuda = [
+    "tenferro-gpu/cuda",
     "tenferro-ad?/cuda",
     "tenferro-internal-ops/cuda",
-    "dep:cubecl",
-    "dep:cubecl-cuda",
-    "dep:cubecl-runtime",
     "dep:cudarc",
     "dep:libloading",
     "dep:tenferro-gpu",
-    "tenferro-gpu/cuda",
-    "tenferro-gpu/cubecl-interop",
 ]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
-webgpu = ["tenferro-ad?/webgpu", "dep:tenferro-gpu", "tenferro-gpu/webgpu"]
 
 [dependencies]
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.7.1", default-features = false }
@@ -95,9 +90,6 @@ tenferro-cpu = { path = "../tenferro-cpu", version = "0.7.1", default-features =
 cblas-sys = { workspace = true, optional = true }
 cblas-inject = { workspace = true, optional = true }
 computegraph = { workspace = true, optional = true }
-cubecl = { workspace = true, optional = true }
-cubecl-cuda = { workspace = true, optional = true }
-cubecl-runtime = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 faer = { workspace = true, optional = true }
 # The extracted tensor-free linalg providers, both from the tlinalg-rs workspace: `tlinalg` (faer)
@@ -176,7 +168,3 @@ path = "tests/cpu_linalg_allocation.rs"
 name = "small_linalg_allocation"
 path = "tests/small_linalg_allocation.rs"
 
-[[test]]
-name = "apple_accelerate"
-path = "tests/apple_accelerate.rs"
-required-features = ["blas-accelerate", "webgpu", "autodiff"]

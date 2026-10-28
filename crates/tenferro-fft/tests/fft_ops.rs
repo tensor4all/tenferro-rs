@@ -1116,23 +1116,3 @@ fn irfft_jvp_unsupported_error_names_irfft_and_jvp() {
         "{message}"
     );
 }
-
-#[test]
-fn webgpu_fft_adapter_uses_opaque_session_scoped_provider_operations() {
-    let source = include_str!("../src/webgpu.rs");
-    for operation in [
-        "webgpu_interop::execute_c32_fft",
-        "webgpu_interop::execute_f32_rfft",
-        "webgpu_interop::execute_c32_irfft",
-    ] {
-        assert!(
-            source.contains(operation),
-            "missing opaque WebGPU FFT operation {operation}"
-        );
-    }
-    assert!(source.contains("webgpu_interop::fft_limits"));
-    assert!(!source.contains("Handle"));
-    assert!(!source.contains("download_webgpu_tensor"));
-    assert!(!source.contains("upload_webgpu_tensor"));
-    assert!(source.contains("_cache: FftExecutionCache<'_>"));
-}

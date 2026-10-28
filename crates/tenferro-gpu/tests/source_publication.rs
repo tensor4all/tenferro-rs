@@ -1,4 +1,4 @@
-#![cfg(feature = "cuda")]
+#![cfg(all(feature = "cuda", not(feature = "cuda")))]
 
 //! Source publication contract (#1945 U4 item 1).
 //!

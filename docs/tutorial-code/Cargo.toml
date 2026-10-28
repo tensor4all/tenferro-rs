@@ -49,26 +49,15 @@ blas-openblas = [
     "dep:openblas-src",
 ]
 xla-pjrt = ["tenferro-xla/pjrt"]
-apple-shared = [
-    "dep:tenferro-fft",
-    "dep:tenferro-gpu",
-    "dep:tenferro-tensor",
-    "tenferro-fft/autodiff",
-    "tenferro-fft/webgpu",
-    "tenferro-gpu/webgpu",
-    "tenferro-einsum/webgpu",
-    "tenferro-linalg/webgpu",
-]
-doc-snippets = ["dep:tenferro-fft", "dep:tenferro-gpu", "dep:tenferro-tensor", "dep:tenferro-ext-sparse", "dep:tenferro-ext-tropical", "tenferro-fft/webgpu", "tenferro-gpu/cuda", "tenferro-ext-sparse/autodiff", "tenferro-ext-tropical/autodiff"]
+doc-snippets = ["dep:tenferro-fft", "dep:tenferro-gpu", "dep:tenferro-tensor", "dep:tenferro-ext-sparse", "dep:tenferro-ext-tropical", "tenferro-fft/cuda", "tenferro-gpu/cuda", "tenferro-ext-sparse/autodiff", "tenferro-ext-tropical/autodiff"]
 cuda = [
     "dep:tenferro-fft",
     "dep:tenferro-gpu",
     "dep:tenferro-tensor",
     "tenferro-fft/cuda",
     "tenferro-gpu/cuda",
-    # `custom_cuda_kernels` launches a downstream `#[cube]` kernel through the
-    # public CubeCL session, which is only exposed under `cubecl-interop`.
-    "tenferro-gpu/cubecl-interop",
+    "tenferro-einsum/cuda",
+    "tenferro-linalg/cuda",
 ]
 
 [dependencies]
@@ -167,16 +156,6 @@ path = "src/bin/tenferro_compute_skill.rs"
 required-features = ["doc-snippets"]
 
 [[bin]]
-name = "apple_shared_fft"
-path = "src/bin/apple_shared_fft.rs"
-required-features = ["apple-shared"]
-
-[[bin]]
-name = "apple_shared_cholesky"
-path = "src/bin/apple_shared_cholesky.rs"
-required-features = ["apple-shared"]
-
-[[bin]]
 name = "cuda_fft"
 path = "src/bin/cuda_fft.rs"
 required-features = ["cuda"]
@@ -189,11 +168,6 @@ required-features = ["cuda"]
 [[bin]]
 name = "cuda_vendor_interop"
 path = "src/bin/cuda_vendor_interop.rs"
-required-features = ["cuda"]
-
-[[bin]]
-name = "custom_cuda_kernels"
-path = "src/bin/custom_cuda_kernels.rs"
 required-features = ["cuda"]
 
 [[test]]

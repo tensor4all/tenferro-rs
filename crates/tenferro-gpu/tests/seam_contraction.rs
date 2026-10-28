@@ -1,10 +1,10 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U4: cuTENSOR contraction with shape-keyed plans, matched against host references
 //! (issue #2208 U4).
 
 use t4a_cuda_kernels::DType;
-use tenferro_gpu::cuda_next::{
+use tenferro_gpu::cuda::{
     gpu_available, Contraction, CudaDeviceId, CudaEngine, CudaRuntime, Cutensor, Operand,
 };
 
@@ -25,12 +25,15 @@ fn bytes(values: &[f64]) -> Vec<u8> {
 
 fn values(bytes: &[u8]) -> Vec<f64> {
     bytes
-        .chunks_exact(8)
-        .map(|word| f64::from_le_bytes(word.try_into().expect("8 bytes")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|word| f64::from_le_bytes(*word))
         .collect()
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_matrix_product_as_a_contraction_matches_the_host() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (23usize, 17usize, 31usize);
@@ -89,6 +92,7 @@ fn a_matrix_product_as_a_contraction_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_repeated_signature_reuses_the_plan() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (9usize, 8usize, 7usize);
@@ -139,6 +143,7 @@ fn a_repeated_signature_reuses_the_plan() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_permuted_destination_mode_matches_the_host() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (5usize, 4usize, 6usize);
@@ -195,6 +200,7 @@ fn a_permuted_destination_mode_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn disagreeing_operand_lists_are_refused() {
     let Some(runtime) = runtime() else { return };
     let buffer = runtime.upload_bytes(&bytes(&[0.0f64; 16])).expect("buffer");
@@ -246,6 +252,7 @@ fn bytes_complex32(values: &[(f32, f32)]) -> Vec<u8> {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn an_f32_contraction_reads_its_scalars_at_the_float_width() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (5usize, 4usize, 3usize);
@@ -288,8 +295,10 @@ fn an_f32_contraction_reads_its_scalars_at_the_float_width() {
     let observed: Vec<f32> = runtime
         .download_bytes(&d_buf)
         .expect("download")
-        .chunks_exact(4)
-        .map(|word| f32::from_ne_bytes(word.try_into().expect("4 bytes")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| f32::from_ne_bytes(*word))
         .collect();
     let mut expected = vec![0.0f32; m * n];
     for column in 0..n {
@@ -305,6 +314,7 @@ fn an_f32_contraction_reads_its_scalars_at_the_float_width() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_complex_contraction_scales_by_its_complex_alpha() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (2usize, 2usize, 2usize);
@@ -349,7 +359,9 @@ fn a_complex_contraction_scales_by_its_complex_alpha() {
     let observed: Vec<(f32, f32)> = runtime
         .download_bytes(&d_buf)
         .expect("download")
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|word| {
             (
                 f32::from_ne_bytes(word[0..4].try_into().expect("re")),
@@ -363,6 +375,7 @@ fn a_complex_contraction_scales_by_its_complex_alpha() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_nonzero_beta_accumulates_into_the_addend() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (3usize, 2usize, 2usize);
@@ -446,6 +459,7 @@ fn a_nonzero_beta_accumulates_into_the_addend() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_new_shape_grows_one_shared_workspace() {
     let Some(runtime) = runtime() else { return };
     let mut cutensor = Cutensor::new(&runtime).expect("cuTENSOR");
@@ -494,6 +508,7 @@ fn a_new_shape_grows_one_shared_workspace() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn evicting_a_plan_destroys_its_native_resources() {
     let Some(runtime) = runtime() else { return };
     let mut cutensor = Cutensor::new(&runtime).expect("cuTENSOR");

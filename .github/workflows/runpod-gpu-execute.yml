@@ -813,6 +813,10 @@ jobs:
         working-directory: tenferro-rs
         env:
           NEXTEST_TEST_THREADS: "1"
+          # One process per test, so every one of them would compile the kernel modules it
+          # touches from scratch (about 8 s per module on an A100). The directory makes the
+          # first process compile and the rest read the cubins back.
+          TENFERRO_CUDA_ARTIFACT_CACHE: ${{ runner.temp }}/t4a-cuda-artifacts
         run: |
           set -euo pipefail
           python3 scripts/ci/gpu_test_partition.py --kind cuda --lane gpu \

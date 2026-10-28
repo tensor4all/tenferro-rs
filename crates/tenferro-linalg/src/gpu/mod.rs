@@ -1,9 +1,8 @@
 mod ffi;
-mod kernels;
 mod linalg;
 
 use tenferro_gpu::cuda::CudaEngine;
-use tenferro_tensor::{Tensor, TensorRead, TensorView, TensorViewCanonicalization};
+use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
 use crate::backend::{unsupported_dtype, LinalgBackend};
 use crate::extension::{
@@ -22,22 +21,22 @@ fn svd_read_with_driver(
     let input = input.tensor_view();
     match input {
         TensorView::F32(view) => {
-            let compact = session.to_contiguous(&view)?;
+            let compact = session.to_contiguous_view(&view)?;
             let input = Tensor::from_typed::<f32>(compact);
             linalg::svd(session, &input, driver)
         }
         TensorView::F64(view) => {
-            let compact = session.to_contiguous(&view)?;
+            let compact = session.to_contiguous_view(&view)?;
             let input = Tensor::from_typed::<f64>(compact);
             linalg::svd(session, &input, driver)
         }
         TensorView::C32(view) => {
-            let compact = session.to_contiguous(&view)?;
+            let compact = session.to_contiguous_view(&view)?;
             let input = Tensor::from_typed::<num_complex::Complex32>(compact);
             linalg::svd(session, &input, driver)
         }
         TensorView::C64(view) => {
-            let compact = session.to_contiguous(&view)?;
+            let compact = session.to_contiguous_view(&view)?;
             let input = Tensor::from_typed::<num_complex::Complex64>(compact);
             linalg::svd(session, &input, driver)
         }
@@ -54,20 +53,20 @@ fn svd_values_read_with_driver(
 ) -> tenferro_tensor::Result<Tensor> {
     let input = input.tensor_view();
     match input {
-        TensorView::F32(view) => session.to_contiguous(&view).and_then(|input| {
+        TensorView::F32(view) => session.to_contiguous_view(&view).and_then(|input| {
             linalg::svd_values(session, &Tensor::from_typed::<f32>(input), driver)
         }),
-        TensorView::F64(view) => session.to_contiguous(&view).and_then(|input| {
+        TensorView::F64(view) => session.to_contiguous_view(&view).and_then(|input| {
             linalg::svd_values(session, &Tensor::from_typed::<f64>(input), driver)
         }),
-        TensorView::C32(view) => session.to_contiguous(&view).and_then(|input| {
+        TensorView::C32(view) => session.to_contiguous_view(&view).and_then(|input| {
             linalg::svd_values(
                 session,
                 &Tensor::from_typed::<num_complex::Complex32>(input),
                 driver,
             )
         }),
-        TensorView::C64(view) => session.to_contiguous(&view).and_then(|input| {
+        TensorView::C64(view) => session.to_contiguous_view(&view).and_then(|input| {
             linalg::svd_values(
                 session,
                 &Tensor::from_typed::<num_complex::Complex64>(input),
@@ -90,22 +89,22 @@ fn eigh_read_with_driver(
     let input = input.tensor_view();
     match input {
         TensorView::F32(view) => {
-            let compact = session.to_contiguous(&view)?;
+            let compact = session.to_contiguous_view(&view)?;
             let input = Tensor::from_typed::<f32>(compact);
             linalg::eigh(session, &input, driver)
         }
         TensorView::F64(view) => {
-            let compact = session.to_contiguous(&view)?;
+            let compact = session.to_contiguous_view(&view)?;
             let input = Tensor::from_typed::<f64>(compact);
             linalg::eigh(session, &input, driver)
         }
         TensorView::C32(view) => {
-            let compact = session.to_contiguous(&view)?;
+            let compact = session.to_contiguous_view(&view)?;
             let input = Tensor::from_typed::<num_complex::Complex32>(compact);
             linalg::eigh(session, &input, driver)
         }
         TensorView::C64(view) => {
-            let compact = session.to_contiguous(&view)?;
+            let compact = session.to_contiguous_view(&view)?;
             let input = Tensor::from_typed::<num_complex::Complex64>(compact);
             linalg::eigh(session, &input, driver)
         }
@@ -122,20 +121,20 @@ fn eigh_values_read_with_driver(
 ) -> tenferro_tensor::Result<Tensor> {
     let input = input.tensor_view();
     match input {
-        TensorView::F32(view) => session.to_contiguous(&view).and_then(|input| {
+        TensorView::F32(view) => session.to_contiguous_view(&view).and_then(|input| {
             linalg::eigh_values(session, &Tensor::from_typed::<f32>(input), driver)
         }),
-        TensorView::F64(view) => session.to_contiguous(&view).and_then(|input| {
+        TensorView::F64(view) => session.to_contiguous_view(&view).and_then(|input| {
             linalg::eigh_values(session, &Tensor::from_typed::<f64>(input), driver)
         }),
-        TensorView::C32(view) => session.to_contiguous(&view).and_then(|input| {
+        TensorView::C32(view) => session.to_contiguous_view(&view).and_then(|input| {
             linalg::eigh_values(
                 session,
                 &Tensor::from_typed::<num_complex::Complex32>(input),
                 driver,
             )
         }),
-        TensorView::C64(view) => session.to_contiguous(&view).and_then(|input| {
+        TensorView::C64(view) => session.to_contiguous_view(&view).and_then(|input| {
             linalg::eigh_values(
                 session,
                 &Tensor::from_typed::<num_complex::Complex64>(input),
@@ -224,22 +223,22 @@ impl LinalgBackend for CudaEngine {
         let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<f32>(compact);
                 self.svd_full(&input)
             }
             TensorView::F64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<f64>(compact);
                 self.svd_full(&input)
             }
             TensorView::C32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<num_complex::Complex32>(compact);
                 self.svd_full(&input)
             }
             TensorView::C64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<num_complex::Complex64>(compact);
                 self.svd_full(&input)
             }
@@ -292,22 +291,22 @@ impl LinalgBackend for CudaEngine {
         let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<f32>(compact);
                 self.qr(&input)
             }
             TensorView::F64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<f64>(compact);
                 self.qr(&input)
             }
             TensorView::C32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<num_complex::Complex32>(compact);
                 self.qr(&input)
             }
             TensorView::C64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<num_complex::Complex64>(compact);
                 self.qr(&input)
             }
@@ -332,19 +331,19 @@ impl LinalgBackend for CudaEngine {
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = input.tensor_view();
         match input {
-            TensorView::F32(view) => self.to_contiguous(&view).and_then(|input| {
+            TensorView::F32(view) => self.to_contiguous_view(&view).and_then(|input| {
                 self.rank_revealing_qr(&Tensor::from_typed::<f32>(input), options)
             }),
-            TensorView::F64(view) => self.to_contiguous(&view).and_then(|input| {
+            TensorView::F64(view) => self.to_contiguous_view(&view).and_then(|input| {
                 self.rank_revealing_qr(&Tensor::from_typed::<f64>(input), options)
             }),
-            TensorView::C32(view) => self.to_contiguous(&view).and_then(|input| {
+            TensorView::C32(view) => self.to_contiguous_view(&view).and_then(|input| {
                 self.rank_revealing_qr(
                     &Tensor::from_typed::<num_complex::Complex32>(input),
                     options,
                 )
             }),
-            TensorView::C64(view) => self.to_contiguous(&view).and_then(|input| {
+            TensorView::C64(view) => self.to_contiguous_view(&view).and_then(|input| {
                 self.rank_revealing_qr(
                     &Tensor::from_typed::<num_complex::Complex64>(input),
                     options,
@@ -407,15 +406,15 @@ impl LinalgBackend for CudaEngine {
         let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 linalg::qr_with_options(self, &Tensor::from_typed::<f32>(compact), options)
             }
             TensorView::F64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 linalg::qr_with_options(self, &Tensor::from_typed::<f64>(compact), options)
             }
             TensorView::C32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 linalg::qr_with_options(
                     self,
                     &Tensor::from_typed::<num_complex::Complex32>(compact),
@@ -423,7 +422,7 @@ impl LinalgBackend for CudaEngine {
                 )
             }
             TensorView::C64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 linalg::qr_with_options(
                     self,
                     &Tensor::from_typed::<num_complex::Complex64>(compact),
@@ -470,22 +469,22 @@ impl LinalgBackend for CudaEngine {
         let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<f32>(compact);
                 self.cholesky(&input)
             }
             TensorView::F64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<f64>(compact);
                 self.cholesky(&input)
             }
             TensorView::C32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<num_complex::Complex32>(compact);
                 self.cholesky(&input)
             }
             TensorView::C64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<num_complex::Complex64>(compact);
                 self.cholesky(&input)
             }
@@ -499,22 +498,22 @@ impl LinalgBackend for CudaEngine {
         let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<f32>(compact);
                 self.lu(&input)
             }
             TensorView::F64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<f64>(compact);
                 self.lu(&input)
             }
             TensorView::C32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<num_complex::Complex32>(compact);
                 self.lu(&input)
             }
             TensorView::C64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<num_complex::Complex64>(compact);
                 self.lu(&input)
             }
@@ -528,22 +527,22 @@ impl LinalgBackend for CudaEngine {
         let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<f32>(compact);
                 self.full_piv_lu(&input)
             }
             TensorView::F64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<f64>(compact);
                 self.full_piv_lu(&input)
             }
             TensorView::C32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<num_complex::Complex32>(compact);
                 self.full_piv_lu(&input)
             }
             TensorView::C64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<num_complex::Complex64>(compact);
                 self.full_piv_lu(&input)
             }
@@ -557,22 +556,22 @@ impl LinalgBackend for CudaEngine {
         let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<f32>(compact);
                 self.eig(&input)
             }
             TensorView::F64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<f64>(compact);
                 self.eig(&input)
             }
             TensorView::C32(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<num_complex::Complex32>(compact);
                 self.eig(&input)
             }
             TensorView::C64(view) => {
-                let compact = self.to_contiguous(&view)?;
+                let compact = self.to_contiguous_view(&view)?;
                 let input = Tensor::from_typed::<num_complex::Complex64>(compact);
                 self.eig(&input)
             }

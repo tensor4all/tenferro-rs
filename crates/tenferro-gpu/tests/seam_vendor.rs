@@ -1,10 +1,10 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U4: cuBLAS GEMM and strided-batched GEMM on the runtime's own stream, matched against
 //! host references (issue #2208 U4).
 
 use t4a_cuda_kernels::DType;
-use tenferro_gpu::cuda_next::{
+use tenferro_gpu::cuda::{
     gpu_available, Cublas, CudaDeviceId, CudaEngine, CudaRuntime, GemmRequest,
 };
 
@@ -25,8 +25,10 @@ fn f64_bytes(values: &[f64]) -> Vec<u8> {
 
 fn from_f64_bytes(bytes: &[u8]) -> Vec<f64> {
     bytes
-        .chunks_exact(8)
-        .map(|word| f64::from_le_bytes(word.try_into().expect("8 bytes")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|word| f64::from_le_bytes(*word))
         .collect()
 }
 
@@ -46,6 +48,7 @@ fn host_gemm(a: &[f64], b: &[f64], m: usize, n: usize, k: usize) -> Vec<f64> {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_plain_gemm_matches_the_host() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (37usize, 29usize, 41usize);
@@ -75,6 +78,7 @@ fn a_plain_gemm_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_transposed_operand_matches_the_host() {
     let Some(runtime) = runtime() else { return };
     // `a` is stored as `(k, m)` and transposed into the product.
@@ -110,6 +114,7 @@ fn a_transposed_operand_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_strided_batched_gemm_matches_the_host() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k, batches) = (8usize, 6usize, 5usize, 3usize);
@@ -158,6 +163,7 @@ fn a_strided_batched_gemm_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn an_impossible_leading_dimension_is_refused() {
     let Some(runtime) = runtime() else { return };
     let a_buf = runtime.upload_bytes(&f64_bytes(&[1.0; 4])).expect("a");

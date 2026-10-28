@@ -41,7 +41,6 @@ use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use num_complex::{Complex32, Complex64};
-use rayon::prelude::*;
 use tenferro_gpu::cuda::{
     download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine, CudaRuntime,
 };
@@ -245,9 +244,9 @@ fn reconstruction_error(
     vt: &[Complex64],
     n: usize,
 ) -> f64 {
-    let a_sq: f64 = a.par_iter().map(|value| value.norm_sqr()).sum();
+    let a_sq: f64 = a.iter().map(|value| value.norm_sqr()).sum();
     let diff_sq: f64 = (0..n)
-        .into_par_iter()
+        .into_iter()
         .map(|col| {
             let mut local = 0.0;
             for row in 0..n {
@@ -269,7 +268,7 @@ fn reconstruction_error(
 #[allow(clippy::needless_range_loop)]
 fn orthogonality_columns(matrix: &[Complex64], rows: usize, cols: usize) -> f64 {
     let total: f64 = (0..cols)
-        .into_par_iter()
+        .into_iter()
         .map(|p| {
             let mut local = 0.0;
             for q in 0..cols {
@@ -293,7 +292,7 @@ fn orthogonality_columns(matrix: &[Complex64], rows: usize, cols: usize) -> f64 
 #[allow(clippy::needless_range_loop)]
 fn orthogonality_rows(matrix: &[Complex64], rows: usize, cols: usize) -> f64 {
     let total: f64 = (0..rows)
-        .into_par_iter()
+        .into_iter()
         .map(|p| {
             let mut local = 0.0;
             for q in 0..rows {

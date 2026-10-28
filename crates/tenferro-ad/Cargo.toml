@@ -17,7 +17,7 @@ documentation = "https://docs.rs/tenferro-ad"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["native", "cuda", "webgpu"]
+features = ["native", "cuda"]
 
 [lib]
 name = "tenferro_ad"
@@ -40,7 +40,6 @@ blas-mkl = [
     "tenferro-cpu/blas-mkl",
 ]
 cuda = ["dep:tenferro-gpu", "tenferro-gpu/cuda"]
-webgpu = ["dep:tenferro-gpu", "tenferro-gpu/webgpu"]
 rocm = ["dep:tenferro-gpu", "tenferro-gpu/rocm"]
 
 [dependencies]

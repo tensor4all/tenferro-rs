@@ -46,18 +46,24 @@ fn assert_f64_tensor_close(actual: &Tensor, expected: &Tensor, rtol: f64, atol: 
     }
 }
 
+/// Assert the value is device-resident: backend storage, not a host copy.
+///
+/// The promise these tests pin is residency, not which engine family owns the allocation, so
+/// any backend buffer counts and the family name stays out of the assertion.
 fn assert_device_backed(tensor: &Tensor) {
-    fn is_cubecl<T: 'static>(buffer: &StorageBuffer<T>) -> bool {
-        matches!(buffer, StorageBuffer::Backend(buffer) if buffer.backend_family() == "cubecl")
-    }
-
-    fn assert_typed<T: tenferro_tensor::TensorScalar>(tensor: &Tensor) {
-        assert!(is_cubecl(
-            tensor
-                .as_typed::<T>()
-                .expect("the dtype guard selects this arm")
-                .buffer()
-        ));
+    fn assert_typed<T: tenferro_tensor::TensorScalar + 'static>(tensor: &Tensor) {
+        let buffer = tensor
+            .as_typed::<T>()
+            .expect("the dtype guard selects this arm")
+            .buffer();
+        let family = match buffer {
+            StorageBuffer::Backend(buffer) => buffer.backend_family(),
+            StorageBuffer::Host(_) => "host",
+        };
+        assert!(
+            matches!(buffer, StorageBuffer::Backend(_)),
+            "expected a device-resident buffer, got a {family}-resident one"
+        );
     }
 
     match tensor.dtype() {

@@ -44,9 +44,3 @@ fn cpu_engine_exposes_the_common_surface() {
 fn cuda_engine_exposes_the_common_surface() {
     assert_common_session_surface::<tenferro_gpu::cuda::CudaEngine>();
 }
-
-#[cfg(feature = "webgpu")]
-#[test]
-fn webgpu_session_exposes_the_common_surface() {
-    assert_common_session_surface::<tenferro_gpu::webgpu::WebGpuExecSession<'static>>();
-}

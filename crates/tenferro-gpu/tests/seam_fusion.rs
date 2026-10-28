@@ -1,13 +1,13 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U3: a fused region is emitted, compiled once per runtime, bound and launched, and a
 //! warm run performs no NVRTC compilation (issue #2208 U3).
 
 use t4a_cuda_kernels::fusion::{FusionInstruction, FusionOp, FusionOperand, FusionPlan};
 use t4a_cuda_kernels::DType;
-use tenferro_gpu::cuda_next::{gpu_available, CudaDeviceId, CudaEngine, PreparedFusion};
+use tenferro_gpu::cuda::{gpu_available, CudaDeviceId, CudaEngine, PreparedFusion};
 
-fn runtime() -> Option<tenferro_gpu::cuda_next::CudaRuntime> {
+fn runtime() -> Option<tenferro_gpu::cuda::CudaRuntime> {
     if !gpu_available() {
         return None;
     }
@@ -24,8 +24,10 @@ fn f64_bytes(values: &[f64]) -> Vec<u8> {
 
 fn from_f64_bytes(bytes: &[u8]) -> Vec<f64> {
     bytes
-        .chunks_exact(8)
-        .map(|word| f64::from_le_bytes(word.try_into().expect("8 bytes")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|word| f64::from_le_bytes(*word))
         .collect()
 }
 
@@ -49,6 +51,7 @@ fn multiply_then_add() -> FusionPlan {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_fused_region_matches_the_host_and_prepares_once() {
     let Some(runtime) = runtime() else { return };
     let len = 1024i64;
@@ -62,9 +65,12 @@ fn a_fused_region_matches_the_host_and_prepares_once() {
 
     let prepared = PreparedFusion::prepare(&runtime, &multiply_then_add()).expect("prepare");
     let cold = prepared.counters();
-    assert_eq!(
-        cold.compile_attempts, 1,
-        "a cold prepare compiles the emitted source exactly once"
+    // A persistent artifact directory may already hold this source, so the bound is "never
+    // more than once".
+    assert!(
+        cold.compile_attempts <= 1,
+        "a cold prepare compiles the emitted source at most once, got {}",
+        cold.compile_attempts
     );
     assert_eq!(cold.module_loads, 1, "the emitted entry loads one module");
 
@@ -108,6 +114,7 @@ fn a_fused_region_matches_the_host_and_prepares_once() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_region_with_the_wrong_operand_count_is_refused() {
     let Some(runtime) = runtime() else { return };
     let prepared = PreparedFusion::prepare(&runtime, &multiply_then_add()).expect("prepare");
@@ -118,6 +125,7 @@ fn a_region_with_the_wrong_operand_count_is_refused() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn an_ineligible_plan_is_refused_before_any_compile() {
     let Some(runtime) = runtime() else { return };
     let before = runtime.compile_attempts();

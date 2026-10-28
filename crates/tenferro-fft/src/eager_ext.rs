@@ -7,9 +7,7 @@ use tenferro_ad::extension::{
 use tenferro_ad::{EagerSession, EagerTensor};
 use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda_next::CudaEngine;
-#[cfg(feature = "webgpu")]
-use tenferro_gpu::webgpu::WebGpuBackend;
+use tenferro_gpu::cuda::CudaEngine;
 use tenferro_runtime::{ErrorPhase, ExecutionEngine, ExtensionModule};
 use tenferro_tensor::DType;
 
@@ -354,11 +352,6 @@ pub(crate) fn eager_extension_module(
         #[cfg(feature = "cuda")]
         EagerExtensionBackendKind::Cuda => {
             extension_module::<CudaEngine>(engine_id).map_err(eager_runtime_config_error)
-        }
-        // TODO(#2206 webgpu): the WebGPU engine is migrated in a later unit.
-        #[cfg(feature = "webgpu")]
-        EagerExtensionBackendKind::WebGpu => {
-            extension_module::<WebGpuBackend>(engine_id).map_err(eager_runtime_config_error)
         }
     }
 }

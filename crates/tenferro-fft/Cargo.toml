@@ -16,7 +16,7 @@ documentation = "https://docs.rs/tenferro-fft"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["autodiff", "native", "cuda", "webgpu"]
+features = ["autodiff", "native", "cuda"]
 
 [features]
 default = ["native"]
@@ -33,19 +33,10 @@ cuda = [
     "dep:libloading",
     "dep:tenferro-gpu",
     "tenferro-gpu/cuda",
-    "tenferro-gpu/cuda-next",
-    # The CUDA path scales and allocates through tenferro-gpu's CubeCL session
-    # helpers, which live behind `cubecl-interop` (#2206).
-    "tenferro-gpu/cubecl-interop",
     "tenferro-ad?/cuda",
     "tenferro-internal-ops/cuda",
 ]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
-webgpu = [
-    "dep:tenferro-gpu",
-    "tenferro-gpu/webgpu",
-    "tenferro-ad?/webgpu",
-]
 
 [dependencies]
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.7.1", default-features = false }
@@ -71,16 +62,6 @@ syn = { workspace = true, features = ["full", "visit"] }
 name = "fft_plan_cache"
 path = "benches/fft_plan_cache.rs"
 harness = false
-
-[[test]]
-name = "apple_cpu"
-path = "tests/apple_cpu.rs"
-required-features = ["webgpu"]
-
-[[test]]
-name = "webgpu_metal_fft"
-path = "tests/webgpu_metal_fft.rs"
-required-features = ["webgpu"]
 
 [[test]]
 name = "cuda_fft"

@@ -194,81 +194,34 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertTrue(dependencies["faer"]["optional"])
         self.assertTrue(dependencies["lapack"]["optional"])
 
-    def test_cubecl_dependencies_share_cudarc_contract(self) -> None:
-        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
-        dependencies = manifest["workspace"]["dependencies"]
+    def test_cuda_dependencies_are_pinned_revisions(self) -> None:
+        """The CUDA engine's two upstream crates are `publish = false` git checkouts.
 
-        # Released as `t4a-cubecl* 0.11.0`: the ported upstream 0.11 content plus
-        # the migration's fixes, on the fork's `release/t4a-cubecl-0.11.0` branch.
-        # The 0.10.2 line and its `Client::check_errors` patch (#27) are retired -
-        # 0.11 reports a failed launch on the buffers it never wrote, so the raw
-        # publication boundaries use the buffer-scoped claim instead
-        # (`docs/design/cubecl-011-check-errors-disposition.md`).
-        for name in (
-            "cubecl",
-            "cubecl-cuda",
-            "cubecl-common",
-            "cubecl-environment",
-            "cubecl-runtime",
-            "cubecl-wgpu",
-        ):
+        A branch or a loose version would let the tested kernel ABI change under the
+        build, so both stay exact revisions, and `cudarc` keeps one feature set so a
+        single CUDA binding resolves in the graph.
+        """
+        manifest = tomllib.loads(
+            (ROOT / "crates" / "tenferro-gpu" / "Cargo.toml").read_text()
+        )
+        dependencies = manifest["dependencies"]
+        for name in ("t4a-cuda-runtime", "t4a-cuda-kernels"):
             with self.subTest(dependency=name):
                 spec = dependencies[name]
-                self.assertNotIn("git", spec)
-                # Exact, so a newer registry release cannot replace the tested content,
-                # and one copy of the CubeCL runtime stays in the graph.
-                self.assertEqual(spec["version"], "=0.11.0")
+                self.assertIn("git", spec)
+                self.assertNotIn("branch", spec)
+                self.assertNotIn("tag", spec)
+                self.assertTrue(spec.get("optional"))
+                self.assertEqual(len(spec["rev"]), 40, "an exact revision")
 
-        cudarc = dependencies["cudarc"]
+        cudarc = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"][
+            "dependencies"
+        ]["cudarc"]
         self.assertFalse(cudarc["default-features"])
         self.assertEqual(
             set(cudarc["features"]),
             {"driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"},
         )
-
-    def test_cubek_does_not_impose_a_cuda_runtime_floor(self) -> None:
-        manifest = tomllib.loads(
-            (ROOT / "crates" / "tenferro-gpu" / "Cargo.toml").read_text()
-        )
-        features = manifest["features"]
-
-        self.assertFalse(any("cubek" in item for item in features["cuda"]))
-        self.assertIn("dep:cubek-matmul", features["webgpu"])
-        self.assertIn("dep:cubek-std", features["webgpu"])
-
-    def test_sample_workspace_requires_the_workspace_cubecl_release(self) -> None:
-        """`samples/cubecl-kernel` sits outside the root workspace, so nothing but
-        its own manifest holds it to the same CubeCL release `tenferro-gpu`
-        resolves through the workspace. When the two drift apart, two copies of
-        the CubeCL runtime land in one dependency graph, and the sample fails
-        against same-named types from different crate versions: an `E0308`
-        mismatch on `ComputeClient` and `CubeDim` rather than a legible version
-        conflict. Comparing the manifests catches that at the source.
-        """
-        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())
-        expected = workspace["workspace"]["dependencies"]["cubecl"]["version"]
-        self.assertEqual(expected, "=0.11.0")
-
-        for sample in ("cubecl-kernel",):
-            manifest = tomllib.loads(
-                (ROOT / "samples" / sample / "Cargo.toml").read_text()
-            )
-            dependencies = manifest["dependencies"]
-            for name, package in (
-                ("cubecl", "t4a-cubecl"),
-                ("cubecl-cuda", "t4a-cubecl-cuda"),
-            ):
-                with self.subTest(dependency=name):
-                    spec = dependencies[name]
-                    self.assertEqual(spec.get("package"), package)
-                    self.assertNotIn("git", spec)
-                    self.assertEqual(
-                        spec.get("version"),
-                        expected,
-                        f"samples/{sample} requires {name} at {spec.get('version')}, "
-                        f"but the workspace requires {expected}; both versions would "
-                        "end up in one dependency graph",
-                    )
 
 
 if __name__ == "__main__":

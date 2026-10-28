@@ -1,8 +1,5 @@
 #[path = "integration/ad_support_manifest.rs"]
 mod ad_support_manifest;
-#[cfg(all(feature = "autodiff", feature = "webgpu"))]
-#[path = "integration/apple_shared.rs"]
-mod apple_shared;
 #[path = "integration/backend_errors.rs"]
 mod backend_errors;
 #[path = "integration/borrowed_linalg_parity.rs"]

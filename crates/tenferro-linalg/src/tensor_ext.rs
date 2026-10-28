@@ -11,7 +11,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::with_cpu_engine;
 #[cfg(feature = "cuda")]
-use tenferro_gpu::cuda::with_cuda_engine;
+use tenferro_gpu::cuda::raw::with_cuda_engine;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, Engine, Tensor, TensorRead, TensorScalar, TensorWrite,
     TypedTensor,

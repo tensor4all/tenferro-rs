@@ -1000,62 +1000,6 @@ fn eager_extension_foreign_cuda_input_is_rejected_before_factory() {
     ));
 }
 
-#[cfg(feature = "webgpu")]
-#[test]
-#[ignore = "requires a WebGPU adapter"]
-fn eager_extension_factory_receives_exact_webgpu_target() {
-    use tenferro_gpu::webgpu::{webgpu_runtime_engine_id, WebGpuBackend};
-
-    let Ok(backend) = WebGpuBackend::new_default() else {
-        return;
-    };
-    let ctx = EagerRuntime::with_webgpu_backend(backend).unwrap();
-    let host = Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap();
-    let device_input = ctx
-        .with_execution_session(|session| {
-            session.upload_host_tensor(TensorRead::from_tensor(&host))
-        })
-        .unwrap()
-        .unwrap();
-    let input = EagerTensor::from_tensor_in(device_input, Arc::clone(&ctx)).unwrap();
-    let seen = Arc::new(Mutex::new(None));
-    let seen_by_factory = Arc::clone(&seen);
-
-    execute_probe(Arc::new(BridgeProbe::one()), &input, move |target| {
-        *seen_by_factory.lock().unwrap() = Some(target.clone());
-        Ok(BridgeModule::for_engine(target.engine_id))
-    })
-    .unwrap();
-
-    let copied = ctx
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            session.duplicate_value(&input)
-        })
-        .unwrap();
-    let host = ctx
-        .with_execution_session(|session| {
-            session.download_to_host(TensorRead::from_tensor(&copied))
-        })
-        .unwrap()
-        .unwrap();
-    assert_eq!(host.as_slice::<f32>().unwrap(), &[1.0]);
-
-    assert_eq!(
-        seen.lock()
-            .unwrap()
-            .as_ref()
-            .map(|target| target.backend_kind),
-        Some(EagerExtensionBackendKind::WebGpu)
-    );
-    assert_eq!(
-        seen.lock()
-            .unwrap()
-            .as_ref()
-            .map(|target| target.engine_id.as_str()),
-        Some(webgpu_runtime_engine_id().unwrap().as_str())
-    );
-}
-
 #[test]
 fn adopt_untracked_eager_value_registers_value() {
     let ctx = EagerRuntime::new().unwrap();

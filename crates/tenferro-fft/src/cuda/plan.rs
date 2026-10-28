@@ -22,8 +22,8 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tenferro_gpu::cuda_next::raw::DeviceBytes;
-use tenferro_gpu::cuda_next::{CudaEngine, CudaRuntime};
+use tenferro_gpu::cuda::raw::DeviceBytes;
+use tenferro_gpu::cuda::{CudaEngine, CudaRuntime};
 use tenferro_runtime::ExtensionCacheKey;
 use tenferro_tensor::{Tensor, TensorScalar, TypedTensor};
 
@@ -638,7 +638,7 @@ impl CufftPlanEntry {
                 // and output allocation handles. On a failed synchronization
                 // barrier they are forgotten below so the allocations cannot be
                 // reclaimed while the vendor may still be writing to them.
-                let input_retained = match raw.retain_tensor(input, OP) {
+                let input_retained = match unsafe { raw.retain_tensor(input, OP) } {
                     Ok(guard) => guard,
                     Err(error) => {
                         execution_error =
@@ -646,7 +646,7 @@ impl CufftPlanEntry {
                         return Ok::<(), tenferro_tensor::Error>(());
                     }
                 };
-                let output_retained = match raw.retain_tensor(output, OP) {
+                let output_retained = match unsafe { raw.retain_tensor(output, OP) } {
                     Ok(guard) => guard,
                     Err(error) => {
                         execution_error =

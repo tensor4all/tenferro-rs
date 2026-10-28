@@ -153,10 +153,8 @@ cargo build -p tenferro-tutorial-code --no-default-features \
 ```
 
 The example downloads the result back to CPU and asserts the expected values.
-For downstream PTX, CUBIN, NVRTC, or device-library kernels, see
-[Custom CUDA kernels](custom-cuda-kernels.md). That guide uses only the public
-`CudaEngine::with_raw` / `CudaEngine::with_cubecl` and `cuda::raw` extension
-boundary.
+An extension reaches the CUDA driver through the public `CudaEngine::with_raw`
+and `cuda::raw` session boundary described below.
 
 `TensorStructural::copy_read_into` can reuse an already allocated CUDA
 destination. Both operands may be arbitrary-stride region views at a nonzero
@@ -293,58 +291,6 @@ assert_eq!(cpu_x.as_slice::<f64>()?, &[1.0, 2.0]);
 `rhs_batch_dims`. Direct backend code can use the lower-level
 `backend.runtime().synchronize()` barrier; eager code can use
 `EagerRuntime::synchronize()`.
-
-## Apple Shared CPU/Metal Context
-
-On macOS, `AppleContext` owns a host-visible Metal allocation domain and paired
-CPU and WebGPU backend handles. Creation is explicit:
-
-<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#devices_and_gpu_32 -->
-```rust
-use tenferro_gpu::apple::AppleContext;
-use tenferro_tensor::Tensor;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut context = AppleContext::new()?;
-    let host = Tensor::from_vec_col_major([4], vec![1.0_f32, 2.0, 3.0, 4.0])?;
-    let managed = context.upload_tensor(&host)?;
-    // The context lends both paired engines together; each operation names the
-    // one that executes it and the managed tensor keeps its domain either way.
-    let (cpu, metal) = context.parts();
-    let _ = (&managed, cpu, metal);
-    Ok(())
-}
-```
-<!-- end-snippet-source -->
-
-The cloned mutable handles make backend selection visible at each operation.
-The same managed tensor keeps its domain and physical allocation identity when
-it is mapped by CPU code and then launched by Metal code. Each operation result
-is a new allocation in that same domain. `transfer_stats()` changes only for an
-explicit upload or download, not for guarded mapping, CPU writeback, or a Metal
-launch.
-
-Current mapped CPU coverage is intentionally narrow: RustFFT supports
-`F32`/`F64`/`C32`/`C64`, and rank-2 Cholesky supports those four dtypes through
-the selected CPU linalg provider. This does not make arbitrary CPU tensor or
-linalg operations shared-memory fallbacks. CubeK Metal FFT supports F32/C32
-power-of-two CFFT, one-sided RFFT, and IRFFT; unsupported dtypes and sizes
-return typed errors without dispatching to RustFFT.
-
-The runnable tutorials exercise the complete invariants on macOS. Metal
-initialization failures are returned as errors so a broken or unavailable
-runtime cannot silently pass the tutorial test:
-
-```bash
-cargo run -p tenferro-tutorial-code --no-default-features \
-  --features native,apple-shared --bin apple_shared_fft
-cargo run -p tenferro-tutorial-code --no-default-features \
-  --features native,apple-shared --bin apple_shared_cholesky
-```
-
-See `docs/tutorial-code/src/bin/apple_shared_fft.rs` and
-`docs/tutorial-code/src/bin/apple_shared_cholesky.rs` for allocation-ID,
-transfer-counter, capability-error, and numerical-residual assertions.
 
 ## CUDA Across Tensor Layers
 

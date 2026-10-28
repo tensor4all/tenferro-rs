@@ -482,6 +482,39 @@ on the engine's stream, using only public APIs:
 ```rust
 use tenferro_gpu::cuda::cudarc::cublas::{result as cublas, sys as cublas_sys};
 
+/// The cuBLAS handle a session keeps for its engine, bound to the session's stream.
+struct CublasHandle(*mut cublas_sys::cublasContext);
+
+// SAFETY: the handle is only ever used from the session that created it, on that session's stream,
+// and the engine that caches it is `Send` and not shared.
+unsafe impl Send for CublasHandle {}
+unsafe impl Sync for CublasHandle {}
+
+impl CublasHandle {
+    fn new(stream: u64) -> tenferro_tensor::Result<Self> {
+        // `cudarc` creates the handle and hands back its raw pointer.
+        let raw = cublas::create_handle().map_err(|err| Error::backend_source(OP, err))?;
+        let handle = CublasHandle(raw);
+        // SAFETY: `handle.0` came from `cublasCreate` and stays alive in the engine's cache.
+        unsafe { cublas_sys::cublasSetStream_v2(handle.0, stream as *mut _).result() }
+            .map_err(|err| Error::backend_source(OP, err))?;
+        // SAFETY: same handle; the host pointer mode matches the scalars passed to `dgemm`.
+        unsafe {
+            cublas_sys::cublasSetPointerMode_v2(
+                handle.0,
+                cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
+            )
+            .result()
+        }
+        .map_err(|err| Error::backend_source(OP, err))?;
+        Ok(handle)
+    }
+
+    fn raw(&self) -> *mut cublas_sys::cublasContext {
+        self.0
+    }
+}
+
 /// `C = A * B` with cuBLAS `dgemm` on tenferro device tensors.
 ///
 /// `a` is `m x k` and `b` is `k x n`; both are compact column-major CUDA
@@ -503,45 +536,38 @@ fn cublas_dgemm(
     engine.with_raw(OP, |session| {
         let a_ref = session.tensor(a)?;
         let b_ref = session.tensor(b)?;
-        let mut c = session.alloc_output::<f64>(&[m, n])?;
-        let c_ref = session.tensor_mut(&mut c)?;
+        let c = session.alloc_output::<f64>(&[m, n])?;
+        let c_ref = session.tensor_mut(&c)?;
         let (alpha, beta) = (1.0_f64, 0.0_f64);
 
-        // The handle is the runtime's own, already bound to this raw
-        // scope's stream, so a raw scope pays neither `cublasCreate`
-        // nor `cublasDestroy` (tenferro-rs #2083) and never has to
-        // re-bind the stream. It is usable only inside this closure.
-        session.with_cublas_handle(
-            OP,
-            cublas_sys::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
-            |handle| {
-                // SAFETY: the three device pointers come from checked
-                // tensor references that stay borrowed until the
-                // `synchronize` below; A is m x k (lda = m), B is k x n
-                // (ldb = k) and C is m x n (ldc = m) in compact
-                // column-major storage, which is cuBLAS's native layout.
-                // C is the only buffer written and does not alias A or B.
-                unsafe {
-                    cublas::dgemm(
-                        handle,
-                        cublas_sys::cublasOperation_t::CUBLAS_OP_N,
-                        cublas_sys::cublasOperation_t::CUBLAS_OP_N,
-                        m32,
-                        n32,
-                        k32,
-                        &alpha,
-                        a_ref.raw_ptr().cast(),
-                        m32,
-                        b_ref.raw_ptr().cast(),
-                        k32,
-                        &beta,
-                        c_ref.raw_ptr().cast(),
-                        m32,
-                    )
-                }
-                .map_err(|err| Error::backend_source(OP, err))
-            },
-        )?;
+        // A vendor handle is a resource: the engine creates it once, binds it to this scope's
+        // stream and lends it back for the session's life, so a hot loop pays neither
+        // `cublasCreate` nor a re-bind.
+        let stream = session.stream();
+        let handle = CublasHandle::new(stream.raw_handle())?;
+        // SAFETY: the three device pointers come from checked tensor references that stay
+        // borrowed until the `synchronize` below; A is m x k (lda = m), B is k x n (ldb = k) and C
+        // is m x n (ldc = m) in compact column-major storage, which is cuBLAS's native layout. C
+        // is the only buffer written and does not alias A or B.
+        unsafe {
+            cublas::dgemm(
+                handle.raw(),
+                cublas_sys::cublasOperation_t::CUBLAS_OP_N,
+                cublas_sys::cublasOperation_t::CUBLAS_OP_N,
+                m32,
+                n32,
+                k32,
+                &alpha,
+                a_ref.raw_ptr().cast(),
+                m32,
+                b_ref.raw_ptr().cast(),
+                k32,
+                &beta,
+                c_ref.raw_ptr().cast(),
+                m32,
+            )
+            .map_err(|err| Error::backend_source(OP, err))?;
+        }
         // `synchronize` is the only host barrier: the GEMM was merely
         // enqueued on the engine's stream.
         session.synchronize()?;

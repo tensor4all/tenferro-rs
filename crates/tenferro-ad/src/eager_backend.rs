@@ -58,15 +58,6 @@ pub(crate) fn engine_kind_registration(
     {
         return Some(tenferro_gpu::cuda::cuda_runtime_engine_registration(cuda));
     }
-    #[cfg(feature = "webgpu")]
-    if let Some(webgpu) = engine
-        .as_any_mut()
-        .downcast_mut::<tenferro_gpu::webgpu::WebGpuBackend>()
-    {
-        return Some(tenferro_gpu::webgpu::webgpu_runtime_engine_registration(
-            webgpu,
-        ));
-    }
     None
 }
 

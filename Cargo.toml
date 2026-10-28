@@ -107,23 +107,9 @@ blas-src = { version = "0.14", default-features = false }
 lapack = "0.20"
 lapack-src = "0.13"
 lapack-inject = "0.1.2"
-# Compile both CubeCL runtime paths with CUDA 12.8 bindings. Dynamic runtime
-# gating keeps the baseline compatible with CUDA 12.4 driver/NVRTC libraries.
+# CUDA 12.8 bindings; dynamic runtime gating keeps the baseline compatible with
+# CUDA 12.4 driver/NVRTC libraries.
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"] }
-# The published 0.11.0 / 0.3.0 fork releases of the ported content:
-# - https://github.com/tensor4all/cubecl branch release/t4a-cubecl-0.11.0
-# - https://github.com/tensor4all/cubek  branch release/t4a-cubek-0.3.0
-# Both carry the ported upstream content plus the migration's fixes. Replace
-# them with merged upstream revisions when the ports land upstream (#2116).
-cubecl = { package = "t4a-cubecl", version = "=0.11.0", default-features = false }
-cubecl-cuda = { package = "t4a-cubecl-cuda", version = "=0.11.0", features = ["cpp"] }
-cubecl-common = { package = "t4a-cubecl-common", version = "=0.11.0" }
-cubecl-environment = { package = "t4a-cubecl-environment", version = "=0.11.0" }
-cubecl-runtime = { package = "t4a-cubecl-runtime", version = "=0.11.0" }
-cubecl-wgpu = { package = "t4a-cubecl-wgpu", version = "=0.11.0" }
-cubek-matmul = { package = "t4a-cubek-matmul", version = "=0.3.0", default-features = false, features = ["multi-level"] }
-cubek-std = { package = "t4a-cubek-std", version = "=0.3.0", default-features = false }
-cubek-fft = { package = "t4a-cubek-fft", version = "=0.3.0", default-features = false }
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = "0.1.0"

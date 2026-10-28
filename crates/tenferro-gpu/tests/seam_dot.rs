@@ -1,11 +1,9 @@
-#![cfg(feature = "cuda-next")]
+#![cfg(feature = "cuda")]
 
 //! U5 tail: `TensorDot` on the new engine — plain, batched, conjugated and accumulating
 //! contractions against host references (issue #2208 U5).
 
-use tenferro_gpu::cuda_next::{
-    download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine,
-};
+use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_tensor::{
     Complex64, ContractionScalar, DotGeneralAccumulation, DotGeneralConfig, Tensor, TensorDot,
     TensorRead, TensorWrite,
@@ -51,6 +49,7 @@ fn plain(
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_matrix_product_matches_the_host() {
     let Some(mut engine) = engine() else { return };
     let (m, n, k) = (7usize, 5usize, 3usize);
@@ -81,6 +80,7 @@ fn a_matrix_product_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_batched_product_matches_the_host() {
     let Some(mut engine) = engine() else { return };
     let (batches, m, n, k) = (2usize, 2usize, 3usize, 2usize);
@@ -119,6 +119,7 @@ fn a_batched_product_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn an_accumulating_dot_adds_scaled_product_to_the_output() {
     let Some(mut engine) = engine() else { return };
     let (m, n, k) = (2usize, 2usize, 2usize);
@@ -146,6 +147,7 @@ fn an_accumulating_dot_adds_scaled_product_to_the_output() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_conjugated_left_operand_is_conjugated_before_the_product() {
     let Some(mut engine) = engine() else { return };
     let lhs_host = Tensor::from_vec_col_major(
@@ -177,6 +179,7 @@ fn a_conjugated_left_operand_is_conjugated_before_the_product() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_mispaired_configuration_is_refused() {
     let Some(mut engine) = engine() else { return };
     let lhs = device(&engine, vec![2, 3], vec![1.0; 6]);
@@ -200,6 +203,7 @@ fn a_mispaired_configuration_is_refused() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn an_axis_holding_two_roles_is_refused() {
     let Some(mut engine) = engine() else { return };
     let lhs = device(&engine, vec![2, 2], vec![1.0; 4]);
@@ -216,6 +220,7 @@ fn an_axis_holding_two_roles_is_refused() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn an_empty_contraction_yields_zeros_or_the_scaled_output() {
     let Some(mut engine) = engine() else { return };
     let lhs = device(&engine, vec![2, 0], Vec::new());
@@ -250,6 +255,7 @@ fn an_empty_contraction_yields_zeros_or_the_scaled_output() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn an_empty_contraction_zeroes_an_existing_destination() {
     let Some(mut engine) = engine() else { return };
     let lhs = device(&engine, vec![2, 0], Vec::new());

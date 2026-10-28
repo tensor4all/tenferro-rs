@@ -3880,6 +3880,13 @@ pub struct CudaLinalgHandles {
     cublas: CublasHandle,
 }
 
+// SAFETY: a handle bundle is only reachable through `&mut CudaEngine`, which is `!Sync` and hands
+// out one session at a time on the calling thread, so no two threads use these handles at once. The
+// runtime's extension cache requires `Send + Sync` of the values it stores; that requirement is
+// about moving the value between threads, not about sharing the raw pointers.
+unsafe impl Send for CudaLinalgHandles {}
+unsafe impl Sync for CudaLinalgHandles {}
+
 impl fmt::Debug for CudaLinalgHandles {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CudaLinalgHandles")

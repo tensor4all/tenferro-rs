@@ -53,38 +53,36 @@ where
     backend.with_raw(op, |raw| {
         let handles = raw.resource(CudaLinalgHandles::load)?;
         // SAFETY: this stream is used only inside its owning raw session.
-        let stream = unsafe { raw.stream().raw_handle() } as usize as CudaStream;
+        let stream = raw.stream().raw_handle() as usize as CudaStream;
         handles.cusolver().set_stream(stream, op)?;
-        let mut work = raw.alloc_output::<T>(input.shape())?;
-        let mut u = raw.alloc_output::<T>(&u_shape)?;
-        let mut v = raw.alloc_output::<T>(&v_shape)?;
-        let mut s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
-        let mut info = raw.alloc_output::<i32>(&[batches])?;
+        let work = raw.alloc_output::<T>(input.shape())?;
+        let u = raw.alloc_output::<T>(&u_shape)?;
+        let v = raw.alloc_output::<T>(&v_shape)?;
+        let s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
+        let info = raw.alloc_output::<i32>(&[batches])?;
         let retained = [
-            raw.retain_tensor(input, op)?,
-            raw.retain_tensor(&work, op)?,
-            raw.retain_tensor(&u, op)?,
-            raw.retain_tensor(&v, op)?,
-            raw.retain_tensor(&s, op)?,
-            raw.retain_tensor(&info, op)?,
+            unsafe { raw.retain_tensor(input, op)? },
+            unsafe { raw.retain_tensor(&work, op)? },
+            unsafe { raw.retain_tensor(&u, op)? },
+            unsafe { raw.retain_tensor(&v, op)? },
+            unsafe { raw.retain_tensor(&s, op)? },
+            unsafe { raw.retain_tensor(&info, op)? },
         ];
         let src = raw.tensor(input)?;
-        let a_ref = raw.tensor_mut(&mut work)?;
-        let u_ref = raw.tensor_mut(&mut u)?;
-        let v_ref = raw.tensor_mut(&mut v)?;
-        let s_ref = raw.tensor_mut(&mut s)?;
-        let info_ref = raw.tensor_mut(&mut info)?;
+        let a_ref = raw.tensor_mut(&work)?;
+        let u_ref = raw.tensor_mut(&u)?;
+        let v_ref = raw.tensor_mut(&v)?;
+        let s_ref = raw.tensor_mut(&s)?;
+        let info_ref = raw.tensor_mut(&info)?;
         // SAFETY: all spans are validated resident allocations, with exclusive
         // mutable borrows for outputs and the destructive work copy.
-        let (a_ptr, u_ptr, v_ptr, s_ptr, info_ptr) = unsafe {
-            (
-                a_ref.raw_ptr(),
-                u_ref.raw_ptr(),
-                v_ref.raw_ptr(),
-                s_ref.raw_ptr(),
-                info_ref.raw_ptr(),
-            )
-        };
+        let (a_ptr, u_ptr, v_ptr, s_ptr, info_ptr) = (
+            a_ref.raw_ptr(),
+            u_ref.raw_ptr(),
+            v_ref.raw_ptr(),
+            s_ref.raw_ptr(),
+            info_ref.raw_ptr(),
+        );
         let (device_bytes, host_bytes) = handles.cusolver().gesvdp_buffer_size(
             T::DATA_TYPE,
             jobz,
@@ -121,9 +119,8 @@ where
         let computation = (|| -> Result<()> {
             // SAFETY: source/destination cover the same validated shape and do
             // not alias; retained allocations survive until the barrier below.
-            unsafe {
-                raw.copy_bytes(a_ptr, src.raw_ptr().cast_const(), src.byte_len(), op)?;
-            }
+            unsafe { raw.copy_bytes(a_ptr, src.raw_ptr().cast_const(), src.byte_len(), op)? };
+
             for (batch, sigma) in err_sigma.iter_mut().enumerate() {
                 let a_offset = checked_batch_offset(op, "Xgesvdp input offset", batch, a_stride)?;
                 let u_offset = checked_batch_offset(op, "Xgesvdp U offset", batch, u_stride)?;

@@ -1841,7 +1841,7 @@ fn test_cuda_rank_revealing_qr_f32_batched_and_scaled_ranks() {
     assert_eq!(permutation.shape(), &[2, 2]);
     assert_eq!(rank.shape(), &[2]);
     assert_eq!(rank.as_slice::<i64>().unwrap(), &[2, 1]);
-    for batch in permutation.as_slice::<i64>().unwrap().chunks_exact(2) {
+    for batch in permutation.as_slice::<i64>().unwrap().as_chunks::<2>().0 {
         let mut columns = batch.to_vec();
         columns.sort_unstable();
         assert_eq!(columns, vec![0, 1]);

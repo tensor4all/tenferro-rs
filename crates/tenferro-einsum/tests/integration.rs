@@ -26,5 +26,3 @@ mod trace_context_einsum;
 mod traced_correctness;
 #[path = "integration/traced_graph_cache.rs"]
 mod traced_graph_cache;
-#[path = "integration/webgpu_eager_tensor.rs"]
-mod webgpu_eager_tensor;

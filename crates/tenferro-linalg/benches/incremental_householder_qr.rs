@@ -72,7 +72,9 @@ impl BenchSession for CpuEngine {
 #[cfg(feature = "cuda")]
 impl BenchSession for CudaEngine {
     fn benchmark_synchronize(&mut self) -> tenferro_tensor::Result<()> {
-        self.runtime().synchronize()
+        self.runtime()
+            .synchronize()
+            .map_err(|error| tenferro_tensor::Error::runtime_state_source("benchmark", error))
     }
 }
 
