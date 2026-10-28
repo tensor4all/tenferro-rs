@@ -522,6 +522,10 @@ impl CpuEngine {
     /// Bound the bytes of recycled buffers and contraction scratch retained
     /// between operations; zero disables retention.
     ///
+    /// Destinations larger than the retention limit cannot be recycled, so
+    /// repeated calls allocate again and may pay first-touch costs. The default
+    /// is 100 MiB; raise it when a run keeps producing outputs above that size.
+    ///
     /// # Examples
     ///
     /// ```
