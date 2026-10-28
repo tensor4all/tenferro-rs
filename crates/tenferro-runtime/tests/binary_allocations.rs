@@ -1,6 +1,6 @@
 //! Public same-shape wrappers must not allocate input-sized temporaries.
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tenferro_cpu::CpuEngine;
 use tenferro_runtime::TensorSessionOpsExt;
@@ -9,7 +9,13 @@ use tenferro_tensor::{CompareDir, DotGeneralConfig, Engine, Tensor};
 
 const LEN: usize = 4096;
 const INPUT_BYTES: usize = LEN * size_of::<f64>();
-static ENABLED: AtomicBool = AtomicBool::new(false);
+// Only the measuring thread is counted: another thread (a pool worker finishing its
+// startup, the test harness) allocating during a measurement is not the op's cost, and
+// counted globally it made these budgets flake (#2306). The engines measured here run the
+// op on the calling thread.
+thread_local! {
+    static ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 static LARGE_ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 static TOTAL_ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 static TOTAL_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -18,7 +24,7 @@ struct Allocator;
 // SAFETY: all allocations and deallocations are forwarded unchanged to System.
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if ENABLED.load(Ordering::Relaxed) {
+        if ENABLED.try_with(std::cell::Cell::get).unwrap_or(false) {
             TOTAL_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
             TOTAL_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
             if layout.size() >= INPUT_BYTES {
@@ -33,7 +39,7 @@ unsafe impl GlobalAlloc for Allocator {
         unsafe { System.dealloc(ptr, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        if ENABLED.load(Ordering::Relaxed) {
+        if ENABLED.try_with(std::cell::Cell::get).unwrap_or(false) {
             TOTAL_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
             TOTAL_BYTES.fetch_add(size, Ordering::Relaxed);
             if size >= INPUT_BYTES {
@@ -55,13 +61,13 @@ fn allocations(f: impl FnOnce() -> Tensor) -> (Tensor, usize) {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
-            ENABLED.store(false, Ordering::SeqCst);
+            ENABLED.with(|enabled| enabled.set(false));
         }
     }
     LARGE_ALLOCATIONS.store(0, Ordering::Relaxed);
     TOTAL_ALLOCATIONS.store(0, Ordering::Relaxed);
     TOTAL_BYTES.store(0, Ordering::Relaxed);
-    ENABLED.store(true, Ordering::SeqCst);
+    ENABLED.with(|enabled| enabled.set(true));
     let reset = Reset;
     let result = f();
     drop(reset);
