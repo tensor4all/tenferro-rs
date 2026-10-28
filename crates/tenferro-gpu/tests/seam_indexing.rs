@@ -123,6 +123,44 @@ fn a_dynamic_slice_takes_its_starts_from_the_device() {
 
 #[test]
 #[ignore = "requires CUDA"]
+fn a_rank_zero_dynamic_slice_returns_the_scalar_for_owned_and_borrowed_starts() {
+    let Some(mut engine) = engine() else { return };
+    let scalar = device(&engine, vec![], vec![7.5]);
+    // Owned empty starts: an empty allocation has no device address to read.
+    let empty = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![0], Vec::<i64>::new()).expect("empty starts"),
+    )
+    .expect("upload empty starts");
+    let owned = engine
+        .dynamic_slice(&scalar, &empty, &[])
+        .expect("rank-0 dynamic_slice with owned starts");
+    assert_eq!(owned.shape(), &[] as &[usize]);
+    assert_eq!(read(&engine, &owned), vec![7.5]);
+
+    // Borrowed empty starts at a nonzero offset into a nonempty allocation behave the same.
+    let backing = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![2], vec![3i64, 4]).expect("starts backing"),
+    )
+    .expect("upload starts backing");
+    let view = backing
+        .as_typed::<i64>()
+        .expect("i64 payload")
+        .backend_region_view(vec![0], vec![1], 1)
+        .expect("empty view");
+    let borrowed = engine
+        .dynamic_slice_read(
+            tenferro_tensor::TensorRead::from_tensor(&scalar),
+            tenferro_tensor::TensorRead::from_view(tenferro_tensor::TensorView::I64(view)),
+            &[],
+        )
+        .expect("rank-0 dynamic_slice with borrowed starts");
+    assert_eq!(read(&engine, &borrowed), vec![7.5]);
+}
+
+#[test]
+#[ignore = "requires CUDA"]
 fn concatenate_places_each_input_along_the_axis() {
     let Some(mut engine) = engine() else { return };
     let first = device(&engine, vec![2, 2], vec![0.0, 1.0, 2.0, 3.0]);
@@ -600,6 +638,22 @@ fn f64_region(
     ))
 }
 
+/// A borrowed region of an `i64` index tensor, as one read target.
+fn i64_region(
+    tensor: &Tensor,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+) -> TensorRead<'_> {
+    TensorRead::from_view(TensorView::I64(
+        tensor
+            .as_typed::<i64>()
+            .expect("i64 payload")
+            .backend_region_view(shape, strides, offset)
+            .expect("region view"),
+    ))
+}
+
 /// The three borrowed-region flavours every read entry has to serve on a `4 x 5`
 /// column-major source: a transposed view, an offset view and a negative-stride view.
 fn view_flavours(source: &Tensor) -> Vec<(&'static str, TensorRead<'_>)> {
@@ -738,6 +792,70 @@ fn gather_read_follows_a_view_layout() {
                 .expect("gather_read")
         });
     }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn gather_reads_each_per_matrix_permutation_from_an_offset_view() {
+    use tenferro_tensor::Engine as _;
+
+    let Some(mut engine) = engine() else { return };
+    let operand_values = vec![10.0, 20.0, 30.0, 40.0];
+    let operand = device(&engine, vec![4], operand_values.clone());
+    // One uploaded index tensor, one permutation per column.
+    let permutations = vec![
+        0i64, 1, 2, 3, // the identity
+        3, 0, 1, 2, 2, 3, 0, 1,
+    ];
+    let indices = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![4, 3], permutations.clone()).expect("permutations"),
+    )
+    .expect("upload permutations");
+    let config = tenferro_tensor::GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1],
+    };
+
+    for column in 0..3 {
+        let view = i64_region(&indices, vec![4], vec![1], (column * 4) as isize);
+        let observed = engine
+            .gather_read(TensorRead::from_tensor(&operand), view.clone(), &config)
+            .expect("gather_read");
+        let expected: Vec<f64> = (0..4)
+            .map(|element| operand_values[permutations[column * 4 + element] as usize])
+            .collect();
+        assert_eq!(read(&engine, &observed), expected, "column {column}");
+
+        // The same request against the column's compact copy reads the same values.
+        let compact = engine
+            .to_contiguous_read(view)
+            .expect("materialize the column");
+        let reference = engine
+            .gather(&operand, &compact, &config)
+            .expect("owned gather");
+        assert_eq!(read(&engine, &observed), read(&engine, &reference));
+    }
+
+    // A non-compact index view is not one contiguous span; it still works through one copy.
+    let index_source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![8], (0..8).map(|index| index as i64).collect())
+            .expect("index source"),
+    )
+    .expect("upload index source");
+    let wide_operand = device(&engine, vec![8], (0..8).map(|index| index as f64).collect());
+    let observed = engine
+        .gather_read(
+            TensorRead::from_tensor(&wide_operand),
+            i64_region(&index_source, vec![3], vec![2], 1),
+            &config,
+        )
+        .expect("gather_read on a non-compact index view");
+    assert_eq!(read(&engine, &observed), vec![1.0, 3.0, 5.0]);
 }
 
 #[test]

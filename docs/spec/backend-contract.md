@@ -309,6 +309,16 @@ addresses the operand's own layout (offset, strided and negative-stride
 regions); the entries that still resolve a compact copy document that boundary
 where they are defined.
 
+Its indexing read entries (`gather_read`, `scatter_read` and
+`dynamic_slice_read`) take an index or starts operand of `I32`, `I64`, `F32` or
+`F64`, and a float index is rejected unless every element is an exactly
+representable integer before the launch. The catalogue planners validate the
+index vector extents and axis metadata, and the kernels clamp window starts to
+`[0, extent - window]`, which is the baseline's out-of-range behaviour. A
+compact index view is one contiguous span, so the entry reads it in place by
+rebasing the device pointer to the view's base; a non-compact index view keeps
+one compact copy like any other staged operand.
+
 Every method takes `&mut self`, so one computation uses one engine at a time and
 the borrow is the exclusion contract. There is no session entry, no admission
 permit, no nested-entry error and no shared execution scope: the caller owns the

@@ -81,6 +81,7 @@ host	tenferro-ad	eager_exec::tests::dynamic_truncate_rejects_nan_size
 host	tenferro-ad	eager_exec::tests::dynamic_truncate_rejects_non_scalar_size
 host	tenferro-ad	eager_exec::tests::dynamic_truncate_rounds_non_integer_size
 host	tenferro-ad	eager_exec::tests::eager_input_promotion_plan_covers_all_promoted_families
+host	tenferro-ad	eager_exec::tests::eager_promoting_read_entries_convert_only_the_mismatched_operand
 host	tenferro-ad	eager_exec::tests::eager_read_dispatch_only_materializes_when_the_operation_requires_it
 host	tenferro-ad	eager_exec::tests::eager_read_entries_consume_borrowed_views_without_staging
 host	tenferro-ad	eager_exec::tests::eager_shape_expr_resolution_returns_error_instead_of_panicking
@@ -91,6 +92,7 @@ host	tenferro-ad	eager_exec::tests::pad_to_match_pads_with_zeros
 host	tenferro-ad	eager_exec::tests::pad_to_match_rejects_reference_axis_out_of_bounds_without_panicking
 host	tenferro-ad	eager_exec::tests::reshape_resolves_dim_exprs
 host	tenferro-ad	eager_exec::tests::shape_of_each_axis
+host	tenferro-ad	eager_exec::tests::traced_host_ops_do_not_stage_a_borrowed_operand_or_shape_reference
 host	tenferro-ad	extension::tests::adopt_untracked_eager_value_registers_value
 host	tenferro-ad	extension::tests::apply_eager_falls_back_to_compiled_on_unsupported_prepare
 host	tenferro-ad	extension::tests::consuming_preparation_checks_recording_and_installs_without_taking_ownership
@@ -654,9 +656,12 @@ gpu	tenferro-gpu	cuda::dispatch::tests::compare_and_select_match_the_host_refere
 gpu	tenferro-gpu	cuda::dispatch::tests::gather_matches_the_host_reference
 gpu	tenferro-gpu	cuda::dispatch::tests::scatter_add_matches_the_host_reference
 gpu	tenferro-gpu	cuda::dispatch::tests::unary_matches_the_host_reference
+gpu	tenferro-gpu	cuda::structural::tests::a_float_offset_index_view_is_validated_at_its_base
 gpu	tenferro-gpu	cuda::structural::tests::a_materialized_view_moves_the_staging_counter
+gpu	tenferro-gpu	cuda::structural::tests::a_non_compact_index_view_keeps_one_staging_copy
 gpu	tenferro-gpu	cuda::structural::tests::a_region_view_reads_its_own_elements
 gpu	tenferro-gpu	cuda::structural::tests::concatenate_refuses_a_foreign_later_input_before_preparing_anything
+gpu	tenferro-gpu	cuda::structural::tests::offset_index_views_are_read_in_place
 gpu	tenferro-gpu	cuda::structural::tests::read_entries_consume_a_strided_view_without_staging
 gpu	tenferro-gpu	cuda::structural::tests::reverse_read_keeps_singleton_and_empty_geometry
 host	tenferro-gpu	cuda::structural::tests::the_element_count_checks_both_extremes
@@ -744,6 +749,7 @@ gpu	tenferro-gpu::seam_indexing	a_rank_nine_concatenation_uses_the_general_path
 gpu	tenferro-gpu::seam_indexing	a_rank_nine_dynamic_slice_uses_the_general_path
 gpu	tenferro-gpu::seam_indexing	a_rank_nine_gather_and_scatter_use_the_general_path
 gpu	tenferro-gpu::seam_indexing	a_rank_nine_window_uses_the_general_path
+gpu	tenferro-gpu::seam_indexing	a_rank_zero_dynamic_slice_returns_the_scalar_for_owned_and_borrowed_starts
 gpu	tenferro-gpu::seam_indexing	a_slice_window_reads_the_strided_region
 gpu	tenferro-gpu::seam_indexing	an_empty_window_is_refused_or_produces_an_empty_result
 gpu	tenferro-gpu::seam_indexing	complex_view_reads_match_the_compact_result
@@ -753,6 +759,7 @@ gpu	tenferro-gpu::seam_indexing	dynamic_slice_read_follows_a_view_layout
 gpu	tenferro-gpu::seam_indexing	float_indices_are_checked_for_exactness
 gpu	tenferro-gpu::seam_indexing	gather_read_follows_a_view_layout
 gpu	tenferro-gpu::seam_indexing	gather_reads_a_window_per_index_vector
+gpu	tenferro-gpu::seam_indexing	gather_reads_each_per_matrix_permutation_from_an_offset_view
 gpu	tenferro-gpu::seam_indexing	mismatched_index_metadata_is_refused_before_any_device_read
 gpu	tenferro-gpu::seam_indexing	pad_fills_edges_and_interior_with_zero
 gpu	tenferro-gpu::seam_indexing	pad_read_follows_a_view_layout

@@ -49,6 +49,22 @@ fn region(
     ))
 }
 
+/// A borrowed region of an `i64` index tensor, as one read target.
+fn index_region(
+    tensor: &Tensor,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+) -> TensorRead<'_> {
+    TensorRead::from_view(TensorView::I64(
+        tensor
+            .as_typed::<i64>()
+            .expect("i64 payload")
+            .backend_region_view(shape, strides, offset)
+            .expect("region view"),
+    ))
+}
+
 /// The `3 x 4` column-major source's transpose: the strided view with offset zero.
 fn transposed(source: &Tensor) -> TensorRead<'_> {
     region(source, vec![4, 3], vec![3, 1], 0)
@@ -187,6 +203,202 @@ fn read_entries_consume_a_strided_view_without_staging() {
         engine.staged_reads(),
         before,
         "a native read entry staged a borrowed view instead of reading its own layout"
+    );
+}
+
+/// #1930: one uploaded index tensor holds several per-matrix permutations. Gather, scatter and
+/// dynamic slice each read one column as an offset view of that allocation, so none of them
+/// stages the index operand.
+#[test]
+#[ignore = "requires CUDA"]
+fn offset_index_views_are_read_in_place() {
+    let Some(mut engine) = engine() else { return };
+    let operand_values = vec![10.0, 20.0, 30.0, 40.0];
+    let operand = device(&engine, vec![4], operand_values.clone());
+    let permutations = vec![
+        0i64, 1, 2, 3, // the identity
+        3, 0, 1, 2, 2, 3, 0, 1,
+    ];
+    let index_tensor = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![4, 3], permutations.clone()).expect("permutations"),
+    )
+    .expect("upload permutations");
+
+    let gather_config = tenferro_tensor::GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1],
+    };
+    let updates = device(&engine, vec![4], vec![1.0, 2.0, 3.0, 4.0]);
+    let scatter_config = tenferro_tensor::ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+
+    let before = engine.staged_reads();
+    for column in 0..3 {
+        let indices = || index_region(&index_tensor, vec![4], vec![1], (column * 4) as isize);
+
+        // A gather whose start list is this column.
+        let gathered = engine
+            .gather_read(TensorRead::from_tensor(&operand), indices(), &gather_config)
+            .expect("gather_read");
+        let expected: Vec<f64> = (0..4)
+            .map(|element| operand_values[permutations[column * 4 + element] as usize])
+            .collect();
+        assert_eq!(read(&engine, &gathered), expected, "gather column {column}");
+
+        // A scatter whose start list is the same column.
+        let scattered = engine
+            .scatter_read(
+                TensorRead::from_tensor(&operand),
+                indices(),
+                TensorRead::from_tensor(&updates),
+                &scatter_config,
+            )
+            .expect("scatter_read");
+        let mut expected = operand_values.clone();
+        for element in 0..4 {
+            expected[permutations[column * 4 + element] as usize] += (element + 1) as f64;
+        }
+        assert_eq!(
+            read(&engine, &scattered),
+            expected,
+            "scatter column {column}"
+        );
+    }
+    assert_eq!(
+        engine.staged_reads(),
+        before,
+        "an offset index view was staged instead of read in place"
+    );
+
+    // Dynamic slice: one starts tensor holds several per-window start vectors.
+    let matrix = device(
+        &engine,
+        vec![4, 5],
+        (0..20).map(|index| index as f64).collect(),
+    );
+    let starts_values = vec![0i64, 0, 1, 2, 2, 1];
+    let start_tensor = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![2, 3], starts_values.clone()).expect("starts"),
+    )
+    .expect("upload starts");
+    let before = engine.staged_reads();
+    for column in 0..3 {
+        let starts = index_region(&start_tensor, vec![2], vec![1], (column * 2) as isize);
+        let sliced = engine
+            .dynamic_slice_read(TensorRead::from_tensor(&matrix), starts, &[2, 3])
+            .expect("dynamic_slice_read");
+        let (row, col) = (
+            starts_values[column * 2] as usize,
+            starts_values[column * 2 + 1] as usize,
+        );
+        let mut expected = Vec::with_capacity(6);
+        for c in 0..3 {
+            for r in 0..2 {
+                expected.push((row + r + (col + c) * 4) as f64);
+            }
+        }
+        assert_eq!(
+            read(&engine, &sliced),
+            expected,
+            "dynamic_slice column {column}"
+        );
+    }
+    assert_eq!(
+        engine.staged_reads(),
+        before,
+        "an offset starts view was staged instead of read in place"
+    );
+}
+
+/// A non-compact index view is not one contiguous span, so it keeps exactly one staged copy.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_non_compact_index_view_keeps_one_staging_copy() {
+    let Some(mut engine) = engine() else { return };
+    let operand = device(&engine, vec![8], (0..8).map(|index| index as f64).collect());
+    // The odd elements of an eight-element allocation: shape [3], stride 2, offset 1.
+    let index_source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![8], (0..8).map(|index| index as i64).collect())
+            .expect("index source"),
+    )
+    .expect("upload index source");
+    let config = tenferro_tensor::GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1],
+    };
+    let before = engine.staged_reads();
+    let gathered = engine
+        .gather_read(
+            TensorRead::from_tensor(&operand),
+            index_region(&index_source, vec![3], vec![2], 1),
+            &config,
+        )
+        .expect("gather_read");
+    assert_eq!(
+        engine.staged_reads(),
+        before + 1,
+        "a non-compact index view must keep exactly one staging copy"
+    );
+    assert_eq!(read(&engine, &gathered), vec![1.0, 3.0, 5.0]);
+}
+
+/// A float index view is validated through the same rebased pointer its gather reads: the
+/// fractional value in the second column is found even though the allocation's base holds an
+/// exact integer.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_float_offset_index_view_is_validated_at_its_base() {
+    let Some(mut engine) = engine() else { return };
+    let operand = device(&engine, vec![4], vec![10.0, 20.0, 30.0, 40.0]);
+    let indices = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![4, 2], vec![0.0, 1.0, 2.0, 3.0, 0.5, 1.0, 2.0, 3.0])
+            .expect("float indices"),
+    )
+    .expect("upload float indices");
+    let config = tenferro_tensor::GatherConfig {
+        offset_dims: vec![],
+        collapsed_slice_dims: vec![0],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![1],
+    };
+
+    // The exact column is accepted.
+    engine
+        .gather_read(
+            TensorRead::from_tensor(&operand),
+            region(&indices, vec![4], vec![1], 0),
+            &config,
+        )
+        .expect("an exact float index column");
+
+    // The fractional column is rejected through the rebased span, not through the base.
+    let error = engine
+        .gather_read(
+            TensorRead::from_tensor(&operand),
+            region(&indices, vec![4], vec![1], 4),
+            &config,
+        )
+        .expect_err("a fractional float index must be refused");
+    assert!(
+        error
+            .to_string()
+            .contains("not an exactly representable integer"),
+        "unexpected error: {error}"
     );
 }
 

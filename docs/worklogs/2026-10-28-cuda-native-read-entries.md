@@ -35,8 +35,18 @@
   This is marked `// ponytail:` at each site; removing it needs a general-path
   strided-to-strided copy (slice, pad, dynamic-slice, gather, scatter and both diagonal
   entries) which is a separate change.
-- Not in this unit, by scope: `tril`/`triu` (compact-only kernel), `dynamic_update_slice` (no
-  kernel) and the `gather`/`scatter` **index** operand (#1930).
+- Not in this unit, by scope: `tril`/`triu` (compact-only kernel) and
+  `dynamic_update_slice` (no kernel).
+- The gather, scatter and dynamic-slice index/starts operand now resolves through
+  `index_operand`. The catalogue's index planners require a compact layout with offset zero
+  (`require_compact`). An owned tensor is that already, and a staged compact copy is too. A
+  borrowed view whose strides are its extents' compact strides is one contiguous span, so it
+  is read in place: `IndexOperand::pointer` reports the allocation, an element offset and the
+  span length, and `Dispatcher::run_compact` checks `device_ptr_range` inside a raw scope before
+  embedding the rebased address as `Arg::U64`. The planner then receives the compact layout of
+  the view's extents. The float-index exactness validator uses the same pointer, so a float
+  offset view is validated where the gather/scatter launch will read it. A non-compact index
+  view, a negative offset and an index view wider than `MAX_RANK` keep one `device_read` copy.
 
 ## Verification conclusions and constraints
 
@@ -58,3 +68,9 @@
   nextest inventory (1235 tests).
 - The staging removal is asserted by counters, not timed. No benchmark row was added: the
   change removes a device copy per view operand and does not alter the kernels' own work.
+- The index-operand test drives #1930's shape: one uploaded permutation tensor holds several
+  per-matrix permutations, and gather, scatter and dynamic slice each read one column as an
+  offset view. The staging counter stays put across all three, while a non-compact index view
+  moves it by exactly one; a float offset column is validated through its rebased pointer, not
+  the allocation's base. The A100 focused run passes all 9 `tenferro-gpu` lib device tests and
+  all 24 `seam_indexing` tests, and the CUDA partition matches the nextest inventory (1241).

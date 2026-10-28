@@ -9,7 +9,7 @@
 //! references through the elementwise, comparison, conversion, gather and scatter
 //! entries (issue #2208 U2).
 
-use super::Dispatcher;
+use super::{Dispatcher, IndexPointer};
 use crate::cuda::{gpu_available, CudaDeviceId, CudaEngine, CudaRuntime};
 use t4a_cuda_kernels::{
     BinaryOp, CompareOp, DType, Entry, GatherPlan, Layout, ScalarSide, ScatterPlan, UnaryOp,
@@ -238,7 +238,7 @@ fn gather_matches_the_host_reference() {
             &plan,
             &out,
             &operand,
-            &indices,
+            IndexPointer::Direct(&indices),
         )
         .expect("gather");
     let observed = from_f64_bytes(&runtime.download_bytes(&out).expect("download"));
@@ -282,7 +282,7 @@ fn scatter_add_matches_the_host_reference() {
             1,
             &plan,
             &out,
-            &first_indices,
+            IndexPointer::Direct(&first_indices),
             &first_update,
         )
         .expect("first scatter");
@@ -298,7 +298,7 @@ fn scatter_add_matches_the_host_reference() {
             1,
             &plan,
             &out,
-            &second_indices,
+            IndexPointer::Direct(&second_indices),
             &second_update,
         )
         .expect("second scatter");

@@ -15,6 +15,28 @@ use t4a_cuda_runtime::{Arg, BoundFunction, LaunchConfig};
 use super::engine::CudaEngine;
 use super::launch::{layout_arg, KernelModules};
 
+/// Where a compact index operand's kernel parameter points.
+///
+/// The catalogue's gather, scatter and dynamic-slice planners take a compact index layout with
+/// offset zero (`require_compact`). An owned tensor or a staged compact copy names its
+/// allocation's base. A borrowed view whose strides are compact is one contiguous span that may
+/// start at a nonzero element offset, so its parameter is the allocation's base rebased by that
+/// offset; the runtime validates the span inside the raw scope before the launch embeds it.
+#[derive(Clone, Copy)]
+pub(crate) enum IndexPointer<'a> {
+    /// The allocation's own base pointer.
+    Direct(&'a t4a_cuda_runtime::Buffer),
+    /// A checked span beginning `offset_bytes` into `buffer`, covering `len_bytes`.
+    Rebased {
+        /// The allocation the span lies in.
+        buffer: &'a t4a_cuda_runtime::Buffer,
+        /// Byte offset of the operand's first element.
+        offset_bytes: usize,
+        /// Bytes the operand's compact layout covers.
+        len_bytes: usize,
+    },
+}
+
 /// One runtime's dispatcher over a prepared module set.
 #[doc(hidden)]
 pub struct Dispatcher {
@@ -154,6 +176,74 @@ impl Dispatcher {
         unsafe {
             self.modules
                 .launch(entry, LaunchConfig::new(plan.grid[0], plan.block[0]), args)
+        }
+    }
+
+    /// Enqueue one launch whose compact index operand may name a rebased span.
+    ///
+    /// `arguments` is the complete ABI argument list and `pointer_argument` indexes the operand
+    /// named by `pointer`. A [`IndexPointer::Direct`] operand is the ordinary launch. A
+    /// [`IndexPointer::Rebased`] operand is resolved inside the runtime's raw scope, where
+    /// `device_ptr_range` checks the span against the registered allocation before the launch
+    /// embeds the rebased address. `resources` names the other buffers the parameters use; the
+    /// operand's own allocation is registered from `pointer`.
+    ///
+    /// # Safety
+    ///
+    /// As [`KernelModules::launch`]: the arguments must match the entry's ABI, and `resources`
+    /// plus the operand allocation must name every buffer the parameters read or write.
+    unsafe fn run_compact<'args, 'ptr: 'args>(
+        &mut self,
+        entry: Entry,
+        plan: t4a_cuda_kernels::Launch,
+        arguments: &mut [Arg<'args>],
+        pointer_argument: usize,
+        pointer: IndexPointer<'ptr>,
+        resources: &[&t4a_cuda_runtime::Buffer],
+    ) -> crate::Result<()> {
+        match pointer {
+            IndexPointer::Direct(buffer) => {
+                arguments[pointer_argument] = Arg::DevicePtr(buffer);
+                self.run(entry, plan, arguments)
+            }
+            IndexPointer::Rebased {
+                buffer,
+                offset_bytes,
+                len_bytes,
+            } => {
+                if plan.grid[0] == 0 {
+                    return Ok(());
+                }
+                // The raw scope needs one resource per buffer the parameters name; the rebased
+                // allocation is the one the caller cannot list without the pointer.
+                let mut raw = Vec::with_capacity(resources.len() + 1);
+                raw.extend(
+                    resources
+                        .iter()
+                        .map(|buffer| t4a_cuda_runtime::RawResource::Buffer(buffer)),
+                );
+                raw.push(t4a_cuda_runtime::RawResource::Buffer(buffer));
+                // SAFETY: forwarded to the caller's contract; the span is checked below.
+                unsafe {
+                    self.in_scope(entry, entry.name(), raw, |scope, function| {
+                        let address = scope
+                            .device_ptr_range(buffer, offset_bytes, len_bytes)
+                            .map_err(|error| {
+                                crate::Error::runtime_state_source("cuda launch", error)
+                            })?;
+                        arguments[pointer_argument] = Arg::U64(address);
+                        scope
+                            .launch(
+                                function,
+                                LaunchConfig::new(plan.grid[0], plan.block[0]),
+                                arguments,
+                            )
+                            .map_err(|error| {
+                                crate::Error::runtime_state_source("cuda launch", error)
+                            })
+                    })
+                }
+            }
         }
     }
 
@@ -473,7 +563,7 @@ impl Dispatcher {
         plan: &GatherPlan,
         out_buffer: &t4a_cuda_runtime::Buffer,
         operand_buffer: &t4a_cuda_runtime::Buffer,
-        indices_buffer: &t4a_cuda_runtime::Buffer,
+        indices_buffer: IndexPointer<'_>,
     ) -> crate::Result<()> {
         let (launch, output_len) = plan_gather(
             dtype,
@@ -491,22 +581,31 @@ impl Dispatcher {
         let operand_layout = t4a_cuda_kernels::CLayout::new(operand);
         let indices_layout = t4a_cuda_kernels::CLayout::new(indices);
         let mirror = t4a_cuda_kernels::CGatherPlan::new(plan, out.rank()).map_err(plan_error)?;
-        self.run(
-            Entry::Gather,
-            launch,
-            &[
-                Arg::DevicePtr(out_buffer),
-                Arg::DevicePtr(operand_buffer),
-                Arg::DevicePtr(indices_buffer),
-                Arg::U32(dtype.tag() as u32),
-                Arg::U32(index_dtype.tag() as u32),
-                layout_arg(&out_layout),
-                layout_arg(&operand_layout),
-                layout_arg(&indices_layout),
-                pod_arg(&mirror),
-                Arg::U64(output_len as u64),
-            ],
-        )
+        let mut arguments = [
+            Arg::DevicePtr(out_buffer),
+            Arg::DevicePtr(operand_buffer),
+            // The index operand's pointer is set by `run_compact`.
+            Arg::U64(0),
+            Arg::U32(dtype.tag() as u32),
+            Arg::U32(index_dtype.tag() as u32),
+            layout_arg(&out_layout),
+            layout_arg(&operand_layout),
+            layout_arg(&indices_layout),
+            pod_arg(&mirror),
+            Arg::U64(output_len as u64),
+        ];
+        // SAFETY: `plan_gather` accepted the three layouts and the plan, the argument order is
+        // the entry's documented ABI, and `resources` names every buffer it addresses.
+        unsafe {
+            self.run_compact(
+                Entry::Gather,
+                launch,
+                &mut arguments,
+                2,
+                indices_buffer,
+                &[out_buffer, operand_buffer],
+            )
+        }
     }
 
     /// `t4a_cuda_scatter_add`: the additive scatter described by `plan`.
@@ -529,7 +628,7 @@ impl Dispatcher {
         updates_len: i64,
         plan: &ScatterPlan,
         out_buffer: &t4a_cuda_runtime::Buffer,
-        indices_buffer: &t4a_cuda_runtime::Buffer,
+        indices_buffer: IndexPointer<'_>,
         updates_buffer: &t4a_cuda_runtime::Buffer,
     ) -> crate::Result<()> {
         let launch = plan_scatter_add(
@@ -550,22 +649,31 @@ impl Dispatcher {
         let mirror = t4a_cuda_kernels::CScatterPlan::new(out.rank(), updates.rank(), plan)
             .map_err(plan_error)?;
         let update_len = updates.element_count().map_err(plan_error)?;
-        self.run(
-            Entry::ScatterAdd,
-            launch,
-            &[
-                Arg::DevicePtr(out_buffer),
-                Arg::DevicePtr(indices_buffer),
-                Arg::DevicePtr(updates_buffer),
-                Arg::U32(dtype.tag() as u32),
-                Arg::U32(index_dtype.tag() as u32),
-                layout_arg(&out_layout),
-                layout_arg(&indices_layout),
-                layout_arg(&updates_layout),
-                pod_arg(&mirror),
-                Arg::U64(update_len as u64),
-            ],
-        )
+        let mut arguments = [
+            Arg::DevicePtr(out_buffer),
+            // The index operand's pointer is set by `run_compact`.
+            Arg::U64(0),
+            Arg::DevicePtr(updates_buffer),
+            Arg::U32(dtype.tag() as u32),
+            Arg::U32(index_dtype.tag() as u32),
+            layout_arg(&out_layout),
+            layout_arg(&indices_layout),
+            layout_arg(&updates_layout),
+            pod_arg(&mirror),
+            Arg::U64(update_len as u64),
+        ];
+        // SAFETY: `plan_scatter_add` accepted the three layouts and the plan, the argument order
+        // is the entry's documented ABI, and `resources` names every buffer it addresses.
+        unsafe {
+            self.run_compact(
+                Entry::ScatterAdd,
+                launch,
+                &mut arguments,
+                1,
+                indices_buffer,
+                &[out_buffer, updates_buffer],
+            )
+        }
     }
 
     /// `t4a_cuda_slice`: the window `starts`/`steps` describes, into a compact destination.
@@ -627,7 +735,7 @@ impl Dispatcher {
         starts_rank: u32,
         out_buffer: &t4a_cuda_runtime::Buffer,
         operand_buffer: &t4a_cuda_runtime::Buffer,
-        starts_buffer: &t4a_cuda_runtime::Buffer,
+        starts_buffer: IndexPointer<'_>,
     ) -> crate::Result<()> {
         let launch = plan_dynamic_slice(
             dtype,
@@ -641,20 +749,29 @@ impl Dispatcher {
         .map_err(plan_error)?;
         let out_layout = t4a_cuda_kernels::CLayout::new(out);
         let operand_layout = t4a_cuda_kernels::CLayout::new(operand);
-        self.run(
-            Entry::DynamicSlice,
-            launch,
-            &[
-                Arg::DevicePtr(out_buffer),
-                Arg::DevicePtr(operand_buffer),
-                Arg::DevicePtr(starts_buffer),
-                Arg::U32(dtype.tag() as u32),
-                Arg::U32(index_dtype.tag() as u32),
-                layout_arg(&out_layout),
-                layout_arg(&operand_layout),
-                Arg::U64(out_len as u64),
-            ],
-        )
+        let mut arguments = [
+            Arg::DevicePtr(out_buffer),
+            Arg::DevicePtr(operand_buffer),
+            // The starts operand's pointer is set by `run_compact`.
+            Arg::U64(0),
+            Arg::U32(dtype.tag() as u32),
+            Arg::U32(index_dtype.tag() as u32),
+            layout_arg(&out_layout),
+            layout_arg(&operand_layout),
+            Arg::U64(out_len as u64),
+        ];
+        // SAFETY: `plan_dynamic_slice` accepted the two layouts, the argument order is the
+        // entry's documented ABI, and `resources` names every buffer it addresses.
+        unsafe {
+            self.run_compact(
+                Entry::DynamicSlice,
+                launch,
+                &mut arguments,
+                2,
+                starts_buffer,
+                &[out_buffer, operand_buffer],
+            )
+        }
     }
 
     /// `t4a_cuda_pad`: edge and interior padding into a compact destination.
@@ -722,21 +839,30 @@ impl Dispatcher {
         dtype: DType,
         len: i64,
         max_exact_integer: f64,
-        indices: &t4a_cuda_runtime::Buffer,
+        indices: IndexPointer<'_>,
         flag: &t4a_cuda_runtime::Buffer,
     ) -> crate::Result<()> {
         let plan = plan_validate_float_indices(dtype, len).map_err(plan_error)?;
-        self.run(
-            Entry::ValidateFloatIndices,
-            plan,
-            &[
-                Arg::DevicePtr(indices),
-                Arg::DevicePtr(flag),
-                Arg::U32(dtype.tag() as u32),
-                Arg::F64(max_exact_integer),
-                Arg::U64(len as u64),
-            ],
-        )
+        let mut arguments = [
+            // The index operand's pointer is set by `run_compact`.
+            Arg::U64(0),
+            Arg::DevicePtr(flag),
+            Arg::U32(dtype.tag() as u32),
+            Arg::F64(max_exact_integer),
+            Arg::U64(len as u64),
+        ];
+        // SAFETY: `plan_validate_float_indices` accepted the dtype and count, the argument order
+        // is the entry's documented ABI, and `resources` names both buffers it addresses.
+        unsafe {
+            self.run_compact(
+                Entry::ValidateFloatIndices,
+                plan,
+                &mut arguments,
+                0,
+                indices,
+                &[flag],
+            )
+        }
     }
 
     /// `t4a_cuda_validate_real_cast`: record the first sampled value a cast to a signed
