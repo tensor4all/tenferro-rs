@@ -63,6 +63,8 @@ mod nn_composites;
 mod numpy_api;
 #[path = "integration/primitive_ops.rs"]
 mod primitive_ops;
+#[path = "integration/read_entry_parity.rs"]
+mod read_entry_parity;
 #[path = "integration/runtime_execution.rs"]
 mod runtime_execution;
 #[path = "integration/semantic_extension.rs"]

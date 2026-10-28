@@ -131,7 +131,13 @@ macro_rules! delegate_owned_read_methods {
 }
 
 #[cfg(test)]
-impl Engine for RecordingEngine {}
+impl Engine for RecordingEngine {
+    // The gather read entry belongs to `Engine`; it forwards the reads so the
+    // `to_contiguous_read` count stays a caller-staging count (#2223).
+    delegate_recording_backend_methods! {
+        fn gather_read(operand: TensorRead<'_>, start_indices: TensorRead<'_>, config: &GatherConfig) -> TensorResult<Tensor>;
+    }
+}
 
 #[cfg(test)]
 impl TensorElementwise for RecordingEngine {
@@ -204,6 +210,14 @@ impl TensorStructural for RecordingEngine {
         fn tril(input: &Tensor, k: i64) -> TensorResult<Tensor>;
         fn triu(input: &Tensor, k: i64) -> TensorResult<Tensor>;
         fn transpose_read(input: TensorRead<'_>, perm: &[usize]) -> TensorResult<Tensor>;
+        // The read entries that consume a borrowed operand's own layout. Forwarding the
+        // read as-is is what the CPU engine itself does, so a caller that stages the view
+        // before the hook is the only thing that can raise `to_contiguous_read` here
+        // (#2223).
+        fn extract_diagonal_read(input: TensorRead<'_>, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
+        fn embed_diagonal_read(input: TensorRead<'_>, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
+        fn tril_read(input: TensorRead<'_>, k: i64) -> TensorResult<Tensor>;
+        fn triu_read(input: TensorRead<'_>, k: i64) -> TensorResult<Tensor>;
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -255,6 +269,15 @@ impl TensorIndexing for RecordingEngine {
         fn pad(input: &Tensor, config: &PadConfig) -> TensorResult<Tensor>;
         fn concatenate(inputs: &[&Tensor], axis: usize) -> TensorResult<Tensor>;
         fn reverse(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
+        // The read entries that consume a borrowed operand's own layout; see the
+        // structural block above for why they forward the read unchanged (#2223).
+        fn scatter_read(operand: TensorRead<'_>, scatter_indices: TensorRead<'_>, updates: TensorRead<'_>, config: &ScatterConfig) -> TensorResult<Tensor>;
+        fn slice_read(input: TensorRead<'_>, config: &SliceConfig) -> TensorResult<Tensor>;
+        fn dynamic_slice_read(input: TensorRead<'_>, starts: TensorRead<'_>, slice_sizes: &[usize]) -> TensorResult<Tensor>;
+        fn dynamic_update_slice_read(operand: TensorRead<'_>, update: TensorRead<'_>, starts: TensorRead<'_>) -> TensorResult<Tensor>;
+        fn pad_read(input: TensorRead<'_>, config: &PadConfig) -> TensorResult<Tensor>;
+        fn concatenate_read(inputs: &[TensorRead<'_>], axis: usize) -> TensorResult<Tensor>;
+        fn reverse_read(input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor>;
     }
 }
 
