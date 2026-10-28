@@ -661,9 +661,11 @@ gpu	tenferro-gpu	cuda::structural::tests::a_materialized_view_moves_the_staging_
 gpu	tenferro-gpu	cuda::structural::tests::a_non_compact_index_view_keeps_one_staging_copy
 gpu	tenferro-gpu	cuda::structural::tests::a_region_view_reads_its_own_elements
 gpu	tenferro-gpu	cuda::structural::tests::concatenate_refuses_a_foreign_later_input_before_preparing_anything
+gpu	tenferro-gpu	cuda::structural::tests::elementwise_read_into_refuses_a_mismatched_operand_before_staging_the_scratch
 gpu	tenferro-gpu	cuda::structural::tests::offset_index_views_are_read_in_place
 gpu	tenferro-gpu	cuda::structural::tests::read_entries_consume_a_strided_view_without_staging
 gpu	tenferro-gpu	cuda::structural::tests::reverse_read_keeps_singleton_and_empty_geometry
+gpu	tenferro-gpu	cuda::structural::tests::scale_tensor_write_refuses_a_host_view_whatever_the_factor
 host	tenferro-gpu	cuda::structural::tests::the_element_count_checks_both_extremes
 host	tenferro-gpu	cuda::runtime::tests::the_environment_names_the_persistent_artifact_directory
 host	tenferro-gpu	event_retirement::tests::explicit_retirement_then_drop_invokes_retirement_once

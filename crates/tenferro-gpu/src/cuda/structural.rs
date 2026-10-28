@@ -8,7 +8,7 @@
 
 use tenferro_tensor::{
     DType, MemoryKind, StorageBuffer, Tensor, TensorRead, TensorScalar, TensorStructural,
-    TensorView, TensorWrite, TypedTensor,
+    TensorView, TensorViewMut, TensorWrite, TypedTensor,
 };
 
 use t4a_cuda_kernels::{
@@ -369,6 +369,74 @@ pub(super) fn region_of<'v>(
     }
 }
 
+/// The device region the writable target names, or a typed refusal for a host view.
+///
+/// This is the mirror of [`region_of`] for a mutable view. The constructors of
+/// `TypedTensorViewMut` proved write injectivity (`TensorLayout::validate_mutable_no_overlap`
+/// rejects two logical elements aliasing one physical element), so a kernel may write one
+/// element per logical position of this region; that proof is the only exclusivity this
+/// boundary relies on.
+fn write_region_of<'v>(view: &'v TensorViewMut<'v>, op: &'static str) -> crate::Result<Region<'v>> {
+    match view {
+        TensorViewMut::F32(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::F32,
+            op,
+        ),
+        TensorViewMut::F64(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::F64,
+            op,
+        ),
+        TensorViewMut::I32(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::I32,
+            op,
+        ),
+        TensorViewMut::I64(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::I64,
+            op,
+        ),
+        TensorViewMut::Bool(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::Bool,
+            op,
+        ),
+        TensorViewMut::C32(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::C32,
+            op,
+        ),
+        TensorViewMut::C64(view) => typed_region(
+            view.backend_buffer(),
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            DType::C64,
+            op,
+        ),
+    }
+}
+
 /// The catalogue's extents for a logical shape.
 fn catalogue_extents(shape: &[usize], op: &'static str) -> crate::Result<Vec<i64>> {
     shape
@@ -460,6 +528,14 @@ fn region_has_compact_strides(region: &Region<'_>) -> bool {
         stride = next;
     }
     true
+}
+
+/// Whether a region is one contiguous span starting at its allocation's base.
+///
+/// A flat region's elements are the first `element_count` entries of the allocation, which is
+/// exactly what a by-value `len`-element copy addresses, so it needs no layout parameter.
+fn region_is_flat(region: &Region<'_>) -> bool {
+    region.offset == 0 && region_has_compact_strides(region)
 }
 
 /// The real dtype that holds a magnitude or a norm for `dtype`.
@@ -597,30 +673,79 @@ impl CudaEngine {
         self.ensure_healthy()
             .map_err(|error| crate::Error::runtime_state(op, error.to_string()))?;
         match input {
-            TensorRead::Tensor(tensor) => {
-                if is_host(tensor) {
-                    return Err(crate::Error::unsupported(
-                        op,
-                        "a host tensor would need an implicit transfer",
-                    ));
-                }
-                let storage = super::pending::cuda_storage(tensor).ok_or_else(|| {
-                    crate::Error::runtime_state(op, "expected a CUDA allocation of this backend")
-                })?;
-                let storage = self.own_storage(storage, op)?;
-                let shape = tensor.shape().to_vec();
-                Ok(Region {
-                    storage,
-                    dtype: tensor.dtype(),
-                    extents: catalogue_extents(&shape, op)?,
-                    strides: catalogue_strides(&self.strides_of(tensor, op)?, op)?,
-                    // An owned tensor is the compact, offset-zero region of its own allocation.
-                    offset: 0,
-                    shape,
-                })
-            }
+            TensorRead::Tensor(tensor) => self.owned_region(tensor, op),
             TensorRead::View(view) => {
                 let region = region_of(view, op)?;
+                self.own_storage(region.storage, op)?;
+                Ok(region)
+            }
+        }
+    }
+
+    /// The compact, offset-zero region an owned tensor is.
+    fn owned_region<'t>(&self, tensor: &'t Tensor, op: &'static str) -> crate::Result<Region<'t>> {
+        if is_host(tensor) {
+            return Err(crate::Error::unsupported(
+                op,
+                "a host tensor would need an implicit transfer",
+            ));
+        }
+        let storage = super::pending::cuda_storage(tensor).ok_or_else(|| {
+            crate::Error::runtime_state(op, "expected a CUDA allocation of this backend")
+        })?;
+        let storage = self.own_storage(storage, op)?;
+        let shape = tensor.shape().to_vec();
+        Ok(Region {
+            storage,
+            dtype: tensor.dtype(),
+            extents: catalogue_extents(&shape, op)?,
+            strides: catalogue_strides(&self.strides_of(tensor, op)?, op)?,
+            // An owned tensor is the compact, offset-zero region of its own allocation.
+            offset: 0,
+            shape,
+        })
+    }
+
+    /// The device region a writable target names, written where it lives.
+    ///
+    /// An owned destination is the compact, offset-zero region of its own allocation, exactly as
+    /// on the read side. A borrowed [`TensorWrite::View`] names its own region of the caller's
+    /// allocation and is **write-injective by construction**: every `TypedTensorViewMut`
+    /// constructor validates the layout with `TensorLayout::validate_mutable_no_overlap`, which
+    /// rejects two logical elements aliasing one physical element (a broadcast axis is the
+    /// reachable case). A kernel may therefore write one element per logical position without
+    /// reading the destination, and no second exclusivity check is needed here. That injectivity
+    /// is the whole dependency this write boundary places on `tenferro-tensor`.
+    ///
+    /// The entries that reach this boundary launch the catalogue's by-value layout form
+    /// ([`t4a_cuda_kernels::MAX_RANK`] axes), so a wider *view* is a typed refusal below.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::unsupported`] for a host view, and [`crate::Error::RuntimeState`] for a
+    /// view of another runtime's allocation or a broken engine.
+    fn write_region<'v, 'a: 'v>(
+        &self,
+        output: &'v TensorWrite<'a>,
+        op: &'static str,
+    ) -> crate::Result<Region<'v>> {
+        // An engine the runtime marked broken accepts no further numerical submission.
+        self.ensure_healthy()
+            .map_err(|error| crate::Error::runtime_state(op, error.to_string()))?;
+        match output {
+            TensorWrite::Tensor(tensor) => self.owned_region(tensor, op),
+            TensorWrite::View(view) => {
+                let region = write_region_of(view, op)?;
+                if region.extents.len() > t4a_cuda_kernels::MAX_RANK {
+                    // ponytail: ceiling = the catalogue's by-value layout rank. A write
+                    // destination above it needs an `_any` symbol with device-resident geometry,
+                    // which no write entry wires yet; the read side's `materialize_storage` has
+                    // that general path. Before this change every view destination was refused.
+                    return Err(crate::Error::unsupported(
+                        op,
+                        "a write destination view wider than the ABI's layout rank is not served",
+                    ));
+                }
                 self.own_storage(region.storage, op)?;
                 Ok(region)
             }
@@ -816,44 +941,96 @@ impl TensorStructural for CudaEngine {
 
     fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
         const OP: &str = "copy_read_into";
-        // The read half resolves a borrowed view; only a writable region has no stride-addressed
-        // copy entry yet, so a view destination is refused below.
-        let source = self.device_read(src, OP)?;
-        let TensorWrite::Tensor(destination) = dst else {
-            return Err(crate::Error::unsupported(
+        // Neither side is staged: the source is read through its own layout and the destination
+        // region is written in place. A writable view is write-injective by construction, which
+        // `write_region` documents.
+        let source = self.read_region(&src, OP)?;
+        let destination = self.write_region(&dst, OP)?;
+        if source.dtype != destination.dtype {
+            return Err(crate::Error::dtype_mismatch(
                 OP,
-                "a borrowed view destination is not served by the structural slice",
-            ));
-        };
-        let destination = &*destination;
-        if is_host(destination) {
-            return Err(crate::Error::unsupported(
-                OP,
-                "a host operand would need an implicit transfer",
+                destination.dtype,
+                source.dtype,
             ));
         }
-        if source.dtype() != destination.dtype() || source.shape() != destination.shape() {
-            return Err(crate::Error::unsupported(
+        if source.shape != destination.shape {
+            return Err(crate::Error::shape_mismatch(
                 OP,
-                "source and destination must share dtype and shape",
+                destination.shape.clone(),
+                source.shape.clone(),
             ));
         }
-        let dtype = source.dtype();
-        let kernel = kernel_dtype(dtype, "copy_read_into")?;
-        let len = i64::try_from(element_count(source.shape())?)
-            .map_err(|_| crate::Error::unsupported("copy_read_into", "count exceeds i64"))?;
+        let count = element_count(&source.shape)?;
+        if count == 0 {
+            // Both regions were validated; an empty copy has no element to move.
+            return Ok(());
+        }
+        let dtype = destination.dtype;
+        let kernel = kernel_dtype(dtype, OP)?;
+        let destination_len = destination.len(OP)?;
+        let destination_flat = region_is_flat(&destination);
+        if !(destination_flat && region_is_flat(&source)) {
+            if source.extents.len() <= t4a_cuda_kernels::MAX_RANK {
+                let source_layout = source.layout(OP)?;
+                let source_len = source.len(OP)?;
+                let destination_layout = destination.layout(OP)?;
+                let mut dispatcher = self.dispatcher(&[Entry::StridedToStrided])?;
+                with_scalar!(dtype, |T| {
+                    dispatcher.strided_to_strided(
+                        kernel,
+                        &source_layout,
+                        source_len,
+                        &destination_layout,
+                        destination_len,
+                        destination.storage.allocation(),
+                        source.storage.allocation(),
+                    )
+                })?;
+                return self
+                    .runtime()
+                    .synchronize()
+                    .map_err(|error| crate::Error::runtime_state_source(OP, error));
+            }
+            // A source wider than the by-value layout keeps the general-path materialization the
+            // read boundary already offers, and the exact copy below carries its logical order.
+            // INVARIANT: the destination has the source's shape rank, and a non-flat destination
+            // of that rank cannot reach this arm — `write_region` refuses a view above
+            // `MAX_RANK`, and an owned tensor is compact and offset-zero by construction — so
+            // the destination is one flat span and the exact copy addresses it.
+            drop(source);
+            let staged = self.device_read(src, OP)?;
+            let mut dispatcher = self.dispatcher(&[Entry::CopyExact])?;
+            let len = i64::try_from(count)
+                .map_err(|_| crate::Error::unsupported(OP, "count exceeds i64"))?;
+            let destination_allocation = destination.storage.allocation();
+            with_scalar!(dtype, |T| {
+                dispatcher.copy_exact(
+                    kernel,
+                    len,
+                    destination_allocation,
+                    self.allocation_of::<T>(&staged, OP)?,
+                )
+            })?;
+            return self
+                .runtime()
+                .synchronize()
+                .map_err(|error| crate::Error::runtime_state_source(OP, error));
+        }
+        // Both regions are one contiguous span: the exact copy carries them without a layout.
+        let len =
+            i64::try_from(count).map_err(|_| crate::Error::unsupported(OP, "count exceeds i64"))?;
         let mut dispatcher = self.dispatcher(&[Entry::CopyExact])?;
         with_scalar!(dtype, |T| {
             dispatcher.copy_exact(
                 kernel,
                 len,
-                self.allocation_of::<T>(destination, OP)?,
-                self.allocation_of::<T>(&source, OP)?,
+                destination.storage.allocation(),
+                source.storage.allocation(),
             )
         })?;
         self.runtime()
             .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source("copy_read_into", error))
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))
     }
 
     fn cast(&mut self, input: &Tensor, to: DType) -> crate::Result<Tensor> {
@@ -1386,6 +1563,52 @@ impl CudaEngine {
             .synchronize()
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
         Ok(output)
+    }
+
+    /// Scatter the compact `source` into the writable destination region.
+    ///
+    /// An entry whose kernel addresses a flat domain (the elementwise planners take only the
+    /// element count) or hands its destination to a vendor library (cuTENSOR) computes into a
+    /// compact scratch and this writes the caller's region once. The scatter is the operation's
+    /// required output write, not operator staging: exactly `element_count` positions of the
+    /// destination region are written and every element outside it keeps its value.
+    fn contiguous_into_write(
+        &mut self,
+        source: &Tensor,
+        destination: &Region<'_>,
+        op: &'static str,
+    ) -> crate::Result<()> {
+        let dtype = destination.dtype;
+        if source.dtype() != dtype {
+            return Err(crate::Error::dtype_mismatch(op, dtype, source.dtype()));
+        }
+        if source.shape() != destination.shape.as_slice() {
+            return Err(crate::Error::shape_mismatch(
+                op,
+                destination.shape.clone(),
+                source.shape().to_vec(),
+            ));
+        }
+        let count = element_count(&destination.shape)?;
+        if count == 0 {
+            return Ok(());
+        }
+        let kernel = kernel_dtype(dtype, op)?;
+        let layout = destination.layout(op)?;
+        let destination_len = destination.len(op)?;
+        let mut dispatcher = self.dispatcher(&[Entry::ContiguousToView])?;
+        with_scalar!(dtype, |T| {
+            dispatcher.contiguous_to_view(
+                kernel,
+                &layout,
+                destination_len,
+                destination.storage.allocation(),
+                self.allocation_of::<T>(source, op)?,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
     }
 
     /// `gather` through the general path: three device-resident layouts and the plan's packed
@@ -3303,26 +3526,76 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
         inputs: &[TensorRead<'_>],
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        let name = "elementwise_read_into";
-        let destination = match out {
-            TensorWrite::Tensor(tensor) => tensor,
-            TensorWrite::View(_) => {
-                return Err(crate::Error::unsupported(
-                    name,
-                    "a borrowed view destination is not served by the structural slice",
-                ))
+        const NAME: &str = "elementwise_read_into";
+        match out {
+            TensorWrite::Tensor(tensor) => {
+                if is_host(tensor) {
+                    return Err(crate::Error::unsupported(
+                        NAME,
+                        "a host destination would need an implicit transfer",
+                    ));
+                }
+                self.validate_elementwise_read_into(
+                    op,
+                    inputs,
+                    tensor.dtype(),
+                    tensor.shape(),
+                    NAME,
+                )?;
+                self.elementwise_into_compact(op, inputs, tensor, NAME)
             }
-        };
-        if is_host(destination) {
-            return Err(crate::Error::unsupported(
-                name,
-                "a host destination would need an implicit transfer",
-            ));
+            view @ TensorWrite::View(_) => {
+                // The elementwise planners (`plan_elementwise`, `plan_unary`, `plan_binary`) take
+                // only the element count and no layout: their kernels address a flat domain, so a
+                // strided destination is not expressible through them. The elements are computed
+                // into a compact scratch and `ContiguousToView` writes the caller's region once.
+                //
+                // The destination region and every operand are validated before that scratch is
+                // allocated, so a refused call allocates a destination-sized buffer for nothing.
+                let destination = self.write_region(&view, NAME)?;
+                self.validate_elementwise_read_into(
+                    op,
+                    inputs,
+                    destination.dtype,
+                    &destination.shape,
+                    NAME,
+                )?;
+                let scratch = alloc_tensor(self.runtime(), destination.dtype, &destination.shape)?;
+                self.elementwise_into_compact(op, inputs, &scratch, NAME)?;
+                self.contiguous_into_write(&scratch, &destination, NAME)
+            }
         }
-        let dtype = destination.dtype();
-        let kernel = kernel_dtype(dtype, name)?;
-        let shape = destination.shape().to_vec();
-        let len = count_i64(&shape, name)?;
+    }
+
+    fn rem(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+        self.remainder(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            "rem",
+        )
+    }
+
+    fn rem_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.remainder(lhs, rhs, "rem_read")
+    }
+}
+
+impl CudaEngine {
+    /// Validate the elementwise operands against the destination metadata, without staging.
+    ///
+    /// The elementwise planners address a flat domain, so an operand's own layout is not part of
+    /// the contract; its residency, dtype and shape are. [`Self::read_region`] applies the native
+    /// read boundary's refusals without materializing anything, so a broken engine, a host
+    /// operand or another runtime's allocation is refused before the caller allocates a
+    /// destination-sized scratch or stages an operand.
+    fn validate_elementwise_read_into(
+        &self,
+        op: tenferro_tensor::ElementwiseReadOp,
+        inputs: &[TensorRead<'_>],
+        dtype: DType,
+        shape: &[usize],
+        name: &'static str,
+    ) -> crate::Result<()> {
         // Each shape carries the operands it needs: one for the unary forms, two for the
         // binary ones.
         let unary = matches!(
@@ -3339,18 +3612,37 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                 ),
             ));
         }
-        let sources: Vec<Resolved<'_>> = inputs
-            .iter()
-            .map(|input| self.device_read(input.clone(), name))
-            .collect::<crate::Result<_>>()?;
-        for source in &sources {
-            if source.shape() != shape.as_slice() || source.dtype() != dtype {
+        for input in inputs {
+            // The read boundary's residency refusals, from metadata only.
+            self.read_region(input, name)?;
+            if input.dtype() != dtype || input.shape() != shape {
                 return Err(crate::Error::unsupported(
                     name,
                     "every operand must share the destination's shape and dtype on this path",
                 ));
             }
         }
+        Ok(())
+    }
+
+    /// The elementwise entries' flat kernel over a compact destination.
+    ///
+    /// [`Self::validate_elementwise_read_into`] has already accepted the operands against
+    /// `destination`'s metadata, so this only stages them and submits the launch.
+    fn elementwise_into_compact(
+        &mut self,
+        op: tenferro_tensor::ElementwiseReadOp,
+        inputs: &[TensorRead<'_>],
+        destination: &Tensor,
+        name: &'static str,
+    ) -> crate::Result<()> {
+        let dtype = destination.dtype();
+        let kernel = kernel_dtype(dtype, name)?;
+        let len = count_i64(destination.shape(), name)?;
+        let sources: Vec<Resolved<'_>> = inputs
+            .iter()
+            .map(|input| self.device_read(input.clone(), name))
+            .collect::<crate::Result<_>>()?;
         match op {
             tenferro_tensor::ElementwiseReadOp::Negate => {
                 let mut dispatcher = self.dispatcher(&[Entry::Unary])?;
@@ -3402,18 +3694,6 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
             .synchronize()
             .map_err(|error| crate::Error::runtime_state_source(name, error))
     }
-
-    fn rem(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.remainder(
-            TensorRead::from_tensor(lhs),
-            TensorRead::from_tensor(rhs),
-            "rem",
-        )
-    }
-
-    fn rem_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.remainder(lhs, rhs, "rem_read")
-    }
 }
 
 /// The kernel crate's dtype tag for a contraction, which cuTENSOR serves for all four.
@@ -3456,7 +3736,90 @@ impl CudaEngine {
         if len == 0 {
             return Ok(());
         }
-        // The factor travels as one element of the tensor's own dtype.
+        let scalar = self.factor_scalar(dtype, factor, op)?;
+        let runtime = self.runtime().clone();
+        let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
+        let status = runtime
+            .upload_bytes(&[0u8; 4])
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        with_scalar!(dtype, |T| {
+            dispatcher.binary(
+                t4a_cuda_kernels::BinaryOp::Mul,
+                kernel,
+                t4a_cuda_kernels::ScalarSide::Right,
+                len,
+                self.allocation_of::<T>(tensor, op)?,
+                self.allocation_of::<T>(tensor, op)?,
+                self.allocation_of::<T>(&scalar, op)?,
+                &status,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
+    }
+
+    /// Scale a writable region by `factor`, in place, through its own layout.
+    ///
+    /// `CombinedStrided`'s `MUL` re-addresses one logical domain through a layout per operand,
+    /// and every operand layout shares the destination's extents. The factor is one element of
+    /// the region's dtype whose layout gives every axis stride zero, so the same value repeats
+    /// over the destination; the ABI allows `out` to alias an input whose layout is identical,
+    /// so the region is both the `a` operand and the destination and nothing is copied. The
+    /// coefficients buffer is ignored by `MUL`, and the factor's own element is a legal device
+    /// buffer for that argument.
+    fn scale_region_in_place(
+        &mut self,
+        destination: &Region<'_>,
+        factor: (f64, f64),
+        op: &'static str,
+    ) -> crate::Result<()> {
+        if factor == (1.0, 0.0) {
+            return Ok(());
+        }
+        let dtype = destination.dtype;
+        let kernel = kernel_dtype(dtype, op)?;
+        let len = count_i64(&destination.shape, op)?;
+        if len == 0 {
+            return Ok(());
+        }
+        let layout = destination.layout(op)?;
+        let destination_len = destination.len(op)?;
+        let zero_strides = vec![0i64; destination.extents.len()];
+        let broadcast = Layout::new(&destination.extents, &zero_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let scalar = self.factor_scalar(dtype, factor, op)?;
+        let scalar_len = count_i64(scalar.shape(), op)?;
+        let mut dispatcher = self.dispatcher(&[Entry::CombinedStrided])?;
+        with_scalar!(dtype, |T| {
+            let scalar_buffer = self.allocation_of::<T>(&scalar, op)?;
+            dispatcher.combined_strided(
+                t4a_cuda_kernels::StridedOp::Mul,
+                kernel,
+                &layout,
+                destination_len,
+                &layout,
+                destination_len,
+                &broadcast,
+                scalar_len,
+                destination.storage.allocation(),
+                destination.storage.allocation(),
+                scalar_buffer,
+                scalar_buffer,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
+    }
+
+    /// The one-element device buffer that holds `factor` in `dtype`.
+    fn factor_scalar(
+        &mut self,
+        dtype: DType,
+        factor: (f64, f64),
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
         let host = match dtype {
             DType::F32 => Tensor::from_vec_col_major(Vec::new(), vec![factor.0 as f32]),
             DType::F64 => Tensor::from_vec_col_major(Vec::new(), vec![factor.0]),
@@ -3479,27 +3842,7 @@ impl CudaEngine {
             }
         }
         .map_err(|error| crate::Error::runtime_state(op, error.to_string()))?;
-        let scalar = super::transfer::upload_tensor(self.runtime(), &host)?;
-        let runtime = self.runtime().clone();
-        let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
-        let status = runtime
-            .upload_bytes(&[0u8; 4])
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-        with_scalar!(dtype, |T| {
-            dispatcher.binary(
-                t4a_cuda_kernels::BinaryOp::Mul,
-                kernel,
-                t4a_cuda_kernels::ScalarSide::Right,
-                len,
-                self.allocation_of::<T>(tensor, op)?,
-                self.allocation_of::<T>(tensor, op)?,
-                self.allocation_of::<T>(&scalar, op)?,
-                &status,
-            )
-        })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))
+        super::transfer::upload_tensor(self.runtime(), &host)
     }
 
     /// Refuse a floating source whose values a signed-integer destination cannot hold.
@@ -4808,26 +5151,50 @@ impl tenferro_tensor::TensorDot for CudaEngine {
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         let op = "dot_general_read_into";
-        let TensorWrite::Tensor(output) = out else {
-            return Err(crate::Error::unsupported(
-                op,
-                "a borrowed view is not served by the structural slice",
-            ));
-        };
-        let left = self.device_read(lhs, op)?;
-        let right = self.device_read(rhs, op)?;
-        self.submit_dot(
-            &left,
-            &right,
-            config,
-            false,
-            false,
-            (1.0, 0.0),
-            (0.0, 0.0),
-            None,
-            output,
-            op,
-        )
+        match out {
+            TensorWrite::Tensor(output) => {
+                let left = self.device_read(lhs, op)?;
+                let right = self.device_read(rhs, op)?;
+                self.submit_dot(
+                    &left,
+                    &right,
+                    config,
+                    false,
+                    false,
+                    (1.0, 0.0),
+                    (0.0, 0.0),
+                    None,
+                    output,
+                    op,
+                )
+            }
+            view @ TensorWrite::View(_) => {
+                // cuTENSOR is handed one destination, so the product lands in a compact scratch
+                // of the caller's shape and `ContiguousToView` writes the region once. The
+                // shared validator settles dtype and shape against the destination before any
+                // allocation or launch.
+                let destination = self.write_region(&view, op)?;
+                let out_shape = tenferro_tensor::backend::validate_dot_general_read_into(
+                    &lhs, &rhs, config, &view, op,
+                )?;
+                let left = self.device_read(lhs, op)?;
+                let right = self.device_read(rhs, op)?;
+                let scratch = alloc_tensor(self.runtime(), left.dtype(), &out_shape)?;
+                self.submit_dot(
+                    &left,
+                    &right,
+                    config,
+                    false,
+                    false,
+                    (1.0, 0.0),
+                    (0.0, 0.0),
+                    None,
+                    &scratch,
+                    op,
+                )?;
+                self.contiguous_into_write(&scratch, &destination, op)
+            }
+        }
     }
 
     fn dot_general_with_conj(
@@ -4875,7 +5242,7 @@ impl tenferro_tensor::TensorDot for CudaEngine {
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         let op = "dot_general_read_into_accum";
-        tenferro_tensor::backend::validate_dot_general_accumulation(
+        let out_shape = tenferro_tensor::backend::validate_dot_general_accumulation(
             &lhs,
             &rhs,
             config,
@@ -4883,26 +5250,64 @@ impl tenferro_tensor::TensorDot for CudaEngine {
             &out,
             op,
         )?;
-        let TensorWrite::Tensor(output) = out else {
-            return Err(crate::Error::unsupported(
-                op,
-                "a borrowed view is not served by the structural slice",
-            ));
-        };
-        let left = self.device_read(lhs, op)?;
-        let right = self.device_read(rhs, op)?;
-        self.submit_dot(
-            &left,
-            &right,
-            config,
-            accumulation.lhs_conj,
-            accumulation.rhs_conj,
-            scalar_pair(accumulation.alpha),
-            scalar_pair(accumulation.beta),
-            Some(output),
-            output,
-            op,
-        )
+        match out {
+            TensorWrite::Tensor(output) => {
+                let left = self.device_read(lhs, op)?;
+                let right = self.device_read(rhs, op)?;
+                self.submit_dot(
+                    &left,
+                    &right,
+                    config,
+                    accumulation.lhs_conj,
+                    accumulation.rhs_conj,
+                    scalar_pair(accumulation.alpha),
+                    scalar_pair(accumulation.beta),
+                    Some(output),
+                    output,
+                    op,
+                )
+            }
+            view @ TensorWrite::View(_) => {
+                let destination = self.write_region(&view, op)?;
+                let left = self.device_read(lhs, op)?;
+                let right = self.device_read(rhs, op)?;
+                let beta = scalar_pair(accumulation.beta);
+                // The scratch is the accumulation destination. A nonzero beta reads the old
+                // destination, so the region is materialized into the scratch first; a zero beta
+                // follows BLAS semantics and must not read it at all (a NaN there would survive
+                // `beta * NaN`), so the allocation's zero fill is never read either — the
+                // contraction overwrites it. An empty contraction keeps the same beta semantics
+                // inside `submit_dot`, which scales the scratch or zeroes it as it does for an
+                // owned destination.
+                let scratch = if beta == (0.0, 0.0) {
+                    alloc_tensor(self.runtime(), left.dtype(), &out_shape)?
+                } else {
+                    self.materialize_storage(
+                        destination.storage,
+                        destination.len(op)?,
+                        destination.dtype,
+                        &destination.extents,
+                        &destination.strides,
+                        destination.offset,
+                        destination.shape.clone(),
+                        op,
+                    )?
+                };
+                self.submit_dot(
+                    &left,
+                    &right,
+                    config,
+                    accumulation.lhs_conj,
+                    accumulation.rhs_conj,
+                    scalar_pair(accumulation.alpha),
+                    beta,
+                    Some(&scratch),
+                    &scratch,
+                    op,
+                )?;
+                self.contiguous_into_write(&scratch, &destination, op)
+            }
+        }
     }
 }
 
@@ -5036,12 +5441,18 @@ impl CudaEngine {
         Ok(())
     }
 
-    /// Scale an owned device tensor by `factor`, in place.
+    /// Scale a device tensor or a writable device region by `factor`, in place.
+    ///
+    /// An owned tensor takes the flat in-place multiply; a borrowed view is scaled where it
+    /// lives through `CombinedStrided`'s `MUL`, with a broadcast factor, so it costs no
+    /// copy-out/copy-back. A factor of one leaves the target untouched, but only after the write
+    /// boundary has accepted the target: a host or foreign destination is refused whatever the
+    /// factor, so a unit scale is not a validation bypass.
     ///
     /// # Errors
     ///
-    /// [`crate::Error::Unsupported`] for a dtype the catalogue does not scale, and the runtime's
-    /// own failure.
+    /// [`crate::Error::Unsupported`] for a dtype the catalogue does not scale, the write
+    /// boundary's own refusals for a borrowed view, and the runtime's failure.
     #[doc(hidden)]
     pub fn scale_tensor_write(
         &mut self,
@@ -5049,13 +5460,15 @@ impl CudaEngine {
         factor: f64,
         op: &'static str,
     ) -> crate::Result<()> {
-        let tenferro_tensor::TensorWrite::Tensor(tensor) = output else {
-            return Err(crate::Error::unsupported(
-                op,
-                "a borrowed view is not served by the structural slice",
-            ));
-        };
-        self.scale_in_place(tensor, (factor, 0.0), op)
+        match output {
+            tenferro_tensor::TensorWrite::Tensor(tensor) => {
+                self.scale_in_place(tensor, (factor, 0.0), op)
+            }
+            view @ tenferro_tensor::TensorWrite::View(_) => {
+                let destination = self.write_region(&view, op)?;
+                self.scale_region_in_place(&destination, (factor, 0.0), op)
+            }
+        }
     }
 }
 

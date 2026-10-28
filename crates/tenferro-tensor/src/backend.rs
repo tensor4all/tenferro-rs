@@ -2187,12 +2187,13 @@ pub trait TensorStructural {
     /// value. Source and destination allocations must not alias. Implementations
     /// must not materialize through host memory or perform an implicit transfer.
     ///
-    /// CPU accepts arbitrary valid source and destination strides and performs
-    /// no tensor allocation. CUDA currently accepts only a compact column-major
-    /// source with offset zero covering its full allocation; CUDA destinations
-    /// may be arbitrary valid non-overlapping views. CUDA rejects aliased
-    /// allocations and currently reports an explicit unsupported-dtype error
-    /// for `Bool`. The conservative default is explicitly unsupported.
+    /// CPU and CUDA accept arbitrary valid source and destination strides: the
+    /// source is read where it lives and a destination region is written in
+    /// place, so neither side is copied. CUDA stages only a source view wider
+    /// than its catalogue's by-value layout rank, through one compact copy. A
+    /// destination *view* wider than that rank is a typed refusal there, while
+    /// an owned destination of the same rank is served. The conservative
+    /// default is explicitly unsupported.
     ///
     /// # Examples
     ///

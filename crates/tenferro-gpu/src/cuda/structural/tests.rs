@@ -3,8 +3,9 @@
 use super::super::structural::element_count;
 use crate::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_tensor::{
-    Engine as _, PadConfig, SliceConfig, Tensor, TensorIndexing, TensorRead, TensorStructural,
-    TensorView,
+    ElementwiseReadOp, Engine as _, PadConfig, SliceConfig, Tensor, TensorElementwise as _,
+    TensorIndexing, TensorRead, TensorStructural, TensorView, TensorViewMut, TensorWrite,
+    TypedTensorViewMut,
 };
 
 #[test]
@@ -560,5 +561,81 @@ fn concatenate_refuses_a_foreign_later_input_before_preparing_anything() {
     assert_eq!(
         after.artifact_entries, before.artifact_entries,
         "a refused concatenate must not prepare an artifact"
+    );
+}
+
+/// A refused elementwise call must be refused before its destination-sized scratch and operands.
+///
+/// The borrowed-view arm computes into a compact scratch of the destination's own shape. An
+/// operand that does not share that shape or dtype used to be found only after the scratch was
+/// allocated and every operand staged; the metadata check now runs first, so a large destination
+/// view plus a bad operand costs one validation error and nothing else.
+#[test]
+#[ignore = "requires CUDA"]
+fn elementwise_read_into_refuses_a_mismatched_operand_before_staging_the_scratch() {
+    let Some(mut engine) = engine() else { return };
+    let mut root = device(
+        &engine,
+        vec![16, 16],
+        (0..256).map(|index| index as f64).collect(),
+    );
+    let operand = device(
+        &engine,
+        vec![4, 4],
+        (0..16).map(|index| index as f64).collect(),
+    );
+    // A borrowed operand would be materialized by the read boundary, so the staging counter
+    // proves the validation ran before any operand copy.
+    let borrowed = region(&operand, vec![4, 4], vec![1, 4], 0);
+    let before_staged = engine.staged_reads();
+    let error = {
+        let view = root
+            .as_typed_mut::<f64>()
+            .expect("f64 payload")
+            .backend_region_view_mut(vec![8, 8], vec![2, 32], 0)
+            .expect("mutable region view");
+        engine
+            .elementwise_read_into(
+                ElementwiseReadOp::Add,
+                &[borrowed.clone(), borrowed],
+                TensorWrite::from_view(TensorViewMut::F64(view)),
+            )
+            .expect_err("a shape mismatch must be refused")
+    };
+    assert!(
+        format!("{error}").contains("every operand must share the destination's shape and dtype"),
+        "unexpected refusal: {error}"
+    );
+    assert_eq!(
+        engine.staged_reads(),
+        before_staged,
+        "a refused elementwise call must not stage an operand"
+    );
+}
+
+/// A unit factor is not a validation bypass: every factor goes through the write boundary.
+#[test]
+#[ignore = "requires CUDA"]
+fn scale_tensor_write_refuses_a_host_view_whatever_the_factor() {
+    let Some(mut engine) = engine() else { return };
+    let mut data = [1.0f64, 2.0, 3.0, 4.0];
+    for factor in [1.0, 2.5] {
+        let view = TypedTensorViewMut::from_slice([2, 2], [1, 2], 0, &mut data).expect("host view");
+        let error = engine
+            .scale_tensor_write(
+                TensorWrite::from_view(TensorViewMut::F64(view)),
+                factor,
+                "scale_tensor_write test",
+            )
+            .expect_err("a host view must be refused");
+        assert!(
+            format!("{error}").contains("a host view would need an implicit transfer"),
+            "factor {factor} was not refused by the write boundary: {error}"
+        );
+    }
+    assert_eq!(
+        data,
+        [1.0, 2.0, 3.0, 4.0],
+        "a refused scale changed the host view"
     );
 }

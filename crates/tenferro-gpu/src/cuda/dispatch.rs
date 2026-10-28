@@ -4,11 +4,11 @@
 //! validation of its own — and every argument order follows the documented ABI.
 
 use t4a_cuda_kernels::{
-    plan_binary, plan_clamp, plan_compare, plan_convert, plan_copy_exact, plan_dynamic_slice,
-    plan_elementwise, plan_gather, plan_pad, plan_reduce, plan_reduction, plan_scatter_add,
-    plan_select, plan_slice, plan_unary, plan_validate_float_indices, plan_validate_real_cast,
-    BinaryOp, DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan,
-    UnaryOp,
+    plan_binary, plan_clamp, plan_compare, plan_contiguous_to_view, plan_convert, plan_copy_exact,
+    plan_dynamic_slice, plan_elementwise, plan_gather, plan_pad, plan_reduce, plan_reduction,
+    plan_scatter_add, plan_select, plan_slice, plan_unary, plan_validate_float_indices,
+    plan_validate_real_cast, BinaryOp, DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan,
+    ScalarSide, ScatterPlan, UnaryOp,
 };
 use t4a_cuda_runtime::{Arg, BoundFunction, LaunchConfig};
 
@@ -947,6 +947,42 @@ impl Dispatcher {
                 Arg::U32(dtype.tag() as u32),
                 Arg::I32(op.tag()),
                 Arg::U64(out_count as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_contiguous_to_view`: scatter a compact source into a strided destination.
+    ///
+    /// The destination may be any write-injective region of a larger allocation; the planner
+    /// proves its span and that no destination axis broadcasts. Only the by-value layout form is
+    /// served: a caller whose rank can exceed [`t4a_cuda_kernels::MAX_RANK`] keeps its general
+    /// path.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the layout, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    pub(crate) fn contiguous_to_view(
+        &mut self,
+        dtype: DType,
+        dst: &Layout,
+        dst_len: i64,
+        dst_buffer: &t4a_cuda_runtime::Buffer,
+        src_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch = plan_contiguous_to_view(dtype, dst, dst_len).map_err(plan_error)?;
+        let dst_layout = t4a_cuda_kernels::CLayout::new(dst);
+        // The destination layout carries the logical count of both sides.
+        let len = dst.element_count().map_err(plan_error)?;
+        self.run(
+            Entry::ContiguousToView,
+            launch,
+            &[
+                Arg::DevicePtr(dst_buffer),
+                Arg::DevicePtr(src_buffer),
+                Arg::U32(dtype.tag() as u32),
+                layout_arg(&dst_layout),
+                Arg::U64(len as u64),
             ],
         )
     }

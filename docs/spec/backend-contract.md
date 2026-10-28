@@ -319,6 +319,22 @@ compact index view is one contiguous span, so the entry reads it in place by
 rebasing the device pointer to the view's base; a non-compact index view keeps
 one compact copy like any other staged operand.
 
+A `TensorWrite` destination may be an owned compact tensor or a borrowed mutable
+view with any offset and strides. The CUDA engine writes a borrowed view in
+place where a catalogue entry addresses a destination layout
+(`StridedToStrided`, `ContiguousToView`, and `CombinedStrided`'s `MUL` for an
+in-place scale) and otherwise computes into a compact scratch of the
+destination's own shape and scatters it once with `ContiguousToView`; apart from
+the nonzero-`beta` accumulation below, no entry copies the destination out and
+back. Write injectivity is a `TensorViewMut` construction guarantee
+(`TensorLayout::validate_mutable_no_overlap` rejects aliasing layouts), so
+kernels do not re-check it, and elements outside the destination region keep
+their value. A zero-beta accumulation follows BLAS's "do not read C" and never
+reads the destination; a nonzero-beta accumulation does read it, so that entry
+materializes the destination region into its scratch and scatters the result
+back. A write destination view wider than the catalogue's by-value layout rank
+is a typed refusal rather than a hidden copy.
+
 Every method takes `&mut self`, so one computation uses one engine at a time and
 the borrow is the exclusion contract. There is no session entry, no admission
 permit, no nested-entry error and no shared execution scope: the caller owns the
