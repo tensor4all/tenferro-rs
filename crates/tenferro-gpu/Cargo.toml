@@ -32,6 +32,11 @@ blas-mkl = ["tenferro-cpu/blas-mkl"]
 cpu-reference = []
 # The CUDA engine: the operation surface over the kernel catalogue, plus the vendor bindings.
 cuda = ["dep:t4a-cuda-runtime", "dep:t4a-cuda-kernels", "dep:cudarc"]
+# Deprecated alias kept for the cutover window: the trusted-base CUDA archive workflow on `main`
+# still builds with `tenferro-gpu/cubecl-interop`, and a gate that runs the base revision's
+# workflow cannot see this branch's workflow edits. It selects the same one CUDA path; remove it
+# once the workflow no longer names it.
+cubecl-interop = ["cuda"]
 rocm = []
 
 [dependencies]
