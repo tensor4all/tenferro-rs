@@ -363,7 +363,7 @@ descriptor.
 | --- | --- | --- |
 | Allocation, upload, download | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Explicit CPU/GPU transfer only |
 | `reshape` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Metadata-only shape change |
-| `transpose`, `broadcast_in_dim`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Structural tensor operations; CUDA `F32`/`F64`/`C32`/`C64` transpose uses cuTENSOR permutation |
+| `transpose`, `broadcast_in_dim`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Structural tensor operations; CUDA `F32`/`F64`/`C32`/`C64` transpose uses cuTENSOR permutation, and the triangular masks read transposed, offset and negative-stride views through their own layout |
 | checked `convert`, explicit `cast` | All CPU-supported pairs among `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | `convert` remains restricted by the public promotion lattice; explicit `cast` supports lossy narrowing, real-component projection, zero-imaginary injection, integer conversion, and nonzero Bool truthiness. Fallible real/complex-to-integer casts validate on device and return the same typed errors as CPU |
 | `gather` | operand `F32`, `F64`, `I32`, `Bool`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` index tensors; `I64` operands are not implemented |
 | `scatter` | operand/update `F32`, `F64`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Add-scatter semantics; complex and `Bool` index tensors and integer/`Bool` operands are not implemented |
@@ -371,7 +371,7 @@ descriptor.
 | `to_contiguous_read` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Same-device canonicalization of owned tensors and arbitrary valid CUDA views; CUDA `F32`/`F64`/`C32`/`C64` nonnegative-stride canonicalization uses cuTENSOR permutation, while negative-stride views use the native CUDA structural copy because cuTENSOR does not represent that layout; `Bool` is an explicit current limitation |
 | `copy_read_into` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | The source may be any valid region of this runtime (any offset, strides and rank; a source view wider than the catalogue's by-value layout rank keeps one compact staging copy); the destination is an owned tensor or a non-overlapping view up to the catalogue's by-value layout rank, written in place; source and destination allocations must not alias |
 | `dynamic_slice` | input `F32`, `F64`, `I32`, `Bool`, `C32`, `C64` with starts `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` start tensors; `I64` inputs are not implemented |
-| `dynamic_update_slice` | No CUDA implementation | Returns an error |
+| `dynamic_update_slice` | operand/update `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` with starts `F32`, `F64`, `I32`, or `I64` | StableHLO window write into a compact operand copy; a strided update and a compact offset starts view are read in place |
 | `cholesky`, `triangular_solve`, `lu`, `svd`, `qr`, `eigh`, `solve` | `F32`, `F64`, `C32`, `C64` | cuSOLVER/cuBLAS-backed; integer and `Bool` dtypes are not implemented |
 | `full_piv_lu`, `full_piv_lu_solve` | No CUDA implementation | Returns an error |
 | General `eig` | No CUDA implementation | cuSOLVER does not provide LAPACK `dgeev`-style general eigendecomposition; download to CPU explicitly |

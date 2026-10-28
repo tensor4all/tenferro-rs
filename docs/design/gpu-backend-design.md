@@ -25,7 +25,7 @@ allocation, explicit CPU/GPU transfer, broad structural/elementwise/reduction
 kernels, cuTENSOR contractions, and cuSOLVER/cuBLAS linear algebra paths.
 Performance optimization is still active work. The remaining unsupported CUDA
 cases are operation-specific: `eig`, `full_piv_lu`, `full_piv_lu_solve`,
-`dynamic_update_slice`, integer numeric/linalg gaps outside the currently
+integer numeric/linalg gaps outside the currently
 supported add/sub/mul/div/rem, neg/abs/sign/pow,
 comparison/selection/minimum/maximum, and sum/product/minimum/maximum
 reductions, `Bool` arithmetic/reduction/linalg and additive-scatter gaps, and
@@ -818,16 +818,15 @@ The following are intentionally outside the current batch:
 - HIP/ROCm execution backend implementation,
 - replacing the CubeCL fork,
 - selected complex analytic kernels and ordering operations,
-- CUDA implementations for `full_piv_lu`, `full_piv_lu_solve`, and
-  `dynamic_update_slice`,
+- CUDA implementations for `full_piv_lu` and `full_piv_lu_solve`,
 - integer numeric/linalg CUDA kernels outside the supported add/sub/mul/div/rem,
   neg/abs/sign/pow, compare/select/minimum/maximum, structural/indexing paths,
   and sum/product/minimum/maximum reductions,
 - `Bool` CUDA arithmetic, reductions, linalg, and additive scatter.
   Allocation/transfer, reshape, transpose, broadcast, diagonal
-  extraction/embedding, triangular masks, slice, `dynamic_slice` with
-  numeric starts, pad, concatenate, reverse, and gather with numeric index
-  tensors are implemented,
+  extraction/embedding, triangular masks, slice, `dynamic_slice` and
+  `dynamic_update_slice` with numeric starts, pad, concatenate, reverse, and
+  gather with numeric index tensors are implemented,
 - changing the public placement contract,
 - WebGPU elementwise, reduction, indexing, and linalg kernels beyond explicit
   transfer and CubeK-backed `F32`/`C32` contraction.
