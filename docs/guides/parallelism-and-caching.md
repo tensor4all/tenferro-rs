@@ -248,6 +248,16 @@ engine.set_buffer_pool_limit_bytes(32 * 1024 * 1024);
 ```
 <!-- end-snippet-source -->
 
+The limit is a byte cap on recycled capacity and defaults to 100 MiB. An output
+larger than the cap cannot come back through the pool, so every call allocates a
+fresh destination and pays its first touch inside the operation: on one x86-64
+core a fresh 256 MiB `f64` destination costs roughly 110 ms of page faults, where
+the same `sqrt` over a reused destination takes about 22 ms. Size the limit to
+the outputs a run keeps cycling through, and leave it small when it only serves
+small scratch. The cap stays a bound either way; only its value is
+workload-specific, and `TENFERRO_BUFFER_POOL_MAX_RETAINED_BYTES` sets it once for
+every engine the process creates.
+
 ## Clearing Cached Memory
 
 Clear caches when a long-running process changes workload phase, when a
