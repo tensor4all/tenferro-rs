@@ -19,6 +19,9 @@ CONTRACT_PROBE = "--contract-schema"
 MANIFEST_RELATIVE_DEFAULT = "scripts/storage-ownership-contracts.toml"
 ACTIVE_STATE = "active"
 DEFERRED_STATE = "deferred"
+# A retired obligation is finished by removing its subject from the product: the artifact it
+# named no longer exists, it satisfies no successor, and it does not block one.
+RETIRED_STATE = "retired"
 
 CLI_CONTRACT = {
     "schema": CLI_SCHEMA,
@@ -63,6 +66,7 @@ DIAGNOSTIC_FIELDS = {
     "E_ARTIFACT_ID_CONFLICT": frozenset({"artifact_id"}),
     "E_ARTIFACT_MISSING": frozenset({"artifact_id"}),
     "E_DEFERRED_ARTIFACT_EXISTS": frozenset({"obligation_id"}),
+    "E_RETIRED_ARTIFACT_EXISTS": frozenset({"obligation_id"}),
     "E_PATH_ESCAPE": frozenset({"obligation_id"}),
     "E_COMMAND_KIND": frozenset({"command_id", "kind"}),
     "E_COMMAND_ARGV": frozenset({"command_id"}),
@@ -572,7 +576,7 @@ def _validate_manifest(root: Path, data: dict[str, object]) -> tuple[list[dict[s
         if not isinstance(state, dict) or "status" in raw or not isinstance(state.get("kind"), str):
             _fail("E_OBLIGATION_TAGGED_STATE", {"obligation_id": obligation_id}, "obligation must use a tagged state")
         state_kind = state["kind"]
-        if state_kind not in {ACTIVE_STATE, DEFERRED_STATE}:
+        if state_kind not in {ACTIVE_STATE, DEFERRED_STATE, RETIRED_STATE}:
             _fail("E_OBLIGATION_TAGGED_STATE", {"obligation_id": obligation_id}, "obligation state is invalid")
         if state_kind == ACTIVE_STATE and state != {"kind": ACTIVE_STATE}:
             _fail("E_OBLIGATION_TAGGED_STATE", {"obligation_id": obligation_id}, "active state is not canonical")
@@ -604,6 +608,22 @@ def _validate_manifest(root: Path, data: dict[str, object]) -> tuple[list[dict[s
                 _fail("E_OBLIGATION_TAGGED_STATE", {"obligation_id": obligation_id}, "deferred state is not canonical")
             if resolved_artifact.exists():
                 _fail("E_DEFERRED_ARTIFACT_EXISTS", {"obligation_id": obligation_id}, "deferred artifact must not exist")
+        elif state_kind == RETIRED_STATE:
+            retired_by = state.get("retired_by")
+            if state != {"kind": RETIRED_STATE, "retired_by": retired_by} or not isinstance(
+                retired_by, str
+            ) or not retired_by.startswith("#") or not retired_by[1:].isdigit():
+                _fail(
+                    "E_OBLIGATION_TAGGED_STATE",
+                    {"obligation_id": obligation_id},
+                    "retired state names the issue that retired it, as '#<number>'",
+                )
+            if resolved_artifact.exists():
+                _fail(
+                    "E_RETIRED_ARTIFACT_EXISTS",
+                    {"obligation_id": obligation_id},
+                    "a retired artifact must not exist",
+                )
         elif not resolved_artifact.is_file():
             _fail("E_ARTIFACT_MISSING", {"artifact_id": artifact_id}, "active artifact is missing")
         command = raw.get("command")
@@ -633,7 +653,8 @@ def _validate_graph_prerequisites(
         ):
             continue
         for row in rows:
-            if row["unit"] == source and row["state"]["kind"] != ACTIVE_STATE:
+            # A retired obligation left the graph with its subject; a deferred one has not run yet.
+            if row["unit"] == source and row["state"]["kind"] == DEFERRED_STATE:
                 _fail(
                     "E_GRAPH_PREREQUISITE_INCOMPLETE",
                     {
@@ -650,6 +671,7 @@ def _validate_cohort(rows: list[dict[str, object]], cohort: dict[str, object]) -
     member_rows = [row for row in rows if row["unit"] in members]
     active = [row for row in member_rows if row["state"]["kind"] == ACTIVE_STATE]
     deferred = [row for row in member_rows if row["state"]["kind"] == DEFERRED_STATE]
+    # A retirement is not a partial promotion: the member's subject is gone, not pending.
     if active and deferred:
         _fail("E_COHORT_PARTIAL_PROMOTION", {"cohort_id": "cutover"}, "cutover members must promote together")
     if active:
@@ -734,11 +756,18 @@ def _promotion_check(root: Path, data: dict[str, object], *, base_commit: str | 
         candidate_state = candidate.get("state")
         if not isinstance(base_state, dict) or not isinstance(candidate_state, dict):
             continue
-        if base_state.get("kind") == ACTIVE_STATE and candidate_state.get("kind") != ACTIVE_STATE:
+        if (
+            base_state.get("kind") == ACTIVE_STATE
+            and candidate_state.get("kind") == DEFERRED_STATE
+        ):
             _fail("E_PROMOTION_IDENTITY", {"obligation_id": str(obligation_id)}, "an active obligation cannot be deferred")
         identity_changed = any(base.get(key) != candidate.get(key) for key in immutable)
         if revision_changed:
-            if base_state != candidate_state:
+            retirement = (
+                base_state.get("kind") == ACTIVE_STATE
+                and candidate_state.get("kind") == RETIRED_STATE
+            )
+            if base_state != candidate_state and not retirement:
                 _fail(
                     "E_PROMOTION_IDENTITY",
                     {"obligation_id": str(obligation_id)},

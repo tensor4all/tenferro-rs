@@ -23,6 +23,8 @@ SCHEMA = "tenferro.storage-ownership-contracts.v2"
 RECEIPT_SCHEMA = "tenferro.storage-ownership-receipt.v1"
 DIAGNOSTICS_SCHEMA = "tenferro.storage-ownership-diagnostics.v1"
 
+RETIRED_IDS = frozenset({"p8-webgpu-metal"})
+
 ACTIVE_IDS = frozenset(
     {
         "p0-control-plane",
@@ -45,7 +47,6 @@ ACTIVE_IDS = frozenset(
         "p6-reinterpret",
         "p6-reinterpret-rank-policy",
         "p7-cuda",
-        "p8-webgpu-metal",
         "p10-api-normalization",
         "p10-element-hot-path-structure",
         "p10-storage-traversal-performance",
@@ -395,10 +396,18 @@ class StorageOwnershipV2Tests(unittest.TestCase):
             row = next(row for row in rows if row["id"] == obligation_id)
             self.assertEqual(row["state"]["kind"], "deferred")
             self.assertEqual(row["state"]["activation_unit"], activation_unit)
+        # Retirement is a third terminal state: the obligation is finished because its subject
+        # left the product, and its artifact must be gone.
+        retired = {row["id"] for row in rows if row["state"]["kind"] == "retired"}
+        self.assertEqual(retired, RETIRED_IDS)
+        for obligation_id in RETIRED_IDS:
+            row = next(row for row in rows if row["id"] == obligation_id)
+            self.assertTrue(row["state"]["retired_by"].startswith("#"))
         self.assertEqual(
             len(rows),
             len([row for row in rows if row["state"]["kind"] == "active"])
-            + len([row for row in rows if row["state"]["kind"] == "deferred"]),
+            + len([row for row in rows if row["state"]["kind"] == "deferred"])
+            + len(retired),
         )
         self.assertEqual(
             tomllib.loads(_manifest_text()),
@@ -431,6 +440,28 @@ class StorageOwnershipV2Tests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(json.loads(result.stdout), {"terminal": False})
+
+    def test_a_retirement_names_its_issue_and_removes_the_artifact(self) -> None:
+        # Retiring is a state the ledger can express, and it is the only backward transition it
+        # allows: the artifact it named must be gone, and it names the issue that removed it.
+        manifest = _replace_row_state(
+            _manifest_text(),
+            "p7-cuda",
+            '{ kind = "retired", retired_by = "#9999" }',
+        )
+        # The artifact still exists (it is the checked-in test); only the state changed.
+        result = _run_checker(
+            manifest, files=_fixture_files(_manifest_text()), extra=("--diagnostics-json",)
+        )
+        _assert_error(self, result, "E_RETIRED_ARTIFACT_EXISTS", {"obligation_id": "p7-cuda"})
+
+        manifest = _replace_row_state(
+            _manifest_text(),
+            "p8-webgpu-metal",
+            '{ kind = "retired" }',
+        )
+        result = _run_checker(manifest, extra=("--diagnostics-json",))
+        _assert_error(self, result, "E_OBLIGATION_TAGGED_STATE", {"obligation_id": "p8-webgpu-metal"})
 
     def test_schema_only_v1_fixture_is_rejected(self) -> None:
         self.assertEqual(

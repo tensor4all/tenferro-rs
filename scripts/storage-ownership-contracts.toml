@@ -353,8 +353,8 @@ unit = "P8"
 gates = ["G1", "G3", "G5"]
 artifact = { id = "artifact-webgpu-metal-provider", kind = "hardware-test", path = "crates/tenferro-gpu/tests/storage_provider_webgpu.rs" }
 command = { id = "cmd-webgpu-metal-provider", kind = "cargo-test", argv = ["cargo", "test", "-p", "tenferro-gpu", "--features", "webgpu", "--test", "storage_provider_webgpu"], cwd = ".", path_args = [], artifact_id = "artifact-webgpu-metal-provider" }
-state = { kind = "active" }
-rationale = "The obligation is one immutable artifact-command contract owned by one graph unit."
+state = { kind = "retired", retired_by = "#2208" }
+rationale = "The WebGPU/Metal lane retired with the CUDA cutover (#2208): the provider and its hardware test left the product, so this obligation is retired rather than active. The registry keeps the unit and its edges as the frozen history of how the storage work was staged."
 
 [[obligations]]
 id = "p10-api-normalization"

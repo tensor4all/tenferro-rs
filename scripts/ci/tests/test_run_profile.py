@@ -181,10 +181,12 @@ class RunProfileTests(unittest.TestCase):
 
     def test_docs_profile_compile_checks_custom_cuda_kernel_examples(self) -> None:
         commands = commands_for("docs")
+        # The custom NVRTC-launch tutorial retired with the CubeCL session (#2208); the
+        # surviving vendor-interop binary is the one the docs profile compiles.
         command = (
             "cargo check -p tenferro-tutorial-code --profile ci "
             "--no-default-features --features cuda,native "
-            "--bin custom_cuda_kernels"
+            "--bin cuda_vendor_interop"
         )
 
         self.assertIn(command, commands)
