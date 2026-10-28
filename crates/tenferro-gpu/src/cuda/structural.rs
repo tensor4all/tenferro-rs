@@ -650,6 +650,8 @@ impl TensorStructural for CudaEngine {
     }
 
     fn cast(&mut self, input: &Tensor, to: DType) -> crate::Result<Tensor> {
+        self.ensure_healthy()
+            .map_err(|error| crate::Error::runtime_state("cast", error.to_string()))?;
         if is_host(input) {
             return Err(crate::Error::unsupported(
                 "cast",
@@ -657,10 +659,16 @@ impl TensorStructural for CudaEngine {
             ));
         }
         let from = input.dtype();
-        let (kernel_from, kernel_to) = (kernel_dtype(from, "cast")?, kernel_dtype(to, "cast")?);
         let shape = input.shape().to_vec();
         let len = i64::try_from(element_count(&shape)?)
             .map_err(|_| crate::Error::unsupported("cast", "the element count exceeds i64"))?;
+        if from == to {
+            // The conversion entry is defined for dtype changes only: `plan_convert` refuses equal
+            // dtypes. A same-dtype cast is the explicit duplicate the caller asked for, so it takes
+            // the copy route and still hands back fresh storage with its own identity.
+            return self.copy_to_fresh(input, shape, "cast");
+        }
+        let (kernel_from, kernel_to) = (kernel_dtype(from, "cast")?, kernel_dtype(to, "cast")?);
         // A C++ float-to-int cast is undefined for NaN, an infinity and an out-of-range value,
         // so the ABI requires the check below before the conversion. The complex routes read
         // the real component of each pair, hence the stride of two.
