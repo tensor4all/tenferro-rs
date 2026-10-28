@@ -20,6 +20,7 @@ fn identity(tensor: &Tensor) -> (Option<AllocationDomainId>, Option<AllocationId
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn seam_upload_keeps_the_single_root_identity() {
     if !gpu_available() {
         return;
@@ -38,6 +39,7 @@ fn seam_upload_keeps_the_single_root_identity() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn seam_upload_allocates_a_fresh_allocation_per_value() {
     if !gpu_available() {
         return;
@@ -56,6 +58,7 @@ fn seam_upload_allocates_a_fresh_allocation_per_value() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn seam_engine_is_send_and_reports_its_device() {
     if !gpu_available() {
         return;

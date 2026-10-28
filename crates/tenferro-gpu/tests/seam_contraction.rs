@@ -33,6 +33,7 @@ fn values(bytes: &[u8]) -> Vec<f64> {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_matrix_product_as_a_contraction_matches_the_host() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (23usize, 17usize, 31usize);
@@ -91,6 +92,7 @@ fn a_matrix_product_as_a_contraction_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_repeated_signature_reuses_the_plan() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (9usize, 8usize, 7usize);
@@ -141,6 +143,7 @@ fn a_repeated_signature_reuses_the_plan() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_permuted_destination_mode_matches_the_host() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (5usize, 4usize, 6usize);
@@ -197,6 +200,7 @@ fn a_permuted_destination_mode_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn disagreeing_operand_lists_are_refused() {
     let Some(runtime) = runtime() else { return };
     let buffer = runtime.upload_bytes(&bytes(&[0.0f64; 16])).expect("buffer");
@@ -248,6 +252,7 @@ fn bytes_complex32(values: &[(f32, f32)]) -> Vec<u8> {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn an_f32_contraction_reads_its_scalars_at_the_float_width() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (5usize, 4usize, 3usize);
@@ -309,6 +314,7 @@ fn an_f32_contraction_reads_its_scalars_at_the_float_width() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_complex_contraction_scales_by_its_complex_alpha() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (2usize, 2usize, 2usize);
@@ -369,6 +375,7 @@ fn a_complex_contraction_scales_by_its_complex_alpha() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_nonzero_beta_accumulates_into_the_addend() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (3usize, 2usize, 2usize);
@@ -452,6 +459,7 @@ fn a_nonzero_beta_accumulates_into_the_addend() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_new_shape_grows_one_shared_workspace() {
     let Some(runtime) = runtime() else { return };
     let mut cutensor = Cutensor::new(&runtime).expect("cuTENSOR");
@@ -500,6 +508,7 @@ fn a_new_shape_grows_one_shared_workspace() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn evicting_a_plan_destroys_its_native_resources() {
     let Some(runtime) = runtime() else { return };
     let mut cutensor = Cutensor::new(&runtime).expect("cuTENSOR");

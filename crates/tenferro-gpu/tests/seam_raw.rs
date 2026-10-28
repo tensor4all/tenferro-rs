@@ -19,6 +19,7 @@ fn device(engine: &CudaEngine, values: Vec<f32>) -> Tensor {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_session_hands_out_scratch_and_tensor_addresses() {
     let Some(mut engine) = engine() else { return };
     let input = device(&engine, vec![1.0, 2.0, 3.0, 4.0]);
@@ -52,6 +53,7 @@ fn the_session_hands_out_scratch_and_tensor_addresses() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_tensor_of_another_engine_is_refused() {
     let Some(mut engine) = engine() else { return };
     let other = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("second engine");
@@ -68,6 +70,7 @@ fn a_tensor_of_another_engine_is_refused() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_runtime_runs_a_plan_setup_with_its_context_current() {
     let Some(engine) = engine() else { return };
     // A plan is created outside any scope: the context has to be current for the vendor call, and
@@ -92,6 +95,7 @@ fn the_runtime_runs_a_plan_setup_with_its_context_current() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn an_extension_reaches_the_concrete_engine_through_the_engine_trait() {
     use tenferro_gpu::cuda::raw::with_cuda_engine;
 
@@ -106,6 +110,7 @@ fn an_extension_reaches_the_concrete_engine_through_the_engine_trait() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_nested_context_activation_does_not_block() {
     let Some(engine) = engine() else { return };
     // A cuFFT plan's rollback runs inside the context that created it, so activation nests. Without
@@ -126,6 +131,7 @@ fn a_nested_context_activation_does_not_block() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_session_copies_uploads_and_downloads() {
     let Some(mut engine) = engine() else { return };
     let source = device(&engine, vec![3.0, 1.0, 2.0]);
@@ -158,6 +164,7 @@ fn the_session_copies_uploads_and_downloads() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_vendor_resource_is_created_once_per_engine() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -180,6 +187,7 @@ fn a_vendor_resource_is_created_once_per_engine() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_borrowed_view_canonicalizes_into_owned_storage() {
     use tenferro_gpu::cuda::download_tensor;
     let Some(mut engine) = engine() else { return };
@@ -206,6 +214,7 @@ fn a_borrowed_view_canonicalizes_into_owned_storage() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_session_allocates_a_typed_output_the_extension_owns() {
     use tenferro_gpu::cuda::download_tensor;
     let Some(mut engine) = engine() else { return };

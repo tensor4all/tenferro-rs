@@ -15,6 +15,7 @@ fn engine() -> Option<CudaEngine> {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_engine_reports_the_cuda_target_and_its_allocation_domain() {
     let Some(engine) = engine() else { return };
     let target = engine.target();
@@ -38,6 +39,7 @@ fn the_engine_reports_the_cuda_target_and_its_allocation_domain() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_runtime_lends_and_takes_back_its_extension_caches() {
     use tenferro_runtime::ExtensionCacheKey;
 
@@ -99,6 +101,7 @@ fn event_domain(suffix: &str) -> tenferro_runtime::EventDomainId {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_driver_orders_a_launch_behind_its_dependency_and_retires_it() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -150,6 +153,7 @@ fn the_driver_orders_a_launch_behind_its_dependency_and_retires_it() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_prepared_elementwise_program_runs_on_the_new_engine() {
     use tenferro_gpu::cuda::{download_tensor, upload_tensor};
     use tenferro_runtime::{ExecutionEngine, GraphCompiler, Output, Runtime, TracedTensor};
@@ -197,6 +201,7 @@ fn a_prepared_elementwise_program_runs_on_the_new_engine() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_prepared_comparison_runs_on_the_new_engine() {
     use tenferro_gpu::cuda::{download_tensor, upload_tensor};
     use tenferro_runtime::{ExecutionEngine, GraphCompiler, Output, Runtime, TracedTensor};

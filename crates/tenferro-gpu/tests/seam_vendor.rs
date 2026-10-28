@@ -48,6 +48,7 @@ fn host_gemm(a: &[f64], b: &[f64], m: usize, n: usize, k: usize) -> Vec<f64> {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_plain_gemm_matches_the_host() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k) = (37usize, 29usize, 41usize);
@@ -77,6 +78,7 @@ fn a_plain_gemm_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_transposed_operand_matches_the_host() {
     let Some(runtime) = runtime() else { return };
     // `a` is stored as `(k, m)` and transposed into the product.
@@ -112,6 +114,7 @@ fn a_transposed_operand_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_strided_batched_gemm_matches_the_host() {
     let Some(runtime) = runtime() else { return };
     let (m, n, k, batches) = (8usize, 6usize, 5usize, 3usize);
@@ -160,6 +163,7 @@ fn a_strided_batched_gemm_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn an_impossible_leading_dimension_is_refused() {
     let Some(runtime) = runtime() else { return };
     let a_buf = runtime.upload_bytes(&f64_bytes(&[1.0; 4])).expect("a");

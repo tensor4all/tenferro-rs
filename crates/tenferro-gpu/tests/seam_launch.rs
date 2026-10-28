@@ -40,6 +40,7 @@ fn threads(plan: &t4a_cuda_kernels::Launch) -> (u32, u32) {
 /// count is the contract: repeating an entry costs nothing, and an unused module is never
 /// compiled.
 #[test]
+#[ignore = "requires CUDA"]
 fn each_module_is_compiled_once_per_runtime() {
     let Some(engine) = engine() else { return };
     let entries = [Entry::CopyExact, Entry::Reduce, Entry::CopyExact];
@@ -77,6 +78,7 @@ fn each_module_is_compiled_once_per_runtime() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn copy_exact_reads_back_the_same_bytes() {
     let Some(engine) = engine() else { return };
     let runtime = engine.runtime().clone();
@@ -112,6 +114,7 @@ fn copy_exact_reads_back_the_same_bytes() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn materialize_strided_gathers_a_transposed_view() {
     let Some(engine) = engine() else { return };
     let runtime = engine.runtime().clone();
@@ -160,6 +163,7 @@ fn materialize_strided_gathers_a_transposed_view() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn fill_zero_and_contiguous_to_view_cover_the_movement_family() {
     let Some(engine) = engine() else { return };
     let runtime = engine.runtime().clone();

@@ -35,6 +35,7 @@ fn as_bytes(values: &[f64]) -> Vec<u8> {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_value_transfers_to_another_engine_and_the_producer_moves_on() {
     let Some((producer, consumer)) = engines() else {
         return;
@@ -56,6 +57,7 @@ fn a_value_transfers_to_another_engine_and_the_producer_moves_on() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_copy_outlives_its_producer_engine() {
     let Some((producer, consumer)) = engines() else {
         return;
@@ -78,6 +80,7 @@ fn a_copy_outlives_its_producer_engine() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_cross_engine_copy_orders_the_source_write_and_the_destination_read() {
     let Some((producer, consumer)) = engines() else {
         return;
@@ -100,6 +103,7 @@ fn a_cross_engine_copy_orders_the_source_write_and_the_destination_read() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_copy_between_one_runtime_and_itself_is_refused() {
     let Some((engine, _other)) = engines() else {
         return;
@@ -111,6 +115,7 @@ fn a_copy_between_one_runtime_and_itself_is_refused() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_host_value_cannot_be_copied_between_engines() {
     let Some((producer, consumer)) = engines() else {
         return;
@@ -123,6 +128,7 @@ fn a_host_value_cannot_be_copied_between_engines() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_source_allocation_may_be_reused_immediately() {
     let Some((producer, consumer)) = engines() else {
         return;
@@ -149,6 +155,7 @@ fn the_source_allocation_may_be_reused_immediately() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_consumer_copy_survives_a_dropped_producer() {
     let Some((producer, consumer)) = engines() else {
         return;

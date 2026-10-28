@@ -100,6 +100,7 @@ fn run(
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn every_claimed_entry_matches_what_the_engine_does() {
     let Some(mut engine) = engine() else { return };
     let mut checked = 0_usize;
@@ -139,6 +140,7 @@ fn every_claimed_entry_matches_what_the_engine_does() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_descriptor_names_this_backend_and_its_dtype_pairs() {
     // This one needs an engine, and a host without a device skips it like its siblings (the GPU
     // lane runs it with `TENFERRO_REQUIRE_GPU=1`, where a missing device fails).

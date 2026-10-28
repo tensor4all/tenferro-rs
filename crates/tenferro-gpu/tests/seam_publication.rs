@@ -51,6 +51,7 @@ fn queue_work(runtime: &CudaRuntime) {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_published_value_survives_its_engine() {
     let Some(mut engine) = engine() else { return };
     let runtime = engine.runtime().clone();
@@ -69,6 +70,7 @@ fn a_published_value_survives_its_engine() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_publication_keeps_its_allocation_when_the_engine_is_dropped() {
     let Some(mut engine) = engine() else { return };
     let runtime = engine.runtime().clone();
@@ -91,6 +93,7 @@ fn a_publication_keeps_its_allocation_when_the_engine_is_dropped() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_publication_frontier_is_monotone_and_awaitable() {
     let Some(mut engine) = engine() else { return };
     let runtime = engine.runtime().clone();
@@ -120,6 +123,7 @@ fn a_publication_frontier_is_monotone_and_awaitable() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn dropping_a_publication_detaches_and_retires_it() {
     let Some(mut engine) = engine() else { return };
     let runtime = engine.runtime().clone();
@@ -139,6 +143,7 @@ fn dropping_a_publication_detaches_and_retires_it() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn forgetting_a_publication_leaks_it_in_place() {
     let Some(mut engine) = engine() else { return };
     let runtime = engine.runtime().clone();
@@ -155,6 +160,7 @@ fn forgetting_a_publication_leaks_it_in_place() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rejected_publication_returns_the_value() {
     let Some(mut engine) = engine() else { return };
     let host = vector(&values(16));
@@ -173,6 +179,7 @@ fn a_rejected_publication_returns_the_value() {
 /// A second engine on the same device is a different allocation domain, and its frontier does
 /// not order this engine's readers.
 #[test]
+#[ignore = "requires CUDA"]
 fn a_value_from_another_allocation_domain_is_rejected() {
     let Some(mut engine) = engine() else { return };
     let other = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("second engine");
@@ -191,6 +198,7 @@ fn a_value_from_another_allocation_domain_is_rejected() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_frontier_outlives_a_copy_that_reads_it() {
     let Some(mut engine) = engine() else { return };
     let runtime = engine.runtime().clone();

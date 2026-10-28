@@ -51,6 +51,7 @@ fn multiply_then_add() -> FusionPlan {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_fused_region_matches_the_host_and_prepares_once() {
     let Some(runtime) = runtime() else { return };
     let len = 1024i64;
@@ -113,6 +114,7 @@ fn a_fused_region_matches_the_host_and_prepares_once() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_region_with_the_wrong_operand_count_is_refused() {
     let Some(runtime) = runtime() else { return };
     let prepared = PreparedFusion::prepare(&runtime, &multiply_then_add()).expect("prepare");
@@ -123,6 +125,7 @@ fn a_region_with_the_wrong_operand_count_is_refused() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn an_ineligible_plan_is_refused_before_any_compile() {
     let Some(runtime) = runtime() else { return };
     let before = runtime.compile_attempts();

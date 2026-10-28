@@ -30,6 +30,7 @@ fn device(engine: &CudaEngine, data: Vec<f64>) -> Tensor {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_device_tensor_materializes_into_fresh_storage() {
     let Some(mut engine) = engine() else { return };
     let data = values(64);
@@ -47,6 +48,7 @@ fn a_device_tensor_materializes_into_fresh_storage() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_host_tensor_is_duplicated_without_device_work() {
     let Some(mut engine) = engine() else { return };
     let data = values(16);
@@ -60,6 +62,7 @@ fn a_host_tensor_is_duplicated_without_device_work() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn copy_read_into_overwrites_the_destination() {
     let Some(mut engine) = engine() else { return };
     let data = values(32);
@@ -76,6 +79,7 @@ fn copy_read_into_overwrites_the_destination() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_cast_converts_on_the_device() {
     let Some(mut engine) = engine() else { return };
     let data = values(24);
@@ -90,6 +94,7 @@ fn a_cast_converts_on_the_device() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_transposed_read_matches_the_host_transpose() {
     let Some(mut engine) = engine() else { return };
     // A 3x4 column-major matrix, read as its 4x3 transpose.
@@ -115,6 +120,7 @@ fn a_transposed_read_matches_the_host_transpose() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_reshape_read_relabels_the_same_elements() {
     let Some(mut engine) = engine() else { return };
     let data = values(12);
@@ -136,6 +142,7 @@ fn a_reshape_read_relabels_the_same_elements() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_broadcast_in_dim_read_matches_the_host() {
     let Some(mut engine) = engine() else { return };
     // A 3-vector broadcast along the second axis of a 3x2 output.
@@ -156,6 +163,7 @@ fn a_broadcast_in_dim_read_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_diagonal_extract_and_embed_round_trip() {
     let Some(mut engine) = engine() else { return };
     // A 3x3 column-major matrix whose diagonal is (1, 5, 9).
@@ -189,6 +197,7 @@ fn a_diagonal_extract_and_embed_round_trip() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_triangular_masks_match_the_host() {
     let Some(mut engine) = engine() else { return };
     let data: Vec<f64> = (1..=12).map(|value| value as f64).collect();
@@ -228,6 +237,7 @@ fn the_triangular_masks_match_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_reductions_match_the_host() {
     use tenferro_tensor::TensorReduction as _;
 
@@ -298,6 +308,7 @@ fn the_reductions_match_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_elementwise_family_matches_the_host() {
     use tenferro_tensor::TensorElementwise as _;
 
@@ -438,6 +449,7 @@ fn the_elementwise_family_matches_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn compare_and_select_round_trip_through_a_boolean_tensor() {
     use tenferro_tensor::{CompareDir, TensorElementwise as _};
 
@@ -510,6 +522,7 @@ fn compare_and_select_round_trip_through_a_boolean_tensor() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn remainder_and_read_into_match_the_host() {
     use tenferro_tensor::{ElementwiseReadOp, TensorElementwise as _};
 
@@ -617,6 +630,7 @@ fn remainder_and_read_into_match_the_host() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rank_nine_transpose_uses_the_general_path() {
     let Some(mut engine) = engine() else { return };
     // Nine axes exceed the fast ABI's rank limit, so the view's geometry travels in device
@@ -657,6 +671,7 @@ fn a_rank_nine_transpose_uses_the_general_path() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rank_nine_reverse_carries_its_negative_strides_and_offset() {
     let Some(mut engine) = engine() else { return };
     // Non-singleton axes on both ends, so a dropped offset or an unnegated stride would show.
@@ -690,6 +705,7 @@ fn a_rank_nine_reverse_carries_its_negative_strides_and_offset() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rank_nine_broadcast_uses_the_general_path() {
     let Some(mut engine) = engine() else { return };
     // A rank-2 source into a rank-9 destination: the destination layout is wider than the
@@ -726,6 +742,7 @@ fn a_rank_nine_broadcast_uses_the_general_path() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rank_nine_diagonal_pair_uses_the_general_path() {
     let Some(mut engine) = engine() else { return };
     // Unequal diagonal extents, a non-singleton spectator axis, and the lower axis removed
@@ -775,6 +792,7 @@ fn a_rank_nine_diagonal_pair_uses_the_general_path() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rank_nine_reduction_uses_the_general_path() {
     let Some(mut engine) = engine() else { return };
     // Nine axes; the first reduction is a single axis and the second a multi-axis sum, so the
@@ -843,6 +861,7 @@ fn a_rank_nine_reduction_uses_the_general_path() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_sum_of_squares_over_two_axes_squares_once() {
     let Some(mut engine) = engine() else { return };
     // Squaring both passes would return `sum((sum x^2)^2)` instead of `sum(x^2)`.
@@ -860,6 +879,7 @@ fn a_sum_of_squares_over_two_axes_squares_once() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rank_nine_reduction_over_a_long_axis_picks_a_plane_or_split_strategy() {
     let Some(mut engine) = engine() else { return };
     // Axis lengths past a warp and past the plane threshold make the crate choose a plane or a
@@ -887,6 +907,7 @@ fn a_rank_nine_reduction_over_a_long_axis_picks_a_plane_or_split_strategy() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_multi_axis_fold_keeps_its_own_operation() {
     let Some(mut engine) = engine() else { return };
     // A product over two axes must stay a product; only a sum of squares changes between passes.
@@ -925,6 +946,7 @@ fn a_multi_axis_fold_keeps_its_own_operation() {
 /// compact destination), and a view whose strides are all zero must not collapse to its first
 /// element.
 #[test]
+#[ignore = "requires CUDA"]
 fn a_borrowed_view_materializes_its_own_region() {
     let Some(mut engine) = engine() else { return };
 

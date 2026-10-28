@@ -52,6 +52,7 @@ fn host_values(tensor: &Tensor) -> Vec<f64> {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn pending_upload_reports_not_ready_then_publishes_the_values() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);
@@ -88,6 +89,7 @@ fn pending_upload_reports_not_ready_then_publishes_the_values() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn dropping_a_pending_upload_detaches_and_synchronize_retires_it() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);
@@ -118,6 +120,7 @@ fn dropping_a_pending_upload_detaches_and_synchronize_retires_it() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn forgetting_a_pending_upload_leaks_it_in_place() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);
@@ -137,6 +140,7 @@ fn forgetting_a_pending_upload_leaks_it_in_place() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rejected_upload_returns_the_submitted_package() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);
@@ -175,6 +179,7 @@ fn a_rejected_upload_returns_the_submitted_package() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn two_pending_uploads_in_flight_complete_independently() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);
@@ -210,6 +215,7 @@ fn two_pending_uploads_in_flight_complete_independently() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn pending_download_reports_not_ready_then_returns_the_bytes_and_the_value() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);
@@ -242,6 +248,7 @@ fn pending_download_reports_not_ready_then_returns_the_bytes_and_the_value() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn pending_download_survives_its_producing_engine() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);
@@ -256,6 +263,7 @@ fn pending_download_survives_its_producing_engine() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn pinned_buffer_bytes_round_trip() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);
@@ -266,6 +274,7 @@ fn pinned_buffer_bytes_round_trip() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn dropping_a_pending_download_detaches_and_forgetting_it_leaks() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);
@@ -294,6 +303,7 @@ fn dropping_a_pending_download_detaches_and_forgetting_it_leaks() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rejected_download_returns_the_package() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);
@@ -326,6 +336,7 @@ fn a_rejected_download_returns_the_package() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn two_pending_downloads_in_flight_complete_independently() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);
@@ -345,6 +356,7 @@ fn two_pending_downloads_in_flight_complete_independently() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn boolean_payloads_round_trip_through_the_transfer_route() {
     let Some(engine) = engine() else { return };
     let runtime = runtime_of(&engine);

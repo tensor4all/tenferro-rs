@@ -30,6 +30,7 @@ fn read(engine: &CudaEngine, tensor: &Tensor) -> Vec<f64> {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_slice_window_reads_the_strided_region() {
     let Some(mut engine) = engine() else { return };
     let source = device(&engine, vec![4, 5], matrix(4, 5));
@@ -63,6 +64,7 @@ fn a_slice_window_reads_the_strided_region() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn pad_fills_edges_and_interior_with_zero() {
     let Some(mut engine) = engine() else { return };
     let source = device(&engine, vec![2, 2], matrix(2, 2));
@@ -101,6 +103,7 @@ fn pad_fills_edges_and_interior_with_zero() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_dynamic_slice_takes_its_starts_from_the_device() {
     let Some(mut engine) = engine() else { return };
     let source = device(&engine, vec![4, 5], matrix(4, 5));
@@ -119,6 +122,7 @@ fn a_dynamic_slice_takes_its_starts_from_the_device() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn concatenate_places_each_input_along_the_axis() {
     let Some(mut engine) = engine() else { return };
     let first = device(&engine, vec![2, 2], vec![0.0, 1.0, 2.0, 3.0]);
@@ -136,6 +140,7 @@ fn concatenate_places_each_input_along_the_axis() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn reverse_negates_only_the_named_axes() {
     let Some(mut engine) = engine() else { return };
     let source = device(&engine, vec![2, 3], matrix(2, 3));
@@ -149,6 +154,7 @@ fn reverse_negates_only_the_named_axes() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn gather_reads_a_window_per_index_vector() {
     let Some(mut engine) = engine() else { return };
     // Operand [3, 4]: value = row + col * 3.
@@ -174,6 +180,7 @@ fn gather_reads_a_window_per_index_vector() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn scatter_adds_each_update_into_the_operand_copy() {
     let Some(mut engine) = engine() else { return };
     let operand = device(&engine, vec![2, 2], vec![0.0; 4]);
@@ -202,6 +209,7 @@ fn scatter_adds_each_update_into_the_operand_copy() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn an_empty_window_is_refused_or_produces_an_empty_result() {
     let Some(mut engine) = engine() else { return };
     let source = device(&engine, vec![2, 2], matrix(2, 2));
@@ -236,6 +244,7 @@ fn an_empty_window_is_refused_or_produces_an_empty_result() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn mismatched_index_metadata_is_refused_before_any_device_read() {
     let Some(mut engine) = engine() else { return };
     let source = device(&engine, vec![4, 5], matrix(4, 5));
@@ -288,6 +297,7 @@ fn mismatched_index_metadata_is_refused_before_any_device_read() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn float_indices_are_checked_for_exactness() {
     let Some(mut engine) = engine() else { return };
     let source = device(&engine, vec![4, 5], matrix(4, 5));
@@ -377,6 +387,7 @@ fn float_indices_are_checked_for_exactness() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rank_nine_concatenation_uses_the_general_path() {
     let Some(mut engine) = engine() else { return };
     // Nine axes exceed the by-value layout form. Concatenating the leading axis interleaves the
@@ -416,6 +427,7 @@ fn a_rank_nine_concatenation_uses_the_general_path() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rank_nine_window_uses_the_general_path() {
     let Some(mut engine) = engine() else { return };
     // Nine axes: the layouts and the per-axis window arrays all travel in device memory.
@@ -475,6 +487,7 @@ fn a_rank_nine_window_uses_the_general_path() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rank_nine_dynamic_slice_uses_the_general_path() {
     let Some(mut engine) = engine() else { return };
     let shape = vec![4usize, 1, 1, 1, 1, 1, 1, 1, 5];
@@ -502,6 +515,7 @@ fn a_rank_nine_dynamic_slice_uses_the_general_path() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn a_rank_nine_gather_and_scatter_use_the_general_path() {
     let Some(mut engine) = engine() else { return };
     // A rank-9 operand whose window rides axis 8 and whose start selects axis 7, so the plan's

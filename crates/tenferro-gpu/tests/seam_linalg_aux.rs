@@ -40,6 +40,7 @@ fn read(engine: &CudaEngine, tensor: &Tensor) -> Vec<f64> {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_matrix_adjoint_transposes_each_batch() {
     let Some(mut engine) = engine() else { return };
     // Two 2x3 matrices; the adjoint of each is 3x2.
@@ -62,6 +63,7 @@ fn the_matrix_adjoint_transposes_each_batch() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_column_norms_measure_the_trailing_columns() {
     let Some(mut engine) = engine() else { return };
     // A 3x3 work matrix with columns of known norm; `step = 0` measures every column.
@@ -78,6 +80,7 @@ fn the_column_norms_measure_the_trailing_columns() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_pivot_selection_and_swap_exchange_the_largest_column() {
     let Some(mut engine) = engine() else { return };
     // Two columns whose norms are 3 and 12: from step 0 the largest column is 1.
@@ -102,6 +105,7 @@ fn the_pivot_selection_and_swap_exchange_the_largest_column() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_qr_phase_scales_and_the_shifted_identity_is_built() {
     let Some(mut engine) = engine() else { return };
     // R = diag(2, -3) as a 2x2; the phase of a diagonal is +1 where the entry is positive.
@@ -134,6 +138,7 @@ fn the_qr_phase_scales_and_the_shifted_identity_is_built() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_reflector_round_trip_and_the_extracted_r() {
     let Some(mut engine) = engine() else { return };
     // Column 0 of the 3x2 working matrix is (3, 4, 0): its Householder reflector has norm 5, phase
@@ -187,6 +192,7 @@ fn the_reflector_round_trip_and_the_extracted_r() {
 }
 
 #[test]
+#[ignore = "requires CUDA"]
 fn the_lu_pivots_permute_rows_and_the_parity_is_read() {
     let Some(mut engine) = engine() else { return };
     // The pivots are LAPACK's one-based row numbers: pivot 2 at step 0 means row 0 and row 1
