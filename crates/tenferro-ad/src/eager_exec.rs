@@ -137,22 +137,6 @@ fn concrete_tensor_reads<'a>(
         .collect()
 }
 
-fn concrete_promoted_read_to_dtype<'a>(
-    exec: &mut dyn Engine,
-    input: TensorRead<'a>,
-    promoted: DType,
-) -> Result<ConcreteTensorRead<'a>> {
-    if input.dtype() == promoted {
-        concrete_tensor_read(exec, input)
-    } else {
-        let input = concrete_tensor_read(exec, input)?;
-        Ok(ConcreteTensorRead::Owned(Box::new(
-            exec.convert(input.tensor(), promoted)
-                .map_err(Error::from)?,
-        )))
-    }
-}
-
 fn promote_read_to_dtype<'a>(
     exec: &mut dyn Engine,
     input: TensorRead<'a>,
@@ -389,7 +373,9 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
     exec: &mut dyn Engine,
 ) -> Result<Vec<Tensor>> {
     // `_read` hooks own layout handling, including backend-specific fallback.
-    // Materialize only for dtype conversion or the owned-only arms below.
+    // Materialize only where the value itself is needed (`Convert`, the
+    // dynamic-truncate size, and an operation that must return a fresh owned
+    // tensor), never to prepare an operand for a hook (#2223).
     let promotion_plan =
         eager_input_promotion_plan(op, inputs.len(), |index| inputs[index].dtype());
     let target_dtype = |index| promotion_plan.target_dtype(index, inputs[index].dtype());
@@ -478,33 +464,30 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             let shape = resolve_tensor_read_shape_exprs(inputs, shape)?;
             vec![exec.broadcast_in_dim_read(inputs[0].clone(), &shape, dims)?]
         }
+        // Structural and indexing operands stay reads: the backend reads the
+        // operand's own layout when it can, and its `_read` default stages the
+        // view when it cannot. Pre-materializing here would take that decision
+        // away from the backend (#2223).
         StdTensorOp::ExtractDiag { axis_a, axis_b } => {
-            let input = concrete_tensor_read(exec, inputs[0].clone())?;
-            vec![exec.extract_diagonal(input.tensor(), *axis_a, *axis_b)?]
+            vec![exec.extract_diagonal_read(inputs[0].clone(), *axis_a, *axis_b)?]
         }
         StdTensorOp::EmbedDiag { axis_a, axis_b } => {
-            let input = concrete_tensor_read(exec, inputs[0].clone())?;
-            vec![exec.embed_diagonal(input.tensor(), *axis_a, *axis_b)?]
+            vec![exec.embed_diagonal_read(inputs[0].clone(), *axis_a, *axis_b)?]
         }
         StdTensorOp::Tril { k } => {
-            let input = concrete_tensor_read(exec, inputs[0].clone())?;
-            vec![exec.tril(input.tensor(), *k)?]
+            vec![exec.tril_read(inputs[0].clone(), *k)?]
         }
         StdTensorOp::Triu { k } => {
-            let input = concrete_tensor_read(exec, inputs[0].clone())?;
-            vec![exec.triu(input.tensor(), *k)?]
+            vec![exec.triu_read(inputs[0].clone(), *k)?]
         }
         StdTensorOp::Slice(config) => {
-            let input = concrete_tensor_read(exec, inputs[0].clone())?;
-            vec![exec.slice(input.tensor(), config)?]
+            vec![exec.slice_read(inputs[0].clone(), config)?]
         }
         StdTensorOp::Pad(config) => {
-            let input = concrete_tensor_read(exec, inputs[0].clone())?;
-            vec![exec.pad(input.tensor(), config)?]
+            vec![exec.pad_read(inputs[0].clone(), config)?]
         }
         StdTensorOp::Reverse { axes } => {
-            let input = concrete_tensor_read(exec, inputs[0].clone())?;
-            vec![exec.reverse(input.tensor(), axes)?]
+            vec![exec.reverse_read(inputs[0].clone(), axes)?]
         }
         StdTensorOp::ReduceProd { axes, .. } => {
             vec![exec.reduce_prod_read(inputs[0].clone(), axes)?]
@@ -544,16 +527,19 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             )?]
         }
         StdTensorOp::Concatenate { axis, .. } => {
-            let mut tensors = Vec::with_capacity(inputs.len());
+            let mut promoted = Vec::with_capacity(inputs.len());
             for (index, input) in inputs.iter().enumerate() {
-                tensors.push(concrete_promoted_read_to_dtype(
+                promoted.push(promote_read_to_dtype(
                     exec,
                     input.clone(),
                     target_dtype(index),
                 )?);
             }
-            let refs: Vec<&Tensor> = tensors.iter().map(ConcreteTensorRead::tensor).collect();
-            vec![exec.concatenate(&refs, *axis)?]
+            let reads: Vec<TensorRead<'_>> = promoted
+                .iter()
+                .map(PromotedTensorRead::tensor_read)
+                .collect();
+            vec![exec.concatenate_read(&reads, *axis)?]
         }
         StdTensorOp::Gather(config) => {
             // Both operands stay reads: the backend decides whether it can
@@ -578,23 +564,26 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             vec![exec.gather_read(inputs[0].clone(), inputs[1].clone(), &config)?]
         }
         StdTensorOp::Scatter(config) => {
-            let operand =
-                concrete_promoted_read_to_dtype(exec, inputs[0].clone(), target_dtype(0))?;
-            let updates =
-                concrete_promoted_read_to_dtype(exec, inputs[2].clone(), target_dtype(2))?;
-            let indices = concrete_tensor_read(exec, inputs[1].clone())?;
-            vec![exec.scatter(operand.tensor(), indices.tensor(), updates.tensor(), config)?]
+            let operand = promote_read_to_dtype(exec, inputs[0].clone(), target_dtype(0))?;
+            let updates = promote_read_to_dtype(exec, inputs[2].clone(), target_dtype(2))?;
+            vec![exec.scatter_read(
+                operand.tensor_read(),
+                inputs[1].clone(),
+                updates.tensor_read(),
+                config,
+            )?]
         }
         StdTensorOp::DynamicSlice { slice_sizes } => {
-            let tensors = concrete_tensor_reads(exec, inputs)?;
-            vec![exec.dynamic_slice(tensors[0].tensor(), tensors[1].tensor(), slice_sizes)?]
+            vec![exec.dynamic_slice_read(inputs[0].clone(), inputs[1].clone(), slice_sizes)?]
         }
         StdTensorOp::DynamicUpdateSlice => {
-            let operand =
-                concrete_promoted_read_to_dtype(exec, inputs[0].clone(), target_dtype(0))?;
-            let update = concrete_promoted_read_to_dtype(exec, inputs[1].clone(), target_dtype(1))?;
-            let starts = concrete_tensor_read(exec, inputs[2].clone())?;
-            vec![exec.dynamic_update_slice(operand.tensor(), update.tensor(), starts.tensor())?]
+            let operand = promote_read_to_dtype(exec, inputs[0].clone(), target_dtype(0))?;
+            let update = promote_read_to_dtype(exec, inputs[1].clone(), target_dtype(1))?;
+            vec![exec.dynamic_update_slice_read(
+                operand.tensor_read(),
+                update.tensor_read(),
+                inputs[2].clone(),
+            )?]
         }
         StdTensorOp::ShapeOf { .. } => {
             return Err(Error::Internal(
@@ -622,8 +611,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
                 limits,
                 strides: vec![1; rank],
             };
-            let input = concrete_tensor_read(exec, inputs[0].clone())?;
-            vec![exec.slice(input.tensor(), &config)?]
+            vec![exec.slice_read(inputs[0].clone(), &config)?]
         }
         StdTensorOp::PadToMatch { axis } => {
             let input = &inputs[0];
@@ -651,8 +639,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
                     edge_padding_high: high,
                     interior_padding: vec![0i64; rank],
                 };
-                let input = concrete_tensor_read(exec, inputs[0].clone())?;
-                vec![exec.pad(input.tensor(), &config)?]
+                vec![exec.pad_read(inputs[0].clone(), &config)?]
             }
         }
         StdTensorOp::Extension(ext) => {

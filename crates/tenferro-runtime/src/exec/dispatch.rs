@@ -190,9 +190,9 @@ pub(super) fn is_host_op(op: &ExecOp) -> bool {
 ///
 /// Every backend entry but `Convert` (`cast` takes an owned tensor) reads its
 /// inputs through `get_read`; the FFI entries (`dot_general_read_cached`,
-/// extension executors) and `ShapeOf` take reads; the remaining host ops
-/// materialize their inputs. The owned accessors reject a folded view typed,
-/// so a consumer this predicate misclassifies fails loudly.
+/// extension executors), `ShapeOf`, `DynamicTruncate` and `PadToMatch` take
+/// reads; `Constant` has no inputs. The owned accessors reject a folded view
+/// typed, so a consumer this predicate misclassifies fails loudly.
 pub(super) fn reads_input_view(op: &ExecOp, input_index: usize) -> bool {
     if let Some(entry) = backend_dispatch_entry(op) {
         return entry.key != PrimitiveOpKind::Convert;
@@ -204,7 +204,14 @@ pub(super) fn reads_input_view(op: &ExecOp, input_index: usize) -> bool {
         Some(FfiDispatchKey::Extension) => return true,
         None => {}
     }
-    matches!(HostDispatchKey::for_op(op), Some(HostDispatchKey::ShapeOf))
+    matches!(
+        HostDispatchKey::for_op(op),
+        Some(
+            HostDispatchKey::ShapeOf
+                | HostDispatchKey::DynamicTruncate
+                | HostDispatchKey::PadToMatch
+        )
+    )
 }
 
 pub(super) fn is_ffi_op(op: &ExecOp) -> bool {
@@ -310,42 +317,6 @@ fn host_dispatch_mismatch(expected: HostDispatchKey, op: &ExecOp) -> Error {
     ))
 }
 
-fn ensure_host_owned<B: HostExecution + ?Sized>(
-    backend: &mut B,
-    slots: &mut [Option<ExecSlot<'_>>],
-    inst: &ExecInstruction,
-    idx: usize,
-) -> Result<()> {
-    if inst.input_views.iter().any(|(input, _)| *input == idx) {
-        return Err(Error::Internal(format!(
-            "host input {idx} of {:?} carries a folded view, but the operation reads owned inputs",
-            inst.op
-        )));
-    }
-    let slot = inst
-        .input_slots
-        .get(idx)
-        .copied()
-        .ok_or_else(|| Error::Internal(format!("host input slot {idx} is missing")))?;
-    let needs_materialization = matches!(
-        slots
-            .get(slot)
-            .and_then(Option::as_ref)
-            .ok_or_else(|| Error::Internal(format!("host input slot {slot} is empty")))?,
-        ExecSlot::Read(TensorRead::View(_))
-    );
-    if needs_materialization {
-        let read = slots
-            .get(slot)
-            .and_then(Option::as_ref)
-            .ok_or_else(|| Error::Internal(format!("host input slot {slot} is empty")))?
-            .as_read();
-        let tensor = backend.to_contiguous_read(read)?;
-        slots[slot] = Some(ExecSlot::Owned(tensor));
-    }
-    Ok(())
-}
-
 fn execute_shape_of_host<B: HostExecution + ?Sized>(
     backend: &mut B,
     slots: &mut [Option<ExecSlot<'_>>],
@@ -387,9 +358,7 @@ fn execute_dynamic_truncate_host<B: HostExecution + ?Sized>(
             &inst.op,
         ));
     };
-    ensure_host_owned(backend, slots, inst, 0)?;
-    ensure_host_owned(backend, slots, inst, 1)?;
-    let input = get(slots, inst, 0)?;
+    let input = get_read(slots, inst, 0)?;
     if *axis >= input.shape().len() {
         return Err(Error::invalid_argument(
             "dynamic_truncate",
@@ -401,6 +370,8 @@ fn execute_dynamic_truncate_host<B: HostExecution + ?Sized>(
             ),
         ));
     }
+    // The size is a value the dispatch reads, not an operand: only this
+    // download materializes it.
     let size_tensor = backend.download_to_host(get_read(slots, inst, 1)?)?;
     let axis_extent = input.shape()[*axis];
     let size = dynamic_truncate_size(&size_tensor, axis_extent)?;
@@ -412,7 +383,7 @@ fn execute_dynamic_truncate_host<B: HostExecution + ?Sized>(
         limits,
         strides: vec![1; rank],
     };
-    slots[inst.output_slots[0]] = Some(ExecSlot::Owned(backend.slice(input, &config)?));
+    slots[inst.output_slots[0]] = Some(ExecSlot::Owned(backend.slice_read(input, &config)?));
     Ok(())
 }
 
@@ -427,10 +398,9 @@ fn execute_pad_to_match_host<B: HostExecution + ?Sized>(
             &inst.op,
         ));
     };
-    ensure_host_owned(backend, slots, inst, 0)?;
-    ensure_host_owned(backend, slots, inst, 1)?;
-    let input = get(slots, inst, 0)?;
-    let reference = get(slots, inst, 1)?;
+    // The reference is needed only for its shape, so it stays a read.
+    let input = get_read(slots, inst, 0)?;
+    let reference = get_read(slots, inst, 1)?;
     if *axis >= input.shape().len() {
         return Err(Error::invalid_argument(
             "pad_to_match",
@@ -444,8 +414,10 @@ fn execute_pad_to_match_host<B: HostExecution + ?Sized>(
     }
     let target_size = reference.shape()[*axis];
     let current_size = input.shape()[*axis];
-    if current_size >= target_size {
-        slots[inst.output_slots[0]] = Some(ExecSlot::Owned(input.duplicate()?));
+    let output = if current_size >= target_size {
+        // The result must be a fresh owned tensor, which is the only
+        // materialization this branch needs.
+        backend.to_contiguous_read(input)?
     } else {
         let rank = input.shape().len();
         let mut high = vec![0i64; rank];
@@ -455,8 +427,9 @@ fn execute_pad_to_match_host<B: HostExecution + ?Sized>(
             edge_padding_high: high,
             interior_padding: vec![0i64; rank],
         };
-        slots[inst.output_slots[0]] = Some(ExecSlot::Owned(backend.pad(input, &config)?));
-    }
+        backend.pad_read(input, &config)?
+    };
+    slots[inst.output_slots[0]] = Some(ExecSlot::Owned(output));
     Ok(())
 }
 

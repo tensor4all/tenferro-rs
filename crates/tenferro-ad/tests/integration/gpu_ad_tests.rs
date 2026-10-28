@@ -573,6 +573,99 @@ fn assert_real_like_close(actual: &Tensor, expected: &Tensor, what: &str) {
 /// shape in-repo, which is why it is classified `gpu` (a device test the pod runs)
 /// rather than `benchmark` - the partition reserves that lane for a single
 /// reviewed exclusion.
+/// Download an eager value on the engine that owns it.
+fn download_eager(backend: &mut CudaEngine, value: &EagerTensor) -> Tensor {
+    let owned = value.to_tensor(backend).unwrap();
+    assert_device_backed(&owned);
+    on_engine(backend, |session| {
+        session.download_to_host(TensorRead::from_tensor(&owned))
+    })
+    .unwrap()
+    .unwrap()
+}
+
+/// #2223: the eager API reads a strided device view and returns the values of
+/// its compact copy.
+///
+/// The pieces are proven where each is observable: the dispatch spy in
+/// `tenferro-ad` holds the caller's staging count at zero, and the
+/// `staged_reads` unit test in `tenferro-gpu` holds the engine's counter at zero
+/// for its native read entries. This test only pins the values the eager API
+/// returns for a device view whose layout is not compact.
+#[test]
+#[ignore = "requires CUDA"]
+fn test_gpu_eager_structural_reads_agree_on_a_strided_device_view() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
+
+    let source = f64_tensor(
+        vec![2, 3, 4],
+        (0..24).map(|index| index as f64).collect::<Vec<_>>(),
+    );
+    let source_gpu = upload_tensor(backend.runtime(), &source).unwrap();
+    let ctx = EagerRuntime::new().unwrap();
+    let owned = ctx
+        .with_eager_session(&mut backend, |s| s.constant_from(source_gpu))
+        .unwrap();
+    // An untracked transpose keeps the borrowed layout, so every operation below
+    // reads a device view of shape `[3, 4, 2]` with strides `[2, 6, 1]`.
+    let view = ctx
+        .with_eager_session(&mut backend, |s| s.transpose(&owned, &[1, 2, 0]))
+        .unwrap();
+    assert!(
+        matches!(view.tensor_read(), TensorRead::View(_)),
+        "the eager input must stay a borrowed device view"
+    );
+    assert_eq!(view.shape(), &[3, 4, 2]);
+
+    let compact_gpu = view.to_tensor(&mut backend).unwrap();
+    assert_device_backed(&compact_gpu);
+    let compact = ctx
+        .with_eager_session(&mut backend, |s| s.constant_from(compact_gpu))
+        .unwrap();
+
+    let slice_config = tenferro_tensor::SliceConfig {
+        starts: vec![1, 0, 0],
+        limits: vec![3, 4, 2],
+        strides: vec![1, 2, 1],
+    };
+    let sliced_view = ctx
+        .with_eager_session(&mut backend, |s| s.slice(&view, slice_config.clone()))
+        .unwrap();
+    let sliced_compact = ctx
+        .with_eager_session(&mut backend, |s| s.slice(&compact, slice_config))
+        .unwrap();
+
+    let reversed_view = ctx
+        .with_eager_session(&mut backend, |s| s.reverse(&view, &[0, 2]))
+        .unwrap();
+    let reversed_compact = ctx
+        .with_eager_session(&mut backend, |s| s.reverse(&compact, &[0, 2]))
+        .unwrap();
+
+    let joined_view = ctx
+        .with_eager_session(&mut backend, |s| s.concatenate(&[&view, &view], 0))
+        .unwrap();
+    let joined_compact = ctx
+        .with_eager_session(&mut backend, |s| s.concatenate(&[&compact, &compact], 0))
+        .unwrap();
+
+    for (label, from_view, from_compact) in [
+        ("slice", &sliced_view, &sliced_compact),
+        ("reverse", &reversed_view, &reversed_compact),
+        ("concatenate", &joined_view, &joined_compact),
+    ] {
+        let view_values = download_eager(&mut backend, from_view);
+        let compact_values = download_eager(&mut backend, from_compact);
+        assert_eq!(view_values.shape(), compact_values.shape(), "eager {label}");
+        assert_eq!(
+            view_values.as_slice::<f64>().unwrap(),
+            compact_values.as_slice::<f64>().unwrap(),
+            "eager {label} on a strided device view"
+        );
+    }
+}
+
 #[test]
 #[ignore = "requires CUDA"]
 fn eager_op_f64_decode_add_host_cost_benchmark() {

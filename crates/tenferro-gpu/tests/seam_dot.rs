@@ -291,3 +291,296 @@ fn an_empty_contraction_zeroes_an_existing_destination() {
         .expect("empty zero-beta accumulation");
     assert_eq!(read(&engine, &out), vec![0.0; 6]);
 }
+
+// --- Write-side views: a contraction into a borrowed destination region (#2223 item 3) ---
+
+use tenferro_tensor::TensorViewMut;
+
+/// The three destination flavours the write-side tests use: a transposed stride pair, a
+/// nonzero offset and a negative stride, all over a `6 x 5` column-major root of thirty
+/// sentinel entries. Each covers six entries, so the other twenty-four must survive untouched.
+fn write_view_flavours() -> Vec<(&'static str, Vec<usize>, Vec<isize>, isize)> {
+    vec![
+        ("transposed", vec![2, 3], vec![5, 1], 2),
+        ("offset", vec![2, 3], vec![1, 6], 7),
+        ("negative", vec![2, 3], vec![-1, 6], 5),
+    ]
+}
+
+fn sentinel(index: usize) -> f64 {
+    100.0 + index as f64
+}
+
+/// A `6 x 5` column-major device tensor of sentinels.
+fn write_root(engine: &CudaEngine) -> Tensor {
+    device(engine, vec![6, 5], (0..30).map(sentinel).collect())
+}
+
+/// The root's linear indices in logical column-major order for one region.
+fn region_indices(shape: &[usize], strides: &[isize], offset: isize) -> Vec<usize> {
+    let count: usize = shape.iter().product();
+    (0..count)
+        .map(|flat| {
+            let mut remaining = flat;
+            let mut index = offset;
+            for (&extent, &stride) in shape.iter().zip(strides) {
+                let coordinate = remaining % extent;
+                remaining /= extent;
+                index += coordinate as isize * stride;
+            }
+            usize::try_from(index).expect("the region starts at a nonnegative element")
+        })
+        .collect()
+}
+
+/// The root a write should have produced: `written` at the region and the sentinel elsewhere.
+fn expected_root(region: &[usize], written: &[f64]) -> Vec<f64> {
+    assert_eq!(region.len(), written.len());
+    let mut root: Vec<f64> = (0..30).map(sentinel).collect();
+    for (&index, &value) in region.iter().zip(written) {
+        root[index] = value;
+    }
+    root
+}
+
+/// Write through one destination region of `root`, then read the whole root back.
+fn write_through_view(
+    engine: &mut CudaEngine,
+    root: &mut Tensor,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+    write: impl FnOnce(&mut CudaEngine, TensorWrite<'_>) -> tenferro_tensor::Result<()>,
+) -> Vec<f64> {
+    {
+        let region = root
+            .as_typed_mut::<f64>()
+            .expect("f64 payload")
+            .backend_region_view_mut(shape, strides, offset)
+            .expect("mutable region view");
+        write(engine, TensorWrite::from_view(TensorViewMut::F64(region)))
+            .expect("write through the destination view");
+    }
+    read(engine, root)
+}
+
+/// The `[2, 3]` column-major product of a `[2, 2]` and a `[2, 3]` operand.
+fn product(lhs: &[f64], rhs: &[f64]) -> Vec<f64> {
+    let mut out = vec![0.0; 6];
+    for column in 0..3 {
+        for row in 0..2 {
+            out[row + column * 2] = lhs[row] * rhs[column * 2] + lhs[row + 2] * rhs[column * 2 + 1];
+        }
+    }
+    out
+}
+
+/// The `[2, 2]` and `[2, 3]` operands and the product they must produce.
+fn operands(engine: &CudaEngine) -> (Tensor, Tensor, Vec<f64>) {
+    let a: Vec<f64> = (1..=4).map(|index| index as f64).collect();
+    let b: Vec<f64> = vec![1.0, 0.0, 0.5, 2.0, -1.0, 3.0];
+    let expected = product(&a, &b);
+    let lhs = device(engine, vec![2, 2], a);
+    let rhs = device(engine, vec![2, 3], b);
+    (lhs, rhs, expected)
+}
+
+fn accumulation(alpha: f64, beta: f64) -> DotGeneralAccumulation {
+    DotGeneralAccumulation {
+        lhs_conj: false,
+        rhs_conj: false,
+        alpha: ContractionScalar::F64(alpha),
+        beta: ContractionScalar::F64(beta),
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn dot_general_read_into_writes_a_strided_destination_view() {
+    let Some(mut engine) = engine() else { return };
+    for (flavour, shape, strides, offset) in write_view_flavours() {
+        let mut root = write_root(&engine);
+        let (lhs, rhs, expected) = operands(&engine);
+        let observed = write_through_view(
+            &mut engine,
+            &mut root,
+            shape.clone(),
+            strides.clone(),
+            offset,
+            |engine, out| {
+                engine.dot_general_read_into(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &plain(&[1], &[0], &[], &[]),
+                    out,
+                )
+            },
+        );
+        let region = region_indices(&shape, &strides, offset);
+        assert_eq!(
+            observed,
+            expected_root(&region, &expected),
+            "the {flavour} destination"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn dot_general_read_into_accum_scales_a_strided_destination_view() {
+    let Some(mut engine) = engine() else { return };
+    for (flavour, shape, strides, offset) in write_view_flavours() {
+        let mut root = write_root(&engine);
+        let (lhs, rhs, expected) = operands(&engine);
+        let region = region_indices(&shape, &strides, offset);
+        // `out = 0.5 * A B + 2 * out`, where the old destination is the root's sentinel.
+        let scaled: Vec<f64> = expected
+            .iter()
+            .zip(&region)
+            .map(|(&product, &index)| 0.5 * product + 2.0 * sentinel(index))
+            .collect();
+        let observed = write_through_view(
+            &mut engine,
+            &mut root,
+            shape.clone(),
+            strides.clone(),
+            offset,
+            |engine, out| {
+                engine.dot_general_read_into_accum(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &plain(&[1], &[0], &[], &[]),
+                    accumulation(0.5, 2.0),
+                    out,
+                )
+            },
+        );
+        assert_eq!(
+            observed,
+            expected_root(&region, &scaled),
+            "the {flavour} destination"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn a_zero_beta_accumulation_does_not_read_a_nan_destination_view() {
+    let Some(mut engine) = engine() else { return };
+    for (flavour, shape, strides, offset) in write_view_flavours() {
+        let region = region_indices(&shape, &strides, offset);
+        // A NaN in every destination entry: `beta * NaN` would survive an accumulation that
+        // read the old value, which a zero beta must not do (BLAS's "do not read C").
+        let mut data: Vec<f64> = (0..30).map(sentinel).collect();
+        for &index in &region {
+            data[index] = f64::NAN;
+        }
+        let mut root = device(&engine, vec![6, 5], data);
+        let (lhs, rhs, expected) = operands(&engine);
+        let observed = write_through_view(
+            &mut engine,
+            &mut root,
+            shape.clone(),
+            strides.clone(),
+            offset,
+            |engine, out| {
+                engine.dot_general_read_into_accum(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &plain(&[1], &[0], &[], &[]),
+                    accumulation(1.0, 0.0),
+                    out,
+                )
+            },
+        );
+        assert_eq!(
+            observed,
+            expected_root(&region, &expected),
+            "the {flavour} destination kept a NaN through a zero beta"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn an_empty_contraction_keeps_the_beta_semantics_on_a_destination_view() {
+    let Some(mut engine) = engine() else { return };
+    for (flavour, shape, strides, offset) in write_view_flavours() {
+        let region = region_indices(&shape, &strides, offset);
+        let lhs = device(&engine, vec![2, 0], Vec::new());
+        let rhs = device(&engine, vec![0, 3], Vec::new());
+        let zeros = vec![0.0; region.len()];
+
+        // A nonzero beta scales what the region held; nothing outside it moves.
+        let scaled: Vec<f64> = region.iter().map(|&index| 3.0 * sentinel(index)).collect();
+        let mut root = write_root(&engine);
+        let observed = write_through_view(
+            &mut engine,
+            &mut root,
+            shape.clone(),
+            strides.clone(),
+            offset,
+            |engine, out| {
+                engine.dot_general_read_into_accum(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &plain(&[1], &[0], &[], &[]),
+                    accumulation(1.0, 3.0),
+                    out,
+                )
+            },
+        );
+        assert_eq!(
+            observed,
+            expected_root(&region, &scaled),
+            "the {flavour} destination"
+        );
+
+        // A zero beta overwrites the region with the empty product's zeros.
+        let mut root = write_root(&engine);
+        let observed = write_through_view(
+            &mut engine,
+            &mut root,
+            shape.clone(),
+            strides.clone(),
+            offset,
+            |engine, out| {
+                engine.dot_general_read_into_accum(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &plain(&[1], &[0], &[], &[]),
+                    accumulation(1.0, 0.0),
+                    out,
+                )
+            },
+        );
+        assert_eq!(
+            observed,
+            expected_root(&region, &zeros),
+            "the {flavour} destination"
+        );
+
+        // The overwrite form leaves zeros as well.
+        let mut root = write_root(&engine);
+        let observed = write_through_view(
+            &mut engine,
+            &mut root,
+            shape.clone(),
+            strides.clone(),
+            offset,
+            |engine, out| {
+                engine.dot_general_read_into(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &plain(&[1], &[0], &[], &[]),
+                    out,
+                )
+            },
+        );
+        assert_eq!(
+            observed,
+            expected_root(&region, &zeros),
+            "the {flavour} destination"
+        );
+    }
+}

@@ -598,13 +598,17 @@ backing root, so the device tensor's shape and buffer stay consistent. The
 in-place root preservation of that owner is a host-side property and does not
 cross the transfer boundary.
 
-The object-safe CUDA runtime boundaries have deliberately narrower current
-contracts. `to_contiguous_read` canonicalizes numeric and complex CUDA reads on
-the active device; `Bool` is an explicit current limitation. `copy_read_into`
-requires a compact column-major source with offset zero covering its full
-allocation. Its destination may be an arbitrary valid non-overlapping CUDA
-view, but source and destination allocations must not alias. Both operations
-preserve CUDA residency and never stage tensor payloads through host memory.
+The object-safe CUDA runtime boundaries keep CUDA residency and never stage tensor
+payloads through host memory. `to_contiguous_read` canonicalizes a device read on
+the active device for every dtype the catalogue copies. `copy_read_into` reads
+any valid source region of this runtime where it lives — any offset, stride and
+rank — and writes the destination region in place: an owned compact tensor, or a
+borrowed non-overlapping view with any offset and strides. A source view wider
+than the catalogue's by-value layout rank keeps one compact staging copy, while a
+wider destination view is a typed refusal; source and destination allocations
+must not alias. See
+[backend-contract.md § VI](../spec/backend-contract.md#vi-backend-traits) for the
+engine-trait contract these entries implement.
 
 ```text
 use tenferro_gpu::{cuda_devices, download_tensor, upload_tensor, CudaBackend};

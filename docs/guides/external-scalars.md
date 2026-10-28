@@ -226,9 +226,9 @@ The test the row asks for is the comparison, not an assertion of closeness: thre
 contract to **300** through the promised accumulation, while the same sum with the storage type's own
 addition — which rounds at every step — stalls at **256**, where bfloat16 spacing above one becomes
 two. The output rounding is checked separately, against the rounded accumulation rather than an
-accumulation of rounded values. Traces and N-ary patterns are refused with typed errors, because this
-module's body is the accumulation contract rather than the wider pattern surface the DF64 contraction
-covers.
+accumulation of rounded values. A label repeated inside an operand (a trace) or in the output is
+refused with a typed error, as is an N-ary pattern, because this module's body is the accumulation
+contract rather than the wider pattern surface the DF64 contraction covers.
 
 ## Unsupported cases
 

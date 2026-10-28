@@ -791,8 +791,21 @@ fn input_view_definition_matches_the_view_ops_and_read_entries() {
         0
     ));
     assert!(super::reads_input_view(&ExecOp::ShapeOf { axis: 0 }, 0));
+    for input in 0..2 {
+        assert!(super::reads_input_view(
+            &ExecOp::DynamicTruncate { axis: 0 },
+            input
+        ));
+        assert!(super::reads_input_view(
+            &ExecOp::PadToMatch { axis: 0 },
+            input
+        ));
+    }
     assert!(!super::reads_input_view(
-        &ExecOp::DynamicTruncate { axis: 0 },
+        &ExecOp::Constant {
+            dtype: DType::F64,
+            bytes: 1.0_f64.to_le_bytes().to_vec(),
+        },
         0
     ));
 }

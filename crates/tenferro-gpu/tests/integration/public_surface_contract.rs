@@ -130,9 +130,9 @@ fn cuda_runtime_materialization_limitations_are_documented() {
         let rendered_text = document.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(rendered_text.contains("to_contiguous_read"));
         assert!(rendered_text.contains("copy_read_into"));
-        assert!(rendered_text.contains("offset zero"));
-        assert!(rendered_text.contains("full allocation"));
-        assert!(rendered_text.contains("Bool"));
+        // The read/write view contract (#2223): any source region, a destination view up to
+        // the catalogue's by-value layout rank, and no aliasing.
+        assert!(rendered_text.contains("by-value layout rank"));
         assert!(rendered_text.contains("must not alias"));
     }
 }

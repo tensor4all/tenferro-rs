@@ -80,7 +80,8 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
         "only the promoted input needs conversion storage"
     );
 
-    // Owned-only operations retain their explicit materialization boundary.
+    // A structural read entry consumes the borrowed view, so the eager caller
+    // hands it over instead of staging a compact copy first (#2223).
     let result = {
         let session: &mut dyn tenferro_tensor::Engine = &mut backend;
         execute(
@@ -91,7 +92,33 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     }
     .unwrap();
     assert_eq!(data(&result[0]), vec![1., 3., 5., 0., 4., 6.]);
-    assert_eq!(copies.swap(0, Ordering::Relaxed), 1);
+    assert_eq!(
+        copies.load(Ordering::Relaxed),
+        0,
+        "tril reads the borrowed operand instead of staging it"
+    );
+
+    // A value-changing operation still needs owned compact storage: the
+    // dispatch stages the view before the owned `cast` entry, and that copy
+    // must stay visible to this counter.
+    let result = {
+        let session: &mut dyn tenferro_tensor::Engine = &mut backend;
+        execute(
+            &StdTensorOp::Convert {
+                from: DType::F64,
+                to: DType::F32,
+            },
+            std::slice::from_ref(&read),
+            session,
+        )
+    }
+    .unwrap();
+    assert_eq!(result[0].dtype(), DType::F32);
+    assert_eq!(
+        copies.swap(0, Ordering::Relaxed),
+        1,
+        "a conversion still stages its borrowed operand"
+    );
 
     // Default read hooks reject views; never conceal unsupported capabilities
     // with an implicit eager copy. Production CPU sessions override exp_read.
@@ -465,6 +492,523 @@ fn generated_outputs_use_the_callers_borrowed_session() {
         Ok::<_, tenferro_runtime::Error>(())
     })(&mut backend)
     .unwrap();
+}
+
+/// #2223: the eager dispatch hands a borrowed operand to the read entry.
+///
+/// Each case runs the same op twice through the eager dispatch: once with the
+/// compact copies its operands stand for, once with the borrowed views — a
+/// compact one and an offset/non-compact one. The values must agree, and the
+/// caller must not canonicalize either operand: `RecordingEngine` counts every
+/// `to_contiguous_read`, and the CPU engine reads a borrowed layout in place.
+#[test]
+fn eager_read_entries_consume_borrowed_views_without_staging() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::exec_standard_op_on_tensor_reads_in_session;
+    use crate::eager_backend::RecordingEngine;
+    use tenferro_cpu::CpuEngine;
+    use tenferro_tensor::{
+        PadConfig, ScatterConfig, SliceConfig, TensorRead, TensorStructural, TensorValue,
+    };
+
+    fn assert_outputs_match(
+        actual: &[Tensor],
+        expected: &[Tensor],
+        op: &StdTensorOp,
+        flavour: &str,
+    ) {
+        assert_eq!(actual.len(), expected.len(), "{op:?} {flavour}");
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert_eq!(actual.shape(), expected.shape(), "{op:?} {flavour}");
+            assert_eq!(data(actual), data(expected), "{op:?} {flavour}");
+        }
+    }
+
+    fn assert_views_match_materialized(op: &StdTensorOp, views: &[TensorRead<'_>]) {
+        let copies = Arc::new(AtomicUsize::new(0));
+        let mut backend = RecordingEngine::new(Arc::clone(&copies));
+
+        let mut materializer = CpuEngine::serial();
+        let owned: Vec<Tensor> = views
+            .iter()
+            .cloned()
+            .map(|read| {
+                materializer
+                    .to_contiguous_read(read)
+                    .expect("materialize a compact copy of the view")
+            })
+            .collect();
+        let owned_reads: Vec<TensorRead<'_>> = owned.iter().map(TensorRead::from_tensor).collect();
+        let expected = exec_standard_op_on_tensor_reads_in_session(op, &owned_reads, &mut backend)
+            .unwrap_or_else(|error| panic!("{op:?} on owned copies: {error}"));
+        assert_eq!(
+            copies.swap(0, Ordering::Relaxed),
+            0,
+            "{op:?}: an owned operand must not be staged"
+        );
+
+        // The same values bound as a compact borrowed read, not as an owned
+        // `TensorRead::Tensor`. A value input that the arm already passes owned
+        // (the dynamic-truncate size, the pad-to-match reference) keeps that
+        // flavour: it is not an operand view, and its value read may legitimately
+        // materialize.
+        let compact_reads: Vec<TensorRead<'_>> = views
+            .iter()
+            .zip(&owned)
+            .map(|(original, compact)| match original {
+                TensorRead::Tensor(_) => TensorRead::from_tensor(compact),
+                TensorRead::View(_) => {
+                    TensorRead::from_view(TensorRead::from_tensor(compact).tensor_view())
+                }
+            })
+            .collect();
+        let from_compact =
+            exec_standard_op_on_tensor_reads_in_session(op, &compact_reads, &mut backend)
+                .unwrap_or_else(|error| panic!("{op:?} on compact borrowed reads: {error}"));
+        assert_eq!(
+            copies.swap(0, Ordering::Relaxed),
+            0,
+            "{op:?}: a compact borrowed operand must not be staged"
+        );
+        assert_outputs_match(&from_compact, &expected, op, "on compact borrowed reads");
+
+        let actual = exec_standard_op_on_tensor_reads_in_session(op, views, &mut backend)
+            .unwrap_or_else(|error| panic!("{op:?} on borrowed views: {error}"));
+        assert_eq!(
+            copies.load(Ordering::Relaxed),
+            0,
+            "{op:?} staged a borrowed operand instead of reading it"
+        );
+        assert_outputs_match(&actual, &expected, op, "on the view");
+    }
+
+    // A `5 x 4` column-major source, so an element is `row + column * 5`.
+    let base = || TensorValue::from_tensor(f64t(vec![5, 4], (0..20).map(|i| i as f64).collect()));
+    let compact = base();
+    // Rows 1..4 keep the source's column stride of 5, so this is offset and non-compact.
+    let offset = base()
+        .slice_view(&SliceConfig {
+            starts: vec![1, 0],
+            limits: vec![4, 4],
+            strides: vec![1, 1],
+        })
+        .expect("offset view");
+    let columns = base()
+        .slice_view(&SliceConfig {
+            starts: vec![0, 0],
+            limits: vec![4, 4],
+            strides: vec![1, 1],
+        })
+        .expect("column view");
+    let transposed = base().transpose_view([1, 0]).expect("transposed view");
+    let update = base()
+        .slice_view(&SliceConfig {
+            starts: vec![1, 1],
+            limits: vec![3, 3],
+            strides: vec![1, 1],
+        })
+        .expect("update view");
+    assert_eq!(compact.tensor_read().shape(), &[5, 4]);
+    assert_eq!(offset.shape(), &[3, 4]);
+    assert_eq!(offset.strides(), &[1, 5]);
+
+    assert_views_match_materialized(&StdTensorOp::Tril { k: -1 }, &[offset.tensor_read()]);
+    assert_views_match_materialized(&StdTensorOp::Triu { k: 1 }, &[columns.tensor_read()]);
+    assert_views_match_materialized(
+        &StdTensorOp::ExtractDiag {
+            axis_a: 0,
+            axis_b: 1,
+        },
+        &[offset.tensor_read()],
+    );
+    assert_views_match_materialized(
+        &StdTensorOp::EmbedDiag {
+            axis_a: 0,
+            axis_b: 1,
+        },
+        &[offset.tensor_read()],
+    );
+    assert_views_match_materialized(
+        &StdTensorOp::Slice(SliceConfig {
+            starts: vec![0, 1],
+            limits: vec![3, 4],
+            strides: vec![1, 2],
+        }),
+        &[offset.tensor_read()],
+    );
+    assert_views_match_materialized(
+        &StdTensorOp::Pad(PadConfig {
+            edge_padding_low: vec![1, 0],
+            edge_padding_high: vec![0, 1],
+            interior_padding: vec![0, 1],
+        }),
+        &[transposed.tensor_read()],
+    );
+    assert_views_match_materialized(
+        &StdTensorOp::Reverse { axes: vec![0] },
+        &[offset.tensor_read()],
+    );
+    assert_views_match_materialized(
+        &StdTensorOp::Concatenate {
+            axis: 0,
+            input_count: 2,
+        },
+        &[offset.tensor_read(), columns.tensor_read()],
+    );
+
+    // The dynamic-truncate size is a value the dispatch reads, not an operand.
+    let truncated_size = scalar(2.0);
+    assert_views_match_materialized(
+        &StdTensorOp::DynamicTruncate { axis: 0 },
+        &[
+            offset.tensor_read(),
+            TensorRead::from_tensor(&truncated_size),
+        ],
+    );
+    // Pad-to-match pads against a wider reference, so the pad entry runs.
+    let wider = f64t(vec![5, 4], vec![0.0; 20]);
+    assert_views_match_materialized(
+        &StdTensorOp::PadToMatch { axis: 0 },
+        &[offset.tensor_read(), TensorRead::from_tensor(&wider)],
+    );
+
+    let starts = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1, 1]).expect("starts tensor"),
+    );
+    assert_views_match_materialized(
+        &StdTensorOp::DynamicSlice {
+            slice_sizes: vec![2, 2],
+        },
+        &[offset.tensor_read(), TensorRead::from_tensor(&starts)],
+    );
+    assert_views_match_materialized(
+        &StdTensorOp::DynamicUpdateSlice,
+        &[
+            offset.tensor_read(),
+            update.tensor_read(),
+            TensorRead::from_tensor(&starts),
+        ],
+    );
+
+    let scatter_indices = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![4, 1], vec![0, 1, 1, 2]).expect("scatter indices"),
+    );
+    let scatter_updates = f64t(vec![4], vec![100.0, 200.0, 300.0, 400.0]);
+    assert_views_match_materialized(
+        &StdTensorOp::Scatter(ScatterConfig {
+            update_window_dims: vec![],
+            inserted_window_dims: vec![0, 1],
+            scatter_dims_to_operand_dims: vec![0],
+            index_vector_dim: 1,
+        }),
+        &[
+            offset.tensor_read(),
+            TensorRead::from_tensor(&scatter_indices),
+            TensorRead::from_tensor(&scatter_updates),
+        ],
+    );
+
+    // A compact borrowed read is a view too; it must reach the hook unchanged.
+    assert_views_match_materialized(
+        &StdTensorOp::Tril { k: 0 },
+        &[TensorRead::from_view(compact.tensor_view())],
+    );
+}
+
+/// #2223: a dtype mismatch still converts, but the operand that already has
+/// the promoted dtype stays a borrowed read, and the typed errors are the
+/// same as the owned entries report.
+#[test]
+fn eager_promoting_read_entries_convert_only_the_mismatched_operand() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::exec_standard_op_on_tensor_reads_in_session;
+    use crate::eager_backend::RecordingEngine;
+    use tenferro_cpu::CpuEngine;
+    use tenferro_tensor::{Error as TensorError, TensorRead, ValidationError};
+
+    fn view(tensor: &Tensor) -> TensorRead<'_> {
+        TensorRead::from_view(TensorRead::from_tensor(tensor).tensor_view())
+    }
+
+    fn expected(op: &StdTensorOp, inputs: &[&Tensor]) -> Vec<Tensor> {
+        let reads: Vec<TensorRead<'_>> =
+            inputs.iter().map(|t| TensorRead::from_tensor(t)).collect();
+        exec_standard_op_on_tensor_reads_in_session(op, &reads, &mut CpuEngine::serial())
+            .expect("the promoted owned baseline")
+    }
+
+    fn promoted(op: &StdTensorOp, inputs: &[TensorRead<'_>]) -> (Vec<Tensor>, usize) {
+        let copies = Arc::new(AtomicUsize::new(0));
+        let mut backend = RecordingEngine::new(Arc::clone(&copies));
+        let outputs = exec_standard_op_on_tensor_reads_in_session(op, inputs, &mut backend)
+            .expect("the borrowed mixed-dtype run");
+        (outputs, copies.load(Ordering::Relaxed))
+    }
+
+    let concat = StdTensorOp::Concatenate {
+        axis: 0,
+        input_count: 2,
+    };
+    let left = f64t(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let right64 = f64t(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
+    let right32 = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f32, 6.0, 7.0, 8.0])
+        .expect("f32 right operand");
+    let want = expected(&concat, &[&left, &right64]);
+    let (got, copies) = promoted(&concat, &[view(&left), view(&right32)]);
+    assert_eq!(got[0].dtype(), DType::F64);
+    assert_eq!(
+        copies, 1,
+        "only the F32 concatenate operand needs conversion storage"
+    );
+    assert_eq!(data(&got[0]), data(&want[0]));
+
+    let scatter = StdTensorOp::Scatter(ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0, 1],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    });
+    let operand = f64t(vec![3, 2], vec![0.0; 6]);
+    let indices = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![4, 1], vec![0, 1, 1, 2]).expect("scatter indices"),
+    );
+    let updates64 = f64t(vec![4], vec![10.0, 20.0, 30.0, 40.0]);
+    let updates32 =
+        Tensor::from_vec_col_major(vec![4], vec![10.0_f32, 20.0, 30.0, 40.0]).expect("f32 updates");
+    let want = expected(&scatter, &[&operand, &indices, &updates64]);
+    let (got, copies) = promoted(
+        &scatter,
+        &[view(&operand), view(&indices), view(&updates32)],
+    );
+    assert_eq!(got[0].dtype(), DType::F64);
+    assert_eq!(
+        copies, 1,
+        "only the F32 scatter updates need conversion storage"
+    );
+    assert_eq!(data(&got[0]), data(&want[0]));
+
+    let operand = f64t(vec![3, 2], vec![0.0; 6]);
+    let update64 = f64t(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+    let update32 =
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]).expect("f32 update");
+    let starts = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![2], vec![1, 0]).expect("starts"),
+    );
+    let want = expected(
+        &StdTensorOp::DynamicUpdateSlice,
+        &[&operand, &update64, &starts],
+    );
+    let (got, copies) = promoted(
+        &StdTensorOp::DynamicUpdateSlice,
+        &[view(&operand), view(&update32), view(&starts)],
+    );
+    assert_eq!(got[0].dtype(), DType::F64);
+    assert_eq!(
+        copies, 1,
+        "only the F32 dynamic-update update needs conversion storage"
+    );
+    assert_eq!(data(&got[0]), data(&want[0]));
+
+    // One representative invalid configuration per arm: the read entries keep
+    // the typed validation the owned entries reported.
+    let err = {
+        let mut backend = RecordingEngine::new(Arc::new(AtomicUsize::new(0)));
+        exec_standard_op_on_tensor_reads_in_session(
+            &StdTensorOp::Concatenate {
+                axis: 2,
+                input_count: 2,
+            },
+            &[view(&left), view(&right64)],
+            &mut backend,
+        )
+        .expect_err("axis 2 is out of bounds for rank 2")
+    };
+    assert!(
+        matches!(
+            &err,
+            crate::Error::TensorRuntime(TensorError::Validation {
+                op: "concatenate",
+                source: ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
+                ..
+            })
+        ),
+        "unexpected concatenate error: {err}"
+    );
+
+    let bad_scatter = StdTensorOp::Scatter(ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0, 1],
+        scatter_dims_to_operand_dims: vec![2],
+        index_vector_dim: 1,
+    });
+    let err = {
+        let mut backend = RecordingEngine::new(Arc::new(AtomicUsize::new(0)));
+        exec_standard_op_on_tensor_reads_in_session(
+            &bad_scatter,
+            &[view(&operand), view(&indices), view(&updates64)],
+            &mut backend,
+        )
+        .expect_err("scatter dimension 2 is out of bounds for rank 2")
+    };
+    assert!(
+        matches!(
+            &err,
+            crate::Error::TensorRuntime(TensorError::Validation {
+                op: "scatter",
+                source: ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
+                ..
+            })
+        ),
+        "unexpected scatter error: {err}"
+    );
+
+    let short_starts = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![1], vec![0]).expect("short starts"),
+    );
+    let err = {
+        let mut backend = RecordingEngine::new(Arc::new(AtomicUsize::new(0)));
+        exec_standard_op_on_tensor_reads_in_session(
+            &StdTensorOp::DynamicUpdateSlice,
+            &[view(&operand), view(&update64), view(&short_starts)],
+            &mut backend,
+        )
+        .expect_err("starts must match the operand rank")
+    };
+    assert!(
+        matches!(
+            &err,
+            crate::Error::TensorRuntime(TensorError::Validation {
+                op: "dynamic_update_slice",
+                source: ValidationError::InvalidArgument { argument: "configuration", message },
+                ..
+            }) if message.contains("starts length 1")
+        ),
+        "unexpected dynamic_update_slice error: {err}"
+    );
+}
+
+#[test]
+fn traced_host_ops_do_not_stage_a_borrowed_operand_or_shape_reference() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::eager_backend::RecordingEngine;
+    use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+    use tenferro_tensor::{SliceConfig, TensorValue};
+
+    fn cpu_runtime() -> Runtime {
+        let backend = tenferro_cpu::CpuEngine::serial();
+        let mut builder = Runtime::builder();
+        builder
+            .register_engine(
+                tenferro_cpu::runtime_engine_registration(&backend)
+                    .expect("CPU engine registration"),
+            )
+            .expect("register the CPU engine");
+        builder.build().expect("CPU runtime")
+    }
+
+    let copies = Arc::new(AtomicUsize::new(0));
+    let placeholder = TracedTensor::input_symbolic_shape(DType::F64, 2).expect("placeholder");
+    let source = f64t(vec![5, 4], (0..20).map(|index| index as f64).collect());
+    let view = TensorValue::from_tensor(source)
+        .slice_view(&SliceConfig {
+            starts: vec![1, 0],
+            limits: vec![4, 4],
+            strides: vec![1, 1],
+        })
+        .expect("offset view");
+
+    let size = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).expect("size scalar");
+    let truncated = placeholder
+        .dynamic_truncate(&size, 0)
+        .expect("traced dynamic_truncate");
+    let mut engine = RecordingEngine::new(Arc::clone(&copies));
+    let shape = view.shape().to_vec();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&truncated, &[(&placeholder, DType::F64, shape.as_slice())])
+        .expect("compile the traced dynamic_truncate");
+    let runtime = cpu_runtime();
+    let target = engine.target();
+    let reads = [view.tensor_read()];
+    let prepared = runtime
+        .prepare(&program, &reads, std::slice::from_ref(&target))
+        .expect("prepare the traced dynamic_truncate");
+    let outputs = runtime
+        .run(&mut [&mut engine], &prepared, &reads)
+        .expect("run the traced dynamic_truncate");
+    assert_eq!(outputs[0].read().shape(), &[2, 4]);
+    assert_eq!(
+        copies.load(Ordering::Relaxed),
+        0,
+        "dynamic_truncate staged its borrowed operand"
+    );
+
+    // The reference is a borrowed view too, so the old staging of both inputs
+    // would move the counter; the new path must read only its shape.
+    let reference_placeholder =
+        TracedTensor::input_symbolic_shape(DType::F64, 2).expect("reference placeholder");
+    let wider = TensorValue::from_tensor(f64t(vec![5, 4], vec![0.0; 20]));
+    let wider_shape = wider.shape().to_vec();
+    let padded = placeholder
+        .pad_to_match(&reference_placeholder, 0)
+        .expect("traced pad_to_match");
+    let program = compiler
+        .compile_with_input_specs(
+            &padded,
+            &[
+                (&placeholder, DType::F64, shape.as_slice()),
+                (&reference_placeholder, DType::F64, wider_shape.as_slice()),
+            ],
+        )
+        .expect("compile the traced pad_to_match");
+    let padded_reads = [view.tensor_read(), wider.tensor_read()];
+    let prepared = runtime
+        .prepare(&program, &padded_reads, std::slice::from_ref(&target))
+        .expect("prepare the traced pad_to_match");
+    copies.store(0, Ordering::Relaxed);
+    let outputs = runtime
+        .run(&mut [&mut engine], &prepared, &padded_reads)
+        .expect("run the traced pad_to_match");
+    assert_eq!(outputs[0].read().shape(), &[5, 4]);
+    assert_eq!(
+        copies.load(Ordering::Relaxed),
+        0,
+        "pad_to_match staged its operand or its shape-only reference"
+    );
+
+    // The unpadded branch must still return a fresh owned tensor, so its one
+    // output materialization proves the counter is live.
+    let same = TensorValue::from_tensor(f64t(vec![3, 4], vec![0.0; 12]));
+    let same_shape = same.shape().to_vec();
+    let unpadded = placeholder
+        .pad_to_match(&reference_placeholder, 0)
+        .expect("traced unpadded pad_to_match");
+    let program = compiler
+        .compile_with_input_specs(
+            &unpadded,
+            &[
+                (&placeholder, DType::F64, shape.as_slice()),
+                (&reference_placeholder, DType::F64, same_shape.as_slice()),
+            ],
+        )
+        .expect("compile the traced unpadded pad_to_match");
+    let same_reads = [view.tensor_read(), same.tensor_read()];
+    let prepared = runtime
+        .prepare(&program, &same_reads, std::slice::from_ref(&target))
+        .expect("prepare the traced unpadded pad_to_match");
+    copies.store(0, Ordering::Relaxed);
+    let outputs = runtime
+        .run(&mut [&mut engine], &prepared, &same_reads)
+        .expect("run the traced unpadded pad_to_match");
+    assert_eq!(outputs[0].read().shape(), &[3, 4]);
+    assert_eq!(
+        copies.load(Ordering::Relaxed),
+        1,
+        "the unpadded branch materializes only its fresh output"
+    );
 }
 
 #[test]

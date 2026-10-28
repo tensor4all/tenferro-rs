@@ -191,8 +191,8 @@ jobs:
       - name: Build CUDA test archive
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
         env:
-          # cubecl-cuda's build.rs reads cudarc's CUDA_VERSION. Match workspace cudarc
-          # cuda-12080 bindings so compile-time cfgs and NVRTC symbols stay aligned.
+          # Match the workspace's cudarc cuda-12080 bindings so compile-time cfgs and
+          # NVRTC symbols stay aligned.
           CUDARC_CUDA_VERSION: "12080"
         run: |
           set -euo pipefail
