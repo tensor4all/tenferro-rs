@@ -657,6 +657,11 @@ impl TensorStructural for CudaEngine {
             ));
         }
         let from = input.dtype();
+        // The conversion entry refuses identical dtypes by design (its planners reject them), and a
+        // same-dtype cast is exactly a compact copy into a fresh allocation.
+        if from == to {
+            return self.to_contiguous(input);
+        }
         let (kernel_from, kernel_to) = (kernel_dtype(from, "cast")?, kernel_dtype(to, "cast")?);
         let shape = input.shape().to_vec();
         let len = i64::try_from(element_count(&shape)?)
