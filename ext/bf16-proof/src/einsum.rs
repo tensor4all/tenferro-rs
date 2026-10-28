@@ -7,9 +7,9 @@
 //! contraction accumulates there, and the result is rounded to bfloat16 once.
 //!
 //! What it does not do is inherit a wider pattern surface. The operation is the pairwise
-//! contraction the table's example needs, so a trace, a repeated label, or more than two operands is
-//! refused with a typed error rather than folded, which keeps this module's body to the
-//! accumulation contract the row is about.
+//! contraction the table's example needs, so a trace, a label repeated in the output, or more than
+//! two operands is refused with a typed error rather than folded, which keeps this module's body to
+//! the accumulation contract the row is about.
 
 use std::any::Any;
 use std::hash::Hasher;
@@ -61,9 +61,10 @@ impl Bf16Einsum {
     ///
     /// # Errors
     ///
-    /// Returns [`tenferro_tensor::Error::InvalidArgument`] when the pattern is not a pairwise contraction: an operand
-    /// carries no label, a label repeats inside one operand, the operands share no contracted
-    /// label, or an output label appears in no operand.
+    /// Returns a validation error (an invalid `pattern` argument, built with
+    /// [`tenferro_tensor::Error::invalid_argument`]) when the pattern is not a pairwise contraction: an operand
+    /// carries no label, a label repeats inside one operand, an output label repeats, or an output
+    /// label appears in no operand.
     ///
     /// # Examples
     ///
@@ -72,6 +73,8 @@ impl Bf16Einsum {
     ///
     /// assert!(Bf16Einsum::new(&[0, 1], &[1, 2], &[0, 2]).is_ok());
     /// assert!(Bf16Einsum::new(&[], &[1, 2], &[0, 2]).is_err());
+    /// // A label repeated in the output is refused, exactly as one repeated inside an operand is.
+    /// assert!(Bf16Einsum::new(&[0, 1], &[1, 2], &[0, 0]).is_err());
     /// ```
     pub fn new(lhs: &[u32], rhs: &[u32], out: &[u32]) -> tenferro_runtime::Result<Self> {
         let invalid = |message: &str| {
@@ -84,13 +87,15 @@ impl Bf16Einsum {
         if lhs.is_empty() || rhs.is_empty() {
             return Err(invalid("an operand must carry at least one label"));
         }
-        for labels in [lhs, rhs] {
+        // A label repeated inside an operand is a trace, and one repeated in the output would
+        // build a duplicate output axis; neither is a pairwise contraction.
+        for labels in [lhs, rhs, out] {
             let mut seen = labels.to_vec();
             seen.sort_unstable();
             seen.dedup();
             if seen.len() != labels.len() {
                 return Err(invalid(
-                    "a label repeats within one operand, which is a trace and not supported here",
+                    "a label repeats within one operand or the output, which this pairwise contraction does not support",
                 ));
             }
         }

@@ -12,8 +12,10 @@ use tenferro_bf16_proof::einsum::{module, Bf16Einsum};
 use tenferro_bf16_proof::Bf16;
 use tenferro_cpu::CpuEngine;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{CompiledGraph, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-use tenferro_tensor::{DType, Tensor};
+use tenferro_runtime::{
+    CompiledGraph, Error, ExecutionEngine, GraphCompiler, Runtime, TracedTensor,
+};
+use tenferro_tensor::{DType, Error as TensorError, Tensor, ValidationError};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 fn runtime_with_module() -> Runtime {
@@ -76,21 +78,32 @@ fn values(tensor: &Tensor) -> Vec<f32> {
 
 /// Contract two bfloat16 operands through the runtime and return the result's elements.
 fn contract(lhs: &[f32], lhs_shape: [usize; 2], rhs: &[f32], rhs_shape: [usize; 2]) -> Vec<f32> {
-    let op = Bf16Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
+    run_pattern((&[0, 1], &[1, 2], &[0, 2]), lhs, lhs_shape, rhs, rhs_shape)
+        .expect("contraction execution")
+}
+
+/// Run one pattern through every public layer: constructor, trace, compile, execute.
+fn run_pattern(
+    pattern: (&[u32], &[u32], &[u32]),
+    lhs: &[f32],
+    lhs_shape: [usize; 2],
+    rhs: &[f32],
+    rhs_shape: [usize; 2],
+) -> tenferro_runtime::Result<Vec<f32>> {
+    let (lhs_labels, rhs_labels, out_labels) = pattern;
+    let op = Bf16Einsum::new(lhs_labels, rhs_labels, out_labels)?;
     let lhs_leaf = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
         external(lhs, lhs_shape.to_vec()),
         tenferro_bf16_proof::einsum::BF16_SCALAR_IDENTITY,
-    )
-    .expect("traced operand");
+    )?;
     let rhs_leaf = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
         external(rhs, rhs_shape.to_vec()),
         tenferro_bf16_proof::einsum::BF16_SCALAR_IDENTITY,
-    )
-    .expect("traced operand");
-    let output = apply(Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
+    )?;
+    let output = apply(Arc::new(op), &[&lhs_leaf, &rhs_leaf])?;
 
     let mut compiler = GraphCompiler::new();
-    let program = compiler.compile(&output[0]).expect("compiled contraction");
+    let program = compiler.compile(&output[0])?;
     let results = run_compiled(
         &runtime_with_module(),
         &program,
@@ -98,9 +111,9 @@ fn contract(lhs: &[f32], lhs_shape: [usize; 2], rhs: &[f32], rhs_shape: [usize; 
             &external(lhs, lhs_shape.to_vec()),
             &external(rhs, rhs_shape.to_vec()),
         ],
-    )
-    .expect("contraction execution");
-    values(&results[0])
+    )?;
+    let result = results.first().expect("the contraction returns one output");
+    Ok(values(result))
 }
 
 #[test]
@@ -170,4 +183,72 @@ fn the_pattern_validator_refuses_a_repeated_label() {
         "a trace is not part of this module's pattern surface"
     );
     assert!(Bf16Einsum::new(&[], &[1, 2], &[0, 2]).is_err());
+}
+
+/// The refusal both repeat sites produce: one typed invalid-argument pattern error.
+fn assert_typed_pattern_rejection(error: &Error) {
+    assert!(
+        matches!(
+            error,
+            Error::TensorRuntime(TensorError::Validation {
+                op: "bf16_einsum",
+                source: ValidationError::InvalidArgument {
+                    argument: "pattern",
+                    ..
+                },
+                ..
+            })
+        ),
+        "the refusal is the typed pattern error: {error:?}"
+    );
+}
+
+#[test]
+fn the_pattern_validator_refuses_a_repeated_output_label() {
+    // `AB,BC->AA` is not a pairwise contraction: `offset_for` resolves every occurrence of a label
+    // through the first output position, so the second output axis would never be read and the
+    // contraction would answer a different pattern's question. Refuse it where the input side is
+    // refused instead.
+    let repeated_output = Bf16Einsum::new(&[0, 1], &[1, 2], &[0, 0])
+        .expect_err("a repeated output label is not a pairwise contraction");
+    assert_typed_pattern_rejection(&repeated_output);
+
+    // The same typed error as a label repeated inside one operand.
+    let repeated_input = Bf16Einsum::new(&[0, 0], &[0, 2], &[0, 2])
+        .expect_err("a trace is not a pairwise contraction");
+    assert_typed_pattern_rejection(&repeated_input);
+}
+
+#[test]
+fn the_pairwise_surface_accepts_a_pair_with_no_contracted_label() {
+    // `new` refuses an empty operand, a trace, a repeated output label and an output label no
+    // operand names; it does not refuse operands that share no label, which is the outer product
+    // the shape inference and body already handle. Pin the `# Errors` list to that surface.
+    let result = run_pattern(
+        (&[0, 1], &[2, 3], &[0, 1, 2, 3]),
+        &[2.0],
+        [1, 1],
+        &[3.0],
+        [1, 1],
+    )
+    .expect("an outer product is a pairwise contraction");
+    assert_eq!(result, vec![6.0]);
+}
+
+#[test]
+fn no_public_execution_path_accepts_a_repeated_output_label() {
+    // `Bf16Einsum::new` is the operation's only public constructor, so every execution path -
+    // `apply`, the compiler, the runtime - can only receive a pattern it accepted. Drive all of
+    // them with the invalid pattern anyway: the run must stop at the constructor. The same helper
+    // with the valid spelling does reach execution, so the refusal is the pattern's and not a dead
+    // path's.
+    let lhs = [1.0_f32, 2.0];
+    let rhs = [3.0_f32, 4.0];
+    let refused = run_pattern((&[0, 1], &[1, 2], &[0, 0]), &lhs, [1, 2], &rhs, [2, 1]);
+    let error = refused.expect_err("a repeated output label must not produce a tensor");
+    assert_typed_pattern_rejection(&error);
+
+    let accepted = run_pattern((&[0, 1], &[1, 2], &[0, 2]), &lhs, [1, 2], &rhs, [2, 1])
+        .expect("the valid spelling runs through the same helper");
+    assert_eq!(accepted, vec![11.0]);
 }
