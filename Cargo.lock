@@ -2337,9 +2337,9 @@ dependencies = [
 
 [[package]]
 name = "t4a-faer"
-version = "0.25.0"
+version = "0.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b44b862d9af74968e8e730d9a4b8c347327131d0e7425ccff803a14034a9a77"
+checksum = "1aabd45ed2a409a6c0e1d0ce2b39db1e19c6a14e954c24714b980cf8de285750"
 dependencies = [
  "bytemuck",
  "dyn-stack",
@@ -2361,9 +2361,9 @@ dependencies = [
 
 [[package]]
 name = "t4a-faer-traits"
-version = "0.24.0"
+version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b20254002b5028791c3b97cf7baebce6ea5f3541977348da1c109d16c1dc889"
+checksum = "d60bfe32acf31309e66c2ce464ffca0fbad0ae4f38657c562af4aae48589f69c"
 dependencies = [
  "bytemuck",
  "dyn-stack",
