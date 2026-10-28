@@ -606,6 +606,8 @@ jobs:
       !cancelled() &&
       github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    # Covers the labelled PR's 330-minute wait for the local GPU gate.
+    timeout-minutes: 340
     steps:
       # The classification that decides whether a pod is needed must not come
       # from the pull request: a diff that could patch the policy into saying
@@ -678,38 +680,39 @@ jobs:
             exit 0
           fi
 
-          # A CUDA-touching change that a maintainer validated on a local GPU
-          # needs no pod either (REPOSITORY_RULES.md, CI Cost Discipline). The
-          # label is the switch and the recorded evidence is the requirement;
-          # both are verified here, so a RunPod dispatch that is queued, saturated
-          # or broken cannot hold the required check. This is the default route
-          # for a change with local coverage; the paid gate is for one without.
-          if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
-              --jq '.[].name' 2>/dev/null | grep -Fxq "gpu-validated-locally"; then
-            evidence="$(gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
-              --jq '.[] | select(.body | contains("Local GPU validation:")) | "\(.user.login)\t\(.html_url)"' \
-              | tail -1)"
-            evidence_login="${evidence%%$'\t'*}"
-            evidence_url="${evidence##*$'\t'}"
-            if [ -z "${evidence_login}" ]; then
-              echo "::error::Label gpu-validated-locally has no 'Local GPU validation:' comment."
+          # A PR labelled gpu-validated-locally takes its verdict from a
+          # maintainer's local GPU run on exactly this head SHA, which
+          # local-gpu-gate.yml publishes with the external_id below
+          # (REPOSITORY_RULES.md, CI Cost Discipline). The RunPod workflow runs
+          # nothing for such a PR, so only that publication is a verdict here; a
+          # RunPod check left from before the label was added is not.
+          local_external_id=""
+          verdict="RunPod CI GPU gate"
+          wait_minutes=90
+          # A lookup that keeps failing fails the gate rather than waiting for
+          # a RunPod verdict that a labelled PR never gets; re-run the job.
+          labels=""
+          attempt=1
+          until labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '.[].name')"; do
+            if [ "${attempt}" -ge 5 ]; then
+              echo "::error::Could not read the labels of PR #${PR_NUMBER}."
               exit 1
             fi
-            evidence_role="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${evidence_login}/permission" --jq .role_name)"
-            case "${evidence_role}" in
-              admin|maintain)
-                echo "Local GPU validation recorded by ${evidence_login} (${evidence_role}): ${evidence_url}"
-                exit 0
-                ;;
-              *)
-                echo "::error::Local GPU evidence from ${evidence_login} is not an admin or maintainer (${evidence_role})."
-                exit 1
-                ;;
-            esac
+            sleep $((attempt * 5))
+            attempt=$((attempt + 1))
+          done
+          if grep -Fxq "gpu-validated-locally" <<<"${labels}"; then
+            local_external_id="local-gpu-gate:v1:${HEAD_SHA}"
+            verdict="local GPU gate"
+            # The local run is started by a person and may land well after this
+            # job; polling a public repository's hosted runner costs nothing,
+            # so wait up to the job's own 6-hour limit.
+            wait_minutes=330
+            echo "Labelled gpu-validated-locally: waiting for the local GPU gate on ${HEAD_SHA}"
+            echo "(scripts/ci/local_gpu_gate.py publish)."
           fi
 
-          deadline=$((SECONDS + 90 * 60))
+          deadline=$((SECONDS + wait_minutes * 60))
           while [ "${SECONDS}" -lt "${deadline}" ]; do
             # This loop polls for up to 90 minutes, so it is the most exposed
             # `gh api` call in the repository. A single empty body or 5xx used to
@@ -746,11 +749,12 @@ jobs:
             # re-run used to read a cancelled job from the previous attempt and
             # fail in three seconds (#2163).
             run_json="$(
-              jq -c --arg current "${CURRENT_RUN_MARKER}" '
+              jq -c --arg current "${CURRENT_RUN_MARKER}" --arg local "${local_external_id}" '
                 .check_runs
                 | map(select(
                     (((.details_url // "") | contains($current)) | not)
                     and (((.details_url // "") | contains("/job/")) | not)
+                    and ($local == "" or .external_id == $local)
                   ))
                 | sort_by(.started_at // .created_at // "")
                 | reverse
@@ -763,22 +767,22 @@ jobs:
               conclusion="$(jq -r '.conclusion // ""' <<<"${run_json}")"
               url="$(jq -r '.details_url // .html_url // ""' <<<"${run_json}")"
               if [ "${status}" = "completed" ] && [ "${conclusion}" = "success" ]; then
-                echo "RunPod CI GPU gate passed: ${url}"
+                echo "${verdict} passed: ${url}"
                 exit 0
               fi
               if [ "${status}" = "completed" ]; then
-                echo "RunPod CI GPU gate concluded ${conclusion}: ${url}"
+                echo "${verdict} concluded ${conclusion}: ${url}"
                 exit 1
               fi
-              echo "Waiting for RunPod CI GPU gate (${status}): ${url}"
+              echo "Waiting for ${verdict} (${status}): ${url}"
             else
-              echo "Waiting for RunPod CI GPU gate on ${HEAD_SHA}."
+              echo "Waiting for ${verdict} on ${HEAD_SHA}."
             fi
 
             sleep 30
           done
 
-          echo "Timed out waiting for RunPod CI GPU gate on ${HEAD_SHA}."
+          echo "Timed out waiting for ${verdict} on ${HEAD_SHA}."
           exit 1
 
   cuda-gate-manual:

@@ -172,8 +172,7 @@ class GatePublicationTests(unittest.TestCase):
                 gh() {
                   case "$*" in
                     *--method\\ POST*) return 0 ;;
-                    *comments*) printf 'maint\\thttps://example.invalid/c1\\n' ;;
-                    *permission*) echo maintain ;;
+                    *labels*) printf '%s' "${STUB_LABELS:-}" ;;
                     *) echo "unexpected gh call: $*" >&2; return 1 ;;
                   esac
                 }
@@ -202,7 +201,8 @@ class GatePublicationTests(unittest.TestCase):
             env.update(overrides)
             result = subprocess.run(["bash", "-c", stub + script], env=env,
                                     capture_output=True, text=True)
-            payload = json.loads(Path(check_file).read_text())
+            published = Path(check_file)
+            payload = json.loads(published.read_text()) if published.exists() else {}
             return result.returncode, payload
 
     def test_paid_success_is_marked_reusable(self) -> None:
@@ -231,13 +231,25 @@ class GatePublicationTests(unittest.TestCase):
             ({"GPU_REQUIRED": "false"}, "success", "not-required"),
             ({"PAID_PATH_DECISION": "skip"}, "success", "skipped"),
             ({"PAID_PATH_DECISION": ""}, "success", "skipped"),
-            ({"LOCAL_GPU_VALIDATION": "true", "GPU_EXECUTION_RESULT": "skipped",
-              "PAID_PATH_DECISION": "skip"}, "success", "local"),
         ):
             with self.subTest(**overrides):
                 _, check = self.publish(**overrides)
                 self.assertEqual(check["conclusion"], conclusion)
                 self.assertEqual(check["external_id"], gate_external_id(REF, kind))
+
+    def test_a_labelled_pr_gets_no_runpod_publication(self) -> None:
+        # local-gpu-gate.yml owns CI GPU gate for a gpu-validated-locally PR;
+        # this workflow must never publish over it, whichever way it learns of
+        # the label (at authorize, or added afterwards).
+        for overrides in (
+            {"LOCAL_GPU_VALIDATION": "true", "CONTRACT_RESULT": "skipped",
+             "ARCHIVE_RESULT": "skipped", "GPU_EXECUTION_RESULT": "skipped"},
+            {"STUB_LABELS": "gpu-validated-locally\n", "GPU_EXECUTION_RESULT": "failure"},
+        ):
+            with self.subTest(**overrides):
+                status, check = self.publish(**overrides)
+                self.assertEqual(status, 0)
+                self.assertEqual(check, {})
 
     def test_no_tested_ref_publishes_no_marker(self) -> None:
         status, check = self.publish(TESTED_REF="")
@@ -249,8 +261,8 @@ class GatePublicationTests(unittest.TestCase):
         self.assertIn("gh run rerun 123 --failed", check["output"]["summary"])
 
     def test_local_label_reaches_the_gate(self) -> None:
-        # The label decision used to be printed to stdout, so the gate never
-        # verified the evidence comment of a labelled PR.
+        # The label decision used to be printed to stdout, so the jobs it skips
+        # never saw it.
         authorize = step_script(text(PARENT), "Check actor and PR source are allowed")
         self.assertIn('echo "local_gpu_validation=true" >> "${GITHUB_OUTPUT}"', authorize)
         self.assertIn('echo "local_gpu_validation=false" >> "${GITHUB_OUTPUT}"', authorize)

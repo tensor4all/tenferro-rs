@@ -1,0 +1,60 @@
+name: Local GPU gate relay
+
+# Publishes the branch-protection-required `CI GPU gate` check for a same-repo
+# PR labelled `gpu-validated-locally`, from a maintainer's recorded local GPU run
+# (REPOSITORY_RULES.md, CI Cost Discipline). No pod, no secret, no PR code:
+# `scripts/ci/local_gpu_gate.py publish` posts the SHA-bound evidence comment and
+# dispatches this workflow on trusted `main`, and the `relay` step re-verifies
+# the dispatching account's role, the PR, its label and head SHA, and the comment
+# before it publishes. Branch protection pins `CI GPU gate` to the GitHub
+# Actions app, which is why the publication runs here and not on the GPU host.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open same-repository PR number
+        required: true
+        type: number
+      head_sha:
+        description: PR head SHA the local run tested
+        required: true
+        type: string
+      comment_id:
+        description: ID of the evidence comment `local_gpu_gate.py publish` posted
+        required: true
+        type: number
+
+permissions:
+  checks: write
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: local-gpu-gate-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  relay:
+    name: Relay local GPU validation
+    # Only the copy on trusted main may publish; the relay checks this again.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted relay
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          sparse-checkout: scripts/ci/local_gpu_gate.py
+          sparse-checkout-cone-mode: false
+
+      - name: Verify the local run and publish CI GPU gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          COMMENT_ID: ${{ inputs.comment_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 scripts/ci/local_gpu_gate.py relay

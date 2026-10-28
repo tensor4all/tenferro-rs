@@ -34,13 +34,21 @@ STEP_NAME = "Require fork CUDA GPU tests or same-repo RunPod gate"
 
 RUN_URL = "https://example/actions/runs/4242"
 JOB_URL = "https://example/actions/runs/999/job/77"
+HEAD = "0" * 40
 
 
-def check_run(conclusion: str, *, details_url: str, status: str = "completed") -> dict:
+def check_run(
+    conclusion: str,
+    *,
+    details_url: str,
+    status: str = "completed",
+    external_id: str | None = None,
+) -> dict:
     return {
         "status": status,
         "conclusion": conclusion if status == "completed" else None,
         "details_url": details_url,
+        "external_id": external_id,
         "started_at": "2026-01-01T00:00:00Z",
     }
 
@@ -104,8 +112,6 @@ class GatePollerTests(unittest.TestCase):
                     ;;
                   *"/files"*) body="${GATE_STATE}/files.json" ;;
                   *"/labels"*) body="${GATE_STATE}/labels.json" ;;
-                  *"/comments"*) body="${GATE_STATE}/comments.json" ;;
-                  *"/collaborators/"*) body="${GATE_STATE}/role.json" ;;
                   *) body="${GATE_STATE}/checks.json" ;;
                 esac
                 jq_expr=""
@@ -146,8 +152,7 @@ class GatePollerTests(unittest.TestCase):
         check_runs: list[dict] | None = None,
         files: list[str] | None = None,
         labels: list[str] | None = None,
-        comments: list[dict] | None = None,
-        role: str = "admin",
+        labels_body: str | None = None,
         fail_until: int = 0,
         timeout: float = 30,
     ) -> tuple[int, str]:
@@ -159,10 +164,10 @@ class GatePollerTests(unittest.TestCase):
             json.dumps([{"filename": name} for name in (files or [])])
         )
         (self.state / "labels.json").write_text(
-            json.dumps([{"name": name} for name in (labels or [])])
+            labels_body
+            if labels_body is not None
+            else json.dumps([{"name": name} for name in (labels or [])])
         )
-        (self.state / "comments.json").write_text(json.dumps(comments or []))
-        (self.state / "role.json").write_text(json.dumps({"role_name": role}))
         # The stub applies the step's own `--jq` with the real jq, so the
         # expressions under test are the ones the workflow runs.
         real_jq = self.state / "real_jq"
@@ -249,6 +254,10 @@ class GatePollerTests(unittest.TestCase):
 
     def test_a_body_that_never_parses_does_not_fail_the_gate(self) -> None:
         (self.state / "files.txt").write_text("crates/tenferro-gpu/src/lib.rs\n")
+        (self.state / "labels.json").write_text("[]")
+        real_jq = self.state / "real_jq"
+        real_jq.write_text(f'#!/bin/bash\nexec "{self.real_jq}" "$@"\n')
+        real_jq.chmod(0o755)
         (self.state / "fail_until").write_text("0")
         (self.state / "calls").write_text("0")
         # An empty checks body is what `gh` returned on the incident this fixes.
@@ -279,54 +288,73 @@ class GatePollerTests(unittest.TestCase):
 
 
 
-    def test_local_gpu_evidence_skips_the_runpod_wait(self) -> None:
-        """A maintainer's recorded A100 run is the gate, with no pod involved.
+    def test_a_labelled_pr_takes_the_local_gate_for_its_head(self) -> None:
+        """A maintainer's local GPU run on this head is the verdict, no pod involved.
 
-        The paid lane exists to supply device coverage. When a maintainer has
-        already recorded that coverage on the PR, the required check concludes on
-        the host, so a RunPod dispatch that is queued, saturated or broken cannot
-        hold the merge (REPOSITORY_RULES.md, CI Cost Discipline).
+        `local-gpu-gate.yml` publishes it with `local-gpu-gate:v1:<head>`
+        (REPOSITORY_RULES.md, CI Cost Discipline).
         """
         code, output = self.run_step(
+            check_runs=[
+                check_run(
+                    "success",
+                    details_url=RUN_URL,
+                    external_id=f"local-gpu-gate:v1:{HEAD}",
+                )
+            ],
             files=["crates/tenferro-tensor/src/config.rs"],
             labels=["gpu-validated-locally"],
-            comments=[
-                {
-                    "user": {"login": "maintainer"},
-                    "html_url": "https://example/pull/1#issuecomment-1",
-                    "body": "Local GPU validation: A100 80GB, commit abc, 221 passed.",
-                }
-            ],
-            role="maintain",
         )
         self.assertEqual(code, 0, output)
-        self.assertIn("Local GPU validation recorded by maintainer", output)
-        self.assertNotIn("Waiting for RunPod", output)
+        self.assertIn("local GPU gate passed", output)
 
-    def test_local_gpu_evidence_from_a_non_maintainer_is_refused(self) -> None:
+    def test_a_labelled_pr_ignores_every_other_verdict(self) -> None:
+        # Neither a RunPod check from before the label nor a local run of an
+        # earlier head satisfies the labelled gate; it keeps waiting.
         code, output = self.run_step(
-            files=["crates/tenferro-tensor/src/config.rs"],
-            labels=["gpu-validated-locally"],
-            comments=[
-                {
-                    "user": {"login": "someone"},
-                    "html_url": "https://example/pull/1#issuecomment-2",
-                    "body": "Local GPU validation: trust me",
-                }
+            check_runs=[
+                check_run(
+                    "success",
+                    details_url=RUN_URL,
+                    external_id=f"runpod-gpu-gate:v1:{HEAD}:paid",
+                ),
+                check_run(
+                    "success",
+                    details_url=RUN_URL,
+                    external_id="local-gpu-gate:v1:" + "1" * 40,
+                ),
             ],
-            role="read",
-        )
-        self.assertEqual(code, 1, output)
-        self.assertIn("not an admin or maintainer", output)
-
-    def test_the_label_alone_does_not_waive_the_gate(self) -> None:
-        code, output = self.run_step(
             files=["crates/tenferro-tensor/src/config.rs"],
             labels=["gpu-validated-locally"],
-            comments=[],
+            timeout=8,
+        )
+        self.assertEqual(code, 124, output)
+        self.assertNotIn("passed", output)
+
+    def test_an_unreadable_label_list_fails_instead_of_waiting(self) -> None:
+        # Read as "unlabelled", a labelled PR would wait out the whole window for
+        # a RunPod verdict that never comes.
+        code, output = self.run_step(
+            files=["crates/tenferro-gpu/src/lib.rs"], labels_body="{not json"
         )
         self.assertEqual(code, 1, output)
-        self.assertIn("no 'Local GPU validation:' comment", output)
+        self.assertIn("Could not read the labels", output)
+        self.assertNotIn("Waiting for", output)
+
+    def test_a_failed_local_gate_is_reported(self) -> None:
+        code, output = self.run_step(
+            check_runs=[
+                check_run(
+                    "failure",
+                    details_url=RUN_URL,
+                    external_id=f"local-gpu-gate:v1:{HEAD}",
+                )
+            ],
+            files=["crates/tenferro-tensor/src/config.rs"],
+            labels=["gpu-validated-locally"],
+        )
+        self.assertEqual(code, 1, output)
+        self.assertIn("local GPU gate concluded failure", output)
 
 
 if __name__ == "__main__":

@@ -329,18 +329,17 @@ diff-scoped review bot.
   checks remain merge-blocking; this is a deliberate latency trade-off, not a
   reduction in validation.
 - **A recorded local GPU run is the default route for a GPU-affecting change.**
-  This workspace has an A100; run the affected CUDA tests on it, then apply the
-  `gpu-validated-locally` label and post a PR comment containing a line that
-  starts with `Local GPU validation:`, naming the GPU model, the exact commit,
-  the commands, and the observed result. The required `CI GPU gate` then
-  concludes on the host from that record - no pod is provisioned, and a queued,
-  saturated or broken RunPod dispatch cannot hold the merge - and it passes only
-  after verifying that the comment's author is an admin or maintainer, so the
-  label alone never waives GPU validation. The paid gate is the route only for a
-  change the host cannot cover: Apple/Metal, another vendor, or a matrix this
-  machine cannot run. Keep CUDA-touching branches local until they are complete,
-  and spend a hosted GPU gate once per finished PR, never to see whether CI
-  passes.
+  This workspace has an A100. Label the PR `gpu-validated-locally`, run
+  `python3 scripts/ci/local_gpu_gate.py run` at the commit you push, then
+  `python3 scripts/ci/local_gpu_gate.py publish --pr <n>` (CONTRIBUTING.md,
+  "Local GPU validation instead of the paid gate"). The RunPod workflow then
+  provisions nothing and publishes nothing for the PR; `local-gpu-gate.yml`
+  publishes the required `CI GPU gate` on the head SHA only after verifying that
+  an admin or maintainer recorded a passing run of the GPU lane on exactly that
+  SHA. A push invalidates it. The paid gate is the route only for a change the
+  host cannot cover: Apple/Metal, another vendor, or a matrix this machine cannot
+  run. Keep CUDA-touching branches local until they are complete, and spend a
+  hosted GPU gate once per finished PR, never to see whether CI passes.
 - The macOS lane compiles and runs Apple-specific targets with Accelerate and
   default features disabled, not a duplicate faer workspace/doctest suite.
   Keep numerical Accelerate and Apple/Metal shared-storage checks, and never
