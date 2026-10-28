@@ -459,7 +459,10 @@ Audit hints:
   steady-state outputs with `CpuEngine::set_buffer_pool_limit_bytes`, or set
   `TENFERRO_BUFFER_POOL_MAX_RETAINED_BYTES` (read once, when the first default
   buffer pool is created). The limit stays a bound; only its value is
-  workload-specific.
+  workload-specific. How expensive that fresh destination is depends on the
+  host's transparent-hugepage mode (a 2 MiB page fault covers 512 times the
+  memory of a 4 KiB one), so compare such timings only between hosts whose
+  recorded mode matches; the benchmark reports record it.
 - Engines owning resource pools or runtime contexts, including `CpuEngine`'s
   buffer pool, workspace and caller-supplied `Pool`, and CUDA engines'
   runtime client/context, are construct-once-and-reuse values. Examples should
