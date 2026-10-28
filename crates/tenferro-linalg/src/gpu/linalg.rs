@@ -3954,7 +3954,7 @@ fn as_i32(value: usize, op: &'static str, label: &'static str) -> Result<i32> {
 unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
     // SAFETY: the caller guarantees `base` covers `offset` further `T`
     // elements inside one device allocation (see `# Safety` above).
-    unsafe { base.cast::<T>() }.add(offset).cast()
+    unsafe { base.cast::<T>().add(offset) }.cast()
 }
 
 /// Offset an immutable device pointer by `offset` typed elements.
@@ -3967,7 +3967,7 @@ unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
 unsafe fn batch_const_ptr<T>(base: *const c_void, offset: usize) -> *const c_void {
     // SAFETY: the caller guarantees `base` covers `offset` further `T`
     // elements inside one device allocation (see `# Safety` above).
-    unsafe { base.cast::<T>() }.add(offset).cast()
+    unsafe { base.cast::<T>().add(offset) }.cast()
 }
 
 fn zero_like_linalg_device_tensor(

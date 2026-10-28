@@ -372,9 +372,11 @@ where
         // exactly after the first, and `block_ref` is no longer than the remaining bytes.
         unsafe {
             raw.copy_bytes(
-                // SAFETY: the offset is within the allocation this call owns; `byte_len` is the
-                // length of the first factor, so the sum stays inside the second.
-                unsafe { output_ref.raw_ptr().cast::<u8>().add(packed_ref.byte_len()) }.cast(),
+                output_ref
+                    .raw_ptr()
+                    .cast::<u8>()
+                    .add(packed_ref.byte_len())
+                    .cast(),
                 block_ref.raw_ptr() as *const _,
                 block_ref.byte_len(),
                 op,
@@ -394,15 +396,11 @@ where
         // starts exactly after the packed factor.
         unsafe {
             raw.copy_bytes(
-                // SAFETY: the offset is within the allocation this call owns; `byte_len` is the
-                // length of the first factor, so the sum stays inside the second.
-                unsafe {
-                    output_coeff_ref
-                        .raw_ptr()
-                        .cast::<u8>()
-                        .add(coeff_ref.byte_len())
-                }
-                .cast(),
+                output_coeff_ref
+                    .raw_ptr()
+                    .cast::<u8>()
+                    .add(coeff_ref.byte_len())
+                    .cast(),
                 trailing_ref.raw_ptr() as *const _,
                 trailing_ref.byte_len(),
                 op,
