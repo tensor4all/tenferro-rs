@@ -209,6 +209,16 @@ impl CudaEngine {
         self.runtime.device_id()
     }
 
+    /// How many operand reads this engine materialized instead of reading in place.
+    ///
+    /// The counter measures one thing: a borrowed view resolved into a compact device copy so a
+    /// kernel that cannot address the view's layout can run. An operation's required output
+    /// allocation and its output writes are not counted.
+    #[cfg(test)]
+    pub(crate) fn staged_reads(&self) -> u64 {
+        self.staged_reads.get()
+    }
+
     /// Record one operand materialization for [`CudaEngine::staged_reads`].
     pub(crate) fn note_staged_read(&self) {
         self.staged_reads.set(self.staged_reads.get() + 1);

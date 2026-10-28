@@ -993,3 +993,271 @@ fn a_borrowed_view_materializes_its_own_region() {
         &[2.5f64; 6][..]
     );
 }
+
+// --- Native read entries: the operand is read where it lives (#2223 item 1) ---
+
+use tenferro_tensor::TensorView;
+
+/// A borrowed region of `tensor`'s device allocation, as one read target.
+fn f64_region(
+    tensor: &Tensor,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+) -> TensorRead<'_> {
+    TensorRead::from_view(TensorView::F64(
+        tensor
+            .as_typed::<f64>()
+            .expect("f64 payload")
+            .backend_region_view(shape, strides, offset)
+            .expect("region view"),
+    ))
+}
+
+/// The three borrowed-region flavours the diagonal entries have to serve on a `4 x 5`
+/// column-major source: a transposed view, an offset view and a negative-stride view.
+fn diagonal_view_flavours(source: &Tensor) -> Vec<(&'static str, TensorRead<'_>)> {
+    vec![
+        ("transposed", f64_region(source, vec![5, 4], vec![4, 1], 0)),
+        ("offset", f64_region(source, vec![2, 3], vec![1, 4], 2)),
+        ("negative", f64_region(source, vec![4, 2], vec![-1, 4], 3)),
+    ]
+}
+
+/// Run `run` on the borrowed view and on its materialized compact copy, and require the same
+/// shape and values: a read entry must read the region it was handed, not a stand-in.
+fn matches_the_compact_operand(
+    engine: &mut CudaEngine,
+    flavour: &str,
+    view: TensorRead<'_>,
+    run: impl Fn(&mut CudaEngine, TensorRead<'_>) -> Tensor,
+) {
+    let observed = run(engine, view.clone());
+    let compact = engine
+        .to_contiguous_read(view)
+        .expect("materialize the view");
+    let expected = run(engine, TensorRead::from_tensor(&compact));
+    assert_eq!(
+        observed.shape(),
+        expected.shape(),
+        "the {flavour} view produced a different shape"
+    );
+    assert_eq!(
+        read(engine, &observed),
+        read(engine, &expected),
+        "the {flavour} view read a different region"
+    );
+}
+
+fn read(engine: &CudaEngine, tensor: &Tensor) -> Vec<f64> {
+    let back = download_tensor(engine.runtime(), tensor).expect("download");
+    back.as_slice::<f64>().expect("f64 payload").to_vec()
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn extract_diagonal_read_follows_a_view_layout() {
+    let Some(mut engine) = engine() else { return };
+    let data: Vec<f64> = (0..20).map(|index| index as f64).collect();
+    let source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![4, 5], data).expect("matrix"),
+    )
+    .expect("upload");
+    for (flavour, view) in diagonal_view_flavours(&source) {
+        for (axis_a, axis_b) in [(0usize, 1usize), (1, 0)] {
+            matches_the_compact_operand(&mut engine, flavour, view.clone(), |engine, input| {
+                engine
+                    .extract_diagonal_read(input, axis_a, axis_b)
+                    .expect("extract_diagonal_read")
+            });
+        }
+    }
+}
+
+/// The host answer for embedding a diagonal: insert an axis of the `axis_a` extent at
+/// `axis_b` and write the input's diagonal positions into the zero-filled result.
+fn embed_diagonal_expected(
+    input: &[f64],
+    shape: &[usize],
+    axis_a: usize,
+    axis_b: usize,
+) -> Vec<f64> {
+    let mut out_shape = shape.to_vec();
+    out_shape.insert(axis_b, shape[axis_a]);
+    let mut strides = vec![1usize; out_shape.len()];
+    for axis in 1..out_shape.len() {
+        strides[axis] = strides[axis - 1] * out_shape[axis - 1];
+    }
+    let mut output = vec![0.0; out_shape.iter().product()];
+    for (flat, &value) in input.iter().enumerate() {
+        let mut remaining = flat;
+        let mut output_index = 0;
+        for (axis, &extent) in shape.iter().enumerate() {
+            let index = remaining % extent;
+            remaining /= extent;
+            let mapped = axis + if axis >= axis_b { 1 } else { 0 };
+            output_index += index * strides[mapped];
+            if axis == axis_a {
+                output_index += index * strides[axis_b];
+            }
+        }
+        output[output_index] = value;
+    }
+    output
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn embed_diagonal_read_follows_a_view_layout() {
+    let Some(mut engine) = engine() else { return };
+    let data: Vec<f64> = (0..20).map(|index| index as f64 + 1.0).collect();
+    let source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![4, 5], data).expect("matrix"),
+    )
+    .expect("upload");
+    for (flavour, view) in diagonal_view_flavours(&source) {
+        // The expected values come from the view's own materialized data, not from another
+        // embed, so a diagonal placed on the wrong pair of axes cannot pass.
+        let compact = engine
+            .to_contiguous_read(view.clone())
+            .expect("materialize the view");
+        let input = read(&engine, &compact);
+        let shape = compact.shape().to_vec();
+        for (axis_a, axis_b) in [(0usize, 1usize), (1, 0), (0, shape.len())] {
+            let observed = engine
+                .embed_diagonal_read(view.clone(), axis_a, axis_b)
+                .expect("embed_diagonal_read");
+            let mut expected_shape = shape.clone();
+            expected_shape.insert(axis_b, shape[axis_a]);
+            assert_eq!(observed.shape(), expected_shape, "the {flavour} view");
+            assert_eq!(
+                read(&engine, &observed),
+                embed_diagonal_expected(&input, &shape, axis_a, axis_b),
+                "the {flavour} view"
+            );
+        }
+    }
+}
+
+/// Explicit host values for an asymmetric input, both axis orders and insertion past the last
+/// input axis.
+#[test]
+#[ignore = "requires CUDA"]
+fn embed_diagonal_read_writes_the_requested_axis_pair() {
+    let Some(mut engine) = engine() else { return };
+    // Column-major [2, 3]: (row, column) holds `1 + row + 2 * column`.
+    let source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .expect("matrix"),
+    )
+    .expect("upload");
+
+    let embedded = engine
+        .embed_diagonal(&source, 0, 1)
+        .expect("embed axis 0 at position 1");
+    assert_eq!(embedded.shape(), &[2, 2, 3]);
+    assert_eq!(
+        read(&engine, &embedded),
+        vec![1.0, 0.0, 0.0, 2.0, 3.0, 0.0, 0.0, 4.0, 5.0, 0.0, 0.0, 6.0]
+    );
+
+    let embedded = engine
+        .embed_diagonal(&source, 1, 0)
+        .expect("embed axis 1 at position 0");
+    assert_eq!(embedded.shape(), &[3, 2, 3]);
+    assert_eq!(
+        read(&engine, &embedded),
+        vec![
+            1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 5.0, 0.0, 0.0,
+            6.0
+        ]
+    );
+
+    let embedded = engine
+        .embed_diagonal(&source, 0, 2)
+        .expect("insert at the input's rank");
+    assert_eq!(embedded.shape(), &[2, 3, 2]);
+    assert_eq!(
+        read(&engine, &embedded),
+        vec![1.0, 0.0, 3.0, 0.0, 5.0, 0.0, 0.0, 2.0, 0.0, 4.0, 0.0, 6.0]
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn diagonal_read_entries_serve_an_empty_view() {
+    let Some(mut engine) = engine() else { return };
+    let source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![4, 5], values(20)).expect("matrix"),
+    )
+    .expect("upload");
+    let empty = || f64_region(&source, vec![0, 2], vec![1, 4], 0);
+
+    matches_the_compact_operand(&mut engine, "empty", empty(), |engine, input| {
+        engine
+            .extract_diagonal_read(input, 0, 1)
+            .expect("extract_diagonal_read")
+    });
+    matches_the_compact_operand(&mut engine, "empty", empty(), |engine, input| {
+        engine
+            .embed_diagonal_read(input, 0, 1)
+            .expect("embed_diagonal_read")
+    });
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn complex_diagonal_reads_follow_a_view_layout() {
+    use tenferro_tensor::{Complex64, TensorStructural as _};
+
+    let Some(mut engine) = engine() else { return };
+    let data: Vec<Complex64> = (0..12)
+        .map(|index| Complex64::new(index as f64 * 0.5, index as f64))
+        .collect();
+    let source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![3, 4], data).expect("matrix"),
+    )
+    .expect("upload");
+    let region = |shape: Vec<usize>, strides: Vec<isize>, offset: isize| {
+        TensorRead::from_view(TensorView::C64(
+            source
+                .as_typed::<Complex64>()
+                .expect("complex payload")
+                .backend_region_view(shape, strides, offset)
+                .expect("region view"),
+        ))
+    };
+    let transpose = || region(vec![4, 3], vec![3, 1], 0);
+    let read_complex = |engine: &CudaEngine, tensor: &Tensor| -> Vec<Complex64> {
+        let back = download_tensor(engine.runtime(), tensor).expect("download");
+        back.as_slice::<Complex64>()
+            .expect("complex payload")
+            .to_vec()
+    };
+
+    let extracted = engine
+        .extract_diagonal_read(transpose(), 0, 1)
+        .expect("extract_diagonal_read");
+    let compact = engine.to_contiguous_read(transpose()).expect("materialize");
+    let expected = engine.extract_diagonal(&compact, 0, 1).expect("extract");
+    assert_eq!(extracted.shape(), expected.shape());
+    assert_eq!(
+        read_complex(&engine, &extracted),
+        read_complex(&engine, &expected)
+    );
+
+    let embedded = engine
+        .embed_diagonal_read(transpose(), 0, 1)
+        .expect("embed_diagonal_read");
+    let expected = engine.embed_diagonal(&compact, 0, 1).expect("embed");
+    assert_eq!(embedded.shape(), expected.shape());
+    assert_eq!(
+        read_complex(&engine, &embedded),
+        read_complex(&engine, &expected)
+    );
+}

@@ -579,3 +579,373 @@ fn a_rank_nine_gather_and_scatter_use_the_general_path() {
     }
     assert_eq!(read(&engine, &scattered), expected);
 }
+
+// --- Native read entries: the operand is read where it lives (#2223 item 1) ---
+
+use tenferro_tensor::{TensorRead, TensorStructural, TensorView};
+
+/// A borrowed region of `tensor`'s device allocation, as one read target.
+fn f64_region(
+    tensor: &Tensor,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+) -> TensorRead<'_> {
+    TensorRead::from_view(TensorView::F64(
+        tensor
+            .as_typed::<f64>()
+            .expect("f64 payload")
+            .backend_region_view(shape, strides, offset)
+            .expect("region view"),
+    ))
+}
+
+/// The three borrowed-region flavours every read entry has to serve on a `4 x 5`
+/// column-major source: a transposed view, an offset view and a negative-stride view.
+fn view_flavours(source: &Tensor) -> Vec<(&'static str, TensorRead<'_>)> {
+    vec![
+        ("transposed", f64_region(source, vec![5, 4], vec![4, 1], 0)),
+        ("offset", f64_region(source, vec![2, 3], vec![1, 4], 2)),
+        ("negative", f64_region(source, vec![4, 2], vec![-1, 4], 3)),
+    ]
+}
+
+/// Run `run` on the borrowed view and on its materialized compact copy, and require the same
+/// shape and values: a read entry must read the region it was handed, not a stand-in.
+fn matches_the_compact_operand(
+    engine: &mut CudaEngine,
+    flavour: &str,
+    view: TensorRead<'_>,
+    run: impl Fn(&mut CudaEngine, TensorRead<'_>) -> Tensor,
+) {
+    let observed = run(engine, view.clone());
+    let compact = engine
+        .to_contiguous_read(view)
+        .expect("materialize the view");
+    let expected = run(engine, TensorRead::from_tensor(&compact));
+    assert_eq!(
+        observed.shape(),
+        expected.shape(),
+        "the {flavour} view produced a different shape"
+    );
+    assert_eq!(
+        read(engine, &observed),
+        read(engine, &expected),
+        "the {flavour} view read a different region"
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn slice_read_follows_a_view_layout() {
+    let Some(mut engine) = engine() else { return };
+    let source = device(&engine, vec![4, 5], matrix(4, 5));
+    for (flavour, view) in view_flavours(&source) {
+        let shape = view.shape().to_vec();
+        // Drop the first index on every axis that has one, so the window sits inside the view.
+        let starts: Vec<usize> = shape
+            .iter()
+            .map(|&extent| usize::from(extent > 1))
+            .collect();
+        let config = SliceConfig {
+            starts,
+            limits: shape.clone(),
+            strides: vec![1; shape.len()],
+        };
+        matches_the_compact_operand(&mut engine, flavour, view, |engine, input| {
+            engine.slice_read(input, &config).expect("slice_read")
+        });
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn dynamic_slice_read_follows_a_view_layout() {
+    let Some(mut engine) = engine() else { return };
+    let source = device(&engine, vec![4, 5], matrix(4, 5));
+    let all_flavours = view_flavours(&source);
+    for (flavour, view) in all_flavours {
+        let shape = view.shape().to_vec();
+        let starts_host =
+            Tensor::from_vec_col_major(vec![shape.len()], vec![0i64; shape.len()]).expect("starts");
+        let starts = upload_tensor(engine.runtime(), &starts_host).expect("upload starts");
+        let sizes: Vec<usize> = shape.iter().map(|&extent| extent.min(2)).collect();
+        matches_the_compact_operand(&mut engine, flavour, view, |engine, input| {
+            engine
+                .dynamic_slice_read(input, TensorRead::from_tensor(&starts), &sizes)
+                .expect("dynamic_slice_read")
+        });
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn pad_read_follows_a_view_layout() {
+    let Some(mut engine) = engine() else { return };
+    let source = device(&engine, vec![4, 5], matrix(4, 5));
+    let config = PadConfig {
+        edge_padding_low: vec![1, 0],
+        edge_padding_high: vec![0, 2],
+        interior_padding: vec![0, 1],
+    };
+    for (flavour, view) in view_flavours(&source) {
+        matches_the_compact_operand(&mut engine, flavour, view, |engine, input| {
+            engine.pad_read(input, &config).expect("pad_read")
+        });
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn reverse_read_follows_a_view_layout() {
+    let Some(mut engine) = engine() else { return };
+    let source = device(&engine, vec![4, 5], matrix(4, 5));
+    for (flavour, view) in view_flavours(&source) {
+        matches_the_compact_operand(&mut engine, flavour, view, |engine, input| {
+            engine.reverse_read(input, &[0]).expect("reverse_read")
+        });
+    }
+    // Both axes of a negative-stride region in one call: every stride of the operand layout is
+    // negated, so the offset must move to the far end on each of them.
+    matches_the_compact_operand(
+        &mut engine,
+        "negative",
+        f64_region(&source, vec![4, 2], vec![-1, 4], 3),
+        |engine, input| engine.reverse_read(input, &[0, 1]).expect("reverse_read"),
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn gather_read_follows_a_view_layout() {
+    let Some(mut engine) = engine() else { return };
+    let source = device(&engine, vec![4, 5], matrix(4, 5));
+    let indices_host = Tensor::from_vec_col_major(vec![2, 1], vec![0i64, 1]).expect("indices");
+    let indices = upload_tensor(engine.runtime(), &indices_host).expect("upload indices");
+    let config = tenferro_tensor::GatherConfig {
+        offset_dims: vec![0],
+        collapsed_slice_dims: vec![1],
+        start_index_map: vec![0],
+        index_vector_dim: 1,
+        slice_sizes: vec![2, 1],
+    };
+    for (flavour, view) in view_flavours(&source) {
+        // Two one-column windows taken at axis-0 starts 0 and 1 of the borrowed region.
+        matches_the_compact_operand(&mut engine, flavour, view, |engine, operand| {
+            use tenferro_tensor::Engine as _;
+            engine
+                .gather_read(operand, TensorRead::from_tensor(&indices), &config)
+                .expect("gather_read")
+        });
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn scatter_read_follows_a_view_layout() {
+    let Some(mut engine) = engine() else { return };
+    let source = device(&engine, vec![4, 5], matrix(4, 5));
+    let indices_host = Tensor::from_vec_col_major(vec![2, 1], vec![0i64, 1]).expect("indices");
+    let indices = upload_tensor(engine.runtime(), &indices_host).expect("upload indices");
+    // The update window rides a strided region of its own: the odd elements of a four-element
+    // allocation, in reverse order.
+    let updates_source = device(&engine, vec![4], vec![1.0, 2.0, 3.0, 4.0]);
+    let updates = f64_region(&updates_source, vec![2], vec![-2], 3);
+    let config = tenferro_tensor::ScatterConfig {
+        update_window_dims: vec![],
+        inserted_window_dims: vec![0, 1],
+        scatter_dims_to_operand_dims: vec![0],
+        index_vector_dim: 1,
+    };
+    for (flavour, view) in view_flavours(&source) {
+        // Materialize the operand and the update window independently, then add the updates on
+        // the host: the reference cannot reuse the scatter kernel it is checking.
+        let operand = engine
+            .to_contiguous_read(view.clone())
+            .expect("materialize the operand");
+        let mut expected = read(&engine, &operand);
+        let compact_updates = engine
+            .to_contiguous_read(updates.clone())
+            .expect("materialize the updates");
+        let updates_values = read(&engine, &compact_updates);
+        // The indices are 0 and 1 on operand axis 0; every other axis is inserted, so each scalar
+        // update lands in the first column of its row.
+        expected[0] += updates_values[0];
+        expected[1] += updates_values[1];
+        let observed = engine
+            .scatter_read(
+                view,
+                TensorRead::from_tensor(&indices),
+                updates.clone(),
+                &config,
+            )
+            .expect("scatter_read");
+        assert_eq!(observed.shape(), operand.shape(), "the {flavour} view");
+        assert_eq!(read(&engine, &observed), expected, "the {flavour} view");
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn concatenate_read_follows_a_view_layout() {
+    let Some(mut engine) = engine() else { return };
+    let transposed_source = device(&engine, vec![3, 2], matrix(3, 2));
+    // A real transpose of the compact column-major [3, 2] source: [2, 3] with strides [3, 1].
+    let transposed = f64_region(&transposed_source, vec![2, 3], vec![3, 1], 0);
+    let offset_source = device(&engine, vec![2, 5], matrix(2, 5));
+    let offset = f64_region(&offset_source, vec![2, 3], vec![1, 2], 1);
+    let negative_source = device(&engine, vec![2, 3], matrix(2, 3));
+    let negative = f64_region(&negative_source, vec![2, 3], vec![-1, 2], 1);
+
+    for axis in [0usize, 1] {
+        let inputs = [transposed.clone(), offset.clone(), negative.clone()];
+        let observed = engine
+            .concatenate_read(&inputs, axis)
+            .expect("concatenate_read");
+        let mut compact = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            compact.push(
+                engine
+                    .to_contiguous_read(input)
+                    .expect("materialize the input"),
+            );
+        }
+        let refs: Vec<&Tensor> = compact.iter().collect();
+        let expected = engine.concatenate(&refs, axis).expect("concatenate");
+        assert_eq!(observed.shape(), expected.shape(), "axis {axis}");
+        assert_eq!(
+            read(&engine, &observed),
+            read(&engine, &expected),
+            "axis {axis}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn read_entries_serve_an_empty_view() {
+    let Some(mut engine) = engine() else { return };
+    let source = device(&engine, vec![2, 3], matrix(2, 3));
+    // A zero-extent region of a non-empty allocation: no element, but a real allocation.
+    let empty = || f64_region(&source, vec![0, 3], vec![1, 2], 0);
+    // The same with the empty axis last, which is the shape a scatter destination must have: an
+    // empty leading axis makes the compact strides of the later axes zero.
+    let empty_trailing = || f64_region(&source, vec![3, 0], vec![1, 2], 0);
+
+    matches_the_compact_operand(&mut engine, "empty", empty(), |engine, input| {
+        engine
+            .slice_read(
+                input,
+                &SliceConfig {
+                    starts: vec![0, 0],
+                    limits: vec![0, 3],
+                    strides: vec![1, 1],
+                },
+            )
+            .expect("slice_read")
+    });
+    matches_the_compact_operand(&mut engine, "empty", empty(), |engine, input| {
+        engine.reverse_read(input, &[1]).expect("reverse_read")
+    });
+    matches_the_compact_operand(&mut engine, "empty", empty(), |engine, input| {
+        engine
+            .pad_read(
+                input,
+                &PadConfig {
+                    edge_padding_low: vec![1, 0],
+                    edge_padding_high: vec![0, 1],
+                    interior_padding: vec![0, 1],
+                },
+            )
+            .expect("pad_read")
+    });
+
+    // Concatenating an empty input with a non-empty one is a plain placement of the latter.
+    let kept = device(&engine, vec![2, 3], matrix(2, 3));
+    let joined = engine
+        .concatenate_read(&[empty(), TensorRead::from_tensor(&kept)], 0)
+        .expect("concatenate_read");
+    assert_eq!(joined.shape(), &[2, 3]);
+    assert_eq!(read(&engine, &joined), read(&engine, &kept));
+
+    // An empty scatter has no update to add, so the operand copy is the answer.
+    let no_indices = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![0, 1], Vec::<i64>::new()).expect("indices"),
+    )
+    .expect("upload indices");
+    let no_updates = device(&engine, vec![0], Vec::new());
+    let scattered = engine
+        .scatter_read(
+            empty_trailing(),
+            TensorRead::from_tensor(&no_indices),
+            TensorRead::from_tensor(&no_updates),
+            &tenferro_tensor::ScatterConfig {
+                update_window_dims: vec![],
+                inserted_window_dims: vec![0, 1],
+                scatter_dims_to_operand_dims: vec![0],
+                index_vector_dim: 1,
+            },
+        )
+        .expect("scatter_read");
+    assert_eq!(scattered.shape(), &[3, 0]);
+    assert!(read(&engine, &scattered).is_empty());
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn complex_view_reads_match_the_compact_result() {
+    use tenferro_tensor::Complex64;
+
+    let Some(mut engine) = engine() else { return };
+    let data: Vec<Complex64> = (0..12)
+        .map(|index| Complex64::new(index as f64, -(index as f64) * 0.5))
+        .collect();
+    let source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![3, 4], data.clone()).expect("matrix"),
+    )
+    .expect("upload");
+    let region = |shape: Vec<usize>, strides: Vec<isize>, offset: isize| {
+        TensorRead::from_view(TensorView::C64(
+            source
+                .as_typed::<Complex64>()
+                .expect("complex payload")
+                .backend_region_view(shape, strides, offset)
+                .expect("region view"),
+        ))
+    };
+    let transpose = || region(vec![4, 3], vec![3, 1], 0);
+    let reversed = || region(vec![3, 2], vec![-1, 3], 2);
+
+    let read_complex = |engine: &CudaEngine, tensor: &Tensor| -> Vec<Complex64> {
+        let back = download_tensor(engine.runtime(), tensor).expect("download");
+        back.as_slice::<Complex64>()
+            .expect("complex payload")
+            .to_vec()
+    };
+
+    // Slice the transpose, and reverse the negative-stride region.
+    let config = SliceConfig {
+        starts: vec![1, 0],
+        limits: vec![4, 3],
+        strides: vec![1, 1],
+    };
+    let sliced = engine.slice_read(transpose(), &config).expect("slice_read");
+    let compact = engine.to_contiguous_read(transpose()).expect("materialize");
+    let expected = engine.slice(&compact, &config).expect("slice");
+    assert_eq!(sliced.shape(), expected.shape());
+    assert_eq!(
+        read_complex(&engine, &sliced),
+        read_complex(&engine, &expected)
+    );
+
+    let reversed_out = engine.reverse_read(reversed(), &[1]).expect("reverse_read");
+    let compact = engine.to_contiguous_read(reversed()).expect("materialize");
+    let expected = engine.reverse(&compact, &[1]).expect("reverse");
+    assert_eq!(reversed_out.shape(), expected.shape());
+    assert_eq!(
+        read_complex(&engine, &reversed_out),
+        read_complex(&engine, &expected)
+    );
+}
