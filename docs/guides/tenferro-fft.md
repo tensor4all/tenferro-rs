@@ -36,9 +36,7 @@ tenferro-fft = { path = "../crates/tenferro-fft", features = ["autodiff"] }
 ```
 
 The Apple shared path is not released yet. Until a later release task publishes
-it, use matching path dependencies from the same `tenferro-rs` checkout. The
-workspace pins the reviewed CubeCL and CubeK revisions; applications do not
-need to declare CubeCL or CubeK directly.
+it, use matching path dependencies from the same `tenferro-rs` checkout.
 
 Concrete and graph-only users can omit `tenferro-ad` and the `autodiff`
 feature. Enable `tenferro-fft`'s `autodiff` feature when registering FFT AD

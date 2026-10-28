@@ -78,7 +78,7 @@ where
         return Ok(());
     }
     // The explicit reflector vectors are device-local function scratch, not Q.
-    // `with_raw` flushes this CubeCL build before the vendor calls below.
+    // `with_raw` flushes queued runtime work before the vendor calls below.
     let v = build_explicit_v(backend, packed, k, op)?;
     let m_i32 = as_i32(m, op, "m")?;
     let k_i32 = as_i32(k, op, "k")?;

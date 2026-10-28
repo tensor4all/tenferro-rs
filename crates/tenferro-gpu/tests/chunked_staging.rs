@@ -12,7 +12,7 @@ use tenferro_gpu::cuda::{
 };
 use tenferro_tensor::{StorageBuffer, Tensor};
 
-/// The chunk the runtime stages at a time, mirrored from `cubecl::runtime::STAGING_CHUNK_BYTES`.
+/// The chunk the runtime stages at a time.
 const CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
 fn backend() -> CudaEngine {
