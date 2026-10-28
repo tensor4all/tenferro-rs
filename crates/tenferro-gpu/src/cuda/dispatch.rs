@@ -5,10 +5,10 @@
 
 use t4a_cuda_kernels::{
     plan_binary, plan_clamp, plan_compare, plan_contiguous_to_view, plan_convert, plan_copy_exact,
-    plan_dynamic_slice, plan_elementwise, plan_pad, plan_reduce, plan_reduction, plan_scatter_add,
-    plan_select, plan_slice, plan_unary, plan_validate_float_indices, plan_validate_real_cast,
-    BinaryOp, DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan,
-    UnaryOp,
+    plan_dynamic_slice, plan_dynamic_update_slice, plan_elementwise, plan_pad, plan_reduce,
+    plan_reduction, plan_scatter_add, plan_select, plan_slice, plan_tril_view, plan_triu_view,
+    plan_unary, plan_validate_float_indices, plan_validate_real_cast, BinaryOp, DType, Entry,
+    GatherPlan, Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan, UnaryOp,
 };
 use t4a_cuda_runtime::{Arg, BoundFunction, LaunchConfig};
 
@@ -759,6 +759,113 @@ impl Dispatcher {
                 2,
                 starts_buffer,
                 &[out_buffer, operand_buffer],
+            )
+        }
+    }
+
+    /// `t4a_cuda_tril_view` / `t4a_cuda_triu_view`: the triangle mask of a strided input
+    /// into a compact destination of the input's extents.
+    ///
+    /// `len` is both the destination's allocation length and the launch's element count: the
+    /// view entries write the whole compact output.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn triangular_view(
+        &mut self,
+        entry: Entry,
+        dtype: DType,
+        len: i64,
+        in_layout: &t4a_cuda_kernels::Layout,
+        in_len: i64,
+        k: i64,
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        in_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch = if entry == Entry::TrilView {
+            plan_tril_view(dtype, len, in_layout, in_len)
+        } else {
+            plan_triu_view(dtype, len, in_layout, in_len)
+        }
+        .map_err(plan_error)?;
+        let in_layout = t4a_cuda_kernels::CLayout::new(in_layout);
+        self.run(
+            entry,
+            launch,
+            &[
+                Arg::DevicePtr(out_buffer),
+                Arg::DevicePtr(in_buffer),
+                Arg::U32(dtype.tag() as u32),
+                layout_arg(&in_layout),
+                pod_arg(&k),
+                Arg::U64(len as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_dynamic_update_slice`: write the update into the compact operand at the
+    /// device-resident window origin.
+    ///
+    /// `out_len` and `update_len` are the two allocations' lengths for the planner; the launch
+    /// itself visits exactly the update's element count, so an empty update plans nothing. The
+    /// caller has already copied the operand into `out`, ordered before this launch on the same
+    /// stream.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the window, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn dynamic_update_slice(
+        &mut self,
+        dtype: DType,
+        index_dtype: DType,
+        out: &t4a_cuda_kernels::Layout,
+        out_len: i64,
+        update: &t4a_cuda_kernels::Layout,
+        update_len: i64,
+        starts_rank: u32,
+        out_buffer: &t4a_cuda_runtime::Buffer,
+        update_buffer: &t4a_cuda_runtime::Buffer,
+        starts_buffer: IndexPointer<'_>,
+    ) -> crate::Result<()> {
+        let launch = plan_dynamic_update_slice(
+            dtype,
+            index_dtype,
+            out,
+            out_len,
+            update,
+            update_len,
+            starts_rank,
+        )
+        .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let update_layout = t4a_cuda_kernels::CLayout::new(update);
+        let len = update.element_count().map_err(plan_error)?;
+        let mut arguments = [
+            Arg::DevicePtr(out_buffer),
+            Arg::DevicePtr(update_buffer),
+            // The starts operand's pointer is set by `run_compact`.
+            Arg::U64(0),
+            Arg::U32(dtype.tag() as u32),
+            Arg::U32(index_dtype.tag() as u32),
+            layout_arg(&out_layout),
+            layout_arg(&update_layout),
+            Arg::U64(len as u64),
+        ];
+        // SAFETY: `plan_dynamic_update_slice` accepted the two layouts, the argument order is
+        // the entry's documented ABI, and `resources` names every buffer it addresses.
+        unsafe {
+            self.run_compact(
+                Entry::DynamicUpdateSlice,
+                launch,
+                &mut arguments,
+                2,
+                starts_buffer,
+                &[out_buffer, update_buffer],
             )
         }
     }

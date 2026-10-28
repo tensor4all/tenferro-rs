@@ -1067,3 +1067,279 @@ fn complex_view_reads_match_the_compact_result() {
         read_complex(&engine, &expected)
     );
 }
+
+/// The logical values a borrowed region names, in column-major order.
+fn region_values(data: &[f64], shape: &[usize], strides: &[isize], offset: isize) -> Vec<f64> {
+    let count: usize = shape.iter().product();
+    let mut values = Vec::with_capacity(count);
+    for index in 0..count {
+        let mut remaining = index;
+        let mut source = offset;
+        for (axis, &extent) in shape.iter().enumerate() {
+            let coordinate = remaining % extent;
+            remaining /= extent;
+            source += coordinate as isize * strides[axis];
+        }
+        values.push(data[source as usize]);
+    }
+    values
+}
+
+fn upload_host(engine: &CudaEngine, host: &Tensor) -> Tensor {
+    upload_tensor(engine.runtime(), host).expect("upload")
+}
+
+fn cpu_dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) -> Tensor {
+    tenferro_cpu::CpuEngine::serial()
+        .dynamic_update_slice(operand, update, starts)
+        .expect("CPU dynamic_update_slice")
+}
+
+/// Every starts index dtype, including negative and too-large values the kernel clamps, agrees
+/// with the CPU engine.
+#[test]
+#[ignore = "requires CUDA"]
+fn dynamic_update_slice_matches_the_cpu_engine_for_every_starts_dtype() {
+    let Some(mut engine) = engine() else { return };
+    let operand_values = matrix(4, 5);
+    let update_values = vec![100.0, 101.0, 102.0, 103.0, 104.0, 105.0];
+
+    macro_rules! starts_case {
+        ($ty:ty, $values:expr) => {{
+            let operand_host =
+                Tensor::from_vec_col_major(vec![4, 5], operand_values.clone()).expect("operand");
+            let update_host =
+                Tensor::from_vec_col_major(vec![2, 3], update_values.clone()).expect("update");
+            let starts_host = Tensor::from_vec_col_major(vec![2], $values).expect("starts");
+            let operand = upload_host(&engine, &operand_host);
+            let update = upload_host(&engine, &update_host);
+            let starts = upload_host(&engine, &starts_host);
+            let observed = engine
+                .dynamic_update_slice(&operand, &update, &starts)
+                .expect("CUDA dynamic_update_slice");
+            let expected = cpu_dynamic_update_slice(&operand_host, &update_host, &starts_host);
+            assert_eq!(
+                read(&engine, &observed),
+                expected.as_slice::<f64>().expect("f64 payload"),
+                "starts {:?}",
+                $values
+            );
+        }};
+    }
+
+    starts_case!(i64, vec![1i64, 2]);
+    starts_case!(i64, vec![-2i64, 99]);
+    starts_case!(i32, vec![1i32, 2]);
+    starts_case!(f32, vec![1.0f32, 2.0]);
+    starts_case!(f64, vec![1.0f64, 2.0]);
+}
+
+/// The CPU engine's dtype matrix, on compact operands.
+#[test]
+#[ignore = "requires CUDA"]
+fn dynamic_update_slice_matches_the_cpu_engine_for_every_data_dtype() {
+    use tenferro_tensor::{Complex32, Complex64};
+
+    let Some(mut engine) = engine() else { return };
+    let starts_host = Tensor::from_vec_col_major(vec![2], vec![1i64, 2]).expect("starts");
+
+    macro_rules! dtype_case {
+        ($ty:ty, $operand_values:expr, $update_values:expr) => {{
+            let operand_host =
+                Tensor::from_vec_col_major(vec![4, 5], $operand_values).expect("operand");
+            let update_host =
+                Tensor::from_vec_col_major(vec![2, 3], $update_values).expect("update");
+            let operand = upload_host(&engine, &operand_host);
+            let update = upload_host(&engine, &update_host);
+            let starts = upload_host(&engine, &starts_host);
+            let observed = engine
+                .dynamic_update_slice(&operand, &update, &starts)
+                .expect("CUDA dynamic_update_slice");
+            let expected = cpu_dynamic_update_slice(&operand_host, &update_host, &starts_host);
+            let back = download_tensor(engine.runtime(), &observed).expect("download");
+            assert_eq!(
+                back.as_slice::<$ty>().expect("payload"),
+                expected.as_slice::<$ty>().expect("payload")
+            );
+        }};
+    }
+
+    dtype_case!(
+        f32,
+        (0..20).map(|index| index as f32).collect::<Vec<_>>(),
+        vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+    dtype_case!(
+        i32,
+        (0..20i32).collect::<Vec<_>>(),
+        vec![1i32, 2, 3, 4, 5, 6]
+    );
+    dtype_case!(
+        i64,
+        (0..20).map(|index| index as i64).collect::<Vec<_>>(),
+        vec![1i64, 2, 3, 4, 5, 6]
+    );
+    dtype_case!(
+        bool,
+        (0..20).map(|index| index % 2 == 0).collect::<Vec<_>>(),
+        vec![true, false, true, false, true, false]
+    );
+    dtype_case!(
+        Complex32,
+        (0..20)
+            .map(|index| Complex32::new(index as f32, -(index as f32)))
+            .collect::<Vec<_>>(),
+        vec![
+            Complex32::new(1.0, -1.0),
+            Complex32::new(2.0, -2.0),
+            Complex32::new(3.0, -3.0),
+            Complex32::new(4.0, -4.0),
+            Complex32::new(5.0, -5.0),
+            Complex32::new(6.0, -6.0),
+        ]
+    );
+    dtype_case!(
+        Complex64,
+        (0..20)
+            .map(|index| Complex64::new(index as f64, -(index as f64)))
+            .collect::<Vec<_>>(),
+        vec![
+            Complex64::new(1.0, -1.0),
+            Complex64::new(2.0, -2.0),
+            Complex64::new(3.0, -3.0),
+            Complex64::new(4.0, -4.0),
+            Complex64::new(5.0, -5.0),
+            Complex64::new(6.0, -6.0),
+        ]
+    );
+}
+
+/// A strided update and an offset starts view are read where they live, and their values agree
+/// with the CPU engine on the materialized update.
+#[test]
+#[ignore = "requires CUDA"]
+fn dynamic_update_slice_reads_a_strided_update_and_an_offset_starts_view() {
+    let Some(mut engine) = engine() else { return };
+    let operand_values = matrix(4, 5);
+    let update_source_values = matrix(4, 5);
+    let operand_host =
+        Tensor::from_vec_col_major(vec![4, 5], operand_values.clone()).expect("operand");
+    let update_source = upload_host(
+        &engine,
+        &Tensor::from_vec_col_major(vec![4, 5], update_source_values.clone())
+            .expect("update source"),
+    );
+    let operand = upload_host(&engine, &operand_host);
+    // Rows 1..3 of columns 0..3: a transposed-strided region, not one contiguous span.
+    let update_shape = vec![2usize, 3];
+    let update_strides = vec![1isize, 4];
+    let update_offset = 1isize;
+    let update_values = region_values(
+        &update_source_values,
+        &update_shape,
+        &update_strides,
+        update_offset,
+    );
+    let update_view = TensorRead::from_view(TensorView::F64(
+        update_source
+            .as_typed::<f64>()
+            .expect("f64 payload")
+            .backend_region_view(update_shape.clone(), update_strides, update_offset)
+            .expect("update view"),
+    ));
+
+    // The starts tensor holds three per-call vectors; this call reads the middle one.
+    let starts_values = vec![0i64, 0, 1, 2, 3, 4];
+    let starts_source = upload_host(
+        &engine,
+        &Tensor::from_vec_col_major(vec![2, 3], starts_values).expect("starts"),
+    );
+    let starts_shape = vec![2usize];
+    let starts_strides = vec![1isize];
+    let starts_offset = 2isize;
+    let starts = TensorRead::from_view(TensorView::I64(
+        starts_source
+            .as_typed::<i64>()
+            .expect("i64 payload")
+            .backend_region_view(starts_shape, starts_strides, starts_offset)
+            .expect("starts view"),
+    ));
+
+    let observed = engine
+        .dynamic_update_slice_read(TensorRead::from_tensor(&operand), update_view, starts)
+        .expect("dynamic_update_slice_read");
+
+    let starts_host = Tensor::from_vec_col_major(vec![2], vec![1i64, 2]).expect("starts host");
+    let update_host = Tensor::from_vec_col_major(update_shape, update_values).expect("update host");
+    let expected = cpu_dynamic_update_slice(&operand_host, &update_host, &starts_host);
+    assert_eq!(
+        read(&engine, &observed),
+        expected.as_slice::<f64>().expect("f64 payload")
+    );
+}
+
+/// Empty updates, rank 0, and a rank-9 window agree with the CPU engine.
+#[test]
+#[ignore = "requires CUDA"]
+fn dynamic_update_slice_handles_empty_rank_zero_and_rank_nine() {
+    let Some(mut engine) = engine() else { return };
+
+    // An empty update leaves the operand copy untouched.
+    let operand_host = Tensor::from_vec_col_major(vec![3, 4], matrix(3, 4)).expect("operand");
+    let update_host = Tensor::from_vec_col_major(vec![0, 2], Vec::<f64>::new()).expect("update");
+    let starts_host = Tensor::from_vec_col_major(vec![2], vec![1i64, 1]).expect("starts");
+    let observed = engine
+        .dynamic_update_slice(
+            &upload_host(&engine, &operand_host),
+            &upload_host(&engine, &update_host),
+            &upload_host(&engine, &starts_host),
+        )
+        .expect("empty update");
+    let expected = cpu_dynamic_update_slice(&operand_host, &update_host, &starts_host);
+    assert_eq!(
+        read(&engine, &observed),
+        expected.as_slice::<f64>().expect("f64 payload")
+    );
+
+    // A rank-0 update is the result, and an empty starts vector is never dereferenced.
+    let scalar_operand = Tensor::from_vec_col_major(vec![], vec![7.0f64]).expect("scalar");
+    let scalar_update = Tensor::from_vec_col_major(vec![], vec![9.0f64]).expect("update");
+    let empty_starts = Tensor::from_vec_col_major(vec![0], Vec::<i64>::new()).expect("starts");
+    let observed = engine
+        .dynamic_update_slice(
+            &upload_host(&engine, &scalar_operand),
+            &upload_host(&engine, &scalar_update),
+            &upload_host(&engine, &empty_starts),
+        )
+        .expect("rank-0 update");
+    assert_eq!(read(&engine, &observed), vec![9.0]);
+
+    // Nine axes: the general path carries the two layouts in device memory.
+    let operand_shape = vec![3usize, 1, 1, 1, 1, 1, 1, 1, 4];
+    let update_shape = vec![2usize, 1, 1, 1, 1, 1, 1, 1, 3];
+    let operand_host = Tensor::from_vec_col_major(
+        operand_shape.clone(),
+        (0..12).map(|index| index as f64).collect(),
+    )
+    .expect("rank-9 operand");
+    let update_host = Tensor::from_vec_col_major(
+        update_shape.clone(),
+        (0..6).map(|index| 100.0 + index as f64).collect(),
+    )
+    .expect("rank-9 update");
+    let starts_host =
+        Tensor::from_vec_col_major(vec![9], vec![1i64, 0, 0, 0, 0, 0, 0, 0, 1]).expect("starts");
+    let observed = engine
+        .dynamic_update_slice(
+            &upload_host(&engine, &operand_host),
+            &upload_host(&engine, &update_host),
+            &upload_host(&engine, &starts_host),
+        )
+        .expect("rank-9 update");
+    let expected = cpu_dynamic_update_slice(&operand_host, &update_host, &starts_host);
+    assert_eq!(observed.shape(), &operand_shape[..]);
+    assert_eq!(
+        read(&engine, &observed),
+        expected.as_slice::<f64>().expect("f64 payload")
+    );
+}

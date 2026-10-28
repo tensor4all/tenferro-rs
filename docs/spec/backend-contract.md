@@ -307,12 +307,15 @@ owned-input method and stages only a borrowed view through `to_contiguous_read`.
 `tenferro_gpu::cuda::CudaEngine` overrides the entries whose catalogue kernel
 addresses the operand's own layout (offset, strided and negative-stride
 regions); the entries that still resolve a compact copy document that boundary
-where they are defined.
+where they are defined. In particular, `tril_read` and `triu_read` keep the flat
+catalogue entry only for a compact offset-zero operand and otherwise use the
+revision-11 view entry, so a triangular mask of a strided view needs no staging
+copy.
 
-Its indexing read entries (`gather_read`, `scatter_read` and
-`dynamic_slice_read`) take an index or starts operand of `I32`, `I64`, `F32` or
-`F64`, and a float index is rejected unless every element is an exactly
-representable integer before the launch. The catalogue planners validate the
+Its indexing read entries (`gather_read`, `scatter_read`, `dynamic_slice_read`
+and `dynamic_update_slice_read`) take an index or starts operand of `I32`,
+`I64`, `F32` or `F64`, and a float index is rejected unless every element is an
+exactly representable integer before the launch. The catalogue planners validate the
 index vector extents and axis metadata, and the kernels clamp window starts to
 `[0, extent - window]`, which is the baseline's out-of-range behaviour. A
 compact index view is one contiguous span, so the entry reads it in place by

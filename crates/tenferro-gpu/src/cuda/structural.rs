@@ -13,12 +13,13 @@ use tenferro_tensor::{
 
 use t4a_cuda_kernels::{
     plan_apply_reflector, plan_broadcast_in_dim, plan_column_norms, plan_concatenate_copy,
-    plan_dynamic_slice, plan_embed_diagonal_copy, plan_extract_diagonal, plan_extract_r,
-    plan_fill_one, plan_gather, plan_householder_assemble, plan_householder_explicit_v,
-    plan_identity_shifted, plan_initialize_permutation, plan_lu_apply_pivots,
-    plan_lu_extract_outputs, plan_lu_parity, plan_materialize_strided, plan_matrix_adjoint,
-    plan_pad, plan_prefix_rank, plan_qr_apply_phase, plan_qr_phase, plan_reduction, plan_reflector,
-    plan_scatter_add, plan_select_pivot, plan_slice, plan_swap_columns, plan_tril, plan_triu,
+    plan_dynamic_slice, plan_dynamic_update_slice, plan_embed_diagonal_copy, plan_extract_diagonal,
+    plan_extract_r, plan_fill_one, plan_gather, plan_householder_assemble,
+    plan_householder_explicit_v, plan_identity_shifted, plan_initialize_permutation,
+    plan_lu_apply_pivots, plan_lu_extract_outputs, plan_lu_parity, plan_materialize_strided,
+    plan_matrix_adjoint, plan_pad, plan_prefix_rank, plan_qr_apply_phase, plan_qr_phase,
+    plan_reduction, plan_reflector, plan_scatter_add, plan_select_pivot, plan_slice,
+    plan_swap_columns, plan_tril, plan_tril_view, plan_triu, plan_triu_view,
     plan_upper_trapezoidal_violation, CAxisValues, CLayout, Entry, GatherPlan, Layout, LayoutRef,
     ReductionPlan, ScatterPlan,
 };
@@ -1355,50 +1356,167 @@ impl TensorStructural for CudaEngine {
     }
 
     fn tril(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
-        self.triangular(input, k, true)
+        self.tril_read(TensorRead::from_tensor(input), k)
     }
 
     fn triu(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
-        self.triangular(input, k, false)
+        self.triu_read(TensorRead::from_tensor(input), k)
+    }
+
+    fn tril_read(&mut self, input: TensorRead<'_>, k: i64) -> crate::Result<Tensor> {
+        self.triangular_read(input, k, true)
+    }
+
+    fn triu_read(&mut self, input: TensorRead<'_>, k: i64) -> crate::Result<Tensor> {
+        self.triangular_read(input, k, false)
     }
 }
 
 impl CudaEngine {
-    /// `tril`/`triu` over a rank-2-or-higher compact tensor, batching on higher axes.
-    fn triangular(&mut self, input: &Tensor, k: i64, lower: bool) -> crate::Result<Tensor> {
-        let op = if lower { "tril" } else { "triu" };
-        let shape = input.shape().to_vec();
+    /// `tril`/`triu` over a rank-2-or-higher operand, batching on higher axes.
+    ///
+    /// A compact, offset-zero operand keeps the flat catalogue entry. Any other region — a
+    /// transposed, offset or negative-stride view — is read through its own layout by the
+    /// revision-11 view entry, whose destination is the compact form of the input's extents. A
+    /// region wider than [`t4a_cuda_kernels::MAX_RANK`] takes the entry's `_any` twin.
+    fn triangular_read(
+        &mut self,
+        input: TensorRead<'_>,
+        k: i64,
+        lower: bool,
+    ) -> crate::Result<Tensor> {
+        let op = if lower { "tril_read" } else { "triu_read" };
+        let region = self.read_region(&input, op)?;
+        let shape = region.shape.clone();
         if shape.len() < 2 {
             return Err(crate::Error::unsupported(
                 op,
                 "a triangular mask needs at least two axes",
             ));
         }
-        let kernel = kernel_dtype(input.dtype(), op)?;
+        let dtype = region.dtype;
+        let kernel = kernel_dtype(dtype, op)?;
         let len = count_i64(&shape, op)?;
-        let (rows, cols) = (shape[0] as i64, shape[1] as i64);
-        let output = alloc_tensor(self.runtime(), input.dtype(), &shape)?;
-        let plan = if lower {
-            plan_tril(kernel, rows, cols, len)
+        if region_is_flat(&region) {
+            // The flat entry is unchanged: it masks a compact span without a layout parameter,
+            // so the shape's first two axes carry the triangle and every higher axis batches it.
+            let (rows, cols) = (shape[0] as i64, shape[1] as i64);
+            let plan = if lower {
+                plan_tril(kernel, rows, cols, len)
+            } else {
+                plan_triu(kernel, rows, cols, len)
+            }
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+            let (destination, source) = with_scalar!(dtype, |T| {
+                Ok((
+                    self.allocation_of::<T>(&output, op)?,
+                    region.storage.allocation(),
+                ))
+            })?;
+            self.launch_planned(
+                if lower { Entry::Tril } else { Entry::Triu },
+                plan,
+                &[
+                    Arg::DevicePtr(destination),
+                    Arg::DevicePtr(source),
+                    Arg::U32(kernel.tag() as u32),
+                    pod_arg(&k),
+                    Arg::U64(rows as u64),
+                    Arg::U64(cols as u64),
+                    Arg::U64(len as u64),
+                ],
+                op,
+            )?;
+            return Ok(output);
+        }
+        let entry = if lower {
+            Entry::TrilView
         } else {
-            plan_triu(kernel, rows, cols, len)
+            Entry::TriuView
+        };
+        let source = region.storage.allocation();
+        if shape.len() <= t4a_cuda_kernels::MAX_RANK {
+            let in_layout = region.layout(op)?;
+            let in_len = region.len(op)?;
+            if lower {
+                plan_tril_view(kernel, len, &in_layout, in_len)
+            } else {
+                plan_triu_view(kernel, len, &in_layout, in_len)
+            }
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+            let destination = with_scalar!(dtype, |T| self.allocation_of::<T>(&output, op))?;
+            let mut dispatcher = self.dispatcher(&[entry])?;
+            dispatcher.triangular_view(
+                entry,
+                kernel,
+                len,
+                &in_layout,
+                in_len,
+                k,
+                destination,
+                source,
+            )?;
+            self.runtime()
+                .synchronize()
+                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            return Ok(output);
+        }
+        // A region wider than the by-value layout has no `CLayout` parameter, so its geometry
+        // travels in device memory and the launch goes through the entry's `_any` twin.
+        let in_ref = LayoutRef::new(&region.extents, &region.strides, region.offset)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let in_len = region.len(op)?;
+        let plan = if lower {
+            plan_tril_view(kernel, len, in_ref, in_len)
+        } else {
+            plan_triu_view(kernel, len, in_ref, in_len)
         }
         .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-        let (destination, source) = self.two_allocations(&output, input, op)?;
-        self.launch_planned(
-            if lower { Entry::Tril } else { Entry::Triu },
-            plan,
-            &[
-                Arg::DevicePtr(destination),
-                Arg::DevicePtr(source),
-                Arg::U32(kernel.tag() as u32),
-                pod_arg(&k),
-                Arg::U64(rows as u64),
-                Arg::U64(cols as u64),
-                Arg::U64(len as u64),
-            ],
-            op,
-        )?;
+        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        if plan.grid[0] == 0 {
+            // An empty region has no element to visit, and the runtime rejects a zero grid.
+            return Ok(output);
+        }
+        let destination = with_scalar!(dtype, |T| self.allocation_of::<T>(&output, op))?;
+        let symbol = entry
+            .general()
+            .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
+            .name();
+        let in_geometry = self.wide_geometry(&region.extents, &region.strides, op)?;
+        let mut dispatcher = self.dispatcher(&[entry])?;
+        let resources = vec![
+            t4a_cuda_runtime::RawResource::Buffer(&in_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&in_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(destination),
+            t4a_cuda_runtime::RawResource::Buffer(source),
+        ];
+        // SAFETY: every address the parameters name is registered with this scope, the planner
+        // proved the input span and output length, and the geometry outlives the synchronise.
+        unsafe {
+            dispatcher.in_scope(entry, symbol, resources, |scope, function| {
+                let mirror = in_geometry.mirror(in_ref, scope, op)?;
+                let args = [
+                    Arg::DevicePtr(destination),
+                    Arg::DevicePtr(source),
+                    Arg::U32(kernel.tag() as u32),
+                    pod_arg(&mirror),
+                    pod_arg(&k),
+                    Arg::U64(len as u64),
+                ];
+                scope
+                    .launch(
+                        function,
+                        LaunchConfig::new(plan.grid[0], plan.block[0]),
+                        &args,
+                    )
+                    .map_err(|error| crate::Error::runtime_state_source(op, error))
+            })
+        }?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
         Ok(output)
     }
 
@@ -1423,6 +1541,62 @@ impl CudaEngine {
 /// bounds at [`t4a_cuda_kernels::MAX_RANK`] axes; a wider view goes through the `_any` symbol,
 /// whose geometry lives in device memory.
 impl CudaEngine {
+    /// A compact copy of one read region, in the region's logical order.
+    ///
+    /// A flat region is one contiguous span, so the exact copy carries it without a layout. Any
+    /// other region is read through its own geometry by `strided_to_strided`; a region wider
+    /// than the by-value layout keeps the catalogue's device-geometry materialization.
+    fn copy_region_to_compact(
+        &mut self,
+        region: &Region<'_>,
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let dtype = region.dtype;
+        let shape = region.shape.clone();
+        let flat = region_is_flat(region);
+        if !flat && region.extents.len() > t4a_cuda_kernels::MAX_RANK {
+            return self.materialize_storage(
+                region.storage,
+                region.len(op)?,
+                dtype,
+                &region.extents,
+                &region.strides,
+                region.offset,
+                shape,
+                op,
+            );
+        }
+        let len = count_i64(&shape, op)?;
+        let kernel = kernel_dtype(dtype, op)?;
+        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        if len == 0 {
+            return Ok(output);
+        }
+        let destination = with_scalar!(dtype, |T| self.allocation_of::<T>(&output, op))?;
+        if flat {
+            let mut dispatcher = self.dispatcher(&[Entry::CopyExact])?;
+            dispatcher.copy_exact(kernel, len, destination, region.storage.allocation())?;
+        } else {
+            let source_layout = region.layout(op)?;
+            let source_len = region.len(op)?;
+            let destination_layout = self.layout_of(&output, op)?;
+            let mut dispatcher = self.dispatcher(&[Entry::StridedToStrided])?;
+            dispatcher.strided_to_strided(
+                kernel,
+                &source_layout,
+                source_len,
+                &destination_layout,
+                len,
+                destination,
+                region.storage.allocation(),
+            )?;
+        }
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        Ok(output)
+    }
+
     fn materialize_view(
         &mut self,
         input: &Tensor,
@@ -4606,15 +4780,234 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
 
     fn dynamic_update_slice(
         &mut self,
-        _operand: &Tensor,
-        _update: &Tensor,
-        _starts: &Tensor,
+        operand: &Tensor,
+        update: &Tensor,
+        starts: &Tensor,
     ) -> crate::Result<Tensor> {
-        Err(crate::Error::unsupported(
-            "dynamic_update_slice",
-            "the CubeCL path does not serve this operation either; it needs a windowed write \
-             kernel the catalogue does not have",
-        ))
+        self.dynamic_update_slice_read(
+            TensorRead::from_tensor(operand),
+            TensorRead::from_tensor(update),
+            TensorRead::from_tensor(starts),
+        )
+    }
+
+    /// StableHLO dynamic update slice with every operand read where it lives.
+    ///
+    /// The result starts as a compact copy of the operand's own region, then the update window
+    /// is written at the clamped device-resident starts. The update may have any offset and
+    /// signed strides; the starts operand is read in place when it is compact and keeps one
+    /// staged copy otherwise, exactly as for `dynamic_slice`. Every metadata and float-index
+    /// check runs before the output allocation and operand copy, so a refused invocation
+    /// allocates no output and copies no operand (the float-index validator may allocate its
+    /// flag and stage a non-compact starts operand first). An empty update launches nothing and
+    /// leaves the operand copy; a rank-0 update is the update value, which the copy below
+    /// returns without dereferencing an (empty) starts vector.
+    fn dynamic_update_slice_read(
+        &mut self,
+        operand: TensorRead<'_>,
+        update: TensorRead<'_>,
+        starts: TensorRead<'_>,
+    ) -> crate::Result<Tensor> {
+        const OP: &str = "dynamic_update_slice_read";
+        let region = self.read_region(&operand, OP)?;
+        let (shape, dtype) = (region.shape.clone(), region.dtype);
+        let rank = shape.len();
+        let update_region = self.read_region(&update, OP)?;
+        if update_region.dtype != dtype {
+            return Err(crate::Error::dtype_mismatch(OP, dtype, update_region.dtype));
+        }
+        if update_region.shape.len() != rank {
+            return Err(crate::Error::rank_mismatch(
+                OP,
+                rank,
+                update_region.shape.len(),
+            ));
+        }
+        for (axis, &update_extent) in update_region.shape.iter().enumerate() {
+            if update_extent > shape[axis] {
+                return Err(crate::Error::invalid_argument(
+                    OP,
+                    "update",
+                    format!(
+                        "extent {update_extent} on axis {axis} exceeds the operand's {}",
+                        shape[axis]
+                    ),
+                ));
+            }
+        }
+        if starts.shape().len() != 1 {
+            return Err(crate::Error::invalid_argument(
+                OP,
+                "starts",
+                format!(
+                    "the starts tensor must be a rank-1 vector, got rank {}",
+                    starts.shape().len()
+                ),
+            ));
+        }
+        let starts_count = element_count(starts.shape())?;
+        if starts_count != rank {
+            return Err(crate::Error::invalid_argument(
+                OP,
+                "starts",
+                format!("the starts tensor holds {starts_count} values for a rank-{rank} operand"),
+            ));
+        }
+        let index_dtype = index_dtype_of(starts.dtype(), OP)?;
+        let index_kernel = kernel_dtype(index_dtype, OP)?;
+        let kernel = kernel_dtype(dtype, OP)?;
+        let starts_rank = u32::try_from(rank)
+            .map_err(|_| crate::Error::unsupported(OP, "the rank exceeds the ABI's int"))?;
+        let out_extents = catalogue_extents(&shape, OP)?;
+        let out_len = count_i64(&shape, OP)?;
+        if rank > t4a_cuda_kernels::MAX_RANK {
+            let out_strides: Vec<i64> = catalogue_strides(&compact_strides(&shape, OP)?, OP)?;
+            let out_ref = LayoutRef::new(&out_extents, &out_strides, 0)
+                .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+            let update_ref = LayoutRef::new(
+                &update_region.extents,
+                &update_region.strides,
+                update_region.offset,
+            )
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+            let update_len = update_region.len(OP)?;
+            let plan = plan_dynamic_update_slice(
+                kernel,
+                index_kernel,
+                out_ref,
+                out_len,
+                update_ref,
+                update_len,
+                starts_rank,
+            )
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+            let starts_operand = self.index_operand(&starts, OP)?;
+            self.validate_exact_indices(&starts_operand, OP)?;
+            let output = self.copy_region_to_compact(&region, OP)?;
+            if element_count(&update_region.shape)? == 0 {
+                return Ok(output);
+            }
+            let symbol = Entry::DynamicUpdateSlice
+                .general()
+                .ok_or_else(|| {
+                    crate::Error::unsupported(OP, "this entry has no general-path symbol")
+                })?
+                .name();
+            let out_geometry = self.wide_geometry(&out_extents, &out_strides, OP)?;
+            let update_geometry =
+                self.wide_geometry(&update_region.extents, &update_region.strides, OP)?;
+            let starts_pointer = starts_operand.pointer(OP)?;
+            let starts_buffer = match starts_pointer {
+                IndexPointer::Direct(buffer) => buffer,
+                IndexPointer::Rebased { buffer, .. } => buffer,
+            };
+            let destination = with_scalar!(dtype, |T| self.allocation_of::<T>(&output, OP))?;
+            let mut dispatcher = self.dispatcher(&[Entry::DynamicUpdateSlice])?;
+            let resources = vec![
+                t4a_cuda_runtime::RawResource::Buffer(&out_geometry.extents),
+                t4a_cuda_runtime::RawResource::Buffer(&out_geometry.strides),
+                t4a_cuda_runtime::RawResource::Buffer(&update_geometry.extents),
+                t4a_cuda_runtime::RawResource::Buffer(&update_geometry.strides),
+                t4a_cuda_runtime::RawResource::Buffer(destination),
+                t4a_cuda_runtime::RawResource::Buffer(update_region.storage.allocation()),
+                t4a_cuda_runtime::RawResource::Buffer(starts_buffer),
+            ];
+            // SAFETY: every address the parameters name is registered with this scope, the
+            // planner proved the window, and the geometry outlives the synchronise below.
+            unsafe {
+                dispatcher.in_scope(
+                    Entry::DynamicUpdateSlice,
+                    symbol,
+                    resources,
+                    |scope, function| {
+                        let out_mirror = out_geometry.mirror(out_ref, scope, OP)?;
+                        let update_mirror = update_geometry.mirror(update_ref, scope, OP)?;
+                        let starts_arg = match starts_pointer {
+                            IndexPointer::Direct(buffer) => Arg::DevicePtr(buffer),
+                            IndexPointer::Rebased {
+                                buffer,
+                                offset_bytes,
+                                len_bytes,
+                            } => Arg::U64(
+                                scope
+                                    .device_ptr_range(buffer, offset_bytes, len_bytes)
+                                    .map_err(|error| {
+                                        crate::Error::runtime_state_source(OP, error)
+                                    })?,
+                            ),
+                        };
+                        let len = update_ref
+                            .element_count()
+                            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+                        let args = [
+                            Arg::DevicePtr(destination),
+                            Arg::DevicePtr(update_region.storage.allocation()),
+                            starts_arg,
+                            Arg::U32(kernel.tag() as u32),
+                            Arg::U32(index_kernel.tag() as u32),
+                            pod_arg(&out_mirror),
+                            pod_arg(&update_mirror),
+                            Arg::U64(len as u64),
+                        ];
+                        scope
+                            .launch(
+                                function,
+                                LaunchConfig::new(plan.grid[0], plan.block[0]),
+                                &args,
+                            )
+                            .map_err(|error| crate::Error::runtime_state_source(OP, error))
+                    },
+                )
+            }?;
+            self.runtime()
+                .synchronize()
+                .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+            return Ok(output);
+        }
+        let out_layout = Layout::compact(&out_extents)
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        let update_layout = update_region.layout(OP)?;
+        let update_len = update_region.len(OP)?;
+        plan_dynamic_update_slice(
+            kernel,
+            index_kernel,
+            &out_layout,
+            out_len,
+            &update_layout,
+            update_len,
+            starts_rank,
+        )
+        .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        let starts_operand = self.index_operand(&starts, OP)?;
+        self.validate_exact_indices(&starts_operand, OP)?;
+        if rank == 0 {
+            // The update is the result, and the starts vector has no device address to read.
+            return self.copy_region_to_compact(&update_region, OP);
+        }
+        let output = self.copy_region_to_compact(&region, OP)?;
+        if element_count(&update_region.shape)? == 0 {
+            return Ok(output);
+        }
+        let starts_pointer = starts_operand.pointer(OP)?;
+        let mut dispatcher = self.dispatcher(&[Entry::DynamicUpdateSlice])?;
+        with_scalar!(dtype, |T| {
+            dispatcher.dynamic_update_slice(
+                kernel,
+                index_kernel,
+                &out_layout,
+                out_len,
+                &update_layout,
+                update_len,
+                starts_rank,
+                self.allocation_of::<T>(&output, OP)?,
+                update_region.storage.allocation(),
+                starts_pointer,
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        Ok(output)
     }
 
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {

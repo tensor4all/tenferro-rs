@@ -90,8 +90,8 @@ and `REPOSITORY_RULES.md`; reusable workflow steps live in
 CUDA support is implemented through the feature-gated CubeCL backend across the
 concrete tensor, eager, and traced surfaces; performance work is ongoing.
 Remaining CUDA limitations: `eig`, `full_piv_lu`, `full_piv_lu_solve`,
-`dynamic_update_slice`, integer numeric/linalg gaps outside the supported
-add/sub/mul/div/rem, neg/abs/sign/pow, comparison/selection/minimum/maximum, and
+integer numeric/linalg gaps outside the supported add/sub/mul/div/rem,
+neg/abs/sign/pow, comparison/selection/minimum/maximum, and
 sum/product/minimum/maximum reductions, `Bool` arithmetic/reduction/linalg and
 additive-scatter gaps, and selected complex analytic or ordering operations.
 HIP/ROCm is stubbed. Outside explicit GPU tasks, check

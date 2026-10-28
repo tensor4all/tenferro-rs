@@ -96,11 +96,8 @@ fn reversed_columns(source: &Tensor) -> TensorRead<'_> {
 #[ignore = "requires CUDA"]
 fn read_entries_consume_a_strided_view_without_staging() {
     let Some(mut engine) = engine() else { return };
-    let source = device(
-        &engine,
-        vec![3, 4],
-        (0..12).map(|index| index as f64).collect(),
-    );
+    let source_data: Vec<f64> = (0..12).map(|index| index as f64).collect();
+    let source = device(&engine, vec![3, 4], source_data.clone());
 
     // The non-operand tensors stay on their existing path: compact owned reads.
     let starts = upload_tensor(
@@ -126,6 +123,11 @@ fn read_entries_consume_a_strided_view_without_staging() {
             .backend_region_view(vec![2], vec![-2], 3)
             .expect("updates view"),
     ));
+    let update_slice_starts = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![2], vec![1i64, 1]).expect("update slice starts"),
+    )
+    .expect("upload update slice starts");
 
     let before = engine.staged_reads();
 
@@ -159,6 +161,59 @@ fn read_entries_consume_a_strided_view_without_staging() {
     engine
         .reverse_read(negative(&source), &[0])
         .expect("reverse_read");
+    let mirror_data: Vec<f64> = (0..12).map(|index| 100.0 + index as f64).collect();
+    let mirror = device(&engine, vec![4, 3], mirror_data.clone());
+    engine.tril_read(transposed(&source), 0).expect("tril_read");
+    engine.triu_read(negative(&source), 1).expect("triu_read");
+
+    // A strided operand with a smaller offset update, so the untouched cells are part of the
+    // comparison rather than being overwritten by the window.
+    let operand_shape = vec![4usize, 3];
+    let update_shape = vec![2usize, 2];
+    let operand_values = view_values(&source_data, &operand_shape, &[3, 1], 0);
+    let update_values = view_values(&mirror_data, &update_shape, &[1, 3], 1);
+    let updated = engine
+        .dynamic_update_slice_read(
+            transposed(&source),
+            region(&mirror, update_shape.clone(), vec![1, 3], 1),
+            TensorRead::from_tensor(&update_slice_starts),
+        )
+        .expect("dynamic_update_slice_read on a strided operand");
+    assert_eq!(
+        read(&engine, &updated),
+        dynamic_update_reference(
+            &operand_values,
+            &operand_shape,
+            &update_values,
+            &update_shape,
+            &[1, 1],
+        ),
+        "the strided dynamic update must keep every cell outside its window"
+    );
+
+    // The same entry with an offset operand and a strided update.
+    let operand_shape = vec![2usize, 2];
+    let update_shape = vec![1usize, 2];
+    let operand_values = view_values(&source_data, &operand_shape, &[1, 3], 1);
+    let update_values = view_values(&mirror_data, &update_shape, &[1, 4], 2);
+    let updated = engine
+        .dynamic_update_slice_read(
+            offset(&source),
+            region(&mirror, update_shape.clone(), vec![1, 4], 2),
+            TensorRead::from_tensor(&update_slice_starts),
+        )
+        .expect("dynamic_update_slice_read on an offset operand");
+    assert_eq!(
+        read(&engine, &updated),
+        dynamic_update_reference(
+            &operand_values,
+            &operand_shape,
+            &update_values,
+            &update_shape,
+            &[1, 1],
+        ),
+        "the offset dynamic update must keep every cell outside its window"
+    );
     engine
         .extract_diagonal_read(offset(&source), 0, 1)
         .expect("extract_diagonal_read");
@@ -191,11 +246,6 @@ fn read_entries_consume_a_strided_view_without_staging() {
             },
         )
         .expect("scatter_read");
-    let mirror = device(
-        &engine,
-        vec![4, 3],
-        (0..12).map(|index| 100.0 + index as f64).collect(),
-    );
     engine
         .concatenate_read(&[transposed(&source), reversed_columns(&mirror)], 1)
         .expect("concatenate_read");
@@ -415,13 +465,13 @@ fn a_materialized_view_moves_the_staging_counter() {
         (0..12).map(|index| index as f64).collect(),
     );
 
-    // `tril_read` keeps the catalogue's compact-only kernel in this unit, so it stages.
+    // `tril_read` reads the view through its own layout, so it moves the counter not at all.
     let before = engine.staged_reads();
     engine.tril_read(transposed(&source), 0).expect("tril_read");
     assert_eq!(
         engine.staged_reads(),
-        before + 1,
-        "the compact-only triangular entry must report its staging copy"
+        before,
+        "the triangular view entry must not stage its operand"
     );
 
     // `to_contiguous_read` of a view is exactly one materialization.
@@ -489,6 +539,277 @@ fn a_region_view_reads_its_own_elements() {
     assert_eq!(
         read(&engine, &copy),
         vec![at(2, 0), at(1, 0), at(0, 0), at(2, 1), at(1, 1), at(0, 1)]
+    );
+}
+
+/// The logical values a view names, in column-major order, from the source's flat data.
+fn view_values(data: &[f64], shape: &[usize], strides: &[isize], offset: isize) -> Vec<f64> {
+    let count: usize = shape.iter().product();
+    let mut values = Vec::with_capacity(count);
+    for index in 0..count {
+        let mut remaining = index;
+        let mut source = offset;
+        for (axis, &extent) in shape.iter().enumerate() {
+            let coordinate = remaining % extent;
+            remaining /= extent;
+            source += coordinate as isize * strides[axis];
+        }
+        values.push(data[source as usize]);
+    }
+    values
+}
+
+/// The StableHLO dynamic-update result: the operand values with the update window written at
+/// the clamped starts.
+fn dynamic_update_reference(
+    operand: &[f64],
+    operand_shape: &[usize],
+    update: &[f64],
+    update_shape: &[usize],
+    starts: &[i64],
+) -> Vec<f64> {
+    let mut expected = operand.to_vec();
+    let origin: Vec<usize> = starts
+        .iter()
+        .zip(operand_shape)
+        .zip(update_shape)
+        .map(|((&start, &operand_extent), &update_extent)| {
+            start.clamp(0, (operand_extent - update_extent) as i64) as usize
+        })
+        .collect();
+    for (index, &value) in update.iter().enumerate() {
+        let mut remaining = index;
+        let mut destination = 0usize;
+        let mut stride = 1usize;
+        for axis in 0..operand_shape.len() {
+            let coordinate = remaining % update_shape[axis];
+            remaining /= update_shape[axis];
+            destination += (origin[axis] + coordinate) * stride;
+            stride *= operand_shape[axis];
+        }
+        expected[destination] = value;
+    }
+    expected
+}
+
+/// The triangle mask of `values` for a rank-2-or-higher shape, batched on every higher axis.
+fn triangular_reference(values: &[f64], shape: &[usize], k: i64, lower: bool) -> Vec<f64> {
+    let rows = shape[0];
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let row = index % rows;
+            let column = (index / rows) % shape[1];
+            let difference = column as i64 - row as i64;
+            let keeps = if lower {
+                difference <= k
+            } else {
+                difference >= k
+            };
+            if keeps {
+                *value
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+/// The revision-11 view entries mask transposed, offset, negative-stride and rank-9 regions
+/// through their own layouts, with `k` on both ends of the comparison.
+#[test]
+#[ignore = "requires CUDA"]
+fn triangular_reads_mask_borrowed_regions() {
+    let Some(mut engine) = engine() else { return };
+    let data: Vec<f64> = (0..12).map(|index| index as f64 + 1.0).collect();
+    let source = device(&engine, vec![3, 4], data.clone());
+
+    for (flavour, shape, strides, offset) in [
+        ("transposed", vec![4, 3], vec![3, 1], 0),
+        ("offset", vec![2, 2], vec![1, 3], 1),
+        ("compact-offset", vec![3, 2], vec![1, 3], 1),
+        ("negative", vec![3, 2], vec![-1, 3], 2),
+    ] {
+        let logical = view_values(&data, &shape, &strides, offset);
+        for k in [0i64, 1, -1] {
+            for lower in [true, false] {
+                let expected = triangular_reference(&logical, &shape, k, lower);
+                let observed = if lower {
+                    engine.tril_read(region(&source, shape.clone(), strides.clone(), offset), k)
+                } else {
+                    engine.triu_read(region(&source, shape.clone(), strides.clone(), offset), k)
+                }
+                .expect("triangular read");
+                assert_eq!(
+                    observed.shape(),
+                    &shape[..],
+                    "{flavour} k={k} lower={lower}"
+                );
+                assert_eq!(
+                    read(&engine, &observed),
+                    expected,
+                    "{flavour} k={k} lower={lower}"
+                );
+            }
+        }
+    }
+
+    // Nine axes, genuinely transposed: axes 0 and 8 exchange the compact strides, so the view
+    // is not compact logical order with singleton zero strides.
+    let rank_nine_data: Vec<f64> = (0..12).map(|index| index as f64 + 10.0).collect();
+    let rank_nine = device(&engine, vec![2, 2, 3], rank_nine_data.clone());
+    let shape = vec![2usize, 2, 1, 1, 1, 1, 1, 1, 3];
+    let strides = vec![4isize, 2, 2, 2, 2, 2, 2, 2, 1];
+    let logical = view_values(&rank_nine_data, &shape, &strides, 0);
+    for lower in [true, false] {
+        let expected = triangular_reference(&logical, &shape, 0, lower);
+        let observed = if lower {
+            engine.tril_read(region(&rank_nine, shape.clone(), strides.clone(), 0), 0)
+        } else {
+            engine.triu_read(region(&rank_nine, shape.clone(), strides.clone(), 0), 0)
+        }
+        .expect("rank-9 triangular read");
+        assert_eq!(read(&engine, &observed), expected, "rank-9 lower={lower}");
+    }
+
+    // An empty non-flat rank-9 region has a zero grid; the entry must return the empty output
+    // without uploading geometry or launching the zero-grid kernel.
+    let empty_shape = vec![2usize, 2, 1, 1, 1, 1, 1, 1, 0];
+    let empty = engine
+        .tril_read(region(&rank_nine, empty_shape.clone(), strides, 0), 0)
+        .expect("empty rank-9 triangular read");
+    assert_eq!(empty.shape(), &empty_shape[..]);
+    assert!(read(&engine, &empty).is_empty());
+}
+
+/// DUS metadata and float-index refusals run before the output allocation or any operand copy.
+#[test]
+#[ignore = "requires CUDA"]
+fn dynamic_update_slice_refuses_bad_metadata_before_allocating_or_staging() {
+    let Some(mut engine) = engine() else { return };
+    let operand = device(
+        &engine,
+        vec![4, 5],
+        (0..20).map(|index| index as f64).collect(),
+    );
+    let update = device(
+        &engine,
+        vec![2, 3],
+        (0..6).map(|index| index as f64).collect(),
+    );
+    let wrong_dtype = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![2, 3], vec![1i32; 6]).expect("wrong dtype"),
+    )
+    .expect("upload wrong dtype");
+    let wrong_rank = device(&engine, vec![6], (0..6).map(|index| index as f64).collect());
+    let too_wide = device(
+        &engine,
+        vec![5, 3],
+        (0..15).map(|index| index as f64).collect(),
+    );
+    let short_starts = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![1], vec![0i64]).expect("short starts"),
+    )
+    .expect("upload short starts");
+    let rank_two_starts = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![1, 2], vec![0i64, 1]).expect("rank-2 starts"),
+    )
+    .expect("upload rank-2 starts");
+    let bool_starts = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![2], vec![true, false]).expect("bool starts"),
+    )
+    .expect("upload bool starts");
+
+    // A non-compact starts view would stage if the entry resolved it before its metadata checks.
+    let starts_source = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![4], vec![0i64, 1, 2, 3]).expect("starts source"),
+    )
+    .expect("upload starts source");
+    let non_compact_starts = TensorRead::from_view(TensorView::I64(
+        starts_source
+            .as_typed::<i64>()
+            .expect("i64 payload")
+            .backend_region_view(vec![2], vec![2], 0)
+            .expect("strided starts view"),
+    ));
+    let compact_starts = TensorRead::from_tensor(&short_starts);
+
+    let before_staged = engine.staged_reads();
+    let before = engine.runtime().stats();
+    for (label, update, starts) in [
+        (
+            "dtype",
+            TensorRead::from_tensor(&wrong_dtype),
+            non_compact_starts.clone(),
+        ),
+        (
+            "rank",
+            TensorRead::from_tensor(&wrong_rank),
+            non_compact_starts.clone(),
+        ),
+        (
+            "extent",
+            TensorRead::from_tensor(&too_wide),
+            non_compact_starts.clone(),
+        ),
+        (
+            "starts count",
+            TensorRead::from_tensor(&update),
+            compact_starts.clone(),
+        ),
+        (
+            "starts rank",
+            TensorRead::from_tensor(&update),
+            TensorRead::from_tensor(&rank_two_starts),
+        ),
+        (
+            "starts dtype",
+            TensorRead::from_tensor(&update),
+            TensorRead::from_tensor(&bool_starts),
+        ),
+    ] {
+        engine
+            .dynamic_update_slice_read(TensorRead::from_tensor(&operand), update, starts)
+            .expect_err(label);
+    }
+    assert_eq!(
+        engine.staged_reads(),
+        before_staged,
+        "metadata refusals must run before a starts view is staged"
+    );
+    let after = engine.runtime().stats();
+    assert_eq!(
+        after.live_allocations, before.live_allocations,
+        "metadata refusals must run before the output is allocated"
+    );
+    assert_eq!(
+        (after.module_entries, after.artifact_entries),
+        (before.module_entries, before.artifact_entries),
+        "metadata refusals must run before a launch is prepared"
+    );
+
+    // A fractional float start is refused before the update window is written.
+    let fractional = upload_tensor(
+        engine.runtime(),
+        &Tensor::from_vec_col_major(vec![2], vec![1.5f32, 2.0]).expect("fractional starts"),
+    )
+    .expect("upload fractional starts");
+    let error = engine
+        .dynamic_update_slice_read(
+            TensorRead::from_tensor(&operand),
+            TensorRead::from_tensor(&update),
+            TensorRead::from_tensor(&fractional),
+        )
+        .expect_err("a fractional start must be refused");
+    assert!(
+        format!("{error}").contains("not an exactly representable integer"),
+        "unexpected refusal: {error}"
     );
 }
 

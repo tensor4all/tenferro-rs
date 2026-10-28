@@ -35,8 +35,9 @@
   This is marked `// ponytail:` at each site; removing it needs a general-path
   strided-to-strided copy (slice, pad, dynamic-slice, gather, scatter and both diagonal
   entries) which is a separate change.
-- Not in this unit, by scope: `tril`/`triu` (compact-only kernel) and
-  `dynamic_update_slice` (no kernel).
+- Revision 11 closes the boundary this unit left: `tril`/`triu` now read their operand
+  through the view entries, and `dynamic_update_slice` is served by the window write. The flat
+  triangle entries remain the compact fast path, and neither family stages a strided view.
 - The gather, scatter and dynamic-slice index/starts operand now resolves through
   `index_operand`. The catalogue's index planners require a compact layout with offset zero
   (`require_compact`). An owned tensor is that already, and a staged compact copy is too. A
@@ -51,14 +52,15 @@
 ## Verification conclusions and constraints
 
 - `CudaEngine::staged_reads` counts operand materializations only: the `TensorRead::View`
-  branch of `device_read`. `tril_read` on a view and `to_contiguous_read` each move it by one,
-  which is the counter's negative control.
+  branch of `device_read`. `to_contiguous_read` and a non-compact starts operand each move it
+  by one, which is the counter's negative control.
 - The no-staging unit test drives slice, dynamic-slice, pad, reverse, extract/embed diagonal,
-  gather, scatter and concatenate on a strided view and requires the counter not to move;
-  before this change each view operand cost one staged read (two for scatter).
+  gather, scatter, concatenate, tril/triu and dynamic-update-slice on a strided view and
+  requires the counter not to move; before this change each view operand cost one staged read
+  (two for scatter).
 - Value tests compare slice, dynamic slice, pad, reverse, gather's operand, scatter's operand
-  and update window, concatenate, and both diagonal entries on transposed, offset and
-  negative-stride f64 views. Complex dtype covers slice, reverse and both diagonal entries;
+  and update window, concatenate, both diagonal entries, the triangular masks and
+  dynamic-update-slice on transposed, offset and negative-stride f64 views. Complex dtype covers slice, reverse and both diagonal entries;
   empty operands cover slice, reverse, pad, concatenate, scatter and both diagonal entries.
   Dynamic slice and gather are f64-only and use live operands. The owned twins are exercised
   by the pre-existing suites.
