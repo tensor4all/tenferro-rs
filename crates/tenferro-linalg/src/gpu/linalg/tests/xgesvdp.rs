@@ -1,9 +1,5 @@
-// Import the parent's items by name rather than with a glob. The glob would
-// also pull in `cubecl::prelude::ComplexCore`, whose default `conj(self)`
-// body is `unexpanded!()`; because it takes the receiver by value it wins
-// method resolution over `num_complex`'s inherent `conj(&self)`, and the
-// host-side checks below then panic with "Unexpanded Cube functions should
-// not be called" instead of computing a conjugate.
+// Import the parent's items by name rather than with a glob so the CUDA
+// surface used by these checks stays explicit.
 use super::super::{svd_typed, SvdDriver};
 use num_complex::Complex64;
 use tenferro_gpu::cuda::{download_tensor, upload_tensor, CudaDeviceId, CudaEngine};
@@ -11,7 +7,7 @@ use tenferro_tensor::Tensor;
 
 #[test]
 #[ignore = "requires CUDA; full factors have no public driver option"]
-fn test_cubecl_svd_xgesvdp_full_and_economy() {
+fn test_cuda_svd_xgesvdp_full_and_economy() {
     let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     for (m, n) in [(7, 3), (3, 7)] {
         let data: Vec<_> = (0..m * n)

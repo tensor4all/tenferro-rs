@@ -45,9 +45,6 @@ impl From<GpuError> for CudaEngineError {
 const MAX_PENDING_RUNS: usize = 16;
 
 /// The runtime engine id this backend registers under.
-///
-/// The same identifier the CubeCL-backed engine uses, because both are implementations of the
-/// same backend: the cutover replaces the implementation, not the registration name.
 pub(crate) const DEFAULT_RUNTIME_ENGINE_ID: &str = "tenferro.cuda.default.v1";
 
 /// The built-in CUDA engine id, which is a valid identifier by construction.

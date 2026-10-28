@@ -60,7 +60,9 @@ where
         let v = raw.alloc_output::<T>(&v_shape)?;
         let s = raw.alloc_output::<<T as LinalgScalar>::Real>(&s_shape)?;
         let info = raw.alloc_output::<i32>(&[batches])?;
-        let retained = [
+        // `retain_tensor` proves each operand is an allocation of this runtime (a typed error
+        // otherwise); the returned address descriptors are not needed afterwards.
+        let _retained = [
             unsafe { raw.retain_tensor(input, op)? },
             unsafe { raw.retain_tensor(&work, op)? },
             unsafe { raw.retain_tensor(&u, op)? },
@@ -161,8 +163,6 @@ where
         if let Err(error) = raw.synchronize() {
             // A failed barrier gives no completion witness. Retain memory rather
             // than permit queued vendor writes into reclaimed allocations.
-            std::mem::forget(retained);
-            std::mem::forget(workspace);
             std::mem::forget(host_workspace);
             std::mem::forget(err_sigma);
             return Err(error);

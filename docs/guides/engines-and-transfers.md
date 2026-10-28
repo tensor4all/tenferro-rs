@@ -15,7 +15,7 @@ transfer reasoning and measurements in
 ## One engine, one device, one stream
 
 `CudaEngine::open(ordinal)` opens the device and returns a value you hold. It
-owns the CubeCL runtime, the device's stream, the cuTENSOR/cuBLAS/cuSOLVER
+owns the CUDA runtime, the device's stream, the cuTENSOR/cuBLAS/cuSOLVER
 handles and the engine's caches. Every operation borrows it through `&mut`, so
 there is no entry protocol: a chain of dependent operations is just a chain of
 calls, and one `flush` or `synchronize` covers them.
@@ -84,7 +84,7 @@ explicit host barrier before a download or a host read.
 `flush` reports a producer's failures and dispatches the host task queue without
 retiring staged bytes; that is why the boundary itself does not wait for device
 progress. Host waits still happen at: the explicit `synchronize`, readbacks and
-host exports, CubeCL's own staging-policy retirement when a preceding kernel
+host exports, the runtime's own staging-policy retirement when a preceding kernel
 trips it, cross-stream resource resolution under GC backpressure, and documented
 destruction/error-recovery paths. `flush` is a submission boundary, not a
 synchronization.
@@ -166,7 +166,7 @@ are not guaranteed to be 0/1; `download_tensor` decodes them.
 
 - **One device per engine.** `CudaEngine::open` selects one device and captures its stream; the
   engine's operations run on that stream even if other code changes the ambient one.
-- **Raw scopes restore what they touched.** `with_raw` and `with_cubecl` save the calling thread's
+- **Raw scopes restore what they touched.** `with_raw` saves the calling thread's
   device/context, activate this engine's primary context for the callback, and restore the previous
   one on return, on `Err` and on unwind. Entering a scope is not a host barrier.
 - **`Drop` never panics and never reports.** Dropping the engine releases its resources; submission

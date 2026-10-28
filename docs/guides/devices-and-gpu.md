@@ -26,7 +26,7 @@ see [CUDA engines and pinned transfers](engines-and-transfers.md).
 | Provider | Status | Feature | Notes |
 | --- | --- | --- | --- |
 | CPU | Supported | default CPU provider features | Host execution |
-| CUDA | Supported | `cuda` | NVIDIA CUDA through CubeCL-CUDA plus CUDA libraries |
+| CUDA | Supported | `cuda` | Native NVIDIA CUDA through the `t4a-cuda-kernels` catalogue plus CUDA libraries |
 | WebGPU | Experimental | `webgpu` | Explicit transfer, limited `dot_general`/einsum, and Apple shared CPU/Metal FFT |
 | ROCm | Not supported for execution | `rocm` reserved | Future compile-only substrate; no runtime quickstart |
 
@@ -54,7 +54,7 @@ WebGPU memory, and host code may copy a host view into compact host memory, but
 tenferro does not use that copy as a hidden CPU/GPU transfer.
 
 CUDA transfers make one host-side copy at most. `upload_tensor` borrows the
-host tensor, so CubeCL copies it once into a staging buffer before queueing the
+host tensor, so the runtime copies it once into a staging buffer before queueing the
 device write; the call returns without waiting, and the host tensor can be
 changed or dropped immediately. `download_tensor` has the driver copy straight
 into the vector the returned host tensor owns and waits for that copy.
@@ -196,7 +196,7 @@ the package family or exact archive used by the current GPU workflows.
 
 | Component | Supported runtime contract | Loader ABI | CI-tested setup | Override |
 | --- | --- | --- | --- | --- |
-| NVIDIA driver API | CUDA 12.6.2 minimum; CUDA 12.8 or newer enables the complete CubeCL feature set, including 12.8 tensor-map extensions | Loaded dynamically through `cudarc`; the selected NVRTC must not be newer than the driver API | RunPod accepts 12.6-or-newer drivers and selects a matching 12.6 or 12.8 runtime tier | System driver; no tenferro override |
+| NVIDIA driver API | CUDA 12.6.2 minimum; tenferro compiles against CUDA 12.8 `cudarc` bindings and resolves driver/NVRTC functions dynamically against the loaded stack | Loaded dynamically through `cudarc`; the selected NVRTC must not be newer than the driver API | RunPod accepts 12.6-or-newer drivers and selects a matching 12.6 or 12.8 runtime tier | System driver; no tenferro override |
 | CUDA runtime and NVRTC | 12.6.2 baseline; 12.8 full-capability tier | CUDA 12.x runtime/NVRTC libraries | `cuda-cudart-12-4`/`cuda-nvrtc-12-4` and `cuda-cudart-12-8`/`cuda-nvrtc-12-8` runtime trees | `CUDA_PATH`, `LD_LIBRARY_PATH` |
 | cuTENSOR | CUDA 12 build using the v2 API; on compute capability 7.0, use 2.1.x because tenferro rejects 2.2 and newer on that GPU | `libcutensor.so.2`, then `libcutensor.so` | cuTENSOR `2.6.0.4` CUDA 12 archive | `TENFERRO_CUTENSOR_PATH` |
 | cuBLAS | CUDA 12 library matching the selected runtime tier | `libcublas.so.12`, then `libcublas.so` | `libcublas-12-4` and `libcublas-12-8` package families; patch version follows NVIDIA's package repository | `TENFERRO_CUBLAS_PATH` |
@@ -234,12 +234,11 @@ export TENFERRO_CUTENSOR_PATH=/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutens
 export TENFERRO_CUSOLVER_PATH=$CUDA_PATH/lib64/libcusolver.so.12
 export TENFERRO_CUBLAS_PATH=$CUDA_PATH/lib64/libcublas.so.12
 export TENFERRO_CUFFT_PATH=$CUDA_PATH/lib64/libcufft.so.11
-export CUBECL_DEBUG_LOG=0
 ```
 
 CUDA operations implemented through NVIDIA libraries return typed load or
 provider errors when the required library is missing. They do not silently use
-a slower native CubeCL kernel as a CUDA fallback.
+a slower native kernel as a CUDA fallback.
 
 On compute capability 7.0, select cuTENSOR 2.1.x with
 `TENFERRO_CUTENSOR_PATH`. tenferro rejects cuTENSOR 2.2 and newer because that
@@ -408,7 +407,7 @@ plan for the CPU backend (or CUDA) for those steps, with explicit transfers.
 | `dot_general`, `dot_general_with_conj` | `F32`, `C32` | CubeK-backed BGEMM planner; `C32` conjugation is handled by the CubeK complex GEMM API. Supports rank-2, batched, and same-device packed operand layouts covered by tests |
 | Binary einsum lowering to `dot_general` | `F32`, `C32` | Eager `F32`/`C32` and traced `F32` paths are covered when inputs are explicitly uploaded to WebGPU |
 | 1D CFFT/IFFT, one-sided RFFT/IRFFT on Apple Metal | `C32` CFFT/IFFT; `F32` RFFT; `C32` IRFFT | CubeK-backed, explicit backend selection, power-of-two length at least 2; see the FFT guide for padding and length constraints |
-| `transpose`, `to_contiguous_read` | `F32`, `I32` | Same-device native CubeCL materialization; transpose and strided-view canonicalization share one validated dimension-fusion plan, and exact compact 2D transpose uses a compile-time-configured shared-memory tile |
+| `transpose`, `to_contiguous_read` | `F32`, `I32` | Same-device native materialization; transpose and strided-view canonicalization share one validated dimension-fusion plan, and exact compact 2D transpose uses a compile-time-configured shared-memory tile |
 | `dot_general` with zero contracting size | No WebGPU implementation | Returns an error until CubeK behavior is validated |
 | `dot_general` for `F64`, `C64` | No WebGPU implementation | Returns an error; no CPU fallback |
 | Elementwise and analytic ops | No WebGPU implementation | Returns an error |

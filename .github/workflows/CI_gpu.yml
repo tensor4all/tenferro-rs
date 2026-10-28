@@ -33,7 +33,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
   PJRT_ARCHIVE: pjrt-tests.tar.zst
   CUDA_TUTORIAL_ARCHIVE: cuda-tutorial.tar.zst

@@ -127,9 +127,9 @@ impl PreparedFusion {
 }
 
 /// The runtime counters a prepare/warm pair is judged by.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[doc(hidden)]
-pub struct PrepareCounters {
+pub(crate) struct PrepareCounters {
     /// NVRTC compilation attempts so far.
     pub compile_attempts: u64,
     /// Artifact-cache hits so far.
@@ -138,9 +138,10 @@ pub struct PrepareCounters {
     pub module_loads: u64,
 }
 
+#[cfg(test)]
 impl PreparedFusion {
     /// The runtime's prepare counters, for a cold/warm comparison.
-    pub fn counters(&self) -> PrepareCounters {
+    pub(crate) fn counters(&self) -> PrepareCounters {
         PrepareCounters {
             compile_attempts: self.runtime.compile_attempts(),
             artifact_hits: self.runtime.artifact_cache_hits(),
@@ -148,3 +149,6 @@ impl PreparedFusion {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

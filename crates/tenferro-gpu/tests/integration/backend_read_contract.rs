@@ -7,10 +7,10 @@
 //! silently reject borrowed views. What this contract still watches is the part
 //! the compiler does not enforce: CUDA kernels consume owned compact tensors, so
 //! `tenferro-gpu` has to materialize a view through `to_contiguous_read` and
-//! then run the owned kernel. The operation bodies live in the `cubecl::ops`
-//! module after #1929 moved them off the backend owner, so that module is what
-//! the entry-point scan reads; the erased session side is covered by a
-//! compile-time assertion that `CudaEngine` implements every family.
+//! then run the owned kernel. The CUDA operation bodies live in
+//! `src/cuda/structural.rs`, so that module is what the entry-point scan reads;
+//! the erased session side is covered by a compile-time assertion that
+//! `CudaEngine` implements every family.
 
 use std::collections::BTreeSet;
 use std::fs;

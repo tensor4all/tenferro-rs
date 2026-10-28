@@ -5335,7 +5335,7 @@ fn empty_contraction(lhs_shape: &[usize], config: &tenferro_tensor::DotGeneralCo
         .any(|&axis| lhs_shape[axis] == 0)
 }
 
-/// A numerical failure with the kind the CPU and CubeCL paths report.
+/// A numerical failure with the kind the CPU and CUDA paths report.
 fn numerical_failure(op: &'static str, detail: &'static str) -> crate::Error {
     crate::Error::extension(
         op,

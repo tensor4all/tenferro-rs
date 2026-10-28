@@ -1,12 +1,7 @@
 #[path = "integration/backend_read_contract.rs"]
 mod backend_read_contract;
-#[cfg(all(feature = "cuda", not(feature = "cuda")))]
-#[path = "integration/cubecl_launch_contract.rs"]
-mod cubecl_launch_contract;
 #[path = "integration/engine_run.rs"]
 mod engine_run;
-#[path = "integration/kernel_metadata_contract.rs"]
-mod kernel_metadata_contract;
 #[path = "integration/public_surface_contract.rs"]
 mod public_surface_contract;
 #[path = "integration/session_contract.rs"]

@@ -395,8 +395,8 @@ fn backend_import_rejects_a_provider_length_whose_byte_size_overflows() {
 #[test]
 fn backend_roots_map_provider_family_to_kind() {
     for (family, kind) in [
-        ("cubecl", ProviderKind::Cuda),
-        ("cubecl-webgpu", ProviderKind::WebGpu),
+        ("cuda", ProviderKind::Cuda),
+        ("webgpu", ProviderKind::WebGpu),
         ("test-provider", ProviderKind::Other("test-provider")),
     ] {
         let owner = import_provider(ProviderBuffer::identified(family, 3));

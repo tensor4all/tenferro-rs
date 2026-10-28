@@ -509,8 +509,8 @@ fn allocate_cuda_zero_output(
     dtype: DType,
     shape: &[usize],
 ) -> tenferro_tensor::Result<Tensor> {
-    // The new path's allocation is a zero-filled device allocation for every dtype it serves,
-    // complex included, so the real-then-cast workaround CubeCL needed is gone.
+    // The allocation is zero-filled for every dtype it serves, complex included, so the
+    // former real-then-cast workaround is gone.
     session.alloc_output(dtype, shape).map_err(|source| {
         tenferro_tensor::Error::runtime_state_source(OP, CudaFftPlacementError { source })
     })

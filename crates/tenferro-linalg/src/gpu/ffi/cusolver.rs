@@ -1475,7 +1475,7 @@ unsafe fn load_symbol<T: Copy>(
         // exact FFI function-pointer type declared in this module's vtables.
         let symbol = lib.get::<T>(name).map_err(|err| {
             Error::io_source(
-                "cubecl_linalg",
+                "cuda_linalg",
                 CudaLibraryLoadError::Symbol {
                     library: library_name,
                     name: String::from_utf8_lossy(name)
@@ -1556,7 +1556,7 @@ impl CusolverLibrary {
 
         match last_source {
             Some(source) => Err(Error::io_source(
-                "cubecl_linalg",
+                "cuda_linalg",
                 CudaLibraryLoadError::Library {
                     library: "cuSOLVER",
                     paths: paths.join(", "),
@@ -1565,7 +1565,7 @@ impl CusolverLibrary {
                 },
             )),
             None => Err(Error::io_source(
-                "cubecl_linalg",
+                "cuda_linalg",
                 std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     "no cuSOLVER library search paths configured",
@@ -1809,10 +1809,10 @@ impl CusolverDnHandle {
         let lib = CusolverLibrary::load()?;
         let mut raw = std::ptr::null_mut();
         let status = unsafe { (lib.vtable.create)(&mut raw) };
-        lib.check_status(status, "cubecl_linalg", "cusolverDnCreate")?;
+        lib.check_status(status, "cuda_linalg", "cusolverDnCreate")?;
         let mut params = std::ptr::null_mut();
         let status = unsafe { (lib.vtable.create_params)(&mut params) };
-        if let Err(error) = lib.check_status(status, "cubecl_linalg", "cusolverDnCreateParams") {
+        if let Err(error) = lib.check_status(status, "cuda_linalg", "cusolverDnCreateParams") {
             let destroy_status = unsafe { (lib.vtable.destroy)(raw) };
             report_cusolver_destroy_status(destroy_status, "cusolverDnDestroy");
             return Err(error);

@@ -178,16 +178,6 @@ fn qr_options_routes_owned_read_and_typed_surfaces_through_backend_hooks() {
 
 #[test]
 fn tenferro_gpu_no_longer_owns_linalg_specific_ffi_or_kernels() {
-    for path in [
-        "tenferro-gpu/src/cubecl/ffi/cusolver.rs",
-        "tenferro-gpu/src/kernels/linalg.rs",
-    ] {
-        assert!(
-            !workspace_root().join(path).exists(),
-            "{path} should be owned by tenferro-linalg, not tenferro-gpu"
-        );
-    }
-
     let cuda_mod = read_workspace_source("tenferro-gpu/src/cuda/structural.rs");
     for needle in ["CudaLinalgHandles", "linalg_handles", "cusolver", "cublas"] {
         assert!(
@@ -405,7 +395,7 @@ fn cuda_rrqr_has_no_payload_download_or_cpu_fallback() {
 }
 
 #[test]
-fn cubecl_linalg_overrides_svd_read_with_backend_canonicalization() {
+fn cuda_linalg_overrides_svd_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
     let helper_source = source_section(
         &source,
@@ -419,14 +409,14 @@ fn cubecl_linalg_overrides_svd_read_with_backend_canonicalization() {
     ] {
         assert!(
             helper_source.contains(needle),
-            "CubeCL svd_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+            "CUDA svd_read should canonicalize borrowed GPU views on the backend: missing {needle}"
         );
     }
 
     let svd_read_source = source_section(&source, "fn svd_read(", "fn svd_with_options_read");
     assert!(
         svd_read_source.contains("svd_read_with_driver(self, input, SvdDriver::Auto)"),
-        "CubeCL svd_read should keep the default driver policy"
+        "CUDA svd_read should keep the default driver policy"
     );
     let with_options_source = source_section(&source, "fn svd_with_options_read", "fn qr");
     for needle in [
@@ -435,7 +425,7 @@ fn cubecl_linalg_overrides_svd_read_with_backend_canonicalization() {
     ] {
         assert!(
             with_options_source.contains(needle),
-            "CubeCL svd_with_options_read should forward the driver and apply the gauge: missing {needle}"
+            "CUDA svd_with_options_read should forward the driver and apply the gauge: missing {needle}"
         );
     }
 
@@ -446,13 +436,13 @@ fn cubecl_linalg_overrides_svd_read_with_backend_canonicalization() {
     ] {
         assert!(
             values_read_source.contains(needle),
-            "CubeCL values-only read hooks should share the driver-carrying helper: missing {needle}"
+            "CUDA values-only read hooks should share the driver-carrying helper: missing {needle}"
         );
     }
 }
 
 #[test]
-fn cubecl_linalg_overrides_qr_read_with_backend_canonicalization() {
+fn cuda_linalg_overrides_qr_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
     let qr_read_source = source_section(&source, "fn qr_read", "fn eigh");
 
@@ -463,13 +453,13 @@ fn cubecl_linalg_overrides_qr_read_with_backend_canonicalization() {
     ] {
         assert!(
             qr_read_source.contains(needle),
-            "CubeCL qr_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+            "CUDA qr_read should canonicalize borrowed GPU views on the backend: missing {needle}"
         );
     }
 }
 
 #[test]
-fn cubecl_linalg_overrides_eigh_read_with_backend_canonicalization() {
+fn cuda_linalg_overrides_eigh_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
     let helper_source = source_section(
         &source,
@@ -483,14 +473,14 @@ fn cubecl_linalg_overrides_eigh_read_with_backend_canonicalization() {
     ] {
         assert!(
             helper_source.contains(needle),
-            "CubeCL eigh_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+            "CUDA eigh_read should canonicalize borrowed GPU views on the backend: missing {needle}"
         );
     }
 
     let eigh_read_source = source_section(&source, "fn eigh_read(", "fn eig_read");
     assert!(
         eigh_read_source.contains("eigh_read_with_driver(self, input, EighDriver::Auto)"),
-        "CubeCL eigh_read should keep the default driver policy"
+        "CUDA eigh_read should keep the default driver policy"
     );
     let with_options_source = source_section(&source, "fn eigh_with_options_read", "fn eigh_read(");
     for needle in [
@@ -499,7 +489,7 @@ fn cubecl_linalg_overrides_eigh_read_with_backend_canonicalization() {
     ] {
         assert!(
             with_options_source.contains(needle),
-            "CubeCL eigh_with_options_read should forward the driver and apply the gauge: missing {needle}"
+            "CUDA eigh_with_options_read should forward the driver and apply the gauge: missing {needle}"
         );
     }
 
@@ -510,7 +500,7 @@ fn cubecl_linalg_overrides_eigh_read_with_backend_canonicalization() {
     ] {
         assert!(
             values_read_source.contains(needle),
-            "CubeCL values-only eigh read hooks should share the driver-carrying helper: missing {needle}"
+            "CUDA values-only eigh read hooks should share the driver-carrying helper: missing {needle}"
         );
     }
 }
@@ -874,7 +864,7 @@ fn gpu_eigh_values_uses_cusolver_no_vector_mode() {
     );
     assert!(
         gpu_mod.contains("fn eigh_values"),
-        "CubeCL linalg backend should override eigh_values"
+        "CUDA linalg backend should override eigh_values"
     );
     assert!(
         ffi.contains("NoVector = 0"),
@@ -1050,7 +1040,7 @@ fn gpu_lu_shape_extent_k_is_runtime_not_compile_time_specialized() {
 }
 
 #[test]
-fn cubecl_linalg_overrides_cholesky_read_with_backend_canonicalization() {
+fn cuda_linalg_overrides_cholesky_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
     let cholesky_read_source = source_section(&source, "fn cholesky_read", "fn lu_read");
 
@@ -1061,13 +1051,13 @@ fn cubecl_linalg_overrides_cholesky_read_with_backend_canonicalization() {
     ] {
         assert!(
             cholesky_read_source.contains(needle),
-            "CubeCL cholesky_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+            "CUDA cholesky_read should canonicalize borrowed GPU views on the backend: missing {needle}"
         );
     }
 }
 
 #[test]
-fn cubecl_linalg_overrides_lu_read_with_backend_canonicalization() {
+fn cuda_linalg_overrides_lu_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
     let lu_read_source = source_section(&source, "fn lu_read", "fn full_piv_lu_read");
 
@@ -1078,13 +1068,13 @@ fn cubecl_linalg_overrides_lu_read_with_backend_canonicalization() {
     ] {
         assert!(
             lu_read_source.contains(needle),
-            "CubeCL lu_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+            "CUDA lu_read should canonicalize borrowed GPU views on the backend: missing {needle}"
         );
     }
 }
 
 #[test]
-fn cubecl_linalg_overrides_full_piv_lu_read_with_backend_canonicalization() {
+fn cuda_linalg_overrides_full_piv_lu_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
     let full_piv_lu_read_source = source_section(&source, "fn full_piv_lu_read", "fn eig_read");
 
@@ -1095,13 +1085,13 @@ fn cubecl_linalg_overrides_full_piv_lu_read_with_backend_canonicalization() {
     ] {
         assert!(
             full_piv_lu_read_source.contains(needle),
-            "CubeCL full_piv_lu_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+            "CUDA full_piv_lu_read should canonicalize borrowed GPU views on the backend: missing {needle}"
         );
     }
 }
 
 #[test]
-fn cubecl_linalg_overrides_eig_read_with_backend_canonicalization() {
+fn cuda_linalg_overrides_eig_read_with_backend_canonicalization() {
     let source = gpu_mod_source();
     let eig_read_source = source_section(&source, "fn eig_read", "fn eigh_values");
 
@@ -1112,7 +1102,7 @@ fn cubecl_linalg_overrides_eig_read_with_backend_canonicalization() {
     ] {
         assert!(
             eig_read_source.contains(needle),
-            "CubeCL eig_read should canonicalize borrowed GPU views on the backend: missing {needle}"
+            "CUDA eig_read should canonicalize borrowed GPU views on the backend: missing {needle}"
         );
     }
 }

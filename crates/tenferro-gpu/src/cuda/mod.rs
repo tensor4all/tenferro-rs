@@ -55,8 +55,7 @@ impl crate::gpu::Backend for CudaBackend {
     type Allocation = t4a_cuda_runtime::Buffer;
 }
 
-/// Whether any CUDA device is usable, probed through the new runtime rather than the
-/// CubeCL path, so a new-path test cannot be skipped because the old backend failed.
+/// Whether any CUDA device is usable, probed through the CUDA runtime.
 #[doc(hidden)]
 pub fn gpu_available() -> bool {
     let available = t4a_cuda_runtime::device_count()
@@ -84,9 +83,9 @@ mod pinned;
 mod publication;
 pub mod raw;
 mod runtime;
-pub mod runtime_adapter;
+mod runtime_adapter;
 
-pub use runtime_adapter::cuda_runtime_engine_registration;
+pub use runtime_adapter::{cuda_runtime_engine_registration, cuda_runtime_hardware_class};
 mod storage;
 mod structural;
 mod transfer;
@@ -95,9 +94,8 @@ pub(crate) mod vendor;
 mod capability;
 pub use capability::cuda_capabilities;
 pub use cutensor::{Contraction, Cutensor, Operand};
-pub use dispatch::Dispatcher;
 pub use engine::{CudaEngine, CudaEngineError};
-pub use fusion::{PrepareCounters, PreparedFusion};
+pub use fusion::PreparedFusion;
 pub use launch::{device_buffer, layout_arg, KernelModules};
 pub use pending::{PendingDownload, PendingUpload, RejectedTransfer, TransferSubmitError};
 pub use pinned::PinnedHostBuffer;
@@ -106,6 +104,5 @@ pub use publication::{
     SourcePublication,
 };
 pub use runtime::{CudaRuntime, CudaRuntimeIdentity};
-pub use storage::CudaStorage;
 pub use transfer::{download_pending, download_tensor, upload_pending, upload_tensor};
 pub use vendor::{Cublas, GemmRequest};

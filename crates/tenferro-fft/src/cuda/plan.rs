@@ -5,7 +5,7 @@
 //! `cufftMakePlanMany64`, and a session-scoped workspace allocation combined
 //! with `cufftSetWorkArea` inside the raw execution session. The plan entry
 //! retains only the required workspace byte size; each execution allocates a
-//! fresh CubeCL workspace on the public raw session so no session-independent
+//! fresh device workspace on the public raw session so no session-independent
 //! device allocation must survive across `ExtensionCacheStore` lifetimes.
 //! Every execution synchronizes the stream inside that raw session before the
 //! work area is released, so a cached plan has no queued work that references
@@ -380,12 +380,12 @@ pub(crate) fn merge_execution_errors(
 ///
 // INVARIANT: stream identity is intentionally omitted from `CufftPlanKey`;
 // mutable `CudaEngine` access serializes the runtime's one selectable
-// current CubeCL stream, and the entry is reachable only through the store of
+// current stream, and the entry is reachable only through the store of
 // that one engine. A selectable multi-stream runtime must make stream identity
 // part of this key before concurrent plan reuse is allowed.
 //
 // INVARIANT: the entry retains the plan handle and the required workspace byte
-// size only. The CubeCL workspace allocation is session-scoped and is created
+// size only. The device workspace allocation is session-scoped and is created
 // fresh inside each raw execution session, so no session-independent device
 // allocation outlives the plan handle in this cache.
 pub(crate) struct CufftPlanEntry {
@@ -412,7 +412,7 @@ unsafe impl Sync for CufftPlanEntry {}
 pub(crate) fn retained_entry_bytes() -> usize {
     // The cached entry owns only host-side metadata: the library and runtime
     // witnesses, the plan handle, the workspace-size requirement, the key, and
-    // the retirement witness. The CubeCL workspace allocation itself is
+    // the retirement witness. The device workspace allocation itself is
     // session-scoped and created fresh inside each raw execution session, so it
     // is not charged here.
     size_of::<Arc<CufftLibrary>>()

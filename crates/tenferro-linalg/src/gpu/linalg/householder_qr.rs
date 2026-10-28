@@ -78,7 +78,7 @@ where
         return Ok(());
     }
     // The explicit reflector vectors are device-local function scratch, not Q.
-    // `with_raw` flushes this CubeCL build before the vendor calls below.
+    // `with_raw` flushes queued runtime work before the vendor calls below.
     let v = build_explicit_v(backend, packed, k, op)?;
     let m_i32 = as_i32(m, op, "m")?;
     let k_i32 = as_i32(k, op, "k")?;
@@ -372,9 +372,11 @@ where
         // exactly after the first, and `block_ref` is no longer than the remaining bytes.
         unsafe {
             raw.copy_bytes(
-                // SAFETY: the offset is within the allocation this call owns; `byte_len` is the
-                // length of the first factor, so the sum stays inside the second.
-                unsafe { output_ref.raw_ptr().cast::<u8>().add(packed_ref.byte_len()) }.cast(),
+                output_ref
+                    .raw_ptr()
+                    .cast::<u8>()
+                    .add(packed_ref.byte_len())
+                    .cast(),
                 block_ref.raw_ptr() as *const _,
                 block_ref.byte_len(),
                 op,
@@ -394,15 +396,11 @@ where
         // starts exactly after the packed factor.
         unsafe {
             raw.copy_bytes(
-                // SAFETY: the offset is within the allocation this call owns; `byte_len` is the
-                // length of the first factor, so the sum stays inside the second.
-                unsafe {
-                    output_coeff_ref
-                        .raw_ptr()
-                        .cast::<u8>()
-                        .add(coeff_ref.byte_len())
-                }
-                .cast(),
+                output_coeff_ref
+                    .raw_ptr()
+                    .cast::<u8>()
+                    .add(coeff_ref.byte_len())
+                    .cast(),
                 trailing_ref.raw_ptr() as *const _,
                 trailing_ref.byte_len(),
                 op,

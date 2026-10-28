@@ -13,27 +13,23 @@ static NEXT_ALLOCATION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 /// The seam buffer carries the runtime's domain identity, a stable allocation id and the
 /// runtime's own allocation handle. `t4a-cuda-runtime` addresses are stable for the
 /// allocation's life, so no relocation pin is needed.
-#[doc(hidden)]
-pub struct CudaStorage {
+pub(crate) struct CudaStorage {
     pub(crate) buffer: crate::gpu::Buffer<CudaBackend>,
 }
 
 impl CudaStorage {
     /// Number of bytes in the allocation.
-    #[doc(hidden)]
-    pub fn bytes(&self) -> usize {
+    pub(crate) fn bytes(&self) -> usize {
         self.buffer.len()
     }
 
     /// Device ordinal of the allocation.
-    #[doc(hidden)]
-    pub fn device_ordinal(&self) -> usize {
+    pub(crate) fn device_ordinal(&self) -> usize {
         self.buffer.identity().device
     }
 
     /// The runtime's allocation domain.
-    #[doc(hidden)]
-    pub fn domain(&self) -> AllocationDomainId {
+    pub(crate) fn domain(&self) -> AllocationDomainId {
         self.buffer.identity().domain
     }
 

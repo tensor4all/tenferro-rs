@@ -8,10 +8,10 @@ raw-scope launch, retention) and `t4a-cuda-kernels#15`/`#16` (ABI revisions 9 an
 
 U1 delivers the foundation only: device discovery, one engine over one
 `t4a-cuda-runtime`, storage with allocation-domain identity, transfers, pending
-handles, source publication, workspace counters, the error vocabulary, and the two
-seam traits with CUDA implementations stubbed. **No kernel dispatch and no vendor
-call lands in U1**; its acceptance is that the existing CUDA device, storage,
-transfer, publication and consumer-copy tests run against the new path.
+handles, source publication, workspace counters, and the error vocabulary.
+**No kernel dispatch and no vendor call lands in U1**; its acceptance is that the
+existing CUDA device, storage, transfer, publication and consumer-copy tests run
+against the new path.
 
 ## 1. Module layout
 
@@ -31,7 +31,6 @@ crates/tenferro-gpu/src/
     storage.rs             Buffer internals: t4a_cuda_runtime::Buffer/UninitBuffer
     transfer.rs            upload/download/pending over the runtime's copies
     publication.rs         the CUDA publication guard
-    vendor.rs              VendorOps stub: every route returns Unsupported
 ```
 
 `src/lib.rs` keeps exporting the same `cuda::` names, so no downstream import
@@ -39,44 +38,7 @@ changes in U1. `src/cubecl/` stays in place and keeps serving the operation
 surface until U2 replaces it; the new tree is private until then (the parent
 design's "no dual-storage switch").
 
-## 2. The seam
-
-Two traits, as settled in the parent design (§3.1-3.3):
-
-```rust
-/// One runtime's source of launchable programs. Implemented by the kernel
-/// adapter (U2/U3); in U1 the CUDA implementation returns `Unsupported`.
-pub trait KernelSource {
-    fn plan(&mut self, op: &OpDescriptor) -> Result<Program, GpuError>;
-}
-
-/// The vendor libraries a backend serves: BLAS, contraction, linalg, FFT.
-/// Implemented by the CUDA adapters in U4; in U1 every method returns
-/// `Unsupported`.
-pub trait VendorOps {
-    fn gemm(&mut self, call: &GemmCall<'_>) -> Result<(), GpuError>;
-    fn contraction(&mut self, call: &ContractionCall<'_>) -> Result<(), GpuError>;
-    fn linalg(&mut self, call: &LinalgCall<'_>) -> Result<(), GpuError>;
-    fn fft(&mut self, call: &FftCall<'_>) -> Result<(), GpuError>;
-}
-```
-
-The traits are used as `Box<dyn KernelSource + Send>` / `Box<dyn VendorOps + Send>`:
-the engine moves to another thread, so its parts must. `CudaEngine` keeps `!Sync`
-explicitly (`PhantomData<Cell<()>>`) rather than relying on the runtime's auto
-traits, and a compile-time assertion in the engine module pins `Send` and `!Sync`.
-
-`Program` is the backend-neutral plan type of U2/U3: an opaque handle produced by
-`KernelSource::plan` and consumed by the CUDA launcher, holding the runtime's bound
-function plus the prepared artifact key. In U1 it is a placeholder type with no
-constructor outside `Unsupported`. The vendor call descriptors (`GemmCall`,
-`ContractionCall`, `LinalgCall`, `FftCall`) borrow the engine's operands and scalars;
-their concrete shapes land with their adapters in U4, and cuFFT descriptors stay in
-`tenferro-fft` (the adapter there calls into the engine through `VendorOps`).
-
-No storage trait: `gpu::Buffer` is a concrete type holding the backend handle in a
-private enum (`StorageHandle::Cuda(...)`, later `Rocm(...)`). A third trait or a
-generic storage parameter is a design change, not a detail.
+## 2. The shared error vocabulary
 
 `GpuError` carries the shared causes — `Unavailable`, `Unsupported`,
 `ForeignDomain`, `Backpressure`, `Closed`, `Transfer { staged: bool }`,
@@ -178,9 +140,6 @@ The invariants those tests encode, restated so U1 can be reviewed against them:
 
 ## 5. What U1 deliberately does not do
 
-- No `KernelSource`/`VendorOps` implementation beyond `Unsupported`: the trait
-  objects are wired into the engine so U2/U4 fill them in, but a call fails with a
-  typed error rather than a stub that silently returns zeros.
 - No operation surface: `TensorElementwise`/`TensorStructural`/… keep coming from
   the CubeCL backend until U2. U1's tests therefore do not include the operation
   suites.
@@ -205,8 +164,8 @@ The invariants those tests encode, restated so U1 can be reviewed against them:
   `CudaEngineError`, `TransferSubmitError`, `PublicationAdmissionError`,
   `PublicationError`) carry ownership packages (`Rejected(...)`, `Unproven(...)`) and
   source errors that a bare `GpuError` cause cannot reconstruct. U1 therefore keeps
-  them as the *primary* vocabulary, unchanged, and defines `GpuError` only as the two
-  seam traits' error type with a one-way `From` into the provider errors where a
+  them as the *primary* vocabulary, unchanged, and defines `GpuError` as the
+  shared seam error type with a one-way `From` into the provider errors where a
   transfer is involved. There is no merger in U6: the provider types either survive
   or are replaced when their CubeCL-only variants disappear, and that decision is
   U6's, not U1's.
@@ -223,7 +182,6 @@ The invariants those tests encode, restated so U1 can be reviewed against them:
 | Finding | Answer |
 | --- | --- |
 | Cloneable `Arc<Mutex<Runtime>>` contradicts the parent's "no cloneable serialized owner" | §3 separates the two paths explicitly: the engine owns numerical submission (`&mut`, no lock), the `CudaRuntime` handle owns serialized host transfers (one submission lock, one runtime, one stream). The parent design sentence is amended in this PR |
-| Boxed traits break engine `Send`, `!Sync` not enforced, pinned/pending auto traits | §2: `+ Send` object bounds, an explicit `!Sync` marker with a compile-time assertion, and the pinned/pending handles keep upstream's `Send` |
 | Retaining the runtime after engine destruction delays the synchronisation the publication test needs | §3: `CudaEngine::drop` synchronises (best effort) before releasing its handle; a surviving buffer keeps the domain, not the engine |
 | Upstream `pending_records` is not the detached-handle count the tests assert | §4: the compatibility package keeps its own detached-handle counter, reported beside the runtime's counters |
 | No upstream checkpoint for arbitrary producer work | §4: `Runtime::checkpoint()` (merged upstream in `t4a-gpu-backend#7`) is the publication frontier; its `poll`/`wait` is the failure path; admission never synchronises |

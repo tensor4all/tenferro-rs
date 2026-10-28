@@ -7,57 +7,6 @@ fn repo_file(path: &str) -> String {
     std::fs::read_to_string(root).expect("source file must be readable")
 }
 
-#[cfg(all(feature = "cuda", not(feature = "cuda")))]
-#[test]
-fn cuda_public_api_requires_typed_device_and_caller_selected_engine() {
-    use tenferro_gpu::{
-        cuda::cuda_runtime_engine_registration, cuda::CudaDeviceError, cuda::CudaDeviceId,
-        cuda::CudaEngine, cuda::CudaRuntime,
-    };
-    use tenferro_runtime::{EngineRegistration, RuntimeConfigError};
-
-    let _: fn(CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> = CudaRuntime::new;
-    let _: fn(CudaDeviceId) -> Result<CudaEngine, CudaDeviceError> = CudaEngine::open;
-    let _: fn(&CudaEngine) -> Result<EngineRegistration, RuntimeConfigError> =
-        cuda_runtime_engine_registration;
-}
-
-#[cfg(all(feature = "cuda", not(feature = "cuda")))]
-#[test]
-fn cuda_prepared_access_has_one_state_and_one_downcast_boundary() {
-    let dispatch = repo_file("crates/tenferro-gpu/src/cubecl/dispatch.rs");
-    // The two state checks below are about the prepared-access type, so they read
-    // its body: the file legitimately carries an `element_size` *parameter* in the
-    // single output-allocation path, which a file-wide search would mistake for a
-    // retained field.
-    let prepared = dispatch
-        .split("pub(crate) struct CubeclPreparedAccess {")
-        .nth(1)
-        .and_then(|rest| rest.split('}').next())
-        .expect("CubeclPreparedAccess must be defined in dispatch.rs");
-    assert!(
-        !prepared.contains("writable"),
-        "prepared CUDA state must not retain a dead writable flag"
-    );
-    assert!(
-        !prepared.contains("offset") && !prepared.contains("element_size"),
-        "prepared CUDA state must not retain dead layout scalar fields"
-    );
-    assert_eq!(
-        dispatch
-            .matches("downcast::<CubeclPreparedAccess>()")
-            .count(),
-        1,
-        "CUDA dispatch must centralize prepared-state downcasting"
-    );
-    assert!(
-        !dispatch.contains("request.allocation_domain()")
-            && !dispatch.contains("request.allocation_id()")
-            && !dispatch.contains("request.byte_len()"),
-        "CUDA preparation must not repeat root identity validation"
-    );
-}
-
 fn feature_block(manifest: &str, name: &str) -> String {
     let prefix = format!("{name} = [");
     let mut block = String::new();

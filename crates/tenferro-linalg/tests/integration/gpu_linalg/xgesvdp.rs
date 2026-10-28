@@ -58,7 +58,7 @@ fn check_factors(input: &Tensor, factors: &[Tensor]) {
 
 #[test]
 #[ignore = "requires CUDA and cuSOLVER Xgesvdp"]
-fn test_cubecl_svd_xgesvdp_rectangular_batched_and_values() {
+fn test_cuda_svd_xgesvdp_rectangular_batched_and_values() {
     for (m, n) in [(7, 3), (3, 7), (5, 5)] {
         check_forced_svd_driver(m, n, SvdDriver::Xgesvdp);
         // Different matrices across eight outstanding calls stress host scratch
@@ -89,7 +89,7 @@ fn test_cubecl_svd_xgesvdp_rectangular_batched_and_values() {
 
 #[test]
 #[ignore = "requires CUDA and cuSOLVER Xgesvdp"]
-fn test_cubecl_svd_xgesvdp_traced_and_pruned() {
+fn test_cuda_svd_xgesvdp_traced_and_pruned() {
     use tenferro_gpu::cuda::cuda_runtime_engine_registration;
     let input = complex_input(3, 7, 1);
     let mut gpu = gpu_backend();
@@ -140,7 +140,7 @@ fn test_cubecl_svd_xgesvdp_traced_and_pruned() {
 #[cfg(feature = "autodiff")]
 #[test]
 #[ignore = "requires CUDA and cuSOLVER Xgesvdp"]
-fn test_cubecl_svd_xgesvdp_eager() {
+fn test_cuda_svd_xgesvdp_eager() {
     use tenferro_ad::EagerRuntime;
     use tenferro_linalg::EagerSessionLinalgExt;
     let input = complex_input(7, 3, 1);
@@ -173,7 +173,7 @@ fn test_cubecl_svd_xgesvdp_eager() {
 
 #[test]
 #[ignore = "requires CUDA; issue #1849 acceptance sizes"]
-fn test_cubecl_svd_xgesvdp_large_spectrum_agrees_with_gesvd() {
+fn test_cuda_svd_xgesvdp_large_spectrum_agrees_with_gesvd() {
     let mut gpu = gpu_backend();
     for m in [400, 800, 1024] {
         // A = (I - 2wwᴴ) diag(s) (I - 2zzᴴ) with unit w, z: the issue's

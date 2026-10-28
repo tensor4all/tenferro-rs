@@ -357,7 +357,6 @@ def run(args: argparse.Namespace) -> int:
     log.write_text("")
 
     env = dict(os.environ)
-    env.setdefault("CUBECL_DEBUG_LOG", "0")
     # The hosted archive job builds with these bindings (runpod-gpu-test.yml).
     env.setdefault("CUDARC_CUDA_VERSION", "12080")
     env.setdefault(

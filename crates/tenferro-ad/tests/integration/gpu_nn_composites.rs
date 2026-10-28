@@ -435,7 +435,7 @@ fn run_traced(
 }
 
 /// The traced surface on CUDA, including fused elementwise regions that
-/// contain `erf` (CubeCL `Arithmetic::Erf`), agrees with the CPU runtime.
+/// contain `erf`, agrees with the CPU runtime.
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn test_gpu_composites_traced_values_match_cpu() {

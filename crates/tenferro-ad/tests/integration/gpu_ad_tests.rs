@@ -344,9 +344,8 @@ fn test_gpu_matmul_vjp() {
 /// Two independent defects, both backend-dependent:
 ///
 /// - eager built the rank-0 factor with `constant_from`, which does not cross the
-///   host/device boundary, so the first op needing it failed with
-///   `CudaBackend::to_contiguous_read: expected CubeCL GPU tensor view, got host
-///   tensor`;
+///   host/device boundary, so the first op needing it failed with a host-tensor
+///   rejection from the CUDA backend;
 /// - the traced surface emitted `Mul` with a rank-0 operand and no
 ///   `BroadcastInDim`, which the CUDA backend rejects
 ///   (`mul: incompatible shapes: lhs=[], rhs=[4, 3, 2]`) where the CPU backend

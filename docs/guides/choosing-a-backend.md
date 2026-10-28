@@ -16,7 +16,7 @@ the pool or open the device, hold the engine, and pass it to every operation.
 | WebGPU | A WebGPU adapter/device and queue | A working wgpu/WebGPU implementation; coverage is experimental and operation-specific | `tenferro-gpu` `webgpu` | wgpu owns the device queue. Submissions are asynchronous; queue synchronization or download establishes a host-visible boundary. | Portable GPU experiments and Apple shared CPU/Metal paths |
 | XLA/PJRT | A PJRT addressable device | A PJRT plugin shared library; the `pjrt` loader returns a typed error when it is absent or invalid | `tenferro-xla` `pjrt` | The PJRT plugin owns device execution and intra-op scheduling. tenferro controls lowering and invocation, not the plugin's worker pool. | Static traced programs and deployments already using XLA plugins |
 
-CUDA does not use a native CubeCL kernel as a silent fallback when a required
+CUDA does not use a native kernel as a silent fallback when a required
 NVIDIA library is unavailable. The operation returns a typed library/provider
 error instead. XLA likewise rejects an unavailable plugin or unsupported
 lowering instead of changing execution backends behind the caller's back. See

@@ -243,9 +243,8 @@ Local GPU test runs should also set:
 
 | Variable | Purpose |
 | --- | --- |
-| `CUDA_PATH` | CUDA toolkit root used by CubeCL/NVRTC |
+| `CUDA_PATH` | CUDA toolkit root used by NVRTC |
 | `LD_LIBRARY_PATH` | CUDA/cuFFT, cuTENSOR, cuSOLVER, and cuBLAS library lookup |
-| `CUBECL_DEBUG_LOG=0` | Suppress generated-kernel log spam |
 
 CUDA paths whose accepted implementation is an NVIDIA vendor library report a
 typed load or provider error when that library is unavailable or lacks support;
@@ -507,14 +506,6 @@ and no implicit global shape state.
   `dot_general` pack kernels pass only axis-role lists and rank as compile-time
   launch attributes; shape and stride values are read from `TensorBinding`
   metadata inside the kernel.
-- Every `#[comptime]` parameter in `tenferro-gpu` is classified in review:
-  `every_comptime_kernel_parameter_is_classified`
-  (`tests/integration/kernel_metadata_contract.rs`) parses all of them and
-  requires each `(kernel, parameter)` to be listed with a category (`rank`,
-  `axis-mapping`, `algorithm-config` or `documented-exception`). The CUDA tests
-  in `src/cubecl/tests/kernel_specialization_tests.rs` launch each
-  layout-indexed kernel over several layouts and fail if a new module is
-  compiled at the same rank.
 - Native permutation materialization on **WebGPU/Metal** is the narrow
   exception: `materialize_strided_comptime_layout_kernel` and
   `tiled_transpose_comptime_layout_kernel` encode the validated, bilaterally
@@ -837,14 +828,13 @@ CUDA GPU tests are ignored so regular CPU-only test runs remain portable. Run
 them on a CUDA 12.4-or-newer machine with:
 
 ```sh
-CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda-12.4 \
 LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
   cargo test -p tenferro-gpu --features cuda -- --ignored
 ```
 
 These tests are correctness tests, not benchmarks.
-CUDA 12.8-or-newer driver and NVRTC libraries enable the complete CubeCL
+CUDA 12.8-or-newer driver and NVRTC libraries enable the complete CUDA
 feature set. On CUDA 12.4 through 12.7, the runtime omits 12.8-only compiler
 and tensor-map capabilities while preserving the baseline CUDA backend.
 

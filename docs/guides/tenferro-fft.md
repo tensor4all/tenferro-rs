@@ -36,9 +36,7 @@ tenferro-fft = { path = "../crates/tenferro-fft", features = ["autodiff"] }
 ```
 
 The Apple shared path is not released yet. Until a later release task publishes
-it, use matching path dependencies from the same `tenferro-rs` checkout. The
-workspace pins the reviewed CubeCL and CubeK revisions; applications do not
-need to declare CubeCL or CubeK directly.
+it, use matching path dependencies from the same `tenferro-rs` checkout.
 
 Concrete and graph-only users can omit `tenferro-ad` and the `autodiff`
 feature. Enable `tenferro-fft`'s `autodiff` feature when registering FFT AD
@@ -70,17 +68,15 @@ tenferro-gpu = { version = "0.7", default-features = false, features = ["cuda"] 
 ```
 
 The CUDA provider needs a compatible NVIDIA toolkit and driver. Set
-`CUDA_PATH` to the toolkit root used by CubeCL/NVRTC and include its `lib64`
+`CUDA_PATH` to the toolkit root used by NVRTC and include its `lib64`
 directory (plus any separately installed CUDA vendor-library directories) in
-`LD_LIBRARY_PATH`. Set `CUBECL_DEBUG_LOG=0` to suppress generated-kernel log
-output. cuFFT is loaded by `tenferro-fft`, not `tenferro-gpu`; use
+`LD_LIBRARY_PATH`. cuFFT is loaded by `tenferro-fft`, not `tenferro-gpu`; use
 `TENFERRO_CUFFT_PATH` for an optional ordered, colon-separated list of explicit
 library paths:
 
 ```bash
 export CUDA_PATH=/usr/local/cuda
 export LD_LIBRARY_PATH="$CUDA_PATH/lib64:${LD_LIBRARY_PATH:-}"
-export CUBECL_DEBUG_LOG=0
 export TENFERRO_CUFFT_PATH=/opt/cuda/lib64/libcufft.so.11:/opt/cuda/lib64/libcufft.so.10
 ```
 
@@ -240,7 +236,6 @@ an A100 or another configured CUDA host:
 
 ```bash
 TENFERRO_REQUIRE_CUDA=1 \
-CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda \
 LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-} \
 cargo run -p tenferro-tutorial-code --no-default-features \

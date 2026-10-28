@@ -470,8 +470,8 @@ unsafe impl<T: Send + Sync + 'static> BackendAllocation for BackendStorageAlloca
             }
         };
         match family {
-            "cubecl" => ProviderKind::Cuda,
-            "cubecl-webgpu" => ProviderKind::WebGpu,
+            "cuda" => ProviderKind::Cuda,
+            "webgpu" => ProviderKind::WebGpu,
             "host" => ProviderKind::Cpu,
             other => ProviderKind::Other(other),
         }

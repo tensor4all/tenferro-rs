@@ -38,8 +38,7 @@ pub(crate) enum IndexPointer<'a> {
 }
 
 /// One runtime's dispatcher over a prepared module set.
-#[doc(hidden)]
-pub struct Dispatcher {
+pub(crate) struct Dispatcher {
     modules: KernelModules,
 }
 

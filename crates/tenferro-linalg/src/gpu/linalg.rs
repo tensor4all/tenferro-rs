@@ -521,7 +521,7 @@ fn lu_factor_for_solve(backend: &mut CudaEngine, input: &Tensor) -> Result<(Tens
 pub(super) fn full_piv_lu(_backend: &mut CudaEngine, _input: &Tensor) -> Result<Vec<Tensor>> {
     Err(Error::unsupported(
         "full_piv_lu",
-        "complete-pivoting LU is not implemented for the CubeCL backend",
+        "complete-pivoting LU is not implemented on CUDA",
     ))
 }
 
@@ -533,7 +533,7 @@ pub(super) fn full_piv_lu_solve(
 ) -> Result<Tensor> {
     Err(Error::unsupported(
         "full_piv_lu_solve",
-        "complete-pivoting LU solve is not implemented for the CubeCL backend",
+        "complete-pivoting LU solve is not implemented on CUDA",
     ))
 }
 
@@ -1162,7 +1162,7 @@ pub(super) fn eigh_values(
 pub(super) fn eig(_backend: &mut CudaEngine, _input: &Tensor) -> Result<Vec<Tensor>> {
     Err(Error::unsupported(
         "eig",
-        "non-symmetric eigendecomposition is not supported on the CubeCL GPU backend \
+        "non-symmetric eigendecomposition is not supported on the CUDA backend \
                   because cuSOLVER does not provide it. Download to CPU explicitly via \
                   `backend.download_to_host(&gpu_tensor)?` and then call `CpuEngine::eig`."
             .to_string(),
@@ -2217,9 +2217,9 @@ where
             let mut gesvd_vt_shape = vec![gesvd_vt_rows, gesvd_n];
             gesvd_vt_shape.extend_from_slice(batch_shape);
 
-            // When `m < n` gesvd factors `adjoint(input)` (n×m); the CubeCL
-            // adjoint kernel is flushed before the raw session, so the SVD
-            // below observes it. The SVD results are adjointed again below.
+            // When `m < n` gesvd factors `adjoint(input)` (n×m); the adjoint
+            // kernel is flushed on the same stream before the raw session, so
+            // the SVD below observes it. The SVD results are adjointed again below.
             let transposed_work = if transpose_for_gesvd {
                 let mut work_shape = vec![n, m];
                 work_shape.extend_from_slice(batch_shape);
@@ -2235,7 +2235,7 @@ where
                 let stream = raw.stream().raw_handle() as usize as CudaStream;
                 handles.cusolver().set_stream(stream, op)?;
 
-                // `work` is either the CubeCL-adjointed input (m < n) or a
+                // `work` is either the adjointed input (m < n) or a
                 // clone of `input` made on the session stream.
                 let work = match transposed_work {
                     Some(work) => work,
@@ -2670,9 +2670,9 @@ where
         }
         CusolverSvdRoutine::Gesvd => {
             let (gesvd_m, gesvd_n) = if m < n { (n, m) } else { (m, n) };
-            // When `m < n` gesvd factors `adjoint(input)` (n×m); the CubeCL
-            // adjoint kernel is flushed before the raw session, so the SVD
-            // below observes it.
+            // When `m < n` gesvd factors `adjoint(input)` (n×m); the adjoint
+            // kernel is flushed on the same stream before the raw session, so
+            // the SVD below observes it.
             let transposed_work = if m < n {
                 let mut work_shape = vec![n, m];
                 work_shape.extend_from_slice(batch_shape);
@@ -2688,7 +2688,7 @@ where
                 let stream = raw.stream().raw_handle() as usize as CudaStream;
                 handles.cusolver().set_stream(stream, OP)?;
 
-                // `work` is either the CubeCL-adjointed input (m < n) or a
+                // `work` is either the adjointed input (m < n) or a
                 // clone of `input` made on the session stream.
                 let work = match transposed_work {
                     Some(work) => work,
@@ -3954,7 +3954,7 @@ fn as_i32(value: usize, op: &'static str, label: &'static str) -> Result<i32> {
 unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
     // SAFETY: the caller guarantees `base` covers `offset` further `T`
     // elements inside one device allocation (see `# Safety` above).
-    unsafe { base.cast::<T>() }.add(offset).cast()
+    unsafe { base.cast::<T>().add(offset) }.cast()
 }
 
 /// Offset an immutable device pointer by `offset` typed elements.
@@ -3967,7 +3967,7 @@ unsafe fn batch_ptr<T>(base: *mut c_void, offset: usize) -> *mut c_void {
 unsafe fn batch_const_ptr<T>(base: *const c_void, offset: usize) -> *const c_void {
     // SAFETY: the caller guarantees `base` covers `offset` further `T`
     // elements inside one device allocation (see `# Safety` above).
-    unsafe { base.cast::<T>() }.add(offset).cast()
+    unsafe { base.cast::<T>().add(offset) }.cast()
 }
 
 fn zero_like_linalg_device_tensor(
