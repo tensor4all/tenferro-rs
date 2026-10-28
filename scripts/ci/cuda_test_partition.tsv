@@ -664,12 +664,14 @@ gpu	tenferro-gpu	cuda::structural::tests::concatenate_refuses_a_foreign_later_in
 gpu	tenferro-gpu	cuda::structural::tests::dot_general_read_into_refuses_an_integer_dtype_before_staging_the_scratch
 gpu	tenferro-gpu	cuda::structural::tests::elementwise_read_into_refuses_a_mismatched_operand_before_staging_the_scratch
 gpu	tenferro-gpu	cuda::structural::tests::gather_read_refuses_an_oversized_slice_before_staging_or_allocating
+gpu	tenferro-gpu	cuda::structural::tests::dynamic_update_slice_refuses_bad_metadata_before_allocating_or_staging
 gpu	tenferro-gpu	cuda::structural::tests::offset_index_views_are_read_in_place
 gpu	tenferro-gpu	cuda::structural::tests::read_entries_consume_a_strided_view_without_staging
 gpu	tenferro-gpu	cuda::structural::tests::reverse_read_keeps_singleton_and_empty_geometry
 gpu	tenferro-gpu	cuda::structural::tests::scale_tensor_write_refuses_a_host_owned_destination_whatever_the_factor_and_size
 gpu	tenferro-gpu	cuda::structural::tests::scale_tensor_write_refuses_a_host_view_whatever_the_factor
 gpu	tenferro-gpu	cuda::structural::tests::scatter_read_refuses_a_bad_update_axis_before_allocating_or_staging
+gpu	tenferro-gpu	cuda::structural::tests::triangular_reads_mask_borrowed_regions
 host	tenferro-gpu	cuda::structural::tests::the_element_count_checks_both_extremes
 host	tenferro-gpu	cuda::runtime::tests::the_environment_names_the_persistent_artifact_directory
 host	tenferro-gpu	event_retirement::tests::explicit_retirement_then_drop_invokes_retirement_once
@@ -766,6 +768,10 @@ gpu	tenferro-gpu::seam_indexing	complex_view_reads_match_the_compact_result
 gpu	tenferro-gpu::seam_indexing	concatenate_places_each_input_along_the_axis
 gpu	tenferro-gpu::seam_indexing	concatenate_read_follows_a_view_layout
 gpu	tenferro-gpu::seam_indexing	dynamic_slice_read_follows_a_view_layout
+gpu	tenferro-gpu::seam_indexing	dynamic_update_slice_handles_empty_rank_zero_and_rank_nine
+gpu	tenferro-gpu::seam_indexing	dynamic_update_slice_matches_the_cpu_engine_for_every_data_dtype
+gpu	tenferro-gpu::seam_indexing	dynamic_update_slice_matches_the_cpu_engine_for_every_starts_dtype
+gpu	tenferro-gpu::seam_indexing	dynamic_update_slice_reads_a_strided_update_and_an_offset_starts_view
 gpu	tenferro-gpu::seam_indexing	float_indices_are_checked_for_exactness
 gpu	tenferro-gpu::seam_indexing	gather_read_follows_a_view_layout
 gpu	tenferro-gpu::seam_indexing	gather_reads_a_window_per_index_vector
