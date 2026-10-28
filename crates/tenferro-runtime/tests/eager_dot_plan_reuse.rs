@@ -5,13 +5,19 @@
 //! allocator, because the plan build - not the kernel - is what a small `matmul`
 //! pays for.
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
 
-static ENABLED: AtomicBool = AtomicBool::new(false);
+// Only the measuring thread is counted: another thread (a pool worker finishing its
+// startup, the test harness) allocating during a measurement is not the op's cost, and
+// counted globally it made these budgets flake (#2306). The engines measured here run the
+// op on the calling thread.
+thread_local! {
+    static ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
 struct Allocator;
@@ -19,7 +25,7 @@ struct Allocator;
 // SAFETY: every allocation is forwarded unchanged to the system allocator.
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if ENABLED.load(Ordering::Relaxed) {
+        if ENABLED.try_with(std::cell::Cell::get).unwrap_or(false) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
         // SAFETY: the caller's layout is forwarded verbatim.
@@ -32,7 +38,7 @@ unsafe impl GlobalAlloc for Allocator {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        if ENABLED.load(Ordering::Relaxed) {
+        if ENABLED.try_with(std::cell::Cell::get).unwrap_or(false) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
         // SAFETY: the caller's pointer and requested size are forwarded verbatim.
@@ -45,9 +51,9 @@ static ALLOCATOR: Allocator = Allocator;
 
 fn allocations<T>(call: impl FnOnce() -> T) -> (T, usize) {
     ALLOCATIONS.store(0, Ordering::SeqCst);
-    ENABLED.store(true, Ordering::SeqCst);
+    ENABLED.with(|enabled| enabled.set(true));
     let out = call();
-    ENABLED.store(false, Ordering::SeqCst);
+    ENABLED.with(|enabled| enabled.set(false));
     (out, ALLOCATIONS.load(Ordering::SeqCst))
 }
 

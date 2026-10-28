@@ -13,7 +13,7 @@
 //! (LAPACK/BLAS scratch) are outside the counting allocator and out of scope
 //! here.
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tenferro_cpu::{scalar_binary_into, AddOp, CpuEngine};
 use tenferro_runtime::{TensorSessionOpsExt, TypedTensor, TypedTensorSessionOpsExt};
@@ -24,7 +24,13 @@ use tenferro_tensor::{
 };
 use tinyvec::tiny_vec;
 
-static ENABLED: AtomicBool = AtomicBool::new(false);
+// Only the measuring thread is counted: another thread (a pool worker finishing its
+// startup, the test harness) allocating during a measurement is not the op's cost, and
+// counted globally it made these budgets flake (#2306). The engines measured here run the
+// op on the calling thread.
+thread_local! {
+    static ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 static BYTES: AtomicUsize = AtomicUsize::new(0);
 
@@ -33,7 +39,7 @@ struct Allocator;
 // SAFETY: every allocation is forwarded unchanged to the system allocator.
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if ENABLED.load(Ordering::Relaxed) {
+        if ENABLED.try_with(std::cell::Cell::get).unwrap_or(false) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
             BYTES.fetch_add(layout.size(), Ordering::Relaxed);
         }
@@ -47,7 +53,7 @@ unsafe impl GlobalAlloc for Allocator {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        if ENABLED.load(Ordering::Relaxed) {
+        if ENABLED.try_with(std::cell::Cell::get).unwrap_or(false) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
             BYTES.fetch_add(size, Ordering::Relaxed);
         }
@@ -62,9 +68,9 @@ static ALLOCATOR: Allocator = Allocator;
 fn measure<T>(call: impl FnOnce() -> T) -> (T, usize, usize) {
     ALLOCATIONS.store(0, Ordering::SeqCst);
     BYTES.store(0, Ordering::SeqCst);
-    ENABLED.store(true, Ordering::SeqCst);
+    ENABLED.with(|e| e.set(true));
     let out = call();
-    ENABLED.store(false, Ordering::SeqCst);
+    ENABLED.with(|e| e.set(false));
     (
         out,
         ALLOCATIONS.load(Ordering::SeqCst),
@@ -116,6 +122,13 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
                 $expected
             }};
         }
+        // The counter sees only this thread, so first prove the op runs here: the cold call
+        // allocates its pooled output on this thread (#2306).
+        let (_cold, cold_allocations, _) = measure(|| a.add(&b, session).unwrap());
+        assert!(
+            cold_allocations > 0,
+            "the cold call must allocate its output on the measuring thread"
+        );
         budget!("add n=16", POOL_ACCOUNTING_ALLOCATIONS, |s| a.add(&b, s));
         // #2139 item 3: the caller-output route allocates nothing at all for the
         // output, and writes it in place. The allocating form above reaches zero

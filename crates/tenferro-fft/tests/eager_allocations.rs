@@ -2,7 +2,7 @@
 
 use num_complex::Complex64;
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
@@ -16,14 +16,20 @@ const MIN_LANE_BYTES: usize = LEN * size_of::<f64>();
 // The allocation counters below are process-global, so the measurement cases
 // must not run concurrently in one test binary.
 static MEASUREMENT_LOCK: Mutex<()> = Mutex::new(());
-static ENABLED: AtomicBool = AtomicBool::new(false);
+// Only the measuring thread is counted: another thread (a pool worker finishing its
+// startup, the test harness) allocating during a measurement is not the op's cost, and
+// counted globally it made these budgets flake (#2306). The engines measured here run the
+// op on the calling thread.
+thread_local! {
+    static ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 static COUNT: AtomicUsize = AtomicUsize::new(0);
 static BYTES: AtomicUsize = AtomicUsize::new(0);
 static TOTAL_COUNT: AtomicUsize = AtomicUsize::new(0);
 static TOTAL_BYTES: AtomicUsize = AtomicUsize::new(0);
 struct Allocator;
 fn record(size: usize) {
-    if ENABLED.load(Ordering::Relaxed) {
+    if ENABLED.try_with(std::cell::Cell::get).unwrap_or(false) {
         TOTAL_COUNT.fetch_add(1, Ordering::Relaxed);
         TOTAL_BYTES.fetch_add(size, Ordering::Relaxed);
         if size >= MIN_LANE_BYTES {
@@ -56,14 +62,14 @@ fn measured<T>(expected: (usize, usize), f: impl FnOnce() -> T) -> T {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
-            ENABLED.store(false, Ordering::SeqCst);
+            ENABLED.with(|enabled| enabled.set(false));
         }
     }
     COUNT.store(0, Ordering::Relaxed);
     BYTES.store(0, Ordering::Relaxed);
     TOTAL_COUNT.store(0, Ordering::Relaxed);
     TOTAL_BYTES.store(0, Ordering::Relaxed);
-    ENABLED.store(true, Ordering::SeqCst);
+    ENABLED.with(|enabled| enabled.set(true));
     let reset = Reset;
     let output = f();
     drop(reset);
