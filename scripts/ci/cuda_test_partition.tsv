@@ -646,6 +646,7 @@ host	tenferro-fft::fft_ops	rfft_f64_returns_onesided_spectrum
 host	tenferro-fft::fft_ops	traced_fft_rejects_invalid_dtype_axis_and_length
 host	tenferro-fft::fft_ops	traced_tensor_fft_ext_exposes_fft
 host	tenferro-fft::prelude	prelude_calls_concrete_fft_operation
+gpu	tenferro-gpu	cuda::fusion::tests::a_fused_region_matches_the_host_and_prepares_once
 gpu	tenferro-gpu	cuda::dispatch::prepare_tests::interleaved_auxiliary_launches_extend_the_prepared_set
 gpu	tenferro-gpu	cuda::dispatch::reduce_tests::a_short_axis_reduces_directly
 gpu	tenferro-gpu	cuda::dispatch::reduce_tests::the_split_policy_runs_both_passes
@@ -750,7 +751,6 @@ gpu	tenferro-gpu::seam_dtype	analytic_operations_and_power_follow_the_contract
 gpu	tenferro-gpu::seam_dtype	complex_elementwise_and_the_complex_absolute_value
 gpu	tenferro-gpu::seam_dtype	integer_and_boolean_dtypes_follow_the_catalogue
 gpu	tenferro-gpu::seam_dtype	integer_and_complex_division_use_their_own_entries
-gpu	tenferro-gpu::seam_fusion	a_fused_region_matches_the_host_and_prepares_once
 gpu	tenferro-gpu::seam_fusion	a_region_with_the_wrong_operand_count_is_refused
 gpu	tenferro-gpu::seam_fusion	an_ineligible_plan_is_refused_before_any_compile
 gpu	tenferro-gpu::seam_indexing	a_dynamic_slice_takes_its_starts_from_the_device

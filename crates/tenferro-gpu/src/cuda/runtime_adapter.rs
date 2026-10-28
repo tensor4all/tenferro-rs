@@ -132,7 +132,7 @@ fn input_tensor(
 /// # Examples
 ///
 /// ```no_run
-/// use tenferro_gpu::cuda::runtime_adapter::cuda_runtime_engine_registration;
+/// use tenferro_gpu::cuda::cuda_runtime_engine_registration;
 /// use tenferro_gpu::cuda::{CudaDeviceId, CudaEngine};
 /// use tenferro_runtime::Runtime;
 ///
@@ -239,7 +239,7 @@ pub(crate) fn prepare_cuda_registration_identity(
 /// # Examples
 ///
 /// ```
-/// use tenferro_gpu::cuda::runtime_adapter::cuda_runtime_hardware_class;
+/// use tenferro_gpu::cuda::cuda_runtime_hardware_class;
 ///
 /// assert_eq!(
 ///     cuda_runtime_hardware_class().unwrap().as_str(),
