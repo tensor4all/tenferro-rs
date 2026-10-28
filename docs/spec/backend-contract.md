@@ -304,6 +304,10 @@ Each indexing and structural operation also has a `*_read` entry that takes
 a borrowed view is consumed in place; the CPU engine does this for every such
 entry. A default that cannot do that passes an owned tensor straight to the
 owned-input method and stages only a borrowed view through `to_contiguous_read`.
+`tenferro_gpu::cuda::CudaEngine` overrides the entries whose catalogue kernel
+addresses the operand's own layout (offset, strided and negative-stride
+regions); the entries that still resolve a compact copy document that boundary
+where they are defined.
 
 Every method takes `&mut self`, so one computation uses one engine at a time and
 the borrow is the exclusion contract. There is no session entry, no admission

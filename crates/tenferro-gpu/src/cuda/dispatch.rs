@@ -4,11 +4,11 @@
 //! validation of its own — and every argument order follows the documented ABI.
 
 use t4a_cuda_kernels::{
-    plan_binary, plan_clamp, plan_compare, plan_concatenate_copy, plan_convert, plan_copy_exact,
-    plan_dynamic_slice, plan_elementwise, plan_gather, plan_pad, plan_reduce, plan_reduction,
-    plan_scatter_add, plan_select, plan_slice, plan_unary, plan_validate_float_indices,
-    plan_validate_real_cast, BinaryOp, DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan,
-    ScalarSide, ScatterPlan, UnaryOp,
+    plan_binary, plan_clamp, plan_compare, plan_convert, plan_copy_exact, plan_dynamic_slice,
+    plan_elementwise, plan_gather, plan_pad, plan_reduce, plan_reduction, plan_scatter_add,
+    plan_select, plan_slice, plan_unary, plan_validate_float_indices, plan_validate_real_cast,
+    BinaryOp, DType, Entry, GatherPlan, Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan,
+    UnaryOp,
 };
 use t4a_cuda_runtime::{Arg, BoundFunction, LaunchConfig};
 
@@ -825,43 +825,44 @@ impl Dispatcher {
         )
     }
 
-    /// `t4a_cuda_concatenate_copy`: one compact input into `out` at `axis_offset`.
+    /// `t4a_cuda_strided_to_strided`: copy between two layouts of equal extents.
+    ///
+    /// The destination may be one region of a larger allocation (an output slab or a diagonal
+    /// sub-region); the planner proves both spans and that no destination axis broadcasts. Only
+    /// the by-value layout form is served: a caller whose rank can exceed
+    /// [`t4a_cuda_kernels::MAX_RANK`] keeps its general path.
     ///
     /// # Errors
     ///
-    /// [`crate::Error::RuntimeState`] when the planner refuses the placement, and
+    /// [`crate::Error::RuntimeState`] when the planner refuses the layouts, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn concatenate_copy(
+    pub(crate) fn strided_to_strided(
         &mut self,
         dtype: DType,
-        out: &t4a_cuda_kernels::Layout,
-        out_len: i64,
-        input: &t4a_cuda_kernels::Layout,
-        input_len: i64,
-        axis: u32,
-        axis_offset: i64,
-        out_buffer: &t4a_cuda_runtime::Buffer,
-        input_buffer: &t4a_cuda_runtime::Buffer,
+        src: &t4a_cuda_kernels::Layout,
+        src_len: i64,
+        dst: &t4a_cuda_kernels::Layout,
+        dst_len: i64,
+        dst_buffer: &t4a_cuda_runtime::Buffer,
+        src_buffer: &t4a_cuda_runtime::Buffer,
     ) -> crate::Result<()> {
-        let launch =
-            plan_concatenate_copy(dtype, out, out_len, input, input_len, axis, axis_offset)
-                .map_err(plan_error)?;
-        let out_layout = t4a_cuda_kernels::CLayout::new(out);
-        let input_layout = t4a_cuda_kernels::CLayout::new(input);
-        let input_len = input.element_count().map_err(plan_error)?;
+        let launch = t4a_cuda_kernels::plan_strided_to_strided(dtype, src, src_len, dst, dst_len)
+            .map_err(plan_error)?;
+        let src_layout = t4a_cuda_kernels::CLayout::new(src);
+        let dst_layout = t4a_cuda_kernels::CLayout::new(dst);
+        // The source layout carries the logical count both sides share.
+        let len = src.element_count().map_err(plan_error)?;
         self.run(
-            Entry::ConcatenateCopy,
+            Entry::StridedToStrided,
             launch,
             &[
-                Arg::DevicePtr(out_buffer),
-                Arg::DevicePtr(input_buffer),
+                Arg::DevicePtr(dst_buffer),
+                Arg::DevicePtr(src_buffer),
                 Arg::U32(dtype.tag() as u32),
-                layout_arg(&out_layout),
-                layout_arg(&input_layout),
-                Arg::U32(axis),
-                Arg::U64(axis_offset as u64),
-                Arg::U64(input_len as u64),
+                layout_arg(&src_layout),
+                layout_arg(&dst_layout),
+                Arg::U64(len as u64),
             ],
         )
     }

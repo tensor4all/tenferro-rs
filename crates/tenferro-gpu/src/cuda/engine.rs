@@ -83,6 +83,13 @@ pub struct CudaEngine {
     pending_runs: Vec<Box<dyn tenferro_runtime::EventDomainRun>>,
     /// Set when the runtime reported an unrecoverable failure.
     broken: bool,
+    /// How many borrowed views this engine materialized into a compact operand copy.
+    ///
+    /// A native read entry consumes an operand's own layout, so this stays put; it moves only
+    /// where an operation still has to stage a view (a rank the by-value layout cannot carry,
+    /// or an entry that has no stride-consuming kernel yet). Measurement for the read-entry
+    /// tests, not a public surface: [`CudaEngine::staged_reads`] is crate-private.
+    staged_reads: std::cell::Cell<u64>,
     // `!Sync` explicitly rather than by inheritance from the runtime's auto traits.
     _not_sync: PhantomData<std::cell::Cell<()>>,
 }
@@ -125,6 +132,7 @@ impl CudaEngine {
             prepared: std::cell::RefCell::new(super::dispatch::PreparedDispatchers::default()),
             pending_runs: Vec::new(),
             broken: false,
+            staged_reads: std::cell::Cell::new(0),
             _not_sync: PhantomData,
         })
     }
@@ -199,6 +207,11 @@ impl CudaEngine {
     /// The device this engine opened.
     pub(crate) fn device_id(&self) -> super::CudaDeviceId {
         self.runtime.device_id()
+    }
+
+    /// Record one operand materialization for [`CudaEngine::staged_reads`].
+    pub(crate) fn note_staged_read(&self) {
+        self.staged_reads.set(self.staged_reads.get() + 1);
     }
 
     /// Refuse numerical submission on an engine the runtime marked broken.

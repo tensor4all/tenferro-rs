@@ -175,7 +175,11 @@ impl std::ops::Deref for Resolved<'_> {
     }
 }
 
-/// One device region named by a borrowed view: the allocation it reads and its geometry.
+/// One device region a read operand names: the allocation it reads and its geometry.
+///
+/// A borrowed view describes its own region; an owned tensor is the compact, offset-zero region
+/// of its own allocation. Both are what the catalogue's planners take, so a read entry resolves
+/// one and addresses the region directly.
 pub(super) struct Region<'v> {
     pub(super) storage: &'v CudaStorage,
     dtype: DType,
@@ -271,6 +275,28 @@ pub(super) fn region_of<'v>(
     }
 }
 
+/// The catalogue's extents for a logical shape.
+fn catalogue_extents(shape: &[usize], op: &'static str) -> crate::Result<Vec<i64>> {
+    shape
+        .iter()
+        .map(|&extent| {
+            i64::try_from(extent)
+                .map_err(|_| crate::Error::unsupported(op, "an extent exceeds the ABI's int"))
+        })
+        .collect()
+}
+
+/// The catalogue's signed strides for a tensor's element strides.
+fn catalogue_strides(strides: &[isize], op: &'static str) -> crate::Result<Vec<i64>> {
+    strides
+        .iter()
+        .map(|&stride| {
+            i64::try_from(stride)
+                .map_err(|_| crate::Error::unsupported(op, "a stride exceeds the ABI's int"))
+        })
+        .collect()
+}
+
 /// Validate one view's storage and geometry, whichever view flavour carries it.
 fn typed_region<'v, T: TensorScalar + 'static>(
     buffer: Option<&'v dyn tenferro_tensor::BackendStorage<T>>,
@@ -290,20 +316,8 @@ fn typed_region<'v, T: TensorScalar + 'static>(
             crate::Error::runtime_state(op, "expected a CUDA allocation of this backend")
         })?;
     let shape = shape.to_vec();
-    let extents: Vec<i64> = shape
-        .iter()
-        .map(|&extent| {
-            i64::try_from(extent)
-                .map_err(|_| crate::Error::unsupported(op, "a view extent exceeds the ABI's int"))
-        })
-        .collect::<crate::Result<_>>()?;
-    let strides: Vec<i64> = strides
-        .iter()
-        .map(|&stride| {
-            i64::try_from(stride)
-                .map_err(|_| crate::Error::unsupported(op, "a view stride exceeds the ABI's int"))
-        })
-        .collect::<crate::Result<_>>()?;
+    let extents = catalogue_extents(&shape, op)?;
+    let strides = catalogue_strides(strides, op)?;
     let offset = i64::try_from(offset)
         .map_err(|_| crate::Error::unsupported(op, "a view offset exceeds the ABI's int"))?;
     Ok(Region {
@@ -407,8 +421,9 @@ impl CudaEngine {
     /// Two refusals are the interface: a view over *host* storage, which would need an implicit
     /// transfer, and a view whose allocation belongs to another runtime or allocation domain.
     ///
-    /// Serving a view costs one compact copy; only an entry whose own layout argument can address
-    /// a strided operand (`CombinedStrided`, which `axpby` uses) reads it without one.
+    /// Serving a view costs one compact copy, which the engine's staging counter records. A read
+    /// entry whose kernel can address the operand's own layout takes [`Self::read_region`]
+    /// instead and pays nothing.
     fn device_read<'a>(
         &mut self,
         input: TensorRead<'a>,
@@ -432,9 +447,61 @@ impl CudaEngine {
                 op,
                 "a host tensor would need an implicit transfer",
             )),
-            TensorRead::View(view) => self
-                .materialize_region(view, op)
-                .map(|tensor| Resolved::Owned(Box::new(tensor))),
+            TensorRead::View(view) => {
+                self.note_staged_read();
+                self.materialize_region(view, op)
+                    .map(|tensor| Resolved::Owned(Box::new(tensor)))
+            }
+        }
+    }
+
+    /// The device region `input` names, read where it lives.
+    ///
+    /// This is the native read boundary every overridden read entry starts from. Its acceptance
+    /// is [`Self::device_read`]'s and it applies it before any planner sees the operand — a
+    /// broken engine, a host operand, or an allocation of another runtime is refused here, on an
+    /// empty or no-op input too — but it hands back the operand's own allocation, layout and
+    /// logical shape instead of a compact copy, so a planner can address a strided, offset or
+    /// negative-stride region without one.
+    ///
+    /// A rank above [`t4a_cuda_kernels::MAX_RANK`] has no by-value layout; the entry that named
+    /// it stages the view through [`Self::device_read`] and uses the catalogue's general path.
+    fn read_region<'v>(
+        &self,
+        input: &'v TensorRead<'v>,
+        op: &'static str,
+    ) -> crate::Result<Region<'v>> {
+        // An engine the runtime marked broken accepts no further numerical submission.
+        self.ensure_healthy()
+            .map_err(|error| crate::Error::runtime_state(op, error.to_string()))?;
+        match input {
+            TensorRead::Tensor(tensor) => {
+                if is_host(tensor) {
+                    return Err(crate::Error::unsupported(
+                        op,
+                        "a host tensor would need an implicit transfer",
+                    ));
+                }
+                let storage = super::pending::cuda_storage(tensor).ok_or_else(|| {
+                    crate::Error::runtime_state(op, "expected a CUDA allocation of this backend")
+                })?;
+                let storage = self.own_storage(storage, op)?;
+                let shape = tensor.shape().to_vec();
+                Ok(Region {
+                    storage,
+                    dtype: tensor.dtype(),
+                    extents: catalogue_extents(&shape, op)?,
+                    strides: catalogue_strides(&self.strides_of(tensor, op)?, op)?,
+                    // An owned tensor is the compact, offset-zero region of its own allocation.
+                    offset: 0,
+                    shape,
+                })
+            }
+            TensorRead::View(view) => {
+                let region = region_of(view, op)?;
+                self.own_storage(region.storage, op)?;
+                Ok(region)
+            }
         }
     }
 
@@ -453,37 +520,22 @@ impl CudaEngine {
         Ok(storage)
     }
 
-    /// The allocation and layout one operand names: an owned tensor's compact layout, or the
-    /// region a borrowed view reads.
+    /// The allocation and layout one operand names, resolved through the native read boundary.
+    ///
+    /// An owned tensor is the compact, offset-zero region of its allocation; a borrowed view is
+    /// the region it names. Both acceptance and geometry come from [`Self::read_region`].
     fn read_operand<'v>(
         &self,
         input: &'v TensorRead<'v>,
         op: &'static str,
     ) -> crate::Result<StridedOperand<'v>> {
-        match input {
-            TensorRead::Tensor(tensor) => {
-                let storage = super::pending::cuda_storage(tensor).ok_or_else(|| {
-                    crate::Error::runtime_state(op, "expected a CUDA allocation of this backend")
-                })?;
-                let storage = self.own_storage(storage, op)?;
-                Ok(StridedOperand {
-                    storage,
-                    dtype: tensor.dtype(),
-                    layout: self.layout_of(tensor, op)?,
-                    len: allocation_len(storage, tensor.dtype(), op)?,
-                })
-            }
-            TensorRead::View(view) => {
-                let region = region_of(view, op)?;
-                let storage = self.own_storage(region.storage, op)?;
-                Ok(StridedOperand {
-                    storage,
-                    dtype: region.dtype,
-                    layout: region.layout(op)?,
-                    len: region.len(op)?,
-                })
-            }
-        }
+        let region = self.read_region(input, op)?;
+        Ok(StridedOperand {
+            storage: region.storage,
+            dtype: region.dtype,
+            layout: region.layout(op)?,
+            len: region.len(op)?,
+        })
     }
 
     /// Materialize the region `view` names into a compact tensor of this runtime.
@@ -819,11 +871,23 @@ impl TensorStructural for CudaEngine {
         axis_a: usize,
         axis_b: usize,
     ) -> crate::Result<Tensor> {
-        let shape = input.shape().to_vec();
-        let kernel = kernel_dtype(input.dtype(), "extract_diagonal")?;
+        self.extract_diagonal_read(TensorRead::from_tensor(input), axis_a, axis_b)
+    }
+
+    fn extract_diagonal_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<Tensor> {
+        const OP: &str = "extract_diagonal_read";
+        // The diagonal kernel addresses the operand's own layout.
+        let region = self.read_region(&input, OP)?;
+        let (shape, dtype) = (region.shape.clone(), region.dtype);
+        let kernel = kernel_dtype(dtype, OP)?;
         if axis_a >= shape.len() || axis_b >= shape.len() || axis_a == axis_b {
             return Err(crate::Error::unsupported(
-                "extract_diagonal",
+                OP,
                 "two distinct in-range axes are required",
             ));
         }
@@ -836,27 +900,24 @@ impl TensorStructural for CudaEngine {
         let diag_axis = axis_a - usize::from(axis_b < axis_a);
         out_shape[diag_axis] = out_shape[diag_axis].min(removed);
         if shape.len() > t4a_cuda_kernels::MAX_RANK {
+            // ponytail: ceiling = the catalogue's by-value layout rank, as for `slice_read`.
+            let staged = self.device_read(input, OP)?;
             return self.diagonal_wide(
-                input,
+                &staged,
                 kernel,
                 Entry::ExtractDiagonal,
                 &shape,
                 &out_shape,
                 axis_a,
                 axis_b,
-                "extract_diagonal",
+                OP,
             );
         }
-        let strides = self.strides_of(input, "extract_diagonal")?;
-        let in_layout = compact_layout(&shape, &strides, "extract_diagonal")?;
-        let out_layout = compact_layout(
-            &out_shape,
-            &compact_strides(&out_shape, "extract_diagonal")?,
-            "extract_diagonal",
-        )?;
-        let in_len = count_i64(&shape, "extract_diagonal")?;
-        let out_len = count_i64(&out_shape, "extract_diagonal")?;
-        let output = alloc_tensor(self.runtime(), input.dtype(), &out_shape)?;
+        let in_layout = region.layout(OP)?;
+        let in_len = region.len(OP)?;
+        let out_layout = compact_layout(&out_shape, &compact_strides(&out_shape, OP)?, OP)?;
+        let out_len = count_i64(&out_shape, OP)?;
+        let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
         let plan = plan_extract_diagonal(
             kernel,
             &in_layout,
@@ -866,15 +927,15 @@ impl TensorStructural for CudaEngine {
             axis_a as u32,
             axis_b as u32,
         )
-        .map_err(|error| crate::Error::runtime_state_source("extract_diagonal", error))?;
-        let (destination, source) = self.two_allocations(&output, input, "extract_diagonal")?;
+        .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        let destination = with_scalar!(dtype, |T| self.allocation_of::<T>(&output, OP))?;
         let (in_cl, out_cl) = (CLayout::new(&in_layout), CLayout::new(&out_layout));
         self.launch_planned(
             Entry::ExtractDiagonal,
             plan,
             &[
                 Arg::DevicePtr(destination),
-                Arg::DevicePtr(source),
+                Arg::DevicePtr(region.storage.allocation()),
                 Arg::U32(kernel.tag() as u32),
                 layout_arg(&out_cl),
                 layout_arg(&in_cl),
@@ -882,7 +943,7 @@ impl TensorStructural for CudaEngine {
                 Arg::I32(axis_b as i32),
                 Arg::U64(out_len as u64),
             ],
-            "extract_diagonal",
+            OP,
         )?;
         Ok(output)
     }
@@ -893,68 +954,88 @@ impl TensorStructural for CudaEngine {
         axis_a: usize,
         axis_b: usize,
     ) -> crate::Result<Tensor> {
-        let shape = input.shape().to_vec();
-        let kernel = kernel_dtype(input.dtype(), "embed_diagonal")?;
+        self.embed_diagonal_read(TensorRead::from_tensor(input), axis_a, axis_b)
+    }
+
+    fn embed_diagonal_read(
+        &mut self,
+        input: TensorRead<'_>,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> crate::Result<Tensor> {
+        const OP: &str = "embed_diagonal_read";
+        // The catalogue's embed entry writes diagonal positions of a compact source only, so
+        // this reads the input's own layout and writes a diagonal *view* of the output instead:
+        // a strided-to-strided copy is exactly that map.
+        let region = self.read_region(&input, OP)?;
+        let (shape, dtype) = (region.shape.clone(), region.dtype);
+        let kernel = kernel_dtype(dtype, OP)?;
         if axis_a >= shape.len() || axis_b > shape.len() {
             return Err(crate::Error::unsupported(
-                "embed_diagonal",
+                OP,
                 "the insertion position must be in range",
             ));
         }
-        // The output re-inserts an axis at `axis_b` whose extent is the input's `axis_a`
-        // extent; the diagonal positions are the only ones written, so the destination is
-        // zero-filled by the allocation.
+        // The output re-inserts an axis at `axis_b` whose extent is the input's `axis_a` extent;
+        // the diagonal positions are the only ones written, so the allocation's zero fill is the
+        // rest of the answer.
         let mut out_shape = shape.clone();
         out_shape.insert(axis_b, shape[axis_a]);
         if out_shape.len() > t4a_cuda_kernels::MAX_RANK {
+            // ponytail: ceiling = the catalogue's by-value layout rank, as for `slice_read`.
+            let staged = self.device_read(input, OP)?;
             return self.diagonal_wide(
-                input,
+                &staged,
                 kernel,
                 Entry::EmbedDiagonalCopy,
                 &shape,
                 &out_shape,
                 axis_a,
                 axis_b,
-                "embed_diagonal",
+                OP,
             );
         }
-        let strides = self.strides_of(input, "embed_diagonal")?;
-        let in_layout = compact_layout(&shape, &strides, "embed_diagonal")?;
-        let out_layout = compact_layout(
-            &out_shape,
-            &compact_strides(&out_shape, "embed_diagonal")?,
-            "embed_diagonal",
-        )?;
-        let in_len = count_i64(&shape, "embed_diagonal")?;
-        let out_len = count_i64(&out_shape, "embed_diagonal")?;
-        let output = alloc_tensor(self.runtime(), input.dtype(), &out_shape)?;
-        let plan = plan_embed_diagonal_copy(
-            kernel,
-            &in_layout,
-            in_len,
-            &out_layout,
-            out_len,
-            axis_a as u32,
-            axis_b as u32,
-        )
-        .map_err(|error| crate::Error::runtime_state_source("embed_diagonal", error))?;
-        let (destination, source) = self.two_allocations(&output, input, "embed_diagonal")?;
-        let (in_cl, out_cl) = (CLayout::new(&in_layout), CLayout::new(&out_layout));
-        self.launch_planned(
-            Entry::EmbedDiagonalCopy,
-            plan,
-            &[
-                Arg::DevicePtr(destination),
-                Arg::DevicePtr(source),
-                Arg::U32(kernel.tag() as u32),
-                layout_arg(&out_cl),
-                layout_arg(&in_cl),
-                Arg::I32(axis_a as i32),
-                Arg::I32(axis_b as i32),
-                Arg::U64(in_len as u64),
-            ],
-            "embed_diagonal",
-        )?;
+        let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
+        if element_count(&shape)? == 0 {
+            return Ok(output);
+        }
+        // The diagonal view: input axis `i` reads output axis `i + (i >= axis_b)`, and `axis_a`
+        // additionally reads the inserted axis, so its stride is the sum of both.
+        let out_strides = catalogue_strides(&compact_strides(&out_shape, OP)?, OP)?;
+        let mut diag_strides = Vec::with_capacity(shape.len());
+        for axis in 0..shape.len() {
+            let mapped = axis + usize::from(axis >= axis_b);
+            let stride = if axis == axis_a {
+                out_strides[mapped]
+                    .checked_add(out_strides[axis_b])
+                    .ok_or_else(|| {
+                        crate::Error::unsupported(OP, "a diagonal stride exceeds the ABI's int")
+                    })?
+            } else {
+                out_strides[mapped]
+            };
+            diag_strides.push(stride);
+        }
+        let diagonal = Layout::new(&region.extents, &diag_strides, 0)
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        let out_len = count_i64(&out_shape, OP)?;
+        let in_layout = region.layout(OP)?;
+        let in_len = region.len(OP)?;
+        let mut dispatcher = self.dispatcher(&[Entry::StridedToStrided])?;
+        with_scalar!(dtype, |T| {
+            dispatcher.strided_to_strided(
+                kernel,
+                &in_layout,
+                in_len,
+                &diagonal,
+                out_len,
+                self.allocation_of::<T>(&output, OP)?,
+                region.storage.allocation(),
+            )
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
         Ok(output)
     }
 
@@ -2094,14 +2175,10 @@ impl CudaEngine {
             .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
         let mut offset = 0usize;
         for input in inputs {
-            // The kernel reads a compact source, so a strided input is compacted first.
-            let compact = if compact_strides(input.shape(), op)? == self.strides_of(input, op)? {
-                None
-            } else {
-                Some(self.copy_to_fresh(input, input.shape().to_vec(), op)?)
-            };
-            let source = compact.as_ref().unwrap_or(input);
-            let in_shape = source.shape().to_vec();
+            // INVARIANT: the only caller passes compact tensors. A borrowed input is staged
+            // through `device_read`, and an owned tensor is compact column-major by construction,
+            // so the general path never sees a non-compact source here.
+            let in_shape = input.shape().to_vec();
             let in_extents: Vec<i64> = in_shape.iter().map(|&extent| extent as i64).collect();
             let in_strides: Vec<i64> = compact_strides(&in_shape, op)?
                 .iter()
@@ -2110,7 +2187,7 @@ impl CudaEngine {
             let in_len = count_i64(&in_shape, op)?;
             let in_ref = LayoutRef::new(&in_extents, &in_strides, 0)
                 .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-            let source_buffer = with_scalar!(dtype, |T| self.allocation_of::<T>(source, op))?;
+            let source_buffer = with_scalar!(dtype, |T| self.allocation_of::<T>(input, op))?;
             let axis_offset = i64::try_from(offset).map_err(|_| {
                 crate::Error::invalid_argument(
                     op,
@@ -2175,7 +2252,7 @@ impl CudaEngine {
                     )
                 }?;
             }
-            offset = offset.checked_add(source.shape()[axis]).ok_or_else(|| {
+            offset = offset.checked_add(input.shape()[axis]).ok_or_else(|| {
                 crate::Error::invalid_argument(op, "inputs", "the concatenation offset overflows")
             })?;
         }
@@ -3687,91 +3764,13 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         start_indices: &Tensor,
         config: &tenferro_tensor::GatherConfig,
     ) -> crate::Result<Tensor> {
-        let op = "gather";
-        if is_host(operand) || is_host(start_indices) {
-            return Err(crate::Error::unsupported(
-                op,
-                "a host operand would need an implicit transfer",
-            ));
-        }
-        let dtype = operand.dtype();
-        let kernel = kernel_dtype(dtype, op)?;
-        let index_dtype = index_dtype_of(start_indices.dtype(), op)?;
-        let index_kernel = kernel_dtype(index_dtype, op)?;
-        self.validate_exact_indices(start_indices, op)?;
-        let operand_shape = operand.shape().to_vec();
-        let operand_rank = u32::try_from(operand_shape.len())
-            .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
-        require_axes(
-            op,
-            "collapsed_slice_dims",
-            &config.collapsed_slice_dims,
-            operand_rank as usize,
-        )?;
-        // The output rank is not known yet; `gather_shape` checks these axes against it.
-        require_axes(op, "offset_dims", &config.offset_dims, usize::MAX)?;
-        require_axes(
-            op,
-            "start_index_map",
-            &config.start_index_map,
-            operand_rank as usize,
-        )?;
-        if config.slice_sizes.len() != operand_shape.len() {
-            return Err(crate::Error::rank_mismatch(
-                op,
-                operand_shape.len(),
-                config.slice_sizes.len(),
-            ));
-        }
-        let plan = gather_plan(config, operand_rank);
-        let indices_shape = start_indices.shape().to_vec();
-        let out_shape = gather_shape(&indices_shape, &plan, config)?;
-        if operand_shape.len() > t4a_cuda_kernels::MAX_RANK
-            || out_shape.len() > t4a_cuda_kernels::MAX_RANK
-            || indices_shape.len() > t4a_cuda_kernels::MAX_RANK
-        {
-            return self.gather_wide(
-                operand,
-                start_indices,
-                &plan,
-                &out_shape,
-                kernel,
-                index_kernel,
-                operand_rank,
-                op,
-            );
-        }
-        let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
-        let out_layout = self.layout_of(&output, op)?;
-        let operand_layout = self.layout_of(operand, op)?;
-        let indices_layout = self.layout_of(start_indices, op)?;
-        let out_len = count_i64(&out_shape, op)?;
-        let operand_len = count_i64(&operand_shape, op)?;
-        let indices_len = count_i64(&indices_shape, op)?;
-        let mut dispatcher = self.dispatcher(&[Entry::Gather])?;
-        with_scalar!(index_dtype, |I| {
-            let indices_buffer = self.allocation_of::<I>(start_indices, op)?;
-            with_scalar!(dtype, |T| {
-                dispatcher.gather(
-                    kernel,
-                    index_kernel,
-                    &out_layout,
-                    out_len,
-                    &operand_layout,
-                    operand_len,
-                    &indices_layout,
-                    indices_len,
-                    &plan,
-                    self.allocation_of::<T>(&output, op)?,
-                    self.allocation_of::<T>(operand, op)?,
-                    indices_buffer,
-                )
-            })
-        })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-        Ok(output)
+        // One read entry per operation: the owned form is the borrowed one with owned operands.
+        use tenferro_tensor::Engine as _;
+        self.gather_read(
+            TensorRead::from_tensor(operand),
+            TensorRead::from_tensor(start_indices),
+            config,
+        )
     }
 
     fn scatter(
@@ -3781,72 +3780,99 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         updates: &Tensor,
         config: &tenferro_tensor::ScatterConfig,
     ) -> crate::Result<Tensor> {
-        let op = "scatter";
-        if is_host(operand) || is_host(scatter_indices) || is_host(updates) {
-            return Err(crate::Error::unsupported(
-                op,
-                "a host operand would need an implicit transfer",
-            ));
+        self.scatter_read(
+            TensorRead::from_tensor(operand),
+            TensorRead::from_tensor(scatter_indices),
+            TensorRead::from_tensor(updates),
+            config,
+        )
+    }
+
+    fn scatter_read(
+        &mut self,
+        operand: TensorRead<'_>,
+        scatter_indices: TensorRead<'_>,
+        updates: TensorRead<'_>,
+        config: &tenferro_tensor::ScatterConfig,
+    ) -> crate::Result<Tensor> {
+        const OP: &str = "scatter_read";
+        // The operand and the update windows are read through their own layouts; the output
+        // starts as a copy of the operand region, which is the operation's required write. The
+        // index operand stays on the resolved compact path in this unit.
+        let region = self.read_region(&operand, OP)?;
+        let (operand_shape, dtype) = (region.shape.clone(), region.dtype);
+        let update_region = self.read_region(&updates, OP)?;
+        if update_region.dtype != dtype {
+            return Err(crate::Error::dtype_mismatch(OP, dtype, update_region.dtype));
         }
-        if updates.dtype() != operand.dtype() {
-            return Err(crate::Error::dtype_mismatch(
-                op,
-                operand.dtype(),
-                updates.dtype(),
-            ));
-        }
-        let dtype = operand.dtype();
-        let kernel = kernel_dtype(dtype, op)?;
-        let index_dtype = index_dtype_of(scatter_indices.dtype(), op)?;
-        let index_kernel = kernel_dtype(index_dtype, op)?;
-        self.validate_exact_indices(scatter_indices, op)?;
-        let operand_shape = operand.shape().to_vec();
+        let kernel = kernel_dtype(dtype, OP)?;
+        let indices = self.device_read(scatter_indices, OP)?;
+        let index_dtype = index_dtype_of(indices.dtype(), OP)?;
+        let index_kernel = kernel_dtype(index_dtype, OP)?;
+        self.validate_exact_indices(&indices, OP)?;
         let operand_rank = u32::try_from(operand_shape.len())
-            .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
+            .map_err(|_| crate::Error::unsupported(OP, "the rank exceeds the ABI's int"))?;
         let operand_rank_axes = operand_rank as usize;
         require_axes(
-            op,
+            OP,
             "inserted_window_dims",
             &config.inserted_window_dims,
             operand_rank_axes,
         )?;
         require_axes(
-            op,
+            OP,
             "scatter_dims_to_operand_dims",
             &config.scatter_dims_to_operand_dims,
             operand_rank_axes,
         )?;
         let plan = scatter_plan(config, operand_rank);
         if operand_shape.len() > t4a_cuda_kernels::MAX_RANK
-            || updates.shape().len() > t4a_cuda_kernels::MAX_RANK
-            || scatter_indices.shape().len() > t4a_cuda_kernels::MAX_RANK
+            || indices.shape().len() > t4a_cuda_kernels::MAX_RANK
+            || update_region.shape.len() > t4a_cuda_kernels::MAX_RANK
         {
+            // ponytail: ceiling = the catalogue's by-value layout rank, as for `gather_read`.
+            let staged_operand = self.device_read(operand, OP)?;
+            let staged_updates = self.device_read(updates, OP)?;
             return self.scatter_wide(
-                operand,
-                scatter_indices,
-                updates,
+                &staged_operand,
+                &indices,
+                &staged_updates,
                 &plan,
                 kernel,
                 index_kernel,
                 operand_rank,
-                op,
+                OP,
             );
         }
-        // Additive scatter accumulates into the operand copy. The copy is only enqueued:
-        // the accumulation below is submitted on the same stream, so stream order already
-        // covers it and no host wait is needed.
-        let output = self.enqueue_copy(operand, operand_shape.clone(), op)?;
-        let out_layout = self.layout_of(&output, op)?;
-        let indices_shape = scatter_indices.shape().to_vec();
-        let updates_shape = updates.shape().to_vec();
-        let indices_layout = self.layout_of(scatter_indices, op)?;
-        let updates_layout = self.layout_of(updates, op)?;
-        let out_len = count_i64(&operand_shape, op)?;
-        let indices_len = count_i64(&indices_shape, op)?;
-        let updates_len = count_i64(&updates_shape, op)?;
+        let output = alloc_tensor(self.runtime(), dtype, &operand_shape)?;
+        let out_layout = self.layout_of(&output, OP)?;
+        let out_len = count_i64(&operand_shape, OP)?;
+        let operand_layout = region.layout(OP)?;
+        let operand_len = region.len(OP)?;
+        {
+            // The operand copy is only enqueued: the accumulation below is submitted on the same
+            // stream, so stream order already covers it and no host wait is needed.
+            let mut dispatcher = self.dispatcher(&[Entry::StridedToStrided])?;
+            with_scalar!(dtype, |T| {
+                dispatcher.strided_to_strided(
+                    kernel,
+                    &operand_layout,
+                    operand_len,
+                    &out_layout,
+                    out_len,
+                    self.allocation_of::<T>(&output, OP)?,
+                    region.storage.allocation(),
+                )
+            })?;
+        }
+        let indices_shape = indices.shape().to_vec();
+        let indices_layout = self.layout_of(&indices, OP)?;
+        let updates_layout = update_region.layout(OP)?;
+        let indices_len = count_i64(&indices_shape, OP)?;
+        let updates_len = update_region.len(OP)?;
         let mut dispatcher = self.dispatcher(&[Entry::ScatterAdd])?;
         with_scalar!(index_dtype, |I| {
-            let indices_buffer = self.allocation_of::<I>(scatter_indices, op)?;
+            let indices_buffer = self.allocation_of::<I>(&indices, OP)?;
             with_scalar!(dtype, |T| {
                 dispatcher.scatter_add(
                     kernel,
@@ -3858,15 +3884,15 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                     &updates_layout,
                     updates_len,
                     &plan,
-                    self.allocation_of::<T>(&output, op)?,
+                    self.allocation_of::<T>(&output, OP)?,
                     indices_buffer,
-                    self.allocation_of::<T>(updates, op)?,
+                    update_region.storage.allocation(),
                 )
             })
         })?;
         self.runtime()
             .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
         Ok(output)
     }
 
@@ -3875,22 +3901,29 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         input: &Tensor,
         config: &tenferro_tensor::SliceConfig,
     ) -> crate::Result<Tensor> {
-        let op = "slice";
-        if is_host(input) {
-            return Err(crate::Error::unsupported(
-                op,
-                "a host operand would need an implicit transfer",
-            ));
-        }
-        let shape = input.shape().to_vec();
+        self.slice_read(TensorRead::from_tensor(input), config)
+    }
+
+    fn slice_read(
+        &mut self,
+        input: TensorRead<'_>,
+        config: &tenferro_tensor::SliceConfig,
+    ) -> crate::Result<Tensor> {
+        const OP: &str = "slice_read";
+        // The window kernel addresses the operand's own layout, so a strided view is read in
+        // place and only a rank it cannot carry is staged.
+        let region = self.read_region(&input, OP)?;
+        let (shape, dtype) = (region.shape.clone(), region.dtype);
         let out_shape = slice_window(&shape, config)?;
-        let dtype = input.dtype();
-        let kernel = kernel_dtype(dtype, op)?;
+        let kernel = kernel_dtype(dtype, OP)?;
+        let starts: Vec<i64> = config.starts.iter().map(|&value| value as i64).collect();
+        let steps: Vec<i64> = config.strides.iter().map(|&value| value as i64).collect();
         if shape.len() > t4a_cuda_kernels::MAX_RANK {
-            let starts: Vec<i64> = config.starts.iter().map(|&value| value as i64).collect();
-            let steps: Vec<i64> = config.strides.iter().map(|&value| value as i64).collect();
+            // ponytail: ceiling = the catalogue's by-value layout rank. A wider view has no
+            // layout argument, so it keeps one staging copy and the device-geometry path.
+            let staged = self.device_read(input, OP)?;
             return self.window_wide(
-                input,
+                &staged,
                 kernel,
                 Entry::Slice,
                 &shape,
@@ -3900,16 +3933,14 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                     second: &steps,
                     pad_high: &[],
                 },
-                op,
+                OP,
             );
         }
+        let in_layout = region.layout(OP)?;
+        let in_len = region.len(OP)?;
         let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
-        let out_layout = self.layout_of(&output, op)?;
-        let in_layout = self.layout_of(input, op)?;
-        let out_len = count_i64(&out_shape, op)?;
-        let in_len = count_i64(&shape, op)?;
-        let starts: Vec<i64> = config.starts.iter().map(|&value| value as i64).collect();
-        let steps: Vec<i64> = config.strides.iter().map(|&value| value as i64).collect();
+        let out_layout = self.layout_of(&output, OP)?;
+        let out_len = count_i64(&out_shape, OP)?;
         let mut dispatcher = self.dispatcher(&[Entry::Slice])?;
         with_scalar!(dtype, |T| {
             dispatcher.slice(
@@ -3920,13 +3951,13 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 in_len,
                 &starts,
                 &steps,
-                self.allocation_of::<T>(&output, op)?,
-                self.allocation_of::<T>(input, op)?,
+                self.allocation_of::<T>(&output, OP)?,
+                region.storage.allocation(),
             )
         })?;
         self.runtime()
             .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
         Ok(output)
     }
 
@@ -3936,24 +3967,34 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         starts: &Tensor,
         slice_sizes: &[usize],
     ) -> crate::Result<Tensor> {
-        let op = "dynamic_slice";
-        if is_host(input) || is_host(starts) {
-            return Err(crate::Error::unsupported(
-                op,
-                "a host operand would need an implicit transfer",
-            ));
-        }
-        let shape = input.shape().to_vec();
+        self.dynamic_slice_read(
+            TensorRead::from_tensor(input),
+            TensorRead::from_tensor(starts),
+            slice_sizes,
+        )
+    }
+
+    fn dynamic_slice_read(
+        &mut self,
+        input: TensorRead<'_>,
+        starts: TensorRead<'_>,
+        slice_sizes: &[usize],
+    ) -> crate::Result<Tensor> {
+        const OP: &str = "dynamic_slice_read";
+        // The window kernel addresses the operand's own layout. The starts tensor is a small
+        // device read of its own and stays on the existing resolved path.
+        let region = self.read_region(&input, OP)?;
+        let (shape, dtype) = (region.shape.clone(), region.dtype);
         if slice_sizes.len() != shape.len() {
             return Err(crate::Error::rank_mismatch(
-                op,
+                OP,
                 shape.len(),
                 slice_sizes.len(),
             ));
         }
         if let Some(axis) = (0..shape.len()).find(|&axis| slice_sizes[axis] > shape[axis]) {
             return Err(crate::Error::invalid_argument(
-                op,
+                OP,
                 "slice_sizes",
                 format!(
                     "extent {} on axis {axis} exceeds the dimension {}",
@@ -3961,9 +4002,10 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 ),
             ));
         }
+        let starts = self.device_read(starts, OP)?;
         if element_count(starts.shape())? != shape.len() {
             return Err(crate::Error::invalid_argument(
-                op,
+                OP,
                 "starts",
                 format!(
                     "the starts tensor holds {} values for a rank-{} operand",
@@ -3972,33 +4014,34 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 ),
             ));
         }
-        let index_dtype = index_dtype_of(starts.dtype(), op)?;
-        self.validate_exact_indices(starts, op)?;
-        let dtype = input.dtype();
-        let kernel = kernel_dtype(dtype, op)?;
-        let index_kernel = kernel_dtype(index_dtype, op)?;
+        let index_dtype = index_dtype_of(starts.dtype(), OP)?;
+        self.validate_exact_indices(&starts, OP)?;
+        let kernel = kernel_dtype(dtype, OP)?;
+        let index_kernel = kernel_dtype(index_dtype, OP)?;
         let out_shape = slice_sizes.to_vec();
         if shape.len() > t4a_cuda_kernels::MAX_RANK {
+            // ponytail: ceiling = the catalogue's by-value layout rank, as for `slice_read`.
+            let staged = self.device_read(input, OP)?;
             return self.dynamic_slice_wide(
-                input,
-                starts,
+                &staged,
+                &starts,
                 kernel,
                 index_kernel,
                 &shape,
                 &out_shape,
-                op,
+                OP,
             );
         }
+        let in_layout = region.layout(OP)?;
+        let in_len = region.len(OP)?;
         let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
-        let out_layout = self.layout_of(&output, op)?;
-        let in_layout = self.layout_of(input, op)?;
-        let out_len = count_i64(&out_shape, op)?;
-        let in_len = count_i64(&shape, op)?;
+        let out_layout = self.layout_of(&output, OP)?;
+        let out_len = count_i64(&out_shape, OP)?;
         let starts_rank = u32::try_from(out_shape.len())
-            .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
+            .map_err(|_| crate::Error::unsupported(OP, "the rank exceeds the ABI's int"))?;
         let mut dispatcher = self.dispatcher(&[Entry::DynamicSlice])?;
         with_scalar!(index_dtype, |I| {
-            let start_buffer = self.allocation_of::<I>(starts, op)?;
+            let start_buffer = self.allocation_of::<I>(&starts, OP)?;
             with_scalar!(dtype, |T| {
                 dispatcher.dynamic_slice(
                     kernel,
@@ -4008,15 +4051,15 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                     &in_layout,
                     in_len,
                     starts_rank,
-                    self.allocation_of::<T>(&output, op)?,
-                    self.allocation_of::<T>(input, op)?,
+                    self.allocation_of::<T>(&output, OP)?,
+                    region.storage.allocation(),
                     start_buffer,
                 )
             })
         })?;
         self.runtime()
             .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
         Ok(output)
     }
 
@@ -4034,8 +4077,20 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
     }
 
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-        let op = "concatenate";
-        let Some(first) = inputs.first().copied() else {
+        let reads: Vec<TensorRead<'_>> = inputs
+            .iter()
+            .map(|input| TensorRead::from_tensor(input))
+            .collect();
+        self.concatenate_read(&reads, axis)
+    }
+
+    fn concatenate_read(
+        &mut self,
+        inputs: &[TensorRead<'_>],
+        axis: usize,
+    ) -> crate::Result<Tensor> {
+        let op = "concatenate_read";
+        let Some(first) = inputs.first() else {
             return Err(crate::Error::invalid_argument(
                 op,
                 "inputs",
@@ -4051,12 +4106,6 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         let mut out_shape = shape.clone();
         out_shape[axis] = 0;
         for input in inputs {
-            if is_host(input) {
-                return Err(crate::Error::unsupported(
-                    op,
-                    "a host operand would need an implicit transfer",
-                ));
-            }
             if input.dtype() != dtype {
                 return Err(crate::Error::dtype_mismatch(op, dtype, input.dtype()));
             }
@@ -4081,53 +4130,63 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 )
             })?;
         }
+        // Resolve and validate every input region before allocating or submitting anything, so a
+        // refused later input cannot leave an earlier copy running into a dropped output.
+        let regions: Vec<Region<'_>> = inputs
+            .iter()
+            .map(|input| self.read_region(input, op))
+            .collect::<crate::Result<_>>()?;
         let kernel = kernel_dtype(dtype, op)?;
         if rank > t4a_cuda_kernels::MAX_RANK {
-            return self.concatenate_wide(inputs, &out_shape, axis, dtype, kernel, op);
+            // ponytail: ceiling = the catalogue's by-value layout rank. The general path needs a
+            // compact source per input, so each validated region is staged first.
+            let mut staged = Vec::with_capacity(inputs.len());
+            for input in inputs {
+                staged.push(self.device_read((*input).clone(), op)?);
+            }
+            let refs: Vec<&Tensor> = staged.iter().map(|input| input.tensor()).collect();
+            return self.concatenate_wide(&refs, &out_shape, axis, dtype, kernel, op);
         }
         let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
-        let out_layout = self.layout_of(&output, op)?;
+        let out_strides = catalogue_strides(&compact_strides(&out_shape, op)?, op)?;
         let out_len = count_i64(&out_shape, op)?;
-        // The kernel reads a compact source, so a strided input is compacted before the shared
-        // dispatcher is borrowed.
-        let mut compacted: Vec<Option<Tensor>> = Vec::with_capacity(inputs.len());
-        for input in inputs {
-            let compact = if compact_strides(input.shape(), op)? == self.strides_of(input, op)? {
-                None
-            } else {
-                Some(self.copy_to_fresh(input, input.shape().to_vec(), op)?)
-            };
-            compacted.push(compact);
-        }
-        let mut dispatcher = self.dispatcher(&[Entry::ConcatenateCopy])?;
+        // Each input is copied straight from its own region into the output's slab for that
+        // input: the destination is the output's compact strides over the input's extents, at the
+        // running offset along the concatenated axis.
+        let mut dispatcher = self.dispatcher(&[Entry::StridedToStrided])?;
         let mut offset = 0usize;
-        for (input, compact) in inputs.iter().zip(compacted.iter()) {
-            let source = compact.as_ref().unwrap_or(input);
-            let in_layout = self.layout_of(source, op)?;
-            let in_len = count_i64(source.shape(), op)?;
-            let axis_u32 = u32::try_from(axis)
-                .map_err(|_| crate::Error::unsupported(op, "the rank exceeds the ABI's int"))?;
-            let axis_offset = i64::try_from(offset).map_err(|_| {
-                crate::Error::invalid_argument(
-                    op,
-                    "inputs",
-                    "the concatenation offset is too large",
-                )
-            })?;
+        for region in &regions {
+            let axis_offset = out_strides[axis]
+                .checked_mul(i64::try_from(offset).map_err(|_| {
+                    crate::Error::invalid_argument(
+                        op,
+                        "inputs",
+                        "the concatenation offset is too large",
+                    )
+                })?)
+                .ok_or_else(|| {
+                    crate::Error::invalid_argument(
+                        op,
+                        "inputs",
+                        "the concatenation offset overflows",
+                    )
+                })?;
+            let slab = Layout::new(&region.extents, &out_strides, axis_offset)
+                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            let in_layout = region.layout(op)?;
+            let in_len = region.len(op)?;
             with_scalar!(dtype, |T| {
-                dispatcher.concatenate_copy(
+                dispatcher.strided_to_strided(
                     kernel,
-                    &out_layout,
-                    out_len,
                     &in_layout,
                     in_len,
-                    axis_u32,
-                    axis_offset,
+                    &slab,
+                    out_len,
                     self.allocation_of::<T>(&output, op)?,
-                    self.allocation_of::<T>(source, op)?,
+                    region.storage.allocation(),
                 )
             })?;
-            offset = offset.checked_add(source.shape()[axis]).ok_or_else(|| {
+            offset = offset.checked_add(region.shape[axis]).ok_or_else(|| {
                 crate::Error::invalid_argument(op, "inputs", "the concatenation offset overflows")
             })?;
         }
@@ -4138,34 +4197,66 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
     }
 
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        let op = "reverse";
-        if is_host(input) {
-            return Err(crate::Error::unsupported(
-                op,
-                "a host operand would need an implicit transfer",
-            ));
-        }
-        let shape = input.shape().to_vec();
-        let strides = self.strides_of(input, op)?;
-        let mut view_strides: Vec<i64> = strides.iter().map(|&stride| stride as i64).collect();
-        let mut offset = 0i64;
+        self.reverse_read(TensorRead::from_tensor(input), axes)
+    }
+
+    fn reverse_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        const OP: &str = "reverse_read";
+        let region = self.read_region(&input, OP)?;
+        let shape = region.shape.clone();
+        // Validate every named axis before touching the geometry.
         for (index, &axis) in axes.iter().enumerate() {
             if axis >= shape.len() {
-                return Err(crate::Error::axis_out_of_bounds(op, axis, shape.len()));
+                return Err(crate::Error::axis_out_of_bounds(OP, axis, shape.len()));
             }
             if axes[..index].contains(&axis) {
                 return Err(crate::Error::invalid_argument(
-                    op,
+                    OP,
                     "axes",
                     format!("axis {axis} is listed twice"),
                 ));
             }
-            let stride = view_strides[axis];
-            offset += (shape[axis] as i64 - 1) * stride;
-            view_strides[axis] = -stride;
         }
-        let extents: Vec<i64> = shape.iter().map(|&extent| extent as i64).collect();
-        self.materialize_view(input, &extents, &view_strides, offset, shape, op)
+        let mut strides = region.strides.clone();
+        let mut offset = region.offset;
+        // An empty region has no element to address, so reversing it skips the geometry updates
+        // entirely. A singleton axis keeps its geometry too: reversing its only element is the
+        // identity, and that includes a stride whose negation would overflow.
+        if !shape.contains(&0) {
+            for &axis in axes {
+                if shape[axis] <= 1 {
+                    continue;
+                }
+                let far_end = (shape[axis] as i64 - 1)
+                    .checked_mul(strides[axis])
+                    .and_then(|step| offset.checked_add(step))
+                    .ok_or_else(|| {
+                        crate::Error::invalid_argument(
+                            OP,
+                            "axes",
+                            format!("the reversed offset overflows on axis {axis}"),
+                        )
+                    })?;
+                offset = far_end;
+                strides[axis] = strides[axis].checked_neg().ok_or_else(|| {
+                    crate::Error::invalid_argument(
+                        OP,
+                        "axes",
+                        format!("the reversed stride overflows on axis {axis}"),
+                    )
+                })?;
+            }
+        }
+        self.materialize_storage(
+            region.storage,
+            region.len(OP)?,
+            region.dtype,
+            &region.extents,
+            &strides,
+            offset,
+            shape,
+            OP,
+        )
     }
 
     fn pad(
@@ -4173,20 +4264,25 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         input: &Tensor,
         config: &tenferro_tensor::PadConfig,
     ) -> crate::Result<Tensor> {
-        let op = "pad";
-        if is_host(input) {
-            return Err(crate::Error::unsupported(
-                op,
-                "a host operand would need an implicit transfer",
-            ));
-        }
-        let shape = input.shape().to_vec();
+        self.pad_read(TensorRead::from_tensor(input), config)
+    }
+
+    fn pad_read(
+        &mut self,
+        input: TensorRead<'_>,
+        config: &tenferro_tensor::PadConfig,
+    ) -> crate::Result<Tensor> {
+        const OP: &str = "pad_read";
+        // The padding kernel addresses the operand's own layout.
+        let region = self.read_region(&input, OP)?;
+        let (shape, dtype) = (region.shape.clone(), region.dtype);
         let out_shape = padded_shape(&shape, config)?;
-        let dtype = input.dtype();
-        let kernel = kernel_dtype(dtype, op)?;
+        let kernel = kernel_dtype(dtype, OP)?;
         if shape.len() > t4a_cuda_kernels::MAX_RANK {
+            // ponytail: ceiling = the catalogue's by-value layout rank, as for `slice_read`.
+            let staged = self.device_read(input, OP)?;
             return self.window_wide(
-                input,
+                &staged,
                 kernel,
                 Entry::Pad,
                 &shape,
@@ -4196,20 +4292,19 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                     second: &config.interior_padding,
                     pad_high: &config.edge_padding_high,
                 },
-                op,
+                OP,
             );
         }
-        // An empty operand has no element to place, so every output element is padding and
-        // the zeroed allocation is already the answer — and an empty allocation has no
-        // device address to hand the kernel.
-        let in_len = count_i64(&shape, op)?;
         let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
-        if in_len == 0 {
+        // An empty operand has no element to place, so every output element is padding and
+        // the zeroed allocation is already the answer.
+        if element_count(&shape)? == 0 {
             return Ok(output);
         }
-        let out_layout = self.layout_of(&output, op)?;
-        let in_layout = self.layout_of(input, op)?;
-        let out_len = count_i64(&out_shape, op)?;
+        let in_layout = region.layout(OP)?;
+        let in_len = region.len(OP)?;
+        let out_layout = self.layout_of(&output, OP)?;
+        let out_len = count_i64(&out_shape, OP)?;
         let mut dispatcher = self.dispatcher(&[Entry::Pad])?;
         with_scalar!(dtype, |T| {
             dispatcher.pad(
@@ -4221,13 +4316,13 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 &config.edge_padding_low,
                 &config.edge_padding_high,
                 &config.interior_padding,
-                self.allocation_of::<T>(&output, op)?,
-                self.allocation_of::<T>(input, op)?,
+                self.allocation_of::<T>(&output, OP)?,
+                region.storage.allocation(),
             )
         })?;
         self.runtime()
             .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
         Ok(output)
     }
 }
@@ -4959,11 +5054,93 @@ impl tenferro_tensor::Engine for CudaEngine {
         start_indices: tenferro_tensor::TensorRead<'_>,
         config: &tenferro_tensor::GatherConfig,
     ) -> crate::Result<Tensor> {
-        use tenferro_tensor::TensorIndexing as _;
-        let op = "gather_read";
-        let operand = self.device_read(operand, op)?;
-        let indices = self.device_read(start_indices, op)?;
-        self.gather(&operand, &indices, config)
+        const OP: &str = "gather_read";
+        // The gather kernel addresses the operand's own layout; only the index operand is still
+        // resolved into a compact read in this unit (#1930 keeps that open).
+        let region = self.read_region(&operand, OP)?;
+        let (operand_shape, dtype) = (region.shape.clone(), region.dtype);
+        let kernel = kernel_dtype(dtype, OP)?;
+        let indices = self.device_read(start_indices, OP)?;
+        let index_dtype = index_dtype_of(indices.dtype(), OP)?;
+        let index_kernel = kernel_dtype(index_dtype, OP)?;
+        self.validate_exact_indices(&indices, OP)?;
+        let operand_rank = u32::try_from(operand_shape.len())
+            .map_err(|_| crate::Error::unsupported(OP, "the rank exceeds the ABI's int"))?;
+        require_axes(
+            OP,
+            "collapsed_slice_dims",
+            &config.collapsed_slice_dims,
+            operand_rank as usize,
+        )?;
+        // The output rank is not known yet; `gather_shape` checks these axes against it.
+        require_axes(OP, "offset_dims", &config.offset_dims, usize::MAX)?;
+        require_axes(
+            OP,
+            "start_index_map",
+            &config.start_index_map,
+            operand_rank as usize,
+        )?;
+        if config.slice_sizes.len() != operand_shape.len() {
+            return Err(crate::Error::rank_mismatch(
+                OP,
+                operand_shape.len(),
+                config.slice_sizes.len(),
+            ));
+        }
+        let plan = gather_plan(config, operand_rank);
+        let indices_shape = indices.shape().to_vec();
+        let out_shape = gather_shape(&indices_shape, &plan, config)?;
+        if operand_shape.len() > t4a_cuda_kernels::MAX_RANK
+            || out_shape.len() > t4a_cuda_kernels::MAX_RANK
+            || indices_shape.len() > t4a_cuda_kernels::MAX_RANK
+        {
+            // ponytail: ceiling = the catalogue's by-value layout rank. A wider operand keeps
+            // one staging copy and the device-geometry gather.
+            let staged = self.device_read(operand, OP)?;
+            return self.gather_wide(
+                &staged,
+                &indices,
+                &plan,
+                &out_shape,
+                kernel,
+                index_kernel,
+                operand_rank,
+                OP,
+            );
+        }
+        let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
+        let out_layout = self.layout_of(&output, OP)?;
+        let operand_layout = region.layout(OP)?;
+        // The planner bounds the operand layout's reachable span by its whole allocation, which
+        // is what a region view of a larger buffer needs.
+        let operand_len = region.len(OP)?;
+        let indices_layout = self.layout_of(&indices, OP)?;
+        let out_len = count_i64(&out_shape, OP)?;
+        let indices_len = count_i64(&indices_shape, OP)?;
+        let mut dispatcher = self.dispatcher(&[Entry::Gather])?;
+        with_scalar!(index_dtype, |I| {
+            let indices_buffer = self.allocation_of::<I>(&indices, OP)?;
+            with_scalar!(dtype, |T| {
+                dispatcher.gather(
+                    kernel,
+                    index_kernel,
+                    &out_layout,
+                    out_len,
+                    &operand_layout,
+                    operand_len,
+                    &indices_layout,
+                    indices_len,
+                    &plan,
+                    self.allocation_of::<T>(&output, OP)?,
+                    region.storage.allocation(),
+                    indices_buffer,
+                )
+            })
+        })?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        Ok(output)
     }
 
     fn native_engine(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
