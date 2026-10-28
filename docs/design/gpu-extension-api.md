@@ -177,7 +177,6 @@ package line `cubecl = { package = "t4a-cubecl", version = "=0.10.0" }`.
 ```rust
 #[non_exhaustive]
 pub enum GpuExtensionCapability {
-    CubeClKernel,
     NativeModule,
     RuntimeCompilation,
     RawStream,

@@ -404,8 +404,7 @@ impl CudaDriverApi {
 /// Discover CUDA devices visible to the current process.
 ///
 /// Discovery initializes the CUDA driver and queries device ordinals directly.
-/// It does not create a CUDA context, CUDA runtime, CubeCL runtime, backend, or
-/// client. Device ordinals are process-visible and may change when
+/// It does not create a CUDA context, CUDA runtime, backend, or client. Device ordinals are process-visible and may change when
 /// `CUDA_VISIBLE_DEVICES` changes. The returned values have deterministic
 /// `Eq` and `Debug` behavior only while that process-visible topology remains
 /// unchanged.

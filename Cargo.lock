@@ -2630,7 +2630,6 @@ dependencies = [
  "criterion",
  "cudarc",
  "libloading 0.8.9",
- "lru",
  "num-complex",
  "num-traits",
  "smallvec",

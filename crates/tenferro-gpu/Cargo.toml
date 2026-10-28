@@ -29,7 +29,6 @@ blas = ["tenferro-cpu/blas"]
 blas-openblas = ["tenferro-cpu/blas-openblas"]
 blas-accelerate = ["tenferro-cpu/blas-accelerate"]
 blas-mkl = ["tenferro-cpu/blas-mkl"]
-cpu-reference = []
 # The CUDA engine: the operation surface over the kernel catalogue, plus the vendor bindings.
 cuda = ["dep:t4a-cuda-runtime", "dep:t4a-cuda-kernels", "dep:cudarc"]
 rocm = []
@@ -47,7 +46,6 @@ t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev 
 t4a-cuda-kernels = { git = "https://github.com/tensor4all/t4a-cuda-kernels", rev = "788bd1444cd7b88e7e91a2c4b1478e99293e7926", optional = true }
 cudarc = { workspace = true, optional = true, features = ["cublas", "cutensor"] }
 libloading.workspace = true
-lru = { workspace = true, optional = true }
 num-complex.workspace = true
 num-traits.workspace = true
 smallvec.workspace = true
@@ -58,8 +56,6 @@ thiserror.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 trybuild.workspace = true
-# Unit tests build handles that only carry tenferro's own bookkeeping; 0.11's
-# `Handle` needs the service id those handles name.
 
 [[example]]
 name = "cuda_quickstart"
@@ -83,18 +79,8 @@ path = "tests/warm_up.rs"
 required-features = ["cuda"]
 
 [[test]]
-name = "source_publication"
-path = "tests/source_publication.rs"
-required-features = ["cuda"]
-
-[[test]]
 name = "chunked_staging"
 path = "tests/chunked_staging.rs"
-required-features = ["cuda"]
-
-[[test]]
-name = "consumer_copy"
-path = "tests/consumer_copy.rs"
 required-features = ["cuda"]
 
 [[test]]

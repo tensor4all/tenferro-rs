@@ -55,8 +55,7 @@ impl crate::gpu::Backend for CudaBackend {
     type Allocation = t4a_cuda_runtime::Buffer;
 }
 
-/// Whether any CUDA device is usable, probed through the new runtime rather than the
-/// CubeCL path, so a new-path test cannot be skipped because the old backend failed.
+/// Whether any CUDA device is usable, probed through the CUDA runtime.
 #[doc(hidden)]
 pub fn gpu_available() -> bool {
     let available = t4a_cuda_runtime::device_count()

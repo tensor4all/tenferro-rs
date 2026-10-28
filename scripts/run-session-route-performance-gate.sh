@@ -100,8 +100,7 @@ BENCHMARKS=(
   "tenferro-gpu|route_matrix_gpu|cuda|crates/tenferro-gpu/benches/route_matrix_gpu.rs|CUDA engine contraction routes (session/* arm names as emitted) with enqueue and synchronized completion reported separately"
 )
 
-# CUDA runtime for the GPU targets. CUBECL_DEBUG_LOG=0 is required: without it
-# CubeCL prints the generated CUDA source for every JIT-compiled kernel.
+# CUDA runtime for the GPU targets.
 CUDA_ROOT="${TENFERRO_CUDA_ROOT:-/usr/local/cuda-12.6}"
 CUTENSOR_LIB_DIR="${TENFERRO_CUTENSOR_LIB_DIR:-/usr/lib/x86_64-linux-gnu/libcutensor/12}"
 
@@ -191,7 +190,6 @@ for entry in "${BENCHMARKS[@]}"; do
     printf 'gpu_target=%s cuda_root=%s cutensor=%s\n' \
       "$bench" "$CUDA_ROOT" "$CUTENSOR_LIB_DIR" >>"$manifest"
     run_env=(
-      CUBECL_DEBUG_LOG=0
       "CUDA_PATH=$CUDA_ROOT"
       "LD_LIBRARY_PATH=$CUDA_ROOT/lib64:$CUTENSOR_LIB_DIR:${LD_LIBRARY_PATH:-}"
     )

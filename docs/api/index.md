@@ -25,7 +25,7 @@ For contributors, internal crate APIs are also available in the
 - [tenferro-cpu](./tenferro_cpu/index.html): public CPU backend, CPU execution
   sessions, execution context, provider selection, thread policy, and
   resource-pool controls
-- [tenferro-gpu](./tenferro_gpu/index.html): CubeCL/CUDA backend and GPU
+- [tenferro-gpu](./tenferro_gpu/index.html): CUDA backend and GPU
   transfer helpers
 - [tenferro-einsum](./tenferro_einsum/index.html): subscripts,
   contraction planning, concrete/traced/eager einsum APIs, extension runtime,

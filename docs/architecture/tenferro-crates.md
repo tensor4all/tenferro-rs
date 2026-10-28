@@ -40,7 +40,7 @@ stack. `tenferro-xla` is a peer executor over compiled static programs, not an
 | `tenferro-cpu` | `CpuEngine` (the caller-held CPU engine and its thread pool), CPU provider selection, thread policy, public resource-pool controls, and the CPU runtime-registration preparation/execution adapter |
 | `tenferro-cpu-basic` | Shared CPU buffer pool, full-overwrite destination guard, and host strided-storage adapters used by CPU kernel families |
 | `tenferro-cpu-fused` | Internal CPU runtime-DAG fused elementwise adapter; delegates traversal to the fused strided kernel |
-| `tenferro-gpu` | CubeCL/CUDA backend and GPU transfer helpers |
+| `tenferro-gpu` | CUDA backend and GPU transfer helpers |
 | `tenferro-runtime` | Concrete tensor helpers, traced tensors, graph compilation/execution, immutable runtime snapshots, preparation SPI/cache substrate, runtime-owned compiled-graph execution, scheduled-graph staging, extension runtime registration, and extension cache storage |
 | `tenferro-xla` | Experimental StableHLO lowering and runtime-loaded PJRT plugin support for static-shaped traced programs |
 | `tenferro-ad` | Eager runtime, eager tensors, and traced AD extension traits |
@@ -110,7 +110,7 @@ Layer 2: tenferro-tensor
          runtime-DAG fused elementwise adapter
 
          tenferro-gpu
-         CubeCL/CUDA backend and GPU transfer helpers
+         CUDA backend and GPU transfer helpers
 
 Layer 1: tenferro-tensor-core
          rank/layout metadata, dtype tags, scalar tags

@@ -1,7 +1,7 @@
 //! Provider-neutral GPU extension vocabulary (issue #1597).
 //!
 //! These types describe capabilities and stable device identity without
-//! forcing CUDA-, CubeCL-, or WebGPU-specific concepts into a shared surface.
+//! forcing CUDA-specific concepts into a shared surface.
 //! Backend-specific operations live in their provider namespaces
 //! (`cuda`, `webgpu`); the types here are shared vocabulary only.
 
@@ -113,8 +113,6 @@ pub struct CudaComputeCapability {
 #[non_exhaustive]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum GpuExtensionCapability {
-    /// Launch external kernels through the CubeCL client.
-    CubeClKernel,
     /// Load native (PTX/CUBIN/SPIR-V) module artifacts.
     NativeModule,
     /// Compile kernel source at runtime (NVRTC / shader compiler).

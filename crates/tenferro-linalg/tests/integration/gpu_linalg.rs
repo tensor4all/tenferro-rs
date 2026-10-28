@@ -375,7 +375,7 @@ fn assert_singular_values(s: &[f64]) {
 
 #[test]
 #[ignore]
-fn test_cubecl_cholesky_batched_f64_matches_cpu() {
+fn test_cuda_cholesky_batched_f64_matches_cpu() {
     let l0 = vec![2.0, 1.0, 2.0, 0.0, 3.0, -1.0, 0.0, 0.0, 1.5];
     let l1 = vec![1.5, -0.5, 1.0, 0.0, 2.0, 0.75, 0.0, 0.0, 1.25];
     let a0 = matmul_f64(&l0, &transpose_f64(&l0, 3, 3), 3, 3, 3);
@@ -394,7 +394,7 @@ fn test_cubecl_cholesky_batched_f64_matches_cpu() {
 
 #[test]
 #[ignore]
-fn test_cubecl_triangular_solve_c32_reconstructs_rhs() {
+fn test_cuda_triangular_solve_c32_reconstructs_rhs() {
     let a = tensor_c32(
         vec![2, 2],
         vec![
@@ -425,7 +425,7 @@ fn test_cubecl_triangular_solve_c32_reconstructs_rhs() {
 
 #[test]
 #[ignore]
-fn test_cubecl_triangular_solve_batched_f64_matches_cpu() {
+fn test_cuda_triangular_solve_batched_f64_matches_cpu() {
     let a = tensor_f64(vec![2, 2, 2], vec![2.0, 0.0, 1.0, 3.0, 4.0, 0.0, -1.0, 2.0]);
     let b = tensor_f64(vec![2, 1, 2], vec![5.0, 9.0, 2.0, 3.0]);
     let mut cpu = cpu_backend();
@@ -446,7 +446,7 @@ fn test_cubecl_triangular_solve_batched_f64_matches_cpu() {
 
 #[test]
 #[ignore]
-fn test_cubecl_lu_f32_reconstructs_pa_equals_lu() {
+fn test_cuda_lu_f32_reconstructs_pa_equals_lu() {
     let input = tensor_f32(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]);
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
@@ -467,7 +467,7 @@ fn test_cubecl_lu_f32_reconstructs_pa_equals_lu() {
 
 #[test]
 #[ignore]
-fn test_cubecl_lu_f32_handles_rectangular_pivots() {
+fn test_cuda_lu_f32_handles_rectangular_pivots() {
     let rectangular = tensor_f32(vec![3, 2], vec![0.0, 2.0, 0.0, 1.0, 3.0, 0.0]);
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &rectangular);
@@ -493,7 +493,7 @@ fn test_cubecl_lu_f32_handles_rectangular_pivots() {
 
 #[test]
 #[ignore]
-fn test_cubecl_lu_f32_handles_batched_pivots() {
+fn test_cuda_lu_f32_handles_batched_pivots() {
     let batched = tensor_f32(vec![2, 2, 2], vec![0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &batched);
@@ -521,7 +521,7 @@ fn test_cubecl_lu_f32_handles_batched_pivots() {
 
 #[test]
 #[ignore]
-fn test_cubecl_svd_c32_reconstructs_input() {
+fn test_cuda_svd_c32_reconstructs_input() {
     let input = tensor_c32(
         vec![3, 2],
         vec![
@@ -558,7 +558,7 @@ fn test_cubecl_svd_c32_reconstructs_input() {
 
 #[test]
 #[ignore]
-fn test_cubecl_svd_values_f64_matches_cpu() {
+fn test_cuda_svd_values_f64_matches_cpu() {
     let input = tensor_f64(vec![3, 2], vec![1.0, 2.0, -0.5, 0.25, 3.0, -1.0]);
     let mut cpu = cpu_backend();
     let expected = with_cpu_linalg_session(&mut cpu, |session| session.svd_values(&input)).unwrap();
@@ -572,7 +572,7 @@ fn test_cubecl_svd_values_f64_matches_cpu() {
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU and exercises legacy gesvd above 1024"]
-fn test_cubecl_svd_gesvd_wide_f64_reconstructs_and_matches_values() {
+fn test_cuda_svd_gesvd_wide_f64_reconstructs_and_matches_values() {
     const M: usize = 8;
     const N: usize = 1025;
     let data = (0..N)
@@ -625,7 +625,7 @@ fn test_cubecl_svd_gesvd_wide_f64_reconstructs_and_matches_values() {
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU and exercises complex legacy gesvd above 1024"]
-fn test_cubecl_svd_gesvd_wide_c64_preserves_adjoint_mapping() {
+fn test_cuda_svd_gesvd_wide_c64_preserves_adjoint_mapping() {
     const M: usize = 8;
     const N: usize = 1025;
     let data = (0..N)
@@ -680,7 +680,7 @@ fn test_cubecl_svd_gesvd_wide_c64_preserves_adjoint_mapping() {
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU and exercises legacy gesvd above 1024"]
-fn test_cubecl_svd_gesvd_tall_f64_retains_direct_route() {
+fn test_cuda_svd_gesvd_tall_f64_retains_direct_route() {
     const M: usize = 1025;
     const N: usize = 8;
     let data = (0..N)
@@ -795,21 +795,21 @@ fn check_forced_svd_driver(m: usize, n: usize, driver: SvdDriver) {
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU and forces legacy gesvd below the 1024 Auto threshold"]
-fn test_cubecl_svd_forced_gesvd_below_threshold_reconstructs() {
+fn test_cuda_svd_forced_gesvd_below_threshold_reconstructs() {
     check_forced_svd_driver(64, 64, SvdDriver::Gesvd);
     check_forced_svd_driver(8, 64, SvdDriver::Gesvd);
 }
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU and forces gesvdj above the 1024 Auto threshold"]
-fn test_cubecl_svd_forced_gesvdj_above_threshold_reconstructs() {
+fn test_cuda_svd_forced_gesvdj_above_threshold_reconstructs() {
     check_forced_svd_driver(1025, 8, SvdDriver::Gesvdj);
     check_forced_svd_driver(8, 1025, SvdDriver::Gesvdj);
 }
 
 #[test]
 #[ignore]
-fn test_cubecl_svd_auto_driver_matches_default_svd() {
+fn test_cuda_svd_auto_driver_matches_default_svd() {
     let input = patterned_f64_matrix(48, 32);
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
@@ -1318,7 +1318,7 @@ fn test_cuda_compact_householder_qr_wide_empty_range_and_rank_deficient_import()
 
 #[test]
 #[ignore]
-fn test_cubecl_qr_f32_reconstructs_input() {
+fn test_cuda_qr_f32_reconstructs_input() {
     let input = tensor_f32(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 0.5, -1.0]);
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
@@ -1434,7 +1434,7 @@ fn check_forced_eigh_driver(n: usize, batch: usize, driver: EighDriver) {
 
 #[test]
 #[ignore = "requires a CUDA GPU and forces the Jacobi eigensolver that Auto never picks"]
-fn test_cubecl_eigh_forced_syevj_matches_reference() {
+fn test_cuda_eigh_forced_syevj_matches_reference() {
     check_forced_eigh_driver(8, 1, EighDriver::Syevj);
     check_forced_eigh_driver(64, 1, EighDriver::Syevj);
     check_forced_eigh_driver(6, 4, EighDriver::Syevj);
@@ -1446,7 +1446,7 @@ fn test_cubecl_eigh_forced_syevj_matches_reference() {
 
 #[test]
 #[ignore = "requires a CUDA GPU"]
-fn test_cubecl_eigh_forced_syevd_matches_reference() {
+fn test_cuda_eigh_forced_syevd_matches_reference() {
     check_forced_eigh_driver(8, 1, EighDriver::Syevd);
     // Batched input now reaches `cusolverDnXsyevBatched` (#1852), including
     // above the order that used to gate any batched routine.
@@ -1457,7 +1457,7 @@ fn test_cubecl_eigh_forced_syevd_matches_reference() {
 
 #[test]
 #[ignore = "requires a CUDA GPU"]
-fn test_cubecl_eigh_auto_batched_matches_the_per_matrix_spectrum() {
+fn test_cuda_eigh_auto_batched_matches_the_per_matrix_spectrum() {
     // `Auto` batches through `XsyevBatched` while a single matrix keeps the
     // per-matrix `syevd`. The two must agree: the batched routine is the same
     // divide-and-conquer algorithm, not a different accuracy class.
@@ -1501,7 +1501,7 @@ fn patterned_hermitian_c64(n: usize, batch: usize) -> Vec<Complex64> {
 
 #[test]
 #[ignore = "requires a CUDA GPU"]
-fn test_cubecl_eigh_complex_batches_run_through_xsyev_batched() {
+fn test_cuda_eigh_complex_batches_run_through_xsyev_batched() {
     // Complex batches above the order 32 take `cusolverDnXsyevBatched`, whose
     // computeType must be the complex type of A, not the real type of W
     // (#1923). Both precisions must reconstruct every matrix and agree with
@@ -1555,7 +1555,7 @@ fn test_cubecl_eigh_complex_batches_run_through_xsyev_batched() {
 
 #[test]
 #[ignore = "requires a CUDA GPU"]
-fn test_cubecl_eigh_auto_driver_matches_default_eigh() {
+fn test_cuda_eigh_auto_driver_matches_default_eigh() {
     let input = patterned_symmetric_f64(32, 1);
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
@@ -1572,7 +1572,7 @@ fn test_cubecl_eigh_auto_driver_matches_default_eigh() {
 
 #[test]
 #[ignore]
-fn test_cubecl_eigh_c64_reconstructs_input() {
+fn test_cuda_eigh_c64_reconstructs_input() {
     let l = vec![
         Complex64::new(2.0, 0.0),
         Complex64::new(1.0, -1.0),
@@ -1612,7 +1612,7 @@ fn test_cubecl_eigh_c64_reconstructs_input() {
 
 #[test]
 #[ignore]
-fn test_cubecl_eigh_values_c64_matches_cpu() {
+fn test_cuda_eigh_values_c64_matches_cpu() {
     let l = vec![
         Complex64::new(2.0, 0.0),
         Complex64::new(1.0, -1.0),
@@ -1850,7 +1850,7 @@ fn test_cuda_rank_revealing_qr_f32_batched_and_scaled_ranks() {
 
 #[test]
 #[ignore]
-fn test_cubecl_eig_f32_returns_unsupported_error() {
+fn test_cuda_eig_f32_returns_unsupported_error() {
     let input = tensor_f32(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]);
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
@@ -1860,7 +1860,7 @@ fn test_cubecl_eig_f32_returns_unsupported_error() {
 
 #[test]
 #[ignore]
-fn test_cubecl_eig_c32_returns_unsupported_error() {
+fn test_cuda_eig_c32_returns_unsupported_error() {
     let input = tensor_c32(
         vec![2, 2],
         vec![
@@ -1878,7 +1878,7 @@ fn test_cubecl_eig_c32_returns_unsupported_error() {
 
 #[test]
 #[ignore]
-fn test_cubecl_solve_f64_matches_cpu() {
+fn test_cuda_solve_f64_matches_cpu() {
     let a = tensor_f64(vec![2, 2], vec![3.0, 1.0, 1.0, 2.0]);
     let b = tensor_f64(vec![2, 2], vec![5.0, 1.0, -2.0, 4.0]);
     let mut cpu = cpu_backend();
@@ -1894,7 +1894,7 @@ fn test_cubecl_solve_f64_matches_cpu() {
 
 #[test]
 #[ignore = "requires CUDA"]
-fn test_cubecl_solve_singular_matrix_is_left_to_the_caller() {
+fn test_cuda_solve_singular_matrix_is_left_to_the_caller() {
     let a = tensor_f64(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
     let b = tensor_f64(vec![2, 1], vec![1.0, 2.0]);
     let mut gpu = gpu_backend();
@@ -1912,7 +1912,7 @@ fn test_cubecl_solve_singular_matrix_is_left_to_the_caller() {
 
 #[test]
 #[ignore = "requires CUDA"]
-fn test_cubecl_lu_factor_still_rejects_a_singular_matrix() {
+fn test_cuda_lu_factor_still_rejects_a_singular_matrix() {
     let a = tensor_f64(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
     let mut gpu = gpu_backend();
     let gpu_a = upload(&gpu, &a);
@@ -1929,7 +1929,7 @@ fn test_cubecl_lu_factor_still_rejects_a_singular_matrix() {
 
 #[test]
 #[ignore = "requires CUDA"]
-fn test_cubecl_solve_vector_rhs_uses_borrowed_session_reshape() {
+fn test_cuda_solve_vector_rhs_uses_borrowed_session_reshape() {
     let a = tensor_f64(vec![2, 2], vec![3.0, 1.0, 1.0, 2.0]);
     let b = tensor_f64(vec![2], vec![5.0, 1.0]);
     let mut cpu = cpu_backend();

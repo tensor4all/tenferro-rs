@@ -206,8 +206,7 @@ tenferro-rs is a good fit when:
 
 tenferro-rs deliberately builds on the Rust numerics ecosystem instead of
 replacing it: [`faer`](https://github.com/sarah-quinones/faer-rs) for dense
-linear algebra, [CubeCL](https://github.com/tracel-ai/cubecl) for GPU
-kernels, [`omeco`](https://crates.io/crates/omeco) for contraction ordering,
+linear algebra, a native CUDA backend for GPU kernels, [`omeco`](https://crates.io/crates/omeco) for contraction ordering,
 and [`num-traits`](https://github.com/rust-num/num-traits) /
 [`num-complex`](https://github.com/rust-num/num-complex) for generic
 numerics.
@@ -370,10 +369,8 @@ announcements, and the community entry point is <https://tensor4all.org/>.
 tenferro-rs stands on excellent work across several ecosystems, and aims to
 integrate with and contribute back to them.
 
-- **GPU.** The GPU backend builds on
-  [CubeCL](https://github.com/tracel-ai/cubecl) by the
-  [tracel-ai](https://github.com/tracel-ai) team (also the foundation of
-  [Burn](https://github.com/tracel-ai/burn)). The temporary `t4a-*` crates
+- **GPU.** The CUDA backend builds on the NVIDIA CUDA toolkit,
+  cuTENSOR, cuSOLVER, cuBLAS, and cuFFT. The temporary `t4a-*` crates
   stage tensor4all patches until they land upstream.
 - **CPU / numerics.** Dense CPU linear algebra builds on
   [`faer`](https://github.com/sarah-quinones/faer-rs), with numeric

@@ -171,7 +171,7 @@ The audited entry mechanisms live in
 [`scripts/audit-engine-entry.py`](scripts/audit-engine-entry.py):
 `impl Engine for T` (a new operation surface), `impl ExecutionEngine for T` (a
 new prepared-program target), `CudaEngine::open` (device, stream and memory
-domain creation) and `with_raw` (the raw CubeCL/CUDA scope on the engine's
+domain creation) and `with_raw` (the raw CUDA scope on the engine's
 stream). Session mechanisms are deleted, including `BackendSession`,
 `BackendSessionHost`, `with_backend_session*`, `SessionEntryError`, held
 sessions, execution scopes, admission guards and owner install helpers; do not
@@ -716,21 +716,16 @@ Tests follow implementation ownership.
 
 ## GPU Backend Contract
 
-- Before touching CubeCL/GPU backend code, read
+- Before touching CUDA/GPU backend code, read
   [`docs/design/gpu-backend-design.md`](docs/design/gpu-backend-design.md).
-  It is the developer-facing source for CubeCL kernel ownership, runtime
+  It is the developer-facing source for CUDA kernel ownership, runtime
   shape/stride metadata conventions, launch configuration rules, and device
   transfer behavior; any change to those conventions updates it in the same
   PR.
-- Tensor extents, strides, offsets, lengths, slice starts, paddings,
-  slice/window sizes and running axis offsets are runtime kernel arguments,
-  never `#[comptime]` (each value compiles a new module); a new compile-time
-  parameter must be classified in `kernel_metadata_contract.rs`
-  ([GPU design rule](docs/design/gpu-backend-design.md)).
 - CUDA operation paths whose accepted implementation is an NVIDIA vendor
   library must fail with typed load or provider errors when the required
   NVIDIA library is unavailable or lacks support. They must not silently fall
-  back to native CubeCL kernels. Native CubeCL kernels are separate provider
+  back to native kernels. Native kernels are separate provider
   implementations for operations or dtypes not covered by the accepted
   vendor-library path, not fallback tiers for missing CUDA libraries.
 - CUDA `eig` (non-symmetric eigenvalue decomposition, LAPACK `dgeev`) is not

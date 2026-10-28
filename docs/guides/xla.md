@@ -246,11 +246,10 @@ available:
 export TENFERRO_CUTENSOR_PATH=/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so.2
 export TENFERRO_CUSOLVER_PATH=$CUDA_PATH/lib64/libcusolver.so.12
 export TENFERRO_CUBLAS_PATH=$CUDA_PATH/lib64/libcublas.so.12
-export CUBECL_DEBUG_LOG=0
 ```
 
 The `TENFERRO_CUTENSOR_PATH`, `TENFERRO_CUSOLVER_PATH`, and
-`TENFERRO_CUBLAS_PATH` variables are for tenferro's CubeCL/CUDA backend. PJRT
+`TENFERRO_CUBLAS_PATH` variables are for tenferro's CUDA backend. PJRT
 plugins may have their own dynamic-library requirements, but they are still
 loaded from the plugin path supplied by `TENFERRO_PJRT_PLUGIN` or
 `TENFERRO_PJRT_GPU_PLUGIN`.

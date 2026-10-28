@@ -87,7 +87,7 @@ and `REPOSITORY_RULES.md`; reusable workflow steps live in
 
 ### GPU Status
 
-CUDA support is implemented through the feature-gated CubeCL backend across the
+CUDA support is implemented through the feature-gated CUDA backend across the
 concrete tensor, eager, and traced surfaces; performance work is ongoing.
 Remaining CUDA limitations: `eig`, `full_piv_lu`, `full_piv_lu_solve`,
 integer numeric/linalg gaps outside the supported add/sub/mul/div/rem,
@@ -95,7 +95,7 @@ neg/abs/sign/pow, comparison/selection/minimum/maximum, and
 sum/product/minimum/maximum reductions, `Bool` arithmetic/reduction/linalg and
 additive-scatter gaps, and selected complex analytic or ordering operations.
 HIP/ROCm is stubbed. Outside explicit GPU tasks, check
-`docs/guides/devices-and-gpu.md` and the CUDA/CubeCL backend tests before
+`docs/guides/devices-and-gpu.md` and the CUDA backend tests before
 assuming an op/dtype/backend combination is supported.
 
 ### Documentation Requirements
@@ -361,31 +361,27 @@ python3 scripts/check-coverage.py coverage.json
 cargo doc --workspace --no-deps
 python3 scripts/check-docs-site.py
 
-# GPU (CUDA/CubeCL) tests: requires NVIDIA GPU + CUDA 12.6.2+ (12.8+ enables the full CubeCL feature set).
+# GPU (CUDA) tests: requires NVIDIA GPU + CUDA 12.6.2+ (12.8+ enables the full CUDA feature set).
 # The floor is cuSOLVER >= 11.7.1, which ships `cusolverDnXsyevBatched` (issue #1852).
-# GPU tests are #[ignore]; --ignored runs them. CUBECL_DEBUG_LOG=0 suppresses JIT logs.
+# GPU tests are #[ignore]; --ignored runs them.
 # Find the installed CUDA root with `ls -d /usr/local/cuda*`.
-CUBECL_DEBUG_LOG=0 \
 CUDA_PATH=/usr/local/cuda-12.6 \
 LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
   cargo test -p tenferro-gpu --features cuda -- --ignored
 ```
 
-### CubeCL Environment Variables
+### CUDA Environment Variables
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
-| `CUBECL_DEBUG_LOG` | `0` | Suppress JIT compilation log output (default is verbose) |
 | `CUDA_PATH` | `/usr/local/cuda-12.6` or newer | CUDA toolkit root for NVRTC header resolution |
 | `LD_LIBRARY_PATH` | Include CUDA + cuTENSOR lib dirs | Runtime library loading |
 
-Set these in CI and local dev shells. Without `CUBECL_DEBUG_LOG=0`, cubecl emits
-generated CUDA source for every JIT-compiled kernel, millions of log lines per
-test run.
+Set these in CI and local dev shells.
 
 ### FFI Library Path Configuration
 
-The CubeCL backend loads cuTENSOR, cuSOLVER, and cuBLAS at runtime via `dlopen`,
+The CUDA backend loads cuTENSOR, cuSOLVER, and cuBLAS at runtime via `dlopen`,
 trying v12, then v11, then the bare soname. Override with:
 
 | Variable | Library | Example |
@@ -419,7 +415,7 @@ Layer 2: tenferro-tensor   - Dense runtime tensors, backend traits,
                              backend-independent contracts
          tenferro-cpu      - CPU backend, execution sessions, kernels,
                              buffer pools
-         tenferro-gpu      - CubeCL/CUDA backend and GPU transfer helpers
+         tenferro-gpu      - CUDA backend and GPU transfer helpers
 Layer 1: tenferro-tensor-core - Rank/layout metadata, dtype tags,
                                 scalar trait, promotion facts
 Internal: tenferro-core-ops  - Internal core primitive operation catalog
@@ -430,7 +426,7 @@ Internal: tenferro-core-ops  - Internal core primitive operation catalog
 Ownership: `tenferro-tensor-core` owns rank/layout, dtype and scalar metadata.
 `tenferro-tensor` owns every tensor type (including the host container) and
 backend-independent tensor contracts. `tenferro-cpu` owns CPU backend
-execution. `tenferro-gpu` owns CubeCL/CUDA backend code and transfer helpers.
+execution. `tenferro-gpu` owns CUDA backend code and transfer helpers.
 `tenferro-internal-ops/src/ad/` is the semantic source of truth for the core
 `StdTensorOp` primitive AD rules. `tenferro-runtime` owns traced graph
 construction, lowering, execution, extension registration, and cache ownership.

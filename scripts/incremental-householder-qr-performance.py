@@ -281,7 +281,6 @@ def run_suite(root: Path, artifact_dir: Path, backends: list[str]) -> None:
                             OPENBLAS_NUM_THREADS="1",
                             OMP_NUM_THREADS="1",
                             MKL_NUM_THREADS="1",
-                            CUBECL_DEBUG_LOG="0",
                         )
                         result = subprocess.run(
                             command,

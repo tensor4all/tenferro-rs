@@ -85,7 +85,7 @@
   <text x="457" y="375" class="sub" style="font-size:9px">faer | BLAS/LAPACK</text>
   <rect x="530" y="320" width="120" height="68" rx="6" class="box"/>
   <text x="590" y="342" class="name" style="font-size:12px">tenferro-gpu</text>
-  <text x="590" y="359" class="sub">CubeCL · CUDA</text>
+  <text x="590" y="359" class="sub">CUDA</text>
   <text x="590" y="375" class="sub" style="font-size:9px">cuTENSOR/cuSOLVER</text>
 
   <!-- OpenXLA: external, right of tenferro-gpu -->

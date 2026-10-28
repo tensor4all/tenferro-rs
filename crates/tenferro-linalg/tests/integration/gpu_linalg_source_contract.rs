@@ -178,16 +178,6 @@ fn qr_options_routes_owned_read_and_typed_surfaces_through_backend_hooks() {
 
 #[test]
 fn tenferro_gpu_no_longer_owns_linalg_specific_ffi_or_kernels() {
-    for path in [
-        "tenferro-gpu/src/cubecl/ffi/cusolver.rs",
-        "tenferro-gpu/src/kernels/linalg.rs",
-    ] {
-        assert!(
-            !workspace_root().join(path).exists(),
-            "{path} should be owned by tenferro-linalg, not tenferro-gpu"
-        );
-    }
-
     let cuda_mod = read_workspace_source("tenferro-gpu/src/cuda/structural.rs");
     for needle in ["CudaLinalgHandles", "linalg_handles", "cusolver", "cublas"] {
         assert!(

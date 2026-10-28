@@ -234,12 +234,11 @@ export TENFERRO_CUTENSOR_PATH=/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutens
 export TENFERRO_CUSOLVER_PATH=$CUDA_PATH/lib64/libcusolver.so.12
 export TENFERRO_CUBLAS_PATH=$CUDA_PATH/lib64/libcublas.so.12
 export TENFERRO_CUFFT_PATH=$CUDA_PATH/lib64/libcufft.so.11
-export CUBECL_DEBUG_LOG=0
 ```
 
 CUDA operations implemented through NVIDIA libraries return typed load or
 provider errors when the required library is missing. They do not silently use
-a slower native CubeCL kernel as a CUDA fallback.
+a slower native kernel as a CUDA fallback.
 
 On compute capability 7.0, select cuTENSOR 2.1.x with
 `TENFERRO_CUTENSOR_PATH`. tenferro rejects cuTENSOR 2.2 and newer because that

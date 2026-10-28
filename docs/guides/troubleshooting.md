@@ -30,7 +30,7 @@ TENFERRO_CUFFT_PATH=/opt/cuda/lib64/libcufft.so.11
 than the host driver API. Check both versions with `nvidia-smi` and the NVRTC
 library selected by `LD_LIBRARY_PATH`. On a driver reporting CUDA 12.4, load
 NVRTC 12.4; on a driver reporting CUDA 12.8 or newer, load NVRTC 12.8 to retain
-the full CubeCL feature set.
+the full CUDA feature set.
 
 ## Expected GPU Tensor
 

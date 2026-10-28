@@ -11,7 +11,7 @@ use tenferro_tensor::Tensor;
 
 #[test]
 #[ignore = "requires CUDA; full factors have no public driver option"]
-fn test_cubecl_svd_xgesvdp_full_and_economy() {
+fn test_cuda_svd_xgesvdp_full_and_economy() {
     let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     for (m, n) in [(7, 3), (3, 7)] {
         let data: Vec<_> = (0..m * n)
