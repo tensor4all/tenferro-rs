@@ -130,13 +130,13 @@ macro_rules! impl_faer_linalg {
                 let width = exec
                     .batch_decision(&tcontract_exec::BatchQuery::new(1, muladds))
                     .item_threads;
-                // A team token hands its members to faer as `Par::Team`; a
-                // width of one (or a token without a team) stays `Par::Seq`.
-                // Nothing here reaches Rayon.
-                let mut token = exec.token().limit(
+                // A team token of more than one slot hands its members to faer
+                // as `Par::Team`; anything else stays `Par::Seq`. Nothing here
+                // reaches Rayon.
+                let token = exec.token().limit(
                     std::num::NonZeroUsize::new(width).unwrap_or(std::num::NonZeroUsize::MIN),
                 );
-                let mut run = Some(|par: faer::Par<'_>| {
+                tcontract_exec::with_faer_par(token, |par| {
                     faer::linalg::matmul::matmul(
                         out,
                         faer::Accum::Replace,
@@ -146,17 +146,6 @@ macro_rules! impl_faer_linalg {
                         par,
                     );
                 });
-                if width > 1 && token.carries_team() {
-                    // A team token returns its carried team without acquisition.
-                    let _ = token.team(|team| {
-                        if let Some(run) = run.take() {
-                            run(faer::Par::Team(team));
-                        }
-                    });
-                }
-                if let Some(run) = run.take() {
-                    run(faer::Par::Seq);
-                }
                 Ok(())
             }
 
