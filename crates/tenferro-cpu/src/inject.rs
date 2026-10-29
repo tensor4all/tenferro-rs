@@ -173,6 +173,22 @@ pub struct LapackProviderPtrSet {
     pub cungqr: Option<*const c_void>,
     /// Fortran `zungqr` raw function pointer.
     pub zungqr: Option<*const c_void>,
+    /// Fortran `sormqr` raw function pointer.
+    pub sormqr: Option<*const c_void>,
+    /// Fortran `dormqr` raw function pointer.
+    pub dormqr: Option<*const c_void>,
+    /// Fortran `cunmqr` raw function pointer.
+    pub cunmqr: Option<*const c_void>,
+    /// Fortran `zunmqr` raw function pointer.
+    pub zunmqr: Option<*const c_void>,
+    /// Fortran `sgeqp3` raw function pointer.
+    pub sgeqp3: Option<*const c_void>,
+    /// Fortran `dgeqp3` raw function pointer.
+    pub dgeqp3: Option<*const c_void>,
+    /// Fortran `cgeqp3` raw function pointer.
+    pub cgeqp3: Option<*const c_void>,
+    /// Fortran `zgeqp3` raw function pointer.
+    pub zgeqp3: Option<*const c_void>,
     /// Fortran `strtrs` raw function pointer.
     pub strtrs: Option<*const c_void>,
     /// Fortran `dtrtrs` raw function pointer.
@@ -209,6 +225,10 @@ pub struct LapackProviderPtrSet {
     pub ssyev: Option<*const c_void>,
     /// Fortran `dsyev` raw function pointer.
     pub dsyev: Option<*const c_void>,
+    /// Fortran `ssyevd` raw function pointer.
+    pub ssyevd: Option<*const c_void>,
+    /// Fortran `dsyevd` raw function pointer.
+    pub dsyevd: Option<*const c_void>,
     /// Fortran `cheev` raw function pointer.
     pub cheev: Option<*const c_void>,
     /// Fortran `zheev` raw function pointer.
@@ -264,6 +284,14 @@ impl LapackProviderPtrSet {
             dorgqr: None,
             cungqr: None,
             zungqr: None,
+            sormqr: None,
+            dormqr: None,
+            cunmqr: None,
+            zunmqr: None,
+            sgeqp3: None,
+            dgeqp3: None,
+            cgeqp3: None,
+            zgeqp3: None,
             strtrs: None,
             dtrtrs: None,
             ctrtrs: None,
@@ -282,6 +310,8 @@ impl LapackProviderPtrSet {
             zgetrs: None,
             ssyev: None,
             dsyev: None,
+            ssyevd: None,
+            dsyevd: None,
             cheev: None,
             zheev: None,
             sgeev: None,
@@ -635,6 +665,70 @@ pub unsafe fn register_lapack_provider_ptrs(
         register_zungqr_ilp64
     );
     register_field!(
+        sormqr,
+        "sormqr",
+        SormqrLp64FnPtr,
+        SormqrIlp64FnPtr,
+        register_sormqr_lp64,
+        register_sormqr_ilp64
+    );
+    register_field!(
+        dormqr,
+        "dormqr",
+        DormqrLp64FnPtr,
+        DormqrIlp64FnPtr,
+        register_dormqr_lp64,
+        register_dormqr_ilp64
+    );
+    register_field!(
+        cunmqr,
+        "cunmqr",
+        CunmqrLp64FnPtr,
+        CunmqrIlp64FnPtr,
+        register_cunmqr_lp64,
+        register_cunmqr_ilp64
+    );
+    register_field!(
+        zunmqr,
+        "zunmqr",
+        ZunmqrLp64FnPtr,
+        ZunmqrIlp64FnPtr,
+        register_zunmqr_lp64,
+        register_zunmqr_ilp64
+    );
+    register_field!(
+        sgeqp3,
+        "sgeqp3",
+        Sgeqp3Lp64FnPtr,
+        Sgeqp3Ilp64FnPtr,
+        register_sgeqp3_lp64,
+        register_sgeqp3_ilp64
+    );
+    register_field!(
+        dgeqp3,
+        "dgeqp3",
+        Dgeqp3Lp64FnPtr,
+        Dgeqp3Ilp64FnPtr,
+        register_dgeqp3_lp64,
+        register_dgeqp3_ilp64
+    );
+    register_field!(
+        cgeqp3,
+        "cgeqp3",
+        Cgeqp3Lp64FnPtr,
+        Cgeqp3Ilp64FnPtr,
+        register_cgeqp3_lp64,
+        register_cgeqp3_ilp64
+    );
+    register_field!(
+        zgeqp3,
+        "zgeqp3",
+        Zgeqp3Lp64FnPtr,
+        Zgeqp3Ilp64FnPtr,
+        register_zgeqp3_lp64,
+        register_zgeqp3_ilp64
+    );
+    register_field!(
         strtrs,
         "strtrs",
         StrtrsLp64FnPtr,
@@ -777,6 +871,22 @@ pub unsafe fn register_lapack_provider_ptrs(
         DsyevIlp64FnPtr,
         register_dsyev_lp64,
         register_dsyev_ilp64
+    );
+    register_field!(
+        ssyevd,
+        "ssyevd",
+        SsyevdLp64FnPtr,
+        SsyevdIlp64FnPtr,
+        register_ssyevd_lp64,
+        register_ssyevd_ilp64
+    );
+    register_field!(
+        dsyevd,
+        "dsyevd",
+        DsyevdLp64FnPtr,
+        DsyevdIlp64FnPtr,
+        register_dsyevd_lp64,
+        register_dsyevd_ilp64
     );
     register_field!(
         cheev,

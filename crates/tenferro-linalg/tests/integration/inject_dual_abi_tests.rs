@@ -1,6 +1,5 @@
 #![cfg(all(feature = "blas", feature = "provider-inject"))]
 
-use std::ffi::c_char;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
