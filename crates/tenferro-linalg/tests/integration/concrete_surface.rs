@@ -745,3 +745,20 @@ fn eig_enforces_unit_norm_eigenvector_columns_and_refuses_non_finite_ones() {
         Err(error) => assert_eq!(error.kind(), tenferro_tensor::ErrorKind::NumericalFailure),
     };
 }
+
+#[test]
+fn full_piv_lu_solve_rejects_rank_deficiency_on_every_surface() {
+    // The second pivot is below `eps * max|pivot|`: rank 1.
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0e-17]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0e-17]).unwrap();
+    let mut host = CpuEngine::serial();
+
+    assert!(a.full_piv_lu_solve(&b, &mut host).is_err());
+    assert!(TensorRead::from_tensor(&a)
+        .full_piv_lu_solve_read(TensorRead::from_tensor(&b), &mut host)
+        .is_err());
+    let typed_a =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0e-17]).unwrap();
+    let typed_b = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 1.0e-17]).unwrap();
+    assert!(typed_a.full_piv_lu_solve(&typed_b, &mut host).is_err());
+}

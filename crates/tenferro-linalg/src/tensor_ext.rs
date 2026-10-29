@@ -1989,43 +1989,28 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         with_linalg_backend(session, "full_piv_lu_solve_read", |backend| {
-            let b_is_vector = b.shape().len() + 1 == self.shape().len();
-            let original_b_shape = b.shape().to_vec();
-            let vector_as_matrix = if b_is_vector {
-                let mut shape = vec![b.shape()[0], 1];
-                shape.extend_from_slice(&b.shape()[1..]);
-                Some(backend.reshape_read(b.clone(), &shape)?)
-            } else {
-                None
+            // Every surface goes through the backend solve, which rejects a rank-deficient
+            // system (a pivot at or below `eps * max|pivot|`). A borrowed view is made compact
+            // first.
+            let a_owned;
+            let a = match self.as_tensor() {
+                Some(a) => a,
+                None => {
+                    let shape = self.shape().to_vec();
+                    a_owned = backend.reshape_read(self, &shape)?;
+                    &a_owned
+                }
             };
-            let b = vector_as_matrix.as_ref().map_or(b, TensorRead::from_tensor);
-            let (p, l, u, q, _parity) = self.full_piv_lu_read(backend)?;
-            let pb = linalg_matmul_read(&p, b, false, backend)?;
-            let z = backend.triangular_solve_read(
-                TensorRead::from_tensor(&l),
-                TensorRead::from_tensor(&pb),
-                true,
-                true,
-                false,
-                true,
-            )?;
-            let w = backend.triangular_solve_read(
-                TensorRead::from_tensor(&u),
-                TensorRead::from_tensor(&z),
-                true,
-                false,
-                false,
-                false,
-            )?;
-            let mut perm: Vec<usize> = (0..q.shape().len()).collect();
-            perm.swap(0, 1);
-            let qt = transpose(&q, &perm, backend)?;
-            let solution = linalg_matmul_read(&qt, TensorRead::from_tensor(&w), false, backend)?;
-            if b_is_vector {
-                reshape(&solution, &original_b_shape, backend)
-            } else {
-                Ok(solution)
-            }
+            let b_owned;
+            let b = match b.as_tensor() {
+                Some(b) => b,
+                None => {
+                    let shape = b.shape().to_vec();
+                    b_owned = backend.reshape_read(b, &shape)?;
+                    &b_owned
+                }
+            };
+            backend.full_piv_lu_solve(a, b, false)
         })
     }
     fn solve_read(
@@ -2864,24 +2849,6 @@ fn matmul_preserve_trailing_batch<B: Engine + ?Sized>(
         TensorRead::from_tensor(rhs),
         &config,
     )
-}
-
-fn linalg_matmul_read<B: Engine + ?Sized>(
-    lhs: &Tensor,
-    rhs: TensorRead<'_>,
-    rhs_is_vector: bool,
-    session: &mut B,
-) -> tenferro_tensor::Result<Tensor> {
-    let lhs_batch_dims: Vec<usize> = (2..lhs.shape().len()).collect();
-    let rhs_batch_start = if rhs_is_vector { 1 } else { 2 };
-    let rhs_batch_dims: Vec<usize> = (rhs_batch_start..rhs.shape().len()).collect();
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: lhs_batch_dims.iter().copied().collect(),
-        rhs_batch_dims: rhs_batch_dims.iter().copied().collect(),
-    };
-    session.dot_general_read(TensorRead::from_tensor(lhs), rhs, &config)
 }
 
 fn frobenius_norm<B: LinalgBackend + ?Sized>(

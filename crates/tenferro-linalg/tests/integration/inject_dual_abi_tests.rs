@@ -12,51 +12,6 @@ use tenferro_tensor::{Tensor, TypedTensor};
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-// --- LAPACK full-pivot LU ILP64 counters and fakes -----------------------
-
-static DGETC2_ILP64_CALLS: AtomicUsize = AtomicUsize::new(0);
-static DGESC2_ILP64_CALLS: AtomicUsize = AtomicUsize::new(0);
-static DGETC2_ILP64_REGISTERED: AtomicBool = AtomicBool::new(false);
-static DGESC2_ILP64_REGISTERED: AtomicBool = AtomicBool::new(false);
-
-unsafe extern "C" fn test_dgetc2_ilp64(
-    n: *const i64,
-    _a: *mut f64,
-    lda: *const i64,
-    ipiv: *mut i64,
-    jpiv: *mut i64,
-    info: *mut i64,
-) {
-    let _ = lda;
-    DGETC2_ILP64_CALLS.fetch_add(1, Ordering::SeqCst);
-    let n = unsafe { *n as usize };
-    for index in 0..n {
-        let one_based = (index + 1) as i64;
-        unsafe {
-            *ipiv.add(index) = one_based;
-            *jpiv.add(index) = one_based;
-        }
-    }
-    unsafe {
-        *info = 0;
-    }
-}
-
-unsafe extern "C" fn test_dgesc2_ilp64(
-    _n: *const i64,
-    _a: *const f64,
-    _lda: *const i64,
-    _rhs: *mut f64,
-    _ipiv: *const i64,
-    _jpiv: *const i64,
-    scale: *mut f64,
-) {
-    DGESC2_ILP64_CALLS.fetch_add(1, Ordering::SeqCst);
-    unsafe {
-        *scale = 1.0;
-    }
-}
-
 // --- LAPACK QR ILP64 counters and fakes ----------------------------------
 
 static DGEQRF_ILP64_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -123,57 +78,6 @@ unsafe extern "C" fn test_dorgqr_ilp64(
 
     unsafe {
         *info = 0;
-    }
-}
-
-// --- Test: ILP64 GEMM provider reaches LP64 consumer ---------------------
-
-// --- Test: ILP64 LAPACK full-pivot LU provider bridges integer arrays ----
-
-#[test]
-fn ilp64_lapack_full_piv_lu_bridges_integer_arrays() {
-    let _guard = TEST_LOCK.lock().expect("test lock poisoned");
-
-    if !DGETC2_ILP64_REGISTERED.swap(true, Ordering::SeqCst) {
-        unsafe {
-            register_lapack_provider_ptrs(
-                ProviderAbi::Ilp64,
-                LapackProviderPtrSet {
-                    dgetc2: Some(test_dgetc2_ilp64 as *const std::ffi::c_void),
-                    dgesc2: Some(test_dgesc2_ilp64 as *const std::ffi::c_void),
-                    ..LapackProviderPtrSet::new()
-                },
-            )
-            .expect("ilp64 full-piv-lu registration should succeed");
-        }
-        DGESC2_ILP64_REGISTERED.store(true, Ordering::SeqCst);
-    }
-
-    DGETC2_ILP64_CALLS.store(0, Ordering::SeqCst);
-    DGESC2_ILP64_CALLS.store(0, Ordering::SeqCst);
-
-    let a = Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
-    );
-    let b = Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![2, 1], vec![4.0, 8.0]).unwrap(),
-    );
-
-    let mut backend = tenferro_cpu::CpuEngine::serial();
-    let x = backend.full_piv_lu_solve(&a, &b, false);
-
-    assert_eq!(DGETC2_ILP64_CALLS.load(Ordering::SeqCst), 1);
-    assert_eq!(DGESC2_ILP64_CALLS.load(Ordering::SeqCst), 1);
-    match x {
-        Ok(tensor) => assert_eq!(
-            tensor
-                .into_typed::<f64>()
-                .expect("expected f64 tensor")
-                .host_data()
-                .unwrap(),
-            &[4.0, 8.0]
-        ),
-        _ => panic!("expected f64 tensor"),
     }
 }
 

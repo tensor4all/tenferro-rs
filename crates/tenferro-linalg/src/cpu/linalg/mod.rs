@@ -1,4 +1,6 @@
-#[cfg(feature = "native")]
+// Both CPU builds: the `blas` build takes complete-pivoting LU (`full_piv_lu`,
+// `full_piv_lu_solve`) from here too, because LAPACK has no rank-revealing equivalent.
+#[cfg_attr(not(feature = "native"), allow(dead_code, unused_imports))]
 pub mod faer_linalg;
 
 #[cfg(feature = "blas")]
@@ -102,7 +104,6 @@ pub(crate) fn raw_view<'v, T: 'static>(
     .map_err(|error| tenferro_tensor::Error::invalid_argument(op, "layout", error.to_string()))
 }
 
-#[cfg(feature = "native")]
 pub(crate) use faer_linalg as faer;
 #[cfg(feature = "blas")]
 pub(crate) use lapack_linalg as blas;

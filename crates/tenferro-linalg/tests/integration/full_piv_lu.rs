@@ -116,24 +116,88 @@ fn full_piv_lu_uses_column_pivot_when_max_pivot_is_off_column() {
     assert_close(&f64_data(&u)[..1], &[100.0]);
 }
 
-#[cfg(feature = "blas")]
-#[test]
-fn full_piv_lu_blas_rejects_singular_matrix() {
-    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
-    // This test only compiles in a `blas` build, where the compiled provider is LAPACK.
+/// `(P, Q, rank)` of one `n x n` factorization, the rank counted as the `U` diagonal entries above
+/// `ε · max|U_ii|`, the same threshold `full_piv_lu_solve` rejects.
+fn factor_summary(a: &Tensor, n: usize) -> (Vec<f64>, Vec<f64>, usize) {
     let mut backend = tenferro_cpu::CpuEngine::serial();
+    let outputs = support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(a)).unwrap();
+    let [p, l, u, q, _parity]: [Tensor; 5] = outputs.try_into().unwrap();
+    let paqt = {
+        let pa = matmul(&mut backend, &p, a);
+        let qt = backend
+            .transpose_read(TensorRead::from_tensor(&q), &[1, 0])
+            .unwrap();
+        matmul(&mut backend, &pa, &qt)
+    };
+    assert_close(f64_data(&paqt), f64_data(&matmul(&mut backend, &l, &u)));
+    let diagonal: Vec<f64> = (0..n).map(|i| f64_data(&u)[i + n * i].abs()).collect();
+    let largest = diagonal.iter().copied().fold(0.0_f64, f64::max);
+    let rank = diagonal
+        .iter()
+        .filter(|&&d| d > f64::EPSILON * largest)
+        .count();
+    (f64_data(&p).to_vec(), f64_data(&q).to_vec(), rank)
+}
 
-    let err =
-        support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap_err();
+// Complete-pivoting LU is one kernel in both CPU builds, so these cases assert fixed values and
+// run unchanged in the `native` and `blas` profiles: both builds return the same P, Q and rank.
 
-    assert!(matches!(
-        err,
-        tenferro_tensor::Error::Extension {
-            op: "full_piv_lu",
-            kind: tenferro_tensor::ErrorKind::NumericalFailure,
-            ..
-        }
-    ));
+#[test]
+fn full_piv_lu_factorizes_singular_matrix_and_reveals_rank() {
+    let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 2.0, 4.0]);
+    let (p, q, rank) = factor_summary(&a, 2);
+    assert_eq!(rank, 1);
+    assert_eq!(p, vec![0.0, 1.0, 1.0, 0.0]);
+    assert_eq!(q, vec![0.0, 1.0, 1.0, 0.0]);
+}
+
+#[test]
+fn full_piv_lu_factorizes_zero_matrix_with_rank_zero() {
+    let a = f64_tensor(vec![3, 3], vec![0.0; 9]);
+    let (p, q, rank) = factor_summary(&a, 3);
+    assert_eq!(rank, 0);
+    let identity = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+    assert_eq!(p, identity);
+    assert_eq!(q, identity);
+}
+
+#[test]
+fn full_piv_lu_keeps_the_identity_permutation_on_diagonal_ties() {
+    let identity = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+    let (p, q, rank) = factor_summary(&f64_tensor(vec![3, 3], identity.clone()), 3);
+    assert_eq!(rank, 3);
+    assert_eq!(p, identity);
+    assert_eq!(q, identity);
+}
+
+#[test]
+fn full_piv_lu_keeps_pivots_below_the_lapack_floor_unperturbed() {
+    // `?getc2` would flag a pivot below `EPS * max` and overwrite it with that floor.
+    let a = f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0e-17]);
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    let outputs =
+        support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap();
+    assert_eq!(f64_data(&outputs[2]), &[1.0, 0.0, 0.0, 1.0e-17]);
+    assert_eq!(factor_summary(&a, 2).2, 1);
+}
+
+#[test]
+fn full_piv_lu_solve_decides_singularity_by_rank() {
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    let small = f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0e-12]);
+    let b = f64_tensor(vec![2, 1], vec![2.0, 3.0e-12]);
+    let x = support::with_cpu_linalg(&mut backend, |backend| {
+        backend.full_piv_lu_solve(&small, &b, false)
+    })
+    .unwrap();
+    assert_close(f64_data(&x), &[2.0, 3.0]);
+
+    let deficient = f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0e-17]);
+    let error = support::with_cpu_linalg(&mut backend, |backend| {
+        backend.full_piv_lu_solve(&deficient, &b, false)
+    })
+    .unwrap_err();
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::NumericalFailure);
 }
 
 #[test]

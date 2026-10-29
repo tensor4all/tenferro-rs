@@ -592,7 +592,6 @@ fn lapack_ffi_unsafe_blocks_document_safety_invariants() {
         "cholesky.rs",
         "eig.rs",
         "eigh.rs",
-        "full_piv_lu.rs",
         "lu.rs",
         "qr.rs",
         "solve.rs",
