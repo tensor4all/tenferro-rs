@@ -144,6 +144,22 @@ thread (`CpuBackend::with_threads(1)`) with a warm output pool and an f64 64x64
 `matmul`: **84 -> 0 heap allocations per repeated call** (415 on the cold call,
 which also warms the provider) and **22.4-23.6 us -> 16.5-18.5 us per call**.
 
+A miss on a slot that already holds an entry allocates no new `Arc`: the
+`BinaryCache` rebuilds the prepared plan in the slot's own storage when the
+stored `Arc` is exclusively owned (no caller is still running it) and has the
+requested scalar type. A plan another caller holds, or another scalar type,
+falls back to a fresh `Arc` - that plan keeps working for its holder - and a
+failed preparation returns the error before touching the entry, so only the
+miss counter moves. Requests without a retained slot (no slot, or one at or
+beyond the capacity) have no storage to reuse and still allocate. This is what
+keeps a caller that streams GEMMs of different shapes through one slot from
+paying an allocation per call once warm (#2314): with the native provider and
+f64, three alternating shapes and an eight-block recoupling sequence measured
+**3 -> 0** and **8 -> 0** allocations per warm round with the slot capacity
+forced to one. The rebuilt lower plan itself may still allocate: `cpueinsum-blas`
+planning builds vendor metadata on every miss, and large packed native plans
+allocate their own state.
+
 ## CubeCL/CUDA Execution
 
 When a compiled program is evaluated with `CudaBackend`, the same graph-level

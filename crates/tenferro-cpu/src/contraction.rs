@@ -502,6 +502,16 @@ impl BinaryCache {
     /// returned plan after releasing whatever lock guards this cache, so two
     /// engines sharing one plan cache never wait for each other's numerical
     /// work.
+    ///
+    /// A miss on a slot that already holds an entry rebuilds the plan in place
+    /// when that entry is exclusively owned and of the requested scalar type,
+    /// so streaming different shapes through one slot allocates no new `Arc`
+    /// once warm (with the native provider, whose plan build allocates nothing
+    /// for ordinary GEMMs, such a miss allocates nothing at all). A plan another caller still runs, or another scalar type, is
+    /// replaced by a fresh `Arc`; the plan it hands out keeps working. A failed
+    /// preparation leaves the previous entry untouched. A request without a
+    /// retained slot (no slot, or one beyond `capacity`) has no storage to
+    /// reuse and allocates a new `Arc`.
     fn plan<T: Scalar>(
         &mut self,
         slot: Option<usize>,
@@ -550,11 +560,30 @@ impl BinaryCache {
                     .map_err(|error| crate::Error::backend_source("dot_general", error))?;
                 self.slots.resize_with(slot + 1, || None);
             }
-            self.slots[slot] = Some(CachedBinary {
-                key,
-                config: config.clone(),
-                plan: Arc::new(plan),
-            });
+            match self.slots[slot].as_mut() {
+                // #2314: rebuild the warm slot's storage instead of allocating a
+                // new `Arc` on every miss. `get_mut` fails while a caller still
+                // runs the old plan, and the downcast fails for another scalar
+                // type; both fall back to a fresh `Arc`, and the old one stays
+                // valid for its holder.
+                Some(entry) => {
+                    match Arc::get_mut(&mut entry.plan)
+                        .and_then(|plan| plan.downcast_mut::<BinaryPlan<T>>())
+                    {
+                        Some(stored) => *stored = plan,
+                        None => entry.plan = Arc::new(plan),
+                    }
+                    entry.key = key;
+                    entry.config.clone_from(config);
+                }
+                None => {
+                    self.slots[slot] = Some(CachedBinary {
+                        key,
+                        config: config.clone(),
+                        plan: Arc::new(plan),
+                    });
+                }
+            }
         }
         let plan = self.slots[slot]
             .as_ref()

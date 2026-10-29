@@ -159,9 +159,9 @@ checksum = "450efd17194c59515cc81b1eb553d98c59e407c095a918c84aefbd71bec1eecc"
 
 [[package]]
 name = "cpueinsum"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c10dc3812ac8258efc67bc896c4edd04c98bcb7837ca766ab56e0b8816cedd9e"
+checksum = "41cdf6b1e1cf2c1feb7213348d094a7593f17c31bc2a157c5a8cce2d0d0280e7"
 dependencies = [
  "num-complex",
  "strided-view",
