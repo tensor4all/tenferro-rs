@@ -81,9 +81,12 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         '--features "blas,provider-inject" --test integration inject_tests',
         f"cargo test -p tenferro-cpu {_CARGO_TEST_PROFILE} --no-default-features "
         '--features "blas,provider-inject" --test integration inject_dual_abi_tests',
-        # Every target of both provider-inject crates must compile. tenferro-linalg's inject
-        # binaries do not link yet (missing ?geqp3/?ormqr/?unmqr/?syevd, issue #2321), so
-        # they are type-checked here and run once the symbol set is complete.
+        f"cargo test -p tenferro-linalg {_CARGO_TEST_PROFILE} --no-default-features "
+        '--features "blas,provider-inject" --test integration inject_tests',
+        f"cargo test -p tenferro-linalg {_CARGO_TEST_PROFILE} --no-default-features "
+        '--features "blas,provider-inject" --test integration inject_dual_abi_tests',
+        # The unit suites register no provider, so their first LAPACK call aborts; under
+        # provider-inject they only have to compile.
         f"cargo check -p tenferro-cpu -p tenferro-linalg {_CARGO_TEST_PROFILE} "
         '--no-default-features --features "blas,provider-inject" --all-targets',
     ),
