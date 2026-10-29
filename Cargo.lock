@@ -281,15 +281,16 @@ dependencies = [
 
 [[package]]
 name = "cpueinsum-blas"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bab8e60b50b9846dd9bec3fcd35910a87abc270a4afc9301272f3919c3bfab0a"
+checksum = "22631b9a3ebc812fabf79c31ea99bcb6359b9946557cba501a1fd2e3a7740dec"
 dependencies = [
  "cblas-sys",
  "cpueinsum",
  "num-complex",
  "strided-basic",
  "strided-view",
+ "tcontract",
  "thiserror 1.0.69",
  "threadteam",
 ]
@@ -675,7 +676,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1192,7 +1193,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1954,7 +1955,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2411,9 +2412,9 @@ checksum = "876fef147edbcbddc8ac5cbbba92c7b86519e314e86638596c09673b2ed01e7f"
 
 [[package]]
 name = "tcontract"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4bf337293f760e34b1755fee484d55de4686d5fae8cbe5cac8783ac43adedf1"
+checksum = "b83b8c33ba64c132c99f368a86664ac803ecb3e1563e3af8006e411747046956"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -2429,10 +2430,11 @@ dependencies = [
 
 [[package]]
 name = "tcontract-exec"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2494cdc0d84b859777ec623426116ead0a12775acce03cb6c2f9e17cae8e4a5f"
+checksum = "57bf6060afe278d56a80532a3871b81bb68fb7496eb959c7529866bf401a708d"
 dependencies = [
+ "t4a-faer",
  "thiserror 1.0.69",
  "threadteam",
 ]
@@ -2912,9 +2914,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tlinalg"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3707b44c5565b61fd0207bfd0271d48695a3b2c50559ee3442722e6794d43f67"
+checksum = "bd7b652cccc3e86909844af2def3cd8cdb9e7d7827e04954d882c9aff2ab4975"
 dependencies = [
  "num-complex",
  "strided-view",
@@ -3312,7 +3314,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

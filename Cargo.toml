@@ -85,7 +85,7 @@ strided-perm = { version = "0.8.0", features = ["parallel"] }
 # `tcontract-exec` (check `cargo tree -i tcontract-exec`) keeps `Exec` one type.
 cpueinsum = "0.7.0"
 cpueinsum-blas = "0.7.0"
-tcontract-exec = "0.7.0"
+tcontract-exec = "0.7.1"
 tlinalg = "0.7.0"
 tlinalg-blas = "0.5.0"
 strided-basic = { version = "0.8.0", default-features = false }
