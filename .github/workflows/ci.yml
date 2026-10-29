@@ -155,7 +155,7 @@ jobs:
         if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
         with:
           prefix-key: v1-rust-ubuntu24
-      - name: Run inject tests for tenferro-cpu
+      - name: Run provider-inject tests and build checks
         if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
         run: python3 scripts/ci/run_profile.py blas-inject
       - name: Report BLAS inject disposition

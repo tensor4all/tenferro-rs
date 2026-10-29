@@ -75,8 +75,17 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "--features blas-accelerate,tenferro-linalg/autodiff --no-fail-fast",
     ),
     "blas-inject": (
+        # Provider registration is process-global (LP64 vs ILP64), so each fixture group runs
+        # in its own test process.
         f"cargo test -p tenferro-cpu {_CARGO_TEST_PROFILE} --no-default-features "
         '--features "blas,provider-inject" --test integration inject_tests',
+        f"cargo test -p tenferro-cpu {_CARGO_TEST_PROFILE} --no-default-features "
+        '--features "blas,provider-inject" --test integration inject_dual_abi_tests',
+        # Every target of both provider-inject crates must compile. tenferro-linalg's inject
+        # binaries do not link yet (missing ?geqp3/?ormqr/?unmqr/?syevd, issue #2321), so
+        # they are type-checked here and run once the symbol set is complete.
+        f"cargo check -p tenferro-cpu -p tenferro-linalg {_CARGO_TEST_PROFILE} "
+        '--no-default-features --features "blas,provider-inject" --all-targets',
     ),
     "extensions": (
         f"cargo test --manifest-path ext/tropical/Cargo.toml {_CARGO_TEST_PROFILE} "

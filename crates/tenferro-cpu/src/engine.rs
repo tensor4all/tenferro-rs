@@ -649,5 +649,6 @@ impl CpuEngine {
     }
 }
 
-#[cfg(test)]
+// Uses the crate-level test helpers, which `provider-inject` builds leave out (see `lib.rs`).
+#[cfg(all(test, not(feature = "provider-inject")))]
 mod tests;

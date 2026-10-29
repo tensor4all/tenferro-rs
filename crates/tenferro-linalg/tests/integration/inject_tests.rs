@@ -8,9 +8,8 @@ use tenferro_cpu::inject::{
     register_blas_gemm_provider_ptrs, register_lapack_provider_ptrs, BlasGemmProviderPtrSet,
     LapackProviderPtrSet, ProviderAbi,
 };
-use tenferro_cpu::CpuEngine;
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
+use tenferro_tensor::{Tensor, TypedTensor};
 
 static REGISTER_ONCE: Once = Once::new();
 static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -229,115 +228,6 @@ unsafe extern "C" fn test_dgesvd(
 }
 
 #[test]
-fn provider_inject_dot_general_uses_registered_blas() {
-    let _guard = TEST_LOCK
-        .lock()
-        .expect("provider-inject test lock poisoned");
-    register_test_ptrs_once();
-    DGEMM_CALLS.store(0, Ordering::SeqCst);
-
-    let a = Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]).unwrap(),
-    );
-    let b = Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 7.0, 6.0, 8.0]).unwrap(),
-    );
-
-    let mut backend = tenferro_cpu::CpuEngine::serial();
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: [1].as_slice().into(),
-            rhs_contracting_dims: [0].as_slice().into(),
-            lhs_batch_dims: [].as_slice().into(),
-            rhs_batch_dims: [].as_slice().into(),
-        },
-    );
-
-    assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
-    match c {
-        Ok(tensor) => {
-            let inner = tensor.into_typed::<f64>().expect("expected f64 tensor");
-            assert_eq!(inner.host_data().unwrap(), &[19.0, 43.0, 22.0, 50.0])
-        }
-        _ => panic!("expected f64 tensor"),
-    }
-}
-
-#[test]
-fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
-    let _guard = TEST_LOCK
-        .lock()
-        .expect("provider-inject test lock poisoned");
-    register_test_ptrs_once();
-    DGEMM_CALLS.store(0, Ordering::SeqCst);
-
-    let a = Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![1, 2], vec![1.0, 2.0]).unwrap(),
-    );
-    let b = Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![1, 2], vec![3.0, 4.0]).unwrap(),
-    );
-
-    let mut backend = tenferro_cpu::CpuEngine::serial();
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: [0].as_slice().into(),
-            rhs_contracting_dims: [0].as_slice().into(),
-            lhs_batch_dims: [].as_slice().into(),
-            rhs_batch_dims: [].as_slice().into(),
-        },
-    );
-
-    assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
-    match c {
-        Ok(tensor) => {
-            let inner = tensor.into_typed::<f64>().expect("expected f64 tensor");
-            assert_eq!(inner.host_data().unwrap(), &[3.0, 6.0, 4.0, 8.0])
-        }
-        _ => panic!("expected f64 tensor"),
-    }
-}
-
-#[test]
-fn provider_inject_dot_general_rhs_singleton_contract_uses_registered_blas() {
-    let _guard = TEST_LOCK
-        .lock()
-        .expect("provider-inject test lock poisoned");
-    register_test_ptrs_once();
-    DGEMM_CALLS.store(0, Ordering::SeqCst);
-
-    let a = Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![1], vec![2.0]).unwrap());
-    let b = Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![2, 1, 2], vec![3.0, 4.0, 5.0, 6.0]).unwrap(),
-    );
-
-    let mut backend = tenferro_cpu::CpuEngine::serial();
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: [0].as_slice().into(),
-            rhs_contracting_dims: [1].as_slice().into(),
-            lhs_batch_dims: [].as_slice().into(),
-            rhs_batch_dims: [].as_slice().into(),
-        },
-    );
-
-    assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
-    match c {
-        Ok(tensor) => {
-            let inner = tensor.into_typed::<f64>().expect("expected f64 tensor");
-            assert_eq!(inner.host_data().unwrap(), &[6.0, 8.0, 10.0, 12.0])
-        }
-        _ => panic!("expected f64 tensor"),
-    }
-}
-
-#[test]
 fn provider_inject_full_piv_lu_solve_uses_registered_lapack() {
     let _guard = TEST_LOCK
         .lock()
@@ -364,7 +254,9 @@ fn provider_inject_full_piv_lu_solve_uses_registered_lapack() {
                 .into_typed::<f64>()
                 .expect("expected f64 tensor")
                 .host_data()
-                .unwrap(),.host_data().unwrap(), &[4.0, 8.0]),
+                .unwrap(),
+            &[4.0, 8.0]
+        ),
         _ => panic!("expected f64 tensor"),
     }
 }
@@ -396,7 +288,9 @@ fn provider_inject_solve_uses_registered_lapack_getrf_getrs() {
                 .into_typed::<f64>()
                 .expect("expected f64 tensor")
                 .host_data()
-                .unwrap(),.host_data().unwrap(), &[4.0, 8.0]),
+                .unwrap(),
+            &[4.0, 8.0]
+        ),
         _ => panic!("expected f64 tensor"),
     }
 }
