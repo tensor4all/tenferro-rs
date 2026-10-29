@@ -248,6 +248,16 @@ Audit hints:
   counts inside operation helpers.
 - Scratch and batching follow the batched linalg rule in Dense Layout And
   Linear Algebra, which applies to faer and LAPACK providers alike.
+- CPU `dot_general` (native provider) plans with tcontract's `FaerLimit`. Its
+  default sends c64 products above `m*n*k = 1 << 17` to the packed driver, which
+  at a thread budget of one is about 2x slower than faer (8x141 * 141x282 c64:
+  170 us against 87 us). A plan prepared under a budget-one token therefore uses
+  `FaerLimit::NONE`; wider budgets keep the default. The budget class is part
+  of the plan-cache key because a `CpuPlanCache` may be shared by engines of
+  different widths. Consequence: serial c64 results above the old volume come
+  from faer's accumulation order, so their last bits differ from the packed
+  driver's (bitwise equal to a direct faer matmul). f32, f64 and c32 have no
+  bound in the default and are unchanged.
 
 Audit hints:
 
