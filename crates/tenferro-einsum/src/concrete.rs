@@ -11,7 +11,8 @@ use crate::eager::{
     binary_dot_config_for_into, binary_dot_plan_for_shapes, eager_einsum_exec,
     eager_einsum_exec_read, eager_einsum_exec_read_into, eager_einsum_exec_read_into_accum,
     eager_einsum_read_subscripts_on_session, eager_einsum_subscripts_on_session,
-    execute_binary_dot_read_into, execute_binary_dot_read_into_accum, plan_subscripts,
+    execute_binary_dot_read_into, execute_binary_dot_read_into_accum, execute_binary_dot_shortcut,
+    plan_subscripts, try_binary_dot_shortcut,
 };
 use crate::ellipsis::resolve_einsum_notation;
 use crate::TensorDotAxes;
@@ -1502,6 +1503,10 @@ impl ConcreteEinsumPlan {
     {
         let inputs = inputs.as_ref();
         self.validate_tensor_inputs(inputs, PLAN_EXECUTE_OP)?;
+        if let ([lhs, rhs], Some(plan)) = (inputs, self.binary_dot_shortcut()) {
+            let reads = [TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs)];
+            return execute_binary_dot_shortcut(session, &reads, plan).map_err(Error::from);
+        }
         if inputs.len() >= 3 {
             let reads: Vec<_> = inputs
                 .iter()
@@ -1561,6 +1566,10 @@ impl ConcreteEinsumPlan {
         let inputs = inputs.as_ref();
         self.validate_typed_inputs(inputs, PLAN_EXECUTE_OP)?;
         let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
+        if let Some(plan) = self.binary_dot_shortcut() {
+            let result = execute_binary_dot_shortcut(session, &reads, plan)?;
+            return into_typed_result(result, PLAN_EXECUTE_OP);
+        }
         let result = match crate::cpu_concrete::execute_cached(
             session,
             &reads,
@@ -1613,6 +1622,9 @@ impl ConcreteEinsumPlan {
     {
         let inputs = inputs.as_ref();
         self.validate_read_inputs(inputs, PLAN_EXECUTE_OP)?;
+        if let Some(plan) = self.binary_dot_shortcut() {
+            return execute_binary_dot_shortcut(session, inputs, plan).map_err(Error::from);
+        }
         if let Some(result) =
             crate::cpu_concrete::execute_cached(session, inputs, &self.tree, Some(&self.cpu_plan))
         {
@@ -1900,6 +1912,19 @@ impl ConcreteEinsumPlan {
         }
     }
 
+    /// The prepared binary-dot plan when `execute*` may skip the contraction
+    /// tree: operands in written order, same dtype (see
+    /// `binary_dot_shortcut_plan`). The input count and metadata are validated
+    /// by the caller before this is used.
+    fn binary_dot_shortcut(&self) -> Option<&crate::binary_dot::BinaryDotPlan> {
+        let plan = self.binary_dot.as_ref()?;
+        let [lhs, rhs] = self.inputs.as_slice() else {
+            return None;
+        };
+        (plan.operand_order == BinaryDotOperandOrder::Original && lhs.dtype == rhs.dtype)
+            .then_some(plan)
+    }
+
     fn prepare_subscripts_internal(
         inputs: Vec<ConcreteEinsumInputSpec>,
         subscripts: &Subscripts,
@@ -2079,6 +2104,9 @@ fn typed_view_einsum_subscripts<T: TensorScalar>(
         .cloned()
         .map(|view| TensorRead::from_view(T::tensor_view(view)))
         .collect();
+    if let Some(result) = try_binary_dot_shortcut(session, &reads, subscripts) {
+        return into_typed_result(result?, op);
+    }
     let plan =
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
     let result = plan.execute_read(&reads, session)?;
@@ -2350,6 +2378,9 @@ fn typed_einsum_subscripts<T: TensorScalar>(
     op: &'static str,
 ) -> Result<TypedTensor<T>> {
     let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
+    if let Some(result) = try_binary_dot_shortcut(session, &reads, subscripts) {
+        return into_typed_result(result?, op);
+    }
     let plan =
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
     let result = plan.execute_read(&reads, session)?;

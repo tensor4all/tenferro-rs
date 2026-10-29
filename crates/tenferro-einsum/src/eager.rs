@@ -1018,6 +1018,53 @@ pub(crate) fn binary_dot_plan_for_shapes(
     Some(plan)
 }
 
+/// Plan the two-operand shortcut for `inputs`: one `dot_general` whose result
+/// axes already equal the einsum output, with the operands in their written
+/// order.
+///
+/// Returns `None` (the caller takes the contraction-tree path) for anything the
+/// labelled path treats differently from a bare `dot_general`: repeated labels
+/// (diagonals), labels summed in only one operand, no contracted label (outer
+/// product), an output order other than lhs-free, rhs-free, batch (the tree
+/// path transposes), size mismatches on contracted/batch labels (broadcasting
+/// of size-1 axes), and operands of different dtypes (promotion). A plan that
+/// needs the operands swapped is also declined: the tree path issues the
+/// original-order `dot_general` and then transposes, so swapping would change
+/// the kernel call and could change the bits.
+pub(crate) fn binary_dot_shortcut_plan(
+    inputs: &[TensorRead<'_>],
+    subscripts: &Subscripts,
+) -> Option<BinaryDotPlan> {
+    let [lhs, rhs] = inputs else {
+        return None;
+    };
+    if lhs.dtype() != rhs.dtype() {
+        return None;
+    }
+    let plan = binary_dot_plan_for_shapes(&[lhs.shape(), rhs.shape()], subscripts)?;
+    (plan.operand_order == BinaryDotOperandOrder::Original).then_some(plan)
+}
+
+/// Execute a plan from [`binary_dot_shortcut_plan`].
+pub(crate) fn execute_binary_dot_shortcut(
+    exec: &mut dyn Engine,
+    inputs: &[TensorRead<'_>],
+    plan: &BinaryDotPlan,
+) -> Result<Tensor> {
+    exec.dot_general_read(inputs[0].clone(), inputs[1].clone(), &plan.config)
+}
+
+/// Run the two-operand shortcut when it applies, skipping contraction-tree
+/// planning.
+pub(crate) fn try_binary_dot_shortcut(
+    exec: &mut dyn Engine,
+    inputs: &[TensorRead<'_>],
+    subscripts: &Subscripts,
+) -> Option<Result<Tensor>> {
+    let plan = binary_dot_shortcut_plan(inputs, subscripts)?;
+    Some(execute_binary_dot_shortcut(exec, inputs, &plan))
+}
+
 pub(crate) fn binary_dot_config_for_into<L: Copy + PartialEq>(
     lhs_shape: &[usize],
     rhs_shape: &[usize],
@@ -1249,6 +1296,12 @@ pub(crate) fn eager_einsum_subscripts_on_session(
     inputs: &[&Tensor],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
+    if let [lhs, rhs] = inputs {
+        let reads = [TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs)];
+        if let Some(result) = try_binary_dot_shortcut(session, &reads, subscripts) {
+            return result;
+        }
+    }
     if eager_einsum_profile_enabled() {
         let total_started = Instant::now();
         let plan = profile_eager_einsum_section("plan_subscripts", || {
@@ -1319,6 +1372,9 @@ pub(crate) fn eager_einsum_read_subscripts_on_session(
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
+    if let Some(result) = try_binary_dot_shortcut(session, inputs, subscripts) {
+        return result;
+    }
     let plan =
         ConcreteEinsumPlan::prepare_read_subscripts(inputs, &EinsumSubscripts::from(subscripts))
             .map_err(into_tensor_error)?;
