@@ -235,8 +235,10 @@ unsafe extern "C" fn test_dgesvd(
     }
 }
 
+// Complete-pivoting LU runs on the shared tlinalg kernel in every build, so a registered
+// `?getc2`/`?gesc2` is never called.
 #[test]
-fn provider_inject_full_piv_lu_solve_uses_registered_lapack() {
+fn provider_inject_full_piv_lu_solve_uses_the_shared_kernel() {
     let _guard = TEST_LOCK
         .lock()
         .expect("provider-inject test lock poisoned");
@@ -254,8 +256,8 @@ fn provider_inject_full_piv_lu_solve_uses_registered_lapack() {
     let mut backend = tenferro_cpu::CpuEngine::serial();
     let x = backend.full_piv_lu_solve(&a, &b, false);
 
-    assert_eq!(DGETC2_CALLS.load(Ordering::SeqCst), 1);
-    assert_eq!(DGESC2_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(DGETC2_CALLS.load(Ordering::SeqCst), 0);
+    assert_eq!(DGESC2_CALLS.load(Ordering::SeqCst), 0);
     match x {
         Ok(tensor) => assert_eq!(
             tensor

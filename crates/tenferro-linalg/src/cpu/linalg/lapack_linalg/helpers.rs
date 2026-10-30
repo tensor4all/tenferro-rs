@@ -83,18 +83,6 @@ pub(crate) trait LapackLinalg:
         b: RawStridedRef<'_, Self>,
         out: RawStridedMut<'_, Self>,
     ) -> BlasResult<()>;
-    fn full_piv_lu(
-        pool: &mut BufferPool,
-        a: RawStridedRef<'_, Self>,
-        outputs: tlinalg_blas::full_piv_lu::FullPivLuOutputs<'_, Self>,
-    ) -> BlasResult<()>;
-    fn full_piv_lu_solve(
-        pool: &mut BufferPool,
-        transpose_a: bool,
-        a: RawStridedRef<'_, Self>,
-        b: RawStridedRef<'_, Self>,
-        out: &mut Vec<Self>,
-    ) -> BlasResult<()>;
     fn householder_factor(
         pool: &mut BufferPool,
         rows: usize,
@@ -203,31 +191,6 @@ macro_rules! forward_lapack_families {
             out: RawStridedMut<'_, Self>,
         ) -> BlasResult<()> {
             tlinalg_blas::solve::solve_into(Op::Solve, transpose_a, a, b, out, &mut workspace(pool))
-        }
-
-        fn full_piv_lu(
-            pool: &mut BufferPool,
-            a: RawStridedRef<'_, Self>,
-            outputs: tlinalg_blas::full_piv_lu::FullPivLuOutputs<'_, Self>,
-        ) -> BlasResult<()> {
-            tlinalg_blas::full_piv_lu::full_piv_lu(Op::FullPivLu, a, outputs, &mut workspace(pool))
-        }
-
-        fn full_piv_lu_solve(
-            pool: &mut BufferPool,
-            transpose_a: bool,
-            a: RawStridedRef<'_, Self>,
-            b: RawStridedRef<'_, Self>,
-            out: &mut Vec<Self>,
-        ) -> BlasResult<()> {
-            tlinalg_blas::full_piv_lu::full_piv_lu_solve(
-                Op::FullPivLuSolve,
-                transpose_a,
-                a,
-                b,
-                out,
-                &mut workspace(pool),
-            )
         }
 
         fn householder_factor(

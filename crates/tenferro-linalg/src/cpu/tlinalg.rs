@@ -11,8 +11,6 @@
 //! pays its own bookkeeping allocations (the pool's in-flight accounting node, the caller's result
 //! vectors), and a multi-lane run adds one rayon spawn job per extra lane.
 
-#![cfg(feature = "native")]
-
 use core::mem::MaybeUninit;
 
 use strided_view::RawStridedRef;

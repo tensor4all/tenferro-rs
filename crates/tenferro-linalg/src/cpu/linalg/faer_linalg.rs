@@ -2307,6 +2307,7 @@ pub(crate) fn faer_strided_ok<T: 'static>(view: &TypedTensorView<'_, T>) -> bool
         && view.strides().iter().all(|&s| s >= 0)
 }
 
-#[cfg(test)]
+// The tests drive the public backend, which takes this route only in the `native` build.
+#[cfg(all(test, feature = "native"))]
 #[path = "faer_linalg/tests.rs"]
 mod tests;

@@ -36,7 +36,12 @@ native = [
     "tenferro-ad?/native",
     "tenferro-cpu/native",
 ]
+# The `blas` build keeps tlinalg (faer) for complete-pivoting LU, which LAPACK does not
+# provide in rank-revealing form.
 blas = [
+    "dep:faer",
+    "tcontract-exec/faer",
+    "dep:tlinalg",
     "dep:cblas-sys",
     "dep:lapack",
     "dep:tlinalg-blas",
