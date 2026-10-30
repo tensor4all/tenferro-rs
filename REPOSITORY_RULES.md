@@ -680,11 +680,12 @@ Tests follow implementation ownership.
   sizes, is filed upstream with a strided-level reproduction
   ([strided-rs#269](https://github.com/tensor4all/strided-rs/issues/269)), not
   accepted as a tenferro baseline.
-- The CPU provider is selected at compile time. Exactly one of `native` (the
-  default) or `blas` is enabled; enabling both, or neither, is a
-  `compile_error!`. There is no runtime provider kind, provider bundle, kernel
-  slot, or per-handle provider selection. `blas` is a compiled adapter, not a
-  vendor-only execution world, and keeps the native path for declined steps.
+- CPU provider selection is compile-time. Enabling both `native` (default) and
+  `blas` is a `compile_error!`; neither is allowed with reduced functionality
+  (typed `Unsupported` on CPU numerical routes). The provider-less einsum branch in
+  `crates/tenferro-einsum/src/cpu_concrete.rs` is the `--no-default-features`
+  contract, not dead code. There is no runtime provider kind/bundle, kernel slot,
+  or per-handle selection. `blas` is a compiled adapter, retaining native execution for declined steps.
 - Tensor-sized CPU kernels run through the repository CPU threading policy:
   only `threadteam` starts tasks (`Exec::fork` / `for_ranges` / `external`;
   no other crate depends on `rayon`, see `deny.toml`). `strided-kernel` is

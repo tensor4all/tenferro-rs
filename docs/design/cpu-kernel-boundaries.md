@@ -14,9 +14,10 @@ The CPU backend is assembled from three internal crates:
 - `tenferro-cpu-fused` owns the runtime-DAG fused elementwise adapter. It
   depends on `tenferro-cpu-basic` and `strided-fused`, not on the ordinary
   internal kernel implementation.
-- `tenferro-cpu` owns `CpuBackend`, provider selection, session entry,
-  resource arbitration, and execution policy. It assembles both operation
-  families and borrows the same context and pool for each call.
+- `tenferro-cpu` owns the caller-held `CpuEngine`, compile-time provider
+  selection, and execution policy. The engine takes over a caller-built `Pool`
+  (or runs serially without one) and owns persistent buffers and workspaces.
+  Calls borrow it through `&mut`; there is no session entry or resource arbiter.
 
 `tenferro-tensor` owns backend traits and tensor semantics, but does not
 instantiate CPU strided kernels. Its `TensorElementwise::elementwise_read_into`
@@ -26,11 +27,12 @@ backend boundary.
 
 ## Execution contracts
 
-CPU elementwise read-into enters through `CpuBackend` or `CpuExecSession` and
-calls the internal ordinary kernel with the installed `CpuExecutionContext` and
-persistent pool. Supported normal fusion enters the separate fused adapter from
-the same closure, with the same context and pool. Unsupported fused plans return
-the existing `None` result and retain the normal fallback behavior.
+CPU elementwise read-into enters through a caller-provided `&mut CpuEngine` and
+calls the internal ordinary kernel with the operation's execution token and the
+engine's persistent `BufferPool`. Supported normal fusion uses the separate
+fused adapter with the same engine-owned resources and token policy; no
+execution context is installed. Unsupported fused plans return the existing
+`None` result and retain the normal fallback behavior.
 
 The one-shot read-into implementation validates arity, storage overlap, host
 placement, dtype, shape and reachable layouts before constructing raw strided

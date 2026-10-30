@@ -78,11 +78,13 @@ The host waits when a value is downloaded or otherwise inspected on the host.
 Some library-backed operations also synchronize internally when they must read
 device-side status.
 
-Use `EagerRuntime::synchronize()` when code needs an explicit host-side barrier
-for the eager runtime. CPU runtimes return immediately; CUDA runtimes wait for
-the current backend stream, and WebGPU runtimes wait for the WebGPU queue.
-Direct GPU backend code can call the provider runtime's `synchronize()` through
-`backend.runtime()`.
+Use `ExecutionEngine::synchronize` on the caller-held engine when code needs
+an explicit host-side barrier, including after an eager session releases its
+engine borrow. Import `tenferro_runtime::ExecutionEngine` to call
+`engine.synchronize()?`. CPU work is already complete; a `CudaEngine` waits for
+its stream and retires pending runs. Direct CUDA code can also call the
+lower-level `engine.runtime().synchronize()` barrier. See
+[CUDA engines and pinned transfers](engines-and-transfers.md).
 
 For a time-axis diagram, see [Execution Models](execution-models.md).
 
@@ -287,9 +289,9 @@ assert_eq!(cpu_x.as_slice::<f64>()?, &[1.0, 2.0]);
 
 `DotGeneralConfig` uses StableHLO-style dimension-number fields:
 `lhs_contracting_dims`, `rhs_contracting_dims`, `lhs_batch_dims`, and
-`rhs_batch_dims`. Direct backend code can use the lower-level
-`backend.runtime().synchronize()` barrier; eager code can use
-`EagerRuntime::synchronize()`.
+`rhs_batch_dims`. For an explicit host barrier, use
+`ExecutionEngine::synchronize` on the caller-held engine, including for eager
+work; direct CUDA code can also use `engine.runtime().synchronize()`.
 
 ## CUDA Across Tensor Layers
 

@@ -242,18 +242,18 @@ Audit hints:
   the preferred contiguous layout; generic-stride inputs that trigger faer
   performance warnings must be justified or converted deliberately at an
   explicit boundary.
-- Pass faer parallelism through the operation's placement token only
-  (`Exec::external` hands the budget over as a plain width; `Par::Seq` for a
-  width of one, else `Par::rayon(width)`); never choose `Par::rayon` or thread
-  counts inside operation helpers.
+- Pass faer parallelism through the operation's placement token only.
+  `tcontract_exec::with_faer_par` hands a multi-slot Team token to faer as
+  `Par::Team`; otherwise it uses `Par::Seq`. Never reconstruct parallelism
+  from a plain width or use `Par::rayon` inside operation helpers.
 - Scratch and batching follow the batched linalg rule in Dense Layout And
   Linear Algebra, which applies to faer and LAPACK providers alike.
 
 Audit hints:
 
 - Detect: packing into temporary dense matrices before a faer call;
-  `Par::rayon(...)`/`Par::Seq` chosen inside an op helper; `Vec` scratch
-  allocated per decomposition, solve, or batch iteration.
+  `Par::rayon(...)` or faer parallelism chosen independently of the token;
+  `Vec` scratch allocated per decomposition, solve, or batch iteration.
 - Fix: zero-copy `MatRef`/`MatMut` after validation, parallelism from the
   operation's placement token, scratch sized once per operation.
 
@@ -485,28 +485,33 @@ Audit hints:
 
 ## CPU Threading Contract
 
-- A CPU engine owns exactly one `threadteam::Pool`, or none for
-  `CpuEngine::serial()`. The caller builds the pool (with `Pool::builder()`, which
-  `tenferro-cpu` re-exports) and hands it over; tenferro never starts a hidden or
-  global pool, keeps no process-wide registry of engines, and does not
-  arbitrate between callers. `&mut engine` is the exclusivity mechanism.
-  Concurrent computations use separate engines and separate pools, each on its
-  own calling thread.
+- CPU placement is `Serial`, `Single`, or `Team`. `CpuEngine::serial()` owns no
+  pool; a caller-built one-worker `threadteam::Pool` stays `Single`, with no
+  dispatch. For a larger pool, construction attempts to reserve all workers as
+  a `threadteam::Team` for the engine's lifetime. Reservation retries for a
+  bounded interval (currently ten seconds); if it is still refused, the pool
+  is dropped and the engine becomes `Serial`, not a Rayon execution path.
+  `CpuEngine::num_threads()` reports the effective budget (one after refusal),
+  and `has_team()` reports whether reservation succeeded. The caller builds
+  the pool with the re-exported `Pool::builder()`; tenferro starts no hidden or
+  global pool and keeps no process-wide registry or resource arbiter.
+  `&mut engine` is the exclusivity mechanism. Concurrent computations use
+  separate engines and pools, each on its own calling thread.
 - Only `threadteam` starts tasks. Where CPU work runs and how many tasks run at
-  once is decided by one borrowed token, `threadteam::Exec`: a pool reference
-  plus a budget. It is neither `Clone` nor `Copy`, every parallel entry
-  consumes it, and a split (`fork`, `for_ranges`) gives each child a share of
+  once is decided by one borrowed token, `threadteam::Exec`: the engine's
+  placement plus a budget. It is neither `Clone` nor `Copy`, every parallel
+  entry consumes it, and a split (`fork`, `for_ranges`) gives each child a share of
   the budget, so the tasks running at once under one operation never exceed its
   budget at any nesting depth. tenferro has no raw Rayon call, no thread-local
-  placement state and no second clamp: `Exec::new` clamps the budget once, to
-  the pool width.
-- The thread width is decided before the pool is built and never changed at
-  run time. Do not derive it from an ambient pool, do not build a second pool
-  inside an operation, and do not install or restore an execution context per
-  operation. `CpuEngine::num_threads()` reports the fixed budget.
+  placement state and no second scheduler: a Team token is bounded by the
+  reserved team, and `Single` and `Serial` tokens have a budget of one.
+- The caller chooses the pool width before construction; the engine's effective
+  budget is fixed after the reservation attempt. Do not derive it from an
+  ambient pool, build a second pool inside an operation, or install or restore
+  an execution context per operation.
 - Every operation starts on the calling thread and mints one token from the
-  engine's pool. Kernels take it by value as their **last** parameter; a kernel
-  that runs several parallel phases takes `reborrow()` for each of them, and
+  engine's placement. Kernels take it by value as their **last** parameter; a
+  kernel that runs several parallel phases takes `reborrow()` for each of them, and
   one that runs independent parts forks it. Plans never store a token; replay
   takes it per call. A serial engine mints a serial token: no pool is started
   or entered. A small operation never enters the pool because a serial token, a
@@ -514,14 +519,14 @@ Audit hints:
 - cpueinsum/tcontract and tlinalg receive the engine's provider bundle
   (`CpuEngine::exec`, a `tcontract_exec::Exec`: token, workspace, batch
   policy) by `&mut` and fork the token for their lanes. They never call back
-  into tenferro from a lane. Direct downstream faer calls take their width from
-  the same token with `Exec::external`.
+  into tenferro from a lane. Direct downstream faer calls use the same token's
+  Team through `tcontract_exec::with_faer_par`, not a plain-width external handoff.
 - For faer-backed CPU ops the token is the single source of truth for
-  thread-pool policy. Choose the faer width from the shared work model
-  **before** any pool entry and hand it over with `Exec::limit(..).external(..)`;
-  never choose `Par::rayon` or a thread count inside an operation helper. Do
-  not derive faer parallelism independently. How faer divides the width it
-  receives is faer's concern.
+  parallelism. Limit it using the shared work model **before** entering
+  parallel work, then pass it to `tcontract_exec::with_faer_par`: a multi-slot
+  Team token yields `Par::Team`, anything else yields `Par::Seq`. No Rayon path
+  is used. Do not derive faer parallelism independently; how faer divides the
+  team it receives is faer's concern.
 - The token is correct when the operation is called from a plain thread, from a
   worker of the engine's own pool (the entry runs in place) and from a worker of
   a different pool. A kernel that needs every worker at once (a barrier team)
