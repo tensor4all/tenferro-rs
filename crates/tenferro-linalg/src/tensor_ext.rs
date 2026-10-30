@@ -18,6 +18,8 @@ use tenferro_tensor::{
 };
 
 use crate::extension::{EighOptions, QrOptions, SvdOptions};
+use crate::traced::real_values_dtype;
+use crate::validation::validate_square_matrix;
 use crate::{LinalgBackend, RankRevealingQrOptions, RankRevealingQrResult};
 
 /// Scalar types supported by statically typed linear algebra methods.
@@ -1863,11 +1865,19 @@ impl TensorLinalgExt for Tensor {
         })
     }
     fn slogdet(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        validate_square_matrix("slogdet", self.shape())?;
+        if self.shape()[0] == 0 && self.shape()[1] == 0 {
+            ensure_linalg_input_residency(session, "slogdet", &TensorRead::from_tensor(self))?;
+            return with_linalg_backend(session, "slogdet", |backend| {
+                empty_square_slogdet(self.shape(), self.dtype(), backend)
+            });
+        }
         with_linalg_backend(session, "slogdet", |backend| {
             slogdet_from_lu(four(backend.lu(self)?, "slogdet")?, backend)
         })
     }
     fn det(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
+        validate_square_matrix("det", self.shape())?;
         with_linalg_backend(session, "det", |backend| {
             det_impl(self.slogdet(backend)?, backend)
         })
@@ -2071,11 +2081,19 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         })
     }
     fn slogdet_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        validate_square_matrix("slogdet_read", self.shape())?;
+        if self.shape()[0] == 0 && self.shape()[1] == 0 {
+            ensure_linalg_input_residency(session, "slogdet_read", &self)?;
+            return with_linalg_backend(session, "slogdet_read", |backend| {
+                empty_square_slogdet(self.shape(), self.dtype(), backend)
+            });
+        }
         with_linalg_backend(session, "slogdet_read", |backend| {
             slogdet_from_lu(four(backend.lu_read(self)?, "slogdet_read")?, backend)
         })
     }
     fn det_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
+        validate_square_matrix("det_read", self.shape())?;
         with_linalg_backend(session, "det_read", |backend| {
             det_impl(self.slogdet_read(backend)?, backend)
         })
@@ -2434,6 +2452,36 @@ pub(crate) fn with_linalg_backend<X>(
     ))
 }
 
+/// Run the backend's own input-residency check without an operation.
+///
+/// An empty determinant shortcut returns before the LU call that would
+/// otherwise reject a host tensor on a device session or a device tensor on a
+/// host session. This keeps that refusal by calling the same check the LU
+/// route performs, without factorizing or copying the input.
+fn ensure_linalg_input_residency(
+    session: &mut dyn Engine,
+    op: &'static str,
+    input: &TensorRead<'_>,
+) -> tenferro_tensor::Result<()> {
+    if with_cpu_engine(session, |_| ()).is_some() {
+        return with_cpu_engine(session, |_| {
+            crate::cpu::backend::ensure_host_tensor_read(op, input)
+        })
+        .expect("marker probe matched a CPU execution session");
+    }
+    #[cfg(feature = "cuda")]
+    if with_cuda_engine(session, |_| ()).is_some() {
+        return with_cuda_engine(session, |backend| {
+            crate::gpu::ensure_device_resident_read(backend, op, input)
+        })
+        .expect("marker probe matched a CUDA execution session");
+    }
+    Err(tenferro_tensor::Error::unsupported(
+        op,
+        "selected backend session does not expose a linalg execution capability",
+    ))
+}
+
 fn typed_output<T: TensorScalar>(tensor: Tensor) -> tenferro_tensor::Result<TypedTensor<T>> {
     if tensor.dtype() != T::dtype() {
         return Err(tenferro_tensor::Error::Internal(format!(
@@ -2610,6 +2658,22 @@ fn norm_from_read<B: LinalgBackend + ?Sized>(
         shape[axis] = 1;
     }
     reshape(&reduced, &shape, backend)
+}
+
+/// Sign and log-absolute determinant of the empty `0 x 0` batch, whose
+/// determinant is the empty product `1` and whose log-absolute determinant is
+/// therefore `0`. The batch axes become the output shape.
+fn empty_square_slogdet<B: LinalgBackend + ?Sized>(
+    shape: &[usize],
+    dtype: DType,
+    backend: &mut B,
+) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+    let batch_shape = &shape[2..];
+    let sign_scalar = resident(scalar_real(dtype, 1.0)?, backend)?;
+    let sign = broadcast(&sign_scalar, batch_shape, &[], backend)?;
+    let log_scalar = resident(scalar_real(real_values_dtype(dtype), 0.0)?, backend)?;
+    let logabsdet = broadcast(&log_scalar, batch_shape, &[], backend)?;
+    Ok((sign, logabsdet))
 }
 
 fn scalar_real(dtype: DType, value: f64) -> tenferro_tensor::Result<Tensor> {

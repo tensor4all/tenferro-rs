@@ -146,13 +146,16 @@ pub fn download_tensor(runtime: &CudaRuntime, tensor: &Tensor) -> crate::Result<
                 .wait()
                 .map_err(|error| crate::Error::runtime_state_source("cuda download", error))?
         };
-        let values: Vec<T> = bytes
-            .chunks_exact(std::mem::size_of::<T>().max(1))
-            .map(|word| {
-                // SAFETY: the chunk has exactly the element size and `T` is plain data.
-                unsafe { std::ptr::read_unaligned(word.as_ptr().cast::<T>()) }
-            })
-            .collect();
+        let element_bytes = std::mem::size_of::<T>().max(1);
+        let elements = bytes.len() / element_bytes;
+        let mut values: Vec<T> = Vec::new();
+        values
+            .try_reserve_exact(elements)
+            .map_err(|error| crate::Error::backend_source("cuda download", error))?;
+        values.extend(bytes.chunks_exact(element_bytes).map(|word| {
+            // SAFETY: the chunk has exactly the element size and `T` is plain data.
+            unsafe { std::ptr::read_unaligned(word.as_ptr().cast::<T>()) }
+        }));
         TypedTensor::from_buffer_col_major(
             typed.shape().to_vec(),
             StorageBuffer::Host(values),

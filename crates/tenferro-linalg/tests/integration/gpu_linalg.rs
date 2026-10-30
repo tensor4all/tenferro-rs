@@ -10,8 +10,10 @@ use tenferro_gpu::{
 };
 use tenferro_linalg::{
     EighDriver, EighOptions, HouseholderQr, LinalgBackend, QrGauge, QrOptions,
-    RankRevealingQrOptions, SvdDriver, SvdOptions, TensorLinalgExt,
+    RankRevealingQrOptions, SvdDriver, SvdOptions, TensorLinalgExt, TensorReadLinalgExt,
+    TracedTensorLinalgExt,
 };
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{DType, Error, Tensor, TensorRead, TypedTensor};
 
 #[path = "gpu_linalg/svd_auto.rs"]
@@ -1941,6 +1943,134 @@ fn test_cuda_solve_vector_rhs_uses_borrowed_session_reshape() {
         with_cuda_linalg_session(&mut gpu, |session| session.solve(&gpu_a, &gpu_b)).unwrap();
     assert_eq!(gpu_out.shape(), &[2]);
     assert_tensor_close(&download(&gpu, &gpu_out), &expected, 1e-9);
+}
+
+fn rhs_shape(shape: &[usize]) -> Vec<usize> {
+    let mut rhs = vec![shape[0], 1];
+    rhs.extend_from_slice(&shape[2..]);
+    rhs
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn cuda_empty_rectangular_solve_and_inv_are_rejected() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut gpu = gpu_backend();
+    for shape in [&[0usize, 3][..], &[2, 3, 0][..]] {
+        let a = tensor_f64(shape.to_vec(), Vec::new());
+        let b = tensor_f64(rhs_shape(shape), Vec::new());
+        let gpu_a = upload(&gpu, &a);
+        let gpu_b = upload(&gpu, &b);
+
+        let solve = with_cuda_linalg_session(&mut gpu, |session| session.solve(&gpu_a, &gpu_b));
+        assert!(
+            matches!(solve, Err(tenferro_tensor::Error::Validation { .. })),
+            "empty rectangular solve with {shape:?} must be a validation error, got {solve:?}"
+        );
+
+        let inv = with_cuda_linalg_session(&mut gpu, |session| gpu_a.inv(session));
+        assert!(
+            matches!(inv, Err(tenferro_tensor::Error::Validation { .. })),
+            "empty rectangular inv with {shape:?} must be a validation error, got {inv:?}"
+        );
+    }
+}
+
+/// Return the first error from building, compiling, preparing, or running a
+/// traced CUDA solve, or panic if every stage accepted the graph.
+fn cuda_traced_solve_error(gpu: &mut CudaEngine, shape: &[usize]) -> tenferro_runtime::Error {
+    use tenferro_gpu::cuda::cuda_runtime_engine_registration;
+
+    let a = TracedTensor::from_vec_col_major(shape.to_vec(), Vec::<f64>::new())
+        .expect("empty traced coefficient");
+    let b = TracedTensor::from_vec_col_major(rhs_shape(shape), Vec::<f64>::new())
+        .expect("empty traced rhs");
+    let x = match a.solve(&b) {
+        Ok(x) => x,
+        Err(error) => return error,
+    };
+    let program = match GraphCompiler::new().compile(&x) {
+        Ok(program) => program,
+        Err(error) => return error,
+    };
+
+    let host_a = tensor_f64(shape.to_vec(), Vec::new());
+    let host_b = tensor_f64(rhs_shape(shape), Vec::new());
+    let device_a = upload(gpu, &host_a);
+    let device_b = upload(gpu, &host_b);
+    let reads = [
+        TensorRead::from_tensor(&device_a),
+        TensorRead::from_tensor(&device_b),
+    ];
+    let engine = gpu.runtime_engine_id().clone();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(cuda_runtime_engine_registration(gpu).expect("CUDA registration"))
+        .expect("register CUDA engine");
+    builder
+        .install_extension_module(
+            tenferro_linalg::extension_module::<CudaEngine>(engine).expect("linalg module"),
+        )
+        .expect("install linalg module");
+    let runtime = builder.build().expect("CUDA runtime");
+    let prepared = match runtime.prepare(&program, &reads, &[gpu.target()]) {
+        Ok(prepared) => prepared,
+        Err(error) => return error,
+    };
+    let mut engines: [&mut dyn ExecutionEngine; 1] = [gpu];
+    match runtime.run(&mut engines, &prepared, &reads) {
+        Ok(outputs) => panic!(
+            "traced empty rectangular solve with {shape:?} must fail on CUDA, got {} outputs",
+            outputs.len()
+        ),
+        Err(error) => error,
+    }
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn cuda_traced_empty_rectangular_solve_is_rejected() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut gpu = gpu_backend();
+    for shape in [&[0usize, 3][..], &[2, 3, 0][..]] {
+        let error = cuda_traced_solve_error(&mut gpu, shape);
+        assert!(
+            matches!(error, tenferro_runtime::Error::TensorRuntime(_)),
+            "traced empty rectangular solve with {shape:?} must report a tensor validation error, got {error:?}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn empty_square_slogdet_keeps_input_residency_check_on_cpu_and_cuda() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let host_empty = tensor_f64(vec![0, 0], Vec::new());
+    let mut gpu = gpu_backend();
+    let device_empty = upload(&gpu, &host_empty);
+    let mut cpu = cpu_backend();
+
+    let owned = device_empty.slogdet(&mut cpu);
+    assert!(
+        matches!(owned, Err(tenferro_tensor::Error::RuntimeState { .. })),
+        "a CUDA-resident empty tensor must be refused by the CPU engine, got {owned:?}"
+    );
+    let read = TensorRead::from_tensor(&device_empty).slogdet_read(&mut cpu);
+    assert!(
+        matches!(read, Err(tenferro_tensor::Error::RuntimeState { .. })),
+        "a CUDA-resident empty read must be refused by the CPU engine, got {read:?}"
+    );
+
+    let owned = host_empty.slogdet(&mut gpu);
+    assert!(
+        matches!(owned, Err(tenferro_tensor::Error::RuntimeState { .. })),
+        "a host empty tensor must be refused by the CUDA engine, got {owned:?}"
+    );
+    let read = TensorRead::from_tensor(&host_empty).slogdet_read(&mut gpu);
+    assert!(
+        matches!(read, Err(tenferro_tensor::Error::RuntimeState { .. })),
+        "a host empty read must be refused by the CUDA engine, got {read:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------

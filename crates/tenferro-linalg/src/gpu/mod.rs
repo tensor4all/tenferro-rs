@@ -1,6 +1,8 @@
 mod ffi;
 mod linalg;
 
+pub(crate) use linalg::ensure_device_resident_read;
+
 use tenferro_gpu::cuda::CudaEngine;
 use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
