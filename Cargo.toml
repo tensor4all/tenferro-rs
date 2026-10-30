@@ -111,6 +111,14 @@ lapack-inject = "0.1.3"
 # CUDA 12.8 bindings; dynamic runtime gating keeps the baseline compatible with
 # CUDA 12.4 driver/NVRTC libraries.
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"] }
+# The standalone CUDA runtime (tensor4all/t4a-gpu-backend) and the kernel
+# catalogue with its NVRTC sources (tensor4all/t4a-cuda-kernels, ABI revision
+# 11) that tenferro-gpu's CUDA engine is built on (#2208). Each pin is the
+# commit its crates.io release was published from, with the exact registry
+# version `cargo publish` keeps; scripts/check-git-pin-content.py checks that
+# the two agree.
+t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "a1fd7aec7cf295e5b0dcd75ca12b12350d9e57c0", version = "=0.1.0" }
+t4a-cuda-kernels = { git = "https://github.com/tensor4all/t4a-cuda-kernels", rev = "d44b57be28ae299d2c2fef57e014ada1adfadc75", version = "=0.1.0" }
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = "0.1.0"
