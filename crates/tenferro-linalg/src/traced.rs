@@ -10,7 +10,7 @@ use crate::extension::{
     validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
 };
 use crate::rank_revealing_qr::validate_rank_revealing_qr_options;
-use crate::validation::{ensure_float_or_complex, validate_lstsq};
+use crate::validation::{ensure_float_or_complex, validate_lstsq, validate_square_matrix};
 use crate::{RankRevealingQrOptions, RankRevealingQrResult};
 
 /// Linear algebra extension methods for [`TracedTensor`].
@@ -166,8 +166,9 @@ pub trait TracedTensorLinalgExt {
     ///
     /// # Deferred errors
     ///
-    /// Symbolic square-shape checks and numerical eigensolver failures may be
-    /// reported during compile or execution.
+    /// The square requirement is checked concretely when the backend executes
+    /// the factorization; no symbolic square equality is recorded. Numerical
+    /// eigensolver failures may also be reported during execution.
     fn eigh_with_options(&self, options: EighOptions) -> Result<(TracedTensor, TracedTensor)>;
 
     /// Build a traced Cholesky factorization operation.
@@ -340,13 +341,13 @@ pub trait TracedTensorLinalgExt {
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` for non-square metadata or
+    /// Returns `Error::Validation` for invalid-rank metadata or
     /// `Error::Extension` for unsupported dtype.
     ///
     /// # Deferred errors
     ///
-    /// Concrete square-shape and solver failures may be reported during compile
-    /// or execution.
+    /// A known non-square input is rejected when the backend executes the
+    /// factorization; solver failures may also be reported during execution.
     fn eigvalsh(&self) -> Result<TracedTensor>;
 
     /// Build a traced general eigenvalue-only operation.
@@ -814,15 +815,17 @@ pub fn rank_revealing_qr(
 ///
 /// # Errors
 ///
-/// Returns `Error::Validation` for a known non-square or invalid-rank input,
-/// `Error::Extension` for an unsupported dtype or eigensolver
+/// Returns `Error::Validation` for an invalid-rank input; a known non-square
+/// input is rejected when the backend executes the factorization.
+/// `Error::Extension` is returned for an unsupported dtype or eigensolver
 /// non-convergence, and `Error::RuntimeState` when the extension is not
 /// registered.
 ///
 /// # Deferred errors
 ///
-/// Symbolic square-shape constraints can fail later as
-/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
+/// The square requirement is checked concretely when the backend executes the
+/// factorization; no symbolic square equality is recorded. Numerical
+/// eigensolver failures are reported during execution.
 pub fn eigh(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     eigh_with_options(a, EighOptions::default())
 }
@@ -851,15 +854,17 @@ pub fn eigh(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 ///
 /// # Errors
 ///
-/// Returns `Error::Validation` for a known non-square or invalid-rank input,
-/// or for non-finite/non-positive `derivative_eps`; `Error::Extension` for an
-/// unsupported dtype or eigensolver non-convergence; and `Error::Internal` for
-/// an output-count contract violation.
+/// Returns `Error::Validation` for an invalid-rank input, or for
+/// non-finite/non-positive `derivative_eps`; a known non-square input is
+/// rejected when the backend executes the factorization. `Error::Extension` is
+/// returned for an unsupported dtype or eigensolver non-convergence, and
+/// `Error::Internal` for an output-count contract violation.
 ///
 /// # Deferred errors
 ///
-/// Symbolic square-shape constraints can fail later as
-/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
+/// The square requirement is checked concretely when the backend executes the
+/// factorization; no symbolic square equality is recorded. Numerical
+/// eigensolver failures are reported during execution.
 pub fn eigh_with_options(
     a: &TracedTensor,
     options: EighOptions,
@@ -894,14 +899,17 @@ pub fn eigh_with_options(
 ///
 /// # Errors
 ///
-/// Returns `Error::Validation` for a known non-square or invalid-rank input,
-/// `Error::Extension` for an unsupported dtype or a non-positive-definite
-/// matrix, and `Error::RuntimeState` when the extension is not registered.
+/// Returns `Error::Validation` for an invalid-rank input; a known non-square
+/// input is rejected when the backend executes the factorization.
+/// `Error::Extension` is returned for an unsupported dtype or a
+/// non-positive-definite matrix, and `Error::RuntimeState` when the extension
+/// is not registered.
 ///
 /// # Deferred errors
 ///
-/// Symbolic square-shape constraints can fail later as
-/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
+/// The square requirement is checked concretely when the backend executes the
+/// factorization; no symbolic square equality is recorded. A non-positive
+/// definite matrix fails during execution.
 pub fn cholesky(a: &TracedTensor) -> Result<TracedTensor> {
     ensure_float_or_complex("cholesky", a.dtype)?;
     one_output(
@@ -934,8 +942,9 @@ pub fn cholesky(a: &TracedTensor) -> Result<TracedTensor> {
 ///
 /// # Deferred errors
 ///
-/// Symbolic square-shape constraints can fail later as
-/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
+/// Concrete matrix-shape checks and backend factorization failures may be
+/// reported during compile or execution. LU itself accepts rectangular
+/// matrices; the square requirement belongs to its square-only callers.
 pub fn lu(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)> {
     four_outputs(
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Lu)), &[a])?,
@@ -967,14 +976,17 @@ pub fn lu(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor,
 ///
 /// # Errors
 ///
-/// Returns `Error::Validation` for a known invalid rank or matrix shape,
-/// `Error::Extension` for an unsupported dtype or singular numerical result,
-/// and `Error::Internal` for an output-count contract violation.
+/// Returns `Error::Validation` for an invalid-rank input; a known non-square
+/// input is rejected when the backend executes the factorization.
+/// `Error::Extension` is returned for an unsupported dtype or singular
+/// numerical result, and `Error::Internal` for an output-count contract
+/// violation.
 ///
 /// # Deferred errors
 ///
-/// Symbolic square-shape constraints can fail later as
-/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
+/// The square requirement is checked concretely when the backend executes the
+/// factorization; no symbolic square equality is recorded. Backend
+/// factorization failures are reported during execution.
 pub fn full_piv_lu(
     a: &TracedTensor,
 ) -> Result<(
@@ -1006,15 +1018,17 @@ pub fn full_piv_lu(
 ///
 /// # Errors
 ///
-/// Returns `Error::Validation` for a known non-square or invalid-rank input,
-/// `Error::Extension` for an unsupported dtype or eigensolver
+/// Returns `Error::Validation` for an invalid-rank input; a known non-square
+/// input is rejected when the backend executes the factorization.
+/// `Error::Extension` is returned for an unsupported dtype or eigensolver
 /// non-convergence, and `Error::RuntimeState` when the extension is not
 /// registered.
 ///
 /// # Deferred errors
 ///
-/// Symbolic square-shape constraints can fail later as
-/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
+/// The square requirement is checked concretely when the backend executes the
+/// factorization; no symbolic square equality is recorded. Numerical
+/// eigensolver failures are reported during execution.
 pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
         apply(
@@ -1055,9 +1069,10 @@ pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 ///
 /// # Deferred errors
 ///
-/// Symbolic matrix and batch constraints can fail later as
-/// `ShapeConstraintViolation`, `ShapeConstraintEvaluation`, or
-/// `ShapeExpressionEvaluation`.
+/// Concrete coefficient, right-hand-side, and batch shape mismatches are
+/// reported when the backend executes the factorization and solve; no symbolic
+/// square or batch equality is recorded. Singular systems may fail numerically
+/// during execution.
 pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     // One fused op factors and solves in a single backend call and saves
     // (x, packed LU, pivots), so AD reuses the factors for the adjoint solve.
@@ -1160,9 +1175,10 @@ pub fn lstsq(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
 ///
 /// # Deferred errors
 ///
-/// Symbolic matrix and batch constraints can fail later as
-/// `ShapeConstraintViolation`, `ShapeConstraintEvaluation`, or
-/// `ShapeExpressionEvaluation`.
+/// Concrete coefficient, right-hand-side, and batch shape mismatches are
+/// reported when the backend executes the factorization and solve; no symbolic
+/// square or batch equality is recorded. Singular systems may fail numerically
+/// during execution.
 pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     one_output(
         apply(
@@ -1197,9 +1213,10 @@ pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTen
 ///
 /// # Deferred errors
 ///
-/// Symbolic matrix and batch constraints can fail later as
-/// `ShapeConstraintViolation`, `ShapeConstraintEvaluation`, or
-/// `ShapeExpressionEvaluation`.
+/// Concrete coefficient, right-hand-side, and batch shape mismatches are
+/// reported when the backend executes the solve; no symbolic square or batch
+/// equality is recorded. Singular or zero-diagonal systems may fail numerically
+/// during execution.
 pub fn triangular_solve(
     a: &TracedTensor,
     b: &TracedTensor,
@@ -1244,9 +1261,13 @@ pub fn triangular_solve(
 ///
 /// # Deferred errors
 ///
-/// Symbolic square-shape constraints can fail later as
-/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
+/// Symbolic square-shape equality is recorded and can fail later as
+/// `ShapeConstraintViolation` when a concrete binding gives the row and column
+/// extents different values.
 pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
+    if let Some(shape) = a.try_concrete_shape() {
+        validate_square_matrix("slogdet", &shape)?;
+    }
     if let Some(empty) = slogdet_empty_square(a)? {
         return Ok(empty);
     }
@@ -1308,8 +1329,9 @@ pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 ///
 /// # Deferred errors
 ///
-/// Symbolic shape checks can later produce `ShapeConstraintViolation`,
-/// `ShapeConstraintEvaluation`, or `ShapeExpressionEvaluation`.
+/// The symbolic square-shape equality inherited from [`slogdet`] can fail later
+/// as `ShapeConstraintViolation` when a concrete binding gives the row and
+/// column extents different values.
 pub fn det(a: &TracedTensor) -> Result<TracedTensor> {
     // JAX's recipe: `sign, logdet = slogdet(a); return sign * exp(logdet)`
     // (`_det` in `jax/_src/numpy/linalg.py`). Multiplying the LU diagonal
@@ -1348,14 +1370,16 @@ fn slogdet_empty_square(a: &TracedTensor) -> Result<Option<(TracedTensor, Traced
 ///
 /// # Errors
 ///
-/// Returns `Error::Validation` when the input is not at least rank two or is
-/// not square, `Error::Extension` for an unsupported dtype or singular system,
-/// and `Error::RuntimeState` when the extension is not registered.
+/// Returns `Error::Validation` when the input has rank below two or does not
+/// have a concrete shape, `Error::Extension` for an unsupported dtype or
+/// singular system, and `Error::RuntimeState` when the extension is not
+/// registered. A known concrete non-square input is rejected when the composed
+/// solve executes.
 ///
 /// # Deferred errors
 ///
-/// A symbolic shape that cannot provide the identity size fails later as
-/// `ShapeConstraintEvaluation` or `ShapeExpressionEvaluation`.
+/// The composed solve checks the coefficient's concrete square shape during
+/// execution; no symbolic square equality is recorded.
 pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
     ensure_min_rank("inv", a.rank, 2)?;
     let shape = require_concrete_shape("inv", a)?;
@@ -1378,15 +1402,17 @@ pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
 ///
 /// # Errors
 ///
-/// Returns `Error::Validation` for a known non-square or invalid-rank input,
-/// `Error::Extension` for an unsupported dtype or eigensolver
+/// Returns `Error::Validation` for an invalid-rank input; a known non-square
+/// input is rejected when the backend executes the factorization.
+/// `Error::Extension` is returned for an unsupported dtype or eigensolver
 /// non-convergence, and `Error::RuntimeState` when the extension is not
 /// registered.
 ///
 /// # Deferred errors
 ///
-/// Symbolic square-shape constraints can fail later as
-/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
+/// The square requirement is checked concretely when the backend executes the
+/// factorization; no symbolic square equality is recorded. Numerical
+/// eigensolver failures are reported during execution.
 pub fn eigvalsh(a: &TracedTensor) -> Result<TracedTensor> {
     ensure_float_or_complex("eigvalsh", a.dtype)?;
     eigh_values(a)
@@ -1407,15 +1433,17 @@ pub fn eigvalsh(a: &TracedTensor) -> Result<TracedTensor> {
 ///
 /// # Errors
 ///
-/// Returns `Error::Validation` for a known non-square or invalid-rank input,
-/// `Error::Extension` for an unsupported dtype or eigensolver
+/// Returns `Error::Validation` for an invalid-rank input; a known non-square
+/// input is rejected when the backend executes the factorization.
+/// `Error::Extension` is returned for an unsupported dtype or eigensolver
 /// non-convergence, and `Error::RuntimeState` when the extension is not
 /// registered.
 ///
 /// # Deferred errors
 ///
-/// Symbolic square-shape constraints can fail later as
-/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
+/// The square requirement is checked concretely when the backend executes the
+/// factorization; no symbolic square equality is recorded. Numerical
+/// eigensolver failures are reported during execution.
 pub fn eigvals(a: &TracedTensor) -> Result<TracedTensor> {
     eig_values(a)
 }
@@ -1718,7 +1746,7 @@ fn filled_real(dtype: DType, shape: Vec<usize>, value: f64) -> Result<TracedTens
     }
 }
 
-fn real_values_dtype(dtype: DType) -> DType {
+pub(crate) fn real_values_dtype(dtype: DType) -> DType {
     match dtype {
         DType::C64 => DType::F64,
         DType::C32 => DType::F32,

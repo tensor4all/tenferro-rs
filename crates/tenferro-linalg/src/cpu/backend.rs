@@ -8,6 +8,7 @@ struct TriangularSolveOptions {
 }
 use crate::extension::apply_qr_gauge;
 use crate::rank_revealing_qr::validate_rank_revealing_qr_options;
+use crate::validation::validate_square_matrix;
 
 use super::linalg;
 use tenferro_cpu::same_variant_pair;
@@ -294,6 +295,7 @@ impl LinalgBackend for CpuEngine {
         ensure_host_tensor("full_piv_lu_solve", a)?;
         ensure_host_tensor("full_piv_lu_solve", b)?;
         ensure_supported_linalg_pair("full_piv_lu_solve", a, b)?;
+        validate_square_matrix("full_piv_lu_solve", a.shape())?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
             return self.with_linalg_pool_checked(|_, _| zeros_like_tensor(b));
         }
@@ -1155,7 +1157,7 @@ fn ensure_host_tensor(op: &'static str, input: &Tensor) -> tenferro_tensor::Resu
     }
 }
 
-fn ensure_host_tensor_read(
+pub(crate) fn ensure_host_tensor_read(
     op: &'static str,
     input: &TensorRead<'_>,
 ) -> tenferro_tensor::Result<()> {
@@ -1250,6 +1252,7 @@ fn solve_entered(
     a: &Tensor,
     b: &Tensor,
 ) -> tenferro_tensor::Result<Tensor> {
+    validate_square_matrix("solve", a.shape())?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         return zeros_like_tensor(b);
     }

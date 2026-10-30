@@ -829,18 +829,27 @@ impl ExtensionOp for LinalgExtensionOp {
             LinalgOp::Lu => lu_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::LuFactor => lu_factor_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::SignDetFromLuFactor => {
+                let input_shape = input_shapes[0].to_vec();
+                let packed_shape = input_shapes[1].to_vec();
+                let parity_shape = input_shapes[2].to_vec();
+                require_matrix_meta("tenferro-linalg.signdet_from_lu_factor", &input_shape)?;
+                ctx.require_axes_equal((0, 0), (0, 1))?;
                 vec![signdet_from_lu_factor_meta(
                     input_dtypes[0],
-                    input_shapes[0],
-                    input_shapes[1],
-                    input_shapes[2],
+                    &input_shape,
+                    &packed_shape,
+                    &parity_shape,
                 )?]
             }
             LinalgOp::LogAbsDetFromLuFactor => {
+                let input_shape = input_shapes[0].to_vec();
+                let packed_shape = input_shapes[1].to_vec();
+                require_matrix_meta("tenferro-linalg.logabsdet_from_lu_factor", &input_shape)?;
+                ctx.require_axes_equal((0, 0), (0, 1))?;
                 vec![logabsdet_from_lu_factor_meta(
                     input_dtypes[0],
-                    input_shapes[0],
-                    input_shapes[1],
+                    &input_shape,
+                    &packed_shape,
                 )?]
             }
             LinalgOp::FullPivLu => full_piv_lu_meta(input_dtypes[0], input_shapes[0])?,

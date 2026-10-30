@@ -5,12 +5,24 @@ use tenferro_ad::{
 use tenferro_runtime::ErrorPhase;
 
 use crate::eager_ext::EagerSessionLinalgExt;
-use crate::validation::{ensure_float_or_complex, validate_lstsq};
+use crate::traced::real_values_dtype;
+use crate::validation::{ensure_float_or_complex, validate_lstsq, validate_square_matrix};
 
 pub(crate) fn slogdet(
     session: &mut EagerSession<'_>,
     a: &EagerTensor,
 ) -> Result<(EagerTensor, EagerTensor)> {
+    validate_square_matrix("slogdet", a.shape())?;
+    if a.shape()[0] == 0 && a.shape()[1] == 0 {
+        ensure_float_or_complex("slogdet", a.dtype())?;
+        let batch_shape = &a.shape()[2..];
+        let sign_scalar = scalar_real(session, a, 1.0)?;
+        let sign = broadcast_scalar(session, &sign_scalar, batch_shape)?;
+        let log_scalar =
+            session.constant_from_host(scalar_real_tensor(real_values_dtype(a.dtype()), 0.0)?)?;
+        let logabsdet = broadcast_scalar(session, &log_scalar, batch_shape)?;
+        return Ok((sign, logabsdet));
+    }
     let (_p, _l, u, parity) = session.lu(a)?;
     let diag_u = session.extract_diag(&u, 0, 1)?;
     let sign_u = session.sign(&diag_u)?;
