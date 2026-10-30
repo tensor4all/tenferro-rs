@@ -7,10 +7,6 @@ host	tenferro-xla	executor::tests::default_executor_reports_missing_pjrt_before_
 host	tenferro-xla	executor::tests::executor_options_and_debug_are_directly_covered
 host	tenferro-xla	executor::tests::single_output_tensor_rejects_zero_or_multiple_outputs
 host	tenferro-xla	layout::tests::computes_column_major_byte_strides_for_pjrt_upload
-host	tenferro-xla	layout::tests::converts_2d_col_major_host_buffer_to_row_major_for_xla
-host	tenferro-xla	layout::tests::converts_2d_row_major_xla_buffer_back_to_col_major
-host	tenferro-xla	layout::tests::layout_conversion_rejects_wrong_element_count
-host	tenferro-xla	layout::tests::scalar_and_vector_layouts_are_identity
 host	tenferro-xla	lowering::program::tests::constant_lowering_rejects_malformed_literal_bytes
 host	tenferro-xla	lowering::program::tests::dot_shape_rejects_invalid_dimension_config
 host	tenferro-xla	lowering::program::tests::extension_lowering_uses_typed_outcome_not_option_protocol
