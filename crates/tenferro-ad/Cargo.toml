@@ -43,11 +43,11 @@ cuda = ["dep:tenferro-gpu", "tenferro-gpu/cuda"]
 rocm = ["dep:tenferro-gpu", "tenferro-gpu/rocm"]
 
 [dependencies]
-tenferro-runtime = { path = "../tenferro-runtime", version = "0.7.1", default-features = false }
-tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.7.1", default-features = false, features = ["autodiff"] }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.7.1", default-features = false }
-tenferro-cpu = { path = "../tenferro-cpu", version = "0.7.1", default-features = false }
-tenferro-gpu = { path = "../tenferro-gpu", version = "0.7.1", default-features = false, optional = true }
+tenferro-runtime = { path = "../tenferro-runtime", version = "0.8.0", default-features = false }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.8.0", default-features = false, features = ["autodiff"] }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.8.0", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", version = "0.8.0", default-features = false }
+tenferro-gpu = { path = "../tenferro-gpu", version = "0.8.0", default-features = false, optional = true }
 computegraph.workspace = true
 lru.workspace = true
 num-complex.workspace = true
@@ -61,7 +61,7 @@ libm.workspace = true
 trybuild.workspace = true
 # The eager leaf test builds a caller-owned external payload to cover the
 # materialization predicate's decline branch.
-tenferro-tensor-core = { path = "../tenferro-tensor-core", version = "0.7.1" }
+tenferro-tensor-core = { path = "../tenferro-tensor-core", version = "0.8.0" }
 
 [[bench]]
 name = "eager_ad_transform_cache"
