@@ -36,11 +36,28 @@ empty download all succeed with the expected values.
 observes every Rust global-allocator request (not native CUDA-library
 allocations) while the same request is refused and asserts the largest request
 stays below 1 GiB, so the refusal cannot have reserved a 200 GiB host vector.
-Both tests are `#[ignore]`-gated and classified in the CUDA GPU lane.
+These two tests cover the **device-refusal half** of #2327's acceptance
+contract, not a failed host reservation after a successful download.
 
-A valid device-to-host download still reserves its host slot inside
-`t4a_cuda_runtime` (`DownloadSlot::new`); that reservation's fallibility is owned
-by the runtime dependency and is not covered by these tests.
+**Post-download host-copy reservation (#2335).**
+`cuda_refused_host_reservation::post_download_host_reservation_failure_preserves_typed_source`
+covers the **tenferro-owned fallible host-reservation half**: an isolated test
+allocator refuses the payload-sized, `f64`-aligned reservation after a valid
+CUDA download, independently through `cuda::download_tensor`
+(`cuda/transfer.rs`) and `raw::Session::download_tensor` (`cuda/raw.rs`). Both
+calls must return `Error::BackendSource` with `TryReserveError` reachable through
+`source()`. Value-checked downloads before and after each refusal pin success
+and recovery. The test uses a small `f64` payload, not real host-memory
+exhaustion; it does not establish failure coverage for every dtype.
+All three tests are `#[ignore]`-gated and classified in the CUDA GPU lane.
+
+**Still uncovered.** Before tenferro's typed host copy, a valid ordinary
+device-to-host download reserves a byte-vector slot inside `t4a_cuda_runtime`
+(`DownloadSlot::new`). That reservation remains infallible in the pinned runtime
+and its failure is neither forced nor fixed by these tests. The test allocator
+leaves this byte-aligned reservation and raw downloads' native pinned staging
+alone. Thus #2327's host-reservation coverage is limited to tenferro's two
+post-download copies, not all host allocations involved in a download.
 
 ## I5 - a device-side failure is observable at the boundary that caused it
 
@@ -80,6 +97,7 @@ host with no toolkit, no `CUDA_PATH`, and none of `/usr/local/cuda`, `/opt/cuda`
   returning to the driver) is not fixed here. It is #2112 item 3 and keeps its own
   acceptance arm (`pool_retention_f64_*`).
 - The no-toolkit-at-all panic variant of #2091 is unverified, as stated above.
-- I2 covers a refused device allocation only. A valid download's host
-  reservation is owned by `t4a_cuda_runtime` (`DownloadSlot::new`) and its
-  fallibility is not covered here.
+- I2's tests cover device refusal and tenferro's post-download typed host-copy
+  reservation failure on ordinary/raw `f64` downloads. They do not cover or fix
+  failure of the earlier infallible `t4a_cuda_runtime::DownloadSlot::new`
+  reservation or native pinned-staging allocation failure.

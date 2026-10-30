@@ -97,6 +97,11 @@ path = "tests/cuda_refused_allocation_observer.rs"
 required-features = ["cuda"]
 
 [[test]]
+name = "cuda_refused_host_reservation"
+path = "tests/cuda_refused_host_reservation.rs"
+required-features = ["cuda"]
+
+[[test]]
 name = "storage_provider_cuda_progress"
 path = "tests/storage_provider_cuda_progress.rs"
 
