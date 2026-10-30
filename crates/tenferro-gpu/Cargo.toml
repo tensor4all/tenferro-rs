@@ -94,6 +94,11 @@ path = "tests/pending_download.rs"
 required-features = ["cuda"]
 
 [[test]]
+name = "cuda_refused_allocation_observer"
+path = "tests/cuda_refused_allocation_observer.rs"
+required-features = ["cuda"]
+
+[[test]]
 name = "storage_provider_cuda_progress"
 path = "tests/storage_provider_cuda_progress.rs"
 
