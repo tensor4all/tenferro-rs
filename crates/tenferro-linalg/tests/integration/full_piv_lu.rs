@@ -171,6 +171,28 @@ fn full_piv_lu_keeps_the_identity_permutation_on_diagonal_ties() {
 }
 
 #[test]
+fn full_piv_lu_takes_the_first_column_major_maximum_on_off_diagonal_ties() {
+    // The largest entries tie at (1, 0) and (0, 1). The rest is a unit diagonal plus small
+    // distinct entries, so the matrix has full rank and no other entry reaches 2. The first pivot
+    // is the first maximum in column-major order, (1, 0), on every SIMD width: P moves row 1 first
+    // and Q keeps column 0 first.
+    for n in [8, 16] {
+        let mut data: Vec<f64> = (0..n * n)
+            .map(|k| {
+                let diagonal = if k % (n + 1) == 0 { 1.0 } else { 0.0 };
+                diagonal + 1e-5 * ((k * 7919 + 13) % 997 + 1) as f64
+            })
+            .collect();
+        data[1] = 2.0;
+        data[n] = 2.0;
+        let (p, q, rank) = factor_summary(&f64_tensor(vec![n, n], data), n);
+        assert_eq!(rank, n, "n = {n}");
+        assert_eq!(p[n], 1.0, "n = {n}: P must take row 1 first");
+        assert_eq!(q[0], 1.0, "n = {n}: Q must keep column 0 first");
+    }
+}
+
+#[test]
 fn full_piv_lu_keeps_pivots_below_the_lapack_floor_unperturbed() {
     // `?getc2` would flag a pivot below `EPS * max` and overwrite it with that floor.
     let a = f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0e-17]);
