@@ -6,6 +6,12 @@ host	tenferro-xla	error::tests::xla_extension_lowering_preserves_non_validation_
 host	tenferro-xla	executor::tests::default_executor_reports_missing_pjrt_before_dispatch
 host	tenferro-xla	executor::tests::executor_options_and_debug_are_directly_covered
 host	tenferro-xla	executor::tests::single_output_tensor_rejects_zero_or_multiple_outputs
+host	tenferro-xla	layout::tests::column_major_byte_strides_differ_from_row_major_for_rectangular_shapes
+host	tenferro-xla	layout::tests::column_major_byte_strides_handle_scalars_and_vectors
+host	tenferro-xla	layout::tests::column_major_byte_strides_handle_singleton_and_empty_axes
+host	tenferro-xla	layout::tests::column_major_byte_strides_reject_byte_stride_overflow
+host	tenferro-xla	layout::tests::column_major_byte_strides_reject_element_stride_overflow
+host	tenferro-xla	layout::tests::column_major_byte_strides_reject_pjrt_stride_overflow
 host	tenferro-xla	layout::tests::computes_column_major_byte_strides_for_pjrt_upload
 host	tenferro-xla	lowering::program::tests::constant_lowering_rejects_malformed_literal_bytes
 host	tenferro-xla	lowering::program::tests::dot_shape_rejects_invalid_dimension_config
