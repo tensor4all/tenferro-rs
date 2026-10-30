@@ -86,21 +86,30 @@ impl SparseMatmulPlan {
             ));
         }
 
+        // Right entries grouped by their contracted index, each group in the
+        // original entry order, so a left entry visits only the right entries it
+        // pairs with and the contributions keep the order (and therefore the
+        // summation order) of the full left x right scan.
+        let mut right_by_contract: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (right_idx, &[contract_right, _]) in right_entries.iter().enumerate() {
+            right_by_contract
+                .entry(contract_right)
+                .or_default()
+                .push(right_idx);
+        }
         let mut raw = Vec::new();
-        let mut output_coords = Vec::<[usize; 2]>::new();
         for (left_idx, &[row, contract_left]) in left_entries.iter().enumerate() {
-            for (right_idx, &[contract_right, col]) in right_entries.iter().enumerate() {
-                if contract_left != contract_right {
-                    continue;
-                }
-                let coord = [row, col];
-                raw.push((coord, left_idx, right_idx));
-                if !output_coords.contains(&coord) {
-                    output_coords.push(coord);
-                }
+            let Some(rights) = right_by_contract.get(&contract_left) else {
+                continue;
+            };
+            for &right_idx in rights {
+                let col = right_entries[right_idx][1];
+                raw.push(([row, col], left_idx, right_idx));
             }
         }
-        output_coords.sort_by_key(|&[row, col]| (col, row));
+        let mut output_coords: Vec<[usize; 2]> = raw.iter().map(|&(coord, _, _)| coord).collect();
+        output_coords.sort_unstable_by_key(|&[row, col]| (col, row));
+        output_coords.dedup();
         let output_index: HashMap<[usize; 2], usize> = output_coords
             .iter()
             .copied()

@@ -313,3 +313,67 @@ fn sparse_semantic_rules_execute_jvp_and_vjp_numerically() {
     );
     assert_eq!(cotangents[1].as_slice::<f64>().unwrap(), &[5.0, 1.0, 5.0]);
 }
+
+/// The plan of the full left x right scan with a linear membership test, as the
+/// plan was built before right entries were grouped by contracted index.
+fn brute_force_plan(
+    left_shape: &[usize],
+    left_entries: &[[usize; 2]],
+    right_shape: &[usize],
+    right_entries: &[[usize; 2]],
+) -> SparseMatmulPlan {
+    let mut raw = Vec::new();
+    let mut coords = Vec::<[usize; 2]>::new();
+    for (left_idx, &[row, contract_left]) in left_entries.iter().enumerate() {
+        for (right_idx, &[contract_right, col]) in right_entries.iter().enumerate() {
+            if contract_left == contract_right {
+                raw.push(([row, col], left_idx, right_idx));
+                if !coords.contains(&[row, col]) {
+                    coords.push([row, col]);
+                }
+            }
+        }
+    }
+    coords.sort_by_key(|&[row, col]| (col, row));
+    let contributions = raw
+        .into_iter()
+        .map(|(coord, left, right)| super::Contribution {
+            out: coords.iter().position(|&c| c == coord).unwrap(),
+            left,
+            right,
+        })
+        .collect();
+    SparseMatmulPlan {
+        left_shape: left_shape.to_vec(),
+        right_shape: right_shape.to_vec(),
+        left_nnz: left_entries.len(),
+        right_nnz: right_entries.len(),
+        output_shape: vec![left_shape[0], right_shape[1]],
+        output_coords: coords,
+        contributions,
+    }
+}
+
+#[test]
+fn grouped_plan_matches_the_full_pair_scan_including_contribution_order() {
+    // Unsorted entries, repeated contracted indices and output coordinates
+    // reached by several pairs, so both the dedup and the contribution order
+    // are exercised.
+    let left = [[3, 1], [0, 2], [1, 1], [0, 0], [2, 2], [3, 0], [1, 3]];
+    let right = [
+        [2, 4],
+        [1, 0],
+        [0, 4],
+        [1, 2],
+        [2, 0],
+        [3, 1],
+        [0, 0],
+        [1, 4],
+    ];
+    let plan = SparseMatmulPlan::new(&[4, 4], &left, &[4, 5], &right).unwrap();
+    assert_eq!(plan, brute_force_plan(&[4, 4], &left, &[4, 5], &right));
+
+    let disjoint = SparseMatmulPlan::new(&[2, 2], &[[0, 0]], &[2, 2], &[[1, 1]]).unwrap();
+    assert_eq!(disjoint.output_nnz(), 0);
+    assert!(disjoint.contributions.is_empty());
+}
