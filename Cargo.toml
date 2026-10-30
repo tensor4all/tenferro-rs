@@ -73,34 +73,35 @@ syn = "2"
 # a single version, so the strided crates are ordinary caret requirements at the
 # patch each API needs; the committed `Cargo.lock` fixes the exact versions a
 # build uses, and `cargo update -p <crate>` moves them. Every fan-out entry of
-# strided 0.8 takes a `threadteam::Exec` token as its last parameter and decides
+# strided 0.9 takes a `threadteam::Exec` token as its last parameter and decides
 # its parallel width from that token's dispatch costs. `threadteam` (formerly
 # `strided-exec`) is the only crate that depends on Rayon (see `deny.toml`);
 # tenferro starts no task itself.
 strided-view = "0.7.0"
 strided-traits = "0.7.0"
-threadteam = "0.1.0"
-strided-perm = { version = "0.8.0", features = ["parallel"] }
-# The CPU provider stack is on the strided 0.8 / tcontract 0.7 release train; one
+threadteam = "0.2.0"
+strided-perm = { version = "0.9.0", features = ["parallel"] }
+# The CPU provider stack is on the strided 0.9 / tcontract 0.9 release train; one
 # `tcontract-exec` (check `cargo tree -i tcontract-exec`) keeps `Exec` one type.
-cpueinsum = "0.7.0"
-cpueinsum-blas = "0.7.0"
-tcontract-exec = "0.7.1"
-tlinalg = "0.7.0"
+cpueinsum = "0.9.0"
+cpueinsum-blas = "0.9.0"
+tcontract-exec = "0.9.0"
+tlinalg = "0.8.0"
 tlinalg-blas = "0.5.0"
-strided-basic = { version = "0.8.0", default-features = false }
+strided-basic = { version = "0.9.0", default-features = false }
 # Fused NN kernels moved out of this repository (#2272): axis-0 softmax with a
 # tensor-free contract, caller-provided scratch and the caller's `Exec` token.
-strided-nn = "0.8.0"
-strided-fused = { version = "0.8.0", default-features = false, features = ["parallel"] }
-strided-kernel = { version = "0.8.0", features = ["parallel"] }
+strided-nn = "0.9.0"
+strided-fused = { version = "0.9.0", default-features = false, features = ["parallel"] }
+strided-kernel = { version = "0.9.0", features = ["parallel"] }
 libloading = "0.8"
-# One faer identity for the native CPU stack (#1939): tlinalg 0.6 and this
-# dependency use compatible t4a-faer ranges. 0.24.8 fixed divide-and-conquer SVD
-# secular-root stagnation (tensor4all/faer#28); later patch fixes need only a
-# targeted lock update, not another manifest-bump cascade. Keep the `faer` key
+# One faer identity for the native CPU stack (#1939): tlinalg 0.8 and this
+# dependency use compatible t4a-faer ranges. 0.27 has threadteam 0.2 in its
+# public API; 0.24.8 fixed divide-and-conquer SVD secular-root stagnation
+# (tensor4all/faer#28). Later patch fixes need only a targeted lock update, not
+# another manifest-bump cascade. Keep the `faer` key
 # and library name: tenferro-cpu re-exports this build as `tenferro_cpu::faer`.
-faer = { package = "t4a-faer", version = "0.25.0", default-features = false, features = ["std", "rayon", "threadteam"] }
+faer = { package = "t4a-faer", version = "0.27.0", default-features = false, features = ["std", "rayon", "threadteam"] }
 cblas-sys = "0.1"
 cblas-inject = "0.1.1"
 blas-src = { version = "0.14", default-features = false }
