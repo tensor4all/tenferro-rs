@@ -79,7 +79,7 @@ Depend directly on the same major versions the tenferro workspace pins
 
 | Crate | Tested version | Purpose |
 |---|---|---|
-| `faer` (`tenferro_cpu::faer`) | `t4a-faer` `0.24.5` | Pure-Rust column-major linear algebra; the fork the pinned `tlinalg` resolves, re-exported by `tenferro-cpu` under `native` |
+| `faer` (`tenferro_cpu::faer`) | `t4a-faer` `0.27.0` | Pure-Rust column-major linear algebra; the fork the pinned `tlinalg` resolves, re-exported by `tenferro-cpu` under `native` |
 | `cblas-sys` | `0.1` | CBLAS entry points (`cblas_dgemm`, ...) |
 | `lapack` | `0.20` | Fortran LAPACK entry points (`dpotrf`, ...) |
 

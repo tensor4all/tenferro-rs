@@ -105,7 +105,7 @@ evaluate every retained shape guard against the concrete program-input shapes
 in stored order and return the first typed shape-constraint error on failure.
 This validation is enforced immediately after execution-program input-count
 validation and before segmentation, tensor allocation, backend-buffer
-allocation, execution-output allocation, backend sessions, host work, or
+allocation, execution-output allocation, engine execution, host work, or
 extension dispatch. Validation may allocate small metadata vectors. The
 input-count error therefore takes precedence over a guard expression's
 `MissingInput` evaluation error.
@@ -260,14 +260,14 @@ private ExecProgram staging
   ▼
 segment_exec_program()
   │
-  ├── fused backend-session segments
+  ├── fused engine-operation segments
   ├── single-instruction FFI segments
   └── single-instruction host segments
 ```
 
 Segmented execution exists to:
 
-- reuse one backend execution session across consecutive backend ops
+- reuse the caller-held engine across consecutive backend ops
 - enable elementwise fusion planning where the backend supports it
 - preserve the same observable behavior as unsegmented execution
 
@@ -359,9 +359,15 @@ the engine's extension caches to extension executors for the duration of a run.
 
 A backend leaf that exposes native services returns an opaque
 `NativeSessionRef` from `Engine::native_engine()`, recovered only by that leaf's
-visitor; the default is `None`. The raw CUDA seam
-(`CudaEngine::with_raw` / `with_cubecl`) is the sanctioned way to reach vendor
-and CubeCL APIs on tenferro buffers.
+visitor; the default is `None`. The CUDA leaf's `cuda::raw::with_cuda_engine`
+visitor recovers the caller-held `CudaEngine`. Its `CudaEngine::with_raw`
+closure lends a `cuda::raw::Session` for vendor calls on the engine's stream,
+with validated tensor spans and scratch. This is a raw CUDA scope, not backend
+session admission; there is no `CudaExecSession`, `with_backend_session`, or
+`with_cubecl` entry. CUDA execution builds on `t4a-cuda-runtime` and
+`t4a-cuda-kernels`, not CubeCL/CubeK. See
+[GPU backend design](../design/gpu-backend-design.md#operation-crate-interop-boundary)
+and `crates/tenferro-gpu/src/cuda/raw.rs` for the current extension boundary.
 
 Custom operation families do not add a second execution trait. They lower to
 `ExecOp::Extension` and dispatch through their installed `ExtensionModule`.

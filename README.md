@@ -15,12 +15,13 @@
 tenferro-rs provides typed and dynamic dense tensors, explicit backend
 dispatch, linear algebra, einsum, FFT, and extensible automatic differentiation
 native to Rust. Use it as an ordinary tensor library first: direct
-`TypedTensor` and `Tensor` APIs run through a chosen CPU, CUDA, or experimental
-WebGPU backend, while `EagerTensor` and `TracedTensor` add automatic
+`TypedTensor` and `Tensor` APIs run through a chosen CPU or CUDA backend,
+while `EagerTensor` and `TracedTensor` add automatic
 differentiation when a workflow needs it. Both eager and traced modes support
 VJP and JVP. Eager mode also supports PyTorch-style `backward()` for scalar
 losses, while traced mode is the main surface for reusable graph transforms and
-HVP-style higher-order composition.
+HVP-style higher-order composition. WebGPU, Metal execution, and the Apple
+shared CPU/Metal path are not provided today.
 
 tenferro-rs is the tensor engine behind the
 [tensor4all](https://github.com/tensor4all) scientific-computing stack and is
@@ -227,7 +228,7 @@ tenferro-rs is for projects that want this kind of stack natively in Rust.
 | Runtime dtype selection or direct backend dispatch | `Tensor` with an explicit backend |
 | Immediate execution in one runtime, optionally with `backward()`, VJP, or JVP | `EagerTensor` and `EagerRuntime` |
 | Reusable graph transforms, including `grad`, VJP/JVP, and HVP-style composition | `TracedTensor`, `GraphCompiler`, and `Runtime::prepare` / `Runtime::run` |
-| CUDA or experimental WebGPU execution | The same tensor API plus explicit GPU upload/download and supported provider backend features |
+| CUDA execution | The same tensor API plus explicit GPU upload/download and supported provider backend features |
 | Static-shaped StableHLO and PJRT plugin experiments | `GraphCompiler` plus `tenferro-xla` |
 
 ## Crates
@@ -244,7 +245,7 @@ solves your problem.
 | --- | --- |
 | `tenferro-tensor` | Tensor values, typed tensors, views, dtype/runtime tensor contracts, and backend traits |
 | `tenferro-cpu` | CPU backend execution |
-| `tenferro-gpu` | CUDA backend support, experimental WebGPU support, future ROCm substrate, and explicit device transfers |
+| `tenferro-gpu` | CUDA backend support and explicit device transfers; `rocm` is reserved, not an execution backend |
 | `tenferro-runtime` | Eager/traced execution, graph compilation, and extension runtime support |
 | `tenferro-ad` | Automatic differentiation |
 | `tenferro-xla` | Experimental StableHLO lowering and runtime-loaded PJRT plugin support for static-shaped traced graphs |
@@ -302,7 +303,7 @@ Selected deep dives:
 - [Views and slicing](https://tensor4all.org/tenferro-rs/guides/views-and-slicing.html)
   — static-rank views, mutable disjointness, and explicit `duplicate()`.
 - [Devices and GPU](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html)
-  — explicit CPU, CUDA, and experimental WebGPU control; tensors never move
+  — explicit CPU and CUDA control; tensors never move
   between devices silently. Its [CUDA compatibility matrix](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html#cuda-and-nvidia-library-compatibility)
   lists the supported and CI-tested driver, runtime, cuTENSOR, cuBLAS,
   cuSOLVER, and cuFFT combinations.

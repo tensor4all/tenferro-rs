@@ -330,21 +330,26 @@ with `CARGO_PROFILE_DEV_DEBUG=1` or `CARGO_PROFILE_TEST_DEBUG=1`.
 
 Repository scripts require Python 3.11 or newer. Set `$PYTHON` to one executable or path token to override the resolver.
 
+Bare root `cargo build` / `cargo test` select only the default member,
+`tenferro-tensor`. Use `--workspace` for the root workspace. The excluded
+standalone extensions (`ext/tropical/Cargo.toml` and `ext/sparse/Cargo.toml`)
+need separate `--manifest-path` invocations; `--workspace` does not cover them.
+
 ```bash
-# Build entire workspace
-cargo build
+# Build entire root workspace
+cargo build --workspace
 
 # Build a specific crate
 cargo build -p tenferro-tensor
 
-# Run all tests
-cargo test
+# Run all root workspace tests
+cargo test --workspace
 
 # Run tests for a specific crate
 cargo test -p tenferro-einsum
 
-# Run a single test
-cargo test test_name
+# Run a single named test across the root workspace
+cargo test --workspace test_name
 
 # Run a focused incremental local PR check
 bash scripts/check-pr-fast.sh --coverage-reviewed \
