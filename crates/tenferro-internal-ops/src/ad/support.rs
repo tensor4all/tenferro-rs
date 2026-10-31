@@ -43,9 +43,9 @@ pub enum AdRuleSupport {
 pub struct PrimitiveAdSupport {
     /// Core primitive operation kind described by this manifest entry.
     pub kind: PrimitiveOpKind,
-    /// Forward-mode graph emission support.
+    /// Primitive-rule linearization support.
     pub linearize: AdRuleSupport,
-    /// Transposed-linear graph emission support.
+    /// Primitive-rule transposition support.
     pub transpose: AdRuleSupport,
 }
 
@@ -269,41 +269,13 @@ pub fn identity_matrix(
     )[0]
 }
 
-pub(crate) fn is_differentiable_dtype(dtype: DType) -> bool {
-    matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)
-}
-
-pub(crate) fn linear_transpose_input_active(mode: &OperationRole, input_index: usize) -> bool {
-    match mode {
-        // Direct transpose-rule tests use `Primary` for globally linear
-        // primitives. Only an explicit Linearized active mask suppresses an
-        // inactive cotangent path.
-        OperationRole::Primary => true,
-        OperationRole::Linearized { active_mask } => {
-            active_mask.get(input_index).copied().unwrap_or(false)
-        }
-    }
-}
-
 fn is_complex_dtype(dtype: DType) -> bool {
     matches!(dtype, DType::C32 | DType::C64)
 }
 
+#[cfg(test)]
 pub(crate) fn promote_dtype(lhs: DType, rhs: DType) -> DType {
     tenferro_tensor::validate::promote_dtype(lhs, rhs)
-}
-
-pub(crate) fn promote_dtype_div_like(lhs: DType, rhs: DType) -> DType {
-    if matches!(lhs, DType::I32 | DType::I64) && matches!(rhs, DType::I32 | DType::I64) {
-        return DType::F64;
-    }
-    promote_dtype(lhs, rhs)
-}
-
-pub(crate) fn dtype_of_or_real(ctx: &mut ShapeGuardContext, val: &ValueRef<StdTensorOp>) -> DType {
-    ctx.metadata_if_available(val)
-        .map(|metadata| metadata.dtype)
-        .unwrap_or(DType::F64)
 }
 
 #[doc(hidden)]
@@ -331,20 +303,6 @@ pub fn conjugate_primal_if_dtype_complex(
     }
 }
 
-pub(crate) fn conjugate_primal_if_any_dtype_complex(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    input: ValueRef<StdTensorOp>,
-    dtypes: &[DType],
-) -> ValueRef<StdTensorOp> {
-    if dtypes.iter().copied().any(is_complex_dtype) {
-        ValueRef::Local(
-            builder.add_operation(StdTensorOp::Conj, vec![input], OperationRole::Primary)[0],
-        )
-    } else {
-        input
-    }
-}
-
 #[doc(hidden)]
 pub fn conjugate_linear_if_dtype_complex(
     builder: &mut dyn PrimitiveRuleBuilder,
@@ -362,56 +320,6 @@ pub fn conjugate_linear_if_dtype_complex(
     } else {
         input
     }
-}
-
-pub(crate) fn project_linear_to_dtype(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    input: LocalValueId,
-    from: DType,
-    to: DType,
-) -> LocalValueId {
-    if !is_real_dtype(to) || from == to {
-        return input;
-    }
-    convert_linear_to_dtype(builder, input, from, to)
-}
-
-pub(crate) fn convert_linear_to_dtype(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    input: LocalValueId,
-    from: DType,
-    to: DType,
-) -> LocalValueId {
-    if from == to {
-        return input;
-    }
-    builder.add_operation(
-        StdTensorOp::Convert { from, to },
-        vec![ValueRef::Local(input)],
-        OperationRole::Linearized {
-            active_mask: vec![true],
-        },
-    )[0]
-}
-
-pub(crate) fn convert_fixed_ref_to_dtype(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    input: ValueRef<StdTensorOp>,
-    from: DType,
-    to: DType,
-) -> ValueRef<StdTensorOp> {
-    if from == to {
-        return input;
-    }
-    ValueRef::Local(
-        builder.add_operation(
-            StdTensorOp::Convert { from, to },
-            vec![input],
-            OperationRole::Linearized {
-                active_mask: vec![false],
-            },
-        )[0],
-    )
 }
 
 #[cfg(test)]

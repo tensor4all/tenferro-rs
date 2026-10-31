@@ -434,7 +434,7 @@ Layer 2: tenferro-tensor   - Dense runtime tensors, backend traits,
 Layer 1: tenferro-tensor-core - Rank/layout metadata, dtype tags,
                                 scalar trait, promotion facts
 Internal: tenferro-core-ops  - Internal core primitive operation catalog
-          tenferro-internal-ops - Graph op vocabulary and AD rule implementations
+          tenferro-internal-ops - Graph op and primitive-rule vocabulary
           tenferro-internal-extension-macros - Extension-op registration macros
 ```
 
@@ -442,11 +442,13 @@ Ownership: `tenferro-tensor-core` owns rank/layout, dtype and scalar metadata.
 `tenferro-tensor` owns every tensor type (including the host container) and
 backend-independent tensor contracts. `tenferro-cpu` owns CPU backend
 execution. `tenferro-gpu` owns CUDA backend code and transfer helpers.
-`tenferro-internal-ops/src/ad/` is the semantic source of truth for the core
-`StdTensorOp` primitive AD rules. `tenferro-runtime` owns traced graph
-construction, lowering, execution, extension registration, and cache ownership.
-`tenferro-ad` owns eager/traced AD surfaces, traced AD helper APIs, semantic
-extension AD rules, and context-owned AD transform caching.
+`tenferro-internal-ops/src/ad/` preserves shared context, support and rule
+vocabulary paths; it is not a core graph AD emitter. Vocabulary definitions and
+residual declarations live under its private `src/primitive_rules/` owner.
+`tenferro-runtime` owns traced graph construction, lowering, execution,
+extension registration, and cache ownership. `tenferro-ad` owns core semantic
+AD transforms, eager/traced AD surfaces, semantic extension dispatch, and
+context-owned AD transform caching; operation-family crates own their rules.
 
 There is intentionally no root `tenferro` facade crate; operation families stay
 separately imported (`tenferro_einsum`, `tenferro_linalg`, `tenferro_fft`).

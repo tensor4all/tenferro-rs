@@ -152,6 +152,11 @@ shape, signed strides and offsets; a supported strided entry consumes that
 layout, while an entry requiring compact input stages a same-device copy.
 Neither case implies a host transfer.
 
+For supported dtypes, `to_contiguous_read` materializes CUDA views on-device.
+`copy_read_into` accepts any valid source region of the same runtime; destination
+views are limited to the catalogue's by-value layout rank. Source and destination
+allocations must not alias.
+
 Catalogue planners receive validated dtype/layout/operation metadata and
 produce the launch geometry. `cuda/dispatch.rs` calls the catalogue's `plan_*`
 functions, then marshals runtime arguments in the entry's ABI order.

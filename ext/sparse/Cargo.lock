@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-ad"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "computegraph",
  "lru",
@@ -1060,11 +1060,11 @@ dependencies = [
 
 [[package]]
 name = "tenferro-core-ops"
-version = "0.8.0"
+version = "0.9.0"
 
 [[package]]
 name = "tenferro-cpu"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "cpueinsum",
  "elem-simd-math",
@@ -1090,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-cpu-basic"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1101,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-cpu-fused"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1126,7 +1126,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-internal-cpu-kernels"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1140,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-internal-extension-macros"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1149,7 +1149,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-internal-ops"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "computegraph",
  "num-complex",
@@ -1161,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-runtime"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "computegraph",
  "lru",
@@ -1178,7 +1178,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-tensor"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1190,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-tensor-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "num-complex",
  "thiserror 2.0.21",

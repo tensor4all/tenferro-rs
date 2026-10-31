@@ -42,9 +42,10 @@ see [CUDA engines and pinned transfers](engines-and-transfers.md).
 Keep tensors on one GPU provider across a GPU workload. Download only when the
 host needs to inspect values or hand data to CPU-only code.
 
-View compaction follows the same rule. A CUDA backend may copy a CUDA view into
-compact CUDA memory, and host code may copy a host view into compact host
-memory, but tenferro does not use that copy as a hidden CPU/GPU transfer.
+`TensorStructural::to_contiguous_read` follows the same rule. A CUDA backend
+may copy a CUDA view into compact CUDA memory, and host code may copy a host
+view into compact host memory, but tenferro does not use that copy as a hidden
+CPU/GPU transfer.
 
 CUDA transfers make one host-side copy at most. `upload_tensor` borrows the
 host tensor, so the runtime copies it once into a staging buffer before queueing the

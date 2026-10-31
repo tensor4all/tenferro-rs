@@ -34,10 +34,10 @@ cuda = ["dep:t4a-cuda-runtime", "dep:t4a-cuda-kernels", "dep:cudarc"]
 rocm = []
 
 [dependencies]
-tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.8.0" }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.8.0", default-features = false }
-tenferro-cpu = { path = "../tenferro-cpu", version = "0.8.0", default-features = false }
-tenferro-runtime = { path = "../tenferro-runtime", version = "0.8.0", default-features = false }
+tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.9.0" }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.9.0", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", version = "0.9.0", default-features = false }
+tenferro-runtime = { path = "../tenferro-runtime", version = "0.9.0", default-features = false }
 # The standalone CUDA runtime the U1 seam is built on and the kernel catalogue
 # (issue #2208); the pins live in `[workspace.dependencies]`.
 t4a-cuda-runtime = { workspace = true, optional = true }
