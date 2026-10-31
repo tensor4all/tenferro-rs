@@ -19,28 +19,22 @@ fn tensor_value_view_paths_materialize_and_read() {
     let view_data = [3.0_f64, 4.0];
     let view = TensorView::f64(&view_shape, &view_data).unwrap();
 
-    let borrowed = TensorValue::Borrowed(&tensor);
-    assert_eq!(borrowed.as_tensor().unwrap().shape(), &[2]);
-    assert_eq!(borrowed.tensor_read().shape(), &[2]);
-
-    let owned = TensorValue::Owned(tensor.duplicate().unwrap());
-    assert_eq!(owned.as_tensor().unwrap().shape(), &[2]);
-    assert_eq!(owned.tensor_read().shape(), &[2]);
-
-    let view_value = TensorValue::View(view);
-    assert!(view_value.as_tensor().is_none());
-    assert_eq!(view_value.tensor_read().shape(), &[2]);
     let mut backend = CpuEngine::serial();
-    assert_eq!(
-        {
-            let exec = &mut backend;
-            view_value.into_tensor(exec)
-        }
-        .unwrap()
-        .as_slice::<f64>()
-        .unwrap(),
-        &[3.0, 4.0]
-    );
+    for (value, expected) in [
+        (TensorValue::Borrowed(&tensor), [1.0, 2.0]),
+        (TensorValue::Owned(tensor.duplicate().unwrap()), [1.0, 2.0]),
+        (TensorValue::View(view), [3.0, 4.0]),
+    ] {
+        assert_eq!(value.tensor_read().shape(), &[2]);
+        let labeled = LabeledTensor {
+            tensor: value,
+            labels: vec![0],
+        };
+        let copied = labeled.tensor_owned(&mut backend).unwrap();
+        assert_eq!(copied.as_slice::<f64>().unwrap(), expected);
+        let owned = labeled.tensor.into_tensor(&mut backend).unwrap();
+        assert_eq!(owned.as_slice::<f64>().unwrap(), expected);
+    }
 }
 
 #[test]
