@@ -558,6 +558,8 @@ impl Cutensor {
     fn build_plan(&mut self, request: &Contraction<'_>) -> Result<CachedPlan, GpuError> {
         let handle = self.handle;
         let dtype = request.dtype;
+        // cuTENSOR rejects CONJ for real scalars, whose conjugation is the identity.
+        let is_complex = matches!(dtype, DType::C32 | DType::C64);
         let data_type = data_type_of(dtype)?;
         let compute = self.compute_descriptor(dtype)?;
         let vtable = &self.vtable;
@@ -615,14 +617,14 @@ impl Cutensor {
                                 &mut operation,
                                 desc_a,
                                 mode(&request.a),
-                                if request.conj_a {
+                                if request.conj_a && is_complex {
                                     ct::cutensorOperator_t::CUTENSOR_OP_CONJ
                                 } else {
                                     ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY
                                 },
                                 desc_b,
                                 mode(&request.b),
-                                if request.conj_b {
+                                if request.conj_b && is_complex {
                                     ct::cutensorOperator_t::CUTENSOR_OP_CONJ
                                 } else {
                                     ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY

@@ -310,6 +310,15 @@ Legend:
 | `reduce_min` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 <!-- cuda-core-capability:end -->
 
+CUDA dot conjugation flags are accepted for all four supported scalar dtypes:
+`F32`/`F64` conjugation is the identity, while `C32`/`C64` conjugate the
+selected operands. `dot_general_read_into` and `dot_general_read_into_accum`
+currently accept destination **views of at most 8 modes**. The limit belongs
+to the scratch-to-view copy ABI, not cuTENSOR contraction. A wider destination
+view returns `Unsupported` with its rank and the supported limit before any
+output is modified. Use an owned `Tensor` destination (or the allocating dot
+entry) instead; owned outputs are not subject to this copy-ABI ceiling.
+
 Additional CUDA coverage outside the first-scope core descriptor is tracked
 below until those operation families are modeled by the backend capability
 descriptor.

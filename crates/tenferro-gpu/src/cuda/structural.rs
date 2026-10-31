@@ -5365,6 +5365,26 @@ fn scalar_pair(value: tenferro_tensor::ContractionScalar) -> (f64, f64) {
 }
 
 impl CudaEngine {
+    /// Resolve a dot destination whose scratch-to-view copy uses the fixed-rank ABI.
+    fn dot_write_region<'v, 'a: 'v>(
+        &self,
+        output: &'v TensorWrite<'a>,
+        op: &'static str,
+    ) -> crate::Result<Region<'v>> {
+        let rank = output.shape().len();
+        let limit = t4a_cuda_kernels::MAX_RANK;
+        if matches!(output, TensorWrite::View(_)) && rank > limit {
+            return Err(crate::Error::unsupported(
+                op,
+                format!(
+                    "destination view rank {rank} is not served: the CUDA dot scratch-to-view \
+                     copy ABI supports at most {limit} modes; use an owned Tensor destination instead"
+                ),
+            ));
+        }
+        self.write_region(output, op)
+    }
+
     /// Submit one dot-general into an already allocated destination and wait for it.
     ///
     /// # Errors
@@ -5577,7 +5597,7 @@ impl tenferro_tensor::TensorDot for CudaEngine {
                 // shared validator settles dtype and shape against the destination, and the
                 // contraction dtype is refused before either operand is staged or the scratch is
                 // allocated: cuTENSOR serves four dtypes and nothing else.
-                let destination = self.write_region(&view, op)?;
+                let destination = self.dot_write_region(&view, op)?;
                 let out_shape = tenferro_tensor::backend::validate_dot_general_read_into(
                     &lhs, &rhs, config, &view, op,
                 )?;
@@ -5673,7 +5693,7 @@ impl tenferro_tensor::TensorDot for CudaEngine {
                 )
             }
             view @ TensorWrite::View(_) => {
-                let destination = self.write_region(&view, op)?;
+                let destination = self.dot_write_region(&view, op)?;
                 let left = self.device_read(lhs, op)?;
                 let right = self.device_read(rhs, op)?;
                 let beta = scalar_pair(accumulation.beta);
