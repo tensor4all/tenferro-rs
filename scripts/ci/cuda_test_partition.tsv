@@ -2,6 +2,10 @@
 # Audit additions and helper chains; never classify by test-name substrings.
 # The cuda-next path's suites (#2208): every case opens a device except the shape arithmetic.
 host	tenferro-ad	eager::tests::a_panicking_extension_callback_restores_the_lent_cache_and_breaks_the_engine
+host	tenferro-ad	eager::tests::availability::backward_rejects_absent_derivative_before_accumulating_any_target
+host	tenferro-ad	eager::tests::availability::backward_rejects_empty_gradients_but_storage_allows_empty_groups
+host	tenferro-ad	eager::tests::availability::semantic_ad_ignores_retired_switch_in_fresh_processes
+host	tenferro-ad	eager::tests::availability::semantic_ad_returns_gradients_without_an_enable_switch
 host	tenferro-ad	eager::tests::deferred_eager_semantic_analysis_seeds_symbolic_leaf_metadata
 host	tenferro-ad	eager::tests::dropped_values_do_not_accumulate_in_the_runtime_registries
 host	tenferro-ad	eager::tests::eager_backward_with_accepts_vector_cotangent_seed
