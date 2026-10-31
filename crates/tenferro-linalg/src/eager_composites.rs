@@ -367,10 +367,15 @@ fn count_nonzero(
     abs: &EagerTensor,
     axes: &[usize],
 ) -> Result<EagerTensor> {
+    // `ord = 0` counts `x != 0` (#2359); equality with zero, then negated,
+    // keeps NaN entries because IEEE 754 makes `NaN > 0` false while
+    // `NaN != 0` is true.
     let zero = scalar_real(session, abs, 0.0)?;
-    let compared = session.compare(abs, &zero, CompareDir::Gt)?;
-    let converted = session.convert(&compared, abs.dtype())?;
-    session.reduce_sum(&converted, Some(axes))
+    let is_zero = session.compare(abs, &zero, CompareDir::Eq)?;
+    let is_zero = session.convert(&is_zero, abs.dtype())?;
+    let ones = ones_like(session, abs)?;
+    let mask = session.sub(&ones, &is_zero)?;
+    session.reduce_sum(&mask, Some(axes))
 }
 
 fn matrix_row_sum_norm(

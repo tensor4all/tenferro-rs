@@ -2969,12 +2969,20 @@ fn count_nonzero<B: LinalgBackend + ?Sized>(
 ) -> tenferro_tensor::Result<Tensor> {
     let zero = resident(scalar_real(abs.dtype(), 0.0)?, backend)?;
     let zero = broadcast(&zero, abs.shape(), &[], backend)?;
-    let mask = backend.compare_read(
+    // `ord = 0` counts `x != 0` (#2359). Equality with zero, then negated,
+    // keeps NaN entries in the count: IEEE 754 makes `NaN > 0` false while
+    // `NaN != 0` is true, so the former `Gt` mask dropped them.
+    let is_zero = backend.compare_read(
         TensorRead::from_tensor(abs),
         TensorRead::from_tensor(&zero),
-        &CompareDir::Gt,
+        &CompareDir::Eq,
     )?;
-    let mask = backend.convert(&mask, abs.dtype())?;
+    let is_zero = backend.convert(&is_zero, abs.dtype())?;
+    let ones = ones_like(abs, backend)?;
+    let mask = backend.sub_read(
+        TensorRead::from_tensor(&ones),
+        TensorRead::from_tensor(&is_zero),
+    )?;
     reduce_sum(&mask, axes, backend)
 }
 

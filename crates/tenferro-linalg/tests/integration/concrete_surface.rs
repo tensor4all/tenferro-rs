@@ -762,3 +762,38 @@ fn full_piv_lu_solve_rejects_rank_deficiency_on_every_surface() {
     let typed_b = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 1.0e-17]).unwrap();
     assert!(typed_a.full_piv_lu_solve(&typed_b, &mut host).is_err());
 }
+
+#[test]
+fn zero_order_norm_counts_nan_entries_as_nonzero() {
+    // #2359: ord = 0 counts x != 0. abs(NaN) > 0 is false in IEEE 754 while
+    // NaN != 0 is true, so the greater-than form silently dropped NaN entries.
+    let vector = Tensor::from_vec_col_major(vec![3], vec![f64::NAN, 0.0_f64, 2.0]).unwrap();
+    let matrix = Tensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 0.0_f64, 3.0, 0.0]).unwrap();
+    let complex = Tensor::from_typed::<Complex64>(
+        TypedTensor::from_vec_col_major(
+            vec![3],
+            vec![
+                Complex64::new(f64::NAN, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 1.0),
+            ],
+        )
+        .unwrap(),
+    );
+    let mut host = tenferro_cpu::CpuEngine::serial();
+
+    let counts = [
+        vector
+            .norm(Some(0.0), Some(&[0]), false, &mut host)
+            .unwrap(),
+        matrix
+            .norm(Some(0.0), Some(&[0, 1]), false, &mut host)
+            .unwrap(),
+        complex
+            .norm(Some(0.0), Some(&[0]), false, &mut host)
+            .unwrap(),
+    ];
+    for count in &counts {
+        assert_eq!(count.as_slice::<f64>().unwrap(), &[2.0]);
+    }
+}

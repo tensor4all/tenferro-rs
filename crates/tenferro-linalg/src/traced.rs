@@ -2058,8 +2058,14 @@ fn scale_matrix_columns(matrix: &TracedTensor, scale: &TracedTensor) -> Result<T
 }
 
 fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
-    let mask = abs.compare(&zero_scalar(abs.dtype)?, CompareDir::Gt)?;
-    mask.convert(abs.dtype)?.reduce_sum(Some(axes))
+    // `ord = 0` counts `x != 0` (#2359); equality with zero, then negated,
+    // keeps NaN entries because IEEE 754 makes `NaN > 0` false while
+    // `NaN != 0` is true.
+    let is_zero = abs.compare(&zero_scalar(abs.dtype)?, CompareDir::Eq)?;
+    let is_zero = is_zero.convert(abs.dtype)?;
+    let ones = ones_like(abs)?;
+    let mask = (&ones - &is_zero)?;
+    mask.reduce_sum(Some(axes))
 }
 
 fn matrix_row_sum_norm(abs: &TracedTensor, take_max: bool) -> Result<TracedTensor> {
