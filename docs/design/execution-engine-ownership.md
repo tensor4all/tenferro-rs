@@ -55,7 +55,8 @@ no graph, gradient or differentiation state. Prepared programs store target
   computations holds `k` engines and runs them from `k` calling threads. tenferro
   never subdivides a pool, keeps no process-wide engine registry and does not
   choose which engine runs a task.
-- A panic marks the engine broken: later operations return a typed error while
+- A panic marks the engine broken (also inside downstream work run through
+  `CpuEngine::with_exec`): later operations return a typed error while
   retirement, synchronization and safe buffer returns still run. GPU work that a
   run queued but the device has not finished stays with the engine, and the
   engine bounds the memory that unfinished work retains. Some device errors break
