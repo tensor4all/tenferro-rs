@@ -1376,6 +1376,116 @@ fn copy_read_into_writes_a_strided_destination_view() {
 
 #[test]
 #[ignore = "requires CUDA"]
+fn copy_read_into_writes_high_rank_destination_views() {
+    let Some(mut engine) = engine() else { return };
+    for rank in [9, 18, 23, 72] {
+        // Several non-singleton axes prevent a shape-only or identity-copy implementation passing.
+        let mut shape = vec![1; rank];
+        shape[0] = 2;
+        shape[rank / 2] = 3;
+        shape[rank - 1] = 2;
+        let mut strides = vec![1isize; rank];
+        for axis in (0..rank - 1).rev() {
+            strides[axis] = strides[axis + 1] * shape[axis + 1] as isize;
+        }
+        for reversed_source in [false, true] {
+            let values: Vec<f64> = (0..12).map(|index| 1000.0 + index as f64).collect();
+            let source = upload_tensor(
+                engine.runtime(),
+                &Tensor::from_vec_col_major(shape.clone(), values.clone()).expect("source"),
+            )
+            .expect("upload source");
+            let mut source_strides = vec![1isize; rank];
+            for axis in 1..rank {
+                source_strides[axis] = source_strides[axis - 1] * shape[axis - 1] as isize;
+            }
+            let source_offset = if reversed_source { 1 } else { 0 };
+            if reversed_source {
+                source_strides[0] = -1;
+            }
+            let source_view = TensorView::F64(
+                source
+                    .as_typed::<f64>()
+                    .expect("f64 source")
+                    .backend_region_view(shape.clone(), source_strides.clone(), source_offset)
+                    .expect("source view"),
+            );
+            let source_indices = region_indices(&shape, &source_strides, source_offset);
+            let expected: Vec<f64> = source_indices.iter().map(|&index| values[index]).collect();
+            for negative in [false, true] {
+                let mut destination_strides = strides.clone();
+                let offset = if negative {
+                    destination_strides[0] = -destination_strides[0];
+                    2 + strides[0]
+                } else {
+                    2
+                };
+                let mut root = write_root(&engine);
+                let observed = write_through_view(
+                    &mut engine,
+                    &mut root,
+                    shape.clone(),
+                    destination_strides.clone(),
+                    offset,
+                    |engine, out| {
+                        let input = if reversed_source {
+                            TensorRead::from_view(source_view.clone())
+                        } else {
+                            TensorRead::from_tensor(&source)
+                        };
+                        engine.copy_read_into(input, out)
+                    },
+                );
+                assert_eq!(
+                    observed,
+                    expected_root(
+                        &region_indices(&shape, &destination_strides, offset),
+                        &expected,
+                    ),
+                    "rank {rank}, reversed_source={reversed_source}, negative={negative}"
+                );
+            }
+            // Also cover the old wide-source fallback, whose destination is one flat span.
+            let mut root = write_root(&engine);
+            let observed = write_through_view(
+                &mut engine,
+                &mut root,
+                shape.clone(),
+                {
+                    let mut compact = source_strides.clone();
+                    compact[0] = 1;
+                    compact
+                },
+                0,
+                |engine, out| engine.copy_read_into(TensorRead::from_view(source_view), out),
+            );
+            assert_eq!(
+                observed,
+                expected_root(&(0..12).collect::<Vec<_>>(), &expected)
+            );
+        }
+        let mut empty_shape = shape.clone();
+        empty_shape[0] = 0;
+        let empty = upload_tensor(
+            engine.runtime(),
+            &Tensor::from_vec_col_major(empty_shape.clone(), Vec::<f64>::new()).expect("empty"),
+        )
+        .expect("upload empty source");
+        let mut root = write_root(&engine);
+        let observed = write_through_view(
+            &mut engine,
+            &mut root,
+            empty_shape,
+            strides,
+            2,
+            |engine, out| engine.copy_read_into(TensorRead::from_tensor(&empty), out),
+        );
+        assert_eq!(observed, (0..30).map(sentinel).collect::<Vec<_>>());
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
 fn copy_read_into_writes_a_compact_offset_destination_from_a_reversed_source() {
     let Some(mut engine) = engine() else { return };
     // A reversed, offset source view: two rows of three sentinels, walking the source's first
