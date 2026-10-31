@@ -103,9 +103,24 @@ interpreters for the same rule model:
 - **Eager transforms** record eager operations as small graphs/programs and
   reuse the same context-owned transform machinery.
 - **Stateful eager reverse mode** (`backward()` and `backward_with(seed)`)
-  accumulates reachable tracked leaves into gradient slots.
+  accumulates reachable tracked leaves into gradient slots. It returns an error
+  if no gradient is produced (`RuntimeState`) or a selected reachable leaf has
+  no cotangent flow (`Validation`), rather than silently returning an empty or
+  partial bundle. Missing cotangents are rejected before gradient accumulation;
+  unrelated leaves remain untouched. A present numerical zero is a gradient,
+  not absent flow.
 - **Functional eager transforms** (`grad`, `vjp`, `jvp`) return ordinary eager
-  tensors and do not mutate gradient slots.
+  tensors and do not mutate gradient slots. Their `*_optional` counterparts
+  return `None` for disconnected inputs, unrecorded eager computations, or
+  structurally absent derivative flow (for example, real `Sign` or integer
+  conversions). The required APIs report an inactive-`wrt` validation error
+  instead. Missing rules, invalid compiled state, and execution failures are
+  errors, not inactive results.
+
+Semantic transforms are the only eager VJP/JVP route. The retired
+`TENFERRO_EAGER_SEMANTIC_VJP` environment variable has no effect. A general
+empty `AllocationGroup` remains valid storage, but cannot make an empty
+stateful differentiation result successful.
 
 Rule emission must be deterministic for a fixed primitive payload, input and
 output metadata, active masks, requested output slots, AD context, and
