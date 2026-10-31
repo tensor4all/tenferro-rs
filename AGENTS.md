@@ -2,6 +2,16 @@
 
 Guidance for Claude Code (claude.ai/code) and other agents working in this repository.
 
+## Non-Negotiable: No Handwritten Contraction Kernels
+
+Contractions, GEMM, decompositions and solves must use the owning abstraction
+(`einsum_tensors`, `tcontract`, `tlinalg`, or the backend provider); never replace
+them with a repository-local inner scalar-accumulate loop. Handwritten kernels
+bypass the tuned path, threading/SIMD policy and the abstractions' numeric
+contract. If a loop genuinely cannot be expressed through the abstraction, put
+`// contraction-kernel-ok: <reason>` immediately above that loop and explain the
+exception in the PR description.
+
 Before acting, read the latest shared tensor4all agent rules online, starting
 from `https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/index.md`.
 If internet access is unavailable or the remote cannot be resolved, use the
