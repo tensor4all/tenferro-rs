@@ -32,17 +32,9 @@ enum TensorValue<'a> {
 }
 
 impl<'a> TensorValue<'a> {
-    fn as_tensor(&self) -> Option<&Tensor> {
-        match self {
-            Self::Borrowed(tensor) => Some(tensor),
-            Self::View(_) => None,
-            Self::Owned(tensor) => Some(tensor),
-        }
-    }
-
     fn into_tensor(self, exec: &mut dyn Engine) -> Result<Tensor> {
         match self {
-            Self::Borrowed(tensor) => tensor.duplicate(),
+            Self::Borrowed(tensor) => exec.to_contiguous_read(TensorRead::from_tensor(tensor)),
             Self::View(view) => exec.to_contiguous_read(TensorRead::from_view(view)),
             Self::Owned(tensor) => Ok(tensor),
         }
@@ -250,19 +242,12 @@ struct LabeledTensor<'a> {
 }
 
 impl LabeledTensor<'_> {
-    fn tensor(&self) -> Option<&Tensor> {
-        self.tensor.as_tensor()
-    }
-
     fn tensor_read(&self) -> TensorRead<'_> {
         self.tensor.tensor_read()
     }
 
     fn tensor_owned(&self, exec: &mut dyn Engine) -> Result<Tensor> {
-        match self.tensor() {
-            Some(tensor) => tensor.duplicate(),
-            None => exec.to_contiguous_read(self.tensor_read()),
-        }
+        exec.to_contiguous_read(self.tensor_read())
     }
 
     fn shape(&self) -> &[usize] {
