@@ -532,6 +532,9 @@ pub trait EagerSessionLinalgExt {
 
     /// Compute a vector, matrix, or tensor norm in this session.
     /// An empty axis list is a no-op and clones the input without dispatch.
+    /// `ord = Some(0.0)` counts the entries that are not equal to zero: `NaN`
+    /// counts as nonzero, both `+0.0` and `-0.0` count as zero, and `±inf`
+    /// count as nonzero (#2359).
     ///
     /// # Examples
     /// ```rust

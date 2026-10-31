@@ -767,33 +767,93 @@ fn full_piv_lu_solve_rejects_rank_deficiency_on_every_surface() {
 fn zero_order_norm_counts_nan_entries_as_nonzero() {
     // #2359: ord = 0 counts x != 0. abs(NaN) > 0 is false in IEEE 754 while
     // NaN != 0 is true, so the greater-than form silently dropped NaN entries.
-    let vector = Tensor::from_vec_col_major(vec![3], vec![f64::NAN, 0.0_f64, 2.0]).unwrap();
-    let matrix = Tensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 0.0_f64, 3.0, 0.0]).unwrap();
-    let complex = Tensor::from_typed::<Complex64>(
-        TypedTensor::from_vec_col_major(
-            vec![3],
+    // The whole boundary matrix is pinned here (-0.0, both infinities, complex
+    // NaN in either component, vector and matrix routes) so a future refactor
+    // cannot change one of them unnoticed.
+    let mut host = tenferro_cpu::CpuEngine::serial();
+
+    let real_cases: [(&str, Vec<f64>, f64); 5] = [
+        ("nan_zero_two", vec![f64::NAN, 0.0, 2.0], 2.0),
+        ("nan_one", vec![f64::NAN, 1.0], 2.0),
+        ("signed_zeros_only", vec![-0.0, 0.0, -0.0], 0.0),
+        (
+            "both_infinities",
+            vec![f64::INFINITY, f64::NEG_INFINITY, 0.0],
+            2.0,
+        ),
+        ("inf_and_zero", vec![f64::INFINITY, 0.0], 1.0),
+    ];
+    for (label, data, expected) in real_cases {
+        let vector = Tensor::from_vec_col_major(vec![data.len()], data).unwrap();
+        let count = vector
+            .norm(Some(0.0), Some(&[0]), false, &mut host)
+            .unwrap();
+        assert_eq!(count.as_slice::<f64>().unwrap(), &[expected], "{label}");
+    }
+
+    let complex_cases: [(&str, Vec<Complex64>, f64); 4] = [
+        (
+            "real_nan",
             vec![
                 Complex64::new(f64::NAN, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 1.0),
+            ],
+            2.0,
+        ),
+        (
+            "imag_nan",
+            vec![Complex64::new(0.0, f64::NAN), Complex64::new(0.0, 0.0)],
+            1.0,
+        ),
+        (
+            "signed_zeros_only",
+            vec![Complex64::new(-0.0, -0.0), Complex64::new(0.0, 0.0)],
+            0.0,
+        ),
+        (
+            "infinities",
+            vec![
+                Complex64::new(f64::INFINITY, 0.0),
+                Complex64::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+                Complex64::new(0.0, 0.0),
+            ],
+            2.0,
+        ),
+    ];
+    for (label, data, expected) in complex_cases {
+        let vector = Tensor::from_typed::<Complex64>(
+            TypedTensor::from_vec_col_major(vec![data.len()], data).unwrap(),
+        );
+        let count = vector
+            .norm(Some(0.0), Some(&[0]), false, &mut host)
+            .unwrap();
+        assert_eq!(count.as_slice::<f64>().unwrap(), &[expected], "{label}");
+    }
+
+    // The two-axis matrix route and the single-axis route of a complex matrix
+    // agree with the vector route.
+    let matrix = Tensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 0.0_f64, 3.0, 0.0]).unwrap();
+    let complex_matrix = Tensor::from_typed::<Complex64>(
+        TypedTensor::from_vec_col_major(
+            vec![2, 2],
+            vec![
+                Complex64::new(f64::NAN, 0.0),
+                Complex64::new(0.0, 0.0),
                 Complex64::new(0.0, 0.0),
                 Complex64::new(0.0, 1.0),
             ],
         )
         .unwrap(),
     );
-    let mut host = tenferro_cpu::CpuEngine::serial();
-
-    let counts = [
-        vector
-            .norm(Some(0.0), Some(&[0]), false, &mut host)
-            .unwrap(),
+    for count in [
         matrix
             .norm(Some(0.0), Some(&[0, 1]), false, &mut host)
             .unwrap(),
-        complex
-            .norm(Some(0.0), Some(&[0]), false, &mut host)
+        complex_matrix
+            .norm(Some(0.0), Some(&[0, 1]), false, &mut host)
             .unwrap(),
-    ];
-    for count in &counts {
+    ] {
         assert_eq!(count.as_slice::<f64>().unwrap(), &[2.0]);
     }
 }
