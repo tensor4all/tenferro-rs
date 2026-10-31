@@ -111,6 +111,12 @@ tenferro hands out no `faer::Par`; spell the types with `tenferro_cpu::faer`
 This guarantee does not extend to workers created internally by OpenBLAS, MKL,
 Accelerate, or OpenMP.
 
+Work that should keep the engine's guarantees runs inside
+`engine.with_exec(|exec| ..)?` rather than on `engine.exec()?`: the closure gets
+the same bundle, a panic
+inside it marks the engine broken, a broken engine refuses the call with
+`CpuEngineError::Broken`, and the engine cannot be re-entered from the closure.
+
 A team has one leader at a time, so an engine is single-threaded by contract:
 operations take `&mut CpuEngine`. Build one engine per thread (for example one
 per lane) and let each thread lead its own engine; an engine moves between
