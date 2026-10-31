@@ -365,7 +365,11 @@ closure lends a `cuda::raw::Session` for vendor calls on the engine's stream,
 with validated tensor spans and scratch. This is a raw CUDA scope, not backend
 session admission; there is no `CudaExecSession`, `with_backend_session`, or
 `with_cubecl` entry. CUDA execution builds on `t4a-cuda-runtime` and
-`t4a-cuda-kernels`, not CubeCL/CubeK. See
+`t4a-cuda-kernels`, not CubeCL/CubeK. Kernel sources and entry ABIs belong to
+that external catalogue; `tenferro-gpu/src/cuda/launch.rs` binds and launches
+them, while `tenferro-gpu` owns cuBLAS/cuTENSOR integration. The manifests and
+CUDA source define this boundary; a stale design record cannot restore a
+retired entry mechanism. See
 [GPU backend design](../design/gpu-backend-design.md#operation-crate-interop-boundary)
 and `crates/tenferro-gpu/src/cuda/raw.rs` for the current extension boundary.
 

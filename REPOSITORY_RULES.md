@@ -719,10 +719,15 @@ Tests follow implementation ownership.
 
 - Before touching CUDA/GPU backend code, read
   [`docs/design/gpu-backend-design.md`](docs/design/gpu-backend-design.md).
-  It is the developer-facing source for CUDA kernel ownership, runtime
-  shape/stride metadata conventions, launch configuration rules, and device
-  transfer behavior; any change to those conventions updates it in the same
-  PR.
+  It is a developer-facing guide, not an authority over the implementation:
+  the manifests and `crates/tenferro-gpu/src/cuda/` define the current contract.
+  If the guide disagrees, fix the prose, not the code. Changes to kernel
+  ownership, metadata, launches or transfers update the guide in the same PR.
+- CUDA execution uses a caller-held `CudaEngine` over `t4a-cuda-runtime` and
+  the external `t4a-cuda-kernels` catalogue, with cuBLAS/cuTENSOR integration
+  in `tenferro-gpu`. Extension vendor calls enter `CudaEngine::with_raw` in
+  `crates/tenferro-gpu/src/cuda/raw.rs`; retired CubeCL/session mechanisms
+  are not an alternative execution entry.
 - CUDA operation paths whose accepted implementation is an NVIDIA vendor
   library must fail with typed load or provider errors when the required
   NVIDIA library is unavailable or lacks support. They must not silently fall
