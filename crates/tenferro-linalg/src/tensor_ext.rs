@@ -637,6 +637,13 @@ pub trait TensorLinalgExt {
         rtol: f64,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// Compute a vector, matrix, or tensor norm.
+    ///
+    /// `ord = None` is the Frobenius/Euclidean norm. `ord = Some(0.0)` is the
+    /// count of entries that are not equal to zero: `NaN` counts as nonzero,
+    /// both `+0.0` and `-0.0` count as zero, and `±inf` count as nonzero
+    /// (#2359; see `docs/spec/tensor-semantics.md`).
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for axes/order combinations or required backend operations.
@@ -1221,6 +1228,12 @@ pub trait TensorReadLinalgExt {
         rtol: f64,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// Compute a vector, matrix, or tensor norm from a borrowed read.
+    ///
+    /// `ord = Some(0.0)` is the count of entries that are not equal to zero:
+    /// `NaN` counts as nonzero, both `+0.0` and `-0.0` count as zero, and
+    /// `±inf` count as nonzero (#2359; see `docs/spec/tensor-semantics.md`).
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for axes/order combinations or required read/backend operations.
@@ -1724,6 +1737,13 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
         rtol: f64,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Compute a vector, matrix, or tensor norm.
+    ///
+    /// `ord = None` is the Frobenius/Euclidean norm. `ord = Some(0.0)` is the
+    /// count of entries that are not equal to zero: `NaN` counts as nonzero,
+    /// both `+0.0` and `-0.0` count as zero, and `±inf` count as nonzero
+    /// (#2359; see `docs/spec/tensor-semantics.md`).
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for axes/order combinations, backend, or typed-output errors.

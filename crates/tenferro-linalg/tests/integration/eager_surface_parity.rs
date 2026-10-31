@@ -399,22 +399,82 @@ fn eager_norm_covers_remaining_orders_permutations_and_errors() {
 #[test]
 fn zero_order_norm_counts_nan_entries_as_nonzero() {
     // #2359: ord = 0 counts x != 0. abs(NaN) > 0 is false in IEEE 754, so the
-    // former greater-than mask dropped NaN entries from the count.
-    let vector = eager(vec![f64::NAN, 0.0, 2.0], vec![3]);
+    // former greater-than mask dropped NaN entries from the count. The same
+    // boundary matrix as the concrete surface is pinned on the eager surface.
+    let real_cases: [(&str, Vec<f64>, f64); 5] = [
+        ("nan_zero_two", vec![f64::NAN, 0.0, 2.0], 2.0),
+        ("nan_one", vec![f64::NAN, 1.0], 2.0),
+        ("signed_zeros_only", vec![-0.0, 0.0, -0.0], 0.0),
+        (
+            "both_infinities",
+            vec![f64::INFINITY, f64::NEG_INFINITY, 0.0],
+            2.0,
+        ),
+        ("inf_and_zero", vec![f64::INFINITY, 0.0], 1.0),
+    ];
+    for (label, data, expected) in real_cases {
+        let vector = eager(data.clone(), vec![data.len()]);
+        let count = eager_norm(&vector, Some(0.0), Some(&[0]), false).unwrap();
+        assert!(
+            (f64_values(&count)[0] - expected).abs() < 1.0e-12,
+            "{label}: expected {expected}, got {:?}",
+            f64_values(&count)
+        );
+    }
+
+    let complex_cases: [(&str, Vec<Complex64>, f64); 4] = [
+        (
+            "real_nan",
+            vec![
+                Complex64::new(f64::NAN, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 1.0),
+            ],
+            2.0,
+        ),
+        (
+            "imag_nan",
+            vec![Complex64::new(0.0, f64::NAN), Complex64::new(0.0, 0.0)],
+            1.0,
+        ),
+        (
+            "signed_zeros_only",
+            vec![Complex64::new(-0.0, -0.0), Complex64::new(0.0, 0.0)],
+            0.0,
+        ),
+        (
+            "infinities",
+            vec![
+                Complex64::new(f64::INFINITY, 0.0),
+                Complex64::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+                Complex64::new(0.0, 0.0),
+            ],
+            2.0,
+        ),
+    ];
+    for (label, data, expected) in complex_cases {
+        let vector = eager_complex(data.clone(), vec![data.len()]);
+        let count = eager_norm(&vector, Some(0.0), Some(&[0]), false).unwrap();
+        assert!(
+            (f64_values(&count)[0] - expected).abs() < 1.0e-12,
+            "{label}: expected {expected}, got {:?}",
+            f64_values(&count)
+        );
+    }
+
     let matrix = eager(vec![f64::NAN, 0.0, 3.0, 0.0], vec![2, 2]);
-    let complex = eager_complex(
+    let complex_matrix = eager_complex(
         vec![
             Complex64::new(f64::NAN, 0.0),
             Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
             Complex64::new(0.0, 1.0),
         ],
-        vec![3],
+        vec![2, 2],
     );
-
     for value in [
-        eager_norm(&vector, Some(0.0), Some(&[0]), false).unwrap(),
         eager_norm(&matrix, Some(0.0), Some(&[0, 1]), false).unwrap(),
-        eager_norm(&complex, Some(0.0), Some(&[0]), false).unwrap(),
+        eager_norm(&complex_matrix, Some(0.0), Some(&[0, 1]), false).unwrap(),
     ] {
         assert!((f64_values(&value)[0] - 2.0).abs() < 1.0e-12);
     }

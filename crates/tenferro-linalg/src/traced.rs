@@ -391,6 +391,10 @@ pub trait TracedTensorLinalgExt {
 
     /// Build a traced vector/matrix norm operation.
     ///
+    /// `ord = Some(0.0)` counts the entries that are not equal to zero: `NaN`
+    /// counts as nonzero, both `+0.0` and `-0.0` count as zero, and `±inf`
+    /// count as nonzero (#2359).
+    ///
     /// # Errors
     ///
     /// Requires a concrete shape immediately. Returns `Error::Validation` for

@@ -211,6 +211,14 @@ because the host is no more stable there: `2.0 / (inf + 1i)` is `NaN` on one mac
 is what the device reproduces, so the mixed form keeps its componentwise
 expansion for a non-finite divisor and the host's `NaN` stays `NaN`.
 
+`norm` with `ord = 0` is a corner case of the same kind, so it is specified here
+too: it is the count of entries that are not equal to zero, which is not the same
+predicate as `|x| > 0`. In IEEE 754 `NaN > 0` is false while `NaN != 0` is true,
+so a `NaN` entry counts as nonzero; `+0.0` and `-0.0` both count as zero, and
+`±inf` count as nonzero. The rule is identical on every norm surface
+(concrete, borrowed read, typed, eager, and traced) and for real and complex
+dtypes, where an entry is zero exactly when both of its components are zero.
+
 CPU backend implementations, CPU kernels, and CPU resource pools belong in
 `tenferro-cpu`. GPU backend implementations and GPU transfer helpers belong in
 `tenferro-gpu`.

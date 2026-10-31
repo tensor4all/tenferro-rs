@@ -307,20 +307,89 @@ fn assert_tensor_f64_eq(actual: &[f64], expected: &[f64]) {
 #[test]
 fn zero_order_norm_counts_nan_entries_as_nonzero() {
     // #2359: ord = 0 counts x != 0. abs(NaN) > 0 is false in IEEE 754, so the
-    // former greater-than mask dropped NaN entries from the count.
-    let vector =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![f64::NAN, 0.0, 2.0]))
-            .unwrap();
+    // former greater-than mask dropped NaN entries from the count. The traced
+    // surface is the one where the complex case was untested, so the whole
+    // boundary matrix is pinned here as on the concrete and eager surfaces.
+    let real_cases: [(&str, Vec<f64>, f64); 5] = [
+        ("nan_zero_two", vec![f64::NAN, 0.0, 2.0], 2.0),
+        ("nan_one", vec![f64::NAN, 1.0], 2.0),
+        ("signed_zeros_only", vec![-0.0, 0.0, -0.0], 0.0),
+        (
+            "both_infinities",
+            vec![f64::INFINITY, f64::NEG_INFINITY, 0.0],
+            2.0,
+        ),
+        ("inf_and_zero", vec![f64::INFINITY, 0.0], 1.0),
+    ];
+    for (_label, data, expected) in real_cases {
+        let vector =
+            TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![data.len()], data)).unwrap();
+        let count = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
+        assert_f64_eq(get_f64_data(&run_many(&[&count])[0])[0], expected);
+    }
+
+    let complex_cases: [(&str, Vec<Complex64>, f64); 4] = [
+        (
+            "real_nan",
+            vec![
+                Complex64::new(f64::NAN, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 1.0),
+            ],
+            2.0,
+        ),
+        (
+            "imag_nan",
+            vec![Complex64::new(0.0, f64::NAN), Complex64::new(0.0, 0.0)],
+            1.0,
+        ),
+        (
+            "signed_zeros_only",
+            vec![Complex64::new(-0.0, -0.0), Complex64::new(0.0, 0.0)],
+            0.0,
+        ),
+        (
+            "infinities",
+            vec![
+                Complex64::new(f64::INFINITY, 0.0),
+                Complex64::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+                Complex64::new(0.0, 0.0),
+            ],
+            2.0,
+        ),
+    ];
+    for (_label, data, expected) in complex_cases {
+        let vector =
+            TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![data.len()], data)).unwrap();
+        let count = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
+        assert_f64_eq(get_f64_data(&run_many(&[&count])[0])[0], expected);
+    }
+
     let matrix = TracedTensor::from_tensor_concrete_shape(f64_tensor(
         vec![2, 2],
         vec![f64::NAN, 0.0, 3.0, 0.0],
     ))
     .unwrap();
+    let complex_matrix = TracedTensor::from_tensor_concrete_shape(c64_tensor(
+        vec![2, 2],
+        vec![
+            Complex64::new(f64::NAN, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 1.0),
+        ],
+    ))
+    .unwrap();
 
-    let vector_count = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
     let matrix_count = matrix.norm(Some(0.0), Some(&[0, 1]), false).unwrap();
-    let results = run_many(&[&vector_count, &matrix_count]);
-
+    let complex_matrix_count = complex_matrix
+        .norm(Some(0.0), Some(&[0, 1]), false)
+        .unwrap();
+    let results = run_many(&[&matrix_count, &complex_matrix_count]);
     assert_f64_eq(get_f64_data(&results[0])[0], 2.0);
     assert_f64_eq(get_f64_data(&results[1])[0], 2.0);
+}
+
+fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
+    Tensor::from_typed::<Complex64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
