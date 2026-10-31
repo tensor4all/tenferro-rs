@@ -153,9 +153,12 @@ layout, while an entry requiring compact input stages a same-device copy.
 Neither case implies a host transfer.
 
 For supported dtypes, `to_contiguous_read` materializes CUDA views on-device.
-`copy_read_into` accepts any valid source region of the same runtime; destination
-views are limited to the catalogue's by-value layout rank. Source and destination
-allocations must not alias.
+`copy_read_into` accepts valid source and non-overlapping destination regions of
+the same runtime, including ranks above the catalogue's by-value layout limit.
+Non-flat wide copies use `StridedToStrided`'s general symbol with device-resident
+geometry; neither operand needs tensor-sized staging. Compact copies retain the
+layout-free exact-copy path. Source and destination allocations must not alias.
+Other write entries retain their documented by-value layout rank limit.
 
 Catalogue planners receive validated dtype/layout/operation metadata and
 produce the launch geometry. `cuda/dispatch.rs` calls the catalogue's `plan_*`

@@ -701,14 +701,14 @@ impl CudaEngine {
     /// reading the destination, and no second exclusivity check is needed here. That injectivity
     /// is the whole dependency this write boundary places on `tenferro-tensor`.
     ///
-    /// The entries that reach this boundary launch the catalogue's by-value layout form
-    /// ([`t4a_cuda_kernels::MAX_RANK`] axes), so a wider *view* is a typed refusal below.
+    /// The fixed-layout entries use [`Self::write_region`]; copy also serves wider views through
+    /// the catalogue's general symbol and device-resident geometry.
     ///
     /// # Errors
     ///
     /// [`crate::Error::unsupported`] for a host view, and [`crate::Error::RuntimeState`] for a
     /// view of another runtime's allocation or a broken engine.
-    fn write_region<'v, 'a: 'v>(
+    fn write_region_any<'v, 'a: 'v>(
         &self,
         output: &'v TensorWrite<'a>,
         op: &'static str,
@@ -720,20 +720,28 @@ impl CudaEngine {
             TensorWrite::Tensor(tensor) => self.owned_region(tensor, op),
             TensorWrite::View(view) => {
                 let region = write_region_of(view, op)?;
-                if region.extents.len() > t4a_cuda_kernels::MAX_RANK {
-                    // ponytail: ceiling = the catalogue's by-value layout rank. A write
-                    // destination above it needs an `_any` symbol with device-resident geometry,
-                    // which no write entry wires yet; the read side's `materialize_storage` has
-                    // that general path. Before this change every view destination was refused.
-                    return Err(crate::Error::unsupported(
-                        op,
-                        "a write destination view wider than the ABI's layout rank is not served",
-                    ));
-                }
                 self.own_storage(region.storage, op)?;
                 Ok(region)
             }
         }
+    }
+
+    /// Keep the by-value rank ceiling for entries without a general write launch.
+    fn write_region<'v, 'a: 'v>(
+        &self,
+        output: &'v TensorWrite<'a>,
+        op: &'static str,
+    ) -> crate::Result<Region<'v>> {
+        let region = self.write_region_any(output, op)?;
+        if matches!(output, TensorWrite::View(_))
+            && region.extents.len() > t4a_cuda_kernels::MAX_RANK
+        {
+            return Err(crate::Error::unsupported(
+                op,
+                "a write destination view wider than the ABI's layout rank is not served",
+            ));
+        }
+        Ok(region)
     }
 
     /// The index operand of a read entry, resolved to the compact layout its planner takes.
@@ -927,9 +935,9 @@ impl TensorStructural for CudaEngine {
         const OP: &str = "copy_read_into";
         // Neither side is staged: the source is read through its own layout and the destination
         // region is written in place. A writable view is write-injective by construction, which
-        // `write_region` documents.
+        // `write_region_any` documents.
         let source = self.read_region(&src, OP)?;
-        let destination = self.write_region(&dst, OP)?;
+        let destination = self.write_region_any(&dst, OP)?;
         if source.dtype != destination.dtype {
             return Err(crate::Error::dtype_mismatch(
                 OP,
@@ -975,30 +983,7 @@ impl TensorStructural for CudaEngine {
                     .synchronize()
                     .map_err(|error| crate::Error::runtime_state_source(OP, error));
             }
-            // A source wider than the by-value layout keeps the general-path materialization the
-            // read boundary already offers, and the exact copy below carries its logical order.
-            // INVARIANT: the destination has the source's shape rank, and a non-flat destination
-            // of that rank cannot reach this arm — `write_region` refuses a view above
-            // `MAX_RANK`, and an owned tensor is compact and offset-zero by construction — so
-            // the destination is one flat span and the exact copy addresses it.
-            drop(source);
-            let staged = self.device_read(src, OP)?;
-            let mut dispatcher = self.dispatcher(&[Entry::CopyExact])?;
-            let len = i64::try_from(count)
-                .map_err(|_| crate::Error::unsupported(OP, "count exceeds i64"))?;
-            let destination_allocation = destination.storage.allocation();
-            with_scalar!(dtype, |T| {
-                dispatcher.copy_exact(
-                    kernel,
-                    len,
-                    destination_allocation,
-                    self.allocation_of::<T>(&staged, OP)?,
-                )
-            })?;
-            return self
-                .runtime()
-                .synchronize()
-                .map_err(|error| crate::Error::runtime_state_source(OP, error));
+            return self.copy_regions_wide(&source, &destination, OP);
         }
         // Both regions are one contiguous span: the exact copy carries them without a layout.
         let len =
@@ -1720,6 +1705,84 @@ impl CudaEngine {
             .synchronize()
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
         Ok(output)
+    }
+
+    /// Copy wide regions directly, without a tensor-sized temporary or a host transfer.
+    fn copy_regions_wide(
+        &mut self,
+        source: &Region<'_>,
+        destination: &Region<'_>,
+        op: &'static str,
+    ) -> crate::Result<()> {
+        let kernel = kernel_dtype(source.dtype, op)?;
+        let source_layout = LayoutRef::new(&source.extents, &source.strides, source.offset)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let destination_layout = LayoutRef::new(
+            &destination.extents,
+            &destination.strides,
+            destination.offset,
+        )
+        .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let plan = t4a_cuda_kernels::plan_strided_to_strided(
+            kernel,
+            source_layout,
+            source.len(op)?,
+            destination_layout,
+            destination.len(op)?,
+        )
+        .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let len = count_i64(&source.shape, op)?;
+        let source_geometry = self.wide_geometry(&source.extents, &source.strides, op)?;
+        let destination_geometry =
+            self.wide_geometry(&destination.extents, &destination.strides, op)?;
+        let source_buffer = source.storage.allocation();
+        let destination_buffer = destination.storage.allocation();
+        let resources = vec![
+            t4a_cuda_runtime::RawResource::Buffer(source_buffer),
+            t4a_cuda_runtime::RawResource::Buffer(destination_buffer),
+            t4a_cuda_runtime::RawResource::Buffer(&source_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&source_geometry.strides),
+            t4a_cuda_runtime::RawResource::Buffer(&destination_geometry.extents),
+            t4a_cuda_runtime::RawResource::Buffer(&destination_geometry.strides),
+        ];
+        let symbol = Entry::StridedToStrided
+            .general()
+            .ok_or_else(|| crate::Error::unsupported(op, "this entry has no general-path symbol"))?
+            .name();
+        let mut dispatcher = self.dispatcher(&[Entry::StridedToStrided])?;
+        // SAFETY: both regions belong to this runtime; the planner checked their spans and
+        // the mutable view constructor proved injectivity. Every pointer is registered; arguments
+        // match the general StridedToStrided ABI, and geometry outlives the synchronize below.
+        unsafe {
+            dispatcher.in_scope(
+                Entry::StridedToStrided,
+                symbol,
+                resources,
+                |scope, function| {
+                    let source_mirror = source_geometry.mirror(source_layout, scope, op)?;
+                    let destination_mirror =
+                        destination_geometry.mirror(destination_layout, scope, op)?;
+                    let args = [
+                        Arg::DevicePtr(destination_buffer),
+                        Arg::DevicePtr(source_buffer),
+                        Arg::U32(kernel.tag() as u32),
+                        pod_arg(&source_mirror),
+                        pod_arg(&destination_mirror),
+                        Arg::U64(len as u64),
+                    ];
+                    scope
+                        .launch(
+                            function,
+                            LaunchConfig::new(plan.grid[0], plan.block[0]),
+                            &args,
+                        )
+                        .map_err(|error| crate::Error::runtime_state_source(op, error))
+                },
+            )
+        }?;
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
     }
 
     /// Scatter the compact `source` into the writable destination region.
