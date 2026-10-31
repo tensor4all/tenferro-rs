@@ -395,3 +395,27 @@ fn eager_norm_covers_remaining_orders_permutations_and_errors() {
         ));
     }
 }
+
+#[test]
+fn zero_order_norm_counts_nan_entries_as_nonzero() {
+    // #2359: ord = 0 counts x != 0. abs(NaN) > 0 is false in IEEE 754, so the
+    // former greater-than mask dropped NaN entries from the count.
+    let vector = eager(vec![f64::NAN, 0.0, 2.0], vec![3]);
+    let matrix = eager(vec![f64::NAN, 0.0, 3.0, 0.0], vec![2, 2]);
+    let complex = eager_complex(
+        vec![
+            Complex64::new(f64::NAN, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 1.0),
+        ],
+        vec![3],
+    );
+
+    for value in [
+        eager_norm(&vector, Some(0.0), Some(&[0]), false).unwrap(),
+        eager_norm(&matrix, Some(0.0), Some(&[0, 1]), false).unwrap(),
+        eager_norm(&complex, Some(0.0), Some(&[0]), false).unwrap(),
+    ] {
+        assert!((f64_values(&value)[0] - 2.0).abs() < 1.0e-12);
+    }
+}
