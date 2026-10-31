@@ -8,7 +8,7 @@ pub use workspaces::ContractionWorkspaces;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use cpueinsum::tcontract::{
     api::{DotGeneral, LayoutSpec, OperandSpec, Problem},
-    PlanConfig,
+    FaerLimit, PlanConfig,
 };
 use cpueinsum::{ArenaProvider, Exec, SliceAccumulationSource};
 use std::any::Any;
@@ -51,9 +51,26 @@ pub(crate) fn take_last_contraction_route() -> Option<ContractionRoute> {
     LAST_CONTRACTION_ROUTE.with(|last| last.replace(None))
 }
 
+#[cfg(test)]
+thread_local! {
+    static LAST_FAER: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether the last recorded contraction ran tcontract's faer route.
+#[cfg(test)]
+pub(crate) fn take_last_route_was_faer() -> Option<bool> {
+    LAST_FAER.with(|last| last.replace(None))
+}
+
 #[cfg(all(test, feature = "blas"))]
 fn record_contraction_route(route: cpueinsum_blas::ExecutionRoute) {
     use cpueinsum_blas::ExecutionRoute;
+    LAST_FAER.with(|last| {
+        last.set(Some(matches!(
+            route,
+            ExecutionRoute::Native(cpueinsum::ExecutionRoute::Faer)
+        )))
+    });
     let route = match route {
         ExecutionRoute::Vendor => ContractionRoute::Vendor,
         ExecutionRoute::Native(_) => ContractionRoute::Native,
@@ -62,7 +79,8 @@ fn record_contraction_route(route: cpueinsum_blas::ExecutionRoute) {
 }
 
 #[cfg(all(test, not(feature = "blas")))]
-fn record_contraction_route(_route: cpueinsum::ExecutionRoute) {
+fn record_contraction_route(route: cpueinsum::ExecutionRoute) {
+    LAST_FAER.with(|last| last.set(Some(matches!(route, cpueinsum::ExecutionRoute::Faer))));
     LAST_CONTRACTION_ROUTE.with(|last| last.set(Some(ContractionRoute::Native)));
 }
 
@@ -411,6 +429,32 @@ struct Key {
     out: Layout,
     lhs_conj: bool,
     rhs_conj: bool,
+    /// The execution token's thread budget was one when the plan was prepared.
+    ///
+    /// Plans are not re-selected per call, and one `CpuPlanCache` may be shared
+    /// by engines of different widths, so the budget class is part of the key.
+    serial: bool,
+}
+
+/// The plan configuration for a budget class.
+///
+/// tcontract's default `FaerLimit` sends c64 to its packed driver above
+/// `m*n*k = 1 << 17`. At a thread budget of one that driver is about 2x slower
+/// than faer (8x141 * 141x282 c64: 170 us against 82 us, tensor4all-rs#1040),
+/// so a serial budget lifts the bound. Wider budgets keep the default: the
+/// packed driver wins some shapes once threads are available. The bound is set
+/// only for c64 by default; f32, f64 and c32 already have none, so they are
+/// unchanged. Results above the old bound therefore come from faer's
+/// accumulation order: last bits differ from the packed driver's.
+fn plan_config(serial: bool) -> PlanConfig {
+    if serial && cfg!(feature = "native") {
+        PlanConfig {
+            faer_limit: FaerLimit::NONE,
+            ..PlanConfig::default()
+        }
+    } else {
+        PlanConfig::default()
+    }
 }
 #[cfg(any(feature = "native", feature = "blas"))]
 struct CachedBinary {
@@ -538,7 +582,7 @@ impl BinaryCache {
             );
             let problem = Problem::from_dot_general(key.dtype, lhs, rhs, key.out.spec()?, &dot)
                 .map_err(|error| error.into_crate_error("dot_general"))?;
-            BinaryPlan::<T>::new(&problem, &PlanConfig::default())
+            BinaryPlan::<T>::new(&problem, &plan_config(key.serial))
                 .map_err(|error| error.into_crate_error("dot_general"))
         };
         let Some(slot) = slot.filter(|&slot| slot < capacity) else {
@@ -606,6 +650,7 @@ fn key<T: Scalar>(
     rhs: &TypedTensorView<'_, T>,
     out: Layout,
     accumulation: DotGeneralAccumulation,
+    serial: bool,
 ) -> Key {
     Key {
         dtype: <T as cpueinsum::tcontract::api::Scalar>::STORAGE,
@@ -614,6 +659,7 @@ fn key<T: Scalar>(
         out,
         lhs_conj: accumulation.lhs_conj,
         rhs_conj: accumulation.rhs_conj,
+        serial,
     }
 }
 
@@ -637,6 +683,7 @@ fn initialized<T: Scalar>(
         &rhs,
         Layout::new(out.shape(), out.strides(), out.offset()),
         accumulation,
+        exec.budget() == 1,
     );
     let output_offset = out.offset();
     let a = lhs.host_storage()?;
@@ -690,7 +737,13 @@ fn fresh<T: Scalar>(
     beta: T,
 ) -> crate::Result<Tensor> {
     let strides = tenferro_tensor::col_major_strides(&shape)?;
-    let key = key(&lhs, &rhs, Layout::new(&shape, &strides, 0), accumulation);
+    let key = key(
+        &lhs,
+        &rhs,
+        Layout::new(&shape, &strides, 0),
+        accumulation,
+        exec.budget() == 1,
+    );
     let a = lhs.host_storage()?;
     let b = rhs.host_storage()?;
     let plan = plans.binary_plan::<T>(slot, key, config)?;
