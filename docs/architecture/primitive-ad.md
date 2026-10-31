@@ -13,10 +13,10 @@ This page explains how tenferro represents primitive-local automatic
 differentiation rules after U8. The canonical signatures and normative rules
 live in [`../spec/ad-contract.md`](../spec/ad-contract.md).
 
-Core primitive AD rules are tenferro-owned. They live under
-`tenferro-internal-ops/src/ad/` and are registered by
-`PrimitiveOpKind`. The user-facing AD surfaces and semantic extension rule set
-live in `tenferro-ad`.
+Core primitive AD rules and user-facing transforms live in `tenferro-ad`.
+`tenferro-internal-ops/src/ad/` preserves the shared vocabulary, metadata and
+support contracts used by semantic family-rule adapters; its core graph
+emitter and registry are retired.
 
 ## Rule Kinds
 
@@ -32,22 +32,17 @@ primal op. Many primitives become reverse-differentiable by first applying
 rules are reserved for cases where that generic route is incomplete or too
 expensive.
 
-## Core Rule Registry
+## Core Rules And Shared Vocabulary
 
-The core registry maps each `PrimitiveOpKind` to a `PrimitiveAdRule`:
+Core derivatives are implemented in `tenferro-ad/src/semantic_transform.rs`
+and its helper modules. There is no `PrimitiveAdRule` graph registry.
 
-```rust
-pub(crate) trait PrimitiveAdRule: Send + Sync {
-    fn kind(&self) -> PrimitiveOpKind;
-    fn linearize(...) -> ADRuleResult<Vec<Option<LocalValueId>>>;
-    fn transpose_rule(...) -> ADRuleResult<Vec<Option<LocalValueId>>>;
-}
-```
-
-Rules emit graph operations through `PrimitiveRuleBuilder`. They may reference
-primal values, metadata values, and symbolic shape sources supplied by
-`ShapeGuardContext`, but they must not execute tensors or inspect backend
-runtime state.
+`PrimitiveRuleBuilder`, `PrimitiveTransposeInput`, rule errors and
+`ResidualSpec` retain their `tenferro_ops::ad::` paths. Their private definition
+owner is `tenferro-internal-ops/src/primitive_rules/`; core residual declarations
+are metadata, not derivative emitters. Family-rule adapters may still record
+primitive operations through the builder and use `ShapeGuardContext` metadata.
+They must not execute tensors or inspect backend runtime state.
 
 `None` in a tangent or cotangent slot means symbolic zero flow. Rules should
 keep zero flow symbolic until they must pass an actual value to another
@@ -71,9 +66,9 @@ forward tangent sweep alive in the transposed graph.
 
 Extension operation families register semantic rules through
 `SemanticExtensionRuleSet` in `tenferro-ad`. Family crates own their formulas
-and oracle coverage. The private bridge from core graph-rule dispatch to
-semantic extension rules is implemented by `tenferro-ad` only; extension
-families should not depend on it.
+and oracle coverage. Dispatch belongs to semantic transforms in `tenferro-ad`,
+not the retired core graph dispatcher. The shared extension callback type is
+retained as vocabulary, not a second active dispatch path.
 
 ## Closure Responsibility
 

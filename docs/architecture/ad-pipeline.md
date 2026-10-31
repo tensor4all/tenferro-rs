@@ -11,9 +11,9 @@
 ## Purpose
 
 This document describes the current end-to-end AD pipeline after U8. The active
-implementation is tenferro-owned: `tenferro-ad` transforms semantic programs,
-`tenferro-internal-ops` owns core primitive rules, and operation-family crates
-register semantic extension rules.
+implementation is tenferro-owned: `tenferro-ad` owns core semantic AD transforms,
+`tenferro-internal-ops` keeps shared primitive-rule vocabulary and metadata,
+and operation-family crates register semantic extension rules.
 
 The design model remains linearize-then-transpose:
 
@@ -74,13 +74,13 @@ accumulates gradients into tracked leaf slots. Functional eager transforms
 
 ## Rule Dispatch
 
-Core primitive rules are registered by `PrimitiveOpKind` in
-`tenferro-internal-ops/src/ad/registry.rs`. The core rule entry points are:
-
-```text
-PrimitiveAdRule::linearize
-PrimitiveAdRule::transpose_rule
-```
+Core primitive derivatives are implemented by
+`tenferro-ad/src/semantic_transform.rs` and its helper modules. The old
+`tenferro-internal-ops` graph emitter and function-pointer registry are retired.
+Its `ad` facade retains the builder/error/transpose-input vocabulary, shape
+contexts and support helpers used by semantic rules. Core residual declarations
+are a metadata-only lookup under `src/primitive_rules/residual_spec.rs`, still
+exported through `tenferro_ops::ad::primitive_residual_spec`.
 
 Extension rules are registered by operation-family crates in a
 `SemanticExtensionRuleSet`. `tenferro-ad` owns lookup and dispatch for semantic

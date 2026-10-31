@@ -117,13 +117,15 @@ CubeCL. ROCm is only a feature stub.
 
 ## `tenferro-internal-ops`
 
-`tenferro-internal-ops` owns the graph operation vocabulary and graph-level AD rules.
+`tenferro-internal-ops` owns graph operations and shared primitive-rule vocabulary.
 
 - `StdTensorOp` is the mainline operation vocabulary.
-- `PrimitiveOp::linearize` and `PrimitiveOp::transpose_rule` are the semantic
-  source of truth for AD rules.
+- `tenferro_ops::ad` retains builder/error/transpose-input contracts, context
+  metadata, support helpers and residual declarations, not a core AD emitter.
+- Core semantic AD transforms are owned by `tenferro-ad`.
 - The `ExtensionOp` boundary exists for registered extension operations.
-- With `default-features = false`, AD-specific rule code is not compiled.
+- With `default-features = false`, feature-gated builder/support APIs are not
+  compiled; context metadata and `ResidualSpec` remain available.
 - Non-mainline semiring/algebra graph surfaces remain transitional and should
   not be extended by new work.
 
@@ -198,10 +200,11 @@ errors rather than silently falling back to CPU.
 ## AD Support Notes
 
 Current mainline AD coverage is intentionally narrower than primal execution.
-Core primitive rules live in `crates/tenferro-internal-ops/src/ad/`; extension-specific rules
-live in the owning extension crate. Rules must have corresponding
+Core primitive derivatives live in `crates/tenferro-ad/src/semantic_transform.rs`
+and its helper modules; extension-specific rules live in the owning extension crate. Rules must have corresponding
 oracle/finite-difference coverage before being treated as supported mainline AD.
 
-The default feature set enables AD. Builds without AD use
-`default-features = false` plus the `blas` backend feature;
-AD/eager-AD tests and AD rule modules are excluded in that configuration.
+AD feature selection is crate-specific. `tenferro-internal-ops` enables its
+shared `autodiff` vocabulary/support APIs by default; operation-family crates
+control their AD separately (for example, `tenferro-linalg/autodiff` is opt-in).
+Backend selection is independent of retaining shared metadata contracts.

@@ -14,17 +14,6 @@ use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::{SymDim, TensorMeta};
 
-#[cfg(feature = "autodiff")]
-mod contraction_tests;
-#[cfg(feature = "autodiff")]
-mod elementwise_tests;
-#[cfg(feature = "autodiff")]
-mod indexing_tests;
-#[cfg(feature = "autodiff")]
-mod registry_tests;
-#[cfg(feature = "autodiff")]
-mod structural_tests;
-
 fn tensor_input(id: u64) -> TensorInputKey {
     TensorInputKey::User { id }
 }

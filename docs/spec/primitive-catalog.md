@@ -78,8 +78,8 @@ Important distinctions:
 
 Responsibility boundary:
 
-- `tenferro-internal-ops` owns the core `StdTensorOp` primitive AD rule
-  vocabulary and registry.
+- `tenferro-internal-ops` owns the `StdTensorOp` primitive-rule vocabulary
+  and residual metadata, not a core graph AD emitter or rule registry.
 - `tenferro-ad` owns semantic AD transforms and extension-rule dispatch.
 - operation-family crates own their **concrete per-op derivative rules** and
   oracle coverage.
@@ -205,9 +205,10 @@ These are the tensor primitives needed to express:
 - general contractions (including repeated-index patterns like trace/diagonal)
 - reverse-mode accumulation without hidden fan-out
 
-Every op in this table is expected to implement `Primitive` directly
-(for `StdTensorOp`). The set is **AD-closed**: `linearize` and
-`transpose_rule` of any op in this table add only ops from this table.
+Every op in this table is expected to have core semantic AD support in
+`tenferro-ad`. The set is **AD-closed**: linearization and transposition
+of any op in this table add only ops from this table. This is a semantic
+closure requirement, not an implementation of the retired graph rule trait.
 
 **Implementation note:** the boundary between this core set and the
 "Additional dense numeric primitives" (Section V) is primarily an

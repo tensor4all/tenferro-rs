@@ -79,9 +79,9 @@ The release API should make crate ownership obvious.
 | `tenferro-cpu-fused` | Runtime-DAG fused elementwise adapter using the enclosing CPU context and pool; not a user-facing API surface. |
 | `tenferro-gpu` | GPU backend implementations, device buffers, explicit upload/download helpers, CubeCL/CUDA integration, GPU launch metadata, and GPU resource ownership. |
 | `tenferro-core-ops` | Internal primitive operation catalog metadata shared by lower layers. |
-| `tenferro-internal-ops` | Internal graph operation vocabulary and graph-level AD rule implementations. |
+| `tenferro-internal-ops` | Internal graph operation and primitive-rule vocabulary, shared shape metadata, support helpers and residual declarations. |
 | `tenferro-runtime` | Backend-agnostic runtime helpers, traced tensor construction, graph compilation and execution, extension registration, and extension cache storage. |
-| `tenferro-ad` | Eager AD surfaces, eager tensors, AD contexts, traced AD helper traits, and user-facing differentiation APIs. |
+| `tenferro-ad` | Core semantic AD transforms, eager AD surfaces, eager tensors, AD contexts, traced AD helper traits, and user-facing differentiation APIs. |
 | `tenferro-einsum` | Einsum public API, subscript parsing, contraction planning, concrete/traced/autodiff-eager wrappers, extension runtime, extension-owned caches, and optional AD rule ownership. |
 | `tenferro-linalg` | Linalg public API, extension payloads, linalg backend hooks, CPU linalg kernels, optional CUDA linalg bridge code, eager/traced wrappers, and optional AD rule ownership. |
 | `tenferro-fft` | FFT public API, extension runtime registration, concrete/traced wrappers, optional AD rule ownership, and FFT-specific execution behavior. |
@@ -220,8 +220,8 @@ Internal cleanup should follow the same ownership rules as the public API.
   stats, and documented ownership.
 - Keep CPU provider selection inside `tenferro-cpu` and GPU transfer/device
   behavior inside `tenferro-gpu`.
-- Keep AD rule semantics in graph-level `linearize` and `transpose_rule`
-  surfaces unless a separate accepted design changes that model.
+- Keep AD semantics in semantic linearize-then-transpose transforms. Shared
+  graph-builder vocabulary supports family-rule adapters, not a second core AD engine.
 - Keep tests with the crate that owns the behavior. Do not widen public API
   only so another crate can test a private helper.
 

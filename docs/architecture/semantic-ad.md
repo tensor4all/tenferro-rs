@@ -13,10 +13,11 @@ This page records the post-U8 automatic differentiation boundary. The external
 AD-engine dependency used before U8 is retired; the generic AD concepts that
 used to be imported from it now live at tenferro-owned boundaries:
 
-- `computegraph-rs` remains the generic graph substrate used by the core sweep.
-- `tenferro-internal-ops` owns the `StdTensorOp` primitive AD vocabulary:
-  `PrimitiveRuleBuilder`, `PrimitiveAdRule`, `PrimitiveTransposeInput`,
-  `ADRuleError`, and the core op `linearize` / `transpose_rule` registry.
+- `computegraph-rs` remains the generic graph substrate for tracing and local
+  rule recording.
+- `tenferro-internal-ops` owns the `StdTensorOp` primitive-rule vocabulary,
+  shared shape metadata, support helpers, and residual-retention declarations.
+  Its old core graph AD emitter and rule registry are retired.
 - `tenferro-ad` owns user-facing eager/traced AD APIs, `AdContext`,
   `SemanticExtensionRuleSet`, semantic `Program -> Program` transforms, and
   the AD transform cache.
@@ -55,41 +56,25 @@ an `AdContext`.
 
 ## Primitive Rule Boundary
 
-Core primitive rules are implemented for `StdTensorOp` under
-`tenferro-internal-ops/src/ad/`.
+Core primitive AD is implemented by `tenferro-ad/src/semantic_transform.rs`
+and its helper modules as semantic `Program -> Program` transforms.
 
-The current rule vocabulary is:
+`tenferro-internal-ops/src/ad/` remains a compatibility facade and the home of
+live context/support helpers, not a second core AD engine. Its existing public
+paths retain `PrimitiveRuleBuilder`, `PrimitiveTransposeInput`, `ADRuleKind`,
+`ADRuleError`, `ADRuleResult`, `ResidualSpec`, and `ExtensionAdDispatcher`.
+The vocabulary definitions and core residual declarations have a private owner
+under `tenferro-internal-ops/src/primitive_rules/`.
 
-```rust
-pub trait PrimitiveAdRule: Send + Sync {
-    fn kind(&self) -> PrimitiveOpKind;
+`primitive_residual_spec` remains retention metadata: all 52 core declarations
+are preserved without the old function-pointer registry. It does not emit
+or dispatch derivatives. Semantic consumers keep their existing imports.
 
-    fn linearize(
-        &self,
-        op: &StdTensorOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        primal_in: &[ValueKey<StdTensorOp>],
-        primal_out: &[ValueKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValueId>],
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
-
-    fn transpose_rule(
-        &self,
-        op: &StdTensorOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        cotangent_out: &[Option<LocalValueId>],
-        inputs: &[TransposeInputRef<'_>],
-        mode: &OperationRole,
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
-}
-```
-
-Rules emit graph operations through `PrimitiveRuleBuilder`; they do not execute
-tensors and must not read backend state. `ShapeGuardContext` carries shape
-sources, active-output information, extension-rule dispatch, and the metadata
-needed to emit validation-preserving derivative graphs.
+Linalg semantic rules still use `PrimitiveRuleBuilder` to record primitive
+operations without executing tensors or reading backend state.
+`ShapeGuardContext` retains shape sources, active-output information, global
+metadata scopes, and validation metadata. Its public context contract is not
+obsolete merely because the old core graph emitter is gone.
 
 ## Extension Rule Boundary
 
@@ -98,10 +83,10 @@ Extension AD is semantic. An operation-family crate registers rules in a
 extension rules must surface typed unsupported-AD errors rather than silently
 dropping tangent or cotangent flow.
 
-During the transition after U8, a small context-owned bridge still lets the
-core graph sweep call semantic extension rules. That bridge is internal to
-`tenferro-internal-ops` and implemented only by `tenferro-ad`; family crates
-must not implement it directly.
+The old core graph dispatcher no longer calls extension rules.
+`ExtensionAdDispatcher` remains part of the shared context vocabulary for path
+compatibility; current extension AD dispatch belongs to the semantic rule set
+in `tenferro-ad`, not to that retired graph path.
 
 The linalg semantic `linearize` rule emits directly into
 `SemanticProgramBuilder`. Reverse-mode linalg paths that are defined by
@@ -130,11 +115,11 @@ computegraph-rs
   GraphOperation, GraphBuilder, graph values, operation roles
 
 tenferro-internal-ops
-  StdTensorOp, PrimitiveAdRule registry, core linearize/transpose rules,
-  PrimitiveRuleBuilder, PrimitiveTransposeInput, ShapeGuardContext
+  StdTensorOp, primitive-rule vocabulary, residual declarations,
+  PrimitiveRuleBuilder, PrimitiveTransposeInput, ShapeGuardContext/support
 
 tenferro-ad
-  AdContext, SemanticExtensionRuleSet, semantic JVP/VJP transforms,
+  AdContext, SemanticExtensionRuleSet, core semantic JVP/VJP transforms,
   eager/traced AD user APIs, AD transform cache
 
 operation-family crates
