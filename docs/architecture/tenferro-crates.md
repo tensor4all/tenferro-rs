@@ -58,13 +58,7 @@ The public user-facing crates are `tenferro-tensor-core`, `tenferro-tensor`,
 `internal` in their name are
 implementation crates and should not be presented as user-facing API surfaces.
 
-### Non-workspace source-provider packages
-
-`third_party/t4a-tblis-src` is stored in this repository but is not a tenferro
-workspace crate. It is a self-contained, independently versioned source-build
-and native-link provider prepared for a future, separate crates.io release.
-Until that package is released, the root workspace excludes it and does not
-publish any crate that depends on it.
+### External CPU numeric dependencies
 
 `tenferro-cpu` does not depend on `tblis-ffi` or `t4a-tblis-src`, and it has no
 tcontract or linalg dependency of its own. CPU `dot_general`, grouped GEMM, and
@@ -75,7 +69,10 @@ The former external-provider example crates (`ext/tenferro-cpu-tblis`,
 #2004 with the runtime provider machinery.
 `tenferro-linalg` takes its built-in CPU kernels from the extracted
 `tlinalg` (faer) and `tlinalg-blas` (LAPACK/BLAS) crates of the tlinalg-rs
-workspace, pinned by git revision.
+workspace. The CPU numeric dependencies (`cpueinsum`, `cpueinsum-blas`,
+`tcontract-exec`, `tlinalg`, and `tlinalg-blas`) use registry version
+requirements in the root `Cargo.toml`; the committed `Cargo.lock` records the
+resolved versions, not git revision pins.
 
 ## III. Layering
 

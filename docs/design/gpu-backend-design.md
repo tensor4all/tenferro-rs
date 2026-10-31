@@ -1,699 +1,195 @@
 # GPU Backend Design
 
-This document is developer-facing. Public user docs describe GPU providers as
-explicit backend choices. CUDA is exposed as `tenferro_gpu::cuda::CudaBackend`.
-WebGPU is exposed as `tenferro_gpu::webgpu::WebGpuBackend`. Backend
-features are additive provider choices: `cuda` and `webgpu` are both explicit,
-neither is enabled by default as a GPU provider, and downstream crates may
-enable either or both. Eager and operation crates should propagate the same
-concrete feature names instead of introducing default GPU providers or a vague
-public `gpu` feature.
+This document describes the current developer-facing CUDA contract. Execution
+uses a caller-held `tenferro_gpu::cuda::CudaEngine`, opened with
+`CudaEngine::open(device_id)` and borrowed mutably for operations. The `cuda`
+feature is opt-in. WebGPU, Metal execution, and the Apple shared CPU/Metal path
+are not provided today; there is no `webgpu` feature or provider module.
+`rocm` is an empty reserved feature, not an execution backend.
 
-The active CUDA implementation lives in `crates/tenferro-gpu/src/cubecl/`,
-gated by the `cuda` feature. It targets NVIDIA CUDA devices through CubeCL and
-CubeCL-CUDA, with CUDA library support for cuTENSOR, cuSOLVER, and cuBLAS.
-cuFFT is deliberately owned and loaded by the `tenferro-fft` operation crate,
-not by `tenferro-gpu`; the provider supplies only the scoped CUDA interop that
-FFT execution needs. The WebGPU implementation lives in a separate provider
-module, gated by the
-`webgpu` feature, and targets CubeCL-WGPU without depending on CUDA runtime or
-CUDA library bindings.
+The implementation is in `crates/tenferro-gpu/src/cuda/`. It builds on
+`t4a-cuda-runtime` and the `t4a-cuda-kernels` catalogue, not CubeCL or CubeK.
+`CudaBackend` is the CUDA storage-seam marker, not the operation entry point.
+There is no `CudaExecSession`, `with_backend_session`, or `with_cubecl` entry.
+The raw vendor-call boundary is `CudaEngine::with_raw`.
 
-CUDA GPU support is implemented through the feature-gated CubeCL backend across
-the concrete tensor, eager, and traced execution surfaces. Coverage includes
-allocation, explicit CPU/GPU transfer, broad structural/elementwise/reduction
-kernels, cuTENSOR contractions, and cuSOLVER/cuBLAS linear algebra paths.
-Performance optimization is still active work. The remaining unsupported CUDA
-cases are operation-specific: `eig`, `full_piv_lu`, `full_piv_lu_solve`,
-integer numeric/linalg gaps outside the currently
-supported add/sub/mul/div/rem, neg/abs/sign/pow,
-comparison/selection/minimum/maximum, and sum/product/minimum/maximum
-reductions, `Bool` arithmetic/reduction/linalg and additive-scatter gaps, and
-selected complex analytic or ordering operations.
-WebGPU is being introduced incrementally. The implemented path covers explicit
-transfer plus `F32` `dot_general` through a CubeK BGEMM planner. `C32` GEMM is
-implemented through a CubeK-owned complex GEMM launch API that lowers to real
-`F32` matmuls and handles conjugation flags. On Apple, `AppleContext` adds a
-host-visible shared-allocation domain for explicitly selected CPU RustFFT,
-CubeK Metal FFT, and CPU Cholesky. WebGPU matmul and CubeK Metal FFT remain
-`F32`/`C32` paths; `F64`, `C64`, zero-contracting-size matmul, and non-matmul
-tensor ops are not silently redirected to CPU. The explicitly selected mapped
-CPU RustFFT and Cholesky paths do support `F64`/`C64`. HIP/ROCm is still a
-reserved feature stub rather than a supported execution path.
+Historical CubeCL/CubeK fork evaluations and earlier design records do not
+specify the current dependency or execution contract.
 
 See also:
 
-- `crates/tenferro-gpu/src/cubecl/` for the implementation,
-- `crates/tenferro-gpu/src/kernels/` for static CubeCL kernel definitions and kernel-level
-  validation,
-- `AGENTS.md` for the current GPU status and local test command,
-- [backend-contract.md](../spec/backend-contract.md) for placement rules,
-- [tensor-prims.md](./tensor-prims.md) for tensor operation families.
-
----
+- [backend-contract.md](../spec/backend-contract.md) for engine and placement rules,
+- [Devices and GPU](../guides/devices-and-gpu.md) for current operation/dtype
+  coverage and CUDA library compatibility,
+- [CUDA engines and pinned transfers](../guides/engines-and-transfers.md) for
+  caller-held engines and explicit transfer completion,
+- `crates/tenferro-gpu/Cargo.toml` and the root `Cargo.toml` for features and
+  dependency pins.
 
 ## Current Module Structure
 
 ```text
-crates/tenferro-gpu/src/kernels/
-    elementwise.rs         static elementwise CubeCL kernels
-    structural.rs          static structural and conversion CubeCL kernels
-    indexing.rs            static slice/gather/scatter/pad CubeCL kernels
-    diagonal.rs            static diagonal and triangular-mask CubeCL kernels
-    reduce/                reduction validation, launch helpers, and kernels
+crates/tenferro-gpu/src/gpu/
+    mod.rs                 backend-neutral storage identity, allocations and errors
 
-crates/tenferro-gpu/src/cubecl/
-    mod.rs                 CUDA backend and TensorBackend implementation
-    runtime.rs             CubeCL/CUDA runtime initialization and synchronization
-    memory.rs              upload_tensor, download_tensor, device pointer bridge
-    dispatch.rs            private shared launch helpers and dtype dispatch
-    interop.rs             internal (pub(crate)) raw-session helpers: typed upload/download,
-                           allocation, retention guards, and on-device scale
-    fusion/                fused elementwise classification and code generation
-    gemm.rs                cuTENSOR/cuBLAS-backed contraction support
-    permutation.rs         cuTENSOR-backed structural permutation support
-    linalg.rs              cuSOLVER/cuBLAS-backed linalg support
-    ffi/                   runtime-loaded CUDA library bindings
-    tests/                 ignored GPU tests
-
-crates/tenferro-gpu/src/webgpu/
-    mod.rs                 WebGpuBackend provider facade and shared buffer helpers
-    apple.rs               Apple shared domain, paired backends, transfer counters
-    runtime.rs             CubeCL-WGPU runtime initialization and synchronization
-    memory.rs              upload_webgpu_tensor and download_webgpu_tensor
-    gemm.rs                CubeK-backed F32/C32 dot_general planner and launch support
-    interop.rs             owner-scoped bridge for CubeK FFT launches
-    kernels.rs             WebGPU-private dot_general pack kernels
+crates/tenferro-gpu/src/cuda/
+    mod.rs                 CUDA seam marker and exports
+    engine.rs              caller-held CudaEngine and engine-owned state
+    runtime.rs             t4a-cuda-runtime adapter and submission locking
+    storage.rs             CUDA allocations wrapped as tensor storage
+    transfer.rs            explicit upload/download and pending transfers
+    pinned.rs              reusable pinned host buffers
+    pending.rs             pending transfer handles
+    publication.rs         published values and completion frontiers
+    dispatch.rs            typed catalogue planning and argument marshalling
+    launch.rs              NVRTC artifacts, bound functions and launches
+    structural.rs          engine structural/read/write operations
+    fusion.rs              fused elementwise catalogue integration
+    cutensor.rs            cuTENSOR contraction integration
+    vendor.rs              cuBLAS integration
+    raw.rs                 engine-scoped vendor stream, spans and scratch
+    runtime_adapter.rs     prepared-runtime engine registration
+    event_domain.rs        prepared-runtime event integration
 ```
 
-The provider-specific public backend types are `tenferro_gpu::cuda::CudaBackend` and
-`tenferro_gpu::webgpu::WebGpuBackend`; CubeCL naming is an implementation detail. CUDA is selected by
-enabling the `cuda` feature, which depends on the workspace-pinned CubeCL fork
-and the CubeCL CUDA runtime. WebGPU is selected by enabling the `webgpu`
-feature, which depends on CubeCL-WGPU and the CubeK matmul provider. Enabling
-both features must compile and must not merge the two runtime types.
+`crates/tenferro-linalg/src/gpu/` owns cuSOLVER/cuBLAS linalg integration.
+`crates/tenferro-fft/src/cuda/` owns cuFFT loading, plans and execution. These
+operation crates use the CUDA engine rather than owning another execution
+session or runtime.
 
 ## Kernel Ownership
 
-Static CubeCL kernel definitions live under `crates/tenferro-gpu/src/kernels`. The
-tensor backend crate must not keep duplicate static kernels once they have been
-moved. This keeps copied/adapted CubeK-derived code, tenferro-specific kernel
-definitions, and third-party notices in one crate.
+Reusable static CUDA kernel sources, entry ABIs and `plan_*` validation belong
+to the external `t4a-cuda-kernels` catalogue. They do not live under
+`tenferro-gpu/src/kernels/` or `src/cubecl/`; those directories are absent.
 
-`crates/tenferro-gpu/src/cubecl/` still owns tensor values, device placement,
-allocation, upload/download, CUDA library FFI, TensorBackend dispatch, and
-runtime-generated fused elementwise code. Those are backend integration
-concerns rather than reusable static kernels.
+Tenferro owns tensor semantics, placement and allocation-domain checks,
+conversion of tensor layouts to catalogue operands, argument marshalling,
+engine dispatch and vendor-library integration. `cuda/launch.rs` composes the
+catalogue's source modules, prepares NVRTC artifacts through the runtime,
+binds functions and launches them. `cuda/fusion.rs` integrates the catalogue's
+fusion support. Do not restore a parallel CubeCL kernel path.
 
 ## Dependency Source
 
-The workspace intentionally depends on temporary `tensor4all` fork packages for
-CubeCL and CubeK while the required patches are pending upstream. CUDA and
-WebGPU runtime dependencies are feature-owned by `tenferro-gpu`; the workspace
-dependency declaration must not force CUDA for WebGPU-only builds:
+The root workspace declares the `t4a-cuda-runtime` and `t4a-cuda-kernels` pins
+with `git`, `rev` and `version`. `crates/tenferro-gpu/Cargo.toml` makes them
+optional workspace dependencies, enabled together with `cudarc` by `cuda`.
+The runtime comes from `tensor4all/t4a-gpu-backend`; the kernel catalogue comes
+from `tensor4all/t4a-cuda-kernels`. The manifests, not a copied dependency
+stanza here, are the source of truth for their revisions.
 
-```toml
-cubecl = { package = "t4a-cubecl", git = "https://github.com/tensor4all/cubecl.git", rev = "11b52669f13e27bbe188f988fd696df6d989a562", version = "=0.10.0", default-features = false }
-cubecl-cuda = { package = "t4a-cubecl-cuda", git = "https://github.com/tensor4all/cubecl.git", rev = "11b52669f13e27bbe188f988fd696df6d989a562", version = "=0.10.0" }
-cubecl-common = { package = "t4a-cubecl-common", git = "https://github.com/tensor4all/cubecl.git", rev = "11b52669f13e27bbe188f988fd696df6d989a562", version = "=0.10.0" }
-cubecl-wgpu = { package = "t4a-cubecl-wgpu", git = "https://github.com/tensor4all/cubecl.git", rev = "11b52669f13e27bbe188f988fd696df6d989a562", version = "=0.10.0" }
-cubecl-runtime = { package = "t4a-cubecl-runtime", git = "https://github.com/tensor4all/cubecl.git", rev = "11b52669f13e27bbe188f988fd696df6d989a562", version = "=0.10.0" }
-cubek-matmul = { package = "t4a-cubek-matmul", git = "https://github.com/tensor4all/cubek.git", rev = "43e8521885f141cb8ccdf99a766bfde118412010", version = "=0.2.0", default-features = false }
-cubek-std = { package = "t4a-cubek-std", git = "https://github.com/tensor4all/cubek.git", rev = "43e8521885f141cb8ccdf99a766bfde118412010", version = "=0.2.0", default-features = false }
-cubek-fft = { package = "cubek-fft", git = "https://github.com/tensor4all/cubek.git", rev = "43e8521885f141cb8ccdf99a766bfde118412010", version = "=0.2.0", default-features = false }
-```
+There are no current CubeCL/CubeK dependencies to update or restore. Historical
+fork-version evaluations remain historical, not setup instructions.
 
-Keep these fork package dependencies until upstream CubeCL/CubeK have the
-required support and the workspace is deliberately migrated. Do not replace them
-with upstream crates.io CubeCL/CubeK as part of unrelated GPU or documentation
-work.
+## Runtime And Cache Ownership
 
-CubeK matmul integration should branch from the CubeK release paired to CubeCL
-0.10.0: start from CubeK `v0.2.0` / `cubek-matmul 0.2.0`. If complex GEMM or
-WebGPU fixes require a tensor4all fork, publish tensor4all-owned CubeK crates
-from that branch rather than vendoring CubeK into this repository. Local
-development may use sibling checkouts with Cargo `path` dependencies, but
-committed tenferro manifests should use the published `t4a-*` package aliases
-unless the PR deliberately targets a pre-publish staging branch. In that staging
-case, use Cargo's multiple-location form with `git`, `rev`, and `version` so CI
-uses the fork commit while the packaged manifest retains the registry version.
-Publishing is intentionally deferred. Keep the reviewed `git` and `rev` keys
-until a later release task deliberately migrates the workspace.
+A `CudaEngine` owns a `CudaRuntime`, prepared catalogue dispatchers, cuTENSOR
+state, pending prepared runs and an extension-cache store. Its `&mut` borrow
+is the operation-exclusivity contract; the engine is `Send`, not `Sync`.
+`CudaRuntime` adapts `t4a_cuda_runtime::Runtime` and owns the stream,
+allocation domain and transfer state. Explicit transfers use that same
+runtime's submission lock and stream.
 
-## Apple Shared Allocation Domain
+`CudaRuntime::synchronize()` is the explicit CUDA host barrier. There is no
+CubeCL launch queue or physical-stream pool to flush or select. Vendor calls
+bind to the stream lent by the engine's raw scope.
 
-`AppleContext` creates a fresh host-visible Metal client and pairs it with a
-domain-bound `CpuBackend` and the matching `WebGpuBackend`. Tensors created by
-`AppleContext::upload_tensor` retain their managed resource lease, allocation
-domain ID, and physical allocation ID. Guarded CPU reads/writes and Metal
-launches operate on that allocation without an implicit upload or download.
+cuTENSOR and cuBLAS integration lives in `tenferro-gpu`; cuSOLVER integration
+lives in `tenferro-linalg`. cuFFT loading and opaque plan entries remain owned
+by `tenferro-fft`. Its `cufft-plans` entries live in the executing engine's
+extension-cache store, not a caller-owned `FftExecutionCache`. The plan entry
+retains the required work-area byte size, while execution obtains fresh scratch
+through the raw scope and synchronizes before returning. See
+`crates/tenferro-fft/src/cuda/plan.rs` for lifecycle and error handling.
 
-Backend choice is still explicit. The CPU backend currently maps managed
-tensors for RustFFT, rank-2 Cholesky, and explicit compact materialization used
-by eager semantic snapshots and result exports. Materialization allocates an
-independent tensor in the same domain and holds scoped read/write mappings; it
-never aliases a writable owner or copies through host placement. Borrowed
-Cholesky descriptors follow the same domain/layout checks as owned operands.
-Runtime ingress accepts managed records only when their allocation domain
-matches the registered CPU backend. Strided managed materialization remains
-unsupported. Other CPU tensor and linalg operations do not become general
-shared-memory fallbacks. The Metal FFT path is
-owned by `tenferro-fft`, uses CubeK's configured-client launch APIs, and supports
-only its documented F32/C32 power-of-two matrix. Foreign-domain and ordinary
-device-local WebGPU buffers are rejected at the boundary.
+The CUDA library path overrides are:
 
-The context's transfer counters record explicit creation uploads and explicit
-downloads. Mapping, CPU result writeback, synchronization, and Metal kernels do
-not count as transfers. Each independently created context has a distinct
-domain and rejects the other's tensors.
-
-## Runtime And Library Loading
-
-`CudaRuntime::new(device_id)` initializes CUDA and creates the CubeCL CUDA
-client for one device. GPU kernels are JIT-compiled by CubeCL, so local CUDA
-toolkit configuration matters.
-
-`WebGpuRuntime::new(device_ordinal)` creates a CubeCL-WGPU client for a WebGPU
-adapter. WebGPU runtime initialization must not call CUDA driver/runtime APIs,
-load CUDA libraries, or require CUDA environment variables.
-
-Future ROCm support should follow the same explicit-provider model, but it must
-not require ROCm libraries to be present for a binary that merely includes the
-reserved `rocm` feature. The intended substrate is a CubeCL HIP fork or patch
-that runtime-loads HIP libraries with the same discipline as the CUDA FFI layer.
-Until that loader-backed substrate is implemented and tested on ROCm hardware,
-tenferro must keep ROCm unavailable as an execution backend and must not publish
-a ROCm quickstart.
-
-`CudaRuntime::synchronize()` is the explicit host-side barrier for direct CUDA
-backend code. It first flushes CubeCL's host-side launch queue, then
-synchronizes the current CUDA stream and does not
-download tensor data. `WebGpuRuntime::synchronize()` is the corresponding
-WebGPU queue/device barrier. Higher-level eager GPU execution exposes the same
-barrier through `EagerRuntime::synchronize()`, with CPU eager runtimes treating
-the call as a no-op.
-
-CUDA vendor-library handles are indexed by CubeCL's bounded physical stream
-pool, not by process-global logical `StreamId` values. A cuBLAS handle is locked
-across pointer-mode selection and enqueue. A vendor call using an allocation
-owned by another physical stream synchronizes the enqueue stream before its
-retention guards are released; same-stream calls remain asynchronous. Runtime
-teardown retires every initialized physical stream before destroying library
-handles or releasing the retained primary context.
-The direct cuBLAS BLAS-1 hooks use the standard 32-bit interfaces for CUDA
-11/12 library compatibility and reject element counts above `i32::MAX` before
-enqueue.
-
-cuTENSOR, cuSOLVER, and cuBLAS are CUDA-only and are loaded lazily through the
-CUDA FFI layer. cuFFT follows a different ownership boundary: `tenferro-fft`
-loads it and owns its opaque plans and `cufft-plans` cache entries;
-`tenferro-gpu` must not load or cache cuFFT handles. Those entries live in the
-executing engine's own extension-cache store, because a cuFFT plan is
-device-bound; a caller-owned `FftExecutionCache` never receives one. The cuFFT work area is a
-session-scoped CubeCL allocation created fresh inside each raw execution
-session, so it is not owned by the cached plan entry. The CUDA provider first
-uses default soname/path candidates and allows explicit override with these
-variables:
-
-The cuTENSOR loader rejects version 2.2 and newer on SM 7.0 before creating a
-handle. PR #1733 reproduced silent wrong results for that combination, so
-cuTENSOR 2.1.x remains the supported Volta path.
-
-| Variable | Library |
+| Variable | Library owner |
 | --- | --- |
-| `TENFERRO_CUTENSOR_PATH` | cuTENSOR |
-| `TENFERRO_CUSOLVER_PATH` | cuSOLVER |
-| `TENFERRO_CUBLAS_PATH` | cuBLAS |
-| `TENFERRO_CUFFT_PATH` | cuFFT (loaded by `tenferro-fft`) |
+| `TENFERRO_CUTENSOR_PATH` | cuTENSOR in `tenferro-gpu` |
+| `TENFERRO_CUBLAS_PATH` | cuBLAS loader in `tenferro-linalg` |
+| `TENFERRO_CUSOLVER_PATH` | cuSOLVER in `tenferro-linalg` |
+| `TENFERRO_CUFFT_PATH` | cuFFT in `tenferro-fft` |
 
-The cuFFT loader tries non-empty override entries first, then
-`libcufft.so.11`, `libcufft.so.10`, and bare `libcufft.so`, covering CUDA
-12/cuFFT 11 and CUDA 11/cuFFT 10. The initially intended asynchronous
-between-eviction cuFFT execution is superseded for #967 by an independent
-scoped-pointer safety review: CubeCL raw pointers have no completion witness.
-Execution therefore enters the credentialed raw session (`with_raw`), binds the
-captured stream and a fresh work area, retains the input/output allocation
-handles, enqueues the vendor call, and synchronizes the bound stream before the
-session returns. A synchronization failure intentionally forgets the work area
-and the input/output retention guards so reclamation cannot race vendor writes
-(issue #967 invariant); later CubeCL postprocessing stays stream-managed and
-explicit download synchronizes the final output.
-
-Local GPU test runs should also set:
-
-| Variable | Purpose |
-| --- | --- |
-| `CUDA_PATH` | CUDA toolkit root used by NVRTC |
-| `LD_LIBRARY_PATH` | CUDA/cuFFT, cuTENSOR, cuSOLVER, and cuBLAS library lookup |
-
-CUDA paths whose accepted implementation is an NVIDIA vendor library report a
-typed load or provider error when that library is unavailable or lacks support;
-they do not silently fall back to native CubeCL kernels. Native CubeCL kernels
-remain provider implementations for WebGPU/Metal and for CUDA operations or
-dtypes outside a vendor library's supported set. For structural permutation,
-cuTENSOR covers `F32`, `F64`, `C32`, and `C64`; CUDA `I32`, `I64`, and `Bool`
-structural data movement stays on existing CubeCL kernels because cuTENSOR 2.x
-does not provide an integer or bool permutation compute descriptor.
-
-## Runtime Cache Ownership
-
-`CudaEngine` owns CUDA extension backend-state caches. Extension crates may
-store type-indexed CUDA handles or plans through
-`CudaEngine::cuda_extension_cache()`, but the engine remains the lifetime
-and resource owner. The `cufft-plans` cache is an intentional exception to
-that generic provider cache: `tenferro-fft` stores cuFFT plans in the engine's
-own extension-cache store (lent to a runtime run, taken for a direct call) and
-never in a caller-owned `FftExecutionCache` or a hidden `CudaEngine` cache.
-The cuFFT work area is **not** cached: it is a session-scoped CubeCL
-allocation created fresh inside each raw execution session, so the cached plan
-entry charges only its host-side metadata toward the cache byte limit.
-
-The CUDA extension cache has bounded defaults for type entries and logical
-retained bytes. Applications can configure it with
-`CudaEngine::set_cuda_extension_cache_max_entries` and
-`CudaEngine::set_cuda_extension_cache_max_retained_bytes`, clear it with
-`CudaEngine::clear_cuda_extension_cache`, and inspect retained entries,
-logical retained bytes, and event counters with
-`CudaEngine::cuda_extension_cache_stats`.
-Retained bytes are estimates of cache-owned payloads, not process RSS or
-allocator arena usage.
-
-The retained **device-output pool** (a size-keyed free list of CUDA output
-allocation handles that a dropped output returns to) belongs to the runtime,
-not to process-global state. It used to be a `static` keyed by device ordinal,
-so it outlived every backend and a second runtime on the same device shared
-the first one's free list; it is now owned by the `CudaRuntime` that owns the
-device, and every `CubeclBuffer` holds a shared handle to it so its `Drop`
-reaches the owner. Two runtimes therefore never share a free list, and dropping
-the last runtime (or the last tensor that outlived it) releases the handles it
-retained. Dropping a `cubecl_runtime::server::Handle` is reference-count
-bookkeeping with no device interaction - only a `ManagedMemoryBinding` releases
-arena memory - so the pool may outlive the runtime's client.
-
-The `CudaBackend::cuda_output_pool_*` surface keeps the bound, the clear and the
-hit/miss/eviction counters, and is now scoped to that backend's runtime rather
-than to a device. Two accounting consequences follow: a backend whose pool
-holds nothing reports zeroes instead of the former "unknown device" empty
-snapshot, and `clear_cuda_output_pool` counts a `clears` event even when the
-pool is empty, where the absent-ordinal case previously counted nothing.
-
-CUDA `dot_general` stores cuTENSOR contraction descriptors, plans, and lazy
-per-physical-stream device workspaces inside this backend-owned extension
-cache. All contraction plans share one workspace per physical stream slot.
-The cache mutex serializes host enqueues; stream ordering prevents overlapping
-use of a slot's scratch allocation. Plan eviction retains shared scratch;
-growth and cache teardown use event-based workspace retirement from
-[the retirement design](gpu-workspace-retirement.md). The cuTENSOR plan key is
-structural: dtype, extents, strides, modes, conjugation flags, descriptor
-alignment requirements, and workspace preference. It must not include
-allocation addresses or actual pointer-specific alignment. Whole-allocation
-operands keep the CUDA allocation alignment requirement; borrowed views use a
-conservative dtype-size descriptor alignment requirement so the cached plan
-remains valid across different view offsets without using pointer-specific
-alignment. Shared scratch is excluded from the plan and extension-cache byte
-budgets: with one scratch allocation per plan, a single shape that needs more
-scratch than the remaining budget evicted the whole plan-cache entry. The cache
-byte limit therefore does not bound total device memory. Instead the backend
-keeps a separate retention cap:
-`CudaBackend::cutensor_workspace_max_retained_bytes` (default 10 GiB, `0`
-disables retention) configured with
-`CudaBackend::set_cutensor_workspace_max_retained_bytes`. The cap bounds the
-scratch the backend keeps for reuse, not what a contraction may use: a request
-that does not fit the remaining cap runs in a temporary workspace that is
-retired afterwards, and lowering the cap releases retained buffers without
-evicting any plan. Other slots are never evicted to make room. `0` is not
-"unlimited", and the 10 GiB default is a finite policy value, not a practical
-memory protection or reservation. Nonzero requests round up to a power of two
-with a 1 MiB floor; a zero request allocates nothing. Each slot keeps its
-high-water capacity until it is replaced, the cap is lowered,
-`CudaBackend::clear_cuda_extension_cache`, or backend teardown.
-`CudaBackend::cutensor_workspace_stats` reports the retained slot count and
-retained bytes, and `CudaBackend::cutensor_workspace_bytes` reports the byte
-high-water. `CudaBackend::cutensor_workspace_temporary_uses` counts the
-contractions that ran in a temporary workspace because their requirement did
-not fit the cap: a nonzero, increasing value is the direct signal that the cap
-is below the workload's real requirement and that the retained high-water
-under-reports it. That counter is cumulative for the backend and survives
-`CudaBackend::clear_cuda_extension_cache`.
-
-Sizing the cap: with `H_s` the largest workspace requirement seen on slot `s`
-and `Q(w) = next_power_of_two(max(w, 1 MiB))` for `w > 0` (with `Q(0) = 0`),
-retaining every slot's rounded high-water fits the cap iff
-`L >= sum_s Q(H_s)`. That is a sufficient condition for avoiding cap-driven
-temporary workspaces, not a necessary one, because a request whose rounded
-capacity does not fit is retained at its exact size instead. The conservative
-single-value form is `L >= S * Q(W_max)` for `S` stream slots. The cap cannot
-be derived from the plan set or the plan entry bound. Setting it below the
-steady-state working set makes matching contractions allocate and retire
-scratch on every call, which increases retirement churn and can increase the
-retirement queue's stream barrier fallbacks; the reported statistics show the
-retained amount. Read
-`CudaBackend::cutensor_workspace_bytes` after a representative run to choose a
-value, and confirm with
-`CudaBackend::cutensor_workspace_temporary_uses` that the chosen cap is not
-binding. Device residency is not bounded by the cap: a temporary workspace, a
-retiring allocation, the allocator arena, and vendor-internal memory are all
-outside it, so residency can exceed the cap while an older buffer retires.
-The overall extension cache stats report the retained typed cache entry. Use
-`CudaBackend::cutensor_plan_cache_stats`,
-`CudaBackend::cutensor_plan_cache_max_entries`, and
-`CudaBackend::set_cutensor_plan_cache_max_entries` for cuTENSOR plan-entry
-introspection and bound configuration.
-
-CUDA structural permutation for `F32`, `F64`, `C32`, and `C64` stores cuTENSOR
-permutation descriptors and plans in the same backend-owned extension cache
-when the layout is representable by cuTENSOR descriptors. The permutation plan
-key is structural: dtype, input/output extents, strides, modes, unary input
-operator, and descriptor alignment requirements. It must not include allocation
-addresses or actual pointer-specific alignment. Whole allocations keep the CUDA
-allocation alignment requirement; borrowed positive-stride views use a
-conservative dtype-size descriptor alignment requirement so cached plans remain
-valid across offsets. Zero- or negative-stride CUDA views are not a missing-library
-fallback: cuTENSOR 2.x rejects those descriptors, so same-device
-canonicalization of such views remains on the native CubeCL structural copy
-kernel. Use
-`CudaBackend::cutensor_permutation_plan_cache_stats`,
-`CudaBackend::cutensor_permutation_plan_cache_max_entries`, and
-`CudaBackend::set_cutensor_permutation_plan_cache_max_entries` for permutation
-plan-entry introspection and bound configuration.
-
-WebGPU provider caches must be owned by `WebGpuBackend` or a WebGPU runtime
-cache object with the same bounded-default, clear, configure, and stats
-requirements before they become long-lived.
-
-GPU scratch-buffer pools should eventually expose a provider-independent stats
-shape across CUDA, WebGPU, and future ROCm:
-
-| Field | Meaning |
-| --- | --- |
-| `retained_buffers` | Number of buffers currently retained by the pool |
-| `retained_bytes` | Logical bytes retained by the pool |
-| `acquire_calls` | Total acquire requests |
-| `release_calls` | Total release requests |
-| `reuse_hits` | Acquires served from retained buffers |
-| `allocation_misses` | Acquires requiring a new allocation |
-| `evictions` | Retained buffers dropped because of pool limits |
-| `high_water_retained_bytes` | Peak logical retained bytes |
-
-This common stats design is future direction only. It must not be introduced by
-rewriting existing CUDA contraction allocation behavior into an unowned global
-pool. CUDA `dot_general` may retain cuTENSOR-owned contraction workspace only
-through the explicit `CudaBackend` extension cache described above; WebGPU work
-must not alter CUDA buffer pools, CUDA scratch reuse, or CUDA library-call
-algorithms.
+CUDA operation paths implemented through NVIDIA libraries report load or
+provider errors when the required library is unavailable or lacks support;
+they must not silently fall back to native kernels. See the guide's
+[compatibility matrix](../guides/devices-and-gpu.md#cuda-and-nvidia-library-compatibility)
+for the supported runtime and library combinations.
 
 ## Operation-Crate Interop Boundary
 
-See [gpu-extension-api.md](./gpu-extension-api.md) for the public kernel
-extension contract (issue #1597): `CudaExecSession` as the single
-execution-authority boundary, `cuda::raw` / `cuda::cubecl` / `webgpu::cubecl`
-sessions, identity layering, capability/error contracts, multi-GPU copy
-semantics, and the CubeCL package policy.
+Operation crates receive the caller's engine. When handed an erased `Engine`,
+the CUDA leaf's `cuda::raw::with_cuda_engine` visitor recovers the CUDA engine
+through `Engine::native_engine()`; it does not construct or enter another
+engine. Vendor execution then uses `CudaEngine::with_raw(op, closure)`.
 
-`crates/tenferro-gpu/src/cubecl/dispatch.rs` is private backend glue. It owns
-shape/buffer validation before unsafe CubeCL launch arguments are constructed.
-Sibling operation crates must not import it directly.
+The closure receives `cuda::raw::Session`, which lends the runtime's stream,
+validated tensor spans and scratch. This is a raw CUDA scope, not the removed
+backend-session admission mechanism. Work must use that scope's stream and
+obey the raw method and vendor-library safety contracts. Whole-tensor
+transfers run outside the scope: it holds the runtime submission lock, so
+re-entering transfer admission from it is not supported.
 
-Operation crates that need to launch their own CubeCL kernels, such as
-`tenferro-linalg`, enter the public `CudaExecSession` obtained from
-`with_backend_session` and use the `with_cubecl` sub-session (typed CubeCL
-kernels, `tensor_binding`/`array_arg` operands) or the `with_raw` sub-session
-(raw CUDA library calls). `tenferro-fft` uses the same boundary: cuFFT plan
-creation and retirement run under the runtime's scoped context guard
-(`CudaRuntime::with_current_context`), which restores the caller's previous
-device/context on exit (best-effort; failures are logged to stderr), and
-cuFFT execution enters `with_raw` for
-stream binding, workspace allocation, validated tensor spans, and the
-retention guards that pin input/output allocations on a failed synchronization
-barrier (issue #967 invariant). The provider owns each allocation and exposes
-raw streams and pointers only through scoped, session-lifetime-bound
-capabilities; the deleted hidden `cuda::interop` bridge and
-`CudaExternalUse{Read,Write}Lease` leases no longer exist. cuFFT loading,
-opaque plans, and plan-cache entries remain owned by `tenferro-fft`.
+`cuda/raw.rs` defines the stream, tensor-span, scratch, retention and
+synchronization operations. `CudaRuntime::with_current_context` is the separate
+context guard for vendor lifecycle work that only sets up state and enqueues
+nothing. `tenferro-linalg` uses `with_raw` for cuSOLVER/cuBLAS calls;
+`tenferro-fft` uses the context guard for plan lifecycle work and `with_raw`
+for execution. There are no CubeCL sub-sessions or CubeCL bindings in this
+contract.
 
-Extension operation crates interact with CUDA exclusively through the public
-session surface (`tenferro_gpu::cuda::CudaExecSession` with its `with_cubecl`
-and `with_raw` sub-sessions), plus the scoped
-`CudaRuntime::with_current_context` guard for vendor-library lifecycle work.
-The public `raw` and `cubecl` sub-modules expose the typed, session-scoped
-capabilities: validated tensor spans, byte workspaces, retained allocation
-guards, stream/module/function handles, and CubeCL bindings. `CudaRuntime::client`,
-`CudaRuntime::raw_cuda_stream`, `CubeclBuffer`
-fields, and raw `CubeclBuffer` constructors are not public API. Public tensor
-users should use `CudaBackend`, `upload_tensor`, `download_tensor`, and
-`CudaRuntime::synchronize`; device pointers are exposed only through the
-session-scoped `raw::Session` spans.
+For a checked downstream example, see
+`docs/tutorial-code/src/bin/cuda_vendor_interop.rs`. For ordinary tensor calls,
+use `CudaEngine`, `cuda::upload_tensor`, `cuda::download_tensor`, and the
+[CUDA quickstart](../guides/devices-and-gpu.md#cuda-quickstart).
 
-## Kernel Metadata Contract
+## Kernel Metadata And Launch Contract
 
-Owned runtime tensors are compact column-major tensors. The shape determines
-the logical layout; dense column-major strides are `[1, d_0, d_0 * d_1, ...]`.
-Arbitrary strides live on `TypedTensorView`/`TypedTensorViewMut` or
-`TensorLayout` metadata until an explicit same-placement canonicalization
-boundary. See
-[backend-contract.md](../spec/backend-contract.md#vii-layout-and-device-contract)
-for the runtime layout contract.
+Owned dense tensors use column-major logical layout. Borrowed CUDA views carry
+shape, signed strides and offsets; a supported strided entry consumes that
+layout, while an entry requiring compact input stages a same-device copy.
+Neither case implies a host transfer.
 
-Host row-major import helpers canonicalize input into owned column-major host
-tensors before transfer. Device tensors themselves remain column-major. This
-keeps existing CubeCL kernels correct, including raw linear buffer kernels that
-do not consume tensor stride metadata.
+Catalogue planners receive validated dtype/layout/operation metadata and
+produce the launch geometry. `cuda/dispatch.rs` calls the catalogue's `plan_*`
+functions, then marshals runtime arguments in the entry's ABI order.
+`cuda/launch.rs` uses catalogue `CLayout` parameters and runtime `Arg` values,
+not CubeCL `TensorBinding`, `ArrayArg` or `#[comptime]` metadata. Shape extents,
+strides, offsets and lengths must follow the selected catalogue entry's ABI;
+do not reintroduce layout-specific CubeCL specializations.
 
-Supported CUDA elementwise read paths also consume zero-offset compact
-column-major borrowed views directly with these linear kernels: same-shape
-add/subtract/multiply, float/complex divide, negate, and real analytic unary
-operations. Offset or noncompact views retain explicit same-device
-canonicalization; their logical layout must not be discarded by passing a raw
-allocation as if it were compact. Same-shape owned add/subtract/multiply/negate
-`_read_into` paths write the validated destination directly, retaining overlap,
-runtime-residency and exclusive-write checks. Other layouts and operations keep
-their existing allocating fallback. Nonempty owned reductions read the original
-input for the first axis; empty-axis reductions still return independent storage.
+Launch over the output or update domain using the catalogue plan. The dispatch
+layer uses the plan's grid and block sizes rather than inventing a serial
+fallback. Device addresses, byte spans and layout bounds must be validated
+before unsafe launch arguments are submitted. The implementation sources are
+`cuda/dispatch.rs`, `cuda/structural.rs` and `cuda/launch.rs`.
 
-CubeCL kernels that perform logical tensor indexing must receive tensor
-metadata through CubeCL tensor metadata. There is no hidden row-major fallback
-and no implicit global shape state.
+## Backend Allocation Ownership And Device Transfers
 
-- Tensor shape extents and strides are runtime tensor metadata. Logical kernels
-  must receive them through `TensorBinding` and access them inside kernels
-  through CubeCL `Tensor` methods such as `shape(axis)`, `stride(axis)`, and
-  `coordinate(index, axis)`.
-- Rank may be passed as a `#[comptime]` loop bound when CubeCL needs fixed-size
-  local index buffers or unrolled axis loops. This rank must be derived from
-  the validated tensor metadata at the launch boundary and must not carry shape
-  extents or strides.
-- `#[comptime]` is reserved for operation attributes and algorithm
-  configuration. This includes attributes such as transpose `perm`,
-  broadcast/gather/scatter dimension-number mappings, static slice step
-  attributes, axis sets, reduce strategy, and kernel blueprints. Different
-  attribute values may compile as different CubeCL specializations.
-- Do not pass tensor shape extents, strides, buffer lengths, flattened products,
-  or other runtime tensor sizes as `#[comptime]` parameters. The same holds for
-  every value derived from a tensor layout or from an operation's position
-  inside one: element offsets, slice starts, edge and interior padding amounts,
-  slice and window sizes (`slice_sizes`), and running axis offsets (the
-  concatenation offset of each input). CubeCL compiles one module per distinct
-  compile-time value (about 40 ms of NVRTC per new layout on an A100, against a
-  sub-0.1 ms warm call) and keeps every module for the process lifetime, so a
-  workload that visits many layouts pays the compile on each and grows the
-  module cache without bound (#1885 §3.4, #2010).
-- Pass such values at run time: through `TensorBinding` metadata for logical
-  tensors, as a runtime `Sequence<usize>` / `Sequence<i64>` kernel argument for
-  per-axis values (built with `runtime_sequence`; only the sequence length,
-  that is the rank, enters the compile-time key and the values travel as
-  launch scalars, with no device upload), or as plain scalar arguments for a
-  fixed small count. Keep the rank as the only compile-time bound. The WebGPU
-  `dot_general` pack kernels pass only axis-role lists and rank as compile-time
-  launch attributes; shape and stride values are read from `TensorBinding`
-  metadata inside the kernel.
-- Native permutation materialization on **WebGPU/Metal** is the narrow
-  exception: `materialize_strided_comptime_layout_kernel` and
-  `tiled_transpose_comptime_layout_kernel` encode the validated, bilaterally
-  fused affine plan (extents, strides, logical length, batch stride and fast
-  extents) as compile-time metadata, because the raw source/destination arrays
-  do not carry logical layouts and raw-Array runtime metadata packing is
-  ambiguous on Metal. Fusion limits the specialization rank. CUDA does not use
-  this exception: it launches `materialize_strided_kernel` and
-  `tiled_transpose_kernel`, which take the same plan as runtime arguments. In
-  both variants tile size, block rows, padding, and vector width are algorithm
-  configuration and remain compile-time parameters.
-- Permute-like operations should canonicalize their launch attributes where the
-  transformation is mathematically identical. In particular, adjacent axes that
-  stay contiguous in column-major layout should be fused before choosing the
-  effective `perm` and rank when doing so preserves observable shape semantics.
-  This reduces CubeCL JIT specialization patterns without changing the public
-  tensor contract.
-- Raw `ArrayArg` is allowed only for linear-buffer kernels that do not perform
-  logical tensor indexing, such as elementwise kernels and raw dtype conversion
-  helpers. A logical indexing kernel may use raw arrays only with a local comment
-  explaining why `TensorBinding` cannot express the access pattern.
-- View canonicalization and copy-back kernels are the current exception for
-  logical indexing over raw arrays: `TensorBinding` metadata cannot represent
-  signed arbitrary view strides, so these kernels receive the validated
-  `TensorLayout` shape, signed stride, and offset metadata from the launch
-  boundary and index the CubeCL allocation directly. They must still launch over
-  the full logical output or update domain and must not download to host.
-- Kernel crates must not invent or cache host-side tensor shape snapshots that
-  can drift from the `TypedTensor` or `ExecInstruction` metadata. Shape
-  validation belongs at the launch/backend boundary before unsafe launch.
+`StorageBuffer::Backend` owns provider storage. CUDA wraps a
+`t4a-cuda-runtime` allocation in the GPU storage seam; views borrow that owner.
+The engine runtime identifies the allocation domain. A matching device ordinal
+alone does not make a foreign engine's allocation interchangeable.
 
-The caller owns validation that the buffer length matches the dense shape
-product before creating `TensorBinding` or raw array arguments. Existing helper
-functions in `crates/tenferro-gpu/src/cubecl/dispatch.rs` are the current source of
-truth for this boundary.
-
-## Launch Configuration Contract
-
-Elementwise, structural, indexing, and reduction kernels should launch enough
-parallel work items to cover the output or update domain. Single-thread launch
-is not an acceptable correctness fallback for new or modified kernels.
-
-Reduction `Auto` strategy may use one unit per keepdims output element only
-when the reduce-axis length is bounded by the hardware plane width. Larger
-reduce axes must use a parallel plane/subgroup reduction strategy, or return an
-unsupported-strategy error when the runtime cannot provide plane operations.
-The explicit `Unit` strategy remains available as a requested serial strategy,
-but `Auto` must not silently route unbounded reduce-axis work to one worker.
-
-Scatter uses a two-phase launch: first a parallel copy initializes `out` from
-`operand`, then a parallel update kernel covers the scatter update domain.
-Overlapping add-scatter updates use CubeCL atomic add for supported real scalar
-parts. Complex scatter is represented as atomic adds to the real and imaginary
-parts, following the same decomposition used by JAX GPU lowering for complex
-scatter-add. Because floating-point atomic addition does not define a stable
-inter-thread accumulation order, overlapping floating-point scatter updates are
-numerically nondeterministic within normal floating-point roundoff.
-
-## Backend Allocation Ownership
-
-`StorageBuffer::Backend` owns one provider allocation. Tensor views borrow that
-owner, and host writes require an exclusive mutable owner borrow; creating a
-view never clones an allocation handle. CUDA/WebGPU provider objects may retain
-their own runtime or resource state, but tensor-level ownership and aliasing
-must remain represented by Rust borrowing and the provider allocation identity.
-
-## Device Transfer Policy
-
-tenferro follows the PyTorch convention: no implicit CPU/GPU transfer at tensor
-API boundaries. Callers upload tensors before GPU backend operations and
-download results explicitly when host access is needed.
-
-Same-placement canonicalization is allowed: host views may be copied into host
-compact tensors, and GPU views may be copied into compact tensors on the same
-GPU provider. It is not a transfer mechanism.
-
-An upload transfers the source tensor's exported logical values. An owned host
-tensor may keep a descriptor offset over a larger host allocation (a compact
-slice of another allocation, #2023); it uploads its logical extent, not the
-backing root, so the device tensor's shape and buffer stay consistent. The
-in-place root preservation of that owner is a host-side property and does not
-cross the transfer boundary.
-
-The object-safe CUDA runtime boundaries keep CUDA residency and never stage tensor
-payloads through host memory. `to_contiguous_read` canonicalizes a device read on
-the active device for every dtype the catalogue copies. `copy_read_into` reads
-any valid source region of this runtime where it lives — any offset, stride and
-rank — and writes the destination region in place: an owned compact tensor, or a
-borrowed non-overlapping view with any offset and strides. A source view wider
-than the catalogue's by-value layout rank keeps one compact staging copy, while a
-wider destination view is a typed refusal; source and destination allocations
-must not alias. See
-[backend-contract.md § VI](../spec/backend-contract.md#vi-backend-traits) for the
-engine-trait contract these entries implement.
-
-```text
-use tenferro_gpu::{cuda_devices, download_tensor, upload_tensor, CudaBackend};
-use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
-
-let devices = cuda_devices()?;
-let device = devices.first().ok_or("no CUDA device is visible")?;
-let mut backend = CudaBackend::new(device.id())?;
-let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]);
-let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]);
-
-let gpu_a = upload_tensor(backend.runtime(), &a)?;
-let gpu_b = upload_tensor(backend.runtime(), &b)?;
-// Operations run on a borrowed session, not on the backend object.
-let gpu_c = backend.with_backend_session(|session| {
-    session.add_read(TensorRead::from_tensor(&gpu_a), TensorRead::from_tensor(&gpu_b))
-})??;
-let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
-```
-
-### CUDA transfer copies
-
-Each explicit transfer crosses host memory once on the host side (#2009):
-
-- **Borrowed upload** (`upload_tensor(&Tensor)`): below the staging chunk (8 MiB),
-  CubeCL's `create_from_slice` copies the caller's buffer exactly once, into an
-  owned aligned staging buffer, before the asynchronous device write is queued.
-  That staging copy is the lifetime guarantee that lets the caller reuse or drop
-  its buffer as soon as the call returns, without a barrier. Above the chunk the
-  runtime's pinned staging lease replaces it: the payload moves chunk by chunk
-  through one pinned buffer, the device reads pinned memory instead of the
-  pageable transport, and the call waits for its own chunks - a borrowed source
-  and a reused staging buffer cannot stay safe behind an early return. See
-  [large-transfer-staging-1945-u4.md](./large-transfer-staging-1945-u4.md); the
-  measured effect is 6.9x at 256 MiB. The owned paths below are unchanged.
-- **Owned upload** (tenferro-internal paths that build their own host vector,
-  such as `upload_typed_tensor` and the `Bool` byte conversion): the vector's
-  allocation is handed to CubeCL with `ComputeClient::create(Bytes::from_elems)`
-  and nothing is copied on the host.
-- **Download** (`download_tensor`): payloads above the 16-byte pinned scalar
-  slot are copied by the driver straight into the `Vec<T>` that becomes the
-  host tensor's storage. The download flushes pending CubeCL work, resolves the
-  allocation on the current stream with `get_resource` (which orders writes
-  queued on other CubeCL streams, as `read_one` does), enqueues the copy on that
-  stream and synchronizes it. Source resolution and bounds checks precede host
-  reservation, so a refused device allocation is reported without attempting
-  an equally large host allocation (#2247). Host reservation is fallible and
-  preserves its typed error source. The destination-reuse route returns its
-  original buffer unchanged when preparation or reservation fails, before any
-  host copy is submitted. The vector is allocated with its final element
-  type, so it has `T`'s alignment, and it becomes visible only after the copy
-  completed; if the copy or barrier fails, both the vector and the source
-  allocation are leaked rather than freed while the device may still use them.
-  A handle that does not span exactly the tensor's elements keeps the
-  `read_one` path.
-
-The execution pipeline handles placement internally for compiled programs:
-constants are uploaded through `upload_host_tensor()`, metadata-only operations
-read metadata without bulk host transfer, and host-dependent scalar cases
-download only the required scalar values.
-
-Error behavior:
-
-| Case | Behavior |
-| --- | --- |
-| GPU op receives a CPU tensor | `Error::BackendFailure` with an upload hint |
-| CPU op receives a GPU tensor | `Error::BackendFailure` with a download hint for `Result` APIs |
-| `TypedTensor::host_data()` or `host_data_mut()` on a GPU buffer | `Error::RuntimeState` with a download hint |
-| CUDA op receives a WebGPU tensor, or WebGPU op receives a CUDA tensor | `Error::BackendFailure` naming the expected provider |
+Tenferro follows the PyTorch convention: no implicit CPU/GPU transfer at tensor
+API boundaries. Upload host tensors with `cuda::upload_tensor` before CUDA
+operations, and download with `cuda::download_tensor` before host inspection or
+CPU-only execution. Same-device canonicalization is allowed, not a hidden
+transfer. See `cuda/transfer.rs` for the blocking and pending routes and their
+validation. The executable quickstart is
+`crates/tenferro-gpu/examples/cuda_quickstart.rs`.
 
 ## Implemented Coverage
 
-The public CUDA backend implements `TensorBackend` for the main dense CUDA
-execution surface. Internally, that coverage is provided by CubeCL kernels and
-CUDA library calls:
+The [Devices and GPU coverage table](../guides/devices-and-gpu.md#coverage) is
+the current operation/dtype summary. Backend implementation sources and tests
+are authoritative; do not infer support from a historical CubeCL/CubeK design.
+WebGPU, Metal and Apple shared CPU/Metal execution are not available, and ROCm
+has no execution implementation.
 
-| Category | Current status |
-| --- | --- |
-| Allocation/transfer | CUDA allocation, upload, download, raw pointer bridge for all public tensor dtypes |
-| Elementwise | `F32`/`F64` arithmetic, comparison, selection, clamp, and analytic unary ops; `I32`/`I64` add/sub/mul/div/rem, neg/abs/sign/pow, compare/select, and minimum/maximum; `C32`/`C64` add/mul/div/neg/conj/sign and real-output `abs` |
-| Reductions | sum/prod for `F32`, `F64`, `I32`, `I64`, `C32`, and `C64`; min/max for `F32`, `F64`, `I32`, and `I64` |
-| Structural | reshape, transpose, broadcast, reverse, concatenate, diagonal extraction/embedding, triangular masks, slice, and pad support all public tensor dtypes; `F32`/`F64`/`C32`/`C64` transpose and view canonicalization use cuTENSOR permutation on CUDA; integer and Bool data movement use CubeCL kernels because cuTENSOR lacks those permutation compute descriptors. `copy_read_into`/`copy_into` accept arbitrary-stride and offset region views on both operands; `copy_read_into` routes `F32`/`F64`/`C32`/`C64` through the cuTENSOR permutation path, which plans a complex operand through its real view so `alpha = 1` is an exact real multiply, and reversed or broadcast sources route to the native strided kernel because cuTENSOR descriptors require positive strides. `Session::fill_zero_write` resets a caller-owned destination to exact `+0.0` with a stream-ordered memset (compact spans, including offset regions) or one native fill kernel (strided regions) |
-| DType conversion | checked `convert` and explicit `cast` cover every CPU-supported pair among the seven public dtypes; explicit real/complex-to-integer validation uses a small device flag and never downloads the input tensor |
-| Indexing | gather and dynamic_slice support `F32`, `F64`, `I32`, `Bool`, `C32`, and `C64` data with CPU-supported `F32`, `F64`, `I32`, or `I64` index tensors; additive scatter remains limited to floating and complex data and explicitly excludes Bool data |
-| Contraction | cuTENSOR-backed paths for supported real and complex floating dtypes. A standard batched matmul — exactly one contraction axis per operand, both matrix axes innermost, trailing batch axes paired in ascending order on both sides, `batch_count > 1`, no conjugation — is one cuBLAS `gemmStridedBatchedEx` (`crates/tenferro-gpu/src/cubecl/batched_gemm.rs`) instead of a cuTENSOR contraction: the batched entry is one batched API call where the plan path issues several small launches and synchronizations. A single matrix, permuted or multi-axis forms, a batch axis inside the matrix axes, conjugated complex operands, and the `alpha`/`beta` accumulate form keep cuTENSOR |
-| Linalg | cuSOLVER/cuBLAS-backed SVD, QR, Cholesky, LU, Eigh, LU solve, and triangular solve for supported real and complex floating dtypes |
-| BLAS-1 | cuBLAS-backed `vdot_read`, `norm_squared_read`, and `axpby_read_into_accum` for `F32`/`F64`/`C32`/`C64`. An arbitrary-stride or offset `x` or `y` runs one native strided-update pass, a layout the vendor vector entries cannot address; the compact/compact case keeps the cuBLAS `geam` path |
-
-A cuTENSOR operand descriptor advertises the alignment its pointer guarantees,
-and cuTENSOR selects vectorized kernels from it. A region view folds its
-element offset into the operand pointer, so the descriptor must report the
-alignment of that shifted address, not the 256-byte allocation alignment;
-claiming more than the pointer can satisfy fails the launch with `misaligned
-address`.
+### CUDA linalg driver notes
 
 CUDA SVD follows the accuracy-preserving, JAX-compatible default driver
 selection when the caller leaves `SvdOptions::driver` at `SvdDriver::Auto`: use
@@ -781,64 +277,18 @@ total cuSOLVER load failure.
 As with the SVD driver, the eigh driver is part of the traced op identity and
 survives pruning to the values-only op, and CPU providers ignore it.
 
-The published [`Devices and GPU`](../guides/devices-and-gpu.md) guide contains
-the current CUDA operation and dtype matrix. Keep that matrix synchronized with
-the `CudaBackend` `TensorBackend` implementation when adding or removing CUDA
-dispatch arms.
-
-General eigendecomposition (`eig`, LAPACK `dgeev` style) is not provided by
-cuSOLVER. The CUDA backend returns `BackendFailure`; users must explicitly
-download to CPU and call the CPU backend.
-
-The WebGPU backend currently has narrower coverage:
-
-| Category | WebGPU status |
-| --- | --- |
-| Allocation/transfer | WebGPU allocation, upload, and download for `F64`, `F32`, `I32`, `I64`, `Bool`, `C64`, and `C32` tensors |
-| Real contraction | CubeK/CubeCL-backed `F32` `dot_general` through a BGEMM planner, including batched and same-device packed operand layouts covered by tests |
-| Complex contraction | `C32` `dot_general` and `dot_general_with_conj` through a CubeK-owned complex GEMM API. tenferro normalizes `DotGeneralConfig` into CubeK-compatible batched matmul bindings; CubeK owns temporary real buffers, split/compose kernels, conjugation signs, and future native complex-kernel replacement |
-| Structural permutation | `F32` and `I32` transpose plus same-device compact materialization. CUDA-native and WebGPU routes consume the same validated bilateral-fusion plan; exact compact 2D transposes use a shared-memory tile with compile-time tile/block-row/padding/vector-width configuration |
-| Deferred contraction coverage | `F64`, `C64`, zero-contracting-size matmul, and broader planner stress coverage |
-| Other tensor ops | Explicit unsupported `BackendFailure`; no CPU fallback and no hidden provider transfer |
-
-## Unsupported And Deferred Work
-
-The following are intentionally outside the current batch:
-
-- GPU benchmark work,
-- HIP/ROCm execution backend implementation,
-- replacing the CubeCL fork,
-- selected complex analytic kernels and ordering operations,
-- CUDA implementations for `full_piv_lu` and `full_piv_lu_solve`,
-- integer numeric/linalg CUDA kernels outside the supported add/sub/mul/div/rem,
-  neg/abs/sign/pow, compare/select/minimum/maximum, structural/indexing paths,
-  and sum/product/minimum/maximum reductions,
-- `Bool` CUDA arithmetic, reductions, linalg, and additive scatter.
-  Allocation/transfer, reshape, transpose, broadcast, diagonal
-  extraction/embedding, triangular masks, slice, `dynamic_slice` and
-  `dynamic_update_slice` with numeric starts, pad, concatenate, reverse, and
-  gather with numeric index tensors are implemented,
-- changing the public placement contract,
-- WebGPU elementwise, reduction, indexing, and linalg kernels beyond explicit
-  transfer and CubeK-backed `F32`/`C32` contraction.
-
 ## Tests
 
-CUDA GPU tests are ignored so regular CPU-only test runs remain portable. Run
-them on a CUDA 12.4-or-newer machine with:
+Use the repository's local GPU gate for CUDA validation, as described in
+`AGENTS.md`. Focused ignored GPU tests can be run on a configured CUDA
+12.6.2-or-newer machine with:
 
 ```sh
-CUDA_PATH=/usr/local/cuda-12.4 \
-LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
+CUDA_PATH=/usr/local/cuda-12.6 \
+LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
   cargo test -p tenferro-gpu --features cuda -- --ignored
 ```
 
-These tests are correctness tests, not benchmarks.
-CUDA 12.8-or-newer driver and NVRTC libraries enable the complete CUDA
-feature set. On CUDA 12.4 through 12.7, the runtime omits 12.8-only compiler
-and tensor-map capabilities while preserving the baseline CUDA backend.
-
-WebGPU provider tests should have two layers: portable source/feature contract
-tests that run in ordinary CI, and adapter-optional runtime tests that return
-early when no WebGPU adapter is available. Runtime tests must compare meaningful
-tensor values or residuals, not only shapes.
+These are correctness tests, not benchmarks. CUDA 12.8-or-newer driver and
+NVRTC libraries enable the full CUDA feature set; consult the guide's
+compatibility matrix rather than the retired CubeCL runtime policy.
