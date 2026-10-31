@@ -153,6 +153,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "python3 scripts/test-public-boundary-inventory.py",
         "python3 scripts/test-check-boundary-scope.py",
         "python3 scripts/audit-engine-entry.py --check",
+        "python3 scripts/check-contraction-kernels.py",
         "python3 -m unittest discover -s scripts/ci/tests -v",
         "actionlint",
     ),

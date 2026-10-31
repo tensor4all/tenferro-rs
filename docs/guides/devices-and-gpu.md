@@ -71,8 +71,13 @@ The host waits when a value is downloaded or otherwise inspected on the host.
 Some library-backed operations also synchronize internally when they must read
 device-side status.
 
-Use `CudaRuntime::synchronize()` through the caller-held engine's
-`runtime()` when code needs an explicit host-side barrier for the CUDA stream.
+Use `ExecutionEngine::synchronize` on the caller-held engine when code needs
+an explicit host-side barrier, including after an eager session releases its
+engine borrow. Import `tenferro_runtime::ExecutionEngine` to call
+`engine.synchronize()?`. CPU work is already complete; a `CudaEngine` waits for
+its stream and retires pending runs. Direct CUDA code can also call the
+lower-level `engine.runtime().synchronize()` barrier. See
+[CUDA engines and pinned transfers](engines-and-transfers.md).
 
 For a time-axis diagram, see [Execution Models](execution-models.md).
 

@@ -2,6 +2,16 @@
 
 Guidance for Claude Code (claude.ai/code) and other agents working in this repository.
 
+## Non-Negotiable: No Handwritten Contraction Kernels
+
+Contractions, GEMM, decompositions and solves must use the owning abstraction
+(`einsum_tensors`, `tcontract`, `tlinalg`, or the backend provider); never replace
+them with a repository-local inner scalar-accumulate loop. Handwritten kernels
+bypass the tuned path, threading/SIMD policy and the abstractions' numeric
+contract. If a loop genuinely cannot be expressed through the abstraction, put
+`// contraction-kernel-ok: <reason>` immediately above that loop and explain the
+exception in the PR description.
+
 Before acting, read the latest shared tensor4all agent rules online, starting
 from `https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/index.md`.
 If internet access is unavailable or the remote cannot be resolved, use the
@@ -108,7 +118,7 @@ or `no_run`. Crate-level docs (`//!`) include typical end-to-end examples.
 
 **tenferro-rs** is a general-purpose tensor computation library in Rust (`tenferro-*` crates):
 - Dense tensor types with CPU/GPU placement metadata
-- Graph-based traced execution via `TracedTensor` + `GraphCompiler` + `Runtime::run_compiled`
+- Graph-based traced execution via `TracedTensor` + `GraphCompiler` + `Runtime::prepare` / `Runtime::run` on caller-held engines
 - Extension crates for operation families such as einsum, linalg, and FFT
 - Automatic differentiation (VJP/JVP/HVP) for the standard dense numeric path
 - Runtime-owned execution preparation and backend/provider dispatch
@@ -418,8 +428,8 @@ Layer 3: tenferro-runtime  - Concrete tensor helpers, traced tensors, graph comp
          tenferro-fft      - FFT extension runtime and public FFT APIs
 Layer 2: tenferro-tensor   - Dense runtime tensors, backend traits,
                              backend-independent contracts
-         tenferro-cpu      - CPU backend, execution sessions, kernels,
-                             buffer pools
+         tenferro-cpu      - Caller-held CpuEngine, CPU kernels,
+                             execution resources and buffer pools
          tenferro-gpu      - CUDA backend and GPU transfer helpers
 Layer 1: tenferro-tensor-core - Rank/layout metadata, dtype tags,
                                 scalar trait, promotion facts

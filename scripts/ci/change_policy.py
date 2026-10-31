@@ -74,6 +74,7 @@ _CI_FILES = frozenset(
     {
         ".github/dependabot.yml",
         "scripts/check-pr-fast.sh",
+        "scripts/check-contraction-kernels.py",
         "scripts/check-public-boundary-inventory.py",
         "scripts/test-public-boundary-inventory.py",
     }
