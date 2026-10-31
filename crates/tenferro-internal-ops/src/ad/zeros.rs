@@ -2,7 +2,6 @@ use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueRef};
 use tenferro_tensor::DType;
 
-use crate::ad::context::TensorMeta;
 use crate::dim_expr::DimExpr;
 use crate::std_tensor_op::StdTensorOp;
 
@@ -20,25 +19,6 @@ impl SymbolicZero {
             anchor,
             anchor_rank,
         }
-    }
-
-    pub(super) fn from_meta(anchor: ValueRef<StdTensorOp>, meta: &TensorMeta) -> Self {
-        Self::new(meta.dtype, anchor, meta.rank())
-    }
-
-    #[cfg(test)]
-    pub(super) fn dtype(&self) -> DType {
-        self.dtype
-    }
-
-    #[cfg(test)]
-    pub(super) fn rank(&self) -> usize {
-        self.anchor_rank
-    }
-
-    #[cfg(test)]
-    pub(super) fn anchor(&self) -> &ValueRef<StdTensorOp> {
-        &self.anchor
     }
 
     pub(super) fn instantiate(&self, builder: &mut dyn PrimitiveRuleBuilder) -> LocalValueId {
@@ -68,31 +48,6 @@ pub(super) fn build_one_like(
     anchor_rank: usize,
 ) -> LocalValueId {
     build_scalar_like(builder, dtype, one_bytes(dtype), anchor, anchor_rank)
-}
-
-/// Broadcast the real constant `value` in a real floating `dtype` to the anchor's shape.
-///
-/// Returns `None` for a dtype that is not `F32` or `F64`; rules that need a
-/// real constant are defined only on the real floating dtypes.
-pub(super) fn build_real_float_like(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    dtype: DType,
-    value: f64,
-    anchor: ValueRef<StdTensorOp>,
-    anchor_rank: usize,
-) -> Option<LocalValueId> {
-    let bytes = match dtype {
-        DType::F32 => (value as f32).to_le_bytes().to_vec(),
-        DType::F64 => value.to_le_bytes().to_vec(),
-        _ => return None,
-    };
-    Some(build_scalar_like(
-        builder,
-        dtype,
-        bytes,
-        anchor,
-        anchor_rank,
-    ))
 }
 
 fn build_scalar_like(

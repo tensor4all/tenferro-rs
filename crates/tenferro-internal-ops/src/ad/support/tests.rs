@@ -7,7 +7,6 @@ use super::{
     all_primitive_ad_support, identity_matrix, one_like, primitive_ad_support, promote_dtype,
     AdRuleSupport,
 };
-use crate::ad::registry;
 use crate::dim_expr::DimExpr;
 use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
@@ -74,10 +73,8 @@ fn primitive_ad_support_manifest_covers_core_catalog_order() {
 }
 
 #[test]
-fn primitive_ad_support_manifest_matches_registered_rule_table() {
+fn primitive_ad_support_manifest_has_no_unsupported_entries() {
     for entry in all_primitive_ad_support() {
-        let rule = registry::primitive_ad_rule(entry.kind).expect("primitive AD rule must exist");
-        assert_eq!(rule.kind(), entry.kind);
         assert_ne!(entry.linearize, AdRuleSupport::Unsupported);
         assert_ne!(entry.transpose, AdRuleSupport::Unsupported);
     }

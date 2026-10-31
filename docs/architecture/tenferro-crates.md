@@ -49,7 +49,7 @@ stack. `tenferro-xla` is a peer executor over compiled static programs, not an
 | `tenferro-fft` | FFT extension runtime and public concrete/traced FFT APIs |
 | `tenferro-core-ops` | Internal core primitive operation catalog used by graph, runtime, and backend dispatch |
 | `tenferro-internal-cpu-kernels` | Internal ordinary dtype-dispatch CPU kernels, pool-aware one-shot read-into replay, and scalar-agnostic caller-destination entry points |
-| `tenferro-internal-ops` | Graph op vocabulary and AD rule implementations |
+| `tenferro-internal-ops` | Graph op and shared primitive-rule vocabulary |
 | `tenferro-internal-extension-macros` | Procedural macros for extension-op registration |
 
 The public user-facing crates are `tenferro-tensor-core`, `tenferro-tensor`,
@@ -117,7 +117,7 @@ Internal: tenferro-core-ops
           core primitive operation catalog
 
           tenferro-internal-ops
-          graph op vocabulary and AD rule implementations
+          graph op and shared primitive-rule vocabulary
 
           tenferro-internal-extension-macros
           extension-op registration macros
@@ -230,8 +230,9 @@ Rules:
   runtime registration, and extension cache ownership.
 - `tenferro-xla` owns StableHLO lowering, explicit host-layout conversion at
   the XLA boundary, and runtime PJRT plugin loading.
-- `tenferro-ad` owns eager AD surfaces and traced AD helper APIs. Primitive AD
-  rule implementations remain in `tenferro-internal-ops/src/ad/`.
+- `tenferro-ad` owns core semantic AD transforms, eager AD surfaces and traced
+  AD helper APIs. `tenferro-internal-ops/src/ad/` retains shared vocabulary,
+  context/support helpers and residual metadata, not core graph AD rules.
 - Device, placement, and error concepts are owned by the crate that uses them:
   `tenferro-tensor` owns backend-independent tensor contracts,
   `tenferro-gpu` owns GPU backend details, and each operation-family crate owns

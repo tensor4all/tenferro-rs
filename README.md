@@ -66,9 +66,9 @@ Add the runtime, CPU backend, and linear algebra extension crates:
 
 ```toml
 [dependencies]
-tenferro-runtime = "0.8"
-tenferro-cpu = "0.8"
-tenferro-linalg = "0.8"
+tenferro-runtime = "0.9"
+tenferro-cpu = "0.9"
+tenferro-linalg = "0.9"
 ```
 
 <!-- snippet-source: docs/tutorial-code/src/bin/direct_linalg_quickstart.rs -->
@@ -117,9 +117,9 @@ or `jvp`:
 
 ```toml
 [dependencies]
-tenferro-runtime = "0.8"
-tenferro-cpu = "0.8"
-tenferro-ad = "0.8"
+tenferro-runtime = "0.9"
+tenferro-cpu = "0.9"
+tenferro-ad = "0.9"
 ```
 
 <!-- snippet-source: docs/tutorial-code/src/bin/traced_autodiff_jax_style.rs -->

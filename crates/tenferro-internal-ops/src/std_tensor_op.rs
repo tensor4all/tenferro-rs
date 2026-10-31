@@ -1,10 +1,6 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-#[cfg(all(test, feature = "autodiff"))]
-use crate::ad::{ADRuleResult, PrimitiveTransposeInput};
-#[cfg(all(test, feature = "autodiff"))]
-use computegraph::types::{LocalValueId, OperationRole, ValueKey};
 use computegraph::GraphOperation;
 use num_complex::{Complex32, Complex64};
 
@@ -471,42 +467,5 @@ impl GraphOperation for StdTensorOp {
             Self::Concatenate { .. } => 1,
             Self::Extension(op) => ExtensionOp::output_count(op.as_ref()),
         }
-    }
-}
-
-#[cfg(all(test, feature = "autodiff"))]
-impl StdTensorOp {
-    pub(crate) fn jvp_rule(
-        &self,
-        builder: &mut computegraph::graph::GraphBuilder<Self>,
-        primal_in: &[ValueKey<Self>],
-        primal_out: &[ValueKey<Self>],
-        tangent_in: &[Option<LocalValueId>],
-        ctx: &mut crate::ad::context::ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        crate::ad::linearize(self, builder, primal_in, primal_out, tangent_in, ctx)
-    }
-
-    pub(crate) fn transpose_rule(
-        &self,
-        builder: &mut computegraph::graph::GraphBuilder<Self>,
-        cotangent_out: &[Option<LocalValueId>],
-        inputs: &[computegraph::ValueRef<Self>],
-        mode: &OperationRole,
-        ctx: &mut crate::ad::context::ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        let inputs = inputs
-            .iter()
-            .map(|input| match input {
-                computegraph::ValueRef::Local(local_id) => {
-                    let key = builder.global_key(*local_id).clone();
-                    PrimitiveTransposeInput::Residual(key)
-                }
-                computegraph::ValueRef::External(key) => {
-                    PrimitiveTransposeInput::Residual(key.clone())
-                }
-            })
-            .collect::<Vec<_>>();
-        crate::ad::transpose_rule(self, builder, cotangent_out, inputs.as_slice(), mode, ctx)
     }
 }

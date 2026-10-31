@@ -37,7 +37,8 @@ is required before the parent program's final acceptance.
 | Op vocabulary | `tenferro-internal-ops/src/std_tensor_op.rs` |
 | Backend contract | `tenferro-tensor/src/backend.rs` |
 | Execution session | `tenferro-tensor/src/backend.rs` |
-| AD rules | `tenferro-internal-ops/src/ad/` |
+| Core semantic AD | `tenferro-ad/src/semantic_transform.rs` and helper modules |
+| Shared AD vocabulary/metadata | `tenferro-internal-ops/src/ad/` facade and `src/primitive_rules/` |
 | Compilation pipeline | `tenferro-runtime/src/compiler/` |
 | Buffer pool | `tenferro-tensor/src/buffer_pool.rs` |
 | CPU context | `tenferro-tensor/src/cpu/context.rs` |
