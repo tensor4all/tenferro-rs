@@ -1,7 +1,8 @@
 # GPU Backend Design
 
-This document describes the current developer-facing CUDA contract. Execution
-uses a caller-held `tenferro_gpu::cuda::CudaEngine`, opened with
+This document describes the implementation; it does not override it. The
+manifests and `crates/tenferro-gpu/src/cuda/` are authoritative if prose drifts.
+Execution uses a caller-held `tenferro_gpu::cuda::CudaEngine`, opened with
 `CudaEngine::open(device_id)` and borrowed mutably for operations. The `cuda`
 feature is opt-in. WebGPU, Metal execution, and the Apple shared CPU/Metal path
 are not provided today; there is no `webgpu` feature or provider module.
@@ -11,7 +12,10 @@ The implementation is in `crates/tenferro-gpu/src/cuda/`. It builds on
 `t4a-cuda-runtime` and the `t4a-cuda-kernels` catalogue, not CubeCL or CubeK.
 `CudaBackend` is the CUDA storage-seam marker, not the operation entry point.
 There is no `CudaExecSession`, `with_backend_session`, or `with_cubecl` entry.
-The raw vendor-call boundary is `CudaEngine::with_raw`.
+The raw vendor-call boundary is `CudaEngine::with_raw` in `cuda/raw.rs`;
+`cuda/engine.rs` owns the engine state, and `cuda/launch.rs` binds and launches
+the external catalogue's kernels. CubeCL is retired; the legacy names above
+do not describe an available execution path.
 
 Historical CubeCL/CubeK fork evaluations and earlier design records do not
 specify the current dependency or execution contract.
