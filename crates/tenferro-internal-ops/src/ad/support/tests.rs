@@ -228,3 +228,138 @@ fn identity_matrix_helper_rejects_unbound_shape_sources() {
         0,
     );
 }
+
+/// Every preset dtype the AD catalog can seed, with the exact little-endian
+/// bytes the symbolic zero and one constants must carry.
+fn preset_scalar_cases() -> Vec<(DType, Vec<u8>, Vec<u8>)> {
+    fn c32(re: f32, im: f32) -> Vec<u8> {
+        let mut bytes = re.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&im.to_le_bytes());
+        bytes
+    }
+    fn c64(re: f64, im: f64) -> Vec<u8> {
+        let mut bytes = re.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&im.to_le_bytes());
+        bytes
+    }
+    vec![
+        (
+            DType::F32,
+            0.0_f32.to_le_bytes().to_vec(),
+            1.0_f32.to_le_bytes().to_vec(),
+        ),
+        (
+            DType::F64,
+            0.0_f64.to_le_bytes().to_vec(),
+            1.0_f64.to_le_bytes().to_vec(),
+        ),
+        (
+            DType::I32,
+            0_i32.to_le_bytes().to_vec(),
+            1_i32.to_le_bytes().to_vec(),
+        ),
+        (
+            DType::I64,
+            0_i64.to_le_bytes().to_vec(),
+            1_i64.to_le_bytes().to_vec(),
+        ),
+        (DType::Bool, vec![0], vec![1]),
+        (DType::C32, c32(0.0, 0.0), c32(1.0, 0.0)),
+        (DType::C64, c64(0.0, 0.0), c64(1.0, 0.0)),
+    ]
+}
+
+fn sole_constant_bytes(
+    graph: &Graph<StdTensorOp>,
+    value: computegraph::types::LocalValueId,
+) -> (DType, Vec<u8>) {
+    let (op_id, _) = graph.values()[value]
+        .producer
+        .expect("scalar seed must be produced by a constant");
+    match &graph.operations()[op_id].operation {
+        StdTensorOp::Constant { dtype, bytes } => (*dtype, bytes.clone()),
+        other => panic!("expected a Constant, saw {other:?}"),
+    }
+}
+
+#[test]
+fn zero_like_emits_exact_zero_bytes_for_every_preset_dtype() {
+    for (idx, (dtype, zero, _)) in preset_scalar_cases().into_iter().enumerate() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let anchor = builder.add_input(TensorInputKey::User {
+            id: 920 + idx as u64,
+        });
+        let value = super::zero_like(&mut builder, dtype, ValueRef::Local(anchor), 0);
+        let graph = builder.build();
+
+        assert_eq!(
+            op_kind_histogram(&graph),
+            BTreeMap::from([("Constant", 1)]),
+            "a rank-0 seed for {dtype:?} must be one constant and nothing else"
+        );
+        assert_eq!(sole_constant_bytes(&graph, value), (dtype, zero));
+    }
+}
+
+#[test]
+fn one_like_emits_exact_one_bytes_for_every_preset_dtype() {
+    for (idx, (dtype, _, one)) in preset_scalar_cases().into_iter().enumerate() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let anchor = builder.add_input(TensorInputKey::User {
+            id: 930 + idx as u64,
+        });
+        let value = super::one_like(&mut builder, dtype, ValueRef::Local(anchor), 0);
+        let graph = builder.build();
+
+        assert_eq!(
+            op_kind_histogram(&graph),
+            BTreeMap::from([("Constant", 1)]),
+            "a rank-0 seed for {dtype:?} must be one constant and nothing else"
+        );
+        assert_eq!(sole_constant_bytes(&graph, value), (dtype, one));
+    }
+}
+
+#[test]
+fn scalar_seeds_broadcast_once_per_anchor_axis() {
+    for (idx, (dtype, zero, one)) in preset_scalar_cases().into_iter().enumerate() {
+        for (label, expected_bytes) in [("zero", zero), ("one", one)] {
+            let mut builder = GraphBuilder::<StdTensorOp>::new();
+            let anchor = builder.add_input(TensorInputKey::User {
+                id: 940 + idx as u64,
+            });
+            let value = if label == "zero" {
+                super::zero_like(&mut builder, dtype, ValueRef::Local(anchor), 3)
+            } else {
+                super::one_like(&mut builder, dtype, ValueRef::Local(anchor), 3)
+            };
+            let graph = builder.build();
+
+            assert_eq!(
+                op_kind_histogram(&graph),
+                BTreeMap::from([("BroadcastInDim", 1), ("Constant", 1)]),
+                "{label} seed on a rank-3 anchor must lift one scalar once"
+            );
+
+            let (broadcast_id, _) = graph.values()[value]
+                .producer
+                .expect("non-scalar seed must be produced by a broadcast");
+            let broadcast = &graph.operations()[broadcast_id];
+            assert_eq!(
+                broadcast.operation,
+                StdTensorOp::BroadcastInDim {
+                    shape: (0..3)
+                        .map(|axis| DimExpr::InputDim { input_idx: 1, axis })
+                        .collect(),
+                    dims: vec![],
+                }
+            );
+            assert_eq!(broadcast.inputs[1], ValueRef::Local(anchor));
+            let scalar = match broadcast.inputs[0] {
+                ValueRef::Local(id) => id,
+                ref other => panic!("broadcast must consume a local scalar, got {other:?}"),
+            };
+            assert_eq!(sole_constant_bytes(&graph, scalar), (dtype, expected_bytes));
+        }
+    }
+}
