@@ -95,6 +95,7 @@ mod plan_slot_reuse {
             out: Layout::new(&[m, n], &out_strides, 0),
             lhs_conj: false,
             rhs_conj: false,
+            serial: true,
         }
     }
 
@@ -249,5 +250,140 @@ mod plan_slot_reuse {
         let mut want = [0.0f64; 8];
         run(&plan, 1.0, 0.0, &a, &b, &mut want).expect("the previous plan still runs");
         assert_matmul((2, 3, 4), (&a, &b, &want));
+    }
+}
+
+/// c64 products above tcontract's default `FaerLimit` volume (`1 << 17`) take
+/// faer at a thread budget of one (tensor4all-rs#1040), and equal a direct
+/// faer matmul to within a few ULP.
+#[cfg(feature = "native")]
+mod faer_at_budget_one {
+    use crate::test_support::{cpu_engine, with_cpu_session};
+    use tenferro_tensor::{Complex64, DotGeneralConfig, Tensor, TensorDot, TensorRead};
+
+    fn config() -> DotGeneralConfig {
+        DotGeneralConfig {
+            lhs_contracting_dims: [1].as_slice().into(),
+            rhs_contracting_dims: [0].as_slice().into(),
+            lhs_batch_dims: [].as_slice().into(),
+            rhs_batch_dims: [].as_slice().into(),
+        }
+    }
+
+    fn data(len: usize, seed: usize) -> Vec<Complex64> {
+        (0..len)
+            .map(|i| {
+                let x = (i * 2654435761 + seed * 40503) % 1009;
+                Complex64::new(
+                    x as f64 / 503.0 - 1.0,
+                    ((x * 7 + i) % 211) as f64 / 105.0 - 1.0,
+                )
+            })
+            .collect()
+    }
+
+    fn faer_product(
+        a: &[Complex64],
+        b: &[Complex64],
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Vec<Complex64> {
+        use crate::faer::{c64, linalg::matmul::matmul, Accum, Mat, MatRef, Par};
+        let a: Vec<c64> = a.iter().map(|z| c64::new(z.re, z.im)).collect();
+        let b: Vec<c64> = b.iter().map(|z| c64::new(z.re, z.im)).collect();
+        let mut out = Mat::<c64>::zeros(m, n);
+        matmul(
+            out.as_mut(),
+            Accum::Replace,
+            MatRef::from_column_major_slice(&a, m, k),
+            MatRef::from_column_major_slice(&b, k, n),
+            c64::new(1.0, 0.0),
+            Par::Seq,
+        );
+        (0..n)
+            .flat_map(|j| (0..m).map(move |i| (i, j)))
+            .map(|(i, j)| {
+                let z = out.as_ref().get(i, j);
+                Complex64::new(z.re, z.im)
+            })
+            .collect()
+    }
+
+    /// Agreement to a few ULP, not bitwise.
+    ///
+    /// The two calls reach the same kernel family but not the same entry point:
+    /// tcontract multiplies through the t4a-faer conj-aware entry, on a
+    /// destination it may leave uninitialized, while the reference here calls
+    /// `matmul` on an initialized one. On x86_64 the two differ in the last
+    /// bits (2 ULP at 1x141x282 c64, the smallest shape below the old bound;
+    /// aarch64 happens to agree bit for bit). The route assertion is what this
+    /// test guards, so the values only have to agree to faer accuracy.
+    fn assert_same_to_ulp(g: f64, w: f64, shape: (usize, usize, usize)) {
+        let (m, k, n) = shape;
+        let tol = 64.0 * f64::EPSILON * w.abs().max(1.0);
+        assert!(
+            (g - w).abs() <= tol,
+            "{m}x{k}x{n}: {g} and {w} differ by more than 64 ULP"
+        );
+    }
+
+    fn run(engine: &mut crate::CpuEngine, a: &Tensor, b: &Tensor) -> Tensor {
+        with_cpu_session(engine, |session| {
+            session
+                .dot_general_read(
+                    TensorRead::from_tensor(a),
+                    TensorRead::from_tensor(b),
+                    &config(),
+                )
+                .unwrap()
+        })
+    }
+
+    /// The #1040 shapes, all above the old `1 << 17` bound except `1x141x282`.
+    #[test]
+    fn serial_c64_takes_faer_and_matches_direct_faer() {
+        for (m, k, n) in [(1, 141, 282), (8, 141, 282), (141, 282, 141)] {
+            let (av, bv) = (data(m * k, 1), data(k * n, 2));
+            let a = Tensor::from_vec_col_major(vec![m, k], av.clone()).unwrap();
+            let b = Tensor::from_vec_col_major(vec![k, n], bv.clone()).unwrap();
+            let mut engine = cpu_engine(1).unwrap();
+            let _ = crate::contraction::take_last_route_was_faer();
+            let got = run(&mut engine, &a, &b);
+            assert_eq!(
+                crate::contraction::take_last_route_was_faer(),
+                Some(true),
+                "{m}x{k}x{n}: budget one must route to faer"
+            );
+            let want = faer_product(&av, &bv, m, k, n);
+            let got = got.as_slice::<Complex64>().unwrap();
+            assert_eq!(got.len(), want.len());
+            for (g, w) in got.iter().zip(&want) {
+                assert_same_to_ulp(g.re, w.re, (m, k, n));
+                assert_same_to_ulp(g.im, w.im, (m, k, n));
+            }
+        }
+    }
+
+    /// The budget class is part of the plan key: a plan prepared by a serial
+    /// engine is not handed to a wider engine sharing the cache, and back.
+    #[test]
+    fn shared_plan_cache_separates_budget_classes() {
+        let (m, k, n) = (8, 141, 282);
+        let a = Tensor::from_vec_col_major(vec![m, k], data(m * k, 1)).unwrap();
+        let b = Tensor::from_vec_col_major(vec![k, n], data(k * n, 2)).unwrap();
+        let plans = crate::CpuPlanCache::new();
+        let mut serial = cpu_engine(1).unwrap().with_plan_cache(plans.clone());
+        let mut wide = cpu_engine(4).unwrap().with_plan_cache(plans);
+        let _ = run(&mut serial, &a, &b);
+        assert_eq!(crate::contraction::take_last_route_was_faer(), Some(true));
+        let _ = run(&mut wide, &a, &b);
+        assert_eq!(
+            crate::contraction::take_last_route_was_faer(),
+            Some(false),
+            "a wider budget keeps tcontract's default FaerLimit"
+        );
+        let _ = run(&mut serial, &a, &b);
+        assert_eq!(crate::contraction::take_last_route_was_faer(), Some(true));
     }
 }
