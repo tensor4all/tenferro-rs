@@ -63,6 +63,11 @@ name = "fft_plan_cache"
 path = "benches/fft_plan_cache.rs"
 harness = false
 
+[[bench]]
+name = "fft_ndim"
+path = "benches/fft_ndim.rs"
+harness = false
+
 [[test]]
 name = "cuda_fft"
 path = "tests/cuda_fft.rs"
