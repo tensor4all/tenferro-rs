@@ -83,9 +83,14 @@ threadteam = "0.2.0"
 strided-perm = { version = "0.9.0", features = ["parallel"] }
 # The CPU provider stack is on the strided 0.9 / tcontract 0.9 release train; one
 # `tcontract-exec` (check `cargo tree -i tcontract-exec`) keeps `Exec` one type.
-cpueinsum = "0.9.0"
-cpueinsum-blas = "0.9.0"
-tcontract-exec = "0.9.0"
+# Pin the train exactly: 0.9.1 moved it to threadteam 0.3 / strided-basic 0.10 /
+# t4a-faer 0.28, and a caret requirement picks 0.9.1 in any resolution that does
+# not read the committed `Cargo.lock` (the extension-authoring fixture and the
+# doc-consistency temp crate resolve fresh), reintroducing two `Exec` types.
+# Move these three pins together when the stack moves to threadteam 0.3.
+cpueinsum = "=0.9.0"
+cpueinsum-blas = "=0.9.0"
+tcontract-exec = "=0.9.0"
 tlinalg = "0.8.0"
 tlinalg-blas = "0.5.0"
 strided-basic = { version = "0.9.0", default-features = false }

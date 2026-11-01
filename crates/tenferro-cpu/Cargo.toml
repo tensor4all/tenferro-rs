@@ -58,6 +58,11 @@ tenferro-cpu-fused = { path = "../tenferro-cpu-fused", version = "0.9.0" }
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.9.0", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.9.0" }
 cpueinsum.workspace = true
+# The `Exec` bundle this crate builds and hands to cpueinsum/strided is
+# `tcontract_exec::Exec`; naming the crate keeps the pinned 0.9.0 train in any
+# resolution that does not read the committed `Cargo.lock` (see the root
+# `[workspace.dependencies]` comment on the tcontract release train).
+tcontract-exec.workspace = true
 elem-simd-math.workspace = true
 cpueinsum-blas = { workspace = true, optional = true }
 libm.workspace = true
