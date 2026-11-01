@@ -536,6 +536,7 @@ host	tenferro-fft	cpu::managed_tests::domain_bound_backend_accepts_host_owned_ff
 host	tenferro-fft	cpu::managed_tests::domain_bound_backend_accepts_host_read_fft
 host	tenferro-fft	cpu::managed_tests::domain_bound_backend_rejects_foreign_fft_input
 host	tenferro-fft	cpu::managed_tests::managed_cpu_fft_covers_all_supported_scalar_and_operation_paths
+host	tenferro-fft	cpu::managed_tests::managed_cpu_fftn_matches_the_one_axis_transform
 host	tenferro-fft	cpu::managed_tests::managed_output_failures_return_errors_and_leave_input_usable
 gpu	tenferro-fft	cuda::tests::canonicalization::cuda_padding_is_zero_c32
 gpu	tenferro-fft	cuda::tests::canonicalization::cuda_padding_is_zero_c64
@@ -582,6 +583,8 @@ host	tenferro-fft	cuda::tests::source_contract::plan_entry_and_session_reject_fo
 host	tenferro-fft	cuda::tests::source_contract::plan_execution_section_has_no_safe_ffi_pointer_escape
 host	tenferro-fft	cuda::tests::source_contract::plan_execution_stays_on_the_public_raw_session_and_forgets_workspace_on_failed_sync
 host	tenferro-fft	cuda::tests::source_contract::plan_retirement_never_waits_on_the_stream
+host	tenferro-fft	nd_tests::eager_fftn_and_the_extension_path_execute_the_same_axis_loop
+host	tenferro-fft	nd_tests::fftn_executes_on_a_transposed_non_contiguous_view
 host	tenferro-fft	tests::axis_lane_layout_rejects_stride_overflow
 host	tenferro-fft	tests::checked_shape_product_rejects_overflow_before_allocation
 host	tenferro-fft	tests::fft_infer_output_meta_rejects_invalid_trait_inputs_without_panicking
@@ -629,6 +632,16 @@ gpu	tenferro-fft::cuda_fft	traced::cuda_traced_runtime_mismatch_is_rejected_with
 gpu	tenferro-fft::cuda_fft	traced::cuda_traced_zero_batch_returns_empty_outputs_without_engine_cache
 gpu	tenferro-fft::cuda_fft	validation::cuda_validation_rejects_host_foreign_integer_bool_and_invalid_lengths
 gpu	tenferro-fft::cuda_fft	zero_batch::cuda_zero_batch_returns_empty_resident_outputs_without_cache_entries
+host	tenferro-fft::fft_ndim	fftn_matches_the_committed_golden_fixture
+host	tenferro-fft::fft_ndim	fftn_normalization_is_applied_once_over_the_whole_transform
+host	tenferro-fft::fft_ndim	fftn_over_three_axes_matches_sequential_one_axis_fft
+host	tenferro-fft::fft_ndim	fftn_real_input_matches_sequential_full_spectrum_fft
+host	tenferro-fft::fft_ndim	fftn_rejects_empty_repeated_and_mismatched_axes
+host	tenferro-fft::fft_ndim	fftn_reuses_one_plan_per_distinct_length_and_dtype
+host	tenferro-fft::fft_ndim	fftn_with_one_axis_is_exactly_the_one_axis_fft
+host	tenferro-fft::fft_ndim	rfftn_irfftn_round_trip_restores_the_real_grid
+host	tenferro-fft::fft_ndim	rfftn_matches_the_golden_fixture_and_the_onesided_half_of_fftn
+host	tenferro-fft::fft_ndim	traced_fftn_family_matches_the_eager_executor
 host	tenferro-fft::fft_ops	fft_c32_uses_host_runtime
 host	tenferro-fft::fft_ops	fft_c64_matches_numpy_convention
 host	tenferro-fft::fft_ops	fft_cpu_execution_reuses_cached_rustfft_plans
