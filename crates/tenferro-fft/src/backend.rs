@@ -6,7 +6,7 @@ use tenferro_tensor::{Engine, Tensor, TensorRead};
 use crate::{FftPlanCache, FftPlanSpec};
 
 #[derive(Clone, Copy, Debug)]
-enum FftCacheOwner {
+pub(crate) enum FftCacheOwner {
     CallerOwned,
     EngineOwned,
 }
@@ -107,6 +107,20 @@ impl<'a> FftExecutionCache<'a> {
     /// retained-byte estimates supplied at insertion.
     pub fn store_mut(&mut self) -> &mut ExtensionCacheStore {
         self.store
+    }
+
+    /// Borrow the store under the ownership tag of `self`.
+    ///
+    /// A request that executes one backend call per axis hands the backend a
+    /// fresh cache view per step; the tag must survive that split so a
+    /// caller-owned cache is never treated as engine-owned storage.
+    pub(crate) fn with_owner(owner: FftCacheOwner, store: &'a mut ExtensionCacheStore) -> Self {
+        Self { owner, store }
+    }
+
+    /// Return the ownership tag of this cache view.
+    pub(crate) fn owner(&self) -> FftCacheOwner {
+        self.owner
     }
 }
 

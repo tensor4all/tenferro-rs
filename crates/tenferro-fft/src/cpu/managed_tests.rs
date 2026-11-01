@@ -11,7 +11,7 @@ use tenferro_tensor::{
     TensorRead, TensorScalar, TypedTensor,
 };
 
-use crate::{FftNorm, TensorFftExt, TensorReadFftExt};
+use crate::{FftExecutor, FftNorm, TensorFftExt, TensorReadFftExt};
 
 #[derive(Debug, Default)]
 struct AccessCounts {
@@ -358,6 +358,39 @@ fn domain_bound_backend_rejects_foreign_fft_input() {
             ..
         }
     ));
+}
+
+/// A managed CPU tensor is legal input for the one-axis transform, so it must
+/// stay legal for the n-dimensional entry point, including for its owned
+/// per-axis intermediates.
+#[test]
+fn managed_cpu_fftn_matches_the_one_axis_transform() {
+    let domain = FakeDomain::new();
+    let mut backend = backend(&domain);
+    let mut executor = FftExecutor::default();
+    let values: Vec<Complex64> = (0..6)
+        .map(|index| Complex64::new(index as f64, (index % 3) as f64))
+        .collect();
+
+    let input = Tensor::from_typed::<Complex64>(domain.tensor(&[2, 3], values));
+    let n_dimensional = executor
+        .fftn(&input, None, &[0, 1], FftNorm::Backward, &mut backend)
+        .unwrap();
+    assert_managed_output(&n_dimensional, &domain, None);
+
+    let mut sequential = input;
+    for axis in 0..2 {
+        sequential = executor
+            .fft(&sequential, None, axis, FftNorm::Backward, &mut backend)
+            .unwrap();
+    }
+
+    let read = |tensor: &Tensor| {
+        let typed = tensor.as_typed::<Complex64>().unwrap();
+        let guard = typed.backend_buffer().unwrap().map_read().unwrap();
+        guard.to_vec()
+    };
+    assert_eq!(read(&n_dimensional), read(&sequential));
 }
 
 #[test]

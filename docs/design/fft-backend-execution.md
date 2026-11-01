@@ -14,13 +14,61 @@ calling a backend. They pass the result as an immutable `FftPlanSpec`.
 `FftPlanSpec` is a semantic execution request, not a vendor plan. It records:
 
 - the FFT operation and normalization mode;
-- the normalized axis and optional requested transform length;
+- the validated axes, in declaration order, and the optional requested
+  transform length of each axis;
 - the validated input dtype and shape; and
 - the compact column-major input requirement of the current execution path.
 
 Backend-specific choices such as RustFFT versus cuFFT, algorithm selection,
 workspace size, stream identity, and device handles do not belong in the spec.
 Those choices remain private to each `FftBackend` implementation.
+
+## N-dimensional requests
+
+`FftOp` is the single request descriptor behind the eager, traced, and
+extension execution surfaces: it declares one operation, the axes to transform
+in declaration order, one optional requested length per axis, and the
+normalization. A one-axis request is not a separate descriptor or code path; it
+is the ordinary case with one entry in `axes`, and it produces exactly the
+historical one-axis call.
+
+`FftPlanSpec` carries the same axes. The extension executor splits a multi-axis
+request into one single-axis spec per axis and calls the backend once per step,
+so the `FftBackend` SPI, the plan cache key, and every vendor call stay
+one-dimensional. That loop lives in exactly one place — `execute_fft_op` in
+`tenferro-fft/src/lib.rs` — and the eager `FftExecutor::fftn` family and traced
+execution both run through it. It performs no transform arithmetic: it chooses
+the axis order, derives the per-axis operation, and threads the intermediate
+tensor shapes.
+
+Two properties follow from that arrangement and are tested:
+
+- **Axis order.** Complex axes commute and keep their declared order. A real
+  forward transform names its real axis last (the NumPy `rfftn` convention) and
+  runs it first, because it must consume the real input; a complex-to-real
+  inverse names its real axis last and runs it last. `R2cFull`/`R2cOnesided`
+  therefore transform the real axis with `realfft`/cuFFT R2C and the other axes
+  with the complex transform, and `C2r` mirrors that.
+- **Normalization.** `FftNorm` applies once to the whole transform: for
+  `P = prod(shape over axes)`, the selected direction is scaled by `1 / P`
+  (`Ortho`: `1 / sqrt(P)` on both). The per-axis factors multiply to that one
+  factor, so composing one-axis calls agrees with the n-dimensional entry
+  point, while applying that whole-transform factor once per axis is a
+  different transform: with `k = axes.len()` it leaves an extra `P^(k - 1)`
+  (`P^((k - 1) / 2)` for `Ortho`).
+
+Non-contiguous inputs are handled by the backend read path: the request is
+executed against the borrowed input, so a strided view is canonicalized by the
+same code that serves the one-dimensional borrowed surface, and only the
+per-axis intermediates between steps are owned compact tensors.
+
+CUDA currently runs one `cufftPlanMany` transform of that one-dimensional
+length per axis over the resident tensor, and keeps every intermediate on the
+device. A single multi-dimensional `cufftPlanMany` plan over the requested axes
+is not implemented yet; it is the natural next step, and until then an
+n-dimensional CUDA request costs one cuFFT plan plus its device-side
+preparation per axis (the adapter's own scaling, Hermitian completion, and
+transpose passes are unchanged and are not a single-kernel guarantee).
 
 ## Placement and fallback
 
