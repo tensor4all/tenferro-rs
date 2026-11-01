@@ -347,6 +347,75 @@ impl CpuEngine {
         Ok(self.resources.exec(self.batch_policy))
     }
 
+    /// Run `op` on the engine's provider bundle, keeping the engine's guarantees.
+    ///
+    /// `op` receives the same bundle an operation mints (a placement token over
+    /// every worker of the pool, the workspace and the batch policy; see
+    /// [`CpuEngine::exec`]) and runs on the calling thread. Unlike
+    /// [`CpuEngine::exec`], the call is an engine operation: a panic inside `op`
+    /// marks the engine broken, and contraction scratch retained above
+    /// [`CpuEngine::buffer_pool_limit_bytes`] is released when `op` returns.
+    ///
+    /// The bundle is borrowed for the call only, and the engine stays mutably
+    /// borrowed while `op` runs, so neither can be stored or re-entered from
+    /// inside `op`; the compiler rejects both:
+    ///
+    /// ```compile_fail,E0501
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// let engine_ref = &mut engine;
+    /// engine_ref.with_exec(|_| engine_ref.with_exec(|exec| exec.budget()))?;
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// ```compile_fail,E0521
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// let mut kept = None;
+    /// engine.with_exec(|exec| kept = Some(exec))?;
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] with a [`CpuEngineError::Broken`]
+    /// source, without calling `op`, when an earlier operation panicked.
+    ///
+    /// # Panics
+    ///
+    /// Resumes a panic raised by `op` after marking the engine broken.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// let budget = engine.with_exec(|exec| exec.budget())?;
+    /// assert_eq!(budget, 1);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// A panic inside `op` breaks the engine, and a broken engine refuses later
+    /// calls with an error:
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuEngine, CpuEngineError};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    ///     engine.with_exec(|_| panic!("a failing block"))
+    /// }));
+    /// assert!(unwind.is_err());
+    /// assert!(engine.is_broken());
+    ///
+    /// let refused = engine.with_exec(|exec| exec.budget()).unwrap_err();
+    /// let source = std::error::Error::source(&refused).and_then(|s| s.downcast_ref());
+    /// assert_eq!(source, Some(&CpuEngineError::Broken));
+    /// ```
+    pub fn with_exec<R>(
+        &mut self,
+        op: impl FnOnce(&mut cpueinsum::Exec<'_>) -> R,
+    ) -> crate::Result<R> {
+        self.enter("CpuEngine::with_exec", true, |exec, _, _| Ok(op(exec)))
+    }
+
     /// Borrow the provider bundle, the buffer pool and the N-ary contraction
     /// scratch for one downstream call.
     ///
@@ -375,15 +444,7 @@ impl CpuEngine {
             &crate::ContractionWorkspaces,
         ) -> crate::Result<R>,
     ) -> crate::Result<R> {
-        self.check_entry("CpuEngine::with_contraction_exec")?;
-        let _retention = self
-            .resources
-            .retention_guard(self.buffers.max_retained_capacity_bytes());
-        let mut exec = self.resources.exec(self.batch_policy);
-        let nary = &self.resources.nary;
-        guard_unwind(&mut self.buffers, &mut self.broken, |buffers| {
-            op(&mut exec, buffers, nary)
-        })
+        self.enter("CpuEngine::with_contraction_exec", true, op)
     }
 
     /// Borrow the provider bundle and buffer pool for a linalg provider call.
@@ -410,10 +471,34 @@ impl CpuEngine {
         &mut self,
         op: impl FnOnce(&mut cpueinsum::Exec<'_>, &mut BufferPool) -> crate::Result<R>,
     ) -> crate::Result<R> {
-        self.check_entry("CpuEngine::with_linalg_pool")?;
+        self.enter("CpuEngine::with_linalg_pool", false, |exec, buffers, _| {
+            op(exec, buffers)
+        })
+    }
+
+    /// The one guarded entry behind the closure-scoped entries: refuse a broken
+    /// engine, lend the bundle, the buffer pool and the N-ary scratch, mark the
+    /// engine broken if `op` unwinds, and with `bound_retention` release
+    /// workspace retained above the buffer limit afterwards.
+    fn enter<R>(
+        &mut self,
+        name: &'static str,
+        bound_retention: bool,
+        op: impl FnOnce(
+            &mut cpueinsum::Exec<'_>,
+            &mut BufferPool,
+            &crate::ContractionWorkspaces,
+        ) -> crate::Result<R>,
+    ) -> crate::Result<R> {
+        self.check_entry(name)?;
+        let _retention = bound_retention.then(|| {
+            self.resources
+                .retention_guard(self.buffers.max_retained_capacity_bytes())
+        });
         let mut exec = self.resources.exec(self.batch_policy);
+        let nary = &self.resources.nary;
         guard_unwind(&mut self.buffers, &mut self.broken, |buffers| {
-            op(&mut exec, buffers)
+            op(&mut exec, buffers, nary)
         })
     }
 

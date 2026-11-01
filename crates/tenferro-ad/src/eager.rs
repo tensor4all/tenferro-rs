@@ -81,8 +81,6 @@ thread_local! {
     static EAGER_OP_PROFILE_ENABLED_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
     #[cfg(test)]
     static EAGER_OP_PROFILE_PRINT_EVERY_OVERRIDE: RefCell<Option<Option<usize>>> = const { RefCell::new(None) };
-    #[cfg(test)]
-    static EAGER_SEMANTIC_VJP_ENABLED_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -94,18 +92,6 @@ pub(crate) fn eager_grad_recording_enabled() -> bool {
 
 pub(crate) fn eager_capture_active() -> bool {
     EAGER_CAPTURE_DEPTH.with(|depth| depth.get() > 0)
-}
-
-fn eager_semantic_vjp_enabled() -> bool {
-    #[cfg(test)]
-    if let Some(value) = EAGER_SEMANTIC_VJP_ENABLED_OVERRIDE.with(|state| *state.borrow()) {
-        return value;
-    }
-
-    // Semantic eager VJP/JVP on by default (Unification 7).
-    // Set TENFERRO_EAGER_SEMANTIC_VJP=0 to disable.
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| env::var("TENFERRO_EAGER_SEMANTIC_VJP").map_or(true, |v| v != "0"))
 }
 
 /// Scope guard that temporarily disables eager operation recording.
@@ -607,6 +593,13 @@ pub struct Gradients {
 
 impl Gradients {
     fn from_tensors(tensors: HashMap<ValueKey<StdTensorOp>, Tensor>) -> Result<Self> {
+        if tensors.is_empty() {
+            return Err(Error::runtime_state(
+                "backward",
+                ErrorPhase::Execution,
+                "no gradients were produced for reachable tracked leaves; use EagerRuntime::grad_optional or vjp_optional to observe inactive differentiation",
+            ));
+        }
         let (keys, values): (Vec<_>, Vec<_>) = tensors.into_iter().unzip();
         let (group, bindings) = AllocationGroup::from_tensors(values).map_err(|error| {
             Error::runtime_state_source("Gradients::from_tensors", ErrorPhase::Execution, error)
@@ -3547,6 +3540,12 @@ impl EagerRuntime {
 
     /// Reverse-mode vector-Jacobian product that returns `None` for inactive inputs.
     ///
+    /// `None` means the input is disconnected, its eager computation was not
+    /// recorded, or the semantic derivative has no cotangent flow (for example,
+    /// real `sign` or an integer conversion). A present numerical zero is still
+    /// returned as `Some`. Missing rules and execution failures return errors;
+    /// semantic differentiation cannot be disabled by an environment variable.
+    ///
     /// # Examples
     ///
     /// ```
@@ -3637,6 +3636,12 @@ impl EagerRuntime {
 
     /// Forward-mode Jacobian-vector product that returns `None` for inactive outputs.
     ///
+    /// `None` means `wrt` is disconnected, its eager computation was not
+    /// recorded, or the semantic derivative has no tangent flow (for example,
+    /// real `sign` or an integer conversion). A present numerical zero is still
+    /// returned as `Some`. Missing rules and execution failures return errors;
+    /// semantic differentiation cannot be disabled by an environment variable.
+    ///
     /// # Examples
     ///
     /// ```
@@ -3677,11 +3682,7 @@ impl EagerRuntime {
         validate_same_runtime(self, wrt, "jvp wrt")?;
         validate_same_runtime(self, tangent, "jvp tangent")?;
         validate_seed_tensor("jvp", wrt, tangent)?;
-        // Unification 7: semantic path is the only JVP path.
-        match semantic_eager_jvp_optional(self, engine, output, wrt, tangent)? {
-            Some(result) => Ok(result),
-            None => Ok(None),
-        }
+        semantic_eager_jvp_optional(self, engine, output, wrt, tangent)
     }
 
     fn store_grads(
@@ -3917,8 +3918,8 @@ fn semantic_eager_vjp_many(
     wrts: &[&EagerTensor],
     cotangent: &EagerTensor,
 ) -> Result<Vec<Option<EagerTensor>>> {
-    if !eager_semantic_vjp_enabled() || wrts.is_empty() {
-        return Ok(vec![None; wrts.len()]);
+    if wrts.is_empty() {
+        return Ok(Vec::new());
     }
     let Some(raw_output_trace) = output.semantic_trace.as_ref() else {
         return Ok(vec![None; wrts.len()]);
@@ -3954,7 +3955,9 @@ fn semantic_eager_vjp_many(
         || source.input_keys().len() != source.input_count()
         || source.bindings().len() != source.input_count()
     {
-        return Ok(vec![None; wrts.len()]);
+        return Err(Error::Internal(
+            "semantic eager VJP source has inconsistent inputs or outputs".into(),
+        ));
     }
     let wrt_input_indices = wrts
         .iter()
@@ -4178,10 +4181,7 @@ fn semantic_eager_jvp_optional(
     output: &EagerTensor,
     wrt: &EagerTensor,
     tangent: &EagerTensor,
-) -> Result<Option<Option<EagerTensor>>> {
-    if !eager_semantic_vjp_enabled() {
-        return Ok(None);
-    }
+) -> Result<Option<EagerTensor>> {
     let (Some(raw_output_trace), Some(wrt_trace)) =
         (output.semantic_trace.as_ref(), wrt.semantic_trace.as_ref())
     else {
@@ -4204,7 +4204,9 @@ fn semantic_eager_jvp_optional(
         || source.input_keys().len() != source.input_count()
         || source.bindings().len() != source.input_count()
     {
-        return Ok(None);
+        return Err(Error::Internal(
+            "semantic eager JVP source has inconsistent inputs or outputs".into(),
+        ));
     }
     let Some(wrt_input_index) = source.input_key_index(&wrt_key) else {
         return Ok(None);
@@ -4214,7 +4216,9 @@ fn semantic_eager_jvp_optional(
     if let Some(active) = active_inputs.get_mut(wrt_input_index) {
         *active = true;
     } else {
-        return Ok(None);
+        return Err(Error::Internal(
+            "semantic eager JVP input index is outside the source inputs".into(),
+        ));
     }
     let ad = AdContext::with_rules_and_transform_cache(
         ctx.semantic_extension_rules.clone(),
@@ -4232,7 +4236,7 @@ fn semantic_eager_jvp_optional(
         .copied()
         .flatten()
     else {
-        return Ok(Some(None));
+        return Ok(None);
     };
     // derivative_output_indices maps source output → derivative output.
     // There is always exactly one source output (guarded above).
@@ -4242,7 +4246,7 @@ fn semantic_eager_jvp_optional(
         .copied()
         .flatten()
     else {
-        return Ok(Some(None));
+        return Ok(None);
     };
 
     let derivative_program = compiler.compile_frozen_program(derivative.frozen())?;
@@ -4303,14 +4307,14 @@ fn semantic_eager_jvp_optional(
         "semantic_eager_jvp",
     )?;
 
-    Ok(Some(Some(EagerTensor::new_result_with_semantic_trace(
+    Ok(Some(EagerTensor::new_result_with_semantic_trace(
         Arc::clone(ctx),
         eager_val_key(),
         result,
         true,
         None,
         Some(semantic_trace),
-    )?)))
+    )?))
 }
 
 fn validate_same_runtime(
@@ -5265,8 +5269,11 @@ impl EagerTensor {
     /// Run reverse-mode AD from this scalar output.
     ///
     /// Returns the full cotangent map produced by the reverse pass and also
-    /// accumulates into `grad()` for tracked eager tensors reachable from this
-    /// output.
+    /// accumulates into `grad()` for tracked eager leaves reachable from this
+    /// output. A pass with no gradients is an error, not an empty successful
+    /// bundle. If a reachable leaf has no cotangent flow, the pass fails before
+    /// accumulating any gradients; use [`EagerRuntime::vjp_optional`] to observe
+    /// absent flow explicitly.
     ///
     /// For complex scalar outputs, cotangents use tenferro's Hermitian
     /// real-inner-product convention. See
@@ -5294,6 +5301,8 @@ impl EagerTensor {
     /// # Errors
     ///
     /// Returns [`Error::NonScalarGrad`] when this output is not scalar,
+    /// [`Error::Validation`] when a reachable tracked leaf has no cotangent,
+    /// [`Error::RuntimeState`] when no tracked leaf produces a gradient,
     /// [`Error::UnsupportedAdRule`] when a graph operation lacks a reverse rule,
     /// or a typed validation/backend/runtime-state error during the reverse pass.
     pub fn backward(&self, engine: &mut dyn ExecutionEngine) -> Result<Gradients> {
@@ -5309,6 +5318,11 @@ impl EagerTensor {
     }
 
     /// Run reverse-mode AD from this output with an explicit cotangent seed.
+    ///
+    /// Like [`backward`](Self::backward), this rejects absent cotangents for
+    /// reachable tracked leaves before accumulation and never returns an empty
+    /// successful gradient bundle. [`EagerRuntime::vjp_optional`] exposes
+    /// absent flow as `None` instead.
     ///
     /// This is the stateful eager VJP sugar: it returns the cotangent map and
     /// accumulates reachable tracked leaves into their `grad()` slots. Use
@@ -5339,8 +5353,10 @@ impl EagerTensor {
     ///
     /// Returns [`Error::ContextMismatch`] when `cotangent` belongs to another
     /// eager runtime, [`Error::Validation`] when its shape or dtype is not a
-    /// valid seed, [`Error::UnsupportedAdRule`] for an unavailable reverse
-    /// rule, or a typed backend/runtime-state error during execution.
+    /// valid seed or a reachable tracked leaf has no cotangent,
+    /// [`Error::RuntimeState`] when no tracked leaf produces a gradient,
+    /// [`Error::UnsupportedAdRule`] for an unavailable reverse rule, or a typed
+    /// backend/runtime-state error during execution.
     pub fn backward_with(
         &self,
         engine: &mut dyn ExecutionEngine,
@@ -5386,6 +5402,21 @@ impl EagerTensor {
             if !record.requires_grad {
                 continue;
             }
+            // Intermediate and unrelated values also have slots; only request reachable leaves.
+            let Some(input_key) = record
+                .semantic_trace
+                .as_ref()
+                .and_then(TracedTensor::input_key)
+            else {
+                continue;
+            };
+            if !self
+                .semantic_trace
+                .as_ref()
+                .is_some_and(|output| output.has_attached_input_key(&input_key))
+            {
+                continue;
+            }
             targets.push((key, EagerTensor::from_record(record)));
         }
         let wrts = targets.iter().map(|(_, wrt)| wrt).collect::<Vec<_>>();
@@ -5394,9 +5425,16 @@ impl EagerTensor {
             let session: &mut dyn Engine = &mut *engine;
             let mut cotangents = HashMap::new();
             for ((key, _), grad) in targets.into_iter().zip(gradients) {
-                let Some(grad) = grad else {
-                    continue;
-                };
+                let grad = grad.ok_or_else(|| {
+                    Error::invalid_argument(
+                        "backward",
+                        ErrorPhase::GraphBuild,
+                        "wrt",
+                        format!(
+                            "no cotangent flow for reachable tracked leaf {key:?}; use EagerRuntime::vjp_optional to observe absent differentiation"
+                        ),
+                    )
+                })?;
                 let tensor = match grad.into_value() {
                     Ok(tensor) => tensor,
                     Err(IntoValueError::NotUnique(handle)) => {

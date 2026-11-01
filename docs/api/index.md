@@ -73,6 +73,6 @@ are not the recommended application-facing API surface.
 - [tenferro-cpu-fused](./tenferro_cpu_fused/index.html): runtime-DAG fused
   elementwise CPU adapter
 - [tenferro-internal-ops](./tenferro_ops/index.html): graph operation
-  vocabulary and AD rule implementations
+  vocabulary, shared primitive-rule vocabulary and metadata
 - [tenferro-internal-extension-macros](./tenferro_extension_macros/index.html):
   internal extension-op registration macros

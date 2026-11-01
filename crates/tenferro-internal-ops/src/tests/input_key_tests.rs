@@ -1,7 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-#[cfg(feature = "autodiff")]
 use crate::input_key::TensorInputKey;
 
 #[test]

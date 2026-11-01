@@ -195,28 +195,32 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertTrue(dependencies["lapack"]["optional"])
 
     def test_cuda_dependencies_are_pinned_revisions(self) -> None:
-        """The CUDA engine's two upstream crates are `publish = false` git checkouts.
+        """The CUDA engine's two upstream crates are exact revisions of their releases.
 
         A branch or a loose version would let the tested kernel ABI change under the
-        build, so both stay exact revisions, and `cudarc` keeps one feature set so a
-        single CUDA binding resolves in the graph.
+        build, so both stay exact revisions in `[workspace.dependencies]`, next to the
+        exact crates.io version `cargo publish` keeps (the release preflight and
+        `check-git-pin-content.py` scan that table), and `tenferro-gpu` takes them as
+        optional workspace dependencies. `cudarc` keeps one feature set so a single
+        CUDA binding resolves in the graph.
         """
-        manifest = tomllib.loads(
+        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"][
+            "dependencies"
+        ]
+        gpu = tomllib.loads(
             (ROOT / "crates" / "tenferro-gpu" / "Cargo.toml").read_text()
-        )
-        dependencies = manifest["dependencies"]
+        )["dependencies"]
         for name in ("t4a-cuda-runtime", "t4a-cuda-kernels"):
             with self.subTest(dependency=name):
-                spec = dependencies[name]
+                spec = workspace[name]
                 self.assertIn("git", spec)
                 self.assertNotIn("branch", spec)
                 self.assertNotIn("tag", spec)
-                self.assertTrue(spec.get("optional"))
                 self.assertEqual(len(spec["rev"]), 40, "an exact revision")
+                self.assertRegex(spec["version"], r"^=\d+\.\d+\.\d+$")
+                self.assertEqual(gpu[name], {"workspace": True, "optional": True})
 
-        cudarc = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"][
-            "dependencies"
-        ]["cudarc"]
+        cudarc = workspace["cudarc"]
         self.assertFalse(cudarc["default-features"])
         self.assertEqual(
             set(cudarc["features"]),

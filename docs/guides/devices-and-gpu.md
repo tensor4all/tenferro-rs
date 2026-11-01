@@ -3,15 +3,14 @@
 tenferro follows the PyTorch convention: no implicit CPU/GPU transfer. A tensor
 must already live on the device required by the backend operation.
 
-CUDA and WebGPU are backend/device choices, not separate tensor types. The same
-concrete, eager, and traced APIs can run supported GPU operations when tensors
-are explicitly uploaded to the selected provider and the executor/backend uses
-the same provider.
+CUDA is a backend/device choice, not a separate tensor type. The same
+concrete, eager, and traced APIs can run supported CUDA operations when tensors
+are explicitly uploaded and execution uses the owning CUDA engine.
 
-CUDA support targets NVIDIA CUDA. WebGPU support is experimental and currently
-focused on explicit transfer, limited `dot_general`/einsum coverage, and an
-Apple shared CPU/Metal path for FFT and CPU Cholesky.
-AMD/ROCm is not a supported execution path yet.
+CUDA support targets NVIDIA CUDA. WebGPU, Metal execution, and the Apple shared
+CPU/Metal path are not provided today. `tenferro-gpu` has no `webgpu` feature or
+WebGPU upload API. AMD/ROCm is not a supported execution path either; `rocm` is
+an empty reserved feature.
 
 The optional XLA/PJRT path is separate from these tensor backends. It lowers
 static-shaped traced programs to StableHLO in `tenferro-xla` and loads PJRT
@@ -27,31 +26,26 @@ see [CUDA engines and pinned transfers](engines-and-transfers.md).
 | --- | --- | --- | --- |
 | CPU | Supported | default CPU provider features | Host execution |
 | CUDA | Supported | `cuda` | Native NVIDIA CUDA through the `t4a-cuda-kernels` catalogue plus CUDA libraries |
-| WebGPU | Experimental | `webgpu` | Explicit transfer, limited `dot_general`/einsum, and Apple shared CPU/Metal FFT |
-| ROCm | Not supported for execution | `rocm` reserved | Future compile-only substrate; no runtime quickstart |
+| WebGPU / Metal / Apple shared CPU/Metal | Not provided | None | No backend or transfer quickstart |
+| ROCm | Not supported for execution | `rocm` reserved | Empty feature; no runtime quickstart |
 
 ## Transfer Model
 
 | Boundary | What happens |
 | --- | --- |
 | CPU tensor to CUDA backend | Upload first with `tenferro_gpu::cuda::upload_tensor` |
-| CPU tensor to WebGPU backend | Upload first with `tenferro_gpu::webgpu::upload_webgpu_tensor` |
 | CUDA tensor to CUDA backend | Runs on CUDA for supported op/dtype combinations |
-| WebGPU tensor to WebGPU backend | Runs on WebGPU for supported op/dtype combinations |
 | CUDA tensor to CPU backend | `Result`-returning CPU backend ops fail; download first |
-| Ordinary WebGPU tensor to CPU backend | `Result`-returning CPU backend ops fail; download first |
-| Apple managed tensor to its paired CPU backend | Guarded RustFFT and rank-2 Cholesky run without a transfer; other operations are not implied |
 | GPU tensor to host inspection | Direct host slice APIs return `Error::RuntimeState`; download first |
 | Unsupported CUDA op or dtype | Error, not silent CPU fallback |
-| Unsupported WebGPU op or dtype | Error, not silent CPU fallback |
 
 Keep tensors on one GPU provider across a GPU workload. Download only when the
 host needs to inspect values or hand data to CPU-only code.
 
-View compaction follows the same rule. A CUDA backend may copy a CUDA view into
-compact CUDA memory, a WebGPU backend may copy a WebGPU view into compact
-WebGPU memory, and host code may copy a host view into compact host memory, but
-tenferro does not use that copy as a hidden CPU/GPU transfer.
+`TensorStructural::to_contiguous_read` follows the same rule. A CUDA backend
+may copy a CUDA view into compact CUDA memory, and host code may copy a host
+view into compact host memory, but tenferro does not use that copy as a hidden
+CPU/GPU transfer.
 
 CUDA transfers make one host-side copy at most. `upload_tensor` borrows the
 host tensor, so the runtime copies it once into a staging buffer before queueing the
@@ -78,11 +72,13 @@ The host waits when a value is downloaded or otherwise inspected on the host.
 Some library-backed operations also synchronize internally when they must read
 device-side status.
 
-Use `EagerRuntime::synchronize()` when code needs an explicit host-side barrier
-for the eager runtime. CPU runtimes return immediately; CUDA runtimes wait for
-the current backend stream, and WebGPU runtimes wait for the WebGPU queue.
-Direct GPU backend code can call the provider runtime's `synchronize()` through
-`backend.runtime()`.
+Use `ExecutionEngine::synchronize` on the caller-held engine when code needs
+an explicit host-side barrier, including after an eager session releases its
+engine borrow. Import `tenferro_runtime::ExecutionEngine` to call
+`engine.synchronize()?`. CPU work is already complete; a `CudaEngine` waits for
+its stream and retires pending runs. Direct CUDA code can also call the
+lower-level `engine.runtime().synchronize()` barrier. See
+[CUDA engines and pinned transfers](engines-and-transfers.md).
 
 For a time-axis diagram, see [Execution Models](execution-models.md).
 
@@ -154,7 +150,8 @@ cargo build -p tenferro-tutorial-code --no-default-features \
 
 The example downloads the result back to CPU and asserts the expected values.
 An extension reaches the CUDA driver through the public `CudaEngine::with_raw`
-and `cuda::raw` session boundary described below.
+and `cuda::raw` scope described in the
+[GPU backend design](../design/gpu-backend-design.md#operation-crate-interop-boundary).
 
 `TensorStructural::copy_read_into` can reuse an already allocated CUDA
 destination. Both operands may be arbitrary-stride region views at a nonzero
@@ -250,47 +247,6 @@ For XLA/PJRT GPU verification, add the PJRT plugin path separately:
 export TENFERRO_PJRT_GPU_PLUGIN=/path/to/pjrt_c_api_gpu_plugin.so
 ```
 
-## WebGPU Quickstart
-
-WebGPU is experimental and currently useful for explicit transfer plus
-`F32`/`C32` `dot_general` and einsum paths. For a WebGPU-only binary, disable
-default features on `tenferro-gpu` unless the same crate also needs the default
-CPU provider stack:
-
-```toml
-[dependencies]
-tenferro-gpu = { version = "...", default-features = false, features = ["webgpu"] }
-tenferro-tensor = "..."
-```
-
-For a local scratch crate inside the checkout, use matching path dependencies
-and add an empty `[workspace]` table as described in
-[Getting Started](../getting-started/index.md).
-
-<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#devices_and_gpu_31 -->
-```rust
-use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaEngine};
-use tenferro_tensor::Tensor;
-
-if !gpu_available() {
-    return Ok(());
-}
-let devices = cuda_devices()?;
-let Some(device) = devices.first() else { return Ok(()); };
-let engine = CudaEngine::open(device.id())?;
-let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-let gpu_x = upload_tensor(engine.runtime(), &x)?;
-let cpu_x = download_tensor(engine.runtime(), &gpu_x)?;
-assert_eq!(cpu_x.as_slice::<f64>()?, &[1.0, 2.0]);
-```
-<!-- end-snippet-source -->
-
-`DotGeneralConfig` uses StableHLO-style dimension-number fields:
-`lhs_contracting_dims`, `rhs_contracting_dims`, `lhs_batch_dims`, and
-`rhs_batch_dims`. Direct backend code can use the lower-level
-`backend.runtime().synchronize()` barrier; eager code can use
-`EagerRuntime::synchronize()`.
-
 ## CUDA Across Tensor Layers
 
 | Tensor model | How CUDA fits |
@@ -354,6 +310,15 @@ Legend:
 | `reduce_min` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 <!-- cuda-core-capability:end -->
 
+CUDA dot conjugation flags are accepted for all four supported scalar dtypes:
+`F32`/`F64` conjugation is the identity, while `C32`/`C64` conjugate the
+selected operands. `dot_general_read_into` and `dot_general_read_into_accum`
+currently accept destination **views of at most 8 modes**. The limit belongs
+to the scratch-to-view copy ABI, not cuTENSOR contraction. A wider destination
+view returns `Unsupported` with its rank and the supported limit before any
+output is modified. Use an owned `Tensor` destination (or the allocating dot
+entry) instead; owned outputs are not subject to this copy-ABI ceiling.
+
 Additional CUDA coverage outside the first-scope core descriptor is tracked
 below until those operation families are modeled by the backend capability
 descriptor.
@@ -368,53 +333,13 @@ descriptor.
 | `scatter` | operand/update `F32`, `F64`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Add-scatter semantics; complex and `Bool` index tensors and integer/`Bool` operands are not implemented |
 | `slice`, `pad`, `concatenate`, `reverse` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Dense structural/indexing operations |
 | `to_contiguous_read` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Same-device canonicalization of owned tensors and arbitrary valid CUDA views; CUDA `F32`/`F64`/`C32`/`C64` nonnegative-stride canonicalization uses cuTENSOR permutation, while negative-stride views use the native CUDA structural copy because cuTENSOR does not represent that layout; `Bool` is an explicit current limitation |
-| `copy_read_into` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | The source may be any valid region of this runtime (any offset, strides and rank; a source view wider than the catalogue's by-value layout rank keeps one compact staging copy); the destination is an owned tensor or a non-overlapping view up to the catalogue's by-value layout rank, written in place; source and destination allocations must not alias |
+| `copy_read_into` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | The source and destination may be any valid regions of this runtime (including offsets, negative strides and ranks above 8); the destination must be non-overlapping and is written in place. Wide non-flat copies use device-resident geometry, without tensor-sized staging or host transfer; source and destination allocations must not alias |
 | `dynamic_slice` | input `F32`, `F64`, `I32`, `Bool`, `C32`, `C64` with starts `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` start tensors; `I64` inputs are not implemented |
 | `dynamic_update_slice` | operand/update `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` with starts `F32`, `F64`, `I32`, or `I64` | StableHLO window write into a compact operand copy; a strided update and a compact offset starts view are read in place |
 | `cholesky`, `triangular_solve`, `lu`, `svd`, `qr`, `eigh`, `solve` | `F32`, `F64`, `C32`, `C64` | cuSOLVER/cuBLAS-backed; integer and `Bool` dtypes are not implemented |
 | `full_piv_lu`, `full_piv_lu_solve` | No CUDA implementation | Returns an error |
 | General `eig` | No CUDA implementation | cuSOLVER does not provide LAPACK `dgeev`-style general eigendecomposition; download to CPU explicitly |
 | AMD/ROCm | No supported execution backend | ROCm remains reserved for future loader-backed work |
-
-## WebGPU Coverage
-
-The WebGPU backend is experimental. It uses the same tensor APIs as CUDA and
-CPU, but its operation coverage is intentionally much narrower. Unsupported
-rows return explicit errors and do not fall back to CPU.
-
-**WebGPU/Metal versus CUDA at a glance.** In practice the WebGPU/Metal surface
-is transfers, `F32`/`C32` contraction (`dot_general`, binary einsum), `F32`/`I32`
-transpose and compaction, and the Apple Metal FFT. Elementwise and analytic
-math, reductions, reshape/broadcast, indexing (`gather`, `slice`, `pad`, ...),
-and linear algebra are CUDA-only today (see the CUDA coverage table above).
-A model that needs any of those ops on an Apple GPU does not run on WebGPU yet;
-plan for the CPU backend (or CUDA) for those steps, with explicit transfers.
-
-| Family | CUDA | WebGPU/Metal |
-| --- | --- | --- |
-| Upload/download | Explicit, all dtypes | Explicit, all dtypes |
-| `dot_general`, einsum | `F32`, `F64`, `C32`, `C64` | `F32`, `C32` |
-| Elementwise, analytic, comparison/selection | Yes, per-op dtypes in the table above | No |
-| Reductions | Yes, per-op dtypes in the table above | No |
-| Reshape, broadcast, indexing, padding, concatenation | Yes | No (only `transpose` and `to_contiguous_read` for `F32`/`I32`) |
-| Linear algebra | cuSOLVER/cuBLAS families above | No |
-| FFT | cuFFT 1D | CubeK on Apple Metal (power-of-two lengths) |
-| Fused elementwise regions | Yes | No |
-
-| Operation or family | WebGPU dtype support | Notes |
-| --- | --- | --- |
-| Allocation, upload, download | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Explicit CPU/WebGPU transfer only |
-| `dot_general`, `dot_general_with_conj` | `F32`, `C32` | CubeK-backed BGEMM planner; `C32` conjugation is handled by the CubeK complex GEMM API. Supports rank-2, batched, and same-device packed operand layouts covered by tests |
-| Binary einsum lowering to `dot_general` | `F32`, `C32` | Eager `F32`/`C32` and traced `F32` paths are covered when inputs are explicitly uploaded to WebGPU |
-| 1D CFFT/IFFT, one-sided RFFT/IRFFT on Apple Metal | `C32` CFFT/IFFT; `F32` RFFT; `C32` IRFFT | CubeK-backed, explicit backend selection, power-of-two length at least 2; see the FFT guide for padding and length constraints |
-| `transpose`, `to_contiguous_read` | `F32`, `I32` | Same-device native materialization; transpose and strided-view canonicalization share one validated dimension-fusion plan, and exact compact 2D transpose uses a compile-time-configured shared-memory tile |
-| `dot_general` with zero contracting size | No WebGPU implementation | Returns an error until CubeK behavior is validated |
-| `dot_general` for `F64`, `C64` | No WebGPU implementation | Returns an error; no CPU fallback |
-| Elementwise and analytic ops | No WebGPU implementation | Returns an error |
-| Reductions | No WebGPU implementation | Returns an error |
-| Other structural/indexing ops | No WebGPU implementation | Returns an error |
-| Linalg | No WebGPU implementation | Returns an error. The paired CPU backend's rank-2 Cholesky mapping is CPU execution over Apple managed storage, not a WebGPU linalg kernel |
-| ROCm | No supported execution backend | No ROCm quickstart is provided |
 
 If cuTENSOR, cuSOLVER, or cuBLAS are installed outside normal dynamic-linker
 paths, set `TENFERRO_CUTENSOR_PATH`, `TENFERRO_CUSOLVER_PATH`, or

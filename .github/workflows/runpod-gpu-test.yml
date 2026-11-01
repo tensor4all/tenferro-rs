@@ -177,6 +177,8 @@ jobs:
 
           classify_pr_paths() {
             local pr_number="$1"
+            local base_sha="${2:-}"
+            local head_sha="${3:-}"
             local changed_paths=/tmp/runpod-pr-changed-paths.txt
             gh api --paginate \
               "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}/files?per_page=100" \
@@ -187,6 +189,20 @@ jobs:
                 policy_args+=(--path "${path}")
               fi
             done < "${changed_paths}"
+            # The path list cannot tell a rustdoc edit from a code edit in the
+            # same file. Fetch both endpoints so change_policy.py can read the
+            # hunks and drop the paid lane when every changed line is a
+            # `///`/`//!`/`#[doc]`/`/** */` line. Any fetch failure leaves the
+            # path-only policy, which reserves the pod (fail closed).
+            if [ -n "${base_sha}" ] && [ -n "${head_sha}" ] \
+              && grep -q '\.rs$' "${changed_paths}"; then
+              if git fetch --quiet --no-tags --filter=blob:none --depth=100000 \
+                origin "${base_sha}" "${head_sha}"; then
+                policy_args+=(--base "${base_sha}" --head "${head_sha}")
+              else
+                echo "::warning::Could not fetch PR endpoints; classifying by path only."
+              fi
+            fi
             python3 scripts/ci/change_policy.py "${policy_args[@]}"
 
             # A labelled PR takes its CI GPU gate from a maintainer's local GPU
@@ -287,7 +303,7 @@ jobs:
               echo "target_base_sha=${pr_base_sha}"
               echo "pr_number=${pr_number}"
             } >> "${GITHUB_OUTPUT}"
-            classify_pr_paths "${pr_number}"
+            classify_pr_paths "${pr_number}" "${pr_base_sha}" "${pr_head_sha}"
           else
             # Manual dispatch relies on the triggering actor check.
             if [ "${GITHUB_REF}" != "refs/heads/main" ]; then

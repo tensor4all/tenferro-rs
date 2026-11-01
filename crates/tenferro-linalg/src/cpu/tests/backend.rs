@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn test_solve_zero_dim_returns_zeros() {
     let mut backend = tenferro_cpu::CpuEngine::serial();
-    let a = Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![2, 0], vec![]).unwrap());
+    let a = Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![0, 0], vec![]).unwrap());
     let b = Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![0, 1], vec![]).unwrap());
     let x = with_cpu_linalg(&mut backend, |backend| backend.solve(&a, &b)).unwrap();
     assert_eq!(x.shape(), &[0, 1]);

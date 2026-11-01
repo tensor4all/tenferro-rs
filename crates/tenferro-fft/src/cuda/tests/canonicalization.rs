@@ -39,8 +39,8 @@ macro_rules! padding_regression {
                 };
                 let spec = FftPlanSpec::new(
                     operation,
-                    axis,
-                    Some(4),
+                    vec![axis],
+                    Some(vec![4]),
                     FftNorm::Backward,
                     input.dtype(),
                     input.shape().to_vec(),

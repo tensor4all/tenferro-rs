@@ -5,8 +5,8 @@
 
 use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_tensor::{
-    Complex64, ContractionScalar, DotGeneralAccumulation, DotGeneralConfig, Tensor, TensorDot,
-    TensorRead, TensorWrite,
+    Complex32, Complex64, ContractionScalar, DotGeneralAccumulation, DotGeneralConfig, Tensor,
+    TensorDot, TensorRead, TensorView, TensorWrite,
 };
 use tinyvec::TinyVec;
 
@@ -383,6 +383,189 @@ fn operands(engine: &CudaEngine) -> (Tensor, Tensor, Vec<f64>) {
     let lhs = device(engine, vec![2, 2], a);
     let rhs = device(engine, vec![2, 3], b);
     (lhs, rhs, expected)
+}
+
+// The same exact-valued reference exercises real identity and complex conjugation.
+macro_rules! check_conjugation {
+    ($engine:ident, $ty:ty, $tag:ident, $make:expr, $conj:expr) => {{
+        let make = $make;
+        let conjugate = $conj;
+        let a: Vec<$ty> = (1..=4).map(|i| make(i as f64, 1.0 - i as f64)).collect();
+        let b: Vec<$ty> = (1..=6).map(|i| make(i as f64, 2.0 - i as f64)).collect();
+        let host_a = Tensor::from_vec_col_major(vec![2, 2], a.clone()).expect("lhs");
+        let host_b = Tensor::from_vec_col_major(vec![2, 3], b.clone()).expect("rhs");
+        let lhs = upload_tensor($engine.runtime(), &host_a).expect("upload lhs");
+        let rhs = upload_tensor($engine.runtime(), &host_b).expect("upload rhs");
+        for lhs_conj in [false, true] {
+            for rhs_conj in [false, true] {
+                let a: Vec<_> = a
+                    .iter()
+                    .map(|&x| if lhs_conj { conjugate(x) } else { x })
+                    .collect();
+                let b: Vec<_> = b
+                    .iter()
+                    .map(|&x| if rhs_conj { conjugate(x) } else { x })
+                    .collect();
+                let product: Vec<_> = (0..6)
+                    .map(|i| {
+                        let row = i % 2;
+                        let col = i / 2;
+                        a[row] * b[2 * col] + a[row + 2] * b[2 * col + 1]
+                    })
+                    .collect();
+                for beta in [0.0, 2.0] {
+                    for (flavour, shape, strides, offset) in write_view_flavours() {
+                        let original: Vec<$ty> = (0..30).map(|i| make(sentinel(i), -1.0)).collect();
+                        let host =
+                            Tensor::from_vec_col_major(vec![6, 5], original.clone()).expect("root");
+                        let mut root =
+                            upload_tensor($engine.runtime(), &host).expect("upload root");
+                        let region = region_indices(&shape, &strides, offset);
+                        let mut expected = original;
+                        for (i, &index) in region.iter().enumerate() {
+                            expected[index] =
+                                make(0.5, 0.0) * product[i] + make(beta, 0.0) * expected[index];
+                        }
+                        let left = lhs
+                            .as_typed::<$ty>()
+                            .expect("lhs dtype")
+                            .backend_region_view(vec![2, 2], vec![1, 2], 0)
+                            .expect("lhs view");
+                        let right = rhs
+                            .as_typed::<$ty>()
+                            .expect("rhs dtype")
+                            .backend_region_view(vec![2, 3], vec![1, 2], 0)
+                            .expect("rhs view");
+                        let target = root
+                            .as_typed_mut::<$ty>()
+                            .expect("output dtype")
+                            .backend_region_view_mut(shape, strides, offset)
+                            .expect("output view");
+                        $engine
+                            .dot_general_read_into_accum(
+                                TensorRead::from_view(TensorView::$tag(left)),
+                                TensorRead::from_view(TensorView::$tag(right)),
+                                &plain(&[1], &[0], &[], &[]),
+                                DotGeneralAccumulation {
+                                    lhs_conj,
+                                    rhs_conj,
+                                    alpha: ContractionScalar::$tag(make(0.5, 0.0)),
+                                    beta: ContractionScalar::$tag(make(beta, 0.0)),
+                                },
+                                TensorWrite::from_view(TensorViewMut::$tag(target)),
+                            )
+                            .expect("conjugated accumulation");
+                        let observed = download_tensor($engine.runtime(), &root).expect("download");
+                        assert_eq!(
+                            observed.as_slice::<$ty>().expect("dtype"),
+                            expected,
+                            "{} {flavour} lhs_conj={lhs_conj} rhs_conj={rhs_conj} beta={beta}",
+                            stringify!($ty)
+                        );
+                    }
+                }
+            }
+        }
+    }};
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn real_dot_conjugation_flags_are_identity() {
+    let Some(mut engine) = engine() else { return };
+    check_conjugation!(engine, f32, F32, |re: f64, _im: f64| re as f32, |x: f32| x);
+    check_conjugation!(engine, f64, F64, |re: f64, _im: f64| re, |x: f64| x);
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn complex_dot_conjugation_flags_preserve_conjugation() {
+    let Some(mut engine) = engine() else { return };
+    check_conjugation!(
+        engine,
+        Complex32,
+        C32,
+        |re: f64, im: f64| Complex32::new(re as f32, im as f32),
+        |x: Complex32| x.conj()
+    );
+    check_conjugation!(
+        engine,
+        Complex64,
+        C64,
+        |re: f64, im: f64| Complex64::new(re, im),
+        |x: Complex64| x.conj()
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn dot_destination_view_rank_limit_is_explicit_and_nonmutating() {
+    let Some(mut engine) = engine() else { return };
+    for rank in [8, 9, 18] {
+        let mut shape = vec![1; rank];
+        shape[0] = 2;
+        let mut lhs_shape = shape.clone();
+        lhs_shape.push(1);
+        let lhs = device(&engine, lhs_shape, vec![3.0, 4.0]);
+        let rhs = device(&engine, vec![1], vec![2.0]);
+        let config = plain(&[rank], &[0], &[], &[]);
+        // cuTENSOR itself is not limited to the write-copy ABI's eight axes.
+        let mut owned = device(&engine, shape.clone(), vec![10.0, 20.0]);
+        engine
+            .dot_general_read_into_accum(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                accumulation(1.0, 2.0),
+                TensorWrite::from_tensor(&mut owned),
+            )
+            .expect("owned high-rank output");
+        assert_eq!(read(&engine, &owned), vec![26.0, 48.0]);
+        for beta in [None, Some(0.0), Some(2.0)] {
+            let mut root = device(&engine, vec![5], vec![100.0, 10.0, 200.0, 20.0, 300.0]);
+            let view = root
+                .as_typed_mut::<f64>()
+                .expect("f64")
+                .backend_region_view_mut(shape.clone(), vec![2; rank], 1)
+                .expect("view");
+            let out = TensorWrite::from_view(TensorViewMut::F64(view));
+            let result = if let Some(beta) = beta {
+                engine.dot_general_read_into_accum(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                    accumulation(1.0, beta),
+                    out,
+                )
+            } else {
+                engine.dot_general_read_into(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                    out,
+                )
+            };
+            if rank == 8 {
+                result.expect("rank-eight destination");
+                let beta = beta.unwrap_or(0.0);
+                assert_eq!(
+                    read(&engine, &root),
+                    vec![100.0, 6.0 + beta * 10.0, 200.0, 8.0 + beta * 20.0, 300.0]
+                );
+            } else {
+                let error = result.expect_err("wide view must give the documented refusal");
+                assert!(matches!(error, tenferro_tensor::Error::Unsupported { .. }));
+                let message = error.to_string();
+                assert!(
+                    message.contains(&format!("destination view rank {rank}")),
+                    "{message}"
+                );
+                assert!(message.contains("at most 8"), "{message}");
+                assert!(message.contains("owned Tensor destination"), "{message}");
+                assert_eq!(read(&engine, &root), vec![100.0, 10.0, 200.0, 20.0, 300.0]);
+            }
+        }
+    }
 }
 
 fn accumulation(alpha: f64, beta: f64) -> DotGeneralAccumulation {

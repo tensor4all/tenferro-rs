@@ -3,7 +3,6 @@ pub(crate) use crate::error::unsupported_dtype;
 mod cholesky;
 mod eig;
 mod eigh;
-mod full_piv_lu;
 mod helpers;
 mod lu;
 mod qr;
@@ -14,7 +13,6 @@ mod triangular_solve;
 pub(crate) use cholesky::{cholesky, cholesky_compact_data};
 pub(crate) use eig::{eig, eig_values};
 pub(crate) use eigh::{eigh, eigh_values};
-pub(crate) use full_piv_lu::{full_piv_lu, full_piv_lu_solve};
 pub(crate) use lu::{lu, lu_factor};
 pub(crate) use qr::{
     append_2d as householder_qr_append, compact_factor_2d as householder_qr,

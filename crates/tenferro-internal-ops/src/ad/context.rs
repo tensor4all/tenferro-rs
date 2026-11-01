@@ -508,12 +508,6 @@ impl ShapeGuardContext {
         self
     }
 
-    #[doc(hidden)]
-    #[cfg(feature = "autodiff")]
-    pub(crate) fn extension_ad_dispatcher(&self) -> Option<Arc<dyn ExtensionAdDispatcher>> {
-        self.extension_ad_dispatcher.as_ref().map(Arc::clone)
-    }
-
     #[cfg(feature = "autodiff")]
     pub fn with_linearize_active_values(
         mut self,

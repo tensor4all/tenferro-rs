@@ -299,7 +299,8 @@ computegraph owns:
 
 computegraph does NOT own:
   - AD rule registries or semantic AD transforms -> tenferro crates
-  - AD rule traits (linearize, transpose_rule) -> tenferro-internal-ops
+  - Shared primitive rule-builder/error vocabulary -> tenferro-internal-ops
+  - Core semantic derivative rules -> tenferro-ad
   - concrete primitives → downstream (tenferro-rs)
   - backend-specific lowering (StableHLO) → downstream
 ```

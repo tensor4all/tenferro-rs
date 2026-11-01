@@ -79,9 +79,9 @@ fn cuda_runtime_materialization_limitations_are_documented() {
         let rendered_text = document.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(rendered_text.contains("to_contiguous_read"));
         assert!(rendered_text.contains("copy_read_into"));
-        // The read/write view contract (#2223): any source region, a destination view up to
-        // the catalogue's by-value layout rank, and no aliasing.
-        assert!(rendered_text.contains("by-value layout rank"));
+        // Wide copy views (#2334) use the general kernel, not the fixed-layout rank ceiling.
+        assert!(rendered_text.contains("ranks above"));
+        assert!(rendered_text.contains("device-resident geometry"));
         assert!(rendered_text.contains("must not alias"));
     }
 }

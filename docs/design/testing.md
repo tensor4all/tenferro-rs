@@ -275,7 +275,12 @@ product (HVP) across all differentiable operations.
   - `crates/tenferro-einsum/tests/` — einsum AD tests
   - `crates/tenferro-linalg/tests/` — linalg AD tests
   - `crates/tenferro-ad/tests/` — eager/traced AD integration tests
-  - `crates/tenferro-internal-ops/src/ad/tests/` — primitive rule tests
+  - `crates/tenferro-internal-ops/src/ad/tests/` — retained context, metadata,
+    global-scope and shape-guard tests
+  - `crates/tenferro-internal-ops/src/ad/support/tests.rs` — support manifest
+    and semantic constant/identity helper tests
+  - `crates/tenferro-internal-ops/src/primitive_rules/tests.rs` — shared rule
+    vocabulary and residual declarations, including all 52 pre-retirement masks
 - Workspace-level integration tests (in `tests/` at the workspace root) cover
   cross-crate AD scenarios: e.g., an einsum followed by an SVD inside a single
   tape, or C-API roundtrip correctness for AD.
@@ -366,8 +371,8 @@ Notes:
 
 ### AD rule interfaces / tenferro-ad
 
-- `tenferro-internal-ops`: core primitive AD graph-rule interfaces and
-  `StdTensorOp` rule registry
+- `tenferro-internal-ops`: shared primitive-rule vocabulary, shape metadata,
+  support helpers and residual declarations; no core graph AD emitter
 - `tenferro-ad`: semantic AD transforms, extension rule sets, AD transform
   cache, eager runtime, eager tensors, traced AD helper APIs, and integration
   tests over tenferro tensors

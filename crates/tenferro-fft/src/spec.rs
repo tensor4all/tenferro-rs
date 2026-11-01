@@ -59,6 +59,7 @@ pub enum FftOperation {
 }
 
 impl FftOperation {
+    #[cfg(feature = "autodiff")]
     pub(crate) const fn is_c2c(self) -> bool {
         matches!(self, Self::C2cForward | Self::C2cInverse)
     }
@@ -70,14 +71,38 @@ impl FftOperation {
     pub(crate) const fn is_onesided(self) -> bool {
         matches!(self, Self::R2cOnesided)
     }
+
+    /// Return the operation of the `index`-th declared axis of a `count`-axis request.
+    ///
+    /// `count == 1` returns `self`, so a one-axis request is exactly the
+    /// historical one-dimensional transform. For the mixed real transforms the
+    /// last declared axis carries the real transform while every other axis is
+    /// complex, which is the NumPy `rfftn`/`irfftn` convention.
+    pub(crate) const fn step_operation(self, index: usize, count: usize) -> Self {
+        if index + 1 < count {
+            match self {
+                Self::R2cFull | Self::R2cOnesided => Self::C2cForward,
+                Self::C2r => Self::C2cInverse,
+                Self::C2cForward | Self::C2cInverse => self,
+            }
+        } else {
+            self
+        }
+    }
 }
 
-/// Validated, backend-neutral description of one FFT request.
+/// Validated, backend-neutral description of one FFT request over one or more axes.
 ///
 /// Backends receive this value only after the public FFT surface has validated
-/// dtype, rank, axis, requested length, and inverse-spectrum shape. The layout
+/// dtype, rank, axes, requested lengths, and inverse-spectrum shape. The layout
 /// requirement is explicit so a backend can reject unsupported storage without
 /// silently materializing or transferring the input.
+///
+/// A spec carries one or more axes. The n-dimensional executor splits a
+/// multi-axis request into one single-axis spec per axis, so every spec a
+/// backend actually executes names exactly one axis; [`Self::axes`] stays
+/// useful for tests and diagnostics. Axis order is significant only for the
+/// mixed real transforms, whose real transform is the last declared axis.
 ///
 /// # Examples
 ///
@@ -88,13 +113,14 @@ impl FftOperation {
 ///     let operation: FftOperation = spec.operation();
 ///     assert_eq!(operation, spec.operation());
 ///     assert!(spec.requires_compact_column_major());
+///     assert!(!spec.axes().is_empty());
 /// }
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FftPlanSpec {
     operation: FftOperation,
-    normalized_axis: usize,
-    requested_len: Option<usize>,
+    axes: Vec<usize>,
+    lengths: Option<Vec<usize>>,
     norm: FftNorm,
     input_dtype: DType,
     input_shape: Vec<usize>,
@@ -102,18 +128,29 @@ pub struct FftPlanSpec {
 }
 
 impl FftPlanSpec {
+    /// Build a spec from already-validated axes and per-axis lengths.
+    ///
+    /// `axes` must be non-empty and `lengths`, when present, must match its
+    /// length. Every public constructor validates that before reaching here.
     pub(crate) fn new(
         operation: FftOperation,
-        normalized_axis: usize,
-        requested_len: Option<usize>,
+        axes: Vec<usize>,
+        lengths: Option<Vec<usize>>,
         norm: FftNorm,
         input_dtype: DType,
         input_shape: Vec<usize>,
     ) -> Self {
+        debug_assert!(!axes.is_empty(), "an FFT spec names at least one axis");
+        debug_assert!(
+            lengths
+                .as_ref()
+                .is_none_or(|lengths| lengths.len() == axes.len()),
+            "one requested length per axis"
+        );
         Self {
             operation,
-            normalized_axis,
-            requested_len,
+            axes,
+            lengths,
             norm,
             input_dtype,
             input_shape,
@@ -121,19 +158,33 @@ impl FftPlanSpec {
         }
     }
 
-    /// Return the transform operation.
+    /// Return the transform operation of the last declared axis.
     pub const fn operation(&self) -> FftOperation {
         self.operation
     }
 
-    /// Return the non-negative, validated axis.
-    pub const fn normalized_axis(&self) -> usize {
-        self.normalized_axis
+    /// Return every validated axis of this request.
+    pub fn axes(&self) -> &[usize] {
+        &self.axes
     }
 
-    /// Return the caller-requested transform length, if one was supplied.
-    pub const fn requested_len(&self) -> Option<usize> {
-        self.requested_len
+    /// Return the caller-requested transform length of every axis, if supplied.
+    pub fn lengths(&self) -> Option<&[usize]> {
+        self.lengths.as_deref()
+    }
+
+    /// Return the non-negative, validated axis executed by a backend.
+    ///
+    /// Multi-axis requests are expanded into one single-axis spec per axis
+    /// before a backend sees them, so this is the axis of the step to run now.
+    pub fn normalized_axis(&self) -> usize {
+        // INVARIANT: `new` requires a non-empty axis list.
+        self.axes[0]
+    }
+
+    /// Return the caller-requested transform length of the executed step.
+    pub fn requested_len(&self) -> Option<usize> {
+        self.lengths.as_ref().map(|lengths| lengths[0])
     }
 
     /// Return the requested normalization convention.

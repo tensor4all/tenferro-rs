@@ -74,6 +74,7 @@ _CI_FILES = frozenset(
     {
         ".github/dependabot.yml",
         "scripts/check-pr-fast.sh",
+        "scripts/check-contraction-kernels.py",
         "scripts/check-public-boundary-inventory.py",
         "scripts/test-public-boundary-inventory.py",
     }
@@ -165,6 +166,140 @@ def _is_macos_control_plane_path(path: str) -> bool:
     return path in _MACOS_CONTROL_FILES
 
 
+_RUST_SUFFIX = ".rs"
+# A changed Rust line may only belong to one of these shapes to count as
+# documentation: blank, `///`/`//!` comment, `#[doc ...]` attribute, or a
+# `/** ... */` block-comment line. Everything else keeps the full policy.
+_DOC_LINE_PREFIXES = ("///", "//!", "#[doc", "/**", "*/")
+_TEST_DIRECTORIES = frozenset({"tests", "benches", "examples"})
+
+
+def _is_rust_comment_only_line(line: str) -> bool:
+    """Return True when one changed Rust line only edits documentation."""
+
+    text = line.strip()
+    if not text:
+        return True
+    if text.startswith(_DOC_LINE_PREFIXES):
+        return True
+    # Block-comment body: accept a bare '*' or '* text', never '*ptr = 1;'.
+    return text == "*" or text.startswith(("* ", "*\t"))
+
+
+def _is_rust_test_path(path: str) -> bool:
+    """Test, bench and example targets always keep the full policy."""
+
+    parts = Path(path).parts
+    name = parts[-1]
+    return (
+        any(part in _TEST_DIRECTORIES for part in parts[:-1])
+        or name in {"test.rs", "tests.rs"}
+        or name.startswith("test_")
+        or name.endswith(("_test.rs", "_tests.rs"))
+    )
+
+
+def _split_diff_blocks(diff_text: str) -> list[list[str]]:
+    blocks: list[list[str]] = []
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            blocks.append([])
+        if blocks:
+            blocks[-1].append(line)
+    return blocks
+
+
+def _diff_block_path(block: Sequence[str]) -> str | None:
+    for line in block:
+        if line.startswith("+++ b/"):
+            return line[len("+++ b/") :]
+    for line in block:
+        if line.startswith("--- a/"):
+            return line[len("--- a/") :]
+    return None
+
+
+def _diff_block_is_docs_only(block: Sequence[str]) -> bool:
+    in_hunk = False
+    saw_change = False
+    for line in block:
+        if line.startswith("@@"):
+            in_hunk = True
+            continue
+        if not in_hunk:
+            continue
+        if line.startswith("\\"):
+            # "\ No newline at end of file" carries no source text.
+            continue
+        if line[:1] in {"+", "-", " "}:
+            saw_change = True
+            if not _is_rust_comment_only_line(line[1:]):
+                return False
+            continue
+        return False
+    # An empty diff (pure rename, identical content) proves nothing.
+    return saw_change
+
+
+def _parse_docs_only_diff(
+    diff_text: str, candidates: Sequence[str]
+) -> frozenset[str]:
+    allowed = frozenset(candidates)
+    verdicts: dict[str, bool] = {}
+    for block in _split_diff_blocks(diff_text):
+        path = _diff_block_path(block)
+        if path is None or path not in allowed:
+            # Unexpected shape (quoted or unparsable path): keep full policy.
+            return frozenset()
+        verdicts[path] = verdicts.get(path, True) and _diff_block_is_docs_only(
+            block
+        )
+    return frozenset(path for path, docs_only in verdicts.items() if docs_only)
+
+
+def _docs_only_rust_paths(
+    paths: Sequence[str],
+    base: str,
+    head: str,
+    *,
+    cwd: str | None = None,
+) -> frozenset[str]:
+    """Return the Rust paths whose entire diff only edits documentation.
+
+    Fail closed: any non-Rust path, test target, git failure or unexpected diff
+    shape yields an empty set, so the caller keeps the full policy.
+    """
+
+    candidates = tuple(
+        path
+        for path in paths
+        if path.endswith(_RUST_SUFFIX) and not _is_rust_test_path(path)
+    )
+    if not candidates or len(candidates) != len(paths):
+        return frozenset()
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "diff",
+                "-U0",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                f"{base}...{head}",
+                "--",
+                *candidates,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    return _parse_docs_only_diff(result.stdout, candidates)
+
+
 def _full_policy(reason: str, *, run_gpu: bool = True) -> ChangePolicy:
     return ChangePolicy(
         change_class=ChangeClass.CODE,
@@ -180,9 +315,20 @@ def _full_policy(reason: str, *, run_gpu: bool = True) -> ChangePolicy:
 
 
 def classify_paths(
-    paths: Sequence[str], event: str = "pull_request"
+    paths: Sequence[str],
+    event: str = "pull_request",
+    *,
+    base: str | None = None,
+    head: str | None = None,
+    cwd: str | None = None,
 ) -> ChangePolicy:
-    """Classify paths, defaulting empty and unknown diffs to full validation."""
+    """Classify paths, defaulting empty and unknown diffs to full validation.
+
+    `base`/`head` are optional. When both are given, an otherwise-unknown diff
+    that only edits Rust documentation comments keeps every lane except the
+    paid GPU pod. Without them the diff content cannot be inspected and the
+    full policy stands (fail closed).
+    """
 
     normalized = tuple(
         sorted(
@@ -203,6 +349,36 @@ def classify_paths(
     known = frozenset((*docs, *ci))
     unknown = tuple(path for path in normalized if path not in known)
     if unknown:
+        comment_only = (
+            _docs_only_rust_paths(unknown, base, head, cwd=cwd)
+            if base and head
+            else frozenset()
+        )
+        if comment_only and len(comment_only) == len(unknown):
+            # Only the paid device lane depends on what the code says. A
+            # GPU control-plane file in the same diff still reserves the pod.
+            return ChangePolicy(
+                change_class=ChangeClass.CODE,
+                run_rust=True,
+                run_blas=True,
+                run_extensions=True,
+                run_docs=True,
+                run_ci_config=True,
+                run_gpu=any(
+                    _is_gpu_device_control_plane_path(path) for path in ci
+                ),
+                run_macos=True,
+                reasons=tuple(
+                    reason
+                    for reason in (
+                        "docs-only Rust comments: "
+                        + ", ".join(sorted(comment_only)),
+                        "docs: " + ", ".join(docs) if docs else "",
+                        "ci: " + ", ".join(ci) if ci else "",
+                    )
+                    if reason
+                ),
+            )
         return _full_policy("code or unknown paths: " + ", ".join(unknown))
 
     reasons = tuple(
@@ -252,21 +428,31 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--event", choices=("pull_request", "push"), default="pull_request"
     )
-    parser.add_argument("--path", action="append", default=[])
-    parser.add_argument("--base")
-    parser.add_argument("--head")
+    parser.add_argument(
+        "--path", action="append", default=[], help="changed path (repeatable)"
+    )
+    parser.add_argument("--base", help="base revision of the diff")
+    parser.add_argument(
+        "--head",
+        help="head revision; with --path it only enables content inspection",
+    )
     args = parser.parse_args()
     if bool(args.base) != bool(args.head):
         parser.error("--base and --head must be provided together")
-    if args.path and args.base:
-        parser.error("use either --path or --base/--head")
     return args
 
 
 def main() -> int:
     args = _parse_args()
-    paths = _changed_paths(args.base, args.head) if args.base else args.path
-    policy = classify_paths(paths, event=args.event)
+    if args.path:
+        paths = list(args.path)
+    elif args.base:
+        paths = _changed_paths(args.base, args.head)
+    else:
+        paths = []
+    policy = classify_paths(
+        paths, event=args.event, base=args.base, head=args.head
+    )
     print(json.dumps(policy.as_output(), sort_keys=True))
     if output_path := os.environ.get("GITHUB_OUTPUT"):
         _write_github_output(policy, output_path)

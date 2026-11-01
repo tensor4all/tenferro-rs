@@ -22,48 +22,36 @@ rule-structure rationale, see
 
 ## Core Primitive Rule Contract
 
-Core rules are defined in `tenferro-internal-ops/src/ad/` and registered by
-`PrimitiveOpKind`. The canonical internal rule trait is:
+Core rules are implemented by `tenferro-ad/src/semantic_transform.rs` and its
+helper modules as semantic program transforms, not by a graph-rule registry
+in `tenferro-internal-ops`.
+
+The shared `tenferro_ops::ad::` vocabulary remains available to family rule
+adapters: `PrimitiveRuleBuilder`, `PrimitiveTransposeInput`, `ADRuleKind`,
+`ADRuleError`, `ADRuleResult`, `ResidualSpec`, context and support helpers.
+The builder contract is unchanged:
 
 ```rust
-pub(crate) trait PrimitiveAdRule: Send + Sync {
-    fn kind(&self) -> PrimitiveOpKind;
-
-    fn linearize(
-        &self,
-        op: &StdTensorOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        primal_in: &[ValueKey<StdTensorOp>],
-        primal_out: &[ValueKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValueId>],
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
-
-    fn transpose_rule(
-        &self,
-        op: &StdTensorOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        cotangent_out: &[Option<LocalValueId>],
-        inputs: &[TransposeInputRef<'_>],
-        mode: &OperationRole,
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
+pub trait PrimitiveRuleBuilder {
+    fn add_operation(
+        &mut self,
+        operation: StdTensorOp,
+        inputs: Vec<ValueRef<StdTensorOp>>,
+        role: OperationRole,
+    ) -> Vec<LocalValueId>;
 }
 ```
 
-`ADRuleResult<T>` is tenferro's rule-emission result type. Rule failures must
-be reported through typed `ADRuleError` values instead of panicking or silently
-dropping derivative flow.
-
-`PrimitiveRuleBuilder` is the only mutation surface available to core rules.
-Rules emit graph operations; they do not execute tensors, read runtime caches,
-or inspect backend state.
+`ADRuleResult<T>` remains the shared rule-adapter result type. Transform and
+adapter failures must be typed errors, never panics or silently dropped
+derivative flow. Rules build derivative programs; they do not execute tensors,
+read runtime caches, or inspect backend state.
 
 ## Transpose Inputs
 
-Transpose rules receive typed `TransposeInputRef` values derived from
-`PrimitiveTransposeInput<StdTensorOp>` so they can distinguish fixed operands
-from active linear flow.
+Semantic transpose distinguishes fixed operands from active linear flow.
+Family rule adapters retain the typed `PrimitiveTransposeInput<StdTensorOp>`
+vocabulary; the old graph emitter's `TransposeInputRef` wrapper is retired.
 
 Residual or metadata inputs are independent of the differentiated tangent flow
 and may be used as ordinary rule operands. Linear inputs belong to tangent
@@ -115,9 +103,24 @@ interpreters for the same rule model:
 - **Eager transforms** record eager operations as small graphs/programs and
   reuse the same context-owned transform machinery.
 - **Stateful eager reverse mode** (`backward()` and `backward_with(seed)`)
-  accumulates reachable tracked leaves into gradient slots.
+  accumulates reachable tracked leaves into gradient slots. It returns an error
+  if no gradient is produced (`RuntimeState`) or a selected reachable leaf has
+  no cotangent flow (`Validation`), rather than silently returning an empty or
+  partial bundle. Missing cotangents are rejected before gradient accumulation;
+  unrelated leaves remain untouched. A present numerical zero is a gradient,
+  not absent flow.
 - **Functional eager transforms** (`grad`, `vjp`, `jvp`) return ordinary eager
-  tensors and do not mutate gradient slots.
+  tensors and do not mutate gradient slots. Their `*_optional` counterparts
+  return `None` for disconnected inputs, unrecorded eager computations, or
+  structurally absent derivative flow (for example, real `Sign` or integer
+  conversions). The required APIs report an inactive-`wrt` validation error
+  instead. Missing rules, invalid compiled state, and execution failures are
+  errors, not inactive results.
+
+Semantic transforms are the only eager VJP/JVP route. The retired
+`TENFERRO_EAGER_SEMANTIC_VJP` environment variable has no effect. A general
+empty `AllocationGroup` remains valid storage, but cannot make an empty
+stateful differentiation result successful.
 
 Rule emission must be deterministic for a fixed primitive payload, input and
 output metadata, active masks, requested output slots, AD context, and
@@ -277,7 +280,7 @@ difference requirements for AD at those discontinuous boundaries.
 
 ## Owned By This Document
 
-- Core `PrimitiveAdRule` rule-emission contract
+- Core semantic rule-emission contract and shared builder vocabulary
 - Extension semantic AD boundary
 - Closure rule
 - Cotangent accumulation rule

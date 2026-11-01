@@ -18,6 +18,8 @@ use tenferro_tensor::{
 };
 
 use crate::extension::{EighOptions, QrOptions, SvdOptions};
+use crate::traced::real_values_dtype;
+use crate::validation::validate_square_matrix;
 use crate::{LinalgBackend, RankRevealingQrOptions, RankRevealingQrResult};
 
 /// Scalar types supported by statically typed linear algebra methods.
@@ -635,6 +637,13 @@ pub trait TensorLinalgExt {
         rtol: f64,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// Compute a vector, matrix, or tensor norm.
+    ///
+    /// `ord = None` is the Frobenius/Euclidean norm. `ord = Some(0.0)` is the
+    /// count of entries that are not equal to zero: `NaN` counts as nonzero,
+    /// both `+0.0` and `-0.0` count as zero, and `±inf` count as nonzero
+    /// (#2359; see `docs/spec/tensor-semantics.md`).
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for axes/order combinations or required backend operations.
@@ -1219,6 +1228,12 @@ pub trait TensorReadLinalgExt {
         rtol: f64,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// Compute a vector, matrix, or tensor norm from a borrowed read.
+    ///
+    /// `ord = Some(0.0)` is the count of entries that are not equal to zero:
+    /// `NaN` counts as nonzero, both `+0.0` and `-0.0` count as zero, and
+    /// `±inf` count as nonzero (#2359; see `docs/spec/tensor-semantics.md`).
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for axes/order combinations or required read/backend operations.
@@ -1722,6 +1737,13 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
         rtol: f64,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// Compute a vector, matrix, or tensor norm.
+    ///
+    /// `ord = None` is the Frobenius/Euclidean norm. `ord = Some(0.0)` is the
+    /// count of entries that are not equal to zero: `NaN` counts as nonzero,
+    /// both `+0.0` and `-0.0` count as zero, and `±inf` count as nonzero
+    /// (#2359; see `docs/spec/tensor-semantics.md`).
+    ///
     /// # Errors
     /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
     /// Returns validation errors for axes/order combinations, backend, or typed-output errors.
@@ -1863,11 +1885,19 @@ impl TensorLinalgExt for Tensor {
         })
     }
     fn slogdet(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        validate_square_matrix("slogdet", self.shape())?;
+        if self.shape()[0] == 0 && self.shape()[1] == 0 {
+            ensure_linalg_input_residency(session, "slogdet", &TensorRead::from_tensor(self))?;
+            return with_linalg_backend(session, "slogdet", |backend| {
+                empty_square_slogdet(self.shape(), self.dtype(), backend)
+            });
+        }
         with_linalg_backend(session, "slogdet", |backend| {
             slogdet_from_lu(four(backend.lu(self)?, "slogdet")?, backend)
         })
     }
     fn det(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
+        validate_square_matrix("det", self.shape())?;
         with_linalg_backend(session, "det", |backend| {
             det_impl(self.slogdet(backend)?, backend)
         })
@@ -1989,43 +2019,28 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         with_linalg_backend(session, "full_piv_lu_solve_read", |backend| {
-            let b_is_vector = b.shape().len() + 1 == self.shape().len();
-            let original_b_shape = b.shape().to_vec();
-            let vector_as_matrix = if b_is_vector {
-                let mut shape = vec![b.shape()[0], 1];
-                shape.extend_from_slice(&b.shape()[1..]);
-                Some(backend.reshape_read(b.clone(), &shape)?)
-            } else {
-                None
+            // Every surface goes through the backend solve, which rejects a rank-deficient
+            // system (a pivot at or below `eps * max|pivot|`). A borrowed view is made compact
+            // first.
+            let a_owned;
+            let a = match self.as_tensor() {
+                Some(a) => a,
+                None => {
+                    let shape = self.shape().to_vec();
+                    a_owned = backend.reshape_read(self, &shape)?;
+                    &a_owned
+                }
             };
-            let b = vector_as_matrix.as_ref().map_or(b, TensorRead::from_tensor);
-            let (p, l, u, q, _parity) = self.full_piv_lu_read(backend)?;
-            let pb = linalg_matmul_read(&p, b, false, backend)?;
-            let z = backend.triangular_solve_read(
-                TensorRead::from_tensor(&l),
-                TensorRead::from_tensor(&pb),
-                true,
-                true,
-                false,
-                true,
-            )?;
-            let w = backend.triangular_solve_read(
-                TensorRead::from_tensor(&u),
-                TensorRead::from_tensor(&z),
-                true,
-                false,
-                false,
-                false,
-            )?;
-            let mut perm: Vec<usize> = (0..q.shape().len()).collect();
-            perm.swap(0, 1);
-            let qt = transpose(&q, &perm, backend)?;
-            let solution = linalg_matmul_read(&qt, TensorRead::from_tensor(&w), false, backend)?;
-            if b_is_vector {
-                reshape(&solution, &original_b_shape, backend)
-            } else {
-                Ok(solution)
-            }
+            let b_owned;
+            let b = match b.as_tensor() {
+                Some(b) => b,
+                None => {
+                    let shape = b.shape().to_vec();
+                    b_owned = backend.reshape_read(b, &shape)?;
+                    &b_owned
+                }
+            };
+            backend.full_piv_lu_solve(a, b, false)
         })
     }
     fn solve_read(
@@ -2086,11 +2101,19 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         })
     }
     fn slogdet_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        validate_square_matrix("slogdet_read", self.shape())?;
+        if self.shape()[0] == 0 && self.shape()[1] == 0 {
+            ensure_linalg_input_residency(session, "slogdet_read", &self)?;
+            return with_linalg_backend(session, "slogdet_read", |backend| {
+                empty_square_slogdet(self.shape(), self.dtype(), backend)
+            });
+        }
         with_linalg_backend(session, "slogdet_read", |backend| {
             slogdet_from_lu(four(backend.lu_read(self)?, "slogdet_read")?, backend)
         })
     }
     fn det_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
+        validate_square_matrix("det_read", self.shape())?;
         with_linalg_backend(session, "det_read", |backend| {
             det_impl(self.slogdet_read(backend)?, backend)
         })
@@ -2449,6 +2472,36 @@ pub(crate) fn with_linalg_backend<X>(
     ))
 }
 
+/// Run the backend's own input-residency check without an operation.
+///
+/// An empty determinant shortcut returns before the LU call that would
+/// otherwise reject a host tensor on a device session or a device tensor on a
+/// host session. This keeps that refusal by calling the same check the LU
+/// route performs, without factorizing or copying the input.
+fn ensure_linalg_input_residency(
+    session: &mut dyn Engine,
+    op: &'static str,
+    input: &TensorRead<'_>,
+) -> tenferro_tensor::Result<()> {
+    if with_cpu_engine(session, |_| ()).is_some() {
+        return with_cpu_engine(session, |_| {
+            crate::cpu::backend::ensure_host_tensor_read(op, input)
+        })
+        .expect("marker probe matched a CPU execution session");
+    }
+    #[cfg(feature = "cuda")]
+    if with_cuda_engine(session, |_| ()).is_some() {
+        return with_cuda_engine(session, |backend| {
+            crate::gpu::ensure_device_resident_read(backend, op, input)
+        })
+        .expect("marker probe matched a CUDA execution session");
+    }
+    Err(tenferro_tensor::Error::unsupported(
+        op,
+        "selected backend session does not expose a linalg execution capability",
+    ))
+}
+
 fn typed_output<T: TensorScalar>(tensor: Tensor) -> tenferro_tensor::Result<TypedTensor<T>> {
     if tensor.dtype() != T::dtype() {
         return Err(tenferro_tensor::Error::Internal(format!(
@@ -2625,6 +2678,22 @@ fn norm_from_read<B: LinalgBackend + ?Sized>(
         shape[axis] = 1;
     }
     reshape(&reduced, &shape, backend)
+}
+
+/// Sign and log-absolute determinant of the empty `0 x 0` batch, whose
+/// determinant is the empty product `1` and whose log-absolute determinant is
+/// therefore `0`. The batch axes become the output shape.
+fn empty_square_slogdet<B: LinalgBackend + ?Sized>(
+    shape: &[usize],
+    dtype: DType,
+    backend: &mut B,
+) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+    let batch_shape = &shape[2..];
+    let sign_scalar = resident(scalar_real(dtype, 1.0)?, backend)?;
+    let sign = broadcast(&sign_scalar, batch_shape, &[], backend)?;
+    let log_scalar = resident(scalar_real(real_values_dtype(dtype), 0.0)?, backend)?;
+    let logabsdet = broadcast(&log_scalar, batch_shape, &[], backend)?;
+    Ok((sign, logabsdet))
 }
 
 fn scalar_real(dtype: DType, value: f64) -> tenferro_tensor::Result<Tensor> {
@@ -2866,24 +2935,6 @@ fn matmul_preserve_trailing_batch<B: Engine + ?Sized>(
     )
 }
 
-fn linalg_matmul_read<B: Engine + ?Sized>(
-    lhs: &Tensor,
-    rhs: TensorRead<'_>,
-    rhs_is_vector: bool,
-    session: &mut B,
-) -> tenferro_tensor::Result<Tensor> {
-    let lhs_batch_dims: Vec<usize> = (2..lhs.shape().len()).collect();
-    let rhs_batch_start = if rhs_is_vector { 1 } else { 2 };
-    let rhs_batch_dims: Vec<usize> = (rhs_batch_start..rhs.shape().len()).collect();
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: lhs_batch_dims.iter().copied().collect(),
-        rhs_batch_dims: rhs_batch_dims.iter().copied().collect(),
-    };
-    session.dot_general_read(TensorRead::from_tensor(lhs), rhs, &config)
-}
-
 fn frobenius_norm<B: LinalgBackend + ?Sized>(
     abs: &Tensor,
     axes: &[usize],
@@ -2938,12 +2989,20 @@ fn count_nonzero<B: LinalgBackend + ?Sized>(
 ) -> tenferro_tensor::Result<Tensor> {
     let zero = resident(scalar_real(abs.dtype(), 0.0)?, backend)?;
     let zero = broadcast(&zero, abs.shape(), &[], backend)?;
-    let mask = backend.compare_read(
+    // `ord = 0` counts `x != 0` (#2359). Equality with zero, then negated,
+    // keeps NaN entries in the count: IEEE 754 makes `NaN > 0` false while
+    // `NaN != 0` is true, so the former `Gt` mask dropped them.
+    let is_zero = backend.compare_read(
         TensorRead::from_tensor(abs),
         TensorRead::from_tensor(&zero),
-        &CompareDir::Gt,
+        &CompareDir::Eq,
     )?;
-    let mask = backend.convert(&mask, abs.dtype())?;
+    let is_zero = backend.convert(&is_zero, abs.dtype())?;
+    let ones = ones_like(abs, backend)?;
+    let mask = backend.sub_read(
+        TensorRead::from_tensor(&ones),
+        TensorRead::from_tensor(&is_zero),
+    )?;
     reduce_sum(&mask, axes, backend)
 }
 

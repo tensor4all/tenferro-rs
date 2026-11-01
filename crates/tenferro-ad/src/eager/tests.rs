@@ -1,3 +1,4 @@
+mod availability;
 mod leaf_session;
 mod multi_input;
 mod residuals;

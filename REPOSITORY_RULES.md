@@ -680,11 +680,12 @@ Tests follow implementation ownership.
   sizes, is filed upstream with a strided-level reproduction
   ([strided-rs#269](https://github.com/tensor4all/strided-rs/issues/269)), not
   accepted as a tenferro baseline.
-- The CPU provider is selected at compile time. Exactly one of `native` (the
-  default) or `blas` is enabled; enabling both, or neither, is a
-  `compile_error!`. There is no runtime provider kind, provider bundle, kernel
-  slot, or per-handle provider selection. `blas` is a compiled adapter, not a
-  vendor-only execution world, and keeps the native path for declined steps.
+- CPU provider selection is compile-time. Enabling both `native` (default) and
+  `blas` is a `compile_error!`; neither is allowed with reduced functionality
+  (typed `Unsupported` on CPU numerical routes). The provider-less einsum branch in
+  `crates/tenferro-einsum/src/cpu_concrete.rs` is the `--no-default-features`
+  contract, not dead code. There is no runtime provider kind/bundle, kernel slot,
+  or per-handle selection. `blas` is a compiled adapter, retaining native execution for declined steps.
 - Tensor-sized CPU kernels run through the repository CPU threading policy:
   only `threadteam` starts tasks (`Exec::fork` / `for_ranges` / `external`;
   no other crate depends on `rayon`, see `deny.toml`). `strided-kernel` is
@@ -718,10 +719,15 @@ Tests follow implementation ownership.
 
 - Before touching CUDA/GPU backend code, read
   [`docs/design/gpu-backend-design.md`](docs/design/gpu-backend-design.md).
-  It is the developer-facing source for CUDA kernel ownership, runtime
-  shape/stride metadata conventions, launch configuration rules, and device
-  transfer behavior; any change to those conventions updates it in the same
-  PR.
+  It is a developer-facing guide, not an authority over the implementation:
+  the manifests and `crates/tenferro-gpu/src/cuda/` define the current contract.
+  If the guide disagrees, fix the prose, not the code. Changes to kernel
+  ownership, metadata, launches or transfers update the guide in the same PR.
+- CUDA execution uses a caller-held `CudaEngine` over `t4a-cuda-runtime` and
+  the external `t4a-cuda-kernels` catalogue, with cuBLAS/cuTENSOR integration
+  in `tenferro-gpu`. Extension vendor calls enter `CudaEngine::with_raw` in
+  `crates/tenferro-gpu/src/cuda/raw.rs`; retired CubeCL/session mechanisms
+  are not an alternative execution entry.
 - CUDA operation paths whose accepted implementation is an NVIDIA vendor
   library must fail with typed load or provider errors when the required
   NVIDIA library is unavailable or lacks support. They must not silently fall

@@ -115,7 +115,8 @@ website:
               - design/inplace-indexing.md
               - design/linalg.md
               - design/linalg-prims.md
-              - design/refactor-roadmap-912.md
+              - file: design/refactor-roadmap-912.md
+                text: "Historical refactor roadmap (#912)"
               - design/capi.md
               - design/capi-error-handling.md
               - design/testing.md

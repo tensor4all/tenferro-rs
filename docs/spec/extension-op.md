@@ -34,16 +34,17 @@ shape (arguments, return types, blanket bounds) of any signature fixed here.
 This spec extends the three normative contracts that already exist in
 `docs/spec/`:
 
-- [`ad-contract.md`](ad-contract.md) owns the `Primitive` trait. This
+- [`ad-contract.md`](ad-contract.md) owns semantic AD requirements. This
   document extends it by specifying how an `ExtensionOp` participates in
-  AD **without** itself implementing `Primitive`: the dispatcher in
-  `crates/tenferro-internal-ops/src/ad/mod.rs` routes `StdTensorOp::Extension(op)` to a
-  rule for `op.family_id()` in the active `SemanticExtensionRuleSet`. The rule emits
-  tangents and cotangents expressed in the core `StdTensorOp` vocabulary, or
-  in extension helper families covered by Section 10's AD-closure rules. The
-  ad-contract closure rule (add only ops that implement `Primitive`) is
-  preserved at the carrier level because the graph still contains only
-  `StdTensorOp` values.
+  AD through role-specific extension rules: the semantic AD transforms
+  in `tenferro-ad` route a `StdTensorOp::Extension(op)` to the role-specific
+  rule for `op.family_id()` in the active `SemanticExtensionRuleSet`. The rule
+  emits tangents and cotangents expressed in the core `StdTensorOp` vocabulary,
+  or in extension helper families covered by Section 10's AD-closure rules. The
+  ad-contract closure rule requires the emitted program to stay within the
+  supported semantic vocabulary, including registered extension families. The `crates/tenferro-internal-ops/src/ad/` facade keeps
+  the shared primitive-rule vocabulary, context, and support types those rules
+  use; it does not dispatch extension AD.
 - [`primitive-catalog.md`](primitive-catalog.md) owns the core op
   vocabulary. `ExtensionOp` does **not** add to that vocabulary; it is a
   single carrier variant `StdTensorOp::Extension(Arc<dyn ExtensionOp>)`.
@@ -492,7 +493,7 @@ whose return is independent of runtime input sizes. This aligns with the
 `crates/tenferro-internal-ops/src/std_tensor_op.rs` (e.g. `input_count` for `DotGeneral` is
 always `2`).
 
-The dispatcher integration in `crates/tenferro-internal-ops/src/ad/mod.rs` MUST treat
+The semantic extension AD integration in `tenferro-ad` MUST treat
 `StdTensorOp::Extension(op)` as having `op.input_count()` inputs and
 `op.output_count()` outputs. Validation:
 
@@ -946,22 +947,24 @@ values and `StdTensorOp::Extension` values. Emitted extension families MUST
 have the role-specific rules needed by any subsequent AD pass in the active
 `SemanticExtensionRuleSet`. Terminal first-order helper families MAY omit separate
 rules when the owning extension documents that higher-order AD through that
-helper is unsupported. This keeps out-of-tree operations in the same compute
-graph while preserving the `Primitive` closure invariant at the
-`StdTensorOp` carrier level.
+helper is unsupported. This keeps out-of-tree operations in the same semantic
+program while preserving semantic closure over the supported `StdTensorOp`
+vocabulary.
 
-### `ShapeGuardContext` interaction
+### Input metadata access
 
-Extension AD rules MUST use `ctx.shape_of(val)`, `ctx.dtype_of(val)`,
-and `ctx.metadata_of(val)` to query input metadata, exactly like the
-core AD rules (see `crates/tenferro-internal-ops/src/ad/linalg.rs` for a reference
-implementation). They MUST NOT reach around the context to fetch
-metadata from elsewhere.
+Semantic extension AD rules receive input metadata through the semantic AD
+request (`SemanticLinearizeRequest` and its linear-transpose and primal-VJP
+counterparts) and emit through `SemanticProgramBuilder`. The request contract
+lives in `crates/tenferro-ad/src/semantic_extension.rs`; family implementations
+include `crates/tenferro-linalg/src/ad/semantic.rs`. Rules
+MUST NOT reach around that contract to fetch metadata from elsewhere. The
+shape-guard helpers in the `crates/tenferro-internal-ops/src/ad/` facade are
+retained shared vocabulary, not the live extension AD dispatcher.
 
-Guards recorded through `ctx` are part of the cache-invalidation
-contract; implementers that compare symbolic dimensions via
-`resolve_and_guard`-like helpers are responsible for recording the
-comparisons.
+Family adapters using the retained `ShapeGuardContext` remain responsible for
+recording symbolic comparisons through its guard helpers. That local context
+does not replace the semantic request contract or revive graph AD dispatch.
 
 Extension equalities declared through `ExtensionShapeContext` are graph
 contracts distinct from AD's local `ShapeGuardContext` comparisons. JVP, VJP,

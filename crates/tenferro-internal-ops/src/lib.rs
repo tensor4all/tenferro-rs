@@ -30,6 +30,7 @@ pub mod broadcast;
 pub mod dim_expr;
 pub mod ext_op;
 pub mod input_key;
+mod primitive_rules;
 pub mod reduction;
 #[doc(hidden)]
 pub mod shape_constraint;

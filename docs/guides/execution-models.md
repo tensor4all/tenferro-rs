@@ -31,8 +31,11 @@ Subsequent CUDA ops can consume that handle on the same engine stream.
 
 The host waits when values are downloaded or otherwise need host inspection.
 Some library-backed operations also synchronize internally when they must read
-device-side status. Call `EagerRuntime::synchronize()` when a workflow needs an
-explicit host-side barrier without downloading tensor values.
+device-side status. Call `ExecutionEngine::synchronize` on the caller-held
+engine (after releasing any eager session borrow) when a workflow needs an
+explicit host-side barrier without downloading tensor values. Import
+`tenferro_runtime::ExecutionEngine` to call `engine.synchronize()?`; see
+[CUDA engines and pinned transfers](engines-and-transfers.md).
 
 ## Traced Mode
 

@@ -1,5 +1,27 @@
 use tenferro_runtime::{DType, Error, Result};
 
+/// Validate that `shape` is a batched matrix with equal row and column extents.
+///
+/// Square-only linalg operations call this at their public boundary before any
+/// empty-input shortcut or factorization. A rank below two is a rank mismatch;
+/// unequal matrix extents are a shape mismatch.
+pub(crate) fn validate_square_matrix(
+    op: &'static str,
+    shape: &[usize],
+) -> tenferro_tensor::Result<()> {
+    if shape.len() < 2 {
+        return Err(tenferro_tensor::Error::rank_mismatch(op, 2, shape.len()));
+    }
+    if shape[0] != shape[1] {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            op,
+            vec![shape[0]],
+            vec![shape[1]],
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_lstsq(
     op: &'static str,
     dtype: DType,

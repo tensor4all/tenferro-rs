@@ -425,3 +425,21 @@ fn two_engines_on_two_threads_each_lead_their_own_team_at_once() {
     });
     assert_eq!(results, vec![(true, 8190.0), (true, 8190.0)]);
 }
+
+#[test]
+fn with_exec_lends_the_full_budget_and_breaks_the_engine_on_panic() {
+    let mut engine = CpuEngine::new(pool(2));
+    let caller = std::thread::current().id();
+    let (budget, same_thread) = engine
+        .with_exec(|exec| (exec.budget(), std::thread::current().id() == caller))
+        .expect("healthy engine");
+    assert_eq!(budget, engine.num_threads());
+    assert!(same_thread);
+
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        engine.with_exec(|_| panic!("break the engine"))
+    }));
+    assert!(unwind.is_err());
+    let error = engine.with_exec(|_| ()).expect_err("broken engine refuses");
+    assert_eq!(engine_error(&error), Some(CpuEngineError::Broken));
+}

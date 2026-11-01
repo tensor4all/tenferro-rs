@@ -55,7 +55,6 @@ macro_rules! map_provider_error {
 }
 
 /// Rebuild tenferro's error from a `tlinalg` (faer route) failure.
-#[cfg(feature = "native")]
 pub(crate) fn map_error(op: tlinalg::Op, error: tlinalg::Error) -> tenferro_tensor::Error {
     map_provider_error!(op, error, tlinalg,
     // The host sizes every call with the matching `*_workspace` query at the

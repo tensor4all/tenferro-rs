@@ -47,7 +47,6 @@ Known high-review files include:
 - `crates/tenferro-cpu/src/gemm/mod.rs`
 - `crates/tenferro-cpu/src/backend.rs`
 - `crates/tenferro-tensor-core/src/lib.rs`
-- `crates/tenferro-internal-ops/src/ad/registry.rs`
 
 ### Public wrapper duplication
 

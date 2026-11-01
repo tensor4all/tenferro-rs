@@ -8,6 +8,7 @@ struct TriangularSolveOptions {
 }
 use crate::extension::apply_qr_gauge;
 use crate::rank_revealing_qr::validate_rank_revealing_qr_options;
+use crate::validation::validate_square_matrix;
 
 use super::linalg;
 use tenferro_cpu::same_variant_pair;
@@ -294,6 +295,7 @@ impl LinalgBackend for CpuEngine {
         ensure_host_tensor("full_piv_lu_solve", a)?;
         ensure_host_tensor("full_piv_lu_solve", b)?;
         ensure_supported_linalg_pair("full_piv_lu_solve", a, b)?;
+        validate_square_matrix("full_piv_lu_solve", a.shape())?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
             return self.with_linalg_pool_checked(|_, _| zeros_like_tensor(b));
         }
@@ -307,38 +309,15 @@ impl LinalgBackend for CpuEngine {
             (b.duplicate()?, None)
         };
 
-        let result = {
-            #[cfg(feature = "native")]
-            {
-                #[cfg(feature = "native")]
-                {
-                    self.with_linalg_pool_checked(|exec, buffers| {
-                        same_variant_pair!(
-                            a,
-                            &rhs,
-                            |a, b| {
-                                linalg::faer::full_piv_lu_solve(exec, buffers, a, b, transpose_a)
-                            },
-                            unsupported_pair("full_piv_lu_solve", a, &rhs)
-                        )
-                    })
-                }
-            }
-            #[cfg(feature = "blas")]
-            {
-                #[cfg(feature = "blas")]
-                {
-                    self.with_linalg_pool_checked(|_, buffers| {
-                        same_variant_pair!(
-                            a,
-                            &rhs,
-                            |a, b| { linalg::blas::full_piv_lu_solve(buffers, a, b, transpose_a) },
-                            unsupported_pair("full_piv_lu_solve", a, &rhs)
-                        )
-                    })
-                }
-            }
-        }?;
+        // The same complete-pivoting kernel as `full_piv_lu` in both CPU builds.
+        let result = self.with_linalg_pool_checked(|exec, buffers| {
+            same_variant_pair!(
+                a,
+                &rhs,
+                |a, b| { linalg::faer::full_piv_lu_solve(exec, buffers, a, b, transpose_a) },
+                unsupported_pair("full_piv_lu_solve", a, &rhs)
+            )
+        })?;
 
         if let Some(shape) = restore_shape {
             self.reshape_read(TensorRead::from_tensor(&result), &shape)
@@ -625,7 +604,6 @@ impl LinalgBackend for CpuEngine {
         ensure_host_tensor_read("full_piv_lu", &input)?;
         ensure_supported_linalg_dtype("full_piv_lu", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
-            #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
                 return full_piv_lu_faer_view_entered(exec, buffers, input.tensor_view());
             }
@@ -1155,7 +1133,7 @@ fn ensure_host_tensor(op: &'static str, input: &Tensor) -> tenferro_tensor::Resu
     }
 }
 
-fn ensure_host_tensor_read(
+pub(crate) fn ensure_host_tensor_read(
     op: &'static str,
     input: &TensorRead<'_>,
 ) -> tenferro_tensor::Result<()> {
@@ -1250,6 +1228,7 @@ fn solve_entered(
     a: &Tensor,
     b: &Tensor,
 ) -> tenferro_tensor::Result<Tensor> {
+    validate_square_matrix("solve", a.shape())?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         return zeros_like_tensor(b);
     }
@@ -1659,86 +1638,43 @@ fn full_piv_lu_entered(
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    {
-        #[cfg(feature = "native")]
-        {
-            #[cfg(feature = "native")]
-            {
-                match input.dtype() {
-                    DType::F32 => linalg::faer::full_piv_lu(
-                        exec,
-                        buffers,
-                        input
-                            .as_typed::<f32>()
-                            .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
-                    )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-                    DType::F64 => linalg::faer::full_piv_lu(
-                        exec,
-                        buffers,
-                        input
-                            .as_typed::<f64>()
-                            .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
-                    )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-                    DType::C32 => linalg::faer::full_piv_lu(
-                        exec,
-                        buffers,
-                        input
-                            .as_typed::<Complex32>()
-                            .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
-                    )
-                    .and_then(full_piv_lu_c32_outputs_to_public_tensors),
-                    DType::C64 => linalg::faer::full_piv_lu(
-                        exec,
-                        buffers,
-                        input
-                            .as_typed::<Complex64>()
-                            .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
-                    )
-                    .and_then(full_piv_lu_c64_outputs_to_public_tensors),
-                    _ => Err(unsupported_dtype("full_piv_lu", input.dtype())),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                match input.dtype() {
-                    DType::F32 => linalg::blas::full_piv_lu(
-                        buffers,
-                        input
-                            .as_typed::<f32>()
-                            .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
-                    )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-                    DType::F64 => linalg::blas::full_piv_lu(
-                        buffers,
-                        input
-                            .as_typed::<f64>()
-                            .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
-                    )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-                    DType::C32 => linalg::blas::full_piv_lu(
-                        buffers,
-                        input
-                            .as_typed::<Complex32>()
-                            .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
-                    )
-                    .and_then(full_piv_lu_c32_outputs_to_public_tensors),
-                    DType::C64 => linalg::blas::full_piv_lu(
-                        buffers,
-                        input
-                            .as_typed::<Complex64>()
-                            .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
-                    )
-                    .and_then(full_piv_lu_c64_outputs_to_public_tensors),
-                    _ => Err(unsupported_dtype("full_piv_lu", input.dtype())),
-                }
-            }
-        }
+    // One complete-pivoting kernel (tlinalg, faer) serves both CPU builds: LAPACK has no
+    // rank-revealing complete-pivot LU (`?getc2` errors on singular input, perturbs small
+    // pivots and breaks ties toward the last maximum), and the factorization is level-2 work.
+    match input.dtype() {
+        DType::F32 => linalg::faer::full_piv_lu(
+            exec,
+            buffers,
+            input
+                .as_typed::<f32>()
+                .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
+        )
+        .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
+        DType::F64 => linalg::faer::full_piv_lu(
+            exec,
+            buffers,
+            input
+                .as_typed::<f64>()
+                .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
+        )
+        .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
+        DType::C32 => linalg::faer::full_piv_lu(
+            exec,
+            buffers,
+            input
+                .as_typed::<Complex32>()
+                .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
+        )
+        .and_then(full_piv_lu_c32_outputs_to_public_tensors),
+        DType::C64 => linalg::faer::full_piv_lu(
+            exec,
+            buffers,
+            input
+                .as_typed::<Complex64>()
+                .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
+        )
+        .and_then(full_piv_lu_c64_outputs_to_public_tensors),
+        _ => Err(unsupported_dtype("full_piv_lu", input.dtype())),
     }
 }
 
@@ -2856,7 +2792,6 @@ fn eig_entered(
     }
 }
 
-#[cfg(feature = "native")]
 fn faer_strided_read_ok(input: &TensorRead<'_>) -> bool {
     match input {
         TensorRead::Tensor(tensor) => match tensor.dtype() {
@@ -3159,7 +3094,6 @@ fn lu_faer_view_entered(
     }
 }
 
-#[cfg(feature = "native")]
 fn full_piv_lu_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,

@@ -265,9 +265,12 @@ impl<'s> Session<'s> {
             ));
         }
         self.synchronize()?;
-        let values: Vec<T> = staging
-            .as_slice::<T>(bytes / std::mem::size_of::<T>().max(1))
-            .to_vec();
+        let source = staging.as_slice::<T>(bytes / std::mem::size_of::<T>().max(1));
+        let mut values: Vec<T> = Vec::new();
+        values
+            .try_reserve_exact(source.len())
+            .map_err(|error| crate::Error::backend_source(op, error))?;
+        values.extend_from_slice(source);
         TypedTensor::<T>::from_vec_col_major(tensor.shape().to_vec(), values)
             .map_err(|error| crate::Error::runtime_state(op, error.to_string()))
     }

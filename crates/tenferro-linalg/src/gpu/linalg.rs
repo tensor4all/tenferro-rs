@@ -11,11 +11,12 @@ use super::ffi::cusolver::{
 };
 use crate::backend::CompactQrResult;
 use crate::extension::{EighDriver, QrGauge, QrOptions, SvdDriver};
+use crate::validation::validate_square_matrix;
 use tenferro_gpu::cuda::{download_tensor, CudaEngine};
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
     DType, Error, StorageBuffer, Tensor, TensorDeviceTransfer, TensorRead, TensorReduction,
-    TensorScalar, TensorStructural, TypedTensor, ValidationError,
+    TensorScalar, TensorStructural, TensorView, TypedTensor, ValidationError,
 };
 
 type Result<T> = tenferro_tensor::Result<T>;
@@ -263,6 +264,52 @@ fn ensure_device_resident_tensor(op: &'static str, input: &Tensor) -> Result<()>
         DType::C64 => ensure_device_resident_typed(op, typed_host::<Complex64>(op, input)?),
         DType::External(_) => Err(unsupported_linalg_dtype(op, input)),
     }
+}
+
+/// Refuse a read target that is not device-resident on this backend.
+///
+/// This is the residency check the device LU route performs, without a
+/// factorization. It also rejects an allocation from another runtime, as the
+/// backend's first read of the operand would.
+pub(crate) fn ensure_device_resident_read(
+    backend: &CudaEngine,
+    op: &'static str,
+    input: &TensorRead<'_>,
+) -> Result<()> {
+    match input {
+        TensorRead::Tensor(tensor) => backend.ensure_gpu_resident(tensor, op),
+        TensorRead::View(view) => ensure_device_resident_view(backend, op, view),
+    }
+}
+
+fn ensure_device_resident_view(
+    backend: &CudaEngine,
+    op: &'static str,
+    view: &TensorView<'_>,
+) -> Result<()> {
+    match view.backend_family() {
+        Some("cuda") => {}
+        Some(family) => {
+            return Err(Error::runtime_state(
+                op,
+                format!("expected a CUDA tensor, got backend buffer family `{family}`"),
+            ))
+        }
+        None => {
+            return Err(Error::runtime_state(
+                op,
+                "expected a CUDA tensor, got a host tensor. \
+                 Use upload_tensor() to transfer to GPU before calling GPU ops.",
+            ))
+        }
+    }
+    if view.allocation_domain() != Some(backend.runtime().allocation_domain_id()) {
+        return Err(Error::runtime_state(
+            op,
+            "the tensor belongs to another runtime",
+        ));
+    }
+    Ok(())
 }
 
 /// Validate that a tensor is device-resident using only public tensor
@@ -1175,6 +1222,7 @@ pub(super) fn solve(backend: &mut CudaEngine, a: &Tensor, b: &Tensor) -> Result<
     ensure_device_resident_tensor(OP, a)?;
     ensure_device_resident_tensor(OP, b)?;
     ensure_supported_linalg_pair(OP, a, b)?;
+    validate_square_matrix(OP, a.shape())?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         return zero_like_linalg_device_tensor(backend, b, OP);
     }
@@ -1236,6 +1284,8 @@ pub(super) fn lu_solve_prepared(
     if !matches!(pivots.dtype(), DType::I32) {
         return Err(Error::dtype_mismatch(OP, DType::I32, pivots.dtype()));
     }
+    let rhs_shape = batched_vector_rhs_shape(a, b).unwrap_or_else(|| b.shape().to_vec());
+    validate_lu_solve_prepared_shapes(packed_lu.shape(), pivots.shape(), &rhs_shape)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         return zero_like_linalg_device_tensor(backend, b, OP);
     }
