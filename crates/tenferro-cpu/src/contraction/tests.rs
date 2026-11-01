@@ -255,7 +255,7 @@ mod plan_slot_reuse {
 
 /// c64 products above tcontract's default `FaerLimit` volume (`1 << 17`) take
 /// faer at a thread budget of one (tensor4all-rs#1040), and equal a direct
-/// faer matmul bit for bit.
+/// faer matmul to within a few ULP.
 #[cfg(feature = "native")]
 mod faer_at_budget_one {
     use crate::test_support::{cpu_engine, with_cpu_session};
@@ -310,6 +310,24 @@ mod faer_at_budget_one {
             .collect()
     }
 
+    /// Agreement to a few ULP, not bitwise.
+    ///
+    /// The two calls reach the same kernel family but not the same entry point:
+    /// tcontract multiplies through the t4a-faer conj-aware entry, on a
+    /// destination it may leave uninitialized, while the reference here calls
+    /// `matmul` on an initialized one. On x86_64 the two differ in the last
+    /// bits (2 ULP at 1x141x282 c64, the smallest shape below the old bound;
+    /// aarch64 happens to agree bit for bit). The route assertion is what this
+    /// test guards, so the values only have to agree to faer accuracy.
+    fn assert_same_to_ulp(g: f64, w: f64, shape: (usize, usize, usize)) {
+        let (m, k, n) = shape;
+        let tol = 64.0 * f64::EPSILON * w.abs().max(1.0);
+        assert!(
+            (g - w).abs() <= tol,
+            "{m}x{k}x{n}: {g} and {w} differ by more than 64 ULP"
+        );
+    }
+
     fn run(engine: &mut crate::CpuEngine, a: &Tensor, b: &Tensor) -> Tensor {
         with_cpu_session(engine, |session| {
             session
@@ -324,7 +342,7 @@ mod faer_at_budget_one {
 
     /// The #1040 shapes, all above the old `1 << 17` bound except `1x141x282`.
     #[test]
-    fn serial_c64_takes_faer_and_matches_direct_faer_bitwise() {
+    fn serial_c64_takes_faer_and_matches_direct_faer() {
         for (m, k, n) in [(1, 141, 282), (8, 141, 282), (141, 282, 141)] {
             let (av, bv) = (data(m * k, 1), data(k * n, 2));
             let a = Tensor::from_vec_col_major(vec![m, k], av.clone()).unwrap();
@@ -341,8 +359,8 @@ mod faer_at_budget_one {
             let got = got.as_slice::<Complex64>().unwrap();
             assert_eq!(got.len(), want.len());
             for (g, w) in got.iter().zip(&want) {
-                assert_eq!(g.re.to_bits(), w.re.to_bits(), "{m}x{k}x{n}");
-                assert_eq!(g.im.to_bits(), w.im.to_bits(), "{m}x{k}x{n}");
+                assert_same_to_ulp(g.re, w.re, (m, k, n));
+                assert_same_to_ulp(g.im, w.im, (m, k, n));
             }
         }
     }

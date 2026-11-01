@@ -256,7 +256,7 @@ Audit hints:
   of the plan-cache key because a `CpuPlanCache` may be shared by engines of
   different widths. Consequence: serial c64 results above the old volume come
   from faer's accumulation order, so their last bits differ from the packed
-  driver's (bitwise equal to a direct faer matmul). f32, f64 and c32 have no
+  driver's (within a few ULP of a direct faer matmul). f32, f64 and c32 have no
   bound in the default and are unchanged.
 
 Audit hints:
