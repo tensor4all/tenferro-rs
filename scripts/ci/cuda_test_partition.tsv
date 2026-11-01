@@ -674,9 +674,11 @@ gpu	tenferro-gpu	cuda::dispatch::tests::compare_and_select_match_the_host_refere
 gpu	tenferro-gpu	cuda::dispatch::tests::gather_matches_the_host_reference
 gpu	tenferro-gpu	cuda::dispatch::tests::scatter_add_matches_the_host_reference
 gpu	tenferro-gpu	cuda::dispatch::tests::unary_matches_the_host_reference
+gpu	tenferro-gpu	cuda::structural::tests::a_compact_batched_dot_reads_both_operands_in_place
 gpu	tenferro-gpu	cuda::structural::tests::a_float_offset_index_view_is_validated_at_its_base
 gpu	tenferro-gpu	cuda::structural::tests::a_materialized_view_moves_the_staging_counter
 gpu	tenferro-gpu	cuda::structural::tests::a_non_compact_index_view_keeps_one_staging_copy
+gpu	tenferro-gpu	cuda::structural::tests::a_permuted_batched_dot_stages_the_permuted_operand
 gpu	tenferro-gpu	cuda::structural::tests::a_region_view_reads_its_own_elements
 gpu	tenferro-gpu	cuda::structural::tests::concatenate_refuses_a_foreign_later_input_before_preparing_anything
 gpu	tenferro-gpu	cuda::structural::tests::dot_general_read_into_refuses_an_integer_dtype_before_staging_the_scratch

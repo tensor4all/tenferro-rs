@@ -1180,3 +1180,146 @@ fn gather_read_refuses_an_oversized_slice_before_staging_or_allocating() {
         "a refused gather must not prepare a launch"
     );
 }
+
+/// One batched product's host reference, column-major with the batch axis last.
+fn host_batched_product(
+    a: &[f64],
+    b: &[f64],
+    batches: usize,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Vec<f64> {
+    let mut c = vec![0.0f64; batches * m * n];
+    for batch in 0..batches {
+        for column in 0..n {
+            for row in 0..m {
+                let mut sum = 0.0;
+                for inner in 0..k {
+                    sum +=
+                        a[row + inner * m + batch * m * k] * b[inner + column * k + batch * k * n];
+                }
+                c[row + column * m + batch * m * n] = sum;
+            }
+        }
+    }
+    c
+}
+
+/// A batched product whose operands are the compact spans of their allocations is contracted
+/// where the operands lie: neither the copy the read boundary stages for other layouts nor the
+/// allocation that copy would need is paid (#2205's batched matmul row: 1024 x 256^3 f64 spent
+/// 36 ms of 43 ms staging two 512 MiB operands per call).
+#[test]
+#[ignore = "requires CUDA"]
+fn a_compact_batched_dot_reads_both_operands_in_place() {
+    use tenferro_tensor::{DotGeneralConfig, TensorDot as _};
+
+    let Some(mut engine) = engine() else { return };
+    let (batches, m, n, k) = (3usize, 5usize, 4usize, 6usize);
+    let a: Vec<f64> = (0..batches * m * k)
+        .map(|index| (index % 11) as f64 * 0.25 - 1.0)
+        .collect();
+    let b: Vec<f64> = (0..batches * k * n)
+        .map(|index| (index % 7) as f64 - 3.0)
+        .collect();
+    let lhs = device(&engine, vec![m, k, batches], a.clone());
+    let rhs = device(&engine, vec![k, n, batches], b.clone());
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: [1].into_iter().collect(),
+        rhs_contracting_dims: [0].into_iter().collect(),
+        lhs_batch_dims: [2].into_iter().collect(),
+        rhs_batch_dims: [2].into_iter().collect(),
+    };
+    let before = engine.staged_reads();
+    let product = engine
+        .dot_general_read(
+            region(
+                &lhs,
+                vec![m, k, batches],
+                vec![1, m as isize, (m * k) as isize],
+                0,
+            ),
+            region(
+                &rhs,
+                vec![k, n, batches],
+                vec![1, k as isize, (k * n) as isize],
+                0,
+            ),
+            &config,
+        )
+        .expect("dot_general");
+    assert_eq!(
+        engine.staged_reads(),
+        before,
+        "a compact operand is read in place, not staged"
+    );
+    // Every operand entry is a multiple of a quarter and every product a multiple of a sixteenth,
+    // so the six-term sums are exact in f64 and the order cuTENSOR accumulates in cannot change the
+    // result. Exact equality is then the strongest check available, and unlike a normwise bound it
+    // fails on a NaN entry.
+    let expected = host_batched_product(&a, &b, batches, m, n, k);
+    assert_eq!(read(&engine, &product), expected);
+}
+
+/// The same product with a permuted operand keeps the staged copy: a batch axis stored first is
+/// not one flat compact span, so the operand stays outside the in-place path.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_permuted_batched_dot_stages_the_permuted_operand() {
+    use tenferro_tensor::{DotGeneralConfig, TensorDot as _};
+
+    let Some(mut engine) = engine() else { return };
+    let (batches, m, n, k) = (3usize, 5usize, 4usize, 6usize);
+    let a: Vec<f64> = (0..batches * m * k)
+        .map(|index| (index % 11) as f64 * 0.25 - 1.0)
+        .collect();
+    let logical_b: Vec<f64> = (0..batches * k * n)
+        .map(|index| (index % 7) as f64 - 3.0)
+        .collect();
+    // The same values stored `(batches, k, n)`, so reading them as `(k, n, batches)` is the
+    // permutation `(batches, batches * k, 1)`.
+    let mut stored_b = vec![0.0f64; batches * k * n];
+    for batch in 0..batches {
+        for column in 0..n {
+            for inner in 0..k {
+                stored_b[batch + batches * inner + batches * k * column] =
+                    logical_b[inner + k * column + k * n * batch];
+            }
+        }
+    }
+    let lhs = device(&engine, vec![m, k, batches], a.clone());
+    let rhs = device(&engine, vec![batches, k, n], stored_b);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: [1].into_iter().collect(),
+        rhs_contracting_dims: [0].into_iter().collect(),
+        lhs_batch_dims: [2].into_iter().collect(),
+        rhs_batch_dims: [2].into_iter().collect(),
+    };
+    let before = engine.staged_reads();
+    let product = engine
+        .dot_general_read(
+            region(
+                &lhs,
+                vec![m, k, batches],
+                vec![1, m as isize, (m * k) as isize],
+                0,
+            ),
+            region(
+                &rhs,
+                vec![k, n, batches],
+                vec![batches as isize, (batches * k) as isize, 1],
+                0,
+            ),
+            &config,
+        )
+        .expect("dot_general");
+    assert_eq!(
+        engine.staged_reads(),
+        before + 1,
+        "a permuted operand is staged once"
+    );
+    // Exactly representable entries, as in the in-place case above.
+    let expected = host_batched_product(&a, &logical_b, batches, m, n, k);
+    assert_eq!(read(&engine, &product), expected);
+}
