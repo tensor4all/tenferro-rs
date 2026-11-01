@@ -268,9 +268,9 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cpueinsum"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5016c6725d28688983ea1e2090d69ad9afc2343d67d25b0710d7e4b9a2df292"
+checksum = "c7d68fd2a53a48217331c633318609b39a00f71858aeb84407acfd4ed633e2a9"
 dependencies = [
  "num-complex",
  "strided-view",
@@ -281,9 +281,9 @@ dependencies = [
 
 [[package]]
 name = "cpueinsum-blas"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5898b59ec800353aa62620ec376028d184c3831cb8d5186e320adbef48d7f7b4"
+checksum = "5c8aa9e0f0a848819e27ab3c5e31ddf52827029ab2bb05b2cd74e53d7fd245a4"
 dependencies = [
  "cblas-sys",
  "cpueinsum",
@@ -2152,9 +2152,9 @@ checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
 
 [[package]]
 name = "strided-basic"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a24edd822609d545e18bd6231c55d0bc4aa6c0fdbf41fcc5f9b0f9e087fcc76b"
+checksum = "4b5dbf2bd4f822b653ceba8752dc236c3063c65ec153fc143575c163d4188d5f"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -2167,9 +2167,9 @@ dependencies = [
 
 [[package]]
 name = "strided-fused"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ae44b6b21f86bcc63d9b2539e915cefe19c28885ce701bcf1d6e58aec57818a"
+checksum = "9a644a7cd2cc5eed46b8d6cab1f7f1d26dde1dcd08ed1527d2f8bab3374da7a6"
 dependencies = [
  "elem-simd-math",
  "num-complex",
@@ -2179,9 +2179,9 @@ dependencies = [
 
 [[package]]
 name = "strided-kernel"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca5215fb5c3940bcae828ee6fd632c13191c4fb52dc0c6d2ef91a845b76b48f0"
+checksum = "139ea2255b562d6aea0a53bc322fd04b4bd01c65013684e6616765af028f22ae"
 dependencies = [
  "num-complex",
  "strided-basic",
@@ -2190,9 +2190,9 @@ dependencies = [
 
 [[package]]
 name = "strided-nn"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "995637948ed05f1d8f246866b99c8405f4449380104ef607c3e658811e00a293"
+checksum = "4a2710aa0f7d41a3a899e00612c091c8643fdfd129611d80f0633341c737946c"
 dependencies = [
  "elem-simd-math",
  "pulp",
@@ -2202,9 +2202,9 @@ dependencies = [
 
 [[package]]
 name = "strided-perm"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b0868512be6a75ee46d01ae0cf06c53ac03239ae8c8550b6b088b26457fecb5"
+checksum = "29d57af4cfbea685bcadf2f8877891a7f7af005946afab20157f5d23495c67c4"
 dependencies = [
  "strided-view",
  "thiserror 1.0.69",
@@ -2340,9 +2340,9 @@ dependencies = [
 
 [[package]]
 name = "t4a-faer"
-version = "0.27.0"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e18d24747a84703dfb2bb759d19660ad03fd46859d01f4178f89bd041a208fe2"
+checksum = "bd74031bea6eeb7424c9d827d3dc5e7c53c34b87a6ec14a1555922c65e5dd8d7"
 dependencies = [
  "bytemuck",
  "dyn-stack",
@@ -2413,9 +2413,9 @@ checksum = "876fef147edbcbddc8ac5cbbba92c7b86519e314e86638596c09673b2ed01e7f"
 
 [[package]]
 name = "tcontract"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "368f497288746835d1e4d65948a9f6045358d6b4b673992985eaf5a0582a312e"
+checksum = "f4bfc0cace3acfb58c540d9e97725887e4188853b722efa4c2bca21eda64f9d8"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -2431,9 +2431,9 @@ dependencies = [
 
 [[package]]
 name = "tcontract-exec"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cb5032a1c0e785160cfc5d4f51a37400ce87c95e82336aa94d97819a4c1f876"
+checksum = "e9582710f3bd710d535d673014054f6b9057bf0e8f5bf5fddcab6ad423911ccb"
 dependencies = [
  "t4a-faer",
  "thiserror 1.0.69",
@@ -2442,9 +2442,9 @@ dependencies = [
 
 [[package]]
 name = "tcontract-kernel"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ca7f3b0f6c0c1e4e03b9ee51ab4b4e77ba75b17a6b5f2a8c6f7a6176394f248"
+checksum = "9bc965f60442d295dad23199f770640babcac61b792a4c351b81b3d4bb09c3e6"
 dependencies = [
  "num-complex",
 ]
@@ -2877,9 +2877,9 @@ dependencies = [
 
 [[package]]
 name = "threadteam"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23210e76b7702020e91c6b39b1ea83e3e207153d866b261f354eed71f5dcefa3"
+checksum = "d5dd6b40e18f897d036c79963512a194e6f8dbe76e29386ca4ccf6c9d1663f5c"
 dependencies = [
  "libc",
  "loom",
@@ -2915,9 +2915,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tlinalg"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "540c3d6d219aaf95226bcbbf37e3fbb7c85c069defeb66601399696648dc6cb0"
+checksum = "28db4ec533b9ff9c90df170527f3e45cd21cfe3630e74d8123fafa6014af2b5a"
 dependencies = [
  "num-complex",
  "strided-view",
@@ -2929,9 +2929,9 @@ dependencies = [
 
 [[package]]
 name = "tlinalg-blas"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb044c0768c7876d43d39bd07c3ab7fe229f8710004eba7935506f3604bbb0f7"
+checksum = "e8d54c2f6a800b727fc9185e032696ca51f29ee3f6dae17730eb404a24811cd8"
 dependencies = [
  "cblas-sys",
  "lapack",
