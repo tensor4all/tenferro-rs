@@ -4,11 +4,11 @@ tenferro is a Rust-native tensor computation stack with opt-in autodiff for
 scientific workloads: typed tensors, dynamic tensors, PyTorch-style immediate
 execution with `backward()` and `EagerRuntime` functional `grad`, `vjp`, and
 `jvp`, JAX-style traced graphs, einsum, linear algebra, FFT, and explicit CPU,
-CUDA, and experimental WebGPU backend control.
+CUDA backend control.
 
 The project covers both ordinary tensor computation and autodiff workflows.
 Start with the smallest API that solves your problem, then add autodiff, graph
-compilation, CUDA, or experimental WebGPU only when the workflow needs them.
+compilation, or CUDA only when the workflow needs them.
 
 ![tenferro-rs architecture overview](assets/tenferro-architecture.svg)
 
@@ -23,7 +23,7 @@ compilation, CUDA, or experimental WebGPU only when the workflow needs them.
 | Choosing between `TypedTensor`, `Tensor`, `EagerTensor`, and `TracedTensor` | [Choosing a Tensor API](guides/choosing-an-api.md) |
 | Understanding direct, eager, and traced execution | [Execution Models](guides/execution-models.md) |
 | Column-major storage and row-major import/export | [Memory Order](guides/memory-order.md) |
-| CPU, CUDA, and experimental WebGPU behavior; NVIDIA library compatibility | [Devices and GPU](guides/devices-and-gpu.md#cuda-and-nvidia-library-compatibility) |
+| CPU and CUDA behavior; NVIDIA library compatibility | [Devices and GPU](guides/devices-and-gpu.md#cuda-and-nvidia-library-compatibility) |
 | CPU thread pools, affinity, faer, and external BLAS behavior | [CPU Execution and Thread Pools](guides/cpu-execution.md) |
 | Static-shaped StableHLO and PJRT plugin loading | [XLA and PJRT](guides/xla.md) |
 | Runtime-dependent dimensions in traced graphs | [Dynamic and symbolic shapes](design/dynamic-symbolic-shapes.md) |
@@ -98,7 +98,7 @@ traced graphs are not competing APIs; they answer different questions.
 | --- | --- | --- |
 | Tensor API | What kind of value do I pass around? | `TypedTensor<T>`, `Tensor`, `EagerTensor`, `TracedTensor` |
 | Execution timing | When does computation run? | Direct engine call, immediate eager execution, traced compile/run |
-| Engine/device | Where does computation run, and who owns it? | Caller-held CPU, CUDA, or experimental WebGPU engine, with explicit transfer |
+| Engine/device | Where does computation run, and who owns it? | Caller-held CPU or CUDA engine, with explicit transfer |
 
 Most code without autodiff starts with `TypedTensor<T>` when the scalar type is
 known at compile time, or `Tensor` when dtype must be selected at runtime.

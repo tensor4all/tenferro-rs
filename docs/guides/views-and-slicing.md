@@ -102,7 +102,7 @@ This is why the following two operations have different names and contracts:
 | `map`/host guard, synchronize | Existing-allocation visibility/order operation |
 
 See [storage ownership](../storage-ownership.md) for detached/scoped execution,
-AD/checkpoint retention, provider namespaces, and Apple shared endpoint rules.
+AD/checkpoint retention, and provider namespaces.
 
 ## Scalar access and expert host loops
 
