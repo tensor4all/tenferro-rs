@@ -310,23 +310,44 @@ mod faer_at_budget_one {
             .collect()
     }
 
+    /// Distance in representable steps between two finite `f64`s.
+    ///
+    /// Steps, not a relative tolerance: a relative bound with an absolute floor
+    /// (`64 * EPSILON * max(|w|, 1)`, the version this replaced) passes a value
+    /// near `1e-3` that is thousands of steps away, so it silently accepts far
+    /// more error at small magnitudes than at large ones. The step count means
+    /// the same thing everywhere.
+    fn ulp_distance(a: f64, b: f64) -> u64 {
+        if a == b {
+            return 0;
+        }
+        // Map the sign-magnitude bit pattern onto a monotonic integer line so
+        // that adjacent floats are adjacent integers across zero.
+        let key = |x: f64| {
+            let bits = x.to_bits() as i64;
+            if bits < 0 {
+                i64::MIN - bits
+            } else {
+                bits
+            }
+        };
+        key(a).abs_diff(key(b))
+    }
+
     /// Agreement to a few ULP, not bitwise.
     ///
     /// The two calls reach the same kernel family but not the same entry point:
     /// tcontract multiplies through the t4a-faer conj-aware entry, on a
     /// destination it may leave uninitialized, while the reference here calls
-    /// `matmul` on an initialized one. On x86_64 the two differ in the last
-    /// bits (2 ULP at 1x141x282 c64, the smallest shape below the old bound;
-    /// aarch64 happens to agree bit for bit). The route assertion is what this
-    /// test guards, so the values only have to agree to faer accuracy.
-    fn assert_same_to_ulp(g: f64, w: f64, shape: (usize, usize, usize)) {
-        let (m, k, n) = shape;
-        let tol = 64.0 * f64::EPSILON * w.abs().max(1.0);
-        assert!(
-            (g - w).abs() <= tol,
-            "{m}x{k}x{n}: {g} and {w} differ by more than 64 ULP"
-        );
-    }
+    /// `matmul` on an initialized one, so the accumulation order is not required
+    /// to match. Measured: 2 ULP at `1x141x282` c64 on x86_64 (the smallest shape
+    /// below the old volume bound) and bit for bit on aarch64.
+    ///
+    /// The bound is 8, four times the measurement: wide enough for a different
+    /// accumulation order, narrow enough that a changed kernel or a wrong
+    /// conjugate fails instead of hiding. The route assertion below is the real
+    /// guard; this one only says the numbers are the same answer.
+    const ULP_BOUND: u64 = 8;
 
     fn run(engine: &mut crate::CpuEngine, a: &Tensor, b: &Tensor) -> Tensor {
         with_cpu_session(engine, |session| {
@@ -358,10 +379,20 @@ mod faer_at_budget_one {
             let want = faer_product(&av, &bv, m, k, n);
             let got = got.as_slice::<Complex64>().unwrap();
             assert_eq!(got.len(), want.len());
+            let mut worst = 0u64;
             for (g, w) in got.iter().zip(&want) {
-                assert_same_to_ulp(g.re, w.re, (m, k, n));
-                assert_same_to_ulp(g.im, w.im, (m, k, n));
+                assert!(
+                    g.re.is_finite() && g.im.is_finite() && w.re.is_finite() && w.im.is_finite(),
+                    "{m}x{k}x{n}: non-finite value"
+                );
+                worst = worst.max(ulp_distance(g.re, w.re));
+                worst = worst.max(ulp_distance(g.im, w.im));
             }
+            assert!(
+                worst <= ULP_BOUND,
+                "{m}x{k}x{n}: {worst} ULP apart, bound {ULP_BOUND}"
+            );
+            println!("{m}x{k}x{n}: max {worst} ULP");
         }
     }
 
