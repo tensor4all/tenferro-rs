@@ -258,6 +258,24 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("GPU validation not required", text)
         self.assertIn("GPU_REQUIRED: ${{ needs.authorize.outputs.gpu_required }}", text)
 
+    def test_runpod_gpu_skip_inspects_rust_comment_only_diffs(self) -> None:
+        """The path list cannot prove a `.rs` change is rustdoc-only."""
+
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn(
+            'classify_pr_paths "${pr_number}" "${pr_base_sha}" "${pr_head_sha}"',
+            text,
+        )
+        self.assertIn("--depth=100000", text)
+        # A failed fetch must leave the path-only policy, which keeps the pod.
+        self.assertIn("classifying by path only", text)
+        execute = read(".github/workflows/runpod-gpu-execute.yml")
+        self.assertIn("TARGET_BASE_SHA: ${{ inputs.target_base_sha }}", execute)
+        self.assertIn(
+            'policy_args+=(--base "${TARGET_BASE_SHA}" --head "${TARGET_HEAD_SHA}")',
+            execute,
+        )
+
     def test_runpod_authorization_uses_repository_roles(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         authorization = text[

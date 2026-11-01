@@ -122,6 +122,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           TARGET_HEAD_SHA: ${{ inputs.target_head_sha }}
+          TARGET_BASE_SHA: ${{ inputs.target_base_sha }}
           TESTED_REF: ${{ inputs.tenferro_ref }}
         run: |
           set -euo pipefail
@@ -160,6 +161,18 @@ jobs:
               policy_args+=(--path "${path}")
             fi
           done < "${changed_paths}"
+          # Same content check the parent ran: rustdoc-only `.rs` edits do not
+          # need the paid path. Fetching the endpoints can only widen the
+          # decision (a failed fetch keeps the path-only, GPU-requiring policy).
+          if [ -n "${TARGET_BASE_SHA:-}" ] && [ -n "${TARGET_HEAD_SHA:-}" ] \
+            && grep -q '\.rs$' "${changed_paths}"; then
+            if git fetch --quiet --no-tags --filter=blob:none --depth=100000 \
+              origin "${TARGET_BASE_SHA}" "${TARGET_HEAD_SHA}"; then
+              policy_args+=(--base "${TARGET_BASE_SHA}" --head "${TARGET_HEAD_SHA}")
+            else
+              echo "::warning::Could not fetch PR endpoints; classifying by path only."
+            fi
+          fi
           run_gpu="$(python3 scripts/ci/change_policy.py "${policy_args[@]}" | jq -r '.run_gpu')"
           echo "Change classification requires GPU validation: ${run_gpu}."
           if [ "${run_gpu}" != "true" ]; then

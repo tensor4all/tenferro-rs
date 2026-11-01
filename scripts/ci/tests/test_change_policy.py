@@ -266,6 +266,240 @@ class ChangePolicyTests(unittest.TestCase):
             self.assertEqual(json.loads(result.stdout)["classification"], "docs-only")
 
 
+class RustCommentPolicyTests(unittest.TestCase):
+    """A `.rs` diff that only edits documentation comments needs no GPU pod."""
+
+    LIB = "crates/demo/src/lib.rs"
+    INTEGRATION = "crates/demo/tests/integration.rs"
+    UNIT_TEST = "crates/demo/src/demo_test.rs"
+    COUNTER = "crates/demo/src/counter.rs"
+    DOC_LIB = (
+        "/// Returns one.\n"
+        "pub fn demo() -> i32 {\n"
+        "    let mut value = 1;\n"
+        "    value\n"
+        "}\n"
+    )
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp_dir.name)
+        self.git("init", "-b", "main")
+        self.git("config", "user.email", "test@example.com")
+        self.git("config", "user.name", "Test User")
+        self.write(
+            self.LIB,
+            "pub fn demo() -> i32 {\n    let mut value = 1;\n    value\n}\n",
+        )
+        self.write(self.INTEGRATION, "fn helper() {}\n")
+        self.write(self.UNIT_TEST, "fn helper() {}\n")
+        self.write(
+            self.COUNTER, "pub fn bump(ptr: &mut i32) {\n    *ptr += 1;\n}\n"
+        )
+        self.base = self.commit("baseline")
+        self.head = self.base
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def git(self, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args],
+            cwd=self.repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    def write(self, path: str, text: str) -> None:
+        target = self.repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+
+    def commit(self, message: str) -> str:
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def edit(self, path: str, text: str) -> None:
+        self.write(path, text)
+        self.head = self.commit("edit")
+
+    def classify(
+        self,
+        *paths: str,
+        base: str | None = None,
+        head: str | None = None,
+    ):
+        return classify_paths(
+            list(paths),
+            base=self.base if base is None else base,
+            head=self.head if head is None else head,
+            cwd=str(self.repo),
+        )
+
+    def test_doc_comment_only_edit_skips_the_paid_gpu_lane(self) -> None:
+        self.edit(
+            self.LIB,
+            "//! Demo crate.\n"
+            "/// Returns one.\n"
+            "///\n"
+            "/// ```\n"
+            "/// assert_eq!(demo(), 1);\n"
+            "/// ```\n"
+            "pub fn demo() -> i32 {\n"
+            "    let mut value = 1;\n"
+            "    value\n"
+            "}\n",
+        )
+        policy = self.classify(self.LIB)
+        self.assertIs(policy.change_class, ChangeClass.CODE)
+        self.assertFalse(policy.run_gpu)
+        # Doc comments still hold doctests, so every hosted lane keeps running.
+        self.assertTrue(policy.run_rust)
+        self.assertTrue(policy.run_docs)
+        self.assertTrue(policy.run_macos)
+        self.assertTrue(policy.run_blas)
+        self.assertIn("docs-only Rust comments", "; ".join(policy.reasons))
+        self.assertIn(self.LIB, "; ".join(policy.reasons))
+
+    def test_doc_comment_plus_one_code_line_keeps_the_paid_gpu_lane(self) -> None:
+        self.edit(
+            self.LIB,
+            "/// Returns two.\n"
+            "pub fn demo() -> i32 {\n"
+            "    let value = 2;\n"
+            "    value\n"
+            "}\n",
+        )
+        policy = self.classify(self.LIB)
+        self.assertTrue(policy.run_gpu)
+        self.assertIn("code or unknown paths", "; ".join(policy.reasons))
+
+    def test_comment_only_edit_in_a_test_target_keeps_the_paid_gpu_lane(
+        self,
+    ) -> None:
+        for path in (self.INTEGRATION, self.UNIT_TEST):
+            with self.subTest(path=path):
+                self.edit(path, "/// Explains the helper.\nfn helper() {}\n")
+                policy = self.classify(path)
+                self.assertTrue(policy.run_gpu)
+
+    def test_blank_lines_and_block_comments_are_documentation(self) -> None:
+        self.edit(
+            self.LIB,
+            "/**\n"
+            " * Returns the constant one.\n"
+            " *\n"
+            " * Second paragraph, still prose.\n"
+            " */\n"
+            "pub fn demo() -> i32 {\n"
+            "    let mut value = 1;\n"
+            "    value\n"
+            "}\n",
+        )
+        policy = self.classify(self.LIB)
+        self.assertFalse(policy.run_gpu)
+
+    def test_blank_line_only_edit_keeps_hosted_lanes_and_skips_the_pod(
+        self,
+    ) -> None:
+        self.edit(
+            self.LIB,
+            "pub fn demo() -> i32 {\n    let mut value = 1;\n\n    value\n}\n",
+        )
+        # Adding a blank line is whitespace-only, but it is not documentation
+        # either: the guard accepts it, and every other lane still runs.
+        policy = self.classify(self.LIB)
+        self.assertFalse(policy.run_gpu)
+        self.assertTrue(policy.run_rust)
+
+    def test_doc_attribute_line_is_documentation(self) -> None:
+        self.edit(
+            self.LIB,
+            '#[doc = "Returns the constant one."]\n'
+            "pub fn demo() -> i32 {\n"
+            "    let mut value = 1;\n"
+            "    value\n"
+            "}\n",
+        )
+        policy = self.classify(self.LIB)
+        self.assertFalse(policy.run_gpu)
+
+    def test_non_rustdoc_comment_keeps_the_paid_gpu_lane(self) -> None:
+        self.edit(
+            self.LIB,
+            "// Not rustdoc, so it can sit next to code that changed meaning.\n"
+            "pub fn demo() -> i32 {\n"
+            "    let mut value = 1;\n"
+            "    value\n"
+            "}\n",
+        )
+        policy = self.classify(self.LIB)
+        self.assertTrue(policy.run_gpu)
+
+    def test_dereference_line_is_not_a_block_comment_body(self) -> None:
+        self.edit(
+            self.COUNTER, "pub fn bump(ptr: &mut i32) {\n    *ptr += 2;\n}\n"
+        )
+        policy = self.classify(self.COUNTER)
+        self.assertTrue(policy.run_gpu)
+
+    def test_git_failure_falls_back_to_the_paid_gpu_lane(self) -> None:
+        self.edit(self.LIB, self.DOC_LIB)
+        policy = self.classify(self.LIB, base="0" * 40)
+        self.assertTrue(policy.run_gpu)
+
+    def test_missing_endpoints_keep_the_paid_gpu_lane(self) -> None:
+        self.edit(self.LIB, self.DOC_LIB)
+        policy = classify_paths([self.LIB])
+        self.assertTrue(policy.run_gpu)
+
+    def test_doc_comment_edit_beside_a_gpu_control_plane_file_keeps_the_pod(
+        self,
+    ) -> None:
+        self.edit(self.LIB, self.DOC_LIB)
+        policy = self.classify(self.LIB, "scripts/ci/runpod_pricing.py")
+        self.assertFalse(policy.run_gpu)
+        policy = self.classify(self.LIB, "scripts/ci/runpod_client.py")
+        self.assertTrue(policy.run_gpu)
+        self.assertIn("ci: scripts/ci/runpod_client.py", policy.reasons)
+
+    def test_doc_comment_edit_beside_prose_still_skips_the_paid_gpu_lane(
+        self,
+    ) -> None:
+        self.edit(self.LIB, self.DOC_LIB)
+        (self.repo / "README.md").write_text("readme\n")
+        self.head = self.commit("docs")
+        policy = self.classify(self.LIB, "README.md")
+        self.assertIs(policy.change_class, ChangeClass.CODE)
+        self.assertFalse(policy.run_gpu)
+        self.assertTrue(policy.run_docs)
+
+    def test_cli_reads_hunks_when_paths_and_endpoints_are_given(self) -> None:
+        self.edit(self.LIB, self.DOC_LIB)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--path",
+                self.LIB,
+                "--base",
+                self.base,
+                "--head",
+                self.head,
+            ],
+            cwd=self.repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["run_gpu"], False)
+        self.assertEqual(payload["run_rust"], True)
+        self.assertIn("docs-only Rust comments", payload["reason"])
+
+
 class LocalGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
