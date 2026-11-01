@@ -86,8 +86,8 @@ strided-perm = { version = "0.10.0", features = ["parallel"] }
 cpueinsum = "0.9.1"
 cpueinsum-blas = "0.9.1"
 tcontract-exec = "0.9.1"
-tlinalg = "0.8.0"
-tlinalg-blas = "0.5.0"
+tlinalg = "0.8.1"
+tlinalg-blas = "0.5.1"
 strided-basic = { version = "0.10.0", default-features = false }
 # Fused NN kernels moved out of this repository (#2272): axis-0 softmax with a
 # tensor-free contract, caller-provided scratch and the caller's `Exec` token.
