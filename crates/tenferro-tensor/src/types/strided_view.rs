@@ -1,16 +1,33 @@
 /// One-axis slice specification for typed view slicing.
 ///
-/// This follows ndarray's range-with-step model: negative `start` or `end`
-/// values count from the end of the axis, `end` is exclusive, and negative
-/// `step` reverses the selected range before stepping.
+/// `start` and `end` always name the **ascending** half-open interval
+/// `[start, end)` on the axis, with negative bounds counting from the end of
+/// the axis; a negative `step` then walks that interval in reverse. The
+/// endpoint roles therefore do not depend on the sign of `step`, and this is
+/// *not* ndarray's range-with-step model, where a negative `step` makes
+/// `start` the high endpoint and `end` the low one. Full-axis reversal is
+/// [`StridedSliceSpec::reverse`] (`new(0, None, -1)`); under the ndarray model
+/// that spelling would select only the first element.
 ///
 /// # Examples
 ///
 /// ```
-/// use tenferro_tensor::StridedSliceSpec;
+/// use tenferro_tensor::{StridedSliceSpec, TypedTensorView};
 ///
-/// let every_other_reversed = StridedSliceSpec::new(0, None, -2);
-/// assert_eq!(every_other_reversed.step(), -2);
+/// let data = [0_i32, 1, 2, 3, 4, 5];
+/// let view = TypedTensorView::from_slice(vec![6], vec![1], 0, &data)?;
+///
+/// // Ascending selection `[0, 3)` walked backwards with step -2: 2, 0.
+/// let reversed = view.slice_view(&[StridedSliceSpec::new(0, Some(3), -2)])?;
+/// assert_eq!(reversed.shape(), &[2]);
+/// assert_eq!(reversed.get(&[0]), Some(&2));
+/// assert_eq!(reversed.get(&[1]), Some(&0));
+///
+/// // `start` is the low endpoint even for a negative step, so a range that
+/// // looks descending under ndarray's model is empty here.
+/// let empty = view.slice_view(&[StridedSliceSpec::new(4, Some(1), -1)])?;
+/// assert_eq!(empty.shape(), &[0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StridedSliceSpec {
@@ -21,6 +38,11 @@ pub struct StridedSliceSpec {
 
 impl StridedSliceSpec {
     /// Create a slice from a signed start, optional exclusive end, and step.
+    ///
+    /// `start` and `end` are the low and high endpoints of the ascending
+    /// half-open interval `[start, end)`; a negative `step` reverses that
+    /// interval instead of re-reading the endpoints as high and low. See the
+    /// [type documentation](Self) for the full model.
     ///
     /// # Examples
     ///
