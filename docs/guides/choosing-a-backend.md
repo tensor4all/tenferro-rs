@@ -13,7 +13,6 @@ the pool or open the device, hold the engine, and pass it to every operation.
 | --- | --- | --- | --- | --- | --- |
 | CPU | Host CPUs | At least one CPU provider; `native` is the default | `tenferro-cpu` `native` or `blas` | The caller's `Pool` (or no pool at all for `CpuEngine::serial`); one placement token per operation. CPU calls return synchronously. | Controlled CPU execution, dense linalg, and host pipelines |
 | CUDA | NVIDIA GPU | CUDA runtime plus the NVIDIA library stack required by the operation, including cuBLAS/cuSOLVER/cuTENSOR/cuFFT where applicable; missing libraries are typed errors | `tenferro-gpu` `cuda` | `CudaEngine::open` owns one device, its stream and its caches. Launches are asynchronous until an explicit synchronize, download, or host inspection. | NVIDIA production workloads and CUDA library-backed dense operations |
-| WebGPU | A WebGPU adapter/device and queue | A working wgpu/WebGPU implementation; coverage is experimental and operation-specific | `tenferro-gpu` `webgpu` | wgpu owns the device queue. Submissions are asynchronous; queue synchronization or download establishes a host-visible boundary. | Portable GPU experiments and Apple shared CPU/Metal paths |
 | XLA/PJRT | A PJRT addressable device | A PJRT plugin shared library; the `pjrt` loader returns a typed error when it is absent or invalid | `tenferro-xla` `pjrt` | The PJRT plugin owns device execution and intra-op scheduling. tenferro controls lowering and invocation, not the plugin's worker pool. | Static traced programs and deployments already using XLA plugins |
 
 CUDA does not use a native kernel as a silent fallback when a required
@@ -138,7 +137,6 @@ the caller already owns.
 | CPU/native kernels | The engine starts on the calling thread and enters the caller's pool only for a multi-worker provider choice | The caller's `Pool`, one engine per pool | Direct CPU operations complete before return | Host storage classes; the CPU runtime uses an immediate event domain | Typed unsupported errors; see [CPU execution](cpu-execution.md) and [linear algebra](linear-algebra.md) |
 | CPU/BLAS or LAPACK | The vendor owns its own worker team; tenferro neither bounds nor schedules it | Linked provider pool and environment; usually process-wide | The provider call returns before the synchronous CPU API returns; worker synchronization is vendor-owned | Host storage classes; CPU event domain | Unsupported operations are typed errors; `blas` keeps a native fallback for declined small steps; see [CPU execution](cpu-execution.md) |
 | CUDA | Device kernels use provider-selected grid/stream parallelism; host-side nesting is limited to explicit engine calls | One `CudaEngine` owns its `CudaRuntime`, stream, handles and plan caches | Launches may be asynchronous; synchronize, download, or host inspection is the boundary | CUDA device storage and CUDA stream/event domain | Unsupported CUDA operation or dtype, and missing NVIDIA library, return typed errors; see [GPU coverage](devices-and-gpu.md) |
-| WebGPU | Device parallelism is inside the submitted shader; independent work may share the queue, with no tenferro CPU-style nested budget | wgpu device and queue owned by the WebGPU backend | Queue submission is asynchronous; explicit synchronization or download makes results host-visible | WebGPU storage and queue/event domain | Unsupported operation or dtype returns an error; no implicit CPU fallback; see [GPU coverage](devices-and-gpu.md) |
 | XLA/PJRT | XLA decides intra-op decomposition; tenferro does not add a second hidden inner pool | PJRT plugin owns its client, device, streams, and worker scope | PJRT execution and transfers define the host-visible boundary | PJRT device buffers and plugin event domain | Unsupported lowering, dtype, shape, or missing plugin is rejected; see [XLA subset](xla.md) |
 
 The dtype and operation links above are the sources of truth for coverage.
@@ -218,6 +216,3 @@ See [Parallelism and Caching](parallelism-and-caching.md) for thread-budget
 mechanics, provider environment variables, cache lifetime, and
 oversubscription diagnostics.
 
-<!-- ponytail: the WebGPU/Apple backend is not on the engine model yet
-(TODO(#2206 webgpu)); this page describes its ownership shape only and must be
-rechecked when that migration lands. -->

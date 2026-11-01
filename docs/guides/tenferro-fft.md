@@ -8,8 +8,9 @@ behind `autodiff` (consuming in-place transforms use `EagerTensorFftExt`);
 traced graphs use `TracedTensorFftExt`.
 
 The current implementation provides one-dimensional CPU transforms backed by
-RustFFT, an explicitly selected CUDA path backed by cuFFT, and an explicitly
-selected Apple Metal path backed by CubeK. The public API is ordinary Rust
+RustFFT and an explicitly selected CUDA path backed by cuFFT. WebGPU, Metal, and
+the Apple shared CPU/Metal path are not provided today; see
+[Devices and GPU](devices-and-gpu.md). The public API is ordinary Rust
 extension-trait methods, so most users do not need to work with the lower-level
 extension machinery directly.
 
@@ -35,28 +36,10 @@ tenferro-ad = { path = "../crates/tenferro-ad" }
 tenferro-fft = { path = "../crates/tenferro-fft", features = ["autodiff"] }
 ```
 
-The Apple shared path is not released yet. Until a later release task publishes
-it, use matching path dependencies from the same `tenferro-rs` checkout.
-
 Concrete and graph-only users can omit `tenferro-ad` and the `autodiff`
 feature. Enable `tenferro-fft`'s `autodiff` feature when registering FFT AD
 rules. `rustfft` is pulled in automatically by `tenferro-fft`, and the first
 local build can take a few minutes on a fresh machine.
-
-For the Apple shared CPU/Metal path, also enable the WebGPU feature on both
-operation and backend crates:
-
-```toml
-[dependencies]
-tenferro-fft = { path = "../crates/tenferro-fft", features = ["webgpu"] }
-tenferro-gpu = { path = "../crates/tenferro-gpu", default-features = false, features = ["webgpu"] }
-tenferro-cpu = { path = "../crates/tenferro-cpu", default-features = false, features = ["native"] }
-tenferro-linalg = { path = "../crates/tenferro-linalg", default-features = false, features = ["native"] }
-tenferro-tensor = { path = "../crates/tenferro-tensor" }
-```
-
-`tenferro-linalg` and the CPU provider are needed by the Cholesky tutorial;
-FFT-only applications may omit `tenferro-linalg`.
 
 For CUDA cuFFT execution from released packages, enable the CUDA feature on
 both the FFT extension and its provider:
@@ -340,43 +323,6 @@ the input is consumed and no rollback is promised. Keep using the borrowed
 methods when the original value must remain available or gradients are needed.
 The `EagerTensorFftExt` rustdoc includes executable consuming-FFT examples.
 
-### Apple shared CPU and Metal execution
-
-`AppleContext` makes allocation ownership shared, not backend selection
-implicit: one upload serves the paired CPU and Metal backends, and each FFT call
-names the backend that should execute it.
-
-<!-- ponytail: this Apple/Metal example is behind the not-yet-migrated WebGPU
-backend (TODO(#2206 webgpu)), and `AppleContext` still hands out immutable
-engine references, so there is no engine-model form to show yet. The fence below
-is the last pre-migration shape in the guides; replace it when the Apple bridge
-moves to caller-held engines. -->
-
-RustFFT supports managed `F32`, `F64`, `C32`, and `C64` tensors. Its CPU lane
-kernel uses reusable host staging followed by a copy into the provider-owned
-shared allocation: the current managed write API exposes a copy callback, not
-a writable span. Preserving shared residency does not imply zero CPU copies.
-The consuming host in-place API does not extend this managed-storage contract.
-
-The initial
-CubeK Metal implementation supports C32 CFFT/IFFT, F32 one-sided RFFT, and C32
-IRFFT for power-of-two transform lengths of at least 2. RFFT/IRFFT may pad or
-truncate to a supported requested length; CFFT cannot change the input-axis
-length. Full-spectrum real FFT, `F64`/`C64`, non-power-of-two lengths, foreign
-domains, and ordinary device-local WebGPU buffers return typed errors. There
-is no automatic RustFFT fallback.
-
-The complete runnable tutorial additionally proves stable input allocation
-identity across CPU/Metal/CPU use, equal CPU/Metal results, unchanged
-post-creation transfer counters, C64 CPU success, and typed C64 Metal failure:
-
-```bash
-cargo test -p tenferro-tutorial-code --no-default-features \
-  --features native,apple-shared,doc-snippets --test tutorial_binaries
-```
-
-Source: `docs/tutorial-code/src/bin/apple_shared_fft.rs`.
-
 ### Traced Graphs
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_traced -->
@@ -485,9 +431,8 @@ gradient.
 
 `tenferro-fft` currently lives in the top-level `tenferro-fft` crate. It
 supports one-dimensional `fft`, `ifft`, `rfft`, and `irfft` through CPU RustFFT
-on host or matching Apple managed tensors, CUDA cuFFT on exact CUDA residency,
-and the narrower CubeK Metal matrix described above. Multidimensional FFT
-families remain future work; CUDA one-dimensional execution is implemented.
+on host tensors and CUDA cuFFT on exact CUDA residency; CUDA one-dimensional
+execution is implemented. Multidimensional FFT families remain future work.
 
 For the general extension mechanism, see
 [Custom Tensor Operations](custom-operations.md).

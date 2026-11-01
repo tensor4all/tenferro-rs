@@ -5,7 +5,7 @@ traced programs. It lowers tenferro programs to StableHLO and can load PJRT
 plugins when the optional `pjrt` feature is enabled.
 
 It is not an `Engine` implementation and it does not replace native CPU,
-CUDA, or WebGPU execution. Dynamic-shape graphs, extension runtimes, and the
+or CUDA execution. Dynamic-shape graphs, extension runtimes, and the
 full engine contract still run through the tenferro `Runtime` (`prepare` then
 `run`).
 

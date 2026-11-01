@@ -60,12 +60,9 @@ and layout proofs allow it. Neither operation is a disguised transfer.
 
 ## Explicit device movement
 
-The provider namespaces are deliberate:
+Device movement goes through one provider namespace:
 
 - CUDA: `tenferro_gpu::cuda::{CudaEngine, upload_tensor, download_tensor}`;
-- WebGPU: `tenferro_gpu::webgpu::{WebGpuBackend, upload_webgpu_tensor,
-  download_webgpu_tensor}`;
-- Apple shared CPU/Metal: `tenferro_gpu::apple::AppleContext`.
 
 Use `upload_host_tensor(TensorRead::...)` or the provider-specific upload
 function for a host-to-device allocation. Use `download_to_host(...)` or the
@@ -75,9 +72,6 @@ dtypes return typed errors; there is no hidden CPU staging or fallback.
 
 Mapping a host-visible allocation and synchronizing a provider queue are not
 transfers. They make an existing allocation observable at another endpoint.
-In particular, Apple CPU-to-Metal and Metal-to-CPU endpoint changes preserve
-one allocation identity and count synchronization/mapping rather than tensor
-bytes copied.
 
 ## Prepared access and loops
 
@@ -98,9 +92,9 @@ borrowed dispatch input, not an implicit copy request.
 Detached execution consumes owned groups and publishes a completed bundle only
 after provider retirement is proven. `ScopedReadInputs` is synchronous and
 lifetime-bounded: it can borrow caller inputs, but no work or output escapes
-that scope. Asynchronous CUDA, WebGPU, and Metal providers reject a borrowed
-scoped submission before admission with a typed error. A completion-unproven
-outcome retains the private group and exposes diagnostics only; it does not
+that scope. Asynchronous CUDA providers reject a borrowed scoped submission
+before admission with a typed error. A completion-unproven outcome
+retains the private group and exposes diagnostics only; it does not
 provide owner recovery, retry, cancellation, or a hidden copy.
 
 AD records, checkpoints, retained inputs, and gradient bundles retain group
