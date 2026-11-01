@@ -2487,7 +2487,7 @@ version = "0.8.0"
 
 [[package]]
 name = "tenferro-cpu"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "blas-src",
  "cblas-inject",
@@ -2508,6 +2508,7 @@ dependencies = [
  "strided-kernel",
  "strided-nn",
  "t4a-faer",
+ "tcontract-exec",
  "tenferro-core-ops",
  "tenferro-cpu-basic",
  "tenferro-cpu-fused",

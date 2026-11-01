@@ -1,7 +1,7 @@
 [package]
 name = "tenferro-cpu"
 autotests = false
-version.workspace = true
+version = "0.8.1"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -66,6 +66,12 @@ num-traits.workspace = true
 smallvec.workspace = true
 tinyvec.workspace = true
 threadteam.workspace = true
+# Named (unused by this crate's code) to carry the `[workspace.dependencies]`
+# exact pin on `tcontract-exec` into tenferro-cpu-only graphs: `cpueinsum`'s own
+# requirement is a caret, so without a direct edge a lock-less consumer is free
+# to resolve `tcontract-exec 0.9.1`, which pulls threadteam 0.3 beside this
+# crate's 0.2.  See the note on the workspace pins.
+tcontract-exec.workspace = true
 strided-kernel.workspace = true
 strided-basic = { workspace = true, features = ["parallel"] }
 strided-nn.workspace = true

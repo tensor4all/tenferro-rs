@@ -83,9 +83,18 @@ threadteam = "0.2.0"
 strided-perm = { version = "0.9.0", features = ["parallel"] }
 # The CPU provider stack is on the strided 0.9 / tcontract 0.9 release train; one
 # `tcontract-exec` (check `cargo tree -i tcontract-exec`) keeps `Exec` one type.
-cpueinsum = "0.9.0"
-cpueinsum-blas = "0.9.0"
-tcontract-exec = "0.9.0"
+#
+# These three are exact, not caret, on purpose: the 0.9.1 patches of
+# `cpueinsum`/`cpueinsum-blas`/`tcontract-exec` moved to threadteam 0.3 /
+# strided 0.10 / t4a-faer 0.28, and every published `tenferro-*` 0.8.0 crate is
+# built against threadteam 0.2 / strided 0.9 / t4a-faer 0.27.  A caret
+# requirement lets a lock-less consumer resolve 0.9.1 beside the 0.8.0 siblings,
+# which puts two `threadteam::Exec` types in one graph and makes the crate fail
+# to compile (`E0308`, 28 sites).  Bump these together, with the rest of the
+# stack and the sibling crates, when the whole train moves.
+cpueinsum = "=0.9.0"
+cpueinsum-blas = "=0.9.0"
+tcontract-exec = "=0.9.0"
 tlinalg = "0.8.0"
 tlinalg-blas = "0.5.0"
 strided-basic = { version = "0.9.0", default-features = false }
