@@ -310,23 +310,56 @@ mod faer_at_budget_one {
             .collect()
     }
 
+    /// Distance in representable steps between two finite `f64`s.
+    ///
+    /// Steps, not a relative tolerance: a relative bound with an absolute floor
+    /// (`64 * EPSILON * max(|w|, 1)`, the version this replaced) passes a value
+    /// near `1e-3` that is thousands of steps away, so it silently accepts far
+    /// more error at small magnitudes than at large ones. The step count means
+    /// the same thing everywhere.
+    fn ulp_distance(a: f64, b: f64) -> u64 {
+        if a == b {
+            return 0;
+        }
+        // Map the sign-magnitude bit pattern onto a monotonic integer line so
+        // that adjacent floats are adjacent integers across zero.
+        let key = |x: f64| {
+            let bits = x.to_bits() as i64;
+            if bits < 0 {
+                i64::MIN - bits
+            } else {
+                bits
+            }
+        };
+        key(a).abs_diff(key(b))
+    }
+
     /// Agreement to a few ULP, not bitwise.
     ///
     /// The two calls reach the same kernel family but not the same entry point:
     /// tcontract multiplies through the t4a-faer conj-aware entry, on a
     /// destination it may leave uninitialized, while the reference here calls
-    /// `matmul` on an initialized one. On x86_64 the two differ in the last
-    /// bits (2 ULP at 1x141x282 c64, the smallest shape below the old bound;
-    /// aarch64 happens to agree bit for bit). The route assertion is what this
-    /// test guards, so the values only have to agree to faer accuracy.
-    fn assert_same_to_ulp(g: f64, w: f64, shape: (usize, usize, usize)) {
-        let (m, k, n) = shape;
-        let tol = 64.0 * f64::EPSILON * w.abs().max(1.0);
-        assert!(
-            (g - w).abs() <= tol,
-            "{m}x{k}x{n}: {g} and {w} differ by more than 64 ULP"
-        );
-    }
+    /// `matmul` on an initialized one, so the accumulation order is not required
+    /// to match.
+    ///
+    /// The bound is normwise and scaled by the contraction length, not
+    /// component-wise. A component-wise bound cannot work here: a 141-term
+    /// complex dot product with cancellation produces components far below the
+    /// accumulation noise, and on x86_64 at `1x141x282` the largest component
+    /// disagreement is 2102 steps while the tensor is still computed to its own
+    /// scale. The `2 ULP` that #2326 recorded was the *first* offending
+    /// component, not the maximum; that assertion stopped at the first one. A
+    /// component-wise bound tight enough to catch a broken kernel fails on
+    /// correct output, and one loose enough to pass accepts a kernel that lost
+    /// most of its accuracy.
+    ///
+    /// `max|g - w| <= GAMMA_SAFETY * k * eps * max|w|` is the forward bound for a
+    /// length-`k` dot product with a safety factor on top. It is scale free and
+    /// still rejects what this test exists for: a missing conjugate, a route
+    /// change or a degraded kernel move large components by O(|w|), thousands of
+    /// times the bound. The measured error in `eps * max|w|` units and the worst
+    /// component step count are printed for the record.
+    const GAMMA_SAFETY: f64 = 4.0;
 
     fn run(engine: &mut crate::CpuEngine, a: &Tensor, b: &Tensor) -> Tensor {
         with_cpu_session(engine, |session| {
@@ -358,10 +391,30 @@ mod faer_at_budget_one {
             let want = faer_product(&av, &bv, m, k, n);
             let got = got.as_slice::<Complex64>().unwrap();
             assert_eq!(got.len(), want.len());
+            let mut worst_steps = 0u64;
+            let mut max_err: f64 = 0.0;
+            let mut scale: f64 = 0.0;
             for (g, w) in got.iter().zip(&want) {
-                assert_same_to_ulp(g.re, w.re, (m, k, n));
-                assert_same_to_ulp(g.im, w.im, (m, k, n));
+                assert!(
+                    g.re.is_finite() && g.im.is_finite() && w.re.is_finite() && w.im.is_finite(),
+                    "{m}x{k}x{n}: non-finite value"
+                );
+                worst_steps = worst_steps.max(ulp_distance(g.re, w.re));
+                worst_steps = worst_steps.max(ulp_distance(g.im, w.im));
+                max_err = max_err.max((g.re - w.re).abs()).max((g.im - w.im).abs());
+                scale = scale.max(w.re.abs()).max(w.im.abs());
             }
+            let eps = f64::EPSILON;
+            let bound = GAMMA_SAFETY * k as f64 * eps * scale;
+            let measured = max_err / (eps * scale);
+            assert!(
+                max_err <= bound,
+                "{m}x{k}x{n}: max error {max_err:e} exceeds {GAMMA_SAFETY} * {k} * eps * {scale:e} = {bound:e}; measured {measured:.1} eps*scale, worst component {worst_steps} ULP"
+            );
+            println!(
+                "{m}x{k}x{n}: {measured:.1} eps*scale measured, {:.1} allowed, worst component {worst_steps} ULP",
+                GAMMA_SAFETY * k as f64
+            );
         }
     }
 
