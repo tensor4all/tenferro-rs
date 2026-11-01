@@ -340,14 +340,26 @@ mod faer_at_budget_one {
     /// tcontract multiplies through the t4a-faer conj-aware entry, on a
     /// destination it may leave uninitialized, while the reference here calls
     /// `matmul` on an initialized one, so the accumulation order is not required
-    /// to match. Measured: 2 ULP at `1x141x282` c64 on x86_64 (the smallest shape
-    /// below the old volume bound) and bit for bit on aarch64.
+    /// to match.
     ///
-    /// The bound is 8, four times the measurement: wide enough for a different
-    /// accumulation order, narrow enough that a changed kernel or a wrong
-    /// conjugate fails instead of hiding. The route assertion below is the real
-    /// guard; this one only says the numbers are the same answer.
-    const ULP_BOUND: u64 = 8;
+    /// The bound is normwise and scaled by the contraction length, not
+    /// component-wise. A component-wise bound cannot work here: a 141-term
+    /// complex dot product with cancellation produces components far below the
+    /// accumulation noise, and on x86_64 at `1x141x282` the largest component
+    /// disagreement is 2102 steps while the tensor is still computed to its own
+    /// scale. The `2 ULP` that #2326 recorded was the *first* offending
+    /// component, not the maximum; that assertion stopped at the first one. A
+    /// component-wise bound tight enough to catch a broken kernel fails on
+    /// correct output, and one loose enough to pass accepts a kernel that lost
+    /// most of its accuracy.
+    ///
+    /// `max|g - w| <= GAMMA_SAFETY * k * eps * max|w|` is the forward bound for a
+    /// length-`k` dot product with a safety factor on top. It is scale free and
+    /// still rejects what this test exists for: a missing conjugate, a route
+    /// change or a degraded kernel move large components by O(|w|), thousands of
+    /// times the bound. The measured error in `eps * max|w|` units and the worst
+    /// component step count are printed for the record.
+    const GAMMA_SAFETY: f64 = 4.0;
 
     fn run(engine: &mut crate::CpuEngine, a: &Tensor, b: &Tensor) -> Tensor {
         with_cpu_session(engine, |session| {
@@ -379,20 +391,30 @@ mod faer_at_budget_one {
             let want = faer_product(&av, &bv, m, k, n);
             let got = got.as_slice::<Complex64>().unwrap();
             assert_eq!(got.len(), want.len());
-            let mut worst = 0u64;
+            let mut worst_steps = 0u64;
+            let mut max_err: f64 = 0.0;
+            let mut scale: f64 = 0.0;
             for (g, w) in got.iter().zip(&want) {
                 assert!(
                     g.re.is_finite() && g.im.is_finite() && w.re.is_finite() && w.im.is_finite(),
                     "{m}x{k}x{n}: non-finite value"
                 );
-                worst = worst.max(ulp_distance(g.re, w.re));
-                worst = worst.max(ulp_distance(g.im, w.im));
+                worst_steps = worst_steps.max(ulp_distance(g.re, w.re));
+                worst_steps = worst_steps.max(ulp_distance(g.im, w.im));
+                max_err = max_err.max((g.re - w.re).abs()).max((g.im - w.im).abs());
+                scale = scale.max(w.re.abs()).max(w.im.abs());
             }
+            let eps = f64::EPSILON;
+            let bound = GAMMA_SAFETY * k as f64 * eps * scale;
+            let measured = max_err / (eps * scale);
             assert!(
-                worst <= ULP_BOUND,
-                "{m}x{k}x{n}: {worst} ULP apart, bound {ULP_BOUND}"
+                max_err <= bound,
+                "{m}x{k}x{n}: max error {max_err:e} exceeds {GAMMA_SAFETY} * {k} * eps * {scale:e} = {bound:e}; measured {measured:.1} eps*scale, worst component {worst_steps} ULP"
             );
-            println!("{m}x{k}x{n}: max {worst} ULP");
+            println!(
+                "{m}x{k}x{n}: {measured:.1} eps*scale measured, {:.1} allowed, worst component {worst_steps} ULP",
+                GAMMA_SAFETY * k as f64
+            );
         }
     }
 
