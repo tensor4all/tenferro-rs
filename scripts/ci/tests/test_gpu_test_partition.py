@@ -44,6 +44,18 @@ class GpuTestPartitionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "audit test bodies/helpers"):
                     validate_inventory(inventory, self.partition)
 
+    def test_failure_names_the_archive_it_validated(self):
+        inventory = {
+            "test-count": 3,
+            "rust-suites": {"crate": {"testcases": {"host_case": {}, "device_case": {}, "new_case": {}}}},
+        }
+        with self.assertRaises(ValueError) as raised:
+            validate_inventory(inventory, self.partition, "archive key k, checkout revision r")
+        # A foreign archive and a stale partition in this tree read identically
+        # without the archive's own identity in the message (#2390).
+        self.assertIn("audit test bodies/helpers", str(raised.exception))
+        self.assertIn("archive key k, checkout revision r", str(raised.exception))
+
     def test_empty_and_inconsistent_counts_fail(self):
         with self.assertRaisesRegex(ValueError, "empty or inconsistent"):
             validate_inventory({"test-count": 0, "rust-suites": {}}, {})

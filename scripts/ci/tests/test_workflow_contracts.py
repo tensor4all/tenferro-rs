@@ -881,6 +881,20 @@ class WorkflowContractTests(unittest.TestCase):
             run_gpu,
         )
 
+    def test_archive_key_covers_the_test_inventory(self) -> None:
+        """A reused archive is content-identical: the key hashes the partition and every test source."""
+
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        key_line = next(
+            line for line in text.splitlines() if 'key="cuda-pjrt-archive-' in line
+        )
+        for pattern in (
+            "tenferro-rs/scripts/ci/**",
+            "tenferro-rs/**/src/**",
+            "tenferro-rs/**/tests/**",
+        ):
+            self.assertIn(pattern, key_line)
+
     def test_archive_key_hashes_every_embedded_markdown_input(self) -> None:
         """include_str! docs are compile-time inputs to archived binaries."""
 

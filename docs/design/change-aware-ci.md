@@ -132,6 +132,12 @@ disjoint membership before selecting a lane. New, removed, or renamed tests
 fail until their bodies and helper calls are audited and the inventory updated;
 CUDA names, feature gates, and `#[ignore]` alone are not classifications. Host
 execution also catches an existing host test acquiring a device dependency.
+Both the inventory failure and the job log name the archive content key and the
+checkout revision the binaries came from, so a red job is attributable instead
+of being read as a foreign-archive reuse (#2390). The archive key already
+identifies the inventory: it hashes `scripts/ci/**` (the partition TSVs) and
+every source and test input, and deliberately excludes commit identity so an
+equivalent retry can still reuse it.
 The archive is extracted once and its build metadata reused without compilation.
 Nextest remains serial; hosted backend thread variables are explicitly one.
 

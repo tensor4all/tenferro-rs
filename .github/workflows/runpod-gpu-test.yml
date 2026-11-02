@@ -706,11 +706,13 @@ jobs:
           RAYON_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
+          ARCHIVE_KEY: ${{ steps.archive_key.outputs.key }}
         run: |
           set -euo pipefail
           # Execute the same feature-enabled artifacts, including on cache hits.
-          python3 scripts/ci/gpu_test_partition.py --kind cuda --lane host --archive-file "${CUDA_ARCHIVE}"
-          python3 scripts/ci/gpu_test_partition.py --kind pjrt --lane host --archive-file "${PJRT_ARCHIVE}"
+          provenance=(--archive-key "${ARCHIVE_KEY}" --checkout-revision "$(git rev-parse HEAD 2>/dev/null || echo unknown)")
+          python3 scripts/ci/gpu_test_partition.py --kind cuda --lane host --archive-file "${CUDA_ARCHIVE}" "${provenance[@]}"
+          python3 scripts/ci/gpu_test_partition.py --kind pjrt --lane host --archive-file "${PJRT_ARCHIVE}" "${provenance[@]}"
 
       # Inline trusted transport code also works when an older tested PR ref
       # does not contain the latest CI helpers. Keep the single artifact below
