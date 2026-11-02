@@ -1,0 +1,35 @@
+# Reviewed exceptions for scripts/check-twin-paths.py.
+#
+# The checker reports three kinds of duplicated implementation path: `body`
+# (two functions with the same token stream), `branches` (several functions
+# enumerating one enum), and `dead` (a definition no production caller reaches).
+# An entry here records that the twin was read and that the two copies are
+# deliberate, so the weekly report stays actionable. Every entry needs a reason:
+# an unexplained suppression is a defect.
+#
+# Keys:
+#   kind = "body"     left, right = "<repository-relative-path>::<function>"
+#   kind = "branches" left = "enum:<EnumName>"
+#   kind = "dead"     left, right = "<path>::<function>" (or only left)
+#   issue = "#<number>" is optional; add it when a tracked discussion owns the
+#   duplication.
+
+[[allow]]
+kind = "branches"
+left = "enum:DType"
+reason = """
+Exhaustive dispatch over the eight scalar dtypes, not two implementations of one
+contract. `DType` is a closed representation enum: a new variant is a compiler
+error at every match arm, so these tables cannot drift silently the way an
+operation registry can. Reporting all of them would hide the operation tables.
+"""
+
+[[allow]]
+kind = "branches"
+left = "enum:DimExpr"
+reason = """
+Exhaustive dispatch over the eight symbolic-dimension constructors. Same
+argument as `DType`: the enum is a closed representation of a value, each match
+is a total function over it, and adding a constructor fails to compile at every
+site rather than leaving one table stale.
+"""

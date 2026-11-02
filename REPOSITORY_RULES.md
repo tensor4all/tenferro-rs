@@ -506,6 +506,27 @@ constraints.
 - Do not add ad hoc fixes that violate DRY, KISS, or layering.
 - Do not introduce compatibility shims, duplicated logic, or downstream reach-through into lower layers when the correct fix belongs in an existing seam or high-level API.
 
+### Twin Path Inspection
+
+- The duplication rule above is reviewed on a diff, so existing twins survive.
+  [`scripts/ci/check-twin-paths.py`](scripts/ci/check-twin-paths.py) looks for them
+  across `crates/*/src`: two functions with the same comment- and
+  literal-normalized token stream (or >= 85% shingle Jaccard with >= 40 tokens
+  each), one enum enumerated as a table by several functions, and a definition no
+  production caller reaches (a definition, an import, a re-export, an example and
+  a doctest are not callers). It is deterministic: it never infers that two
+  functions "look similar".
+- Reviewed exceptions go to
+  [`scripts/ci/twin-paths-allowlist.toml`](scripts/ci/twin-paths-allowlist.toml) with a
+  reason; an entry without one fails the run. Do not silence a finding with a
+  code branch.
+- `--report` never fails and is the only mode a scheduled or hosted job may use;
+  `--check` fails on a finding that has no entry and is for local and manual
+  dispatch. The check is not a required CI check.
+- A clean run is not evidence of absence: the check reads tokens, so a semantic
+  twin (two different algorithms for one quantity, the `#1089` shape) is out of
+  reach. Cover those with a numerical or oracle test, not with this check.
+
 ## Unsafe Code Boundary
 
 `unsafe` is confined to FFI bindings and backend leaf code and is near-absent
