@@ -41,6 +41,33 @@ class ChangePolicyTests(unittest.TestCase):
         self.assertFalse(policy.run_gpu)
         self.assertFalse(policy.run_macos)
 
+    def test_markdown_under_docs_is_prose_even_in_the_tutorial_tree(self) -> None:
+        # The tutorial tree holds runnable binaries, but a README there is prose:
+        # editing one must not reserve the paid GPU lane (#2376).
+        for path in (
+            "docs/tutorial-code/README.md",
+            ".github/releases/v0.9.0.md",
+        ):
+            with self.subTest(path=path):
+                policy = classify_paths([path])
+                self.assertIs(policy.change_class, ChangeClass.DOCS_ONLY)
+                self.assertTrue(policy.run_docs)
+                self.assertFalse(policy.run_rust)
+                self.assertFalse(policy.run_gpu)
+
+    def test_non_markdown_in_the_tutorial_tree_stays_code(self) -> None:
+        # Only the prose widens; the manifest and the binaries still build.
+        for path in (
+            "docs/tutorial-code/Cargo.toml",
+            "docs/tutorial-code/notes.txt",
+            ".github/releases/payload.json",
+        ):
+            with self.subTest(path=path):
+                policy = classify_paths([path])
+                self.assertIs(policy.change_class, ChangeClass.CODE)
+                self.assertTrue(policy.run_rust)
+                self.assertTrue(policy.run_gpu)
+
     def test_ci_and_docs_runs_both_lightweight_suites(self) -> None:
         policy = classify_paths(
             [".github/workflows/ci.yml", "docs/worklogs/ci.md"]

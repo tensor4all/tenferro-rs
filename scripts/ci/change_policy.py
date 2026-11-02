@@ -146,7 +146,15 @@ _GPU_HOSTED_ONLY_FILES = frozenset(
 )
 
 
+# Markdown is prose wherever it lives: a README under `docs/tutorial-code/` or a
+# release note under `.github/releases/` cannot change what any lane executes,
+# so editing one must not reserve the paid GPU lane (#2376).
+_DOC_MARKDOWN_PREFIXES = ("docs/", ".github/releases/")
+
+
 def _is_docs_path(path: str) -> bool:
+    if path.endswith(".md") and path.startswith(_DOC_MARKDOWN_PREFIXES):
+        return True
     # This tree is a workspace member and supplies the CUDA tutorial artifact.
     # Treat its sources, manifest, and unknown additions as code, not prose.
     if path.startswith("docs/tutorial-code/"):
