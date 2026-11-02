@@ -89,6 +89,7 @@ mod cpu;
 mod eager_composites;
 #[cfg(feature = "autodiff")]
 mod eager_ext;
+mod eig_normalize;
 pub mod error;
 mod extension;
 #[cfg(feature = "cuda")]
@@ -119,6 +120,7 @@ compile_error!(
      or `blas` feature"
 );
 
+pub use eig_normalize::normalize_eig_vectors;
 pub use error::{Error, Result};
 pub use extension::{
     extension_module, EighDriver, EighGauge, EighOptions, QrGauge, QrOptions, SvdDriver, SvdGauge,
