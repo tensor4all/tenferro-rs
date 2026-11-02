@@ -1017,6 +1017,12 @@ host	tenferro-linalg	cpu::tlinalg_error::tests::every_variant_rebuilds_tenferros
 host	tenferro-linalg	error::tests::invalid_workspace_keeps_typed_backend_source
 host	tenferro-linalg	error::tests::provider_status_keeps_typed_backend_source
 host	tenferro-linalg	extension::cuda_tests::session_support_admits_cuda_full_svd_and_still_rejects_the_missing_kernels
+host	tenferro-linalg	eig_normalize::tests::a_huge_f32_column_does_not_square_to_infinity
+host	tenferro-linalg	eig_normalize::tests::a_short_slice_is_rejected_before_anything_is_written
+host	tenferro-linalg	eig_normalize::tests::a_tiny_f64_column_does_not_square_to_zero
+host	tenferro-linalg	eig_normalize::tests::a_zero_column_count_is_rejected
+host	tenferro-linalg	eig_normalize::tests::a_zero_column_is_the_typed_non_finite_failure
+host	tenferro-linalg	eig_normalize::tests::every_column_of_every_block_is_unit
 host	tenferro-linalg	gpu::ffi::tests::cusolver_cuda_data_type_has_c_abi_integer_layout
 gpu	tenferro-linalg	gpu::ffi::tests::vendor_libraries_are_loaded_once_per_process
 host	tenferro-linalg	gpu::linalg::tests::auto_driver_keeps_jax_compatible_threshold
