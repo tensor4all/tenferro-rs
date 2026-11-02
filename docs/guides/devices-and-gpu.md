@@ -12,6 +12,14 @@ CPU/Metal path are not provided today. `tenferro-gpu` has no `webgpu` feature or
 WebGPU upload API. AMD/ROCm is not a supported execution path either; `rocm` is
 an empty reserved feature.
 
+Probe before constructing an engine. `tenferro_gpu::cuda::gpu_available()`
+answers whether a CUDA device is usable without reaching the driver's entry
+points, and `cuda_devices()` and `CudaEngine::open` then return a typed error on
+a host whose driver library cannot be loaded. A binary that offers several
+backends probes each one first and constructs only the backend whose probe
+answered yes: an unanswered probe is a reported condition (a message and a
+non-zero exit), never a panic.
+
 The optional XLA/PJRT path is separate from these tensor backends. It lowers
 static-shaped traced programs to StableHLO in `tenferro-xla` and loads PJRT
 plugins at runtime. See [XLA and PJRT](xla.md).
@@ -87,11 +95,22 @@ For a time-axis diagram, see [Execution Models](execution-models.md).
 <!-- snippet-source: crates/tenferro-gpu/examples/cuda_quickstart.rs -->
 ```rust
 use tenferro_gpu::{
-    cuda::cuda_devices, cuda::download_tensor, cuda::upload_tensor, cuda::CudaEngine,
+    cuda::cuda_devices, cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor,
+    cuda::CudaEngine,
 };
 use tenferro_tensor::{Tensor, TensorElementwise, TensorRead, TensorStructural, TensorWrite};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Probe before anything reaches the driver, so a host without a usable CUDA driver reports
+    // the condition instead of unwinding inside `cudarc` (#2401).
+    if !gpu_available() {
+        eprintln!(
+            "cuda_quickstart: no usable CUDA driver or device; probe with \
+             `tenferro_gpu::cuda::gpu_available()` before constructing an engine"
+        );
+        std::process::exit(1);
+    }
+
     let Some(device) = cuda_devices()?.into_iter().next() else {
         return Ok(());
     };
