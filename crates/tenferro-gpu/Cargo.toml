@@ -82,6 +82,11 @@ path = "tests/coalesced_run.rs"
 required-features = ["cuda"]
 
 [[test]]
+name = "pool_retention"
+path = "tests/pool_retention.rs"
+required-features = ["cuda"]
+
+[[test]]
 name = "chunked_staging"
 path = "tests/chunked_staging.rs"
 required-features = ["cuda"]
