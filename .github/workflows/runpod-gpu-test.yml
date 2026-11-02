@@ -858,6 +858,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
+          TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
           TARGET_HEAD_SHA: ${{ needs.authorize.outputs.target_head_sha }}
           TESTED_REF: ${{ needs.authorize.outputs.tenferro_ref }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -875,6 +876,17 @@ jobs:
           REUSED_CHECK_URL: ${{ needs.gpu-execution.outputs.reused_check_url }}
         run: |
           set -euo pipefail
+
+          # A run without a PR head has no required check to publish. That is the
+          # ordinary `main` push case: the triggering CI run is a pull_request
+          # run, but the push itself belongs to no pull request, so authorize
+          # publishes no policy and this step has nothing to send. Report the
+          # reason and succeed, because a red run nobody can act on is
+          # indistinguishable from a real gate failure (#2391).
+          if [ -z "${TARGET_HEAD_SHA}" ]; then
+            echo "No PR head SHA for ${EVENT_NAME} (trigger: ${TRIGGER_EVENT:-none}, PR: ${PR_NUMBER:-none}, authorize: ${AUTHORIZE_RESULT:-missing}): skipping PR-head CI GPU gate publication."
+            exit 0
+          fi
 
           failures_file="$(mktemp)"
 
@@ -961,37 +973,31 @@ jobs:
             external_id="runpod-gpu-gate:v1:${TESTED_REF}:${kind}"
           fi
 
-          target_sha="${TARGET_HEAD_SHA}"
+          echo "Publishing CI GPU gate check to PR head SHA ${TARGET_HEAD_SHA}."
+          jq -n \
+            --arg name "CI GPU gate" \
+            --arg head_sha "${TARGET_HEAD_SHA}" \
+            --arg conclusion "${conclusion}" \
+            --arg details_url "${RUN_URL}" \
+            --arg title "${title}" \
+            --arg summary "${summary}" \
+            --arg external_id "${external_id}" \
+            '{
+              name: $name,
+              head_sha: $head_sha,
+              status: "completed",
+              conclusion: $conclusion,
+              details_url: $details_url,
+              output: {
+                title: $title,
+                summary: $summary
+              }
+            } + (if $external_id == "" then {} else {external_id: $external_id} end)' > /tmp/ci-gpu-gate-check.json
 
-          if [ -n "${target_sha}" ]; then
-            echo "Publishing CI GPU gate check to PR head SHA ${target_sha}."
-            jq -n \
-              --arg name "CI GPU gate" \
-              --arg head_sha "${target_sha}" \
-              --arg conclusion "${conclusion}" \
-              --arg details_url "${RUN_URL}" \
-              --arg title "${title}" \
-              --arg summary "${summary}" \
-              --arg external_id "${external_id}" \
-              '{
-                name: $name,
-                head_sha: $head_sha,
-                status: "completed",
-                conclusion: $conclusion,
-                details_url: $details_url,
-                output: {
-                  title: $title,
-                  summary: $summary
-                }
-              } + (if $external_id == "" then {} else {external_id: $external_id} end)' > /tmp/ci-gpu-gate-check.json
-
-            gh api \
-              --method POST \
-              "repos/${GITHUB_REPOSITORY}/check-runs" \
-              --input /tmp/ci-gpu-gate-check.json
-          else
-            echo "No PR head SHA available; skipping PR-head CI GPU gate publication."
-          fi
+          gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/check-runs" \
+            --input /tmp/ci-gpu-gate-check.json
 
           if [ "${conclusion}" != "success" ]; then
             exit 1
