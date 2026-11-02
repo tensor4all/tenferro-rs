@@ -77,6 +77,11 @@ path = "tests/warm_up.rs"
 required-features = ["cuda"]
 
 [[test]]
+name = "coalesced_run"
+path = "tests/coalesced_run.rs"
+required-features = ["cuda"]
+
+[[test]]
 name = "chunked_staging"
 path = "tests/chunked_staging.rs"
 required-features = ["cuda"]
