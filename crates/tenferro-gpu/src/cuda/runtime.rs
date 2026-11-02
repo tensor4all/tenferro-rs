@@ -107,6 +107,9 @@ pub(crate) struct CudaRuntimeState {
     /// stream-ordered checkpoint, and the run's retirement is the barrier, so an operation's own
     /// launch does not have to wait. Zero means a standalone call, which proves its own launch.
     pub(crate) deferred_completions: std::sync::atomic::AtomicUsize,
+    /// Completion checkpoints recorded on this runtime's stream, per node of a scheduled run or
+    /// by a transfer. A coalesced run records none: submission order is its order (#2396).
+    pub(crate) completion_checkpoints: std::sync::atomic::AtomicU64,
     /// Stream barriers this runtime ran, whoever asked: an operation proving its own launch, a
     /// download, or a caller's explicit synchronize.
     pub(crate) stream_waits: std::sync::atomic::AtomicU64,
@@ -210,6 +213,7 @@ impl CudaRuntime {
                 detached: Mutex::new(Vec::new()),
                 deferred_completions: std::sync::atomic::AtomicUsize::new(0),
                 stream_waits: std::sync::atomic::AtomicU64::new(0),
+                completion_checkpoints: std::sync::atomic::AtomicU64::new(0),
             }),
         })
     }
@@ -488,6 +492,25 @@ impl CudaRuntime {
             self.retire_detached_locked();
         }
         Ok(())
+    }
+
+    /// Completion checkpoints this runtime recorded on its stream.
+    ///
+    /// A scheduled run records one per node, unless it took the single-domain coalesced path,
+    /// where submission order is the ordering and the run's retirement is the only barrier.
+    /// Exposed so a regression test can pin that (#2396).
+    #[doc(hidden)]
+    pub fn completion_checkpoints(&self) -> u64 {
+        self.inner
+            .completion_checkpoints
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Record one completion checkpoint here, for callers that own the submission lock.
+    pub(crate) fn note_completion_checkpoint(&self) {
+        self.inner
+            .completion_checkpoints
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Stream barriers this runtime ran, including the ones a scheduled run's operations skip.
