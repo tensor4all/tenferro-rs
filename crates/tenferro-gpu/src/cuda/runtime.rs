@@ -154,6 +154,21 @@ fn default_config(total_memory_bytes: u64) -> t4a_cuda_runtime::Config {
     }
 }
 
+/// Rejects construction when no CUDA driver library can be loaded.
+///
+/// `cudarc`'s dynamic loader panics when nothing loads, and the panic text names
+/// `LD_LIBRARY_PATH` and library candidates, which misleads a caller on a host that cannot
+/// have a driver at all. `t4a-cuda-runtime` probes the same libraries without panicking, so
+/// an engine construction reports a typed error a multi-backend binary can match on (#2401).
+fn require_cuda_driver() -> Result<(), CudaDeviceError> {
+    t4a_cuda_runtime::device_count()
+        .map(|_| ())
+        .map_err(|error| CudaDeviceError::Discovery {
+            operation: "initialize_driver",
+            source: Box::new(error),
+        })
+}
+
 /// The least idle device memory the pool keeps mapped, whatever the device size.
 const MIN_POOL_RELEASE_BYTES: usize = 256 << 20;
 /// The most idle device memory the pool keeps mapped, whatever the device size.
@@ -213,6 +228,7 @@ impl CudaRuntime {
     /// [`CudaDeviceError`] when the device is unknown or the driver cannot open it.
     #[doc(hidden)]
     pub fn new(device_id: CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> {
+        require_cuda_driver()?;
         let total_memory = crate::cuda::cuda_devices()?
             .iter()
             .find(|info| info.id() == device_id)
@@ -235,6 +251,7 @@ impl CudaRuntime {
         device_id: CudaDeviceId,
         config: t4a_cuda_runtime::Config,
     ) -> Result<CudaRuntime, CudaDeviceError> {
+        require_cuda_driver()?;
         let devices = crate::cuda::cuda_devices()?;
         let info = devices
             .iter()

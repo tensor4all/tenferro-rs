@@ -1,6 +1,24 @@
 //! The `TENFERRO_CUDA_ARTIFACT_CACHE` contract.
 
-use super::artifact_cache_dir;
+use super::{artifact_cache_dir, CudaRuntime};
+use crate::cuda::{CudaDeviceError, CudaDeviceId};
+
+#[test]
+fn a_missing_driver_is_reported_instead_of_panicking() {
+    if t4a_cuda_runtime::device_count().is_ok() {
+        // A loadable driver takes the real opening path, which this test does not assert.
+        return;
+    }
+    let error = CudaRuntime::new(CudaDeviceId::from_ordinal(0))
+        .expect_err("opening a runtime must fail without a driver library");
+    assert!(matches!(
+        &error,
+        CudaDeviceError::Discovery {
+            operation: "initialize_driver",
+            ..
+        }
+    ));
+}
 
 #[test]
 fn the_environment_names_the_persistent_artifact_directory() {

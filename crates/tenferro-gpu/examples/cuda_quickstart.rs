@@ -1,9 +1,20 @@
 use tenferro_gpu::{
-    cuda::cuda_devices, cuda::download_tensor, cuda::upload_tensor, cuda::CudaEngine,
+    cuda::cuda_devices, cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor,
+    cuda::CudaEngine,
 };
 use tenferro_tensor::{Tensor, TensorElementwise, TensorRead, TensorStructural, TensorWrite};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Probe before `cuda_devices`, which reaches cudarc's dynamic loader and panics when
+    // no driver library loads. Build a backend only when something answered.
+    if !gpu_available() {
+        eprintln!("cuda_quickstart: CUDA is unavailable on this host (gpu_available() = false).");
+        eprintln!(
+            "  The CUDA driver library (libcuda) is missing, could not be loaded, or reports no usable device."
+        );
+        std::process::exit(1);
+    }
+
     let Some(device) = cuda_devices()?.into_iter().next() else {
         return Ok(());
     };

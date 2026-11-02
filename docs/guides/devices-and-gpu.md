@@ -82,16 +82,40 @@ lower-level `engine.runtime().synchronize()` barrier. See
 
 For a time-axis diagram, see [Execution Models](execution-models.md).
 
+## Probe Before Constructing A Backend
+
+**Engine construction requires a probe first.** `tenferro_gpu::cuda::gpu_available()`
+is that probe, and `cuda_devices` must not run before it: the CUDA stack sits
+behind cudarc's dynamic loader, which panics when no driver library is present.
+A multi-backend binary probes every candidate provider and then constructs only
+the backends that answered `true`; a probe that returns `false` is a normal
+runtime condition to report, not a panic to survive. `CudaEngine::open` and
+`CudaRuntime::new` do report a missing driver library as a typed
+`CudaDeviceError::Discovery` under the `initialize_driver` operation instead of
+panicking, but that does not make the probe optional: it is also what a caller
+uses to decide not to build the engine at all.
+
 ## CUDA Quickstart
 
 <!-- snippet-source: crates/tenferro-gpu/examples/cuda_quickstart.rs -->
 ```rust
 use tenferro_gpu::{
-    cuda::cuda_devices, cuda::download_tensor, cuda::upload_tensor, cuda::CudaEngine,
+    cuda::cuda_devices, cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor,
+    cuda::CudaEngine,
 };
 use tenferro_tensor::{Tensor, TensorElementwise, TensorRead, TensorStructural, TensorWrite};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Probe before `cuda_devices`, which reaches cudarc's dynamic loader and panics when
+    // no driver library loads. Build a backend only when something answered.
+    if !gpu_available() {
+        eprintln!("cuda_quickstart: CUDA is unavailable on this host (gpu_available() = false).");
+        eprintln!(
+            "  The CUDA driver library (libcuda) is missing, could not be loaded, or reports no usable device."
+        );
+        std::process::exit(1);
+    }
+
     let Some(device) = cuda_devices()?.into_iter().next() else {
         return Ok(());
     };
