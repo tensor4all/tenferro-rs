@@ -1,7 +1,7 @@
-use super::{checked_product, FaerEig};
+use super::checked_product;
 use crate::cpu::tests::with_cpu_linalg;
 use crate::{QrOptions, TensorLinalgExt};
-use num_complex::{Complex32, Complex64};
+use num_complex::Complex64;
 use tenferro_tensor::Tensor;
 
 fn product(a: &[f64], a_rows: usize, a_cols: usize, b: &[f64], b_cols: usize) -> Vec<f64> {
@@ -83,148 +83,75 @@ fn checked_matrix_element_count_reports_typed_overflow() {
     ));
 }
 
-/// Assert the seam reported a non-normalizable eigenvector column through the
-/// typed linalg `NonFinite` source, not a generic failure.
-fn assert_typed_non_finite(error: tenferro_tensor::Error) {
-    assert!(matches!(
-        error,
-        tenferro_tensor::Error::Extension {
-            op: "eig",
-            family: crate::LINALG_EXTENSION_FAMILY_ID,
-            kind: tenferro_tensor::ErrorKind::NumericalFailure,
-            ..
-        }
-    ));
-    assert!(
-        std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<crate::Error>())
-            .is_some_and(|source| matches!(
-                source,
-                crate::Error::NonFinite {
-                    op: "eig",
-                    role: "eigenvector column",
-                }
-            )),
-        "expected a typed NonFinite eigenvector-column source, got {error}"
-    );
-}
-
+/// `eig`'s output is already in the gauge [`crate::eig`] produces, so the seam is the public
+/// normalizer and lane callers that call it reproduce `eig` (#2387).
 #[test]
-fn normalize_eig_vectors_puts_columns_in_the_unit_gauge() {
-    // Column-major 2x2 block: column 0 is [3, 4i], column 1 is [1, 2i].
-    let mut columns = vec![
-        Complex64::new(3.0, 0.0),
-        Complex64::new(0.0, 4.0),
-        Complex64::new(1.0, 0.0),
-        Complex64::new(0.0, 2.0),
-    ];
-    <f64 as FaerEig>::normalize_eig_vectors(&mut columns, 2, 1).unwrap();
-    assert!((columns[0].re - 0.6).abs() < 1.0e-12, "{:?}", columns[0]);
-    assert!((columns[1].im - 0.8).abs() < 1.0e-12, "{:?}", columns[1]);
-    let root_five = 5.0_f64.sqrt();
-    assert!(
-        (columns[2].re - 1.0 / root_five).abs() < 1.0e-12,
-        "{:?}",
-        columns[2]
-    );
-    assert!(
-        (columns[3].im - 2.0 / root_five).abs() < 1.0e-12,
-        "{:?}",
-        columns[3]
-    );
+fn eig_output_is_already_in_the_gauge_of_the_public_normalizer() {
+    // [[1, 1], [0, 2]] column-major: eigenvalues 1 and 2, eigenvectors [1, 0] and
+    // [1, 1] / sqrt(2), so the provider's columns are not unit-norm on their own.
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 1.0, 2.0]).unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    let (_values, vectors) = with_cpu_linalg(&mut backend, |backend| a.eig(backend)).unwrap();
+    let from_eig = vectors.as_slice::<Complex64>().unwrap().to_vec();
+    assert_eq!(from_eig.len(), 4);
+
+    // Re-running the public normalizer on `eig`'s output leaves it in place.
+    let mut again = from_eig.clone();
+    crate::eig::normalize_eig_vectors_c64(&mut again, 2).unwrap();
+    for (normalized, eig) in again.iter().zip(&from_eig) {
+        assert!(
+            (normalized - eig).norm() < 1.0e-15,
+            "{normalized:?} against {eig:?}"
+        );
+    }
+
+    // And every column carries the unit 2-norm it documents.
+    for column in 0..2 {
+        let norm = (0..2)
+            .map(|row| from_eig[column * 2 + row].norm_sqr())
+            .sum::<f64>()
+            .sqrt();
+        assert!((norm - 1.0).abs() < 1.0e-12, "column {column}: {norm}");
+    }
 }
 
+/// A lane caller that runs the provider's own eigen-solve and then the public normalizer gets
+/// `eig`'s output bit for bit: one implementation of the gauge, not two (#2387).
 #[test]
-fn normalize_eig_vectors_rejects_non_normalizable_columns_typed() {
-    // All-zero column: there is no direction to normalize, so the seam must
-    // refuse rather than divide by zero.
-    let mut zero = vec![Complex64::new(0.0, 0.0); 4];
-    assert_typed_non_finite(<f64 as FaerEig>::normalize_eig_vectors(&mut zero, 2, 1).unwrap_err());
+fn the_public_normalizer_reproduces_eig_bit_for_bit() {
+    // Column-major [[1, 1], [0, 2]]: the provider's own columns [1, 0] and [1, 1] are not
+    // unit-norm, so the normalizer has work to do.
+    let data = [1.0_f64, 0.0, 1.0, 2.0];
+    let a = Tensor::from_vec_col_major(vec![2, 2], data.to_vec()).unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    let (_values, from_eig) = with_cpu_linalg(&mut backend, |backend| a.eig(backend)).unwrap();
+    let from_eig = from_eig.as_slice::<Complex64>().unwrap().to_vec();
 
-    // Non-finite column: a provider that overflowed inside its
-    // back-substitution must surface the typed NonFinite source, not NaN.
-    let mut non_finite = vec![
-        Complex64::new(f64::INFINITY, 0.0),
-        Complex64::new(1.0, 0.0),
-        Complex64::new(1.0, 0.0),
-        Complex64::new(1.0, 0.0),
-    ];
-    assert_typed_non_finite(
-        <f64 as FaerEig>::normalize_eig_vectors(&mut non_finite, 2, 1).unwrap_err(),
+    let (mut raw_values, mut raw_vectors) = (Vec::<Complex64>::new(), Vec::<Complex64>::new());
+    tlinalg::eig::eig(
+        tlinalg::Op::Eig,
+        strided_view::RawStridedRef::new(&data, &[2, 2], &[1, 2], 0).unwrap(),
+        &mut raw_values,
+        &mut raw_vectors,
+        &mut tcontract_exec::Exec::serial(),
+    )
+    .unwrap();
+    crate::eig::normalize_eig_vectors_c64(&mut raw_vectors, 2).unwrap();
+    // Compare raw bit patterns, not `==`: `-0.0 == 0.0` and a bit-identity claim must not accept
+    // a sign flip the arithmetic never made.
+    let bits = |values: &[Complex64]| -> Vec<(u64, u64)> {
+        values
+            .iter()
+            .map(|value| (value.re.to_bits(), value.im.to_bits()))
+            .collect()
+    };
+    assert_eq!(
+        bits(&raw_vectors),
+        bits(&from_eig),
+        "the public normalizer must reproduce eig bit for bit"
     );
 }
 
-#[test]
-fn normalize_eig_vectors_normalizes_extreme_magnitude_finite_columns() {
-    // #2148 review follow-up: the column norm is accumulated in `f64` after
-    // scaling, so finite columns whose squares overflow or underflow in the
-    // operand dtype must still normalize instead of being rejected.
-    // Column 0 is [3e20, 4i e20], whose operand-dtype square sum is `inf` in
-    // f32; column 1 keeps the matrix block non-degenerate.
-    let mut large32 = vec![
-        Complex32::new(3.0e20, 0.0),
-        Complex32::new(0.0, 4.0e20),
-        Complex32::new(1.0, 0.0),
-        Complex32::new(0.0, 1.0),
-    ];
-    <f32 as FaerEig>::normalize_eig_vectors(&mut large32, 2, 1).unwrap();
-    assert!((large32[0].re - 0.6).abs() < 1.0e-6, "{:?}", large32[0]);
-    assert!((large32[1].im - 0.8).abs() < 1.0e-6, "{:?}", large32[1]);
-
-    // A tiny column used to underflow the operand-dtype square sum to zero.
-    let mut tiny32 = vec![
-        Complex32::new(1.0e-30, 0.0),
-        Complex32::new(0.0, 2.0e-30),
-        Complex32::new(1.0, 0.0),
-        Complex32::new(0.0, 1.0),
-    ];
-    <f32 as FaerEig>::normalize_eig_vectors(&mut tiny32, 2, 1).unwrap();
-    let root_five = 5.0_f32.sqrt();
-    assert!(
-        (tiny32[0].re - 1.0 / root_five).abs() < 1.0e-6,
-        "{:?}",
-        tiny32[0]
-    );
-    assert!(
-        (tiny32[1].im - 2.0 / root_five).abs() < 1.0e-6,
-        "{:?}",
-        tiny32[1]
-    );
-
-    // The same overflow is observable in the `f64` instantiation.
-    let mut large64 = vec![
-        Complex64::new(3.0e200, 0.0),
-        Complex64::new(0.0, 4.0e200),
-        Complex64::new(1.0, 0.0),
-        Complex64::new(0.0, 1.0),
-    ];
-    <f64 as FaerEig>::normalize_eig_vectors(&mut large64, 2, 1).unwrap();
-    assert!((large64[0].re - 0.6).abs() < 1.0e-12, "{:?}", large64[0]);
-    assert!((large64[1].im - 0.8).abs() < 1.0e-12, "{:?}", large64[1]);
-
-    // And the underflow side in f64: `1e-200` squared is exactly zero in the
-    // operand dtype, so this column used to look all-zero and be rejected.
-    let mut tiny64 = vec![
-        Complex64::new(1.0e-200, 0.0),
-        Complex64::new(0.0, 2.0e-200),
-        Complex64::new(1.0, 0.0),
-        Complex64::new(0.0, 1.0),
-    ];
-    <f64 as FaerEig>::normalize_eig_vectors(&mut tiny64, 2, 1).unwrap();
-    let root_five64 = 5.0_f64.sqrt();
-    assert!(
-        (tiny64[0].re - 1.0 / root_five64).abs() < 1.0e-12,
-        "{:?}",
-        tiny64[0]
-    );
-    assert!(
-        (tiny64[1].im - 2.0 / root_five64).abs() < 1.0e-12,
-        "{:?}",
-        tiny64[1]
-    );
-}
-/// The compact state must own pooled storage, not two ordinary vectors.
-///
 /// A 64x24 `f64` factor is `packed` (1536 elements) plus `coeff` (24 elements). If either output
 /// left the pool as a plain `Vec`, dropping the state would free it instead of returning it, so the
 /// retained pool could never hold that payload and a second call would have to allocate it again.

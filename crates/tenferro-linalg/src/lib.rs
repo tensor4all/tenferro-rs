@@ -89,6 +89,7 @@ mod cpu;
 mod eager_composites;
 #[cfg(feature = "autodiff")]
 mod eager_ext;
+pub mod eig;
 pub mod error;
 mod extension;
 #[cfg(feature = "cuda")]

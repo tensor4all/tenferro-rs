@@ -310,17 +310,19 @@ pub(crate) trait FaerEig: FaerLinalg {
     /// so the seam normalizes them here. A column the provider left non-finite (a
     /// defective, Jordan-like input can overflow inside its back-substitution) is
     /// reported as a numerical failure rather than returned as NaN (#2148).
+    ///
+    /// The work itself is [`crate::eig`], which lane callers reach without an
+    /// engine (#2387).
     fn normalize_eig_vectors(
         vectors: &mut [Self::ComplexScalar],
         n: usize,
-        batch_count: usize,
     ) -> tenferro_tensor::Result<()>;
 
     fn wrap(tensor: TypedTensor<Self::ComplexScalar>) -> Tensor;
 }
 
 macro_rules! impl_faer_eig {
-    ($scalar:ty, $complex:ty, $real:ty) => {
+    ($scalar:ty, $complex:ty, $normalize:ident) => {
         impl FaerEig for $scalar {
             type ComplexScalar = $complex;
 
@@ -348,67 +350,17 @@ macro_rules! impl_faer_eig {
             fn normalize_eig_vectors(
                 vectors: &mut [$complex],
                 n: usize,
-                batch_count: usize,
             ) -> tenferro_tensor::Result<()> {
-                // INVARIANT: `n >= 1` for a non-empty square input, so each chunk
-                // below is a whole column of the column-major [n, n] block.
-                for block in vectors.chunks_exact_mut(n * n).take(batch_count) {
-                    for column in block.chunks_exact_mut(n) {
-                        // Scale before summing squares. `norm_sqr` is evaluated in the
-                        // operand dtype (`f32` for the `Complex32` instantiation), so a
-                        // finite column of large magnitude squares to `inf` and one of
-                        // tiny magnitude squares to `0`, and both were rejected as
-                        // `NonFinite` even though the column is normalizable. Scaling by
-                        // the largest component first keeps every squared term in [0, 1],
-                        // and the scaling itself is done in f64 so it cannot overflow.
-                        let magnitude = column
-                            .iter()
-                            .map(|value| f64::from(value.re.abs().max(value.im.abs())))
-                            .fold(0.0_f64, f64::max);
-                        if magnitude == 0.0 {
-                            return Err(crate::error::into_tensor_error(
-                                "eig",
-                                crate::Error::NonFinite {
-                                    op: "eig",
-                                    role: "eigenvector column",
-                                },
-                            ));
-                        }
-                        let norm = magnitude
-                            * column
-                                .iter()
-                                .map(|value| {
-                                    let re = f64::from(value.re) / magnitude;
-                                    let im = f64::from(value.im) / magnitude;
-                                    re * re + im * im
-                                })
-                                .sum::<f64>()
-                                .sqrt();
-                        let scale = norm as $real;
-                        if !norm.is_finite() || !scale.is_finite() || scale == 0.0 {
-                            return Err(crate::error::into_tensor_error(
-                                "eig",
-                                crate::Error::NonFinite {
-                                    op: "eig",
-                                    role: "eigenvector column",
-                                },
-                            ));
-                        }
-                        for value in column.iter_mut() {
-                            *value /= scale;
-                        }
-                    }
-                }
-                Ok(())
+                crate::eig::$normalize(vectors, n)
             }
         }
     };
 }
 
-impl_faer_eig!(f32, Complex32, f32);
-impl_faer_eig!(f64, Complex64, f64);
-impl_faer_eig!(Complex32, Complex32, f32);
-impl_faer_eig!(Complex64, Complex64, f64);
+impl_faer_eig!(f32, Complex32, normalize_eig_vectors_c32);
+impl_faer_eig!(f64, Complex64, normalize_eig_vectors_c64);
+impl_faer_eig!(Complex32, Complex32, normalize_eig_vectors_c32);
+impl_faer_eig!(Complex64, Complex64, normalize_eig_vectors_c64);
 
 // ---------------------------------------------------------------------------------------------
 // Shape and allocation helpers
@@ -1726,8 +1678,8 @@ fn eig_impl<T: FaerEig>(
     if let Some(vectors) = vector_lease {
         let mut filled = tensor_from_lease(vectors, placement)?;
         // The public contract's gauge, applied at the seam so every provider
-        // agrees (#2148); see `FaerEig::normalize_eig_vectors`.
-        T::normalize_eig_vectors(filled.host_data_mut()?, n, batch_count)?;
+        // agrees (#2148); see `crate::eig`.
+        T::normalize_eig_vectors(filled.host_data_mut()?, n)?;
         outputs.push(T::wrap(filled));
     }
     Ok(outputs)
