@@ -1,17 +1,19 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use tenferro_tensor::TensorBackend;
 use tenferro_tensor::{
-    BackendSession, DotGeneralAccumulation, DotGeneralConfig, Error, Result, Tensor, TensorRank,
-    TensorRead, TensorView, TensorWrite, TypedTensorView,
+    BackendSession, DType, DotGeneralAccumulation, DotGeneralConfig, Error, Result, Tensor,
+    TensorRank, TensorRead, TensorView, TensorWrite, TypedTensorView,
 };
 
 use crate::binary_dot::{
     try_build_binary_dot_plan, try_build_exact_output_binary_dot_config,
     try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder, BinaryDotPlan,
 };
+use crate::cache::{cached_plan, PlanCacheKey};
 use crate::util::map_label_occurrences;
 use crate::{ConcreteEinsumPlan, ContractionTree, EinsumSubscripts, Subscripts};
 
@@ -1228,6 +1230,52 @@ pub(crate) fn eager_einsum_subscripts(
     })?
 }
 
+fn tensor_read_plan_operands(
+    inputs: &[TensorRead<'_>],
+) -> Result<Vec<(DType, Vec<usize>, Vec<isize>)>> {
+    inputs
+        .iter()
+        .map(|input| Ok((input.dtype(), input.shape().to_vec(), input.strides()?)))
+        .collect()
+}
+
+fn tensor_plan_operands(inputs: &[&Tensor]) -> Result<Vec<(DType, Vec<usize>, Vec<isize>)>> {
+    inputs
+        .iter()
+        .map(|input| {
+            Ok((
+                input.dtype(),
+                input.shape().to_vec(),
+                TensorRead::from_tensor(input).strides()?,
+            ))
+        })
+        .collect()
+}
+
+/// Prepared plan for `inputs`/`subscripts`, reused across calls when the operand
+/// subscripts, dtypes, ranks, layouts and output specification match.
+fn cached_tensor_read_plan(
+    inputs: &[TensorRead<'_>],
+    subscripts: &EinsumSubscripts,
+) -> Result<Arc<ConcreteEinsumPlan>> {
+    let key = PlanCacheKey::new(subscripts, tensor_read_plan_operands(inputs)?);
+    cached_plan(key, || {
+        ConcreteEinsumPlan::prepare_read_subscripts(inputs, subscripts)
+    })
+    .map_err(into_tensor_error)
+}
+
+fn cached_tensor_plan(
+    inputs: &[&Tensor],
+    subscripts: &EinsumSubscripts,
+) -> Result<Arc<ConcreteEinsumPlan>> {
+    let key = PlanCacheKey::new(subscripts, tensor_plan_operands(inputs)?);
+    cached_plan(key, || {
+        ConcreteEinsumPlan::prepare_subscripts(inputs, subscripts)
+    })
+    .map_err(into_tensor_error)
+}
+
 /// Eager N-ary einsum on concrete [`Tensor`] values inside an existing
 /// backend session.
 ///
@@ -1240,10 +1288,10 @@ pub(crate) fn eager_einsum_subscripts_on_session(
 ) -> Result<Tensor> {
     if eager_einsum_profile_enabled() {
         let total_started = Instant::now();
+        let subscripts = EinsumSubscripts::from(subscripts);
         let plan = profile_eager_einsum_section("plan_subscripts", || {
-            ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
-        })
-        .map_err(into_tensor_error)?;
+            cached_tensor_plan(inputs, &subscripts)
+        })?;
         let result = profile_eager_einsum_section("with_backend_session", || {
             plan.execute(inputs, session).map_err(into_tensor_error)
         });
@@ -1259,9 +1307,8 @@ pub(crate) fn eager_einsum_subscripts_on_session(
         let shape_us = started.elapsed().as_secs_f64() * 1.0e6;
 
         let started = Instant::now();
-        let plan =
-            ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
-                .map_err(into_tensor_error)?;
+        let subscripts = EinsumSubscripts::from(subscripts);
+        let plan = cached_tensor_plan(inputs, &subscripts)?;
         let plan_us = started.elapsed().as_secs_f64() * 1.0e6;
 
         let started = Instant::now();
@@ -1278,8 +1325,8 @@ pub(crate) fn eager_einsum_subscripts_on_session(
         return result;
     }
 
-    let plan = ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
-        .map_err(into_tensor_error)?;
+    let subscripts = EinsumSubscripts::from(subscripts);
+    let plan = cached_tensor_plan(inputs, &subscripts)?;
     plan.execute(inputs, session).map_err(into_tensor_error)
 }
 
@@ -1310,9 +1357,8 @@ pub(crate) fn eager_einsum_read_subscripts_on_session(
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
 ) -> Result<Tensor> {
-    let plan =
-        ConcreteEinsumPlan::prepare_read_subscripts(inputs, &EinsumSubscripts::from(subscripts))
-            .map_err(into_tensor_error)?;
+    let subscripts = EinsumSubscripts::from(subscripts);
+    let plan = cached_tensor_read_plan(inputs, &subscripts)?;
     plan.execute_read(inputs, session)
         .map_err(into_tensor_error)
 }
