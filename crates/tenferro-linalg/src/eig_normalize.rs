@@ -161,8 +161,8 @@ mod tests {
             Complex64::new(1.0, 1.0),
         ];
         normalize_eig_vectors(&mut vectors, 2, 2).unwrap();
-        for block in vectors.chunks_exact(4) {
-            for column in block.chunks_exact(2) {
+        for block in [&vectors[..4], &vectors[4..]] {
+            for column in [&block[..2], &block[2..]] {
                 assert!((norm64(column) - 1.0).abs() < 1e-12);
             }
         }
