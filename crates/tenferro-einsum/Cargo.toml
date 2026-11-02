@@ -82,6 +82,7 @@ thiserror.workspace = true
 tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.7.1", default-features = false }
 criterion.workspace = true
 num-complex.workspace = true
+faer = { workspace = true }
 
 [[bench]]
 name = "einsum_cpu_bench"
@@ -104,6 +105,11 @@ harness = false
 [[bench]]
 name = "mps_inner_product_compile"
 harness = false
+
+[[bench]]
+name = "small_contraction_overhead"
+harness = false
+required-features = ["autodiff"]
 
 [[test]]
 name = "integration"
