@@ -312,13 +312,6 @@ fn promote_complex_to_wider_complex() {
 }
 
 #[test]
-fn promote_dtype_div_like_i64_to_f64() {
-    assert_eq!(promote_dtype_div_like(DType::I64, DType::I64), DType::F64);
-    assert_eq!(promote_dtype_div_like(DType::F64, DType::F64), DType::F64);
-    assert_eq!(promote_dtype_div_like(DType::I64, DType::F64), DType::F64);
-}
-
-#[test]
 fn promote_dtypes_fold() {
     assert_eq!(
         promote_dtypes([DType::I64, DType::F32, DType::C64]),
@@ -909,4 +902,28 @@ fn dynamic_slice_rejects_a_starts_rank_the_backends_reject() {
             ..
         }
     ));
+}
+
+#[test]
+fn div_binary_op_keeps_integer_dtype() {
+    // The rustdoc on `promote_dtype` describes what inference does, so pin the
+    // integer-division contract at the entry point `Div` actually uses.
+    // Integer `/` stays integer: the spec gives it a `DivisionByZero` domain
+    // check, which only makes sense for an integer quotient dtype.
+    assert_eq!(
+        promote_dtype_for_binary_op(&StdTensorOp::Div, DType::I64, DType::I64),
+        DType::I64
+    );
+    assert_eq!(
+        promote_dtype_for_binary_op(&StdTensorOp::Div, DType::I32, DType::I64),
+        DType::I64
+    );
+    assert_eq!(
+        promote_dtype_for_binary_op(&StdTensorOp::Div, DType::I64, DType::F64),
+        DType::F64
+    );
+    assert_eq!(
+        promote_dtype_for_binary_op(&StdTensorOp::Pow, DType::I64, DType::I64),
+        DType::I64
+    );
 }

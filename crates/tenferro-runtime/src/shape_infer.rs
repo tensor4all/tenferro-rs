@@ -30,7 +30,8 @@ pub(crate) struct InferredExtensionMeta {
 /// - Bool + T -> T
 /// - I32 + I32 -> I32
 /// - I32 + I64 -> I64
-/// - I64 + I64 → I64 (integer-preserving; Div/Pow use [`promote_dtype_div_like`])
+/// - I64 + I64 → I64 (integer-preserving; `Div`/`Rem` keep it, `Pow` uses
+///   [`promote_dtype_pow_like`])
 /// - I32/I64 + F32/F64 → F64 (F32 does not have enough mantissa bits for arbitrary integers)
 /// - I32/I64 + C32/C64 → C64
 /// - F32 + F64 → F64
@@ -59,15 +60,6 @@ pub fn promote_dtype_for_binary_op(op: &StdTensorOp, lhs: DType, rhs: DType) -> 
         StdTensorOp::Pow => promote_dtype_pow_like(lhs, rhs),
         _ => promote_dtype(lhs, rhs),
     }
-}
-
-/// Like [`promote_dtype`], but for division-like ops where I64 / I64
-/// should produce F64 to avoid integer truncation.
-pub fn promote_dtype_div_like(lhs: DType, rhs: DType) -> DType {
-    if matches!(lhs, DType::I32 | DType::I64) && matches!(rhs, DType::I32 | DType::I64) {
-        return DType::F64;
-    }
-    promote_dtype(lhs, rhs)
 }
 
 /// Like [`promote_dtype`], but integer powers preserve integer dtype because
