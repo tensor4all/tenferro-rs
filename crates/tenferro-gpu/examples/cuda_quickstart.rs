@@ -1,9 +1,20 @@
 use tenferro_gpu::{
-    cuda::cuda_devices, cuda::download_tensor, cuda::upload_tensor, cuda::CudaEngine,
+    cuda::cuda_devices, cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor,
+    cuda::CudaEngine,
 };
 use tenferro_tensor::{Tensor, TensorElementwise, TensorRead, TensorStructural, TensorWrite};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Probe before anything reaches the driver, so a host without a usable CUDA driver reports
+    // the condition instead of unwinding inside `cudarc` (#2401).
+    if !gpu_available() {
+        eprintln!(
+            "cuda_quickstart: no usable CUDA driver or device; probe with \
+             `tenferro_gpu::cuda::gpu_available()` before constructing an engine"
+        );
+        std::process::exit(1);
+    }
+
     let Some(device) = cuda_devices()?.into_iter().next() else {
         return Ok(());
     };

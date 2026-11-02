@@ -6,6 +6,11 @@ use super::identity::{CudaComputeCapability, CudaDeviceUuid};
 
 #[derive(Debug, thiserror::Error)]
 enum CudaDriverDiscoveryError {
+    #[error("the CUDA driver probe failed")]
+    DriverUnavailable {
+        #[source]
+        source: BoxError,
+    },
     #[error("CUDA driver call {function} failed: {source}")]
     DriverCall {
         function: &'static str,
@@ -286,6 +291,13 @@ pub(crate) fn discover_with(
 
 impl DiscoveryDriver for CudaDriverApi {
     fn initialize(&self) -> Result<(), BoxError> {
+        // `cudarc` unwinds when the driver library or one of its entry points is missing, so ask
+        // the runtime's non-panicking probe first and keep the documented `Result` (#2401).
+        t4a_cuda_runtime::device_count().map_err(|error| {
+            boxed_discovery_error(CudaDriverDiscoveryError::DriverUnavailable {
+                source: Box::new(error),
+            })
+        })?;
         cudarc::driver::result::init().map_err(|source| {
             boxed_discovery_error(CudaDriverDiscoveryError::DriverCall {
                 function: "cuInit",
