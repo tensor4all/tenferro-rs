@@ -574,3 +574,6 @@ impl CudaDeviceError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
