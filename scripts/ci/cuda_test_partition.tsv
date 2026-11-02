@@ -693,6 +693,8 @@ gpu	tenferro-gpu	cuda::structural::tests::scale_tensor_write_refuses_a_host_view
 gpu	tenferro-gpu	cuda::structural::tests::scatter_read_refuses_a_bad_update_axis_before_allocating_or_staging
 gpu	tenferro-gpu	cuda::structural::tests::triangular_reads_mask_borrowed_regions
 host	tenferro-gpu	cuda::structural::tests::the_element_count_checks_both_extremes
+host	tenferro-gpu	cuda::runtime::tests::the_budget_grows_with_the_device_and_stays_bounded
+host	tenferro-gpu	cuda::runtime::tests::the_environment_overrides_the_budget_in_mib
 host	tenferro-gpu	cuda::runtime::tests::the_environment_names_the_persistent_artifact_directory
 host	tenferro-gpu	event_retirement::tests::explicit_retirement_then_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_drop_invokes_retirement_once
@@ -1099,6 +1101,7 @@ host	tenferro-linalg::integration	cpu_linalg_source_contract::linalg_rustdoc_reu
 host	tenferro-linalg::integration	cpu_linalg_source_contract::public_cpu_linalg_read_methods_keep_one_operation_entry
 host	tenferro-linalg::integration	cpu_linalg_source_contract::rust_function_section_ignores_braces_in_comments_and_literals
 gpu	tenferro-gpu::coalesced_run	a_single_domain_run_keeps_no_per_node_completion
+gpu	tenferro-gpu::pool_retention	an_opened_runtime_keeps_a_device_scaled_pool_budget
 gpu	tenferro-linalg::integration	deferred_completion::a_scheduled_run_defers_launch_completion_and_keeps_vendor_handles
 host	tenferro-linalg::integration	det_validation::determinant_rejects_rectangular_matrices_on_every_surface
 host	tenferro-linalg::integration	det_validation::empty_square_determinant_remains_one_and_zero

@@ -97,6 +97,8 @@ pub(crate) struct CudaRuntimeState {
     pub(crate) device_info: CudaDeviceInfo,
     pub(crate) allocation_domain: AllocationDomainId,
     pub(crate) identity: CudaRuntimeIdentity,
+    /// The allocation pool's retention budget this runtime opened with, in bytes.
+    pub(crate) pool_release_threshold: usize,
     /// Handles dropped while their work was still queued. The runtime's retirement
     /// already owns the staging; this queue owns only the caller's packages (a pinned
     /// source, a tensor handle) until their completion is observed.
@@ -136,15 +138,55 @@ pub(crate) struct Detached {
 /// process on an A100, and a warm read is a few milliseconds. Unset keeps the in-memory cache
 /// only; `none`, `off` and `memory` say so explicitly; any other value is the directory, created
 /// on the first write.
-fn default_config() -> t4a_cuda_runtime::Config {
+///
+/// `TENFERRO_CUDA_POOL_RELEASE_MIB` overrides the allocation pool's retention budget, the idle
+/// device memory the pool keeps mapped instead of handing back to the driver. See
+/// [`pool_release_threshold_bytes`].
+fn default_config(total_memory_bytes: u64) -> t4a_cuda_runtime::Config {
     t4a_cuda_runtime::Config {
         artifact_cache_dir: artifact_cache_dir(
             std::env::var_os("TENFERRO_CUDA_ARTIFACT_CACHE")
                 .as_deref()
                 .and_then(std::ffi::OsStr::to_str),
         ),
+        pool_release_threshold: pool_release_threshold_bytes(total_memory_bytes),
         ..t4a_cuda_runtime::Config::default()
     }
+}
+
+/// The least idle device memory the pool keeps mapped, whatever the device size.
+const MIN_POOL_RELEASE_BYTES: usize = 256 << 20;
+/// The most idle device memory the pool keeps mapped, whatever the device size.
+const MAX_POOL_RELEASE_BYTES: usize = 4 << 30;
+/// The share of the device's memory the pool may keep mapped.
+const POOL_RELEASE_SHARE: u64 = 8;
+
+/// Idle device memory the allocation pool keeps mapped instead of returning to the driver.
+///
+/// The driver's own default is a fixed 256 MiB, which is smaller than the working set of a single
+/// large operation: an eager 3072^3 f64 matmul holds about 430 MiB of 72 MiB buffers, so every
+/// call's output allocation missed the pool and re-mapped its pages — 864 us of
+/// `cuMemAllocFromPoolAsync` per call, 87 of 87 calls on the A100 host, reproducing in plain CUDA
+/// once six buffers are live (#2381). A budget scaled to the device keeps those pages.
+///
+/// `TENFERRO_CUDA_POOL_RELEASE_MIB` overrides the result, in MiB. The budget is a ceiling on
+/// retained *idle* memory, not a reservation: nothing is allocated before it is needed.
+fn pool_release_threshold_bytes(total_memory_bytes: u64) -> usize {
+    let override_mib = std::env::var("TENFERRO_CUDA_POOL_RELEASE_MIB")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    pool_release_threshold_from(override_mib, total_memory_bytes)
+}
+
+/// [`pool_release_threshold_bytes`] with the environment's override supplied explicitly.
+fn pool_release_threshold_from(override_mib: Option<u64>, total_memory_bytes: u64) -> usize {
+    if let Some(mib) = override_mib {
+        return usize::try_from(mib.saturating_mul(1 << 20))
+            .unwrap_or(usize::MAX)
+            .clamp(MIN_POOL_RELEASE_BYTES, MAX_POOL_RELEASE_BYTES);
+    }
+    let share = usize::try_from(total_memory_bytes / POOL_RELEASE_SHARE).unwrap_or(usize::MAX);
+    share.clamp(MIN_POOL_RELEASE_BYTES, MAX_POOL_RELEASE_BYTES)
 }
 
 /// The persistent artifact directory named by `value`, or `None` for memory only.
@@ -171,7 +213,12 @@ impl CudaRuntime {
     /// [`CudaDeviceError`] when the device is unknown or the driver cannot open it.
     #[doc(hidden)]
     pub fn new(device_id: CudaDeviceId) -> Result<CudaRuntime, CudaDeviceError> {
-        Self::with_config(device_id, default_config())
+        let total_memory = crate::cuda::cuda_devices()?
+            .iter()
+            .find(|info| info.id() == device_id)
+            .map(crate::cuda::CudaDeviceInfo::total_memory_bytes)
+            .unwrap_or(0);
+        Self::with_config(device_id, default_config(total_memory))
     }
 
     /// Open the CUDA runtime on `device_id` with an explicit configuration.
@@ -197,6 +244,7 @@ impl CudaRuntime {
                 requested: device_id,
                 discovered: devices.into_boxed_slice(),
             })?;
+        let pool_release_threshold = config.pool_release_threshold;
         let runtime = t4a_cuda_runtime::Runtime::open(device_id.ordinal() as usize, config)
             .map_err(|error| CudaDeviceError::Initialization {
                 device: device_id,
@@ -209,6 +257,7 @@ impl CudaRuntime {
                 device_id,
                 device_info: info,
                 allocation_domain: AllocationDomainId::fresh(),
+                pool_release_threshold,
                 identity: CudaRuntimeIdentity::fresh(),
                 detached: Mutex::new(Vec::new()),
                 deferred_completions: std::sync::atomic::AtomicUsize::new(0),
@@ -546,6 +595,37 @@ impl CudaRuntime {
             .deferred_completions
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         CompletionDeferral { runtime: self }
+    }
+
+    /// Idle device memory the allocation pool keeps mapped before returning it to the driver.
+    ///
+    /// Reported next to [`Self::stats`] because it is the bound the pool's retained bytes obey
+    /// (`PERFORMANCE_TIPS.md`, Cache Ownership): raise it with
+    /// `TENFERRO_CUDA_POOL_RELEASE_MIB` when a working set of live buffers exceeds it, which is
+    /// what made every eager 3072^3 output allocation re-map its pages (#2381).
+    #[doc(hidden)]
+    pub fn pool_release_threshold_bytes(&self) -> usize {
+        self.inner.pool_release_threshold
+    }
+
+    /// Return idle pool memory above `keep_bytes` to the driver now.
+    ///
+    /// The pool trims itself at the threshold recorded by
+    /// [`Self::pool_release_threshold_bytes`]; this is the explicit clear that a caller uses to
+    /// give device memory back, for example before handing the device to another library.
+    ///
+    /// # Errors
+    ///
+    /// [`CudaDeviceError::Initialization`] when the driver refuses the trim.
+    #[doc(hidden)]
+    pub fn trim_pool(&self, keep_bytes: usize) -> Result<(), CudaDeviceError> {
+        self.submit()
+            .trim_pool(keep_bytes)
+            .map_err(|error| CudaDeviceError::Initialization {
+                device: self.inner.device_id,
+                operation: "t4a_cuda_runtime::Runtime::trim_pool",
+                source: Box::new(error),
+            })
     }
 
     /// Detached pending handles that have not been retired yet, the compatibility
