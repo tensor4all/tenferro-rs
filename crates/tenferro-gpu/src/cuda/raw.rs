@@ -118,11 +118,13 @@ impl<T> TensorMut<'_, T> {
 pub struct Session<'s> {
     runtime: super::CudaRuntime,
     scope: t4a_cuda_runtime::RawScope<'s>,
-    /// The runtime's extension caches, lent by the engine: a vendor handle is created once per
-    /// engine and reused by every later session. The cell is per session and the session is
-    /// thread-bound, so a shared borrow during a vendor call costs nothing and keeps `resource`
-    /// callable while the session is read.
+    /// The engine's vendor resources: a handle is created once per engine and reused by every
+    /// later session. The cell is per session and the session is thread-bound, so a shared borrow
+    /// during a vendor call costs nothing and keeps `resource` callable while the session is read.
     caches: &'s std::cell::RefCell<tenferro_runtime::ExtensionCacheStore>,
+    /// How many resources this engine created rather than reused, for the regression test that
+    /// pins their lifetime to the engine.
+    resource_inits: &'s std::cell::Cell<u64>,
 }
 
 impl<'s> Session<'s> {
@@ -411,6 +413,7 @@ impl<'s> Session<'s> {
         let mut store = self.caches.borrow_mut();
         if store.get::<T>(&key).is_none() {
             let value = init()?;
+            self.resource_inits.set(self.resource_inits.get() + 1);
             store.put(key, value, 0);
         }
         let entry = std::cell::RefMut::map(store, |store| {
@@ -514,7 +517,10 @@ impl CudaEngine {
         // The runtime handle is cloned first so the engine's caches can be borrowed mutably for the
         // same call.
         let runtime = self.runtime().clone();
-        let caches = &self.extension_caches;
+        // The engine's own resources, not the store a run lends away: a vendor handle has to
+        // outlive the run that created it.
+        let caches = &self.vendor_resources;
+        let resource_inits = &self.vendor_resource_inits;
         // SAFETY: the closure only reads the addresses the session registers and enqueues its work
         // on this scope's stream.
         unsafe {
@@ -522,6 +528,7 @@ impl CudaEngine {
                 .with_raw_locked(Vec::new(), |scope| {
                     let mut session = Session {
                         runtime: runtime.clone(),
+                        resource_inits,
                         scope,
                         caches,
                     };

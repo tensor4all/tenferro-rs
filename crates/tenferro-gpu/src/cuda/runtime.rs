@@ -101,6 +101,15 @@ pub(crate) struct CudaRuntimeState {
     /// already owns the staging; this queue owns only the caller's packages (a pinned
     /// source, a tensor handle) until their completion is observed.
     pub(crate) detached: Mutex<Vec<Detached>>,
+    /// How many scheduled runs are currently enqueueing nodes on this runtime.
+    ///
+    /// While it is non-zero a run owns the completion proof: every node it enqueues records a
+    /// stream-ordered checkpoint, and the run's retirement is the barrier, so an operation's own
+    /// launch does not have to wait. Zero means a standalone call, which proves its own launch.
+    pub(crate) deferred_completions: std::sync::atomic::AtomicUsize,
+    /// Stream barriers this runtime ran, whoever asked: an operation proving its own launch, a
+    /// download, or a caller's explicit synchronize.
+    pub(crate) stream_waits: std::sync::atomic::AtomicU64,
 }
 
 /// One dropped handle retained until its completion is observed.
@@ -199,6 +208,8 @@ impl CudaRuntime {
                 allocation_domain: AllocationDomainId::fresh(),
                 identity: CudaRuntimeIdentity::fresh(),
                 detached: Mutex::new(Vec::new()),
+                deferred_completions: std::sync::atomic::AtomicUsize::new(0),
+                stream_waits: std::sync::atomic::AtomicU64::new(0),
             }),
         })
     }
@@ -459,6 +470,9 @@ impl CudaRuntime {
     /// [`CudaDeviceError::Initialization`] when the stream reports a failure.
     #[doc(hidden)]
     pub fn synchronize(&self) -> Result<(), CudaDeviceError> {
+        self.inner
+            .stream_waits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         {
             // Hold the submission lock through the reclamation: a concurrent clone cannot
             // enqueue a transfer it then detaches in the gap between the stream wait and
@@ -474,6 +488,41 @@ impl CudaRuntime {
             self.retire_detached_locked();
         }
         Ok(())
+    }
+
+    /// Stream barriers this runtime ran, including the ones a scheduled run's operations skip.
+    ///
+    /// A prepared run adds exactly the caller's own barrier; an operation that drains its own
+    /// launch adds one per launch. Exposed so the regression test can count real waits.
+    #[doc(hidden)]
+    pub fn stream_waits(&self) -> u64 {
+        self.inner
+            .stream_waits
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Whether a scheduled run currently owns the completion of the launches it enqueues.
+    ///
+    /// A run that holds the deferral records a stream-ordered checkpoint after every node and is
+    /// the barrier for its own work (see the CUDA engine's event domain), so an operation's launch
+    /// does not prove its own completion while it is zero. A standalone call sees zero and waits.
+    #[doc(hidden)]
+    pub fn completion_deferred(&self) -> bool {
+        self.inner
+            .deferred_completions
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0
+    }
+
+    /// Take a scheduled run's completion ownership for as long as the guard lives.
+    ///
+    /// Nested guards are counted, so a run enqueueing a node that itself starts a run keeps the
+    /// deferral in force until the outermost guard is dropped.
+    pub(crate) fn defer_completion(&self) -> CompletionDeferral<'_> {
+        self.inner
+            .deferred_completions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        CompletionDeferral { runtime: self }
     }
 
     /// Detached pending handles that have not been retired yet, the compatibility
@@ -585,6 +634,29 @@ impl Drop for CudaRuntimeState {
             );
             std::mem::forget(leaked);
         }
+    }
+}
+
+/// One scheduled run's ownership of its nodes' launch completion, for as long as it is enqueued.
+///
+/// Dropping the guard hands completion back to the operations, which is what a standalone call
+/// expects; it is deliberately trivial so no failure path can leave the count raised.
+pub(crate) struct CompletionDeferral<'a> {
+    runtime: &'a CudaRuntime,
+}
+
+impl Drop for CompletionDeferral<'_> {
+    fn drop(&mut self) {
+        self.runtime
+            .inner
+            .deferred_completions
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl std::fmt::Debug for CompletionDeferral<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CompletionDeferral")
     }
 }
 

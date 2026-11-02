@@ -71,7 +71,21 @@ pub struct CudaEngine {
     /// The runtime engine id this engine runs prepared programs as.
     runtime_engine_id: tenferro_runtime::EngineId,
     /// Extension caches the runtime lends to extension executors during a run.
+    ///
+    /// The run takes this store out of the engine and puts it back afterwards, so anything an
+    /// operation stores here is dropped at the end of the run it was created in.
     pub(crate) extension_caches: std::cell::RefCell<tenferro_runtime::ExtensionCacheStore>,
+    /// Resources a vendor call creates once per engine and reuses in every later session: a
+    /// cuSOLVER handle, a cuBLAS handle, their stream bindings.
+    ///
+    /// Deliberately not the store above. A run lends `extension_caches` away for its duration, so a
+    /// handle created during a run would be dropped with it and rebuilt on the next call — on the
+    /// A100 host that was 17 `cudaMalloc` + 3 stream creations per linalg AD call, ~1.2 ms of the
+    /// per-call time (#2382).
+    pub(crate) vendor_resources: std::cell::RefCell<tenferro_runtime::ExtensionCacheStore>,
+    /// Resources created in `vendor_resources` instead of reused. A handle that outlives its run
+    /// keeps this flat across runs; a handle rebuilt per run raises it once per run.
+    pub(crate) vendor_resource_inits: std::cell::Cell<u64>,
     /// Dispatchers whose translation units are already prepared. Preparing one is a runtime
     /// round trip, so an operation reuses the set its predecessors built.
     pub(crate) prepared: std::cell::RefCell<super::dispatch::PreparedDispatchers>,
@@ -80,6 +94,9 @@ pub struct CudaEngine {
     pending_runs: Vec<Box<dyn tenferro_runtime::EventDomainRun>>,
     /// Set when the runtime reported an unrecoverable failure.
     broken: bool,
+    /// Standalone launches this engine proved complete by waiting. A scheduled run's nodes are
+    /// retired by the run, so they never raise this; it is the observable form of that boundary.
+    pub(crate) launch_completion_syncs: std::cell::Cell<u64>,
     /// How many borrowed views this engine materialized into a compact operand copy.
     ///
     /// A native read entry consumes an operand's own layout, so this stays put; it moves only
@@ -126,12 +143,52 @@ impl CudaEngine {
             extension_caches: std::cell::RefCell::new(
                 tenferro_runtime::ExtensionCacheStore::default(),
             ),
+            vendor_resources: std::cell::RefCell::new(
+                tenferro_runtime::ExtensionCacheStore::default(),
+            ),
+            vendor_resource_inits: std::cell::Cell::new(0),
             prepared: std::cell::RefCell::new(super::dispatch::PreparedDispatchers::default()),
             pending_runs: Vec::new(),
             broken: false,
+            launch_completion_syncs: std::cell::Cell::new(0),
             staged_reads: std::cell::Cell::new(0),
             _not_sync: PhantomData,
         })
+    }
+
+    /// Retained entries and logical bytes of the vendor resources this engine holds.
+    ///
+    /// Reported like every other engine cache (`PERFORMANCE_TIPS.md`, Cache Ownership): a vendor
+    /// handle charges no logical payload, so the entry count is what a caller watches.
+    #[doc(hidden)]
+    pub fn vendor_resource_stats(&self) -> tenferro_runtime::CacheStats {
+        let store = self.vendor_resources.borrow();
+        store.stats(tenferro_runtime::ExtensionCacheSelector::All)
+    }
+
+    /// Drop the vendor handles this engine retains; the next call rebuilds them.
+    #[doc(hidden)]
+    pub fn clear_vendor_resources(&mut self) {
+        self.vendor_resources.borrow_mut().clear();
+    }
+
+    /// Vendor resources this engine created rather than reused.
+    ///
+    /// A resource outlives the run that created it, so a second identical run does not raise
+    /// this. Exposed so the regression test can pin that lifetime (#2382).
+    #[doc(hidden)]
+    pub fn vendor_resource_inits(&self) -> u64 {
+        self.vendor_resource_inits.get()
+    }
+
+    /// Standalone launch completions this engine proved by waiting for the stream.
+    ///
+    /// A scheduled run owns its nodes' completion: it records one stream-ordered checkpoint per
+    /// node and is retired as the run's barrier, so this count does not move while a prepared
+    /// program runs. Exposed so the regression test can pin that boundary.
+    #[doc(hidden)]
+    pub fn launch_completion_syncs(&self) -> u64 {
+        self.launch_completion_syncs.get()
     }
 
     /// Publish a produced value with a frontier a reader can wait on.

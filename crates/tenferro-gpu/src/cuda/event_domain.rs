@@ -78,7 +78,13 @@ impl EventDomainRun for StreamEventDomainRun {
                 for token in tokens {
                     token.wait()?;
                 }
-                launch()?;
+                // The run owns the completion of what it enqueues: the checkpoint recorded below
+                // is this node's stream position, and the run's retirement is the barrier. An
+                // operation inside `launch` therefore does not wait for its own kernel (#2382).
+                {
+                    let _deferred = self.runtime.defer_completion();
+                    launch()?;
+                }
                 let completion = {
                     let mut guard = self.runtime.submit();
                     guard.checkpoint().map_err(event_domain_error)?

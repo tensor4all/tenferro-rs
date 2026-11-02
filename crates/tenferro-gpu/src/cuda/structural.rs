@@ -972,15 +972,32 @@ impl CudaEngine {
         op: &'static str,
     ) -> crate::Result<Tensor> {
         let output = self.enqueue_copy(source, shape, op)?;
-        // The returned tensor must be complete when the caller sees it.
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        // The copy has to be complete before the caller can see it; inside a scheduled run the
+        // run's checkpoint is what orders it, so only a standalone call waits here.
+        self.prove_launch(op)?;
         Ok(output)
     }
 }
 
 impl CudaEngine {
+    /// Prove that the launch this call just made has completed.
+    ///
+    /// A scheduled run enqueues every node, records a stream-ordered checkpoint after each of
+    /// them, and retires the run as that run's barrier, so waiting here would put the host and the
+    /// device back to back on work stream order already covers (#2382). A standalone call has no
+    /// run behind it and waits, which is what makes an operation's result observable when it
+    /// returns.
+    fn prove_launch(&self, op: &'static str) -> crate::Result<()> {
+        if self.runtime().completion_deferred() {
+            return Ok(());
+        }
+        self.launch_completion_syncs
+            .set(self.launch_completion_syncs.get() + 1);
+        self.runtime()
+            .synchronize()
+            .map_err(|error| crate::Error::runtime_state_source(op, error))
+    }
+
     /// Launch one planned kernel through this engine's prepared dispatcher.
     ///
     /// The module set and its bound functions are the engine's, so an auxiliary that launches
@@ -1000,9 +1017,7 @@ impl CudaEngine {
             let mut dispatcher = self.dispatcher(&[entry])?;
             dispatcher.run_planned(entry, plan, args)?;
         }
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))
+        self.prove_launch(op)
     }
 }
 
@@ -1072,10 +1087,7 @@ impl TensorStructural for CudaEngine {
                         source.storage.allocation(),
                     )
                 })?;
-                return self
-                    .runtime()
-                    .synchronize()
-                    .map_err(|error| crate::Error::runtime_state_source(OP, error));
+                return self.prove_launch(OP);
             }
             return self.copy_regions_wide(&source, &destination, OP);
         }
@@ -1091,9 +1103,7 @@ impl TensorStructural for CudaEngine {
                 source.storage.allocation(),
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(OP, error))
+        self.prove_launch(OP)
     }
 
     fn cast(&mut self, input: &Tensor, to: DType) -> crate::Result<Tensor> {
@@ -1134,9 +1144,7 @@ impl TensorStructural for CudaEngine {
                 )
             })
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source("cast", error))?;
+        self.prove_launch("cast")?;
         Ok(output)
     }
 
@@ -1428,9 +1436,7 @@ impl TensorStructural for CudaEngine {
                 region.storage.allocation(),
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        self.prove_launch(OP)?;
         Ok(output)
     }
 
@@ -1537,9 +1543,7 @@ impl CudaEngine {
                 destination,
                 source,
             )?;
-            self.runtime()
-                .synchronize()
-                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            self.prove_launch(op)?;
             return Ok(output);
         }
         // A region wider than the by-value layout has no `CLayout` parameter, so its geometry
@@ -1593,9 +1597,7 @@ impl CudaEngine {
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
             })
         }?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        self.prove_launch(op)?;
         Ok(output)
     }
 
@@ -1670,9 +1672,7 @@ impl CudaEngine {
                 region.storage.allocation(),
             )?;
         }
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        self.prove_launch(op)?;
         Ok(output)
     }
 
@@ -1795,9 +1795,7 @@ impl CudaEngine {
                 },
             )
         }?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        self.prove_launch(op)?;
         Ok(output)
     }
 
@@ -1874,9 +1872,7 @@ impl CudaEngine {
                 },
             )
         }?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))
+        self.prove_launch(op)
     }
 
     /// Scatter the compact `source` into the writable destination region.
@@ -1920,9 +1916,7 @@ impl CudaEngine {
                 self.allocation_of::<T>(source, op)?,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))
+        self.prove_launch(op)
     }
 
     /// `gather` through the general path: three device-resident layouts and the plan's packed
@@ -2062,9 +2056,7 @@ impl CudaEngine {
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
             })
         }?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        self.prove_launch(op)?;
         Ok(output)
     }
 
@@ -2143,9 +2135,7 @@ impl CudaEngine {
         })?;
         let updates_buffer = with_scalar!(dtype, |T| self.allocation_of::<T>(updates, op))?;
         if launch.grid[0] == 0 {
-            self.runtime()
-                .synchronize()
-                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+            self.prove_launch(op)?;
             return Ok(output);
         }
         let packed = t4a_cuda_kernels::pack_scatter_plan(plan);
@@ -2212,9 +2202,7 @@ impl CudaEngine {
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
             })
         }?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        self.prove_launch(op)?;
         Ok(output)
     }
 
@@ -2488,9 +2476,7 @@ impl CudaEngine {
                     }
                 }
             }
-            self.runtime()
-                .synchronize()
-                .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+            self.prove_launch(name)?;
             drop(partials);
             shape = out_shape;
             owned = Some(output);
@@ -2611,9 +2597,7 @@ impl CudaEngine {
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
             })
         }?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        self.prove_launch(op)?;
         Ok(output)
     }
 
@@ -2707,9 +2691,7 @@ impl CudaEngine {
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
             })
         }?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        self.prove_launch(op)?;
         Ok(output)
     }
 
@@ -2832,9 +2814,7 @@ impl CudaEngine {
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
             })
         }?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        self.prove_launch(op)?;
         Ok(output)
     }
 
@@ -2946,9 +2926,7 @@ impl CudaEngine {
                 crate::Error::invalid_argument(op, "inputs", "the concatenation offset overflows")
             })?;
         }
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        self.prove_launch(op)?;
         Ok(output)
     }
 
@@ -3046,9 +3024,7 @@ impl CudaEngine {
                 },
             )
         }?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        self.prove_launch(op)?;
         Ok(output)
     }
 
@@ -3319,9 +3295,7 @@ impl CudaEngine {
                     self.allocation_of::<T>(partials.as_ref().unwrap_or(&output), name)?,
                 )
             })?;
-            self.runtime()
-                .synchronize()
-                .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+            self.prove_launch(name)?;
             drop(partials);
             shape = out_shape;
             owned = Some(output);
@@ -3424,9 +3398,7 @@ impl CudaEngine {
                 self.allocation_of::<T>(&right, name)?,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        self.prove_launch(name)?;
         Ok(output)
     }
 
@@ -3470,9 +3442,7 @@ impl CudaEngine {
                 &status,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        self.prove_launch(name)?;
         if matches!(dtype, DType::I32 | DType::I64) {
             let flag = self
                 .runtime()
@@ -3522,9 +3492,7 @@ impl CudaEngine {
                 )
             })
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        self.prove_launch(name)?;
         Ok(output)
     }
 
@@ -3568,9 +3536,7 @@ impl CudaEngine {
                 &status,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        self.prove_launch(name)?;
         Ok(output)
     }
 }
@@ -3626,9 +3592,7 @@ impl CudaEngine {
                 &status,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        self.prove_launch(name)?;
         let flag = self
             .runtime()
             .download_bytes(&status)
@@ -3729,9 +3693,7 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                 self.allocation_of::<T>(&high, name)?,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        self.prove_launch(name)?;
         Ok(output)
     }
 
@@ -3775,9 +3737,7 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                 self.allocation_of::<T>(&right, name)?,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        self.prove_launch(name)?;
         Ok(output)
     }
 
@@ -3826,9 +3786,7 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                 self.allocation_of::<T>(&when_false, name)?,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        self.prove_launch(name)?;
         Ok(output)
     }
 
@@ -4002,9 +3960,7 @@ impl CudaEngine {
                 })?;
             }
         }
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))
+        self.prove_launch(name)
     }
 }
 
@@ -4066,9 +4022,7 @@ impl CudaEngine {
                 &status,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))
+        self.prove_launch(op)
     }
 
     /// Scale a writable region by `factor`, in place, through its own layout.
@@ -4120,9 +4074,7 @@ impl CudaEngine {
                 scalar_buffer,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))
+        self.prove_launch(op)
     }
 
     /// The one-element device buffer that holds `factor` in `dtype`.
@@ -4743,9 +4695,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 update_region.storage.allocation(),
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        self.prove_launch(OP)?;
         Ok(output)
     }
 
@@ -4808,9 +4758,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 region.storage.allocation(),
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        self.prove_launch(OP)?;
         Ok(output)
     }
 
@@ -4929,9 +4877,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 starts_pointer,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        self.prove_launch(OP)?;
         Ok(output)
     }
 
@@ -5116,9 +5062,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                     },
                 )
             }?;
-            self.runtime()
-                .synchronize()
-                .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+            self.prove_launch(OP)?;
             return Ok(output);
         }
         let out_layout = Layout::compact(&out_extents)
@@ -5161,9 +5105,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 starts_pointer,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        self.prove_launch(OP)?;
         Ok(output)
     }
 
@@ -5281,9 +5223,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 crate::Error::invalid_argument(op, "inputs", "the concatenation offset overflows")
             })?;
         }
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        self.prove_launch(op)?;
         Ok(output)
     }
 
@@ -5411,9 +5351,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 region.storage.allocation(),
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        self.prove_launch(OP)?;
         Ok(output)
     }
 }
@@ -5662,9 +5600,7 @@ impl CudaEngine {
         cutensor
             .contract(&request)
             .map_err(|error| seam_error(op, error))?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))
+        self.prove_launch(op)
     }
 
     /// Allocate the destination of one dot-general, submit it and return it.
@@ -5973,9 +5909,7 @@ impl CudaEngine {
                 Arg::U64(len as u64),
             ],
         )?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))
+        self.prove_launch(op)
     }
 
     /// Zero-filled device storage of `shape` for `dtype`.
@@ -6156,11 +6090,8 @@ impl CudaEngine {
         if !integral {
             // The floating entry never touches the status word; reading it back would wait
             // for nothing this route needs.
-            return self
-                .runtime()
-                .synchronize()
-                .map_err(|error| crate::Error::runtime_state_source(name, error))
-                .map(|()| output);
+            self.prove_launch(name)?;
+            return Ok(output);
         }
         // The flagged route is the checked integer one; reading the flag waits for it.
         let flag = self
@@ -6388,9 +6319,7 @@ impl tenferro_tensor::Engine for CudaEngine {
                 indices_pointer,
             )
         })?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        self.prove_launch(OP)?;
         Ok(output)
     }
 
@@ -6507,9 +6436,7 @@ impl tenferro_tensor::Engine for CudaEngine {
             destination.storage.allocation(),
             &coefficients,
         )?;
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(OP, error))
+        self.prove_launch(OP)
     }
 }
 

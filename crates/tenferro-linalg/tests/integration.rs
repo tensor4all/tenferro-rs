@@ -8,6 +8,8 @@ mod borrowed_linalg_parity;
 mod concrete_surface;
 #[path = "integration/cpu_linalg_source_contract.rs"]
 mod cpu_linalg_source_contract;
+#[path = "integration/deferred_completion.rs"]
+mod deferred_completion;
 #[path = "integration/det_validation.rs"]
 mod det_validation;
 #[path = "integration/determinant_extremes.rs"]
