@@ -132,6 +132,12 @@ disjoint membership before selecting a lane. New, removed, or renamed tests
 fail until their bodies and helper calls are audited and the inventory updated;
 CUDA names, feature gates, and `#[ignore]` alone are not classifications. Host
 execution also catches an existing host test acquiring a device dependency.
+Both the inventory failure and the job log name the archive content key and the
+checkout revision the binaries came from, so a red job is attributable instead
+of being read as a foreign-archive reuse (#2390). The archive key already
+identifies the inventory: it hashes `scripts/ci/**` (the partition TSVs) and
+every source and test input, and deliberately excludes commit identity so an
+equivalent retry can still reuse it.
 The archive is extracted once and its build metadata reused without compilation.
 Nextest remains serial; hosted backend thread variables are explicitly one.
 
@@ -169,7 +175,12 @@ Only trusted GitHub-hosted jobs receive the RunPod API key or GitHub App
 credentials. The self-hosted pod never receives those credentials. The final
 GitHub-hosted job publishes `CI GPU gate` to the authorized PR head SHA. A
 docs-only or unrelated CI-only skip is successful only when the trusted
-classifier says GPU validation is unnecessary.
+classifier says GPU validation is unnecessary. A dispatch that carries no PR
+head - the `main` push case, where the triggering CI run is a `pull_request` run
+that belongs to no pull request - publishes nothing and succeeds, logging the
+reason; failing there turned `main` red for something no developer could act on
+and blurred the signal of a real gate failure (#2391). A PR run still fails when
+authorize publishes no policy.
 
 Pod creation treats HTTP 408, 429, 5xx responses, and transport failures as
 retryable. Other 4xx responses are permanent. An explicit RunPod machine

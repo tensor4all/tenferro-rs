@@ -829,10 +829,12 @@ jobs:
           # touches from scratch (about 8 s per module on an A100). The directory makes the
           # first process compile and the rest read the cubins back.
           TENFERRO_CUDA_ARTIFACT_CACHE: ${{ runner.temp }}/t4a-cuda-artifacts
+          ARCHIVE_KEY: ${{ inputs.archive_artifact_name }}
         run: |
           set -euo pipefail
           python3 scripts/ci/gpu_test_partition.py --kind cuda --lane gpu \
             --archive-file "${CUDA_ARCHIVE}" \
+            --archive-key "${ARCHIVE_KEY}" --checkout-revision "$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
             --workspace-remap "${GITHUB_WORKSPACE}/tenferro-rs"
 
       - name: Run CUDA tutorial artifact
@@ -901,6 +903,7 @@ jobs:
           LD_LIBRARY_PATH="${cudnn_lib}:${LD_LIBRARY_PATH:-}" \
             python3 scripts/ci/gpu_test_partition.py --kind pjrt --lane gpu \
               --archive-file "${PJRT_ARCHIVE}" \
+              --archive-key "${{ inputs.archive_artifact_name }}" --checkout-revision "$(git rev-parse HEAD 2>/dev/null || echo unknown)" \
               --workspace-remap "${GITHUB_WORKSPACE}/tenferro-rs"
 
       - name: GPU test complete
