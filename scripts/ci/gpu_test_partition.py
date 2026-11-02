@@ -27,7 +27,19 @@ def read_partition(path: Path) -> dict[tuple[str, str], str]:
     return result
 
 
-def validate_inventory(inventory: dict, partition: dict[tuple[str, str], str]) -> None:
+def provenance(args: argparse.Namespace) -> str:
+    # A red job must name the archive it validated: otherwise a reused archive
+    # from another tree and a stale partition in this tree read identically.
+    key = args.archive_key or "unknown"
+    revision = args.checkout_revision or "unknown"
+    return f"archive key {key}, checkout revision {revision}"
+
+
+def validate_inventory(
+    inventory: dict,
+    partition: dict[tuple[str, str], str],
+    source: str = "archive key unknown, checkout revision unknown",
+) -> None:
     actual = {
         (binary, name)
         for binary, suite in inventory["rust-suites"].items()
@@ -39,7 +51,7 @@ def validate_inventory(inventory: dict, partition: dict[tuple[str, str], str]) -
         removed = sorted(expected - actual)
         raise ValueError(
             f"GPU test inventory changed; audit test bodies/helpers and update the partition. "
-            f"Unclassified: {added}; absent: {removed}"
+            f"Unclassified: {added}; absent: {removed} ({source})"
         )
     if not actual or len(actual) != inventory["test-count"]:
         raise ValueError("empty or inconsistent nextest inventory")
@@ -79,6 +91,16 @@ def main() -> int:
     parser.add_argument("--lane", required=True, choices=("host", "gpu"))
     parser.add_argument("--archive-file", required=True, type=Path)
     parser.add_argument("--workspace-remap", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--archive-key",
+        default="",
+        help="Content key the archive was served under (its artifact name)",
+    )
+    parser.add_argument(
+        "--checkout-revision",
+        default="",
+        help="Commit the archive binaries were built from",
+    )
     args = parser.parse_args()
     partition = read_partition(Path(__file__).with_name(f"{args.kind}_test_partition.tsv"))
     with tempfile.TemporaryDirectory(prefix="tenferro-tests-") as temporary:
@@ -98,8 +120,10 @@ def main() -> int:
         listed = subprocess.run([
             "cargo", "nextest", "list", *reuse, "--message-format", "json",
         ], check=True, capture_output=True, text=True)
-        validate_inventory(json.loads(listed.stdout), partition)
+        source = provenance(args)
+        validate_inventory(json.loads(listed.stdout), partition, source)
         summary = report(partition, args.lane)
+        print(f"Validated {args.kind} {args.lane}: {source}", flush=True)
         print(summary, flush=True)
         if summary_path := os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(summary_path, "a") as stream:
