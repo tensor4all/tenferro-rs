@@ -190,6 +190,52 @@ pub(super) struct Region<'v> {
     offset: i64,
 }
 
+/// One operand of a dot, resolved so the contraction addresses it where it lives.
+///
+/// cuTENSOR takes a mode extent and a stride per axis, so a view that is one flat compact span is
+/// read in place at the allocation's base. An offset, permuted, broadcast or reversed region keeps
+/// the staged compact copy [`CudaEngine::device_read`] makes, which is what the rest of the read
+/// boundary already serves for it.
+struct DotOperand<'v> {
+    dtype: DType,
+    shape: Vec<usize>,
+    extents: Vec<i64>,
+    strides: Vec<i64>,
+    source: DotOperandSource<'v>,
+}
+
+enum DotOperandSource<'v> {
+    /// The caller's allocation, addressed at its base.
+    InPlace(&'v t4a_cuda_runtime::Buffer),
+    /// A staged compact copy, kept alive for the contraction's launch.
+    Staged(Resolved<'v>),
+}
+
+impl DotOperand<'_> {
+    fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+
+    fn extents(&self) -> &[i64] {
+        &self.extents
+    }
+
+    fn strides(&self) -> &[i64] {
+        &self.strides
+    }
+
+    fn buffer(&self, op: &'static str) -> crate::Result<&t4a_cuda_runtime::Buffer> {
+        match &self.source {
+            DotOperandSource::InPlace(buffer) => Ok(buffer),
+            DotOperandSource::Staged(staged) => device_tensor_allocation(staged.tensor(), op),
+        }
+    }
+}
+
 impl Region<'_> {
     /// The catalogue's layout for this region.
     fn layout(&self, op: &'static str) -> crate::Result<Layout> {
@@ -635,6 +681,54 @@ impl CudaEngine {
                     .map(|tensor| Resolved::Owned(Box::new(tensor)))
             }
         }
+    }
+
+    /// Resolve one dot operand: read where it lies, or staged when its layout is not a span.
+    ///
+    /// A dot addresses a mode extent and a stride per axis, so a view that is one flat compact
+    /// span is read in place — the same bytes `device_read` would copy into fresh storage, without
+    /// the copy. An offset, permuted, broadcast or reversed region keeps that copy; those stay
+    /// outside this path because the staged compact copy is what the rest of the read boundary
+    /// already serves for them, not because a descriptor could not name them.
+    fn dot_operand<'v>(
+        &mut self,
+        input: &'v TensorRead<'v>,
+        op: &'static str,
+    ) -> crate::Result<DotOperand<'v>> {
+        // The in-place path addresses the caller's allocation directly, so the refusal a broken
+        // engine gives every other read is applied here, before either branch resolves a region.
+        self.ensure_healthy()
+            .map_err(|error| crate::Error::runtime_state(op, error.to_string()))?;
+        if let TensorRead::View(view) = input {
+            let region = region_of(view, op)?;
+            if region_is_flat(&region) {
+                let buffer = self.own_storage(region.storage, op)?.allocation();
+                return Ok(DotOperand {
+                    dtype: region.dtype,
+                    shape: region.shape,
+                    extents: region.extents,
+                    strides: region.strides,
+                    source: DotOperandSource::InPlace(buffer),
+                });
+            }
+        }
+        let staged = self.device_read(input.clone(), op)?;
+        let tensor = staged.tensor();
+        let strides = self
+            .strides_of(tensor, op)?
+            .iter()
+            .map(|&stride| {
+                i64::try_from(stride)
+                    .map_err(|_| crate::Error::unsupported(op, "a stride exceeds the ABI's int"))
+            })
+            .collect::<crate::Result<Vec<i64>>>()?;
+        Ok(DotOperand {
+            dtype: tensor.dtype(),
+            shape: tensor.shape().to_vec(),
+            extents: catalogue_extents(tensor.shape(), op)?,
+            strides,
+            source: DotOperandSource::Staged(staged),
+        })
     }
 
     /// The device region `input` names, read where it lives.
@@ -5457,8 +5551,8 @@ impl CudaEngine {
     #[allow(clippy::too_many_arguments)]
     fn submit_dot(
         &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
+        lhs: &DotOperand<'_>,
+        rhs: &DotOperand<'_>,
         config: &tenferro_tensor::DotGeneralConfig,
         conj_a: bool,
         conj_b: bool,
@@ -5509,17 +5603,10 @@ impl CudaEngine {
                 .map(|&stride| stride as i64)
                 .collect())
         };
-        let lhs_strides = strides(lhs, op)?;
-        let rhs_strides = strides(rhs, op)?;
         let out_strides = strides(output, op)?;
-        let lhs_extents: Vec<i64> = lhs.shape().iter().map(|&extent| extent as i64).collect();
-        let rhs_extents: Vec<i64> = rhs.shape().iter().map(|&extent| extent as i64).collect();
         let out_extents: Vec<i64> = output.shape().iter().map(|&extent| extent as i64).collect();
-        let (a, b, d) = with_scalar!(dtype, |T| Ok((
-            self.allocation_of::<T>(lhs, op)?,
-            self.allocation_of::<T>(rhs, op)?,
-            self.allocation_of::<T>(output, op)?,
-        )))?;
+        let (a, b) = (lhs.buffer(op)?, rhs.buffer(op)?);
+        let d = with_scalar!(dtype, |T| self.allocation_of::<T>(output, op))?;
         let addend_parts = match addend {
             Some(c) => {
                 if c.dtype() != dtype {
@@ -5542,14 +5629,14 @@ impl CudaEngine {
             a: Operand {
                 buffer: a,
                 modes: &modes.lhs_modes,
-                extents: &lhs_extents,
-                strides: &lhs_strides,
+                extents: lhs.extents(),
+                strides: lhs.strides(),
             },
             b: Operand {
                 buffer: b,
                 modes: &modes.rhs_modes,
-                extents: &rhs_extents,
-                strides: &rhs_strides,
+                extents: rhs.extents(),
+                strides: rhs.strides(),
             },
             c: addend_parts.as_ref().map(|(buffer, strides)| Operand {
                 buffer,
@@ -5590,8 +5677,8 @@ impl CudaEngine {
         conj_b: bool,
         op: &'static str,
     ) -> crate::Result<Tensor> {
-        let left = self.device_read(lhs, op)?;
-        let right = self.device_read(rhs, op)?;
+        let left = self.dot_operand(&lhs, op)?;
+        let right = self.dot_operand(&rhs, op)?;
         let dtype = left.dtype();
         if right.dtype() != dtype {
             return Err(crate::Error::dtype_mismatch(op, dtype, right.dtype()));
@@ -5639,8 +5726,8 @@ impl tenferro_tensor::TensorDot for CudaEngine {
         let op = "dot_general_read_into";
         match out {
             TensorWrite::Tensor(output) => {
-                let left = self.device_read(lhs, op)?;
-                let right = self.device_read(rhs, op)?;
+                let left = self.dot_operand(&lhs, op)?;
+                let right = self.dot_operand(&rhs, op)?;
                 self.submit_dot(
                     &left,
                     &right,
@@ -5665,8 +5752,8 @@ impl tenferro_tensor::TensorDot for CudaEngine {
                     &lhs, &rhs, config, &view, op,
                 )?;
                 contraction_dtype(lhs.dtype(), op)?;
-                let left = self.device_read(lhs, op)?;
-                let right = self.device_read(rhs, op)?;
+                let left = self.dot_operand(&lhs, op)?;
+                let right = self.dot_operand(&rhs, op)?;
                 let scratch = alloc_tensor(self.runtime(), left.dtype(), &out_shape)?;
                 self.submit_dot(
                     &left,
@@ -5740,8 +5827,8 @@ impl tenferro_tensor::TensorDot for CudaEngine {
         )?;
         match out {
             TensorWrite::Tensor(output) => {
-                let left = self.device_read(lhs, op)?;
-                let right = self.device_read(rhs, op)?;
+                let left = self.dot_operand(&lhs, op)?;
+                let right = self.dot_operand(&rhs, op)?;
                 self.submit_dot(
                     &left,
                     &right,
@@ -5757,8 +5844,8 @@ impl tenferro_tensor::TensorDot for CudaEngine {
             }
             view @ TensorWrite::View(_) => {
                 let destination = self.dot_write_region(&view, op)?;
-                let left = self.device_read(lhs, op)?;
-                let right = self.device_read(rhs, op)?;
+                let left = self.dot_operand(&lhs, op)?;
+                let right = self.dot_operand(&rhs, op)?;
                 let beta = scalar_pair(accumulation.beta);
                 // The scratch is the accumulation destination. A nonzero beta reads the old
                 // destination, so the region is materialized into the scratch first; a zero beta
@@ -6092,7 +6179,34 @@ impl CudaEngine {
 
 impl tenferro_tensor::TensorFusion for CudaEngine {}
 
-impl tenferro_tensor::SessionCachedDot for CudaEngine {}
+impl tenferro_tensor::SessionCachedDot for CudaEngine {
+    /// The slot stays unused — this engine prepares its contraction from the shape it is handed —
+    /// but the reads are consumed as they arrive. The inherited body compacts a view operand
+    /// first, which is the copy a dot does not need (#2214 asked for the same on the CPU engine).
+    fn dot_general_read_cached(
+        &mut self,
+        _cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &tenferro_tensor::DotGeneralConfig,
+    ) -> crate::Result<Tensor> {
+        tenferro_tensor::TensorDot::dot_general_read(self, lhs, rhs, config)
+    }
+
+    fn dot_general_with_conj_read_cached(
+        &mut self,
+        _cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &tenferro_tensor::DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        tenferro_tensor::TensorDot::dot_general_with_conj_read(
+            self, lhs, rhs, config, lhs_conj, rhs_conj,
+        )
+    }
+}
 
 impl tenferro_tensor::TensorBuffer for CudaEngine {}
 
