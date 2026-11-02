@@ -80,6 +80,9 @@ pub struct CudaEngine {
     pending_runs: Vec<Box<dyn tenferro_runtime::EventDomainRun>>,
     /// Set when the runtime reported an unrecoverable failure.
     broken: bool,
+    /// Standalone launches this engine proved complete by waiting. A scheduled run's nodes are
+    /// retired by the run, so they never raise this; it is the observable form of that boundary.
+    pub(crate) launch_completion_syncs: std::cell::Cell<u64>,
     /// How many borrowed views this engine materialized into a compact operand copy.
     ///
     /// A native read entry consumes an operand's own layout, so this stays put; it moves only
@@ -129,9 +132,20 @@ impl CudaEngine {
             prepared: std::cell::RefCell::new(super::dispatch::PreparedDispatchers::default()),
             pending_runs: Vec::new(),
             broken: false,
+            launch_completion_syncs: std::cell::Cell::new(0),
             staged_reads: std::cell::Cell::new(0),
             _not_sync: PhantomData,
         })
+    }
+
+    /// Standalone launch completions this engine proved by waiting for the stream.
+    ///
+    /// A scheduled run owns its nodes' completion: it records one stream-ordered checkpoint per
+    /// node and is retired as the run's barrier, so this count does not move while a prepared
+    /// program runs. Exposed so the regression test can pin that boundary.
+    #[doc(hidden)]
+    pub fn launch_completion_syncs(&self) -> u64 {
+        self.launch_completion_syncs.get()
     }
 
     /// Publish a produced value with a frontier a reader can wait on.
