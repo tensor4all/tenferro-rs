@@ -42,7 +42,14 @@ impl<'a> TensorValue<'a> {
 
     fn into_tensor(self, exec: &mut dyn Engine) -> Result<Tensor> {
         match self {
-            Self::Borrowed(tensor) => tensor.duplicate(),
+            Self::Borrowed(tensor) => match tensor.duplicate() {
+                Ok(copy) => Ok(copy),
+                // A backend-owned operand has no host storage to borrow, and
+                // `duplicate` refuses it. Copy it inside the session instead:
+                // a CUDA session keeps the copy on the device, and a CPU
+                // session makes the same host copy `duplicate` would have.
+                Err(_) => exec.to_contiguous_read(TensorRead::from_tensor(tensor)),
+            },
             Self::View(view) => exec.to_contiguous_read(TensorRead::from_view(view)),
             Self::Owned(tensor) => Ok(tensor),
         }
@@ -260,7 +267,12 @@ impl LabeledTensor<'_> {
 
     fn tensor_owned(&self, exec: &mut dyn Engine) -> Result<Tensor> {
         match self.tensor() {
-            Some(tensor) => tensor.duplicate(),
+            // See `TensorValue::into_tensor`: a backend-owned operand must be
+            // copied through the session, never through the host owner.
+            Some(tensor) => match tensor.duplicate() {
+                Ok(copy) => Ok(copy),
+                Err(_) => exec.to_contiguous_read(self.tensor_read()),
+            },
             None => exec.to_contiguous_read(self.tensor_read()),
         }
     }
