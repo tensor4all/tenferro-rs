@@ -2567,6 +2567,7 @@ dependencies = [
  "lru",
  "num-complex",
  "omeco",
+ "t4a-faer",
  "tenferro-ad",
  "tenferro-cpu",
  "tenferro-cpu-basic",
