@@ -64,17 +64,17 @@ fn eigh_batches_take_a_batched_routine_at_every_order() {
         let _ = n; // the policy is order-independent; the range documents that.
         for batch in [2, 1024] {
             assert_eq!(
-                select_eigh_driver(EighDriver::Auto, batch),
+                select_eigh_driver(EighDriver::Auto, batch, true),
                 CusolverEighRoutine::XsyevBatched,
                 "Auto batch={batch}"
             );
             assert_eq!(
-                select_eigh_driver(EighDriver::Syevd, batch),
+                select_eigh_driver(EighDriver::Syevd, batch, true),
                 CusolverEighRoutine::XsyevBatched,
                 "Syevd batch={batch}"
             );
             assert_eq!(
-                select_eigh_driver(EighDriver::Syevj, batch),
+                select_eigh_driver(EighDriver::Syevj, batch, true),
                 CusolverEighRoutine::SyevjBatched,
                 "Syevj batch={batch}"
             );
@@ -83,19 +83,57 @@ fn eigh_batches_take_a_batched_routine_at_every_order() {
 }
 
 #[test]
+fn eigh_batches_fall_back_to_the_syevd_loop_without_the_batched_entry_point() {
+    // A cuSOLVER older than 11.7.1 exports no `XsyevBatched`, so the batch
+    // takes the per-matrix `syevd` loop instead of failing (#2413).
+    for batch in [2, 1024] {
+        assert_eq!(
+            select_eigh_driver(EighDriver::Auto, batch, false),
+            CusolverEighRoutine::Syevd,
+            "Auto batch={batch}"
+        );
+        assert_eq!(
+            select_eigh_driver(EighDriver::Syevd, batch, false),
+            CusolverEighRoutine::Syevd,
+            "Syevd batch={batch}"
+        );
+        // The Jacobi batched entry point predates the version boundary, so its
+        // capability does not depend on `XsyevBatched`.
+        assert_eq!(
+            select_eigh_driver(EighDriver::Syevj, batch, false),
+            CusolverEighRoutine::SyevjBatched,
+            "Syevj batch={batch}"
+        );
+    }
+    assert_eq!(
+        select_eigh_driver(EighDriver::Auto, 1, false),
+        CusolverEighRoutine::Syevd
+    );
+}
+
+#[test]
+fn eigh_route_is_recorded_in_the_solver_diagnostics() {
+    assert_eq!(
+        CusolverEighRoutine::XsyevBatched.call_name(),
+        "cusolverDnXsyevBatched"
+    );
+    assert_eq!(CusolverEighRoutine::Syevd.call_name(), "cusolverDn*syevd");
+}
+
+#[test]
 fn eigh_single_matrices_keep_the_per_matrix_entry_points() {
     // One matrix has no launch overhead to amortize, so the batched entry
     // points have nothing to win and the per-matrix routines stay.
     assert_eq!(
-        select_eigh_driver(EighDriver::Auto, 1),
+        select_eigh_driver(EighDriver::Auto, 1, true),
         CusolverEighRoutine::Syevd
     );
     assert_eq!(
-        select_eigh_driver(EighDriver::Syevd, 1),
+        select_eigh_driver(EighDriver::Syevd, 1, true),
         CusolverEighRoutine::Syevd
     );
     assert_eq!(
-        select_eigh_driver(EighDriver::Syevj, 1),
+        select_eigh_driver(EighDriver::Syevj, 1, true),
         CusolverEighRoutine::Syevj
     );
 }
