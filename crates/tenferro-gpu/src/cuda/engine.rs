@@ -71,7 +71,21 @@ pub struct CudaEngine {
     /// The runtime engine id this engine runs prepared programs as.
     runtime_engine_id: tenferro_runtime::EngineId,
     /// Extension caches the runtime lends to extension executors during a run.
+    ///
+    /// The run takes this store out of the engine and puts it back afterwards, so anything an
+    /// operation stores here is dropped at the end of the run it was created in.
     pub(crate) extension_caches: std::cell::RefCell<tenferro_runtime::ExtensionCacheStore>,
+    /// Resources a vendor call creates once per engine and reuses in every later session: a
+    /// cuSOLVER handle, a cuBLAS handle, their stream bindings.
+    ///
+    /// Deliberately not the store above. A run lends `extension_caches` away for its duration, so a
+    /// handle created during a run would be dropped with it and rebuilt on the next call — on the
+    /// A100 host that was 17 `cudaMalloc` + 3 stream creations per linalg AD call, ~1.2 ms of the
+    /// per-call time (#2382).
+    pub(crate) vendor_resources: std::cell::RefCell<tenferro_runtime::ExtensionCacheStore>,
+    /// Resources created in `vendor_resources` instead of reused. A handle that outlives its run
+    /// keeps this flat across runs; a handle rebuilt per run raises it once per run.
+    pub(crate) vendor_resource_inits: std::cell::Cell<u64>,
     /// Dispatchers whose translation units are already prepared. Preparing one is a runtime
     /// round trip, so an operation reuses the set its predecessors built.
     pub(crate) prepared: std::cell::RefCell<super::dispatch::PreparedDispatchers>,
@@ -129,6 +143,10 @@ impl CudaEngine {
             extension_caches: std::cell::RefCell::new(
                 tenferro_runtime::ExtensionCacheStore::default(),
             ),
+            vendor_resources: std::cell::RefCell::new(
+                tenferro_runtime::ExtensionCacheStore::default(),
+            ),
+            vendor_resource_inits: std::cell::Cell::new(0),
             prepared: std::cell::RefCell::new(super::dispatch::PreparedDispatchers::default()),
             pending_runs: Vec::new(),
             broken: false,
@@ -136,6 +154,31 @@ impl CudaEngine {
             staged_reads: std::cell::Cell::new(0),
             _not_sync: PhantomData,
         })
+    }
+
+    /// Retained entries and logical bytes of the vendor resources this engine holds.
+    ///
+    /// Reported like every other engine cache (`PERFORMANCE_TIPS.md`, Cache Ownership): a vendor
+    /// handle charges no logical payload, so the entry count is what a caller watches.
+    #[doc(hidden)]
+    pub fn vendor_resource_stats(&self) -> tenferro_runtime::CacheStats {
+        let store = self.vendor_resources.borrow();
+        store.stats(tenferro_runtime::ExtensionCacheSelector::All)
+    }
+
+    /// Drop the vendor handles this engine retains; the next call rebuilds them.
+    #[doc(hidden)]
+    pub fn clear_vendor_resources(&mut self) {
+        self.vendor_resources.borrow_mut().clear();
+    }
+
+    /// Vendor resources this engine created rather than reused.
+    ///
+    /// A resource outlives the run that created it, so a second identical run does not raise
+    /// this. Exposed so the regression test can pin that lifetime (#2382).
+    #[doc(hidden)]
+    pub fn vendor_resource_inits(&self) -> u64 {
+        self.vendor_resource_inits.get()
     }
 
     /// Standalone launch completions this engine proved by waiting for the stream.
