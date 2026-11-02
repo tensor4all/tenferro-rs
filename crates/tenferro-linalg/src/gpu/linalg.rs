@@ -218,11 +218,19 @@ enum CusolverEighRoutine {
 /// Jacobi beats a per-matrix Jacobi loop at every order tested from 8 to 512,
 /// and `XsyevBatched` beats a per-matrix `syevd` loop at every one of them, so
 /// no order exists at which falling back to a loop is the faster choice.
-fn select_eigh_driver(driver: EighDriver, batch_total: usize) -> CusolverEighRoutine {
+///
+/// The one remaining fallback is a library that does not export `XsyevBatched`
+/// (cuSOLVER older than 11.7.1): the batch takes the per-matrix `syevd` loop,
+/// while every other cuSOLVER routine keeps working (#2413).
+fn select_eigh_driver(
+    driver: EighDriver,
+    batch_total: usize,
+    xsyev_batched_available: bool,
+) -> CusolverEighRoutine {
     let batched = batch_total > 1;
     match driver {
         EighDriver::Auto | EighDriver::Syevd => {
-            if batched {
+            if batched && xsyev_batched_available {
                 CusolverEighRoutine::XsyevBatched
             } else {
                 CusolverEighRoutine::Syevd
@@ -234,6 +242,20 @@ fn select_eigh_driver(driver: EighDriver, batch_total: usize) -> CusolverEighRou
             } else {
                 CusolverEighRoutine::Syevj
             }
+        }
+    }
+}
+
+impl CusolverEighRoutine {
+    /// The cuSOLVER entry point this routine launches, as recorded in the
+    /// solver diagnostics: `cusolverDnXsyevBatched` when a batch went through
+    /// one launch, `cusolverDn*syevd` when it took the per-matrix loop.
+    fn call_name(self) -> &'static str {
+        match self {
+            Self::Syevd => "cusolverDn*syevd",
+            Self::Syevj => "cusolverDn*syevj",
+            Self::SyevjBatched => "cusolverDn*syevjBatched",
+            Self::XsyevBatched => "cusolverDnXsyevBatched",
         }
     }
 }
@@ -3117,7 +3139,6 @@ where
     let batch_total = batch_count(OP, batch_shape)?;
     let matrix_stride = checked_mul_usize(OP, "eigh matrix stride", n, n)?;
     let values_stride = n;
-    let routine = select_eigh_driver(driver, batch_total);
     let batch_total_i32 = as_i32(batch_total, OP, "batch_total")?;
     // The 64-bit batched entry point takes i64 dimensions.
     let n_i64 = i64::from(n_i32);
@@ -3141,6 +3162,13 @@ where
         // it is used immediately to bind the cuSOLVER handle and not retained.
         let stream = raw.stream().raw_handle() as usize as CudaStream;
         handles.cusolver().set_stream(stream, OP)?;
+        // A cuSOLVER without `XsyevBatched` sends the batch to the per-matrix
+        // loop below instead of failing (#2413).
+        let routine = select_eigh_driver(
+            driver,
+            batch_total,
+            handles.cusolver().xsyev_batched_available(),
+        );
         // The Jacobi routine needs a parameter object: it is queried for the
         // workspace size and reused by every call below. It outlives the
         // launches because the solver-status download later in this scope is
@@ -3402,12 +3430,7 @@ where
         }
 
         // Host barrier (only for reading the solver diagnostics).
-        let call = match routine {
-            CusolverEighRoutine::Syevd => "cusolverDn*syevd",
-            CusolverEighRoutine::Syevj => "cusolverDn*syevj",
-            CusolverEighRoutine::SyevjBatched => "cusolverDn*syevjBatched",
-            CusolverEighRoutine::XsyevBatched => "cusolverDnXsyevBatched",
-        };
+        let call = routine.call_name();
         let host_info = raw.download_tensor::<i32>(&info, OP)?;
         for &value in host_info.host_data()? {
             check_solver_info(OP, call, value)?;
@@ -3438,7 +3461,6 @@ where
     let batch_total = batch_count(OP, batch_shape)?;
     let matrix_stride = checked_mul_usize(OP, "eigh_values matrix stride", n, n)?;
     let values_stride = n;
-    let routine = select_eigh_driver(driver, batch_total);
     let batch_total_i32 = as_i32(batch_total, OP, "batch_total")?;
     // The 64-bit batched entry point takes i64 dimensions.
     let n_i64 = i64::from(n_i32);
@@ -3459,6 +3481,13 @@ where
         // it is used immediately to bind the cuSOLVER handle and not retained.
         let stream = raw.stream().raw_handle() as usize as CudaStream;
         handles.cusolver().set_stream(stream, OP)?;
+        // A cuSOLVER without `XsyevBatched` sends the batch to the per-matrix
+        // loop below instead of failing (#2413).
+        let routine = select_eigh_driver(
+            driver,
+            batch_total,
+            handles.cusolver().xsyev_batched_available(),
+        );
         // The Jacobi routine needs a parameter object: it is queried for the
         // workspace size and reused by every call below. It outlives the
         // launches because the solver-status download later in this scope is
@@ -3720,12 +3749,7 @@ where
         }
 
         // Host barrier (only for reading the solver diagnostics).
-        let call = match routine {
-            CusolverEighRoutine::Syevd => "cusolverDn*syevd",
-            CusolverEighRoutine::Syevj => "cusolverDn*syevj",
-            CusolverEighRoutine::SyevjBatched => "cusolverDn*syevjBatched",
-            CusolverEighRoutine::XsyevBatched => "cusolverDnXsyevBatched",
-        };
+        let call = routine.call_name();
         let host_info = raw.download_tensor::<i32>(&info, OP)?;
         for &value in host_info.host_data()? {
             check_solver_info(OP, call, value)?;

@@ -522,8 +522,11 @@ fn gpu_eigh_sends_every_batch_to_a_batched_routine() {
     );
     for needle in [
         "enum CusolverEighRoutine",
-        "fn select_eigh_driver(driver: EighDriver, batch_total: usize) -> CusolverEighRoutine",
+        "fn select_eigh_driver(",
+        "xsyev_batched_available: bool,",
         "let batched = batch_total > 1;",
+        // A library without the batched entry point sends the batch to the loop (#2413).
+        "if batched && xsyev_batched_available {",
         "CusolverEighRoutine::XsyevBatched",
         "CusolverEighRoutine::SyevjBatched",
     ] {
@@ -535,7 +538,8 @@ fn gpu_eigh_sends_every_batch_to_a_batched_routine() {
 
     for section in [eigh, eigh_values] {
         for needle in [
-            "let routine = select_eigh_driver(driver, batch_total);",
+            "let routine = select_eigh_driver(",
+            "handles.cusolver().xsyev_batched_available(),",
             "handles.cusolver().syevd_buffer_size(",
             "handles.cusolver().syevj_buffer_size(",
             "handles.cusolver().syevj_batched_buffer_size(",
@@ -546,16 +550,26 @@ fn gpu_eigh_sends_every_batch_to_a_batched_routine() {
             "handles.cusolver().xsyev_batched(",
             // Either batched launch replaces the per-matrix loop entirely.
             "CusolverEighRoutine::SyevjBatched | CusolverEighRoutine::XsyevBatched => 0,",
-            "CusolverEighRoutine::Syevd => \"cusolverDn*syevd\"",
-            "CusolverEighRoutine::Syevj => \"cusolverDn*syevj\"",
-            "CusolverEighRoutine::SyevjBatched => \"cusolverDn*syevjBatched\"",
-            "CusolverEighRoutine::XsyevBatched => \"cusolverDnXsyevBatched\"",
+            // The diagnostics label names the route that ran.
+            "let call = routine.call_name();",
         ] {
             assert!(
                 section.contains(needle),
                 "GPU eigh driver path should contain {needle}"
             );
         }
+    }
+
+    for needle in [
+        "Self::Syevd => \"cusolverDn*syevd\"",
+        "Self::Syevj => \"cusolverDn*syevj\"",
+        "Self::SyevjBatched => \"cusolverDn*syevjBatched\"",
+        "Self::XsyevBatched => \"cusolverDnXsyevBatched\"",
+    ] {
+        assert!(
+            source.contains(needle),
+            "GPU eigh route label should contain {needle}"
+        );
     }
 }
 

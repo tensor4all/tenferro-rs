@@ -1026,10 +1026,14 @@ host	tenferro-linalg	eig_normalize::tests::a_tiny_f64_column_does_not_square_to_
 host	tenferro-linalg	eig_normalize::tests::a_zero_column_count_is_rejected
 host	tenferro-linalg	eig_normalize::tests::a_zero_column_is_the_typed_non_finite_failure
 host	tenferro-linalg	eig_normalize::tests::every_column_of_every_block_is_unit
+host	tenferro-linalg	gpu::ffi::tests::batched_eigh_capability_follows_the_jax_version_boundary
 host	tenferro-linalg	gpu::ffi::tests::cusolver_cuda_data_type_has_c_abi_integer_layout
 gpu	tenferro-linalg	gpu::ffi::tests::vendor_libraries_are_loaded_once_per_process
+host	tenferro-linalg	gpu::ffi::tests::vtable_opens_when_the_batched_eigh_symbols_are_absent
 host	tenferro-linalg	gpu::linalg::tests::auto_driver_keeps_jax_compatible_threshold
+host	tenferro-linalg	gpu::linalg::tests::eigh_batches_fall_back_to_the_syevd_loop_without_the_batched_entry_point
 host	tenferro-linalg	gpu::linalg::tests::eigh_batches_take_a_batched_routine_at_every_order
+host	tenferro-linalg	gpu::linalg::tests::eigh_route_is_recorded_in_the_solver_diagnostics
 host	tenferro-linalg	gpu::linalg::tests::eigh_single_matrices_keep_the_per_matrix_entry_points
 host	tenferro-linalg	gpu::linalg::tests::explicit_driver_overrides_dimension_policy
 gpu	tenferro-linalg	gpu::linalg::tests::xgesvdp::test_cuda_svd_xgesvdp_full_and_economy

@@ -1170,7 +1170,7 @@ type TrsmBatchedC64Fn = unsafe extern "C" fn(
     i32,
 ) -> CublasStatus;
 
-struct CusolverVtable {
+pub(super) struct CusolverVtable {
     create: CusolverCreateFn,
     destroy: CusolverDestroyFn,
     create_params: CreateParamsFn,
@@ -1204,8 +1204,11 @@ struct CusolverVtable {
     xlarft: XlarftFn,
     xgesvdp_buffer_size: XgesvdpBufferSizeFn,
     xgesvdp: XgesvdpFn,
-    xsyev_batched_buffer_size: XsyevBatchedBufferSizeFn,
-    xsyev_batched: XsyevBatchedFn,
+    // Optional: cuSOLVER only exports the batched divide-and-conquer
+    // eigensolver from 11.7.1 (CUDA 12.6 Update 2) on, so a missing pair must
+    // cost batched eigh and nothing else (#2413).
+    xsyev_batched_buffer_size: Option<XsyevBatchedBufferSizeFn>,
+    xsyev_batched: Option<XsyevBatchedFn>,
     sorgqr_buffer_size: OrgqrBufferSizeF32Fn,
     dorgqr_buffer_size: OrgqrBufferSizeF64Fn,
     cungqr_buffer_size: OrgqrBufferSizeC32Fn,
@@ -1261,7 +1264,7 @@ struct CusolverVtable {
 }
 
 impl CusolverVtable {
-    unsafe fn load(lib: &Library) -> Result<Self> {
+    pub(super) unsafe fn load(lib: &Library) -> Result<Self> {
         // SAFETY: every `load_symbol` below resolves a documented cuSOLVER symbol and
         // stores it under the exact FFI signature its `*Fn` type declares.
         unsafe {
@@ -1303,12 +1306,11 @@ impl CusolverVtable {
                     "cuSOLVER",
                 )?,
                 xgesvdp: load_symbol(lib, b"cusolverDnXgesvdp\0", "cuSOLVER")?,
-                xsyev_batched_buffer_size: load_symbol(
+                xsyev_batched_buffer_size: load_symbol_optional(
                     lib,
                     b"cusolverDnXsyevBatched_bufferSize\0",
-                    "cuSOLVER",
-                )?,
-                xsyev_batched: load_symbol(lib, b"cusolverDnXsyevBatched\0", "cuSOLVER")?,
+                ),
+                xsyev_batched: load_symbol_optional(lib, b"cusolverDnXsyevBatched\0"),
                 sorgqr_buffer_size: load_symbol(lib, b"cusolverDnSorgqr_bufferSize\0", "cuSOLVER")?,
                 dorgqr_buffer_size: load_symbol(lib, b"cusolverDnDorgqr_bufferSize\0", "cuSOLVER")?,
                 cungqr_buffer_size: load_symbol(lib, b"cusolverDnCungqr_bufferSize\0", "cuSOLVER")?,
@@ -1400,6 +1402,22 @@ impl CusolverVtable {
             })
         }
     }
+
+    /// Whether both optional batched divide-and-conquer eigensolver symbols
+    /// resolved in this library.
+    pub(super) fn batched_eigh_resolved(&self) -> bool {
+        self.xsyev_batched_buffer_size.is_some() && self.xsyev_batched.is_some()
+    }
+
+    /// Whether the routines a host without batched eigh must keep have
+    /// symbols: QR (`geqrf`/`orgqr`), `syevd` and `gesvd`.
+    #[cfg(test)]
+    pub(super) fn per_matrix_linear_algebra_resolved(&self) -> bool {
+        self.dgeqrf as usize != 0
+            && self.dorgqr as usize != 0
+            && self.dsyevd as usize != 0
+            && self.dgesvd as usize != 0
+    }
 }
 
 type GemmFn = unsafe extern "C" fn(
@@ -1465,6 +1483,18 @@ impl CublasVtable {
     }
 }
 
+/// Resolve a symbol that older vendor libraries may not export.
+///
+/// Unlike [`load_symbol`], an absent symbol is data (`None`) rather than a
+/// failure, so one optional entry point cannot close the whole binding.
+unsafe fn load_symbol_optional<T: Copy>(lib: &Library, name: &[u8]) -> Option<T> {
+    unsafe {
+        // SAFETY: `name` is a NUL-terminated CUDA library symbol and `T` is the
+        // exact FFI function-pointer type declared in this module's vtables.
+        lib.get::<T>(name).ok().map(|symbol| *symbol)
+    }
+}
+
 unsafe fn load_symbol<T: Copy>(
     lib: &Library,
     name: &[u8],
@@ -1491,11 +1521,27 @@ unsafe fn load_symbol<T: Copy>(
 
 type GetVersionFn = unsafe extern "C" fn(*mut i32) -> CusolverStatus;
 
+/// First cuSOLVER version that exports `cusolverDnXsyevBatched` (CUDA 12.6
+/// Update 2). JAX gates on the same boundary in
+/// `jaxlib/gpu/solver_kernels_ffi.cc`: "syevBatched is supported since CUDA
+/// 12.6.2, where CUSOLVER version is 11.7.1", `version >= 11701`.
+const XSYEV_BATCHED_MIN_VERSION: i32 = 11701;
+
+/// Whether batched divide-and-conquer eigh may be used.
+///
+/// Both symbols must resolve *and* the library must report the release that
+/// introduced them; a library that reports a version below the boundary (or
+/// reports nothing) falls back to the per-matrix loop.
+pub(super) fn xsyev_batched_available(version: i32, both_symbols_resolved: bool) -> bool {
+    both_symbols_resolved && version >= XSYEV_BATCHED_MIN_VERSION
+}
+
 pub(super) struct CusolverLibrary {
     _lib: Library,
     vtable: CusolverVtable,
-    /// cuSOLVER library version (e.g. 11403 for 11.4.3).
-    _version: i32,
+    /// cuSOLVER library version (e.g. 11403 for 11.4.3), or 0 when the library
+    /// does not export `cusolverGetVersion`.
+    version: i32,
 }
 
 // SAFETY: `CusolverLibrary` owns the loaded dynamic library and stores copied
@@ -1545,12 +1591,21 @@ impl CusolverLibrary {
                     0
                 }
             };
-            // Version is retained for diagnostics while keeping the loaded
-            // library alive with the vtable.
+            // Version is retained for the batched-eigh capability decision and
+            // for the open-time fallback log.
+            if !xsyev_batched_available(version, vtable.batched_eigh_resolved()) {
+                eprintln!(
+                    "tenferro-linalg: cuSOLVER {}.{}.{}: batched eigh unavailable, \
+                     using per-matrix syevd",
+                    version / 1000,
+                    version % 1000 / 100,
+                    version % 100,
+                );
+            }
             return Ok(Arc::new(Self {
                 _lib: lib,
                 vtable,
-                _version: version,
+                version,
             }));
         }
 
@@ -1572,6 +1627,15 @@ impl CusolverLibrary {
                 ),
             )),
         }
+    }
+
+    /// Whether this library can diagonalise a whole batch in one launch.
+    ///
+    /// Callers select the per-matrix `syevd` loop when this is false: the
+    /// fallback is a runtime decision, never a compile-time feature, so one
+    /// binary serves every toolkit (#2413).
+    pub(in crate::gpu) fn xsyev_batched_available(&self) -> bool {
+        xsyev_batched_available(self.version, self.vtable.batched_eigh_resolved())
     }
 
     fn check_status(
@@ -1798,6 +1862,12 @@ impl Drop for SyevjInfo<'_> {
 }
 
 impl CusolverDnHandle {
+    /// Whether this handle's cuSOLVER can diagonalise a whole batch in one
+    /// launch, or whether callers must use the per-matrix `syevd` loop (#2413).
+    pub(in crate::gpu) fn xsyev_batched_available(&self) -> bool {
+        self.lib.xsyev_batched_available()
+    }
+
     /// Load cuSOLVER and create a native handle.
     ///
     /// # Errors
@@ -2301,9 +2371,15 @@ impl CusolverDnHandle {
         let dtype = cuda_data_type_abi(dtype);
         let mut device_bytes = 0;
         let mut host_bytes = 0;
+        let Some(xsyev_batched_buffer_size) = self.lib.vtable.xsyev_batched_buffer_size else {
+            return Err(Error::runtime_state(
+                op,
+                "cusolverDnXsyevBatched_bufferSize is not exported by this cuSOLVER",
+            ));
+        };
         // SAFETY: bufferSize only queries sizes; no device data is accessed.
         let status = unsafe {
-            (self.lib.vtable.xsyev_batched_buffer_size)(
+            (xsyev_batched_buffer_size)(
                 self.raw,
                 self.params,
                 jobz as i32,
@@ -2367,7 +2443,13 @@ impl CusolverDnHandle {
             let compute = cuda_data_type_abi(dtype);
             let real = cuda_data_type_abi(real);
             let dtype = cuda_data_type_abi(dtype);
-            let status = (self.lib.vtable.xsyev_batched)(
+            let Some(xsyev_batched) = self.lib.vtable.xsyev_batched else {
+                return Err(Error::runtime_state(
+                    op,
+                    "cusolverDnXsyevBatched is not exported by this cuSOLVER",
+                ));
+            };
+            let status = (xsyev_batched)(
                 self.raw,
                 self.params,
                 jobz as i32,
