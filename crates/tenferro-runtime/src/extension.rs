@@ -42,7 +42,7 @@ pub use crate::compiler::CompilerOptions;
 #[doc(hidden)]
 pub use crate::shape_infer::{
     infer_output_dtype, infer_output_extents, infer_output_shapes, promote_dtype,
-    promote_dtype_div_like, promote_dtype_for_binary_op, promote_dtypes,
+    promote_dtype_for_binary_op, promote_dtypes,
 };
 pub use tenferro_extension_macros::define_extension_runtime;
 pub use tenferro_ops::ext_op::{
