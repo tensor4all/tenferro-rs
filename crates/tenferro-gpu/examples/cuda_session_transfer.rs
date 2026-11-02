@@ -7,7 +7,8 @@
 //! through caller-owned pinned buffers with a pending handle whose completion the caller polls.
 
 use tenferro_gpu::cuda::{
-    cuda_devices, download_pending, upload_pending, upload_tensor, CudaEngine, PinnedHostBuffer,
+    cuda_devices, download_pending, gpu_available, upload_pending, upload_tensor, CudaEngine,
+    PinnedHostBuffer,
 };
 use tenferro_runtime::ExecutionEngine;
 use tenferro_tensor::{Tensor, TensorElementwise, TensorRead};
@@ -36,6 +37,16 @@ fn from_bytes(bytes: &[u8]) -> Vec<f64> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Probe before `cuda_devices`, which reaches cudarc's dynamic loader and panics when
+    // no driver library loads. Build a backend only when something answered.
+    if !gpu_available() {
+        eprintln!(
+            "cuda_session_transfer: no usable CUDA driver or device; probe with \
+             `tenferro_gpu::cuda::gpu_available()` before constructing an engine"
+        );
+        std::process::exit(1);
+    }
+
     let Some(device) = cuda_devices()?.into_iter().next() else {
         println!("no CUDA device available");
         return Ok(());
