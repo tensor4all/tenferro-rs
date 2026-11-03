@@ -63,6 +63,35 @@ pub(crate) fn take_last_route_was_faer() -> Option<bool> {
     LAST_FAER.with(|last| last.replace(None))
 }
 
+#[cfg(all(feature = "native", any(test, feature = "route-report")))]
+thread_local! {
+    /// Algorithm and selection reason of the last prepared plan.
+    static LAST_PLAN_ROUTE: std::cell::Cell<
+        Option<(
+            cpueinsum::tcontract::Algorithm,
+            cpueinsum::tcontract::Reason,
+        )>,
+    > = const { std::cell::Cell::new(None) };
+}
+
+/// The algorithm and selection reason of the last contraction plan prepared on
+/// this thread, and clears the record.
+///
+/// Test and host-check support, behind the off-by-default `route-report`
+/// feature, mirroring the `ledger` accessors. `examples/route_faerlimit.rs`
+/// prints it to check which driver a host class and a thread budget select.
+/// The record is written whenever a plan is prepared, which a cached plan is
+/// not, so a read with nothing prepared in between returns `None`; a read that
+/// skips the `None` case reports the previous plan's route.
+#[cfg(all(feature = "native", any(test, feature = "route-report")))]
+#[doc(hidden)]
+pub fn take_last_plan_route() -> Option<(
+    cpueinsum::tcontract::Algorithm,
+    cpueinsum::tcontract::Reason,
+)> {
+    LAST_PLAN_ROUTE.with(|last| last.replace(None))
+}
+
 #[cfg(all(test, feature = "blas"))]
 fn record_contraction_route(route: cpueinsum_blas::ExecutionRoute) {
     use cpueinsum_blas::ExecutionRoute;
@@ -580,7 +609,7 @@ impl BinaryCache {
         key: Key,
         config: &DotGeneralConfig,
     ) -> crate::Result<Arc<BinaryPlan<T>>> {
-        let prepare = || {
+        let prepare = || -> crate::Result<BinaryPlan<T>> {
             let lhs = if key.lhs_conj {
                 key.lhs.spec()?.conj()
             } else {
@@ -599,8 +628,13 @@ impl BinaryCache {
             );
             let problem = Problem::from_dot_general(key.dtype, lhs, rhs, key.out.spec()?, &dot)
                 .map_err(|error| error.into_crate_error("dot_general"))?;
-            BinaryPlan::<T>::new(&problem, &plan_config(HostClass::detect(), key.budget))
-                .map_err(|error| error.into_crate_error("dot_general"))
+            let plan =
+                BinaryPlan::<T>::new(&problem, &plan_config(HostClass::detect(), key.budget))
+                    .map_err(|error| error.into_crate_error("dot_general"))?;
+            #[cfg(all(feature = "native", any(test, feature = "route-report")))]
+            LAST_PLAN_ROUTE
+                .with(|last| last.set(Some((plan.report().algorithm, plan.report().reason))));
+            Ok(plan)
         };
         let Some(slot) = slot.filter(|&slot| slot < capacity) else {
             return Ok(Arc::new(prepare()?));

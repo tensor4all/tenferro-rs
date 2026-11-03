@@ -263,7 +263,7 @@ mod plan_slot_reuse {
 /// part of the key.
 #[cfg(feature = "native")]
 mod faer_limit {
-    use crate::contraction::{default_faer_limit, take_last_route_was_faer};
+    use crate::contraction::{default_faer_limit, take_last_plan_route, take_last_route_was_faer};
     use crate::test_support::{cpu_engine, with_cpu_session};
     use tenferro_tensor::{Complex64, DotGeneralConfig, Tensor, TensorDot, TensorRead};
     use threadteam::HostClass;
@@ -453,6 +453,15 @@ mod faer_limit {
                 } else {
                     "keep tcontract's packed driver"
                 }
+            );
+            assert_eq!(
+                take_last_plan_route().map(|(algorithm, _)| algorithm.name()),
+                Some(if below_bound || lifted {
+                    "faer"
+                } else {
+                    "packed"
+                }),
+                "{m}x{k}x{n}: the plan report must name the driver that ran"
             );
             let want = faer_product(&av, &bv, m, k, n);
             let got = got.as_slice::<Complex64>().unwrap();

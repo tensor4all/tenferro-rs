@@ -261,7 +261,9 @@ Audit hints:
   accumulation order, so their last bits differ from the packed driver's (a
   direct faer matmul agrees to a few ULP). f32, f64 and c32 have no bound in the
   default on any host, so their plan configuration, and with it their bits, do
-  not move.
+  not move. `cargo run --release -p tenferro-cpu --example route_faerlimit
+  --features route-report` prints the driver and tcontract's reason that a host
+  and budget select.
 
 Audit hints:
 
