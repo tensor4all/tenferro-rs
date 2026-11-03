@@ -1216,3 +1216,30 @@ fn a_core_operation_may_not_name_an_external_scalar() {
     );
     assert!(super::builder::reject_core_external_dtype(&CoreSemanticOp::Neg).is_ok());
 }
+
+#[test]
+fn import_request_and_result_debug_report_structure_only() {
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let output = builder.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
+    let frozen = builder.finish(&[output]).unwrap();
+
+    let request = ProgramImport {
+        program: &frozen.program,
+        bindings: Some(&frozen.bindings),
+        roots: &[output],
+        input_map: &[],
+    };
+    let text = format!("{request:?}");
+    assert!(text.contains("program_inputs: 1"), "{text}");
+    assert!(text.contains("program_outputs: 1"), "{text}");
+    assert!(text.contains("bindings: Some("), "{text}");
+    assert!(text.contains("roots: 1"), "{text}");
+    assert!(text.contains("input_map: 0"), "{text}");
+
+    let imported = super::ImportedProgramValues::new(vec![output, output].into_boxed_slice());
+    assert_eq!(imported.roots().len(), 2);
+    assert!(format!("{imported:?}").contains("roots: 2"));
+}

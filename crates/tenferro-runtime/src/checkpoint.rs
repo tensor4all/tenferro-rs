@@ -135,3 +135,27 @@ impl RetainedValue {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::RetainedValue;
+    use tenferro_tensor::{Tensor, TensorRead};
+
+    #[test]
+    fn a_retained_value_debugs_its_metadata_and_not_its_payload() {
+        let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+        let retained = RetainedValue::from_tensor(tensor);
+
+        assert_eq!(retained.shape(), &[2]);
+        let text = format!("{retained:?}");
+        assert!(text.contains("RetainedValue"), "{text}");
+        assert!(text.contains("Pooled"), "{text}");
+        assert!(
+            !text.contains("1.0"),
+            "the retained payload stays out of Debug: {text}"
+        );
+
+        let read: TensorRead<'_> = retained.tensor_read().unwrap();
+        assert_eq!(read.shape(), &[2]);
+    }
+}

@@ -719,6 +719,40 @@ mod tests {
     }
 
     #[test]
+    fn compiler_options_constructor_keeps_the_given_options() {
+        let options = CompilerOptions {
+            optimizer: crate::OptimizerConfig {
+                dot_decomposer: true,
+                ..crate::OptimizerConfig::default()
+            },
+        };
+        let compiler = GraphCompiler::with_compiler_options(options);
+        assert!(compiler.compiler_options().optimizer.dot_decomposer);
+        assert!(compiler.extension_caches().is_empty());
+    }
+
+    #[test]
+    fn compile_many_refuses_outputs_from_two_contexts() {
+        let first = crate::TraceContext::new();
+        let second = crate::TraceContext::new();
+        let left = first
+            .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap()
+            .neg()
+            .unwrap();
+        let right = second
+            .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap()
+            .neg()
+            .unwrap();
+
+        let error = GraphCompiler::new()
+            .compile_many(&[&left, &right])
+            .unwrap_err();
+        assert!(error.to_string().contains("different contexts"), "{error}");
+    }
+
+    #[test]
     fn compile_preserves_symbolic_default_input_extent_identity() {
         let trace = crate::TraceContext::new();
         let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
