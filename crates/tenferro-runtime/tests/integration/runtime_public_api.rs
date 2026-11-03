@@ -82,9 +82,10 @@ fn run_compiled_one(program: &CompiledGraph, inputs: &[&Tensor]) -> Tensor {
 
 #[test]
 fn runtime_prepared_compiled_graph_runs_repeated_inputs() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[2]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -113,8 +114,9 @@ fn runtime_prepared_compiled_graph_runs_repeated_inputs() {
 
 #[test]
 fn one_prepared_program_runs_concurrently_on_two_engines() {
+    let trace = tenferro_runtime::TraceContext::new();
     let (engine, runtime) = cpu_engine_and_runtime();
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[4]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[4]).unwrap();
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -237,7 +239,10 @@ fn runtime_prepared_execution_hot_path_keeps_input_metadata_inline() {
 
 #[test]
 fn runtime_crate_exposes_traced_graph_execution_api() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let trace = tenferro_runtime::TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap();
     let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -315,14 +320,17 @@ fn concrete_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
 
 #[test]
 fn traced_tensor_methods_cover_conversion_and_rank_errors() {
-    let scalar = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
-    let vector = TracedTensor::from_vec_col_major(vec![2], vec![1.25_f64, -2.75]).unwrap();
+    let trace = tenferro_runtime::TraceContext::new();
+    let scalar = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let vector = trace
+        .from_vec_col_major(vec![2], vec![1.25_f64, -2.75])
+        .unwrap();
 
     let converted = vector.convert(DType::C64).unwrap();
-    assert_eq!(converted.dtype, DType::C64);
+    assert_eq!(converted.dtype(), DType::C64);
 
     let casted = vector.cast(DType::I32).unwrap();
-    assert_eq!(casted.dtype, DType::I32);
+    assert_eq!(casted.dtype(), DType::I32);
 
     let err = scalar.matmul(&vector).unwrap_err();
     assert!(matches!(
@@ -340,13 +348,16 @@ fn traced_tensor_methods_cover_conversion_and_rank_errors() {
 
 #[test]
 fn traced_tensor_methods_cover_structural_surface() {
+    let trace = tenferro_runtime::TraceContext::new();
     fn run(output: &TracedTensor) -> Tensor {
         let mut compiler = GraphCompiler::new();
         let program = compiler.compile(output).unwrap();
         run_compiled_one(&program, &[])
     }
 
-    let vector = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let vector = trace
+        .from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])
+        .unwrap();
     let sliced = vector
         .slice(SliceConfig {
             starts: vec![1],
@@ -356,13 +367,14 @@ fn traced_tensor_methods_cover_structural_surface() {
         .unwrap();
     assert_eq!(run(&sliced).as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 
-    let matrix_3x4 = TracedTensor::from_vec_col_major(
-        vec![3, 4],
-        vec![
-            1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
-        ],
-    )
-    .unwrap();
+    let matrix_3x4 = trace
+        .from_vec_col_major(
+            vec![3, 4],
+            vec![
+                1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
+        )
+        .unwrap();
     let row_slice = matrix_3x4.slice_axis(0, 1..3).unwrap();
     assert_eq!(row_slice.try_concrete_shape(), Some(vec![2, 4]));
     assert_eq!(
@@ -414,11 +426,13 @@ fn traced_tensor_methods_cover_structural_surface() {
         &[0.0, 3.0, 2.0, 0.0]
     );
 
-    let starts = TracedTensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap();
+    let starts = trace.from_vec_col_major(vec![1], vec![1_i64]).unwrap();
     let dynamic = vector.dynamic_slice(&starts, &[2]).unwrap();
     assert_eq!(run(&dynamic).as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 
-    let indices = TracedTensor::from_vec_col_major(vec![3], vec![3_i64, 1, 0]).unwrap();
+    let indices = trace
+        .from_vec_col_major(vec![3], vec![3_i64, 1, 0])
+        .unwrap();
     let gathered = vector
         .gather(
             &indices,
@@ -433,9 +447,15 @@ fn traced_tensor_methods_cover_structural_surface() {
         .unwrap();
     assert_eq!(run(&gathered).as_slice::<f64>().unwrap(), &[4.0, 2.0, 1.0]);
 
-    let operand = TracedTensor::from_vec_col_major(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]).unwrap();
-    let scatter_indices = TracedTensor::from_vec_col_major(vec![2, 1], vec![1_i64, 3]).unwrap();
-    let updates = TracedTensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap();
+    let operand = trace
+        .from_vec_col_major(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0])
+        .unwrap();
+    let scatter_indices = trace
+        .from_vec_col_major(vec![2, 1], vec![1_i64, 3])
+        .unwrap();
+    let updates = trace
+        .from_vec_col_major(vec![2], vec![5.0_f64, 7.0])
+        .unwrap();
     let scattered = operand
         .scatter(
             &scatter_indices,
@@ -456,8 +476,9 @@ fn traced_tensor_methods_cover_structural_surface() {
     let concatenated = TracedTensor::concatenate(&[&vector, &vector], 0).unwrap();
     assert_eq!(run(&concatenated).shape(), &[8]);
 
-    let matrix =
-        TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let matrix = trace
+        .from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])
+        .unwrap();
     assert_eq!(
         run(&matrix.tril(0).unwrap()).as_slice::<f64>().unwrap(),
         &[1.0, 2.0, 0.0, 4.0]
@@ -466,21 +487,26 @@ fn traced_tensor_methods_cover_structural_surface() {
         run(&matrix.triu(0).unwrap()).as_slice::<f64>().unwrap(),
         &[1.0, 0.0, 3.0, 4.0]
     );
-    let rectangular =
-        TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
-            .unwrap();
+    let rectangular = trace
+        .from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .unwrap();
     let diag = rectangular.extract_diag(1, 0).unwrap();
     assert_eq!(diag.try_concrete_shape(), Some(vec![2]));
     assert_eq!(run(&diag).shape(), &[2]);
 
-    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
+    let lhs = trace
+        .from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])
+        .unwrap();
+    let rhs = trace
+        .from_vec_col_major(vec![3, 2], vec![1.0_f64; 6])
+        .unwrap();
     assert_eq!(run(&lhs.matmul(&rhs).unwrap()).shape(), &[2, 2]);
 }
 
 #[test]
 fn traced_shape_packing_rejects_symbolic_shapes_as_graph_build_errors() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let trace = tenferro_runtime::TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
 
     let err = x.index_select(0, &[0]).unwrap_err();
     assert!(matches!(
@@ -505,9 +531,10 @@ fn traced_shape_packing_rejects_symbolic_shapes_as_graph_build_errors() {
 
 #[test]
 fn runtime_runs_elementwise_and_reduction_with_ordered_inputs() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -524,9 +551,12 @@ fn runtime_runs_elementwise_and_reduction_with_ordered_inputs() {
 
 #[test]
 fn traced_broadcast_binary_accepts_symbolic_same_rank_input() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let trace = tenferro_runtime::TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
     let y_data = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let y = TracedTensor::from_tensor_concrete_shape(y_data.duplicate().unwrap()).unwrap();
+    let y = trace
+        .from_tensor_concrete_shape(y_data.duplicate().unwrap())
+        .unwrap();
 
     let z = (&x + &y).unwrap();
 
@@ -542,7 +572,10 @@ fn traced_broadcast_binary_accepts_symbolic_same_rank_input() {
 
 #[test]
 fn traced_reduction_with_too_many_axes_returns_error_without_rank_underflow() {
-    let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    let trace = tenferro_runtime::TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])
+        .unwrap();
 
     let err = x.reduce_max(Some(&[0, 1, 2])).unwrap_err().to_string();
 
@@ -551,10 +584,11 @@ fn traced_reduction_with_too_many_axes_returns_error_without_rank_underflow() {
 
 #[test]
 fn runtime_runs_dot_general_with_ordered_inputs() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let lhs = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    let rhs = trace.input_symbolic_shape(DType::F64, 2).unwrap();
     let product = lhs
         .dot_general(
             &rhs,
@@ -587,7 +621,8 @@ fn runtime_runs_dot_general_with_ordered_inputs() {
 
 #[test]
 fn runtime_ordered_input_errors_are_covered() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let trace = tenferro_runtime::TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -625,18 +660,21 @@ fn runtime_ordered_input_errors_are_covered() {
 /// and a concrete non-axis mismatch is rejected on the public compiled path.
 #[test]
 fn runtime_concatenate_rejects_incompatible_concrete_shapes_without_input_specs() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     // Data-attached but shape-symbolic inputs: the compiled program keeps their
     // extents free, so `run_compiled` reaches the concatenate kernel.
-    let a = TracedTensor::from_tensor_symbolic_shape(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
-    )
-    .unwrap();
-    let b = TracedTensor::from_tensor_symbolic_shape(
-        Tensor::from_vec_col_major(vec![2, 4], vec![2.0_f64; 8]).unwrap(),
-    )
-    .unwrap();
+    let a = trace
+        .from_tensor_symbolic_shape(
+            Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
+        )
+        .unwrap();
+    let b = trace
+        .from_tensor_symbolic_shape(
+            Tensor::from_vec_col_major(vec![2, 4], vec![2.0_f64; 8]).unwrap(),
+        )
+        .unwrap();
 
     let joined = TracedTensor::concatenate(&[&a, &b], 1).unwrap();
     let program = GraphCompiler::new().compile(&joined).unwrap();
@@ -680,9 +718,10 @@ fn runtime_concatenate_rejects_incompatible_concrete_shapes_without_input_specs(
 /// number of commands today.
 #[test]
 fn runtime_prepared_matches_compiled_for_elementwise_chain() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[4]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[4]).unwrap();
     let doubled = (&x + &x).unwrap();
     let y = doubled
         .mul(&doubled)
@@ -722,11 +761,12 @@ fn runtime_prepared_matches_compiled_for_elementwise_chain() {
 /// is test-only.
 #[test]
 fn prepared_execution_command_count_fuses_elementwise_chains() {
+    let trace = tenferro_runtime::TraceContext::new();
     let engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     let n = 4usize;
 
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[n]).unwrap();
     let doubled = (&x + &x).unwrap();
     let chain = doubled
         .mul(&doubled)
@@ -747,7 +787,7 @@ fn prepared_execution_command_count_fuses_elementwise_chains() {
         "the chain should be one fused command"
     );
 
-    let x2 = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
+    let x2 = trace.input_concrete_shape(DType::F64, &[n]).unwrap();
     let with_reduce = (&x2 + &x2)
         .unwrap()
         .exp()
@@ -771,11 +811,12 @@ fn prepared_execution_command_count_fuses_elementwise_chains() {
 /// elementwise chain once through the scheduled production executor.
 #[test]
 fn compiled_and_prepared_submission_counts_match() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     let n = 4usize;
 
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[n]).unwrap();
     let chain = (&x + &x)
         .unwrap()
         .mul(&x)
@@ -811,10 +852,11 @@ fn compiled_and_prepared_submission_counts_match() {
 /// each production entry point.
 #[test]
 fn compiled_and_prepared_submission_counts_match_shape_matrix() {
+    let trace = tenferro_runtime::TraceContext::new();
     for n in [4usize, 64, 1024] {
         let mut engine = CpuEngine::serial();
         let runtime = cpu_runtime(&engine);
-        let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
+        let x = trace.input_concrete_shape(DType::F64, &[n]).unwrap();
         let chain = (&x + &x)
             .unwrap()
             .mul(&x)
@@ -853,11 +895,12 @@ fn compiled_and_prepared_submission_counts_match_shape_matrix() {
 /// all four instructions, while a run containing a reduction plans none.
 #[test]
 fn prepared_elementwise_regions_are_planned_at_prepare_time() {
+    let trace = tenferro_runtime::TraceContext::new();
     let engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     let n = 4usize;
 
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[n]).unwrap();
     let doubled = (&x + &x).unwrap();
     let chain = doubled
         .mul(&doubled)
@@ -878,7 +921,7 @@ fn prepared_elementwise_regions_are_planned_at_prepare_time() {
         "the pure elementwise chain should plan one region over four instructions"
     );
 
-    let x2 = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
+    let x2 = trace.input_concrete_shape(DType::F64, &[n]).unwrap();
     let with_reduce = (&x2 + &x2)
         .unwrap()
         .exp()
@@ -903,11 +946,12 @@ fn prepared_elementwise_regions_are_planned_at_prepare_time() {
 /// containing a reduction plans and executes no region at all.
 #[test]
 fn prepared_elementwise_region_executes_as_one_fused_command() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     let n = 16 * 1024usize;
 
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[n]).unwrap();
     let doubled = (&x + &x).unwrap();
     let chain = doubled
         .mul(&doubled)
@@ -942,7 +986,7 @@ fn prepared_elementwise_region_executes_as_one_fused_command() {
         );
     }
 
-    let x2 = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
+    let x2 = trace.input_concrete_shape(DType::F64, &[n]).unwrap();
     let with_reduce = (&x2 + &x2)
         .unwrap()
         .exp()
@@ -973,14 +1017,15 @@ fn prepared_elementwise_region_executes_as_one_fused_command() {
 /// operand (`R-numerics-01`).
 #[test]
 fn prepared_ordered_region_fuses_and_propagates_nan() {
+    let trace = tenferro_runtime::TraceContext::new();
     for dtype in [DType::F32, DType::F64] {
         let mut engine = CpuEngine::serial();
         let runtime = cpu_runtime(&engine);
         let n = 16 * 1024usize;
 
-        let x = TracedTensor::input_concrete_shape(dtype, &[n]).unwrap();
-        let y = TracedTensor::input_concrete_shape(dtype, &[n]).unwrap();
-        let z = TracedTensor::input_concrete_shape(dtype, &[n]).unwrap();
+        let x = trace.input_concrete_shape(dtype, &[n]).unwrap();
+        let y = trace.input_concrete_shape(dtype, &[n]).unwrap();
+        let z = trace.input_concrete_shape(dtype, &[n]).unwrap();
         let out = (&x.maximum(&y).unwrap() + &z).unwrap();
         let program = GraphCompiler::new()
             .compile_with_input_specs(
@@ -1058,11 +1103,12 @@ fn prepared_ordered_region_fuses_and_propagates_nan() {
 /// reference.
 #[test]
 fn prepared_non_f32_f64_region_is_declined() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     let n = 16 * 1024usize;
 
-    let x = TracedTensor::input_concrete_shape(DType::I64, &[n]).unwrap();
+    let x = trace.input_concrete_shape(DType::I64, &[n]).unwrap();
     let doubled = (&x + &x).unwrap();
     let chain = (&doubled * &doubled).unwrap();
     let program = GraphCompiler::new()
@@ -1099,11 +1145,12 @@ fn prepared_non_f32_f64_region_is_declined() {
 /// count is below the CPU fused kernel's floor, so this exercises the fallback.
 #[test]
 fn prepared_elementwise_region_falls_back_when_fusion_is_declined() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     let n = 4usize;
 
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[n]).unwrap();
     let doubled = (&x + &x).unwrap();
     let chain = doubled
         .mul(&doubled)
@@ -1148,11 +1195,12 @@ fn prepared_elementwise_region_falls_back_when_fusion_is_declined() {
 /// decline on every execution, and still matches the unprepared path.
 #[test]
 fn prepared_elementwise_region_above_cpu_input_limit_is_not_planned() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     let n = 16 * 1024usize;
     let inputs = (0..5)
-        .map(|_| TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap())
+        .map(|_| trace.input_concrete_shape(DType::F64, &[n]).unwrap())
         .collect::<Vec<_>>();
     let mut sum = (&inputs[0] + &inputs[1]).unwrap();
     for input in &inputs[2..] {
@@ -1198,15 +1246,15 @@ fn prepared_elementwise_region_above_cpu_input_limit_is_not_planned() {
 /// Both `y` and `z` are program outputs of one elementwise region.
 #[test]
 fn prepared_elementwise_region_publishes_multiple_live_outs() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     let n = 16 * 1024usize;
 
     let data: Vec<f64> = (0..n).map(|i| 0.25 + (i % 13) as f64 * 0.125).collect();
-    let x = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![n], data.clone()).unwrap(),
-    )
-    .unwrap();
+    let x = trace
+        .from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![n], data.clone()).unwrap())
+        .unwrap();
     let shared = (&x + &x).unwrap();
     let y = shared.exp().unwrap().tanh().unwrap();
     let z = (&shared * &shared).unwrap();
@@ -1254,6 +1302,7 @@ fn prepared_elementwise_region_publishes_multiple_live_outs() {
 /// own command, and both outputs match a host reference.
 #[test]
 fn prepared_elementwise_region_stays_separate_from_ffi_op() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     // The CPU fused kernel only engages above its element floor, so the chain
@@ -1264,15 +1313,16 @@ fn prepared_elementwise_region_stays_separate_from_ffi_op() {
     let matrix = |data: &[f64]| Tensor::from_vec_col_major(vec![n, n], data.to_vec()).unwrap();
     let a_data: Vec<f64> = (0..n * n).map(|i| 0.5 + (i % 7) as f64 * 0.125).collect();
     let b_data: Vec<f64> = (0..n * n).map(|i| 0.25 + (i % 7) as f64 * 0.125).collect();
-    let a = TracedTensor::from_tensor_concrete_shape(matrix(&a_data)).unwrap();
-    let b = TracedTensor::from_tensor_concrete_shape(matrix(&b_data)).unwrap();
+    let a = trace.from_tensor_concrete_shape(matrix(&a_data)).unwrap();
+    let b = trace.from_tensor_concrete_shape(matrix(&b_data)).unwrap();
     let chain_data: Vec<f64> = (0..chain_len)
         .map(|i| 0.5 + (i % 5) as f64 * 0.25)
         .collect();
-    let x = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![chain_len], chain_data.clone()).unwrap(),
-    )
-    .unwrap();
+    let x = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![chain_len], chain_data.clone()).unwrap(),
+        )
+        .unwrap();
 
     let m = a.matmul(&b).unwrap();
     let chain = (&x * &x).unwrap().exp().unwrap().tanh().unwrap();
@@ -1324,11 +1374,12 @@ fn prepared_elementwise_region_stays_separate_from_ffi_op() {
 /// Stage 1: repeated prepared runs neither fall back nor accumulate state.
 #[test]
 fn prepared_elementwise_region_is_stable_across_repeated_runs() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     let n = 16 * 1024usize;
 
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[n]).unwrap();
     let doubled = (&x + &x).unwrap();
     let chain = doubled
         .mul(&doubled)
@@ -1373,6 +1424,7 @@ fn prepared_elementwise_region_is_stable_across_repeated_runs() {
 /// reference, so interleaving regions with FFI work keeps its contract.
 #[test]
 fn prepared_regions_interleave_with_ffi_work() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     let chain_len = 16 * 1024usize;
@@ -1384,18 +1436,17 @@ fn prepared_regions_interleave_with_ffi_work() {
     let a_data: Vec<f64> = (0..n * n).map(|i| 0.5 + (i % 7) as f64 * 0.125).collect();
     let b_data: Vec<f64> = (0..n * n).map(|i| 0.25 + (i % 7) as f64 * 0.125).collect();
 
-    let x = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![chain_len], x_data.clone()).unwrap(),
-    )
-    .unwrap();
-    let a = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![n, n], a_data.clone()).unwrap(),
-    )
-    .unwrap();
-    let b = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![n, n], b_data.clone()).unwrap(),
-    )
-    .unwrap();
+    let x = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![chain_len], x_data.clone()).unwrap(),
+        )
+        .unwrap();
+    let a = trace
+        .from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![n, n], a_data.clone()).unwrap())
+        .unwrap();
+    let b = trace
+        .from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![n, n], b_data.clone()).unwrap())
+        .unwrap();
 
     let before = (&x * &x).unwrap().exp().unwrap().tanh().unwrap();
     let product = a.matmul(&b).unwrap();
@@ -1453,11 +1504,12 @@ fn prepared_regions_interleave_with_ffi_work() {
 /// Stage 1: the fallback path stays stable across repeated runs.
 #[test]
 fn prepared_elementwise_fallback_is_stable_across_repeated_runs() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
     let n = 4usize;
 
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[n]).unwrap();
     let doubled = (&x + &x).unwrap();
     let chain = doubled
         .mul(&doubled)
@@ -1500,11 +1552,14 @@ fn prepared_elementwise_fallback_is_stable_across_repeated_runs() {
 
 #[test]
 fn traced_slice_rejects_out_of_range_limit_at_graph_build() {
+    let trace = tenferro_runtime::TraceContext::new();
     // The sibling `slice_axis` builder, the CPU backend, and the CUDA backend
     // all reject a limit that exceeds a concrete input extent; raw
     // `TracedTensor::slice` used to build successfully and register a phantom
     // output shape. See issue #2042.
-    let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let x = trace
+        .from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])
+        .unwrap();
     let err = x
         .slice(SliceConfig {
             starts: vec![0],
@@ -1528,8 +1583,9 @@ fn traced_slice_rejects_out_of_range_limit_at_graph_build() {
 
 #[test]
 fn prepared_identity_output_is_borrowed_and_a_computed_output_is_compact() {
+    let trace = tenferro_runtime::TraceContext::new();
     let (engine, runtime) = cpu_engine_and_runtime();
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 2]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[2, 2]).unwrap();
     let identity = GraphCompiler::new()
         .compile_with_input_specs(&x, &[(&x, DType::F64, &[2, 2])])
         .unwrap();
@@ -1558,10 +1614,11 @@ fn prepared_identity_output_is_borrowed_and_a_computed_output_is_compact() {
 
 #[test]
 fn run_rejects_a_replacement_input_that_changes_the_prepared_specialization() {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime(&engine);
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let lhs = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    let rhs = trace.input_symbolic_shape(DType::F64, 2).unwrap();
     let product = lhs
         .dot_general(
             &rhs,
@@ -1615,8 +1672,9 @@ fn run_rejects_a_replacement_input_that_changes_the_prepared_specialization() {
 
 #[test]
 fn prepared_transpose_and_slice_outputs_alias_their_input_without_a_copy() {
+    let trace = tenferro_runtime::TraceContext::new();
     let (mut engine, runtime) = cpu_engine_and_runtime();
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[1, 4]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[1, 4]).unwrap();
     let transposed = x.transpose(&[1, 0]).unwrap();
     let program = GraphCompiler::new()
         .compile_with_input_specs(&transposed, &[(&x, DType::F64, &[1, 4])])
@@ -1643,7 +1701,7 @@ fn prepared_transpose_and_slice_outputs_alias_their_input_without_a_copy() {
         );
     }
 
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[2, 3]).unwrap();
     let sliced = x
         .slice(SliceConfig {
             starts: vec![0, 0],

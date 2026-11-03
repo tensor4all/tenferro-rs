@@ -15,7 +15,7 @@ use tenferro_cpu::{scalar_binary_into, scalar_fold, AddOp, CpuEngine};
 use tenferro_df64_proof::extension::{module, Df64Total, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime};
 use tenferro_tensor::Tensor;
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
@@ -60,19 +60,21 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
 
 #[test]
 fn the_core_operations_run_in_the_mixed_configuration() {
+    let trace = tenferro_runtime::TraceContext::new();
     let low = 2f64.powi(-80);
     let (runtime, mut engine) = mixed_runtime();
 
     // A value the runtime itself produces, so the operations below act on a result of the mixed
     // configuration rather than on a hand-built tensor.
-    let input = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
-        external(
-            vec![Df64::from_f64(1.0), Df64 { hi: low, lo: 0.0 }],
-            vec![2],
-        ),
-        DF64_SCALAR_IDENTITY,
-    )
-    .expect("traced leaf");
+    let input = trace
+        .from_tensor_concrete_shape_declaring_scalar(
+            external(
+                vec![Df64::from_f64(1.0), Df64 { hi: low, lo: 0.0 }],
+                vec![2],
+            ),
+            DF64_SCALAR_IDENTITY,
+        )
+        .expect("traced leaf");
     let total = apply(Arc::new(Df64Total), &[&input]).expect("traced total");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&total[0]).expect("compiled total");

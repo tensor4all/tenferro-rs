@@ -9,9 +9,10 @@
 //! ```
 //! use tenferro_linalg::TracedTensorLinalgExt;
 //! use tenferro_cpu::CpuEngine;
-//! use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+//! use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 //!
-//! let a = TracedTensor::from_vec_col_major(
+//! let trace = TraceContext::new();
+//! let a = trace.from_vec_col_major(
 //!     vec![2, 2],
 //!     vec![4.0_f64, 2.0, 2.0, 3.0],
 //! )

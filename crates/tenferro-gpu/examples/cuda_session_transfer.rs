@@ -37,6 +37,7 @@ fn from_bytes(bytes: &[u8]) -> Vec<f64> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let trace = tenferro_runtime::TraceContext::new();
     // Probe before `cuda_devices`, which reaches cudarc's dynamic loader and panics when
     // no driver library loads. Build a backend only when something answered.
     if !gpu_available() {
@@ -79,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &backend,
     )?)?;
     let prepared_runtime = prepared_builder.build()?;
-    let x = tenferro_runtime::TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 1)?;
+    let x = trace.input_symbolic_shape(tenferro_runtime::DType::F64, 1)?;
     let y = (&x * &x)?;
     let program = tenferro_runtime::GraphCompiler::new()
         .compile_with_input_specs(&y, &[(&x, tenferro_runtime::DType::F64, &[4])])?;

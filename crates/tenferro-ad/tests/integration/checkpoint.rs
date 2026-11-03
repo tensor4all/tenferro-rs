@@ -1,7 +1,7 @@
 use crate::support;
 use support::{cpu_runtime, RunTraced};
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{GraphCompiler, Tensor, TraceContext, TracedTensor, TypedTensor};
 
 const TOL: f64 = 1.0e-6;
 const FD_H: f64 = 1.0e-6;
@@ -26,9 +26,10 @@ fn eval_tensor(traced: TracedTensor) -> Tensor {
 
 #[test]
 fn checkpoint_preserves_eval_value() {
+    let trace = TraceContext::new();
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
+    let x = trace.from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
     let mut y = (&x * &x).unwrap();
 
     y.checkpoint(
@@ -51,10 +52,11 @@ fn checkpoint_preserves_eval_value() {
 
 #[test]
 fn checkpoint_downstream_eval_uses_leaf() {
+    let trace = TraceContext::new();
     let engine = cpu_runtime();
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
+    let x = trace.from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
     let mut y = (&x * &x).unwrap();
 
     y.checkpoint(
@@ -64,7 +66,7 @@ fn checkpoint_downstream_eval_uses_leaf() {
     )
     .unwrap();
 
-    let one = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0)).unwrap();
+    let one = trace.from_tensor_concrete_shape(f64_scalar(1.0)).unwrap();
     let z = (&y + &one).unwrap();
     let value = get_f64_scalar(&z.run_with(&engine).unwrap());
     assert!((value - 10.0).abs() < 1.0e-12);
@@ -72,12 +74,15 @@ fn checkpoint_downstream_eval_uses_leaf() {
 
 #[test]
 fn checkpoint_grad_correct() {
+    let trace = TraceContext::new();
     let x_value = 2.0_f64;
     let engine = cpu_runtime();
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
 
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_value)).unwrap();
+    let x = trace
+        .from_tensor_concrete_shape(f64_scalar(x_value))
+        .unwrap();
     let mut y = (&x * &x).unwrap();
     y.checkpoint(
         &mut compiler,
@@ -97,11 +102,14 @@ fn checkpoint_grad_correct() {
 
 #[test]
 fn checkpoint_hvp_correct() {
+    let trace = TraceContext::new();
     let x_value = 2.0_f64;
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
 
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_value)).unwrap();
+    let x = trace
+        .from_tensor_concrete_shape(f64_scalar(x_value))
+        .unwrap();
     let mut y = (&x * &x).unwrap();
     y.checkpoint(
         &mut compiler,
@@ -112,7 +120,7 @@ fn checkpoint_hvp_correct() {
     let z = (&y * &y).unwrap();
 
     let grad = z.grad(&x).unwrap();
-    let v = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0)).unwrap();
+    let v = trace.from_tensor_concrete_shape(f64_scalar(1.0)).unwrap();
     let hv = grad.jvp(&x, &v).unwrap();
     let hv_value = get_f64_scalar(&eval_tensor(hv));
     let expected = 12.0 * x_value * x_value;
@@ -122,7 +130,7 @@ fn checkpoint_hvp_correct() {
     );
 
     let fd_grad = |value: f64| {
-        let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(value)).unwrap();
+        let x = trace.from_tensor_concrete_shape(f64_scalar(value)).unwrap();
         let mut y = (&x * &x).unwrap();
         let mut compiler = GraphCompiler::new();
         let executor = cpu_runtime();
@@ -145,6 +153,7 @@ fn checkpoint_hvp_correct() {
 
 #[test]
 fn checkpoint_loop_grad_correct() {
+    let trace = TraceContext::new();
     let a_value = 0.8_f64;
     let x0_value = 0.5_f64;
     let steps = 3;
@@ -152,8 +161,12 @@ fn checkpoint_loop_grad_correct() {
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
 
-    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_value)).unwrap();
-    let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x0_value)).unwrap();
+    let a = trace
+        .from_tensor_concrete_shape(f64_scalar(a_value))
+        .unwrap();
+    let mut x = trace
+        .from_tensor_concrete_shape(f64_scalar(x0_value))
+        .unwrap();
 
     for _ in 0..steps {
         x = (&a * &x.cos().unwrap()).unwrap();
@@ -185,12 +198,13 @@ fn checkpoint_loop_grad_correct() {
 
 #[test]
 fn grad_both_independently_checkpointed_add_wrt_rhs() {
+    let trace = TraceContext::new();
     let engine = cpu_runtime();
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
 
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
-    let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
+    let x = trace.from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
+    let y = trace.from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
 
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
@@ -221,12 +235,13 @@ fn grad_both_independently_checkpointed_add_wrt_rhs() {
 
 #[test]
 fn grad_both_independently_checkpointed_add_wrt_lhs() {
+    let trace = TraceContext::new();
     let engine = cpu_runtime();
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
 
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
-    let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
+    let x = trace.from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
+    let y = trace.from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
 
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
@@ -257,12 +272,13 @@ fn grad_both_independently_checkpointed_add_wrt_lhs() {
 
 #[test]
 fn grad_both_independently_checkpointed_mul_wrt_rhs() {
+    let trace = TraceContext::new();
     let engine = cpu_runtime();
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
 
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
-    let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
+    let x = trace.from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
+    let y = trace.from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
 
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
@@ -294,6 +310,7 @@ fn grad_both_independently_checkpointed_mul_wrt_rhs() {
 
 #[test]
 fn grad_both_independently_checkpointed_matches_fd() {
+    let trace = TraceContext::new();
     let x_val = 2.0_f64;
     let y_val = 3.0_f64;
 
@@ -303,8 +320,8 @@ fn grad_both_independently_checkpointed_matches_fd() {
     let engine = cpu_runtime();
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_val)).unwrap();
-    let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(y_val)).unwrap();
+    let x = trace.from_tensor_concrete_shape(f64_scalar(x_val)).unwrap();
+    let y = trace.from_tensor_concrete_shape(f64_scalar(y_val)).unwrap();
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
     x2.checkpoint(
@@ -330,12 +347,13 @@ fn grad_both_independently_checkpointed_matches_fd() {
 
 #[test]
 fn grad_mul_both_independently_checkpointed_wrt_rhs() {
+    let trace = TraceContext::new();
     let engine = cpu_runtime();
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
 
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
-    let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
+    let x = trace.from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
+    let y = trace.from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
 
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
@@ -366,12 +384,13 @@ fn grad_mul_both_independently_checkpointed_wrt_rhs() {
 
 #[test]
 fn grad_mul_both_independently_checkpointed_wrt_lhs() {
+    let trace = TraceContext::new();
     let engine = cpu_runtime();
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
 
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
-    let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
+    let x = trace.from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
+    let y = trace.from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
 
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
@@ -402,6 +421,7 @@ fn grad_mul_both_independently_checkpointed_wrt_lhs() {
 
 #[test]
 fn grad_mul_both_independently_checkpointed_matches_fd() {
+    let trace = TraceContext::new();
     let x_val = 2.0_f64;
     let y_val = 3.0_f64;
 
@@ -411,8 +431,8 @@ fn grad_mul_both_independently_checkpointed_matches_fd() {
     let engine = cpu_runtime();
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_val)).unwrap();
-    let y = TracedTensor::from_tensor_concrete_shape(f64_scalar(y_val)).unwrap();
+    let x = trace.from_tensor_concrete_shape(f64_scalar(x_val)).unwrap();
+    let y = trace.from_tensor_concrete_shape(f64_scalar(y_val)).unwrap();
     let mut x2 = (&x * &x).unwrap();
     let mut y2 = (&y * &y).unwrap();
     x2.checkpoint(

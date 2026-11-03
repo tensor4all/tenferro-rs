@@ -391,6 +391,13 @@ the graph reconstruction in `tenferro-ad/src/traced.rs`
 (`derivative_tensors_from_program`, 400+ lines with its metadata plumbing)
 disappears.
 
+As built, dead extension outputs are pruned at **snapshot** time, so the graph a
+snapshot exposes (and therefore the primal program a caller compiles) already
+carries the values-only form of a decomposition whose factor outputs are unused;
+the full-factor residuals a derivative rule needs live in the AD context's own
+record, not in the primal graph. A test that inspects the primal graph for
+residuals therefore observes `SvdVals`, not `Svd`.
+
 Cost: snapshot and import are O(program) per AD call, not per op. Today's path is
 also O(program) per AD call (compile + transform + rebuild). Repeated `grad`
 inside one context grows the context; the documented contract is one snapshot and
@@ -429,6 +436,11 @@ After the change `GraphCompiler` has one lowering path,
 the core phase (implemented over the handle) so that the extension crates
 continue to compile, and is removed in the extension phase, after every caller
 uses the context methods.
+
+As built, `compile_many(&outputs)` requires at least one output: the snapshot is
+taken through the first output's context, so an empty output list has no context
+to freeze and is a typed `InvalidArgument`. A zero-output program is built with
+`SemanticProgramBuilder::finish(&[])` instead.
 
 ### 3.8 Eager: immutable journal, materialisation per backward
 

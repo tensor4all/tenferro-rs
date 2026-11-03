@@ -18,7 +18,7 @@ use tenferro_df64_proof::ad::{Df64LinearizeRule, Df64VjpRule};
 use tenferro_df64_proof::extension::{module, Df64Einsum, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TraceContext, TracedTensor};
 use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
@@ -52,12 +52,10 @@ fn runtime_with_module() -> Runtime {
     builder.build().expect("runtime with the module")
 }
 
-fn leaf(values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
-    TracedTensor::from_tensor_concrete_shape_declaring_scalar(
-        external(values, shape),
-        DF64_SCALAR_IDENTITY,
-    )
-    .expect("traced leaf")
+fn leaf(trace: &TraceContext, values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
+    trace
+        .from_tensor_concrete_shape_declaring_scalar(external(values, shape), DF64_SCALAR_IDENTITY)
+        .expect("traced leaf")
 }
 
 /// Contract two matrices through the runtime and return the result's elements.
@@ -67,9 +65,10 @@ fn contract(
     rhs: Vec<Df64>,
     rhs_shape: [usize; 2],
 ) -> Vec<Df64> {
+    let trace = TraceContext::new();
     let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a matrix contraction");
-    let lhs_leaf = leaf(lhs.clone(), lhs_shape.to_vec());
-    let rhs_leaf = leaf(rhs.clone(), rhs_shape.to_vec());
+    let lhs_leaf = leaf(&trace, lhs.clone(), lhs_shape.to_vec());
+    let rhs_leaf = leaf(&trace, rhs.clone(), rhs_shape.to_vec());
     let output = apply(Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
 
     let mut compiler = GraphCompiler::new();
@@ -151,9 +150,10 @@ fn the_pattern_validator_accepts_any_two_input_contraction_and_reports_its_label
 
 #[test]
 fn the_body_refuses_disagreeing_contracted_dimensions() {
+    let trace = TraceContext::new();
     let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a matrix contraction");
-    let lhs = leaf(vec![Df64::from_f64(1.0); 2], vec![1, 2]);
-    let rhs = leaf(vec![Df64::from_f64(1.0); 3], vec![3, 1]);
+    let lhs = leaf(&trace, vec![Df64::from_f64(1.0); 2], vec![1, 2]);
+    let rhs = leaf(&trace, vec![Df64::from_f64(1.0); 3], vec![3, 1]);
     let output = apply(Arc::new(op), &[&lhs, &rhs]).expect("traced contraction");
 
     let mut compiler = GraphCompiler::new();
@@ -175,9 +175,14 @@ fn the_body_refuses_disagreeing_contracted_dimensions() {
 
 #[test]
 fn the_operation_refuses_a_preset_scalar() {
+    let trace = tenferro_runtime::TraceContext::new();
     let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a matrix contraction");
-    let lhs = TracedTensor::input_concrete_shape(DType::F64, &[1, 2]).expect("traced input");
-    let rhs = TracedTensor::input_concrete_shape(DType::F64, &[2, 1]).expect("traced input");
+    let lhs = trace
+        .input_concrete_shape(DType::F64, &[1, 2])
+        .expect("traced input");
+    let rhs = trace
+        .input_concrete_shape(DType::F64, &[2, 1])
+        .expect("traced input");
     let error = apply(Arc::new(op), &[&lhs, &rhs])
         .expect_err("the body is defined for the externally defined scalar only");
     assert!(
@@ -188,6 +193,7 @@ fn the_operation_refuses_a_preset_scalar() {
 
 #[test]
 fn differentiating_the_contraction_is_supported_in_both_modes() {
+    let trace = TraceContext::new();
     // The forward tangent used to be refused here. It is implemented now, and its values and its
     // duality with the adjoint are checked in `einsum_ad.rs`; this test keeps the rule set up
     // honest by building one and asserting that the refusal is gone rather than silently stale.
@@ -203,11 +209,11 @@ fn differentiating_the_contraction_is_supported_in_both_modes() {
         .expect("ad context");
 
     let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
-    let lhs = leaf(vec![Df64::from_f64(1.0); 2], vec![1, 2]);
-    let rhs = leaf(vec![Df64::from_f64(1.0); 2], vec![2, 1]);
+    let lhs = leaf(&trace, vec![Df64::from_f64(1.0); 2], vec![1, 2]);
+    let rhs = leaf(&trace, vec![Df64::from_f64(1.0); 2], vec![2, 1]);
     let output = apply(std::sync::Arc::new(op), &[&lhs, &rhs]).expect("traced contraction");
-    let tangent = leaf(vec![Df64::from_f64(1.0); 2], vec![1, 2]);
-    let cotangent = leaf(vec![Df64::from_f64(1.0)], vec![1, 1]);
+    let tangent = leaf(&trace, vec![Df64::from_f64(1.0); 2], vec![1, 2]);
+    let cotangent = leaf(&trace, vec![Df64::from_f64(1.0)], vec![1, 1]);
 
     assert!(
         context.jvp(&output[0], &lhs, &tangent).is_ok(),
@@ -227,9 +233,10 @@ fn contract_with(
     rhs_shape: Vec<usize>,
     pattern: (&[u32], &[u32], &[u32]),
 ) -> Vec<Df64> {
+    let trace = TraceContext::new();
     let op = Df64Einsum::new(pattern.0, pattern.1, pattern.2).expect("a valid pattern");
-    let lhs_leaf = leaf(lhs.clone(), lhs_shape.clone());
-    let rhs_leaf = leaf(rhs.clone(), rhs_shape.clone());
+    let lhs_leaf = leaf(&trace, lhs.clone(), lhs_shape.clone());
+    let rhs_leaf = leaf(&trace, rhs.clone(), rhs_shape.clone());
     let output =
         apply(std::sync::Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
     let mut compiler = GraphCompiler::new();
@@ -324,10 +331,11 @@ fn contract_nary(
     operands: Vec<(Vec<Df64>, Vec<usize>)>,
     pattern: (&[&[u32]], &[u32]),
 ) -> Vec<Df64> {
+    let trace = TraceContext::new();
     let op = Df64Einsum::new_nary(pattern.0, pattern.1).expect("a valid pattern");
     let leaves: Vec<TracedTensor> = operands
         .iter()
-        .map(|(values, shape)| leaf(values.clone(), shape.clone()))
+        .map(|(values, shape)| leaf(&trace, values.clone(), shape.clone()))
         .collect();
     let refs: Vec<&TracedTensor> = leaves.iter().collect();
     let output = apply(std::sync::Arc::new(op), &refs).expect("traced contraction");

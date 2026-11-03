@@ -20,13 +20,14 @@
 //!
 //! ```rust
 //! use tenferro_ad::AdContext;
-//! use tenferro_runtime::TracedTensor;
+//! use tenferro_runtime::{TraceContext, TracedTensor};
 //!
 //! let ad = AdContext::builder().build().unwrap();
-//! let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+//! let trace = TraceContext::new();
+//! let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
 //! let loss = (&x * &x).unwrap();
 //! let dx = ad.grad(&loss, &x).unwrap();
-//! assert_eq!(dx.rank, 0);
+//! assert_eq!(dx.rank(), 0);
 //! ```
 //!
 //! # Errors
@@ -105,6 +106,4 @@ pub mod error {
     pub use tenferro_runtime::{ContextId, Error, ErrorPhase, Result};
 }
 
-pub(crate) mod metadata {
-    pub use tenferro_runtime::ad_support::tensor_meta_from_tensor;
-}
+pub(crate) mod metadata {}

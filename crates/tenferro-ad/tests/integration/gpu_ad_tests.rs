@@ -7,7 +7,8 @@ use tenferro_gpu::{
     cuda::gpu_available, cuda::upload_tensor, cuda::CudaDeviceId, cuda::CudaEngine,
 };
 use tenferro_runtime::{
-    DType, DotGeneralConfig, GatherConfig, Tensor, TensorRead, TracedTensor, TypedTensor,
+    DType, DotGeneralConfig, GatherConfig, Tensor, TensorRead, TraceContext, TracedTensor,
+    TypedTensor,
 };
 use tenferro_tensor::StorageBuffer;
 
@@ -237,6 +238,7 @@ fn test_gpu_borrowed_concat_gather_and_index_select_stay_resident() {
 #[test]
 #[ignore = "requires CUDA"]
 fn test_gpu_matmul_vjp() {
+    let trace = TraceContext::new();
     assert!(gpu_available(), "CUDA test requires an available device");
 
     let a_host = f64_tensor(
@@ -269,10 +271,15 @@ fn test_gpu_matmul_vjp() {
         ],
     );
 
-    let a_cpu = TracedTensor::from_tensor_concrete_shape(a_host.duplicate().unwrap()).unwrap();
-    let b_cpu = TracedTensor::from_tensor_concrete_shape(b_host.duplicate().unwrap()).unwrap();
-    let cotangent_cpu =
-        TracedTensor::from_tensor_concrete_shape(cotangent_host.duplicate().unwrap()).unwrap();
+    let a_cpu = trace
+        .from_tensor_concrete_shape(a_host.duplicate().unwrap())
+        .unwrap();
+    let b_cpu = trace
+        .from_tensor_concrete_shape(b_host.duplicate().unwrap())
+        .unwrap();
+    let cotangent_cpu = trace
+        .from_tensor_concrete_shape(cotangent_host.duplicate().unwrap())
+        .unwrap();
     let cpu_engine = cpu_runtime();
     let y_cpu = matmul(&a_cpu, &b_cpu);
     let grad_a_cpu = y_cpu.vjp(&a_cpu, &cotangent_cpu).unwrap();
@@ -354,6 +361,7 @@ fn test_gpu_matmul_vjp() {
 #[test]
 #[ignore = "requires CUDA"]
 fn test_gpu_scale_real_and_scale_complex_match_cpu() {
+    let trace = TraceContext::new();
     use num_complex::Complex64;
     use tenferro_gpu::cuda::{cuda_runtime_engine_registration, download_tensor};
     use tenferro_runtime::{GraphCompiler, Runtime};
@@ -395,8 +403,9 @@ fn test_gpu_scale_real_and_scale_complex_match_cpu() {
          binding: &Tensor,
          apply: &dyn Fn(&TracedTensor) -> Result<TracedTensor, tenferro_runtime::Error>|
          -> Tensor {
-            let placeholder =
-                TracedTensor::input_concrete_shape(binding.dtype(), binding.shape()).unwrap();
+            let placeholder = trace
+                .input_concrete_shape(binding.dtype(), binding.shape())
+                .unwrap();
             let scaled = apply(&placeholder).unwrap();
             // The binding is borrowed, not duplicated: a device-backed tensor cannot
             // be cloned through host data.

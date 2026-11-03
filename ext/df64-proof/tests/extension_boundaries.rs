@@ -17,7 +17,7 @@ use tenferro_df64_proof::extension::{
 };
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TraceContext, TracedTensor};
 use tenferro_tensor::Tensor;
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
@@ -45,16 +45,18 @@ fn runtime_with_module() -> Runtime {
 }
 
 /// Build one traced leaf whose data the program reads.
-fn leaf(values: &[Df64], shape: &[usize]) -> TracedTensor {
-    TracedTensor::from_tensor_concrete_shape_declaring_scalar(
-        external(values.to_vec(), shape.to_vec()),
-        DF64_SCALAR_IDENTITY,
-    )
-    .expect("traced leaf")
+fn leaf(trace: &TraceContext, values: &[Df64], shape: &[usize]) -> TracedTensor {
+    trace
+        .from_tensor_concrete_shape_declaring_scalar(
+            external(values.to_vec(), shape.to_vec()),
+            DF64_SCALAR_IDENTITY,
+        )
+        .expect("traced leaf")
 }
 
-fn preset_leaf(values: &[f64], shape: &[usize]) -> TracedTensor {
-    TracedTensor::from_tensor_concrete_shape(preset(values.to_vec(), shape.to_vec()))
+fn preset_leaf(trace: &TraceContext, values: &[f64], shape: &[usize]) -> TracedTensor {
+    trace
+        .from_tensor_concrete_shape(preset(values.to_vec(), shape.to_vec()))
         .expect("traced leaf")
 }
 
@@ -67,13 +69,15 @@ fn execute(graph: &TracedTensor) -> tenferro_runtime::Result<Vec<Tensor>> {
 
 #[test]
 fn the_factorization_refuses_inputs_it_cannot_factor() {
+    let trace = TraceContext::new();
     // A rank-one input is not a matrix.
-    let vector = leaf(&[Df64::from_f64(1.0), Df64::from_f64(2.0)], &[2]);
+    let vector = leaf(&trace, &[Df64::from_f64(1.0), Df64::from_f64(2.0)], &[2]);
     let error = apply(Arc::new(Df64Qr), &[&vector]).expect_err("a vector is not a matrix");
     assert!(error.to_string().contains("rank-2"), "{error}");
 
     // A wide matrix has more columns than rows.
     let wide = leaf(
+        &trace,
         &[
             Df64::from_f64(1.0),
             Df64::from_f64(0.0),
@@ -91,6 +95,7 @@ fn the_factorization_refuses_inputs_it_cannot_factor() {
     // A zero column has no unit vector.
     // The first column is zero, so the factorization has no unit vector for it.
     let zero_column = leaf(
+        &trace,
         &[
             Df64::zero(),
             Df64::zero(),
@@ -106,23 +111,25 @@ fn the_factorization_refuses_inputs_it_cannot_factor() {
 
 #[test]
 fn the_conversions_refuse_the_scalar_they_do_not_declare() {
+    let trace = TraceContext::new();
     // Narrowing takes the external scalar, not a preset tensor.
-    let ordinary = preset_leaf(&[1.0], &[1]);
+    let ordinary = preset_leaf(&trace, &[1.0], &[1]);
     let error = apply(Arc::new(Df64ToF64), &[&ordinary]).expect_err("preset input");
     assert!(error.to_string().contains("externally defined"), "{error}");
 
     // Widening takes a preset f64 tensor, not the external scalar.
-    let extended = leaf(&[Df64::from_f64(1.0)], &[1]);
+    let extended = leaf(&trace, &[Df64::from_f64(1.0)], &[1]);
     let error = apply(Arc::new(Df64FromF64), &[&extended]).expect_err("external input");
     assert!(error.to_string().contains("preset f64"), "{error}");
 }
 
 #[test]
 fn the_factorization_derivatives_refuse_a_singular_factor() {
+    let trace = TraceContext::new();
     // A zero triangular factor cannot be solved against, in either direction.
-    let q = leaf(&[Df64::from_f64(1.0)], &[1, 1]);
-    let singular = leaf(&[Df64::zero()], &[1, 1]);
-    let cotangent = leaf(&[Df64::from_f64(1.0)], &[1, 1]);
+    let q = leaf(&trace, &[Df64::from_f64(1.0)], &[1, 1]);
+    let singular = leaf(&trace, &[Df64::zero()], &[1, 1]);
+    let cotangent = leaf(&trace, &[Df64::from_f64(1.0)], &[1, 1]);
 
     let adjoint = apply(
         Arc::new(Df64QrVjp::of(false, true)),
@@ -140,6 +147,7 @@ fn the_factorization_derivatives_refuse_a_singular_factor() {
 
 #[test]
 fn a_derivative_rule_refuses_an_operation_outside_its_domain() {
+    let trace = TraceContext::new();
     let rules = SemanticExtensionRuleSet::new()
         .with_primal_vjp(Arc::new(Df64VjpRule))
         .expect("one rule per family");
@@ -151,11 +159,13 @@ fn a_derivative_rule_refuses_an_operation_outside_its_domain() {
 
     // The broadcast is the total sum's adjoint, not a primal operation, so asking for its
     // adjoint is outside the rule's domain.
-    let input = leaf(&[Df64::from_f64(1.0)], &[1]);
+    let input = leaf(&trace, &[Df64::from_f64(1.0)], &[1]);
     let expanded = apply(Arc::new(Df64Expand::new(vec![2])), &[&input])
         .expect("traced broadcast")
         .remove(0);
-    let seed = preset_leaf(&[1.0, 1.0], &[2]);
+    // The seed must carry the loss's scalar identity; a preset f64 cotangent is
+    // refused by the program builder before the rule can answer.
+    let seed = leaf(&trace, &[Df64::from_f64(1.0), Df64::from_f64(1.0)], &[2]);
     let error = ad
         .vjp_many(&expanded, &[&input], &seed)
         .expect_err("the broadcast has no adjoint rule");

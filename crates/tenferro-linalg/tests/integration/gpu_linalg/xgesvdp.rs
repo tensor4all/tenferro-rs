@@ -1,6 +1,6 @@
 use super::*;
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime};
 
 fn complex_input(m: usize, n: usize, batches: usize) -> Tensor {
     tensor_c64(
@@ -90,6 +90,7 @@ fn test_cuda_svd_xgesvdp_rectangular_batched_and_values() {
 #[test]
 #[ignore = "requires CUDA and cuSOLVER Xgesvdp"]
 fn test_cuda_svd_xgesvdp_traced_and_pruned() {
+    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_gpu::cuda::cuda_runtime_engine_registration;
     let input = complex_input(3, 7, 1);
     let mut gpu = gpu_backend();
@@ -97,7 +98,9 @@ fn test_cuda_svd_xgesvdp_traced_and_pruned() {
     let options = SvdOptions::default().driver(SvdDriver::Xgesvdp);
     let expected =
         with_cuda_linalg_session(&mut gpu, |s| s.svd_with_options(&device, options)).unwrap();
-    let traced = TracedTensor::from_tensor_concrete_shape(complex_input(3, 7, 1)).unwrap();
+    let traced = trace
+        .from_tensor_concrete_shape(complex_input(3, 7, 1))
+        .unwrap();
     let (u, s, vt) = traced.svd_with_options(options).unwrap();
     // A separate identity forces an S-only op instead of reusing the full SVD.
     let (_, only_s, _) = traced

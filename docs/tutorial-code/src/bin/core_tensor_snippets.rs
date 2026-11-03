@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fn snippet_eager_operations_1() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_1
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TypedTensor};
+use tenferro_runtime::{TraceContext, Tensor, TypedTensor};
 
 let mut engine = CpuEngine::serial();
         // snippet-end:eager_operations_1
@@ -552,10 +552,11 @@ Ok(())
     fn snippet_tensor_operations_19() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_19
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+let trace = TraceContext::new();
 
-let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
-let b = TracedTensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
+let a = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+let b = trace.from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
 let sum = (&a + &b).unwrap();
 let product = (&a * &b).unwrap();
 

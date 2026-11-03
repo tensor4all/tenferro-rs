@@ -15,7 +15,7 @@ use tenferro_df64_proof::extension::{module, Df64QrVjp, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{
-    ExecutionEngine, ExtensionCacheSelector, GraphCompiler, Runtime, TracedTensor,
+    ExecutionEngine, ExtensionCacheSelector, GraphCompiler, Runtime, TraceContext, TracedTensor,
 };
 use tenferro_tensor::Tensor;
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
@@ -47,12 +47,10 @@ fn runtime() -> (Runtime, CpuEngine) {
     (builder.build().expect("runtime with the module"), backend)
 }
 
-fn leaf(values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
-    TracedTensor::from_tensor_concrete_shape_declaring_scalar(
-        external(values, shape),
-        DF64_SCALAR_IDENTITY,
-    )
-    .expect("traced leaf")
+fn leaf(trace: &TraceContext, values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
+    trace
+        .from_tensor_concrete_shape_declaring_scalar(external(values, shape), DF64_SCALAR_IDENTITY)
+        .expect("traced leaf")
 }
 
 fn payload(tensor: &Tensor) -> Vec<Df64> {
@@ -68,13 +66,26 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
 
 #[test]
 fn clearing_the_accounted_cache_leaves_a_live_value_unchanged() {
+    let trace = TraceContext::new();
     // The adjoint is the body that leaves scratch in the accounted cache, so it is the one
     // whose retention the clear has to release.
     let order = 8;
     let elements = order * order;
-    let q_leaf = leaf(vec![Df64::from_f64(0.5); elements], vec![order, order]);
-    let r_leaf = leaf(vec![Df64::from_f64(2.0); elements], vec![order, order]);
-    let cotangent_leaf = leaf(vec![Df64::from_f64(1.0); elements], vec![order, order]);
+    let q_leaf = leaf(
+        &trace,
+        vec![Df64::from_f64(0.5); elements],
+        vec![order, order],
+    );
+    let r_leaf = leaf(
+        &trace,
+        vec![Df64::from_f64(2.0); elements],
+        vec![order, order],
+    );
+    let cotangent_leaf = leaf(
+        &trace,
+        vec![Df64::from_f64(1.0); elements],
+        vec![order, order],
+    );
     let adjoint = apply(
         Arc::new(Df64QrVjp::of(false, true)),
         &[&q_leaf, &r_leaf, &cotangent_leaf],

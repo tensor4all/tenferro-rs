@@ -1,5 +1,5 @@
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime};
 
 fn cpu_runtime(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>> {
     let mut builder = Runtime::builder();
@@ -8,8 +8,9 @@ fn cpu_runtime(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    let b = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
+    let trace = tenferro_runtime::TraceContext::new();
+    let a = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    let b = trace.from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
     let sum = (&a + &b)?;
 
     let mut compiler = GraphCompiler::new();

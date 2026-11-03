@@ -3,12 +3,14 @@ use tenferro_linalg::{
     EighDriver, EighGauge, EighOptions, LinalgBackend, QrGauge, QrOptions, RankRevealingQrOptions,
     SvdDriver, SvdGauge, SvdOptions, TracedTensorLinalgExt,
 };
-use tenferro_runtime::{DType, Error, GraphCompiler, Runtime, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{
+    DType, Error, GraphCompiler, Runtime, Tensor, TraceContext, TracedTensor, TypedTensor,
+};
 use tenferro_tensor::Error as TensorError;
 
 use super::support;
 
-fn traced_with_dtype(dtype: DType, shape: Vec<usize>) -> TracedTensor {
+fn traced_with_dtype(trace: &TraceContext, dtype: DType, shape: Vec<usize>) -> TracedTensor {
     let n_elements = shape.iter().product();
     let tensor = match dtype {
         DType::F32 => Tensor::from_typed::<f32>(
@@ -38,19 +40,21 @@ fn traced_with_dtype(dtype: DType, shape: Vec<usize>) -> TracedTensor {
         // no fixture and would change what these tests assert.
         DType::External(_) => unreachable!("test fixtures cover the preset dtypes"),
     };
-    TracedTensor::from_tensor_concrete_shape(tensor).unwrap()
+    trace.from_tensor_concrete_shape(tensor).unwrap()
 }
 
 #[test]
 fn rank_revealing_qr_traced_fixed_outputs_execute() {
-    let a = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(
-            vec![3, 3],
-            vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+    let trace = tenferro_runtime::TraceContext::new();
+    let a = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(
+                vec![3, 3],
+                vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    )
-    .unwrap();
+        .unwrap();
     let result = a
         .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-12))
         .unwrap();
@@ -74,10 +78,12 @@ fn rank_revealing_qr_traced_fixed_outputs_execute() {
 
 #[test]
 fn svd_executes_after_runtime_registration() {
-    let a = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
-    )
-    .unwrap();
+    let trace = tenferro_runtime::TraceContext::new();
+    let a = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
+        )
+        .unwrap();
     let (u, s, vt) = a.svd().unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -130,10 +136,12 @@ fn concrete_decomposition_options_execute_through_backend_defaults() {
 
 #[test]
 fn traced_decomposition_options_execute_through_registered_runtime() {
-    let a = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
-    )
-    .unwrap();
+    let trace = tenferro_runtime::TraceContext::new();
+    let a = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
+        )
+        .unwrap();
     let (u, s, vt) = a
         .svd_with_options(
             SvdOptions::default()
@@ -169,12 +177,13 @@ fn traced_decomposition_options_execute_through_registered_runtime() {
 
 #[test]
 fn cpu_ignores_explicit_svd_driver_on_concrete_and_traced_paths() {
+    let trace = TraceContext::new();
     for driver in [SvdDriver::Gesvd, SvdDriver::Gesvdj, SvdDriver::Xgesvdp] {
-        check_cpu_ignores_svd_driver(driver);
+        check_cpu_ignores_svd_driver(&trace, driver);
     }
 }
 
-fn check_cpu_ignores_svd_driver(driver: SvdDriver) {
+fn check_cpu_ignores_svd_driver(trace: &TraceContext, driver: SvdDriver) {
     // `SvdDriver` selects a cuSOLVER routine; CPU providers have one SVD
     // kernel, so a forced driver must execute and match the default policy
     // bit-for-bit on the same host.
@@ -217,10 +226,9 @@ fn check_cpu_ignores_svd_driver(driver: SvdDriver) {
         default_outputs[1].as_slice::<f64>().unwrap(),
     );
 
-    let traced = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![3, 2], data).unwrap(),
-    )
-    .unwrap();
+    let traced = trace
+        .from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3, 2], data).unwrap())
+        .unwrap();
     let (u, s, vt) = traced
         .svd_with_options(SvdOptions::default().driver(driver))
         .unwrap();
@@ -254,6 +262,7 @@ fn check_cpu_ignores_svd_driver(driver: SvdDriver) {
 
 #[test]
 fn cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths() {
+    let trace = tenferro_runtime::TraceContext::new();
     // `EighDriver` selects a cuSOLVER routine; CPU providers have one eigh
     // kernel, so a forced driver must execute and match the default policy on
     // the same host. As with `SvdDriver`, that is a per-entry-point property:
@@ -297,10 +306,9 @@ fn cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths() {
         default_outputs[0].as_slice::<f64>().unwrap(),
     );
 
-    let traced = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![3, 3], data).unwrap(),
-    )
-    .unwrap();
+    let traced = trace
+        .from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3, 3], data).unwrap())
+        .unwrap();
     let (w, v) = traced
         .eigh_with_options(EighOptions::default().driver(EighDriver::Syevj))
         .unwrap();
@@ -350,8 +358,9 @@ fn assert_spectra_close(left: &[f64], right: &[f64]) {
 
 #[test]
 fn complex_svd_runtime_singular_values_match_traced_real_dtype() {
-    let a =
-        TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
+    let trace = tenferro_runtime::TraceContext::new();
+    let a = trace
+        .from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(
                 vec![2, 2],
                 vec![
@@ -365,12 +374,13 @@ fn complex_svd_runtime_singular_values_match_traced_real_dtype() {
         ))
         .unwrap();
     let (_u, s, _vt) = a.svd().unwrap();
-    assert_eq!(s.dtype, DType::F64);
+    assert_eq!(s.dtype(), DType::F64);
 
-    let weights = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![2], vec![0.5_f64, 2.0]).unwrap(),
-    )
-    .unwrap();
+    let weights = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![2], vec![0.5_f64, 2.0]).unwrap(),
+        )
+        .unwrap();
     let weighted = (&s * &weights).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -385,10 +395,12 @@ fn complex_svd_runtime_singular_values_match_traced_real_dtype() {
 
 #[test]
 fn spectral_norm_compile_prunes_residual_svd_to_values_only_op() {
-    let a = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![3, 2], vec![3.0_f64, 0.1, 0.2, 0.3, 2.0, 0.4]).unwrap(),
-    )
-    .unwrap();
+    let trace = tenferro_runtime::TraceContext::new();
+    let a = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![3, 2], vec![3.0_f64, 0.1, 0.2, 0.3, 2.0, 0.4]).unwrap(),
+        )
+        .unwrap();
     let norm = a.norm(Some(2.0), Some(&[0, 1]), false).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -418,10 +430,12 @@ fn spectral_norm_compile_prunes_residual_svd_to_values_only_op() {
 
 #[test]
 fn missing_runtime_reports_linalg_family() {
-    let a = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
-    )
-    .unwrap();
+    let trace = TraceContext::new();
+    let a = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
+        )
+        .unwrap();
     let y = a.cholesky().unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -441,10 +455,12 @@ fn missing_runtime_reports_linalg_family() {
 
 #[test]
 fn full_piv_lu_multi_output_slots_are_preserved() {
-    let a = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]).unwrap(),
-    )
-    .unwrap();
+    let trace = TraceContext::new();
+    let a = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]).unwrap(),
+        )
+        .unwrap();
     let (p, l, u, q, parity) = a.full_piv_lu().unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -460,23 +476,27 @@ fn full_piv_lu_multi_output_slots_are_preserved() {
 
 #[test]
 fn traced_metadata_matches_linalg_extension_shapes_and_dtypes() {
-    let rectangular = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![3, 4, 2], vec![1.0_f64; 24]).unwrap(),
-    )
-    .unwrap();
-    let square = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![3, 3, 2], vec![1.0_f64; 18]).unwrap(),
-    )
-    .unwrap();
-    let complex_square =
-        TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
+    let trace = TraceContext::new();
+    let rectangular = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![3, 4, 2], vec![1.0_f64; 24]).unwrap(),
+        )
+        .unwrap();
+    let square = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![3, 3, 2], vec![1.0_f64; 18]).unwrap(),
+        )
+        .unwrap();
+    let complex_square = trace
+        .from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(vec![2, 2], vec![Complex64::new(1.0, 0.0); 4]).unwrap(),
         ))
         .unwrap();
-    let ints = TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<i64>(
-        TypedTensor::from_vec_col_major(vec![2, 2], vec![1, 0, 0, 2]).unwrap(),
-    ))
-    .unwrap();
+    let ints = trace
+        .from_tensor_concrete_shape(Tensor::from_typed::<i64>(
+            TypedTensor::from_vec_col_major(vec![2, 2], vec![1, 0, 0, 2]).unwrap(),
+        ))
+        .unwrap();
 
     let (u, s, vt) = rectangular.svd().unwrap();
     assert_eq!(u.concrete_shape().unwrap(), vec![3, 3, 2]);
@@ -488,28 +508,29 @@ fn traced_metadata_matches_linalg_extension_shapes_and_dtypes() {
     assert_eq!(r.concrete_shape().unwrap(), vec![3, 4, 2]);
 
     let (values, vectors) = ints.eig().unwrap();
-    assert_eq!(values.dtype, DType::C64);
-    assert_eq!(vectors.dtype, DType::C64);
+    assert_eq!(values.dtype(), DType::C64);
+    assert_eq!(vectors.dtype(), DType::C64);
 
     let (eigh_values, eigh_vectors) = square.eigh().unwrap();
     assert_eq!(eigh_values.concrete_shape().unwrap(), vec![3, 2]);
     assert_eq!(eigh_vectors.concrete_shape().unwrap(), vec![3, 3, 2]);
 
     let (complex_eigh_values, complex_eigh_vectors) = complex_square.eigh().unwrap();
-    assert_eq!(complex_eigh_values.dtype, DType::F64);
-    assert_eq!(complex_eigh_vectors.dtype, DType::C64);
+    assert_eq!(complex_eigh_values.dtype(), DType::F64);
+    assert_eq!(complex_eigh_vectors.dtype(), DType::C64);
 
     let (p, l, u, q, parity) = complex_square.full_piv_lu().unwrap();
-    assert_eq!(p.dtype, DType::C64);
-    assert_eq!(l.dtype, DType::C64);
-    assert_eq!(u.dtype, DType::C64);
-    assert_eq!(q.dtype, DType::C64);
-    assert_eq!(parity.dtype, DType::F64);
-    assert_eq!(parity.rank, 0);
+    assert_eq!(p.dtype(), DType::C64);
+    assert_eq!(l.dtype(), DType::C64);
+    assert_eq!(u.dtype(), DType::C64);
+    assert_eq!(q.dtype(), DType::C64);
+    assert_eq!(parity.dtype(), DType::F64);
+    assert_eq!(parity.rank(), 0);
 }
 
 #[test]
 fn traced_metadata_promotes_linalg_dtypes_broadly() {
+    let trace = TraceContext::new();
     let promotion_cases = [
         (DType::Bool, DType::I32, DType::I32),
         (DType::I32, DType::I64, DType::I64),
@@ -523,28 +544,29 @@ fn traced_metadata_promotes_linalg_dtypes_broadly() {
     ];
 
     for (a_dtype, b_dtype, expected_dtype) in promotion_cases {
-        let a = traced_with_dtype(a_dtype, vec![2, 2]);
-        let b = traced_with_dtype(b_dtype, vec![2, 1]);
+        let a = traced_with_dtype(&trace, a_dtype, vec![2, 2]);
+        let b = traced_with_dtype(&trace, b_dtype, vec![2, 1]);
         let solved = a.solve(&b).unwrap();
-        assert_eq!(solved.dtype, expected_dtype);
+        assert_eq!(solved.dtype(), expected_dtype);
         assert_eq!(solved.concrete_shape().unwrap(), vec![2, 1]);
     }
 
-    let triangular = traced_with_dtype(DType::Bool, vec![2, 2])
+    let triangular = traced_with_dtype(&trace, DType::Bool, vec![2, 2])
         .triangular_solve(
-            &traced_with_dtype(DType::F32, vec![2, 1]),
+            &traced_with_dtype(&trace, DType::F32, vec![2, 1]),
             true,
             false,
             true,
             true,
         )
         .unwrap();
-    assert_eq!(triangular.dtype, DType::F32);
+    assert_eq!(triangular.dtype(), DType::F32);
     assert_eq!(triangular.concrete_shape().unwrap(), vec![2, 1]);
 }
 
 #[test]
 fn traced_metadata_covers_eig_output_dtype_rules() {
+    let trace = TraceContext::new();
     for (input_dtype, expected_dtype) in [
         (DType::F64, DType::C64),
         (DType::C64, DType::C64),
@@ -554,10 +576,10 @@ fn traced_metadata_covers_eig_output_dtype_rules() {
         (DType::I64, DType::C64),
         (DType::Bool, DType::C64),
     ] {
-        let a = traced_with_dtype(input_dtype, vec![2, 2]);
+        let a = traced_with_dtype(&trace, input_dtype, vec![2, 2]);
         let (values, vectors) = a.eig().unwrap();
-        assert_eq!(values.dtype, expected_dtype);
-        assert_eq!(vectors.dtype, expected_dtype);
+        assert_eq!(values.dtype(), expected_dtype);
+        assert_eq!(vectors.dtype(), expected_dtype);
         assert_eq!(values.concrete_shape().unwrap(), vec![2]);
         assert_eq!(vectors.concrete_shape().unwrap(), vec![2, 2]);
     }
@@ -565,8 +587,9 @@ fn traced_metadata_covers_eig_output_dtype_rules() {
 
 #[test]
 fn traced_norm_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
+    let trace = TraceContext::new();
     for dtype in [DType::I32, DType::I64, DType::Bool] {
-        let tensor = traced_with_dtype(dtype, vec![3]);
+        let tensor = traced_with_dtype(&trace, dtype, vec![3]);
         let err = match tensor.norm(Some(2.0), Some(&[0]), false) {
             Ok(_) => panic!("expected unsupported dtype error for {dtype:?}"),
             Err(err) => err,
@@ -605,7 +628,8 @@ fn traced_norm_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
 
 #[test]
 fn traced_inv_rejects_rank_less_than_two_without_panicking() {
-    let scalar = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let trace = TraceContext::new();
+    let scalar = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
 
     let err = scalar.inv().unwrap_err();
 
@@ -643,8 +667,11 @@ fn assert_linalg_rank_mismatch<T>(name: &str, result: tenferro_runtime::Result<T
 
 #[test]
 fn traced_linalg_metadata_helpers_reject_rank_less_than_two_without_panicking() {
-    let scalar = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
-    let vector = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let trace = TraceContext::new();
+    let scalar = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let vector = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap();
 
     assert_linalg_rank_mismatch("svd scalar", scalar.svd(), 0);
     assert_linalg_rank_mismatch("svd vector", vector.svd(), 1);
@@ -663,7 +690,8 @@ fn traced_linalg_metadata_helpers_reject_rank_less_than_two_without_panicking() 
 
 #[test]
 fn traced_linalg_helpers_reject_symbolic_shapes_without_panicking() {
-    let matrix = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let trace = TraceContext::new();
+    let matrix = trace.input_symbolic_shape(DType::F64, 2).unwrap();
 
     for (op, result) in [
         ("inv", matrix.inv()),
@@ -690,11 +718,15 @@ fn traced_linalg_helpers_reject_symbolic_shapes_without_panicking() {
 
 #[test]
 fn traced_norm_rejects_duplicate_axis_before_empty_shortcut() {
-    let nonempty = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let empty = TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![0, 2], vec![]).unwrap(),
-    ))
-    .unwrap();
+    let trace = TraceContext::new();
+    let nonempty = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap();
+    let empty = trace
+        .from_tensor_concrete_shape(Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![0, 2], vec![]).unwrap(),
+        ))
+        .unwrap();
 
     for err in [
         nonempty.norm(None, Some(&[0, 0]), false).unwrap_err(),
@@ -715,7 +747,10 @@ fn traced_norm_rejects_duplicate_axis_before_empty_shortcut() {
 
 #[test]
 fn traced_norm_rejects_out_of_range_axis_without_panicking() {
-    let tensor = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let trace = TraceContext::new();
+    let tensor = trace
+        .from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])
+        .unwrap();
 
     let err = tensor.norm(Some(2.0), Some(&[5]), false).unwrap_err();
 
@@ -730,8 +765,9 @@ fn traced_norm_rejects_out_of_range_axis_without_panicking() {
 
 #[test]
 fn traced_pinv_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
+    let trace = TraceContext::new();
     for dtype in [DType::I32, DType::I64, DType::Bool] {
-        let tensor = traced_with_dtype(dtype, vec![2, 2]);
+        let tensor = traced_with_dtype(&trace, dtype, vec![2, 2]);
         let err = match tensor.pinv() {
             Ok(_) => panic!("expected unsupported dtype error for {dtype:?}"),
             Err(err) => err,
@@ -776,8 +812,9 @@ fn assert_unsupported_dtype_at_construction(
 
 #[test]
 fn traced_svd_eigh_qr_cholesky_reject_integer_and_bool_dtypes_at_construction() {
+    let trace = TraceContext::new();
     for dtype in [DType::I32, DType::I64, DType::Bool] {
-        let tensor = traced_with_dtype(dtype, vec![2, 2]);
+        let tensor = traced_with_dtype(&trace, dtype, vec![2, 2]);
         assert_unsupported_dtype_at_construction(tensor.svd().map(|_| ()), "svd", dtype);
         assert_unsupported_dtype_at_construction(tensor.svd_full().map(|_| ()), "svd_full", dtype);
         assert_unsupported_dtype_at_construction(tensor.eigh().map(|_| ()), "eigh", dtype);

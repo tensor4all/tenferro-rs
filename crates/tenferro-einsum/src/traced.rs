@@ -173,7 +173,9 @@ impl TraceContextEinsumExt for TraceContext {
         subscripts: &str,
         optimize: EinsumOptimize,
     ) -> Result<TraceValue> {
-        let parsed = cached_subscripts(self.extension_caches_mut(), subscripts)?;
+        let parsed = self
+            .with_extension_caches(|caches| cached_subscripts(caches, subscripts))
+            .map_err(semantic_trace_error)??;
         self.einsum_notation_with(inputs, &parsed.notation, optimize)
     }
 
@@ -337,7 +339,7 @@ fn tensordot(
     rhs: &TracedTensor,
     axes: TensorDotAxes<'_>,
 ) -> Result<TracedTensor> {
-    let config = crate::tensordot::dot_general_config(axes, lhs.rank, rhs.rank)?;
+    let config = crate::tensordot::dot_general_config(axes, lhs.rank(), rhs.rank())?;
     crate::tensordot::validate_traced_contract_dims(lhs, rhs, &config)?;
     lhs.dot_general(rhs, config).map_err(Error::Runtime)
 }

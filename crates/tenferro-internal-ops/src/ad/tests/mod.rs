@@ -334,3 +334,40 @@ fn representative_graph_values_all_have_queryable_tensor_metadata() {
         );
     }
 }
+
+#[test]
+fn shape_guard_failure_is_a_typed_boundary_error() {
+    use std::error::Error as _;
+
+    let mut ctx = ShapeGuardContext::default();
+    let missing = ValueRef::External(input_key(1));
+    let failure = ctx.shape_of(&missing).unwrap_err();
+
+    let typed = failure.typed_source().clone();
+    assert!(matches!(
+        typed,
+        crate::ad::context::ShapeGuardError::MissingMetadata { .. }
+    ));
+    // The boundary error is its source, and it keeps the source's message.
+    assert_eq!(failure.to_string(), typed.to_string());
+    assert!(failure.source().is_some());
+    assert!(failure == failure.clone());
+    assert_eq!(failure.clone().into_typed_source(), typed);
+
+    // Different values are different failures, and a different cause is too.
+    let other = ctx.shape_of(&ValueRef::External(input_key(2))).unwrap_err();
+    assert!(failure != other);
+    let non_exact = {
+        let mut ctx = ShapeGuardContext::default();
+        let key = input_key(3);
+        ctx.insert_metadata(
+            key.clone(),
+            TensorMeta::with_extents(
+                DType::F64,
+                vec![ShapeExtent::upper_bound(SymDim::from(4usize))],
+            ),
+        );
+        ctx.shape_of(&ValueRef::External(key)).unwrap_err()
+    };
+    assert!(failure != non_exact);
+}
