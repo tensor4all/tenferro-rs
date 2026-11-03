@@ -53,7 +53,7 @@ reuses its stream, handles and caches:
         &backend,
     )?)?;
     let prepared_runtime = prepared_builder.build()?;
-    let x = tenferro_runtime::TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 1)?;
+    let x = trace.input_symbolic_shape(tenferro_runtime::DType::F64, 1)?;
     let y = (&x * &x)?;
     let program = tenferro_runtime::GraphCompiler::new()
         .compile_with_input_specs(&y, &[(&x, tenferro_runtime::DType::F64, &[4])])?;

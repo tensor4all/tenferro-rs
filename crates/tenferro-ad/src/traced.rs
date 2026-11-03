@@ -1,6 +1,7 @@
 //! Traced reverse- and forward-mode AD on the semantic program of a trace context.
 //!
-//! A differentiated output is snapshotted out of its [`TraceContext`], the
+//! A differentiated output is snapshotted out of its
+//! [`TraceContext`](tenferro_runtime::TraceContext), the
 //! program-level transform runs on that snapshot, and the derivative program is
 //! imported back into the same context, so gradients compose with further traced
 //! operations and with higher-order transforms.
@@ -204,6 +205,27 @@ fn tensor_meta_of(tensor: &TracedTensor) -> Result<TensorMeta> {
     Ok(TensorMeta::exact(tensor.dtype(), extents))
 }
 
+/// Metadata a cotangent seed has to match.
+///
+/// The differentiated output's attached data wins over the program metadata: a
+/// symbolic output that carries data still knows the concrete cotangent shape.
+fn cotangent_meta_of(
+    output: &TracedTensor,
+    source: &AdSource,
+    transform: &'static str,
+) -> Result<TensorMeta> {
+    match output.attached_value() {
+        Some(data) => Ok(TensorMeta::exact(
+            data.dtype(),
+            data.shape()
+                .iter()
+                .map(|&size| tenferro_ops::SymDim::from(size))
+                .collect(),
+        )),
+        None => source_output_metadata(source, transform),
+    }
+}
+
 /// Metadata of the differentiated output, used to validate a cotangent seed.
 fn source_output_metadata(source: &AdSource, transform: &'static str) -> Result<TensorMeta> {
     let Some(&output) = source.frozen.program.outputs().first() else {
@@ -226,8 +248,26 @@ fn validate_seed_against_program(
     _source: &AdSource,
     data: &Arc<RetainedValue>,
     expected: TensorMeta,
+    input_index: usize,
 ) -> Result<()> {
-    validate_seed_tensor(transform, 0, data, &expected)
+    validate_seed_tensor(transform, input_index, data, &expected)
+}
+
+/// Metadata a seed has to match.
+///
+/// A symbolic value that carries attached data still knows the concrete shape its
+/// seed must have, so that shape wins over the symbolic extents.
+fn seed_meta_of(tensor: &TracedTensor) -> Result<TensorMeta> {
+    match tensor.attached_value() {
+        Some(data) => Ok(TensorMeta::exact(
+            data.dtype(),
+            data.shape()
+                .iter()
+                .map(|&size| tenferro_ops::SymDim::from(size))
+                .collect(),
+        )),
+        None => tensor_meta_of(tensor),
+    }
 }
 
 fn program_metadata_to_tensor_meta(
@@ -300,12 +340,6 @@ fn vjp_many_impl(
             format!("{transform} cotangent must have concrete tensor data"),
         )
     })?;
-    validate_seed_against_program(
-        transform,
-        &source,
-        &cotangent_data,
-        source_output_metadata(&source, transform)?,
-    )?;
     let seed = seed_leaf(output, output.trace_value(), &cotangent_data, transform)?;
     let active_outputs = vec![true; source.frozen.program.outputs().len()];
     let derivative = ad_context(rules, cache)
@@ -319,6 +353,13 @@ fn vjp_many_impl(
     else {
         return Ok(vec![None; wrts.len()]);
     };
+    validate_seed_against_program(
+        transform,
+        &source,
+        &cotangent_data,
+        cotangent_meta_of(output, &source, transform)?,
+        seed_input_index,
+    )?;
     let mut requested = Vec::with_capacity(wrts.len());
     let mut roots = Vec::new();
     for (index, slot) in slots.iter().enumerate() {
@@ -426,7 +467,13 @@ fn jvp_many_impl(
         else {
             continue;
         };
-        validate_seed_against_program(transform, &source, &data, tensor_meta_of(wrt)?)?;
+        validate_seed_against_program(
+            transform,
+            &source,
+            &data,
+            seed_meta_of(wrt)?,
+            seed_input_index,
+        )?;
         let seed = seed_leaf(output, wrt.trace_value(), &data, transform)?;
         seeds.push((seed_input_index, seed));
     }
@@ -879,7 +926,10 @@ pub trait TracedTensorAdExt {
     ///
     /// # Errors
     ///
-    /// Returns the same typed failures as [`grad_many`](Self::grad_many).
+    /// Returns [`Error::NonScalarGrad`] for a non-scalar output,
+    /// [`Error::UnsupportedAdRule`] when a rule is unavailable, or a typed
+    /// validation/runtime-state error from the snapshot or the transform; the
+    /// gradients follow [`grad_many`](Self::grad_many).
     fn value_and_grad(
         &self,
         wrts: &[&TracedTensor],

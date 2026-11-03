@@ -1,5 +1,5 @@
 use super::*;
-use tenferro_runtime::{TraceContext, GraphCompiler, TracedTensor};
+use tenferro_runtime::GraphCompiler;
 
 #[test]
 fn mean_square_computes_correctly() {

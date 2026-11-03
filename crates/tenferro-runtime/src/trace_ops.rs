@@ -231,8 +231,11 @@ impl TraceContext {
     ///
     /// # Errors
     ///
-    /// Returns the same typed failures as
-    /// [`input_concrete_shape`](Self::input_concrete_shape).
+    /// Returns [`Error::RuntimeState`] when the trace cannot accept another input
+    /// or a binding already exists for it, and [`Error::RuntimeStateSource`]
+    /// wrapping `ProgramBuildError::ExternalScalarWithoutIdentity` when an
+    /// externally defined scalar dtype reaches the builder without the declared
+    /// identity.
     pub fn input_concrete_shape_declaring_scalar(
         &self,
         dtype: DType,
@@ -309,8 +312,11 @@ impl TraceContext {
     ///
     /// # Errors
     ///
-    /// Returns the same typed failures as
-    /// [`from_tensor_concrete_shape`](Self::from_tensor_concrete_shape).
+    /// Returns [`Error::Validation`] for a malformed tensor, [`Error::RuntimeState`]
+    /// when the trace cannot bind the constant, and [`Error::RuntimeStateSource`]
+    /// wrapping `ProgramBuildError::ExternalScalarWithoutIdentity` when an
+    /// externally defined scalar dtype reaches the builder without the declared
+    /// identity.
     pub fn from_tensor_concrete_shape_declaring_scalar(
         &self,
         tensor: Tensor,

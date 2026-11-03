@@ -6,6 +6,41 @@
 
 #[rustfmt::skip]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    snippet_context_constructor_migration()?;
+
+    // snippet source: docs/guides/custom-operations.md:146
+    fn snippet_context_constructor_migration() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:context_constructor_migration
+use tenferro_cpu::CpuEngine;
+use tenferro_runtime::{
+    DType, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TraceContext,
+};
+
+// A traced value belongs to the context that issued it.
+let trace = TraceContext::new();
+let input = trace.input_concrete_shape(DType::F64, &[2])?;
+let doubled = input.scale_real(2.0)?;
+
+let mut compiler = GraphCompiler::new();
+let program = compiler.compile_with_input_specs(&doubled, &[(&input, DType::F64, &[2])])?;
+
+let mut engine = CpuEngine::serial();
+let mut builder = Runtime::builder();
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
+let runtime = builder.build()?;
+let data = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
+let reads = [TensorRead::from_tensor(&data)];
+let prepared = runtime.prepare(&program, &reads, &[engine.target()])?;
+let value = runtime
+    .run(&mut [&mut engine], &prepared, &reads)?
+    .pop()
+    .unwrap()
+    .into_tensor(&mut engine)?;
+assert_eq!(value.as_slice::<f64>()?, &[2.0, 6.0]);
+        // snippet-end:context_constructor_migration
+        Ok(())
+    }
+
     snippet_sparse_extension_1()?;
 
     // snippet source: docs/tutorials/sparse-extension.md:16

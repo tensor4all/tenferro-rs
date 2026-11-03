@@ -48,7 +48,7 @@ concrete tensor types:
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_1 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TypedTensor};
+use tenferro_runtime::{TraceContext, Tensor, TypedTensor};
 
 let mut engine = CpuEngine::serial();
 ```

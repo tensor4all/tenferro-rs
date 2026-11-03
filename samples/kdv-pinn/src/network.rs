@@ -4,7 +4,7 @@
 //! computational graph can be compiled once and executed many times with
 //! different concrete parameter bindings.
 
-use tenferro_runtime::{TraceContext, DType, DotGeneralConfig, Result, TracedTensor};
+use tenferro_runtime::{DType, DotGeneralConfig, Result, TracedTensor};
 use tenferro_tensor::Tensor;
 
 /// A fully-connected layer using `TracedTensor` placeholders for weight and bias.

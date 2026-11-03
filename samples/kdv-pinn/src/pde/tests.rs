@@ -1,6 +1,6 @@
 use super::*;
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_runtime::{TraceContext, DType, GraphCompiler, Result, TracedTensor};
+use tenferro_runtime::{DType, GraphCompiler, Result, TracedTensor};
 use tenferro_tensor::Tensor;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
