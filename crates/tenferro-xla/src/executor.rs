@@ -34,10 +34,11 @@ impl fmt::Debug for XlaExecutorOptions {
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::{GraphCompiler, TracedTensor};
+/// use tenferro_runtime::{TraceContext, GraphCompiler, TracedTensor};
 /// use tenferro_xla::XlaExecutor;
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let y = x.neg().unwrap();
 /// let program = compiler.compile(&y).unwrap();
@@ -186,10 +187,11 @@ impl XlaExecutor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{TraceContext, GraphCompiler, TracedTensor};
     /// use tenferro_xla::XlaExecutor;
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let y = x.neg().unwrap();
     /// let program = compiler.compile(&y).unwrap();
@@ -215,10 +217,11 @@ impl XlaExecutor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{TraceContext, GraphCompiler, TracedTensor};
     /// use tenferro_xla::XlaExecutor;
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let y = x.neg().unwrap();
     /// let program = compiler.compile(&y).unwrap();
@@ -246,11 +249,12 @@ impl XlaExecutor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{TraceContext, GraphCompiler, TracedTensor};
     /// use tenferro_tensor::Tensor;
     /// use tenferro_xla::{Error, XlaExecutor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let y = x.neg().unwrap();
     /// let program = compiler.compile(&y).unwrap();
@@ -297,11 +301,12 @@ impl XlaExecutor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{TraceContext, GraphCompiler, TracedTensor};
     /// use tenferro_tensor::Tensor;
     /// use tenferro_xla::{Error, XlaExecutor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let y = x.neg().unwrap();
     /// let program = compiler.compile(&y).unwrap();
@@ -331,11 +336,12 @@ impl XlaExecutor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{TraceContext, GraphCompiler, TracedTensor};
     /// use tenferro_tensor::Tensor;
     /// use tenferro_xla::{Error, XlaExecutor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let y = x.neg().unwrap();
     /// let program = compiler.compile(&y).unwrap();
@@ -358,11 +364,12 @@ impl XlaExecutor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{TraceContext, GraphCompiler, TracedTensor};
     /// use tenferro_tensor::Tensor;
     /// use tenferro_xla::{Error, XlaExecutor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let y = x.neg().unwrap();
     /// let program = compiler.compile(&y).unwrap();
@@ -408,7 +415,7 @@ fn single_output_tensor(mut outputs: Vec<Tensor>) -> Result<Tensor> {
 mod tests {
     use super::{single_output_tensor, XlaExecutor, XlaExecutorOptions};
     use crate::Error;
-    use tenferro_runtime::{GraphCompiler, TracedTensor};
+    use tenferro_runtime::GraphCompiler;
     use tenferro_tensor::Tensor;
 
     #[test]
@@ -424,7 +431,8 @@ mod tests {
 
     #[test]
     fn default_executor_reports_missing_pjrt_before_dispatch() {
-        let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+        let trace = tenferro_runtime::TraceContext::new();
+        let x = trace.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
         let mut compiler = GraphCompiler::new();
         let program = compiler.compile(&x.neg().unwrap()).unwrap();
         let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
