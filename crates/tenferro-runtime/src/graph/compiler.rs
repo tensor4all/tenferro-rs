@@ -185,9 +185,10 @@ impl GraphCompiler {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Validation`] with `InvalidArgument` when the outputs come
-    /// from different contexts, or any snapshot/validation failure from
-    /// [`compile`](Self::compile).
+    /// Returns `Error::Validation` with `ValidationError::InvalidArgument` when
+    /// the output list is empty (`argument: "outputs"`) or when an output belongs
+    /// to a different trace context, and the typed snapshot error from
+    /// [`compile`](Self::compile) when the program cannot be frozen.
     pub fn compile_many(&mut self, outputs: &[&TracedTensor]) -> Result<CompiledGraph> {
         let Some(first) = outputs.first() else {
             return Err(Error::invalid_argument(

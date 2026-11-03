@@ -359,3 +359,169 @@ fn generic_constant_constructor_sets_dtype_for_each_scalar() {
         DType::C32
     );
 }
+
+/// One instance of every variant whose equality is a payload comparison.
+fn dim_const(value: usize) -> crate::dim_expr::DimExpr {
+    crate::dim_expr::DimExpr::Const(value)
+}
+
+fn all_variants_sample() -> Vec<StdTensorOp> {
+    use tenferro_tensor::{config::SliceConfig, DotGeneralConfig};
+
+    vec![
+        StdTensorOp::Add,
+        StdTensorOp::Sub,
+        StdTensorOp::Mul,
+        StdTensorOp::Div,
+        StdTensorOp::Rem,
+        StdTensorOp::Neg,
+        StdTensorOp::Conj,
+        StdTensorOp::Abs,
+        StdTensorOp::Sign,
+        StdTensorOp::Maximum,
+        StdTensorOp::Minimum,
+        StdTensorOp::Select,
+        StdTensorOp::Clamp,
+        StdTensorOp::Exp,
+        StdTensorOp::Log,
+        StdTensorOp::Sin,
+        StdTensorOp::Cos,
+        StdTensorOp::Tanh,
+        StdTensorOp::Sqrt,
+        StdTensorOp::Rsqrt,
+        StdTensorOp::Pow,
+        StdTensorOp::Expm1,
+        StdTensorOp::Log1p,
+        StdTensorOp::Erf,
+        StdTensorOp::DynamicUpdateSlice,
+        StdTensorOp::DotGeneral {
+            config: DotGeneralConfig {
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
+            },
+        },
+        StdTensorOp::Transpose { perm: vec![1, 0] },
+        StdTensorOp::Reshape {
+            to_shape: vec![dim_const(2)],
+        },
+        StdTensorOp::BroadcastInDim {
+            shape: vec![dim_const(2)],
+            dims: vec![0],
+        },
+        StdTensorOp::Convert {
+            from: DType::F64,
+            to: DType::F32,
+        },
+        StdTensorOp::Constant {
+            dtype: DType::F64,
+            bytes: 1.0_f64.to_le_bytes().to_vec(),
+        },
+        StdTensorOp::ReduceSum { axes: vec![0] },
+        StdTensorOp::ReduceSumSquares { axes: vec![0] },
+        StdTensorOp::ReduceProd { axes: vec![0] },
+        StdTensorOp::ReduceMax { axes: vec![0] },
+        StdTensorOp::ReduceMin { axes: vec![0] },
+        StdTensorOp::Reverse { axes: vec![0] },
+        StdTensorOp::Compare(CompareDir::Eq),
+        StdTensorOp::ExtractDiag {
+            axis_a: 0,
+            axis_b: 1,
+        },
+        StdTensorOp::EmbedDiag {
+            axis_a: 0,
+            axis_b: 1,
+        },
+        StdTensorOp::Tril { k: -1 },
+        StdTensorOp::Triu { k: 1 },
+        StdTensorOp::Gather(GatherConfig {
+            offset_dims: vec![],
+            collapsed_slice_dims: vec![0],
+            start_index_map: vec![0],
+            index_vector_dim: 1,
+            slice_sizes: vec![1],
+        }),
+        StdTensorOp::GatherDynamicSliceSizes {
+            offset_dims: vec![],
+            collapsed_slice_dims: vec![0],
+            start_index_map: vec![0],
+            index_vector_dim: 1,
+            slice_sizes: vec![dim_const(1)],
+        },
+        StdTensorOp::Scatter(ScatterConfig {
+            update_window_dims: vec![],
+            inserted_window_dims: vec![0],
+            scatter_dims_to_operand_dims: vec![0],
+            index_vector_dim: 1,
+        }),
+        StdTensorOp::Slice(SliceConfig {
+            starts: vec![0],
+            limits: vec![1],
+            strides: vec![1],
+        }),
+        StdTensorOp::DynamicSlice {
+            slice_sizes: vec![1],
+        },
+        StdTensorOp::Pad(PadConfig {
+            edge_padding_low: vec![1],
+            edge_padding_high: vec![1],
+            interior_padding: vec![0],
+        }),
+        StdTensorOp::Concatenate {
+            axis: 0,
+            input_count: 2,
+        },
+        StdTensorOp::ShapeOf { axis: 0 },
+        StdTensorOp::DynamicTruncate { axis: 0 },
+        StdTensorOp::PadToMatch { axis: 0 },
+    ]
+}
+
+#[test]
+fn std_tensor_op_equality_and_hashing_are_variant_and_payload_based() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn hash_of(op: &StdTensorOp) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        op.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    let variants = all_variants_sample();
+    for op in &variants {
+        assert_eq!(op, op, "an operation equals itself: {op:?}");
+        assert_eq!(hash_of(op), hash_of(op), "hashing is stable: {op:?}");
+    }
+
+    // A payload difference is an inequality; a different variant is never equal,
+    // even when the payloads coincide.
+    assert_ne!(StdTensorOp::Tril { k: -1 }, StdTensorOp::Tril { k: 0 });
+    assert_ne!(
+        StdTensorOp::Tril { k: -1 },
+        StdTensorOp::Triu { k: -1 },
+        "the discriminant check must reject a different variant with the same payload"
+    );
+    assert_ne!(
+        StdTensorOp::ReduceSum { axes: vec![0] },
+        StdTensorOp::ReduceProd { axes: vec![0] }
+    );
+    assert_eq!(
+        StdTensorOp::Constant {
+            dtype: DType::F64,
+            bytes: 1.0_f64.to_le_bytes().to_vec(),
+        },
+        StdTensorOp::constant(1.0_f64)
+    );
+
+    // Distinct variants must not collapse into one hash bucket.
+    let mut seen = std::collections::HashSet::new();
+    for op in &variants {
+        seen.insert(hash_of(op));
+    }
+    assert!(
+        seen.len() * 2 >= variants.len(),
+        "hashing should separate the variant set"
+    );
+}

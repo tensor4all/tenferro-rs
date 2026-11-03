@@ -17,6 +17,8 @@ mod support;
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftExecutor, FftNorm, FftPlanCache, TracedTensorFftExt};
+#[cfg(feature = "autodiff")]
+use tenferro_runtime::TracedTensor;
 use tenferro_runtime::{GraphCompiler, TraceContext};
 use tenferro_tensor::Tensor;
 
