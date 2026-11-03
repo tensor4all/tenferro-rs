@@ -2326,8 +2326,8 @@ dependencies = [
 
 [[package]]
 name = "t4a-cuda-kernels"
-version = "0.1.0"
-source = "git+https://github.com/tensor4all/t4a-cuda-kernels?rev=d44b57be28ae299d2c2fef57e014ada1adfadc75#d44b57be28ae299d2c2fef57e014ada1adfadc75"
+version = "0.1.1"
+source = "git+https://github.com/tensor4all/t4a-cuda-kernels?rev=b429d41fd350356ee777948440fd5542ce6ef537#b429d41fd350356ee777948440fd5542ce6ef537"
 
 [[package]]
 name = "t4a-cuda-runtime"
