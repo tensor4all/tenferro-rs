@@ -180,6 +180,38 @@ fn runtime_rejects_invalid_ordered_inputs() {
 }
 
 #[test]
+fn a_default_bound_to_one_input_never_satisfies_another_input() {
+    let trace = TraceContext::new();
+    // Two inputs with the same dtype and shape. Only the first carries a default,
+    // so the second stays unbound: a binding belongs to the input it names, never
+    // to a sibling that happens to look the same.
+    let with_default = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
+    trace
+        .bind_input(
+            with_default.trace_value(),
+            Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+        )
+        .expect("default binding");
+    let needs_a_value = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
+    let output = (&with_default + &needs_a_value).unwrap();
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&output).unwrap();
+    let executor = cpu_runtime();
+
+    let err = run_compiled_one(&executor, &program, &[]).unwrap_err();
+    assert!(
+        matches!(err, Error::UnboundPlaceholder { .. }),
+        "a sibling's default must not bind this input: {err:?}"
+    );
+
+    // Supplying the missing input explicitly is enough; the default fills the other.
+    let filled = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+    let out = run_compiled_one(&executor, &program, &[&filled]).unwrap();
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+}
+
+#[test]
 fn runtime_cache_stats_are_separate_from_compiler_stats() {
     let trace = TraceContext::new();
     let x = trace
