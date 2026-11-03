@@ -195,6 +195,7 @@ jobs:
           CUDARC_CUDA_VERSION: "12080"
         run: |
           set -euo pipefail
+          # einsum's CUDA tests are autodiff-gated (cuda_eager_tensor.rs).
           cargo nextest archive \
             --cargo-profile ci \
             --archive-file "${CUDA_ARCHIVE}" \
@@ -202,7 +203,8 @@ jobs:
             -p tenferro-ad \
             -p tenferro-linalg \
             -p tenferro-fft \
-            --features cuda
+            -p tenferro-einsum \
+            --features cuda,tenferro-einsum/autodiff
       - name: Build PJRT test archive
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
         run: |
