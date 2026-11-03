@@ -1,6 +1,6 @@
 use super::*;
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime};
 
 fn complex_input(m: usize, n: usize, batches: usize) -> Tensor {
     tensor_c64(

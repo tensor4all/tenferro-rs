@@ -13,7 +13,7 @@ use tenferro_linalg::{
     RankRevealingQrOptions, SvdDriver, SvdOptions, TensorLinalgExt, TensorReadLinalgExt,
     TracedTensorLinalgExt,
 };
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 use tenferro_tensor::{DType, Error, Tensor, TensorRead, TypedTensor};
 
 #[path = "gpu_linalg/svd_auto.rs"]

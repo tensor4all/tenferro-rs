@@ -44,7 +44,7 @@ fn well_conditioned_matrix(n: usize) -> Tensor {
 #[test]
 #[ignore = "requires a CUDA device"]
 fn a_scheduled_run_defers_launch_completion_and_keeps_vendor_handles() {
-    let trace = tenferro_runtime::TraceContext::new();
+    let trace = TraceContext::new();
     assert!(gpu_available(), "CUDA test requires an available device");
     let n = 32usize;
 
@@ -62,7 +62,7 @@ fn a_scheduled_run_defers_launch_completion_and_keeps_vendor_handles() {
     let runtime = builder.build().expect("CUDA runtime");
 
     // A QR (cuSOLVER) feeding an elementwise chain: several launches in one prepared program.
-    let x = tenferro_runtime::trace
+    let x = trace
         .input_symbolic_shape(DType::F64, 2)
         .expect("symbolic input");
     let (q, r) = x.qr().expect("qr");
