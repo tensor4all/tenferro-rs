@@ -110,6 +110,23 @@ Provider selection is compile-time (`native` or `blas`); there is no runtime
 provider bundle or override hook. Unsupported dtypes and shapes map to typed
 errors.
 
+On the `blas` provider the *plan* can still be tcontract's own. `cpueinsum-blas`
+prepares a vendor-first plan (the linked CBLAS for every problem its layout
+inference can shape into a GEMM, tcontract's plan as the fallback), which
+bypasses tcontract's per-dtype faer bound. A Complex64 product whose GEMM row
+role is one or two takes tcontract's plan instead of the vendor one on an
+Accelerate link, where Accelerate's Complex64 GEMM kernel pays a per
+right-operand-element read that a thin row role never amortises: 61 us against
+17.8 us at `1x141 * 141x282` and 81 us against 19.3 us at `2x141 * 141x282`,
+while Accelerate stays 4.1x faster at `256^3` and is kept for every real row
+role, every other dtype and any product tcontract does not fuse onto faer. That
+route changes the Complex64 accumulation order for the routed products, by
+2.2e-16 to 1.3e-15 of the output scale (every other cell is bit-identical),
+which is a deliberate numerical choice for this provider and dtype rather than
+a side effect, and it is
+compiled only for an Accelerate link so a reference BLAS keeps its kernel. See
+`docs/worklogs/2026-11-03-thin-c64-vendor-route.md`.
+
 ### Contraction plan cache and the eager slot
 
 The session's `GemmAnalysisCache` retains the prepared numerical plans, bounded
