@@ -20,6 +20,7 @@ use tenferro_tensor::{
     ContractionScalar, DotGeneralAccumulation, DotGeneralConfig, Tensor, TensorRead, TensorView,
     TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
+use threadteam::HostClass;
 use tinyvec::TinyVec;
 
 #[cfg(feature = "native")]
@@ -60,6 +61,35 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn take_last_route_was_faer() -> Option<bool> {
     LAST_FAER.with(|last| last.replace(None))
+}
+
+#[cfg(all(feature = "native", any(test, feature = "route-report")))]
+thread_local! {
+    /// Algorithm and selection reason of the last prepared plan.
+    static LAST_PLAN_ROUTE: std::cell::Cell<
+        Option<(
+            cpueinsum::tcontract::Algorithm,
+            cpueinsum::tcontract::Reason,
+        )>,
+    > = const { std::cell::Cell::new(None) };
+}
+
+/// The algorithm and selection reason of the last contraction plan prepared on
+/// this thread, and clears the record.
+///
+/// Test and host-check support, behind the off-by-default `route-report`
+/// feature, mirroring the `ledger` accessors. `examples/route_faerlimit.rs`
+/// prints it to check which driver a host class and a thread budget select.
+/// The record is written whenever a plan is prepared, which a cached plan is
+/// not, so a read with nothing prepared in between returns `None`; a read that
+/// skips the `None` case reports the previous plan's route.
+#[cfg(all(feature = "native", any(test, feature = "route-report")))]
+#[doc(hidden)]
+pub fn take_last_plan_route() -> Option<(
+    cpueinsum::tcontract::Algorithm,
+    cpueinsum::tcontract::Reason,
+)> {
+    LAST_PLAN_ROUTE.with(|last| last.replace(None))
 }
 
 #[cfg(all(test, feature = "blas"))]
@@ -429,31 +459,47 @@ struct Key {
     out: Layout,
     lhs_conj: bool,
     rhs_conj: bool,
-    /// The execution token's thread budget was one when the plan was prepared.
+    /// The execution token's thread budget when the plan was prepared.
     ///
     /// Plans are not re-selected per call, and one `CpuPlanCache` may be shared
-    /// by engines of different widths, so the budget class is part of the key.
-    serial: bool,
+    /// by engines of different widths, so the budget is part of the key.
+    budget: usize,
 }
 
-/// The plan configuration for a budget class.
+/// The `FaerLimit` for a host class and a thread budget.
 ///
-/// tcontract's default `FaerLimit` sends c64 to its packed driver above
-/// `m*n*k = 1 << 17`. At a thread budget of one that driver is about 2x slower
-/// than faer (8x141 * 141x282 c64: 170 us against 82 us, tensor4all-rs#1040),
-/// so a serial budget lifts the bound. Wider budgets keep the default: the
-/// packed driver wins some shapes once threads are available. The bound is set
-/// only for c64 by default; f32, f64 and c32 already have none, so they are
-/// unchanged. Results above the old bound therefore come from faer's
-/// accumulation order: last bits differ from the packed driver's.
-fn plan_config(serial: bool) -> PlanConfig {
-    if serial && cfg!(feature = "native") {
-        PlanConfig {
-            faer_limit: FaerLimit::NONE,
-            ..PlanConfig::default()
-        }
-    } else {
-        PlanConfig::default()
+/// tcontract's default (`c64: Some(1 << 17)`) sends c64 to its packed driver
+/// above that volume. The driver is host-dependent, so the bound is too:
+///
+/// * `x86_64-avx2` at a thread budget of one: packed loses to faer in every
+///   measured c64 cell (46 cells, packed/faer 1.08 to 2.13, none below 0.98,
+///   EPYC 7763, tcontract-rs#156), so the c64 bound is lifted.
+/// * `aarch64` keeps the default: on an M5 Max packed wins at `m = 16` (0.88)
+///   and ties at `m = 8` (1.01). AVX-512 is left at the default too, not because
+///   it was measured for this rule but because the class spans 256-bit and
+///   512-bit datapaths and reports packed-winning regions at one thread
+///   (tcontract-rs#156), so it is not known to benefit everywhere.
+/// * Every wider budget keeps the default even where the bound is lifted:
+///   tcontract reports packed winning 18 of 79 groups at four threads.
+///
+/// Only c64 is bounded by default, so f32, f64 and c32 are unchanged on every
+/// host, and a lifted bound changes c64 last bits above `1 << 17` only (faer's
+/// accumulation order instead of the packed driver's).
+fn default_faer_limit(host: HostClass, budget: usize) -> FaerLimit {
+    let limit = PlanConfig::default().faer_limit;
+    match (host, budget) {
+        (HostClass::X86_64Avx2, 1) if cfg!(feature = "native") => FaerLimit { c64: None, ..limit },
+        _ => limit,
+    }
+}
+
+/// The plan configuration for a host class and a thread budget.
+///
+/// See [`default_faer_limit`] for which combinations move the c64 bound.
+fn plan_config(host: HostClass, budget: usize) -> PlanConfig {
+    PlanConfig {
+        faer_limit: default_faer_limit(host, budget),
+        ..PlanConfig::default()
     }
 }
 #[cfg(any(feature = "native", feature = "blas"))]
@@ -563,7 +609,7 @@ impl BinaryCache {
         key: Key,
         config: &DotGeneralConfig,
     ) -> crate::Result<Arc<BinaryPlan<T>>> {
-        let prepare = || {
+        let prepare = || -> crate::Result<BinaryPlan<T>> {
             let lhs = if key.lhs_conj {
                 key.lhs.spec()?.conj()
             } else {
@@ -582,8 +628,13 @@ impl BinaryCache {
             );
             let problem = Problem::from_dot_general(key.dtype, lhs, rhs, key.out.spec()?, &dot)
                 .map_err(|error| error.into_crate_error("dot_general"))?;
-            BinaryPlan::<T>::new(&problem, &plan_config(key.serial))
-                .map_err(|error| error.into_crate_error("dot_general"))
+            let plan =
+                BinaryPlan::<T>::new(&problem, &plan_config(HostClass::detect(), key.budget))
+                    .map_err(|error| error.into_crate_error("dot_general"))?;
+            #[cfg(all(feature = "native", any(test, feature = "route-report")))]
+            LAST_PLAN_ROUTE
+                .with(|last| last.set(Some((plan.report().algorithm, plan.report().reason))));
+            Ok(plan)
         };
         let Some(slot) = slot.filter(|&slot| slot < capacity) else {
             return Ok(Arc::new(prepare()?));
@@ -650,7 +701,7 @@ fn key<T: Scalar>(
     rhs: &TypedTensorView<'_, T>,
     out: Layout,
     accumulation: DotGeneralAccumulation,
-    serial: bool,
+    budget: usize,
 ) -> Key {
     Key {
         dtype: <T as cpueinsum::tcontract::api::Scalar>::STORAGE,
@@ -659,7 +710,7 @@ fn key<T: Scalar>(
         out,
         lhs_conj: accumulation.lhs_conj,
         rhs_conj: accumulation.rhs_conj,
-        serial,
+        budget,
     }
 }
 
@@ -683,7 +734,7 @@ fn initialized<T: Scalar>(
         &rhs,
         Layout::new(out.shape(), out.strides(), out.offset()),
         accumulation,
-        exec.budget() == 1,
+        exec.budget(),
     );
     let output_offset = out.offset();
     let a = lhs.host_storage()?;
@@ -742,7 +793,7 @@ fn fresh<T: Scalar>(
         &rhs,
         Layout::new(&shape, &strides, 0),
         accumulation,
-        exec.budget() == 1,
+        exec.budget(),
     );
     let a = lhs.host_storage()?;
     let b = rhs.host_storage()?;

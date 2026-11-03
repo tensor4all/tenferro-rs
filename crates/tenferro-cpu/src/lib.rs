@@ -106,6 +106,9 @@ mod contraction;
 mod engine;
 mod exec_session;
 mod plan_cache;
+#[cfg(all(feature = "native", feature = "route-report"))]
+#[doc(hidden)]
+pub use contraction::take_last_plan_route;
 #[doc(hidden)]
 pub use contraction::ContractionWorkspaces;
 mod gemm;

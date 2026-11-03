@@ -30,6 +30,12 @@ default = ["native"]
 # the ledger tests with `--features ledger` in a build of their own.
 ledger = ["threadteam/ledger"]
 native = ["dep:faer"]
+# Host-check support, off by default: the crate reports the driver and tcontract
+# selection reason of every prepared contraction plan (`take_last_plan_route`),
+# so `examples/route_faerlimit.rs` can check which way a host and thread budget
+# route a c64 product. The record is written on plan preparation only, never per
+# contraction.
+route-report = []
 blas = ["dep:cpueinsum-blas", "dep:cblas-sys", "dep:lapack"]
 # Each supported provider exports CBLAS; no separate Netlib CBLAS build is needed.
 provider-src = ["blas", "dep:blas-src", "dep:lapack-src"]
@@ -127,3 +133,8 @@ path = "tests/blas1_pool_aliasing.rs"
 name = "direct_faer_on_engine_pool"
 path = "tests/direct_faer_on_engine_pool.rs"
 required-features = ["native"]
+
+[[example]]
+name = "route_faerlimit"
+path = "examples/route_faerlimit.rs"
+required-features = ["native", "route-report"]
