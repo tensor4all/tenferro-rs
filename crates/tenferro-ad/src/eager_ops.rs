@@ -216,7 +216,7 @@ impl EagerTensor {
         let trace = recorded.traces.pop().ok_or_else(|| {
             Error::Internal(format!("expected one eager trace for {:?}, got 0", op))
         })?;
-        let semantic_trace = recorded.semantic_traces.pop().flatten();
+        let semantic = recorded.semantic_values.pop().flatten();
 
         let result = Self::new_result_value(
             ctx,
@@ -224,7 +224,7 @@ impl EagerTensor {
             value,
             trace.requires_grad,
             trace.trace,
-            semantic_trace,
+            semantic,
         )?;
         crate::eager::finish_residuals(&op, tensors, &[&result])?;
         Ok(result)
@@ -307,16 +307,16 @@ impl EagerTensor {
         let trace = recorded.traces.pop().ok_or_else(|| {
             Error::Internal(format!("expected one eager trace for {:?}, got 0", op))
         })?;
-        let semantic_trace = recorded.semantic_traces.pop().flatten();
+        let semantic = recorded.semantic_values.pop().flatten();
 
         let result = profile_eager_op_section("nary_op.new_tracked_result", || {
-            Self::new_result_with_semantic_trace(
+            Self::new_result_with_semantic(
                 ctx,
                 trace.key,
                 output,
                 trace.requires_grad,
                 trace.trace,
-                semantic_trace,
+                semantic,
             )
         })?;
         crate::eager::finish_residuals(&op, tensors, &[&result])?;

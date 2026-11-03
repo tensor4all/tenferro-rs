@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
-use super::{AdValueRecord, EagerTensor, Error, Result, StdTensorOp, TracedTensor};
+use super::semantic::SemanticValue;
+use super::{AdValueRecord, EagerTensor, Error, Result, StdTensorOp};
 use crate::semantic_extension::ResidualSpec;
 
 #[derive(Clone, Debug)]
@@ -23,7 +24,7 @@ impl std::fmt::Debug for ResidualNode {
 
 #[derive(Clone)]
 pub(super) struct SavedValue {
-    pub(super) trace: TracedTensor,
+    pub(super) semantic: SemanticValue,
     pub(super) value: Arc<AdValueRecord>,
 }
 
@@ -41,7 +42,7 @@ impl EagerTrace {
     pub(super) fn collect(&self) -> Vec<SavedValue> {
         let mut stack = vec![self];
         let mut visited = HashSet::new();
-        let mut keys = HashSet::new();
+        let mut keys: HashSet<(usize, u8)> = HashSet::new();
         let mut values = Vec::new();
         while let Some(trace) = stack.pop() {
             if !visited.insert(Arc::as_ptr(&trace.0)) {
@@ -49,8 +50,7 @@ impl EagerTrace {
             }
             if let Some(saved) = trace.0.saved.get() {
                 for value in saved {
-                    let key = value.trace.graph().values()[value.trace.val].key.clone();
-                    if keys.insert(key) {
+                    if keys.insert(value.semantic.identity()) {
                         values.push(value.clone());
                     }
                 }
@@ -103,15 +103,15 @@ pub(crate) fn finish_residuals(
         if !declared {
             continue;
         }
-        let Some(semantic) = &tensor.semantic_trace else {
+        let Some(semantic) = &tensor.semantic else {
             continue;
         };
-        // Leaf values are already bound by the semantic source.
-        if semantic.input_key().is_some() {
+        // Leaf values are already bound by the replayed program.
+        if semantic.is_leaf() {
             continue;
         }
         saved.push(SavedValue {
-            trace: semantic.clone(),
+            semantic: semantic.clone(),
             value: Arc::clone(&tensor._record.value),
         });
     }

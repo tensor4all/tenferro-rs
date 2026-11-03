@@ -75,7 +75,19 @@ impl SemanticProgramBuilder {
         self.bind_input_retained(input, Arc::new(RetainedValue::from_tensor(tensor)))
     }
 
-    pub(crate) fn bind_input_retained(
+    /// Attach an already-retained tensor default to one external input.
+    ///
+    /// Owner-scoped hook for the eager semantic record, which retains its leaf
+    /// values and must not copy them into an owned [`Tensor`] to bind them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProgramBuildError::ForeignValue`] for a token from another
+    /// builder, [`ProgramBuildError::BindingTargetNotInput`] for a computed
+    /// value, or [`ProgramBuildError::DuplicateBinding`] when the input already
+    /// has a binding.
+    #[doc(hidden)]
+    pub fn bind_input_retained(
         &mut self,
         input: ProgramValue,
         tensor: Arc<RetainedValue>,

@@ -67,6 +67,7 @@ impl MetadataScopeChain {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn merge<'a>(inherited: impl IntoIterator<Item = &'a MetadataScopeChain>) -> Self {
         let parents: Vec<_> = inherited.into_iter().cloned().collect();
         match parents.as_slice() {

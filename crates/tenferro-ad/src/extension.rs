@@ -451,26 +451,26 @@ fn finish_eager_extension_outputs(
     let results = recorded
         .traces
         .into_iter()
-        .zip(recorded.semantic_traces)
+        .zip(recorded.semantic_values)
         .zip(outputs)
-        .map(|((trace, semantic_trace), output)| {
+        .map(|((trace, semantic), output)| {
             if trace.requires_grad {
-                EagerTensor::new_result_with_semantic_trace(
+                EagerTensor::new_result_with_semantic(
                     Arc::clone(&ctx),
                     trace.key,
                     output,
                     trace.requires_grad,
                     trace.trace,
-                    semantic_trace,
+                    semantic,
                 )
             } else {
-                EagerTensor::new_unregistered_result_with_semantic_trace(
+                EagerTensor::new_unregistered_result_with_semantic(
                     Arc::clone(&ctx),
                     trace.key,
                     output,
                     trace.requires_grad,
                     trace.trace,
-                    semantic_trace,
+                    semantic,
                 )
             }
         })

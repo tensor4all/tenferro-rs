@@ -902,33 +902,6 @@ fn derivative_tensors_from_program(
     )
 }
 
-pub(crate) fn derivative_trace_from_frozen_program(
-    source: &CompiledGraph,
-    frozen: &FrozenProgram,
-    derivative_output_index: usize,
-    seed_tensors: &[(usize, Arc<RetainedValue>)],
-    inherited_tensors: &[&TracedTensor],
-    fallback_shape_hint: Option<Vec<SymDim>>,
-    transform: &'static str,
-) -> Result<TracedTensor> {
-    let mut outputs = derivative_traces_from_frozen_program(
-        source,
-        frozen,
-        &[derivative_output_index],
-        seed_tensors,
-        inherited_tensors,
-        &[fallback_shape_hint],
-        transform,
-    )?;
-    outputs.pop().ok_or_else(|| {
-        Error::runtime_state(
-            transform,
-            ErrorPhase::GraphBuild,
-            "derivative program returned no requested output",
-        )
-    })
-}
-
 fn derivative_traces_from_frozen_program(
     source: &CompiledGraph,
     frozen: &FrozenProgram,

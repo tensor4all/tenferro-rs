@@ -597,17 +597,18 @@ fn eager_recording_retains_symbolic_semantic_trace_for_shape_churn() {
             .runtime()
             .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &x))
             .unwrap();
-        let semantic_trace = y
-            .semantic_trace
-            .as_ref()
-            .expect("tracked eager output should retain a semantic trace");
+        let semantic = y
+            .semantic
+            .clone()
+            .expect("tracked eager output should retain a semantic value");
         assert!(
-            !semantic_trace.is_concrete_shape(),
+            !semantic.is_concrete_shape(),
             "eager semantic recording should keep input extents symbolic"
         );
 
+        let replayed = super::replay(&[semantic]).unwrap();
         let mut compiler = GraphCompiler::new();
-        compiler.compile(semantic_trace).unwrap()
+        compiler.compile_frozen_program(replayed.frozen()).unwrap()
     }
 
     let program2 = compile_square(vec![2.0, 3.0]);
@@ -625,17 +626,13 @@ fn eager_recording_retains_symbolic_semantic_trace_for_shape_churn() {
 }
 
 #[test]
-fn deferred_eager_semantic_analysis_seeds_symbolic_leaf_metadata() {
-    // The deferred analysis must seed leaves from their retained symbolic
-    // construction-time metadata (symbolic_input_meta), not from concrete
-    // extents derived from the bound values: the compiled AD source must
-    // classify eager-AD inputs symbolically (InputDim extents), exactly like
-    // the traced path, so the semantic fingerprint does not embed concrete
-    // extents.
+fn eager_journal_replay_matches_the_traced_path() {
+    // The replay must build the same semantic program as the traced path for the
+    // same leaf and operation sequence: leaves are declared with symbolic
+    // extents (InputDim), not concrete ones derived from the bound values, so the
+    // fingerprint does not embed eager shapes.
     use std::sync::Arc;
-    use tenferro_runtime::ad_support::{
-        analyze_deferred_semantic_trace, compile_ad_source, RetainedValue,
-    };
+    use tenferro_runtime::ad_support::{compile_ad_source, RetainedValue};
     use tenferro_runtime::{extension, TracedTensor};
 
     let ctx = EagerRuntime::new().unwrap();
@@ -647,29 +644,28 @@ fn deferred_eager_semantic_analysis_seeds_symbolic_leaf_metadata() {
     let y = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &x))
         .unwrap();
-    let raw = y
-        .semantic_trace
-        .as_ref()
-        .expect("tracked eager output should retain a semantic trace");
-    let analyzed = analyze_deferred_semantic_trace(raw).unwrap();
+    let semantic = y
+        .semantic
+        .clone()
+        .expect("tracked eager output should retain a semantic value");
 
-    // Traced-path reference: the same symbolic leaf + Mul op, analyzed at
-    // apply time; its input extent identity is symbolic.
+    // Traced-path reference: the same symbolic leaf and Mul op.
     let data = Arc::new(RetainedValue::from_tensor(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ));
     let leaf = TracedTensor::from_shared_tensor_value_symbolic_shape(data).unwrap();
     let traced = extension::apply_standard_op(StdTensorOp::Mul, &[&leaf, &leaf]).unwrap();
 
+    let replayed = super::replay(&[semantic]).unwrap();
     let mut compiler = GraphCompiler::new();
-    let eager_source = compile_ad_source(&mut compiler, &analyzed).unwrap();
+    let eager_source = compiler.compile_frozen_program(replayed.frozen()).unwrap();
     let mut compiler = GraphCompiler::new();
     let traced_source = compile_ad_source(&mut compiler, &traced[0]).unwrap();
 
     assert_eq!(
         eager_source.program().semantic_fingerprint(),
         traced_source.program().semantic_fingerprint(),
-        "deferred eager-AD program must be symbolically consistent with the traced path \
+        "journal replay must be symbolically consistent with the traced path \
          (leaf extents must be InputDim, not concrete constants)"
     );
 }
@@ -1481,5 +1477,43 @@ fn a_panicking_extension_callback_restores_the_lent_cache_and_breaks_the_engine(
         caches.get::<u64>(&key),
         Some(&7),
         "the cache store lent to the callback is restored rather than dropped"
+    );
+}
+
+#[test]
+fn backward_replays_the_eager_record_once() {
+    let ctx = EagerRuntime::new().unwrap();
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let w = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let loss = ctx
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            let product = s.mul(&x, &w)?;
+            s.reduce_sum(&product, Some(&[0]))
+        })
+        .unwrap();
+
+    assert_eq!(ctx.semantic_replay_count(), 0);
+    loss.backward(&mut tenferro_cpu::CpuEngine::serial())
+        .unwrap();
+    assert_eq!(
+        ctx.semantic_replay_count(),
+        1,
+        "one backward pass must replay the record once, not once per operation"
+    );
+    assert_eq!(
+        x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
+        &[5.0, 7.0]
+    );
+    assert_eq!(
+        w.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
+        &[2.0, 3.0]
     );
 }
