@@ -311,13 +311,14 @@ impl AdContext {
     ///
     /// ```rust
     /// use tenferro_ad::AdContext;
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_runtime::{TraceContext, TracedTensor};
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
     /// let loss = (&x * &x).unwrap();
     /// let grad = ad.grad(&loss, &x).unwrap();
-    /// assert_eq!(grad.rank, 0);
+    /// assert_eq!(grad.rank(), 0);
     /// ```
     ///
     /// # Errors
@@ -334,7 +335,7 @@ impl AdContext {
             output,
             wrt,
             &self.semantic_extension_rules,
-            Some(self.ad_transform_cache.as_ref()),
+            Some(&self.ad_transform_cache),
         )
     }
 
@@ -344,10 +345,11 @@ impl AdContext {
     ///
     /// ```rust
     /// use tenferro_ad::AdContext;
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_runtime::{TraceContext, TracedTensor};
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
     /// let loss = (&x * &x).unwrap();
     /// assert!(ad.grad_optional(&loss, &x).unwrap().is_some());
     /// ```
@@ -368,7 +370,7 @@ impl AdContext {
             output,
             wrt,
             &self.semantic_extension_rules,
-            Some(self.ad_transform_cache.as_ref()),
+            Some(&self.ad_transform_cache),
         )
     }
 
@@ -378,14 +380,15 @@ impl AdContext {
     ///
     /// ```rust
     /// use tenferro_ad::AdContext;
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_runtime::{TraceContext, TracedTensor};
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    /// let dx = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let dx = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     /// let y = (&x * &x).unwrap();
     /// let dy = ad.jvp(&y, &x, &dx).unwrap();
-    /// assert_eq!(dy.rank, 0);
+    /// assert_eq!(dy.rank(), 0);
     /// ```
     ///
     /// # Errors
@@ -407,7 +410,7 @@ impl AdContext {
             wrt,
             tangent,
             &self.semantic_extension_rules,
-            Some(self.ad_transform_cache.as_ref()),
+            Some(&self.ad_transform_cache),
         )
     }
 
@@ -417,11 +420,12 @@ impl AdContext {
     ///
     /// ```rust
     /// use tenferro_ad::AdContext;
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_runtime::{TraceContext, TracedTensor};
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    /// let dx = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let dx = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     /// let y = (&x * &x).unwrap();
     /// assert!(ad.jvp_optional(&y, &x, &dx).unwrap().is_some());
     /// ```
@@ -443,7 +447,7 @@ impl AdContext {
             wrt,
             tangent,
             &self.semantic_extension_rules,
-            Some(self.ad_transform_cache.as_ref()),
+            Some(&self.ad_transform_cache),
         )
     }
 
@@ -458,13 +462,14 @@ impl AdContext {
     ///
     /// ```rust
     /// use tenferro_ad::AdContext;
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_runtime::{TraceContext, TracedTensor};
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
-    /// let y = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    /// let dx = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
-    /// let dy = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    /// let y = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let dx = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let dy = trace.from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
     /// let output = (&x * &y).unwrap();
     /// assert!(ad.jvp_many(&output, &[(&x, &dx), (&y, &dy)]).unwrap().is_some());
     /// ```
@@ -488,7 +493,7 @@ impl AdContext {
             output,
             wrt_tangents,
             &self.semantic_extension_rules,
-            Some(self.ad_transform_cache.as_ref()),
+            Some(&self.ad_transform_cache),
         )
     }
 
@@ -503,14 +508,15 @@ impl AdContext {
     ///
     /// ```rust
     /// use tenferro_ad::AdContext;
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_runtime::{TraceContext, TracedTensor};
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    /// let dy = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let dy = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     /// let y = (&x * &x).unwrap();
     /// let dx = ad.vjp(&y, &x, &dy).unwrap();
-    /// assert_eq!(dx.rank, 0);
+    /// assert_eq!(dx.rank(), 0);
     /// ```
     ///
     /// # Errors
@@ -532,7 +538,7 @@ impl AdContext {
             wrt,
             cotangent,
             &self.semantic_extension_rules,
-            Some(self.ad_transform_cache.as_ref()),
+            Some(&self.ad_transform_cache),
         )
     }
 
@@ -542,11 +548,12 @@ impl AdContext {
     ///
     /// ```rust
     /// use tenferro_ad::AdContext;
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_runtime::{TraceContext, TracedTensor};
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    /// let dy = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let dy = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     /// let y = (&x * &x).unwrap();
     /// assert!(ad.vjp_optional(&y, &x, &dy).unwrap().is_some());
     /// ```
@@ -568,7 +575,7 @@ impl AdContext {
             wrt,
             cotangent,
             &self.semantic_extension_rules,
-            Some(self.ad_transform_cache.as_ref()),
+            Some(&self.ad_transform_cache),
         )
     }
 
@@ -583,12 +590,13 @@ impl AdContext {
     ///
     /// ```rust
     /// use tenferro_ad::AdContext;
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_runtime::{TraceContext, TracedTensor};
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
-    /// let y = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    /// let seed = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    /// let y = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let seed = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     /// let output = (&x * &y).unwrap();
     /// let products = ad.vjp_many(&output, &[&x, &y], &seed).unwrap();
     /// assert!(products.iter().all(Option::is_some));
@@ -615,7 +623,7 @@ impl AdContext {
             wrts,
             cotangent,
             &self.semantic_extension_rules,
-            Some(self.ad_transform_cache.as_ref()),
+            Some(&self.ad_transform_cache),
         )
     }
 }

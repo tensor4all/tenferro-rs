@@ -10,14 +10,11 @@
 //! 4. Graph size grows linearly with iteration count.
 
 use crate::support;
-use std::collections::HashSet;
 use support::{cpu_runtime, run_many_traced_with, RunTraced};
 use tenferro_ad::TracedTensorAdExt;
 
-use computegraph::graph::Graph;
-use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::traced::TracedTensor;
-use tenferro_runtime::{Runtime, Tensor, TypedTensor};
+use tenferro_runtime::{Runtime, Tensor, TraceContext, TypedTensor};
 
 const TOL: f64 = 1e-6;
 const FD_H: f64 = 1e-6;
@@ -31,32 +28,6 @@ fn get_f64_scalar(t: &Tensor) -> f64 {
         .expect("expected F64")
         .host_data()
         .unwrap()[0]
-}
-
-/// Count total ops across all graphs in the graph tree, deduplicating
-/// by pointer identity (the same `Arc<Graph>` may appear multiple times).
-fn total_ops(graph: &Graph<StdTensorOp>) -> usize {
-    let mut visited = HashSet::new();
-    let mut count = 0;
-    count_ops_recursive(graph, &mut visited, &mut count);
-    count
-}
-
-// Deduplication uses raw pointer identity, which works because Graph
-// parents share the same Arc allocation (not cloned data).
-fn count_ops_recursive(
-    graph: &Graph<StdTensorOp>,
-    visited: &mut HashSet<*const Graph<StdTensorOp>>,
-    count: &mut usize,
-) {
-    let ptr: *const Graph<StdTensorOp> = graph;
-    if !visited.insert(ptr) {
-        return;
-    }
-    *count += graph.operations().len();
-    for parent in graph.parents() {
-        count_ops_recursive(parent, visited, count);
-    }
 }
 
 /// Run the fixed-point iteration `x_{k+1} = a * cos(x_k)` using concrete f64
@@ -84,7 +55,10 @@ fn fixed_point_traced(
     conv_tol: f64,
     runtime: &Runtime,
 ) -> (TracedTensor, usize) {
-    let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x0)).unwrap();
+    let mut x = a
+        .context()
+        .from_tensor_concrete_shape(f64_scalar(x0))
+        .unwrap();
     let mut prev_val = x0;
 
     for iter in 1..=max_iter {
@@ -111,7 +85,8 @@ fn fixed_point_traced(
 
 #[test]
 fn eval_mid_loop_preserves_graph_connectivity() {
-    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8)).unwrap();
+    let trace = TraceContext::new();
+    let a = trace.from_tensor_concrete_shape(f64_scalar(0.8)).unwrap();
     let engine = cpu_runtime();
 
     let (x_final, iters) = fixed_point_traced(&a, 0.5, 100, 1e-12, &engine);
@@ -134,13 +109,14 @@ fn eval_mid_loop_preserves_graph_connectivity() {
 
 #[test]
 fn iterative_ad_gradient_matches_finite_diff() {
+    let trace = TraceContext::new();
     let a_val = 0.8_f64;
     let x0 = 0.5_f64;
     let max_iter = 100;
     let conv_tol = 1e-12;
 
     // --- AD gradient ---
-    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val)).unwrap();
+    let a = trace.from_tensor_concrete_shape(f64_scalar(a_val)).unwrap();
     let engine = cpu_runtime();
     let (x_final, _) = fixed_point_traced(&a, x0, max_iter, conv_tol, &engine);
 
@@ -167,8 +143,9 @@ fn iterative_ad_gradient_matches_finite_diff() {
 
 #[test]
 fn eval_all_evaluates_primal_and_gradient() {
+    let trace = TraceContext::new();
     let a_val = 0.8_f64;
-    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val)).unwrap();
+    let a = trace.from_tensor_concrete_shape(f64_scalar(a_val)).unwrap();
     let engine = cpu_runtime();
 
     let (x_final, _) = fixed_point_traced(&a, 0.5, 100, 1e-12, &engine);
@@ -204,20 +181,26 @@ fn eval_all_evaluates_primal_and_gradient() {
 
 #[test]
 fn graph_size_grows_linearly() {
+    let trace = TraceContext::new();
     // Run with a fixed number of iterations (no convergence check)
     // and measure graph op count.
-    fn ops_for_k_iters(k: usize) -> usize {
-        let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8)).unwrap();
-        let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.5)).unwrap();
+    fn ops_for_k_iters(trace: &TraceContext, k: usize) -> usize {
+        let a = trace.from_tensor_concrete_shape(f64_scalar(0.8)).unwrap();
+        let mut x = trace.from_tensor_concrete_shape(f64_scalar(0.5)).unwrap();
         for _ in 0..k {
             x = (&a * &x.cos().unwrap()).unwrap();
         }
-        total_ops(x.graph())
+        trace
+            .frozen_snapshot(&[x.trace_value()])
+            .unwrap()
+            .program
+            .operations()
+            .count()
     }
 
-    let ops_10 = ops_for_k_iters(10);
-    let ops_20 = ops_for_k_iters(20);
-    let ops_30 = ops_for_k_iters(30);
+    let ops_10 = ops_for_k_iters(&trace, 10);
+    let ops_20 = ops_for_k_iters(&trace, 20);
+    let ops_30 = ops_for_k_iters(&trace, 30);
 
     // ops_per_iter should be approximately constant
     let per_iter_10_20 = (ops_20 - ops_10) as f64 / 10.0;

@@ -1,38 +1,31 @@
-use std::collections::{HashMap, HashSet};
+//! Traced reverse- and forward-mode AD on the semantic program of a trace context.
+//!
+//! A differentiated output is snapshotted out of its [`TraceContext`], the
+//! program-level transform runs on that snapshot, and the derivative program is
+//! imported back into the same context, so gradients compose with further traced
+//! operations and with higher-order transforms.
+
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use computegraph::graph::GraphBuilder;
-use computegraph::{LocalValueId, OperationRole, ValueRef};
 use tenferro_ops::input_key::TensorInputKey;
-use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::{SymDim, TensorMeta};
-use tenferro_runtime::ad_support::{
-    allocate_input_key, allocate_shape_tensor_id, checkpoint_tensor, compile_ad_source,
-    frozen_input_value, inputs_map as tensor_inputs_map, leaf_input_key, merge_traced_leaf_metas,
-    metadata_scopes as tensor_metadata_scopes, metadata_scopes_with_new, ones_tensor,
-    register_scoped_graph_analysis, shape_hint as tensor_shape_hint, tensor_from_parts,
-    ConstraintScopeTransfer, RetainedValue, TracedTensorParts,
-};
-use tenferro_runtime::program::{FrozenProgram, ProgramValue, ProgramValueMetadata, SemanticOpRef};
+use tenferro_ops::TensorMeta;
+use tenferro_runtime::ad_support::{ones_tensor, RetainedValue};
+use tenferro_runtime::program::{FrozenProgram, ProgramImport, ProgramValue};
 use tenferro_runtime::{
-    CompiledGraph, Error, ErrorPhase, ExecutionEngine, GraphCompiler, Result, Runtime, Tensor,
+    Error, ErrorPhase, ExecutionEngine, GraphCompiler, Result, Runtime, Tensor, TraceValue,
     TracedTensor,
 };
 
 use crate::semantic_extension::{SemanticAdError, SemanticExtensionRuleSet};
-use crate::semantic_transform::{
-    semantic_jvp, semantic_vjp, SemanticAdProgram, SemanticAdTransformError,
-};
-use crate::transform_cache::{AdTransformCache, SemanticAdTransformCacheKey};
-
-pub(crate) fn next_input_key() -> TensorInputKey {
-    tenferro_runtime::ad_support::allocate_input_key()
-}
+use crate::semantic_transform::{SemanticAdProgram, SemanticAdTransformError};
+use crate::transform_cache::AdTransformCache;
+use crate::AdContext;
 
 fn error_shape_hint(tensor: &TracedTensor) -> Vec<usize> {
     tensor
         .try_concrete_shape()
-        .unwrap_or_else(|| vec![0; tensor.rank])
+        .unwrap_or_else(|| vec![0; tensor.rank()])
 }
 
 /// Typed error for the documented, user-reachable inactive-`wrt` state.
@@ -50,13 +43,436 @@ pub(crate) fn inactive_wrt_error(op: &'static str, wrt_key: impl std::fmt::Debug
     )
 }
 
+fn snapshot_error(source: tenferro_runtime::program::ProgramFinishError) -> Error {
+    Error::runtime_state_source("traced AD snapshot", ErrorPhase::GraphBuild, source)
+}
+
+fn import_error(source: tenferro_runtime::program::ProgramBuildError) -> Error {
+    Error::runtime_state_source("traced AD import", ErrorPhase::GraphBuild, source)
+}
+
+/// One differentiated output's snapshot plus its live input interface.
+struct AdSource {
+    frozen: FrozenProgram,
+    /// Context inputs in program input order.
+    inputs: Vec<(TensorInputKey, TraceValue)>,
+}
+
+impl AdSource {
+    fn of(output: &TracedTensor) -> Result<Self> {
+        let (frozen, inputs) = output
+            .context()
+            .ad_snapshot_with_inputs(&[output.trace_value()])
+            .map_err(snapshot_error)?;
+        Ok(Self { frozen, inputs })
+    }
+
+    /// Program input index of `wrt`, when `wrt` is an input of this program.
+    fn slot_of(&self, wrt: &TracedTensor) -> Result<Option<usize>> {
+        let Some(key) = wrt.input_key() else {
+            return Ok(None);
+        };
+        Ok(self
+            .inputs
+            .iter()
+            .position(|(candidate, _)| *candidate == key))
+    }
+
+    fn input_count(&self) -> usize {
+        self.inputs.len()
+    }
+}
+
+fn leaf_input_key(tensor: &TracedTensor) -> Result<TensorInputKey> {
+    tensor.input_key().ok_or_else(|| {
+        Error::invalid_argument(
+            "traced AD",
+            ErrorPhase::GraphBuild,
+            "wrt",
+            "the differentiated tensor is not a trace input",
+        )
+    })
+}
+
+fn seed_leaf(
+    output: &TracedTensor,
+    seeded_value: TraceValue,
+    data: &Arc<RetainedValue>,
+    op: &'static str,
+) -> Result<TraceValue> {
+    // A seed of an externally defined scalar must carry the same canonical scalar
+    // identity as the value it seeds, or the program cannot express it.
+    let identity = output.context().value_scalar_identity(seeded_value);
+    output
+        .context()
+        .bound_input_concrete(Arc::clone(data), identity)
+        .map_err(|source| {
+            Error::invalid_argument(
+                op,
+                ErrorPhase::GraphBuild,
+                "seed",
+                format!("a seed value could not be bound into the trace: {source}"),
+            )
+        })
+}
+
+/// Import derivative roots back into the output's context.
+///
+/// The derivative program's inputs are the source inputs followed by the seeds
+/// the transform introduced; the mapping reuses the live inputs so the imported
+/// operations continue on the same leaves.
+fn import_derivative(
+    output: &TracedTensor,
+    source: &AdSource,
+    derivative: &SemanticAdProgram,
+    seeds: &[(usize, TraceValue)],
+    derivative_output_indices: &[usize],
+    transform: &'static str,
+) -> Result<Vec<TracedTensor>> {
+    let frozen = derivative.frozen();
+    let derivative_inputs = frozen.program.inputs();
+    let source_input_count = source.input_count();
+    let mut input_map: Vec<(ProgramValue, ProgramValue)> =
+        Vec::with_capacity(source_input_count + seeds.len());
+    for (index, (_, live)) in source.inputs.iter().enumerate() {
+        let Some(&derivative_input) = derivative_inputs.get(index) else {
+            return Err(Error::runtime_state(
+                transform,
+                ErrorPhase::GraphBuild,
+                "the derivative program has fewer inputs than the source program",
+            ));
+        };
+        input_map.push((derivative_input, live.program_value()));
+    }
+    for (seed_input_index, seed) in seeds {
+        if *seed_input_index < source_input_count {
+            return Err(Error::runtime_state(
+                transform,
+                ErrorPhase::GraphBuild,
+                "a derivative seed input overlaps the source inputs",
+            ));
+        }
+        let Some(&derivative_input) = derivative_inputs.get(*seed_input_index) else {
+            return Err(Error::runtime_state(
+                transform,
+                ErrorPhase::GraphBuild,
+                "a derivative seed input is outside the derivative program",
+            ));
+        };
+        input_map.push((derivative_input, seed.program_value()));
+    }
+    let mut roots = Vec::with_capacity(derivative_output_indices.len());
+    for &index in derivative_output_indices {
+        let Some(&root) = frozen.program.outputs().get(index) else {
+            return Err(Error::runtime_state(
+                transform,
+                ErrorPhase::GraphBuild,
+                "a derivative output index is outside the derivative program",
+            ));
+        };
+        roots.push(root);
+    }
+    let imported = output
+        .context()
+        .import_values(ProgramImport {
+            program: frozen.program.as_ref(),
+            bindings: None,
+            roots: &roots,
+            input_map: &input_map,
+        })
+        .map_err(import_error)?;
+    imported
+        .into_iter()
+        .map(|value| {
+            output.context().derive_tensor(value).map_err(|source| {
+                Error::runtime_state_source(transform, ErrorPhase::GraphBuild, source)
+            })
+        })
+        .collect()
+}
+
+/// Declared dtype and symbolic extents of a traced value.
+fn tensor_meta_of(tensor: &TracedTensor) -> Result<TensorMeta> {
+    let extents = tensor
+        .sym_shape()
+        .map(|shape| shape.to_vec())
+        .unwrap_or_else(|| {
+            (0..tensor.rank())
+                .map(|axis| tenferro_ops::SymDim::tensor_axis(axis as u64, axis))
+                .collect()
+        });
+    Ok(TensorMeta::exact(tensor.dtype(), extents))
+}
+
+/// Metadata of the differentiated output, used to validate a cotangent seed.
+fn source_output_metadata(source: &AdSource, transform: &'static str) -> Result<TensorMeta> {
+    let Some(&output) = source.frozen.program.outputs().first() else {
+        return Err(Error::runtime_state(
+            transform,
+            ErrorPhase::GraphBuild,
+            "the AD source program has no output",
+        ));
+    };
+    let metadata = source
+        .frozen
+        .program
+        .value_metadata(output)
+        .map_err(|source| Error::runtime_state_source(transform, ErrorPhase::GraphBuild, source))?;
+    program_metadata_to_tensor_meta(metadata, transform)
+}
+
+fn validate_seed_against_program(
+    transform: &'static str,
+    _source: &AdSource,
+    data: &Arc<RetainedValue>,
+    expected: TensorMeta,
+) -> Result<()> {
+    validate_seed_tensor(transform, 0, data, &expected)
+}
+
+fn program_metadata_to_tensor_meta(
+    metadata: &tenferro_runtime::program::ProgramValueMetadata,
+    transform: &'static str,
+) -> Result<TensorMeta> {
+    let extents = metadata
+        .shape()
+        .iter()
+        .map(|extent| match extent {
+            tenferro_ops::shape_extent::ShapeExtent::Exact(expr) => {
+                tenferro_runtime::dim_expr_to_sym_dim_public(expr)
+            }
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            Error::invalid_argument(
+                transform,
+                ErrorPhase::GraphBuild,
+                "seed",
+                "the differentiated value has no concrete dtype and rank metadata",
+            )
+        })?;
+    Ok(TensorMeta::exact(metadata.dtype(), extents))
+}
+
+fn ad_context(
+    rules: &SemanticExtensionRuleSet,
+    cache: Option<&Arc<AdTransformCache>>,
+) -> AdContext {
+    match cache {
+        Some(cache) => AdContext::with_rules_and_transform_cache(rules.clone(), Arc::clone(cache)),
+        None => AdContext::builder()
+            .with_semantic_extension_rules(rules.clone())
+            .expect("registering semantic extension rules is infallible")
+            .build()
+            .expect("building an AD context with a rule set is infallible"),
+    }
+}
+
+fn vjp_many_impl(
+    output: &TracedTensor,
+    wrts: &[&TracedTensor],
+    cotangent: &TracedTensor,
+    rules: &SemanticExtensionRuleSet,
+    cache: Option<&Arc<AdTransformCache>>,
+    transform: &'static str,
+) -> Result<Vec<Option<TracedTensor>>> {
+    if wrts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let source = AdSource::of(output)?;
+    let slots: Vec<Option<usize>> = wrts
+        .iter()
+        .map(|wrt| source.slot_of(wrt))
+        .collect::<Result<_>>()?;
+    let mut active_inputs = vec![false; source.input_count()];
+    for slot in slots.iter().flatten().copied() {
+        active_inputs[slot] = true;
+    }
+    if !active_inputs.iter().any(|active| *active) {
+        return Ok(vec![None; wrts.len()]);
+    }
+    let cotangent_data = cotangent.attached_value().cloned().ok_or_else(|| {
+        Error::invalid_argument(
+            transform,
+            ErrorPhase::GraphBuild,
+            "cotangent",
+            format!("{transform} cotangent must have concrete tensor data"),
+        )
+    })?;
+    validate_seed_against_program(
+        transform,
+        &source,
+        &cotangent_data,
+        source_output_metadata(&source, transform)?,
+    )?;
+    let seed = seed_leaf(output, output.trace_value(), &cotangent_data, transform)?;
+    let active_outputs = vec![true; source.frozen.program.outputs().len()];
+    let derivative = ad_context(rules, cache)
+        .vjp_program(&source.frozen, &active_inputs, &active_outputs)
+        .map_err(semantic_transform_error(transform))?;
+    let Some(seed_input_index) = derivative
+        .derivative_input_indices()
+        .first()
+        .copied()
+        .flatten()
+    else {
+        return Ok(vec![None; wrts.len()]);
+    };
+    let mut requested = Vec::with_capacity(wrts.len());
+    let mut roots = Vec::new();
+    for (index, slot) in slots.iter().enumerate() {
+        let derivative_output = slot.and_then(|slot| {
+            derivative
+                .derivative_output_indices()
+                .get(slot)
+                .copied()
+                .flatten()
+        });
+        requested.push((index, derivative_output));
+        if let Some(derivative_output) = derivative_output
+            && !roots.contains(&derivative_output)
+        {
+            roots.push(derivative_output);
+        }
+    }
+    if roots.is_empty() {
+        return Ok(vec![None; wrts.len()]);
+    }
+    let imported = import_derivative(
+        output,
+        &source,
+        &derivative,
+        &[(seed_input_index, seed)],
+        &roots,
+        transform,
+    )?;
+    let mut results = vec![None; wrts.len()];
+    for (index, derivative_output) in requested {
+        if let Some(derivative_output) = derivative_output
+            && let Some(position) = roots.iter().position(|root| *root == derivative_output)
+        {
+            results[index] = imported.get(position).cloned();
+        }
+    }
+    Ok(results)
+}
+
+fn jvp_many_impl(
+    output: &TracedTensor,
+    wrt_tangents: &[(&TracedTensor, &TracedTensor)],
+    rules: &SemanticExtensionRuleSet,
+    cache: Option<&Arc<AdTransformCache>>,
+    transform: &'static str,
+) -> Result<Option<TracedTensor>> {
+    if wrt_tangents.is_empty() {
+        return Ok(None);
+    }
+    let source = AdSource::of(output)?;
+    let mut seen = HashSet::with_capacity(wrt_tangents.len());
+    let mut active_inputs = vec![false; source.input_count()];
+    let mut tangents = Vec::with_capacity(wrt_tangents.len());
+    for (wrt, tangent) in wrt_tangents {
+        let key = leaf_input_key(wrt)?;
+        if !seen.insert(key.clone()) {
+            return Err(Error::invalid_argument(
+                transform,
+                ErrorPhase::GraphBuild,
+                "wrt_tangents",
+                "wrt_tangents contains duplicate wrt leaves",
+            ));
+        }
+        let tangent_data = tangent.attached_value().cloned().ok_or_else(|| {
+            Error::invalid_argument(
+                transform,
+                ErrorPhase::GraphBuild,
+                "tangent",
+                format!("{transform} tangent must have concrete tensor data"),
+            )
+        })?;
+        tangents.push((wrt, tangent_data));
+    }
+    for (index, (wrt, _)) in tangents.iter().enumerate() {
+        let Some(slot) = source.slot_of(wrt)? else {
+            continue;
+        };
+        active_inputs[slot] = true;
+        let _ = index;
+    }
+    if !active_inputs.iter().any(|active| *active) {
+        return Ok(None);
+    }
+    let derivative = ad_context(rules, cache)
+        .jvp_program(&source.frozen, &active_inputs)
+        .map_err(semantic_transform_error(transform))?;
+    let Some(derivative_output_index) = derivative
+        .derivative_output_indices()
+        .first()
+        .copied()
+        .flatten()
+    else {
+        return Ok(None);
+    };
+    let mut seeds = Vec::with_capacity(tangents.len());
+    for (wrt, data) in tangents {
+        let Some(slot) = source.slot_of(wrt)? else {
+            continue;
+        };
+        let Some(seed_input_index) = derivative
+            .derivative_input_indices()
+            .get(slot)
+            .copied()
+            .flatten()
+        else {
+            continue;
+        };
+        validate_seed_against_program(transform, &source, &data, tensor_meta_of(wrt)?)?;
+        let seed = seed_leaf(output, wrt.trace_value(), &data, transform)?;
+        seeds.push((seed_input_index, seed));
+    }
+    if seeds.is_empty() {
+        return Ok(None);
+    }
+    let mut imported = import_derivative(
+        output,
+        &source,
+        &derivative,
+        &seeds,
+        &[derivative_output_index],
+        transform,
+    )?;
+    Ok(imported.pop())
+}
+
 pub(crate) fn grad_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     rules: &SemanticExtensionRuleSet,
-    ad_transform_cache: Option<&AdTransformCache>,
+    cache: Option<&Arc<AdTransformCache>>,
 ) -> Result<TracedTensor> {
-    grad_with_optional_rules(output, wrt, rules, ad_transform_cache)
+    let key = leaf_input_key(wrt)?;
+    grad_optional_with_rules_and_cache(output, wrt, rules, cache)
+        .and_then(|gradient| gradient.ok_or_else(|| inactive_wrt_error("grad", &key)))
+}
+
+pub(crate) fn grad_optional_with_rules_and_cache(
+    output: &TracedTensor,
+    wrt: &TracedTensor,
+    rules: &SemanticExtensionRuleSet,
+    cache: Option<&Arc<AdTransformCache>>,
+) -> Result<Option<TracedTensor>> {
+    if output.rank() != 0 {
+        return Err(Error::NonScalarGrad {
+            shape: error_shape_hint(output),
+        });
+    }
+    let ones = ones_tensor(output.dtype(), vec![])?;
+    let seed = output
+        .context()
+        .from_tensor_concrete_shape(ones)
+        .map_err(|source| Error::runtime_state_source("grad", ErrorPhase::GraphBuild, source))?;
+    vjp_many_impl(output, &[wrt], &seed, rules, cache, "grad")
+        .map(|mut results| results.pop().flatten())
 }
 
 pub(crate) fn jvp_with_rules_and_cache(
@@ -64,38 +480,11 @@ pub(crate) fn jvp_with_rules_and_cache(
     wrt: &TracedTensor,
     tangent: &TracedTensor,
     rules: &SemanticExtensionRuleSet,
-    ad_transform_cache: Option<&AdTransformCache>,
+    cache: Option<&Arc<AdTransformCache>>,
 ) -> Result<TracedTensor> {
-    let wrt_input_key = leaf_input_key(wrt)?;
-    jvp_many_with_rules_and_cache(output, &[(wrt, tangent)], rules, ad_transform_cache)?
-        .ok_or_else(|| inactive_wrt_error("jvp", &wrt_input_key))
-}
-
-pub(crate) fn jvp_many_with_rules_and_cache(
-    output: &TracedTensor,
-    wrt_tangents: &[(&TracedTensor, &TracedTensor)],
-    rules: &SemanticExtensionRuleSet,
-    ad_transform_cache: Option<&AdTransformCache>,
-) -> Result<Option<TracedTensor>> {
-    jvp_many_optional_impl(output, wrt_tangents, rules, ad_transform_cache)
-}
-
-pub(crate) fn grad_optional_with_rules_and_cache(
-    output: &TracedTensor,
-    wrt: &TracedTensor,
-    rules: &SemanticExtensionRuleSet,
-    ad_transform_cache: Option<&AdTransformCache>,
-) -> Result<Option<TracedTensor>> {
-    if output.rank != 0 {
-        return Err(Error::NonScalarGrad {
-            shape: error_shape_hint(output),
-        });
-    }
-
-    let ones = ones_tensor(output.dtype, vec![])?;
-    let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
-    vjp_many_with_transform_and_cache(output, &[wrt], &seed, rules, "grad", ad_transform_cache)
-        .map(|mut results| results.pop().flatten())
+    let key = leaf_input_key(wrt)?;
+    jvp_many_impl(output, &[(wrt, tangent)], rules, cache, "jvp")
+        .and_then(|result| result.ok_or_else(|| inactive_wrt_error("jvp", &key)))
 }
 
 pub(crate) fn jvp_optional_with_rules_and_cache(
@@ -103,9 +492,18 @@ pub(crate) fn jvp_optional_with_rules_and_cache(
     wrt: &TracedTensor,
     tangent: &TracedTensor,
     rules: &SemanticExtensionRuleSet,
-    ad_transform_cache: Option<&AdTransformCache>,
+    cache: Option<&Arc<AdTransformCache>>,
 ) -> Result<Option<TracedTensor>> {
-    jvp_many_with_rules_and_cache(output, &[(wrt, tangent)], rules, ad_transform_cache)
+    jvp_many_impl(output, &[(wrt, tangent)], rules, cache, "jvp")
+}
+
+pub(crate) fn jvp_many_with_rules_and_cache(
+    output: &TracedTensor,
+    wrt_tangents: &[(&TracedTensor, &TracedTensor)],
+    rules: &SemanticExtensionRuleSet,
+    cache: Option<&Arc<AdTransformCache>>,
+) -> Result<Option<TracedTensor>> {
+    jvp_many_impl(output, wrt_tangents, rules, cache, "jvp")
 }
 
 pub(crate) fn vjp_with_rules_and_cache(
@@ -113,42 +511,11 @@ pub(crate) fn vjp_with_rules_and_cache(
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
     rules: &SemanticExtensionRuleSet,
-    ad_transform_cache: Option<&AdTransformCache>,
+    cache: Option<&Arc<AdTransformCache>>,
 ) -> Result<TracedTensor> {
-    let wrt_input_key = leaf_input_key(wrt)?;
-    vjp_many_with_rules_and_cache(output, &[wrt], cotangent, rules, ad_transform_cache)?
-        .into_iter()
-        .next()
-        .flatten()
-        .ok_or_else(|| inactive_wrt_error("vjp", &wrt_input_key))
-}
-
-pub(crate) fn vjp_many_with_rules_and_cache(
-    output: &TracedTensor,
-    wrts: &[&TracedTensor],
-    cotangent: &TracedTensor,
-    rules: &SemanticExtensionRuleSet,
-    ad_transform_cache: Option<&AdTransformCache>,
-) -> Result<Vec<Option<TracedTensor>>> {
-    vjp_many_with_transform_and_cache(output, wrts, cotangent, rules, "vjp", ad_transform_cache)
-}
-
-fn vjp_many_with_transform_and_cache(
-    output: &TracedTensor,
-    wrts: &[&TracedTensor],
-    cotangent: &TracedTensor,
-    rules: &SemanticExtensionRuleSet,
-    transform: &'static str,
-    ad_transform_cache: Option<&AdTransformCache>,
-) -> Result<Vec<Option<TracedTensor>>> {
-    vjp_many_optional_impl(
-        output,
-        wrts,
-        cotangent,
-        rules,
-        transform,
-        ad_transform_cache,
-    )
+    let key = leaf_input_key(wrt)?;
+    vjp_optional_with_rules_and_cache(output, wrt, cotangent, rules, cache)
+        .and_then(|gradient| gradient.ok_or_else(|| inactive_wrt_error("vjp", &key)))
 }
 
 pub(crate) fn vjp_optional_with_rules_and_cache(
@@ -156,64 +523,22 @@ pub(crate) fn vjp_optional_with_rules_and_cache(
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
     rules: &SemanticExtensionRuleSet,
-    ad_transform_cache: Option<&AdTransformCache>,
+    cache: Option<&Arc<AdTransformCache>>,
 ) -> Result<Option<TracedTensor>> {
-    vjp_many_with_rules_and_cache(output, &[wrt], cotangent, rules, ad_transform_cache)
+    vjp_many_impl(output, &[wrt], cotangent, rules, cache, "vjp")
         .map(|mut results| results.pop().flatten())
 }
 
-fn grad_with_optional_rules(
+pub(crate) fn vjp_many_with_rules_and_cache(
     output: &TracedTensor,
-    wrt: &TracedTensor,
+    wrts: &[&TracedTensor],
+    cotangent: &TracedTensor,
     rules: &SemanticExtensionRuleSet,
-    ad_transform_cache: Option<&AdTransformCache>,
-) -> Result<TracedTensor> {
-    if output.rank != 0 {
-        return Err(Error::NonScalarGrad {
-            shape: error_shape_hint(output),
-        });
-    }
-
-    let ones = ones_tensor(output.dtype, vec![])?;
-    let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
-    let wrt_input_key = leaf_input_key(wrt)?;
-    vjp_many_with_transform_and_cache(output, &[wrt], &seed, rules, "grad", ad_transform_cache)?
-        .pop()
-        .flatten()
-        .ok_or_else(|| inactive_wrt_error("grad", &wrt_input_key))
+    cache: Option<&Arc<AdTransformCache>>,
+) -> Result<Vec<Option<TracedTensor>>> {
+    vjp_many_impl(output, wrts, cotangent, rules, cache, "vjp")
 }
 
-fn single_runtime_output(mut outputs: Vec<Tensor>, op: &'static str) -> Result<Tensor> {
-    let actual = outputs.len();
-    if actual != 1 {
-        return Err(Error::runtime_state(
-            op,
-            ErrorPhase::Execution,
-            format!("expected one runtime output, got {actual}"),
-        ));
-    }
-    outputs.pop().ok_or_else(|| {
-        Error::runtime_state(
-            op,
-            ErrorPhase::Execution,
-            "runtime returned no output after successful output-count validation",
-        )
-    })
-}
-
-/// Automatic differentiation helpers for [`TracedTensor`].
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_ad::TracedTensorAdExt;
-/// use tenferro_runtime::TracedTensor;
-///
-/// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-/// let loss = x.scale_real(2.0).unwrap();
-/// let maybe_dx = loss.grad_optional(&x).unwrap();
-/// assert!(maybe_dx.is_some());
-/// ```
 pub trait TracedTensorAdExt {
     /// Gradient of a scalar output with respect to a traced input.
     ///
@@ -226,7 +551,7 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+    /// use tenferro_runtime::{TraceContext, GraphCompiler, Runtime, TracedTensor};
     ///
     /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
     ///     let mut compiler = GraphCompiler::new();
@@ -243,7 +568,8 @@ pub trait TracedTensorAdExt {
     ///     outputs.pop().unwrap().into_owned().unwrap()
     /// }
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
     /// let loss = (&x * &x).unwrap();
     /// let dx = loss.grad(&x).unwrap();
     ///
@@ -272,10 +598,11 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_runtime::{TraceContext, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    /// let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let y = trace.from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
     /// let loss = (&y * &y).unwrap();
     ///
     /// assert!(loss.grad_optional(&x).unwrap().is_none());
@@ -302,7 +629,7 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+    /// use tenferro_runtime::{TraceContext, GraphCompiler, Runtime, TracedTensor};
     ///
     /// let mut compiler = GraphCompiler::new();
     /// let backend = tenferro_cpu::CpuEngine::serial();
@@ -311,7 +638,8 @@ pub trait TracedTensorAdExt {
     ///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
     ///     .unwrap();
     /// let runtime = builder.build().unwrap();
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
     /// let mut y = (&x * &x).unwrap();
     ///
     /// let mut engine = tenferro_cpu::CpuEngine::serial();
@@ -340,7 +668,7 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+    /// use tenferro_runtime::{TraceContext, GraphCompiler, Runtime, TracedTensor};
     ///
     /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
     ///     let mut compiler = GraphCompiler::new();
@@ -357,8 +685,9 @@ pub trait TracedTensorAdExt {
     ///     outputs.pop().unwrap().into_owned().unwrap()
     /// }
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    /// let tangent = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let tangent = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
     /// let y = (&x * &x).unwrap();
     /// let dy = y.jvp(&x, &tangent).unwrap();
     ///
@@ -387,11 +716,12 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_runtime::{TraceContext, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    /// let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
-    /// let tangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let y = trace.from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
+    /// let tangent = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     /// let loss = (&y * &y).unwrap();
     ///
     /// assert!(loss.jvp_optional(&x, &tangent).unwrap().is_none());
@@ -426,7 +756,7 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+    /// use tenferro_runtime::{TraceContext, GraphCompiler, Runtime, TracedTensor};
     ///
     /// fn eval(tensor: &TracedTensor) -> tenferro_runtime::Tensor {
     ///     let mut compiler = GraphCompiler::new();
@@ -443,8 +773,9 @@ pub trait TracedTensorAdExt {
     ///     outputs.pop().unwrap().into_owned().unwrap()
     /// }
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    /// let cotangent = TracedTensor::from_vec_col_major(vec![], vec![0.5_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let cotangent = trace.from_vec_col_major(vec![], vec![0.5_f64]).unwrap();
     /// let y = (&x * &x).unwrap();
     /// let dx = y.vjp(&x, &cotangent).unwrap();
     ///
@@ -473,11 +804,12 @@ pub trait TracedTensorAdExt {
     ///
     /// ```rust
     /// use tenferro_ad::TracedTensorAdExt;
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_runtime::{TraceContext, TracedTensor};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    /// let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
-    /// let cotangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    /// let y = trace.from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
+    /// let cotangent = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     /// let loss = (&y * &y).unwrap();
     ///
     /// assert!(loss.vjp_optional(&x, &cotangent).unwrap().is_none());
@@ -500,26 +832,90 @@ pub trait TracedTensorAdExt {
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>>;
+
+    /// Reverse-mode gradients for several leaves from one transform.
+    ///
+    /// One snapshot, one program-level transform and one import cover the whole
+    /// `wrt` set, so the backward is a single sweep instead of one per leaf.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_runtime::{TraceContext, DType};
+    ///
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let w = trace.from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
+    /// let loss = (&(&x * &w)?).reduce_sum(None)?;
+    /// let grads = loss.grad_many(&[&x, &w])?;
+    /// assert_eq!(grads.len(), 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NonScalarGrad`] for a non-scalar output,
+    /// [`Error::UnsupportedAdRule`] when a rule is unavailable, or a typed
+    /// validation/runtime-state error from the snapshot or the transform.
+    fn grad_many(&self, wrts: &[&TracedTensor]) -> Result<Vec<Option<TracedTensor>>>;
+
+    /// The scalar output together with reverse-mode gradients for several leaves.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_runtime::{TraceContext, DType};
+    ///
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let loss = (&(&x * &x)?).reduce_sum(None)?;
+    /// let (value, grads) = loss.value_and_grad(&[&x])?;
+    /// assert_eq!(value.rank(), 0);
+    /// assert!(grads[0].is_some());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed failures as [`grad_many`](Self::grad_many).
+    fn value_and_grad(
+        &self,
+        wrts: &[&TracedTensor],
+    ) -> Result<(TracedTensor, Vec<Option<TracedTensor>>)>;
+
+    /// Forward-mode JVPs for several leaves from one transform.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedAdRule`] when a rule is unavailable, or a
+    /// typed validation/runtime-state error from the snapshot or the transform.
+    fn jvp_many(
+        &self,
+        wrt_tangents: &[(&TracedTensor, &TracedTensor)],
+    ) -> Result<Option<TracedTensor>>;
+
+    /// Reverse-mode VJPs for several leaves from one transform.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedAdRule`] when a rule is unavailable, or a
+    /// typed validation/runtime-state error from the snapshot or the transform.
+    fn vjp_many(
+        &self,
+        wrts: &[&TracedTensor],
+        cotangent: &TracedTensor,
+    ) -> Result<Vec<Option<TracedTensor>>>;
 }
 
 impl TracedTensorAdExt for TracedTensor {
     fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor> {
-        let rules = SemanticExtensionRuleSet::default();
-        grad_with_optional_rules(self, wrt, &rules, None)
+        grad_with_rules_and_cache(self, wrt, &SemanticExtensionRuleSet::default(), None)
     }
 
     fn grad_optional(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>> {
-        if self.rank != 0 {
-            return Err(Error::NonScalarGrad {
-                shape: error_shape_hint(self),
-            });
-        }
-
-        let ones = ones_tensor(self.dtype, vec![])?;
-        let seed = TracedTensor::from_tensor_concrete_shape(ones)?;
-        let rules = SemanticExtensionRuleSet::default();
-        vjp_many_with_transform_and_cache(self, &[wrt], &seed, &rules, "grad", None)
-            .map(|mut results| results.pop().flatten())
+        grad_optional_with_rules_and_cache(self, wrt, &SemanticExtensionRuleSet::default(), None)
     }
 
     fn checkpoint(
@@ -540,14 +936,27 @@ impl TracedTensorAdExt for TracedTensor {
                 "TracedTensorAdExt::checkpoint",
             )?))
         };
-        checkpoint_tensor(self, data)?;
-        Ok(())
+        let value = self
+            .context()
+            .checkpoint_value(self.trace_value(), Arc::clone(&data))
+            .map_err(|source| {
+                Error::runtime_state_source(
+                    "TracedTensorAdExt::checkpoint",
+                    ErrorPhase::GraphBuild,
+                    source,
+                )
+            })?;
+        self.rebind_bound(value, data)
     }
 
     fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Result<TracedTensor> {
-        let wrt_input_key = leaf_input_key(wrt)?;
-        self.jvp_optional(wrt, tangent)?
-            .ok_or_else(|| inactive_wrt_error("jvp", &wrt_input_key))
+        jvp_with_rules_and_cache(
+            self,
+            wrt,
+            tangent,
+            &SemanticExtensionRuleSet::default(),
+            None,
+        )
     }
 
     fn jvp_optional(
@@ -555,14 +964,23 @@ impl TracedTensorAdExt for TracedTensor {
         wrt: &TracedTensor,
         tangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        let rules = SemanticExtensionRuleSet::default();
-        jvp_many_optional_impl(self, &[(wrt, tangent)], &rules, None)
+        jvp_optional_with_rules_and_cache(
+            self,
+            wrt,
+            tangent,
+            &SemanticExtensionRuleSet::default(),
+            None,
+        )
     }
 
     fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Result<TracedTensor> {
-        let wrt_input_key = leaf_input_key(wrt)?;
-        self.vjp_optional(wrt, cotangent)?
-            .ok_or_else(|| inactive_wrt_error("vjp", &wrt_input_key))
+        vjp_with_rules_and_cache(
+            self,
+            wrt,
+            cotangent,
+            &SemanticExtensionRuleSet::default(),
+            None,
+        )
     }
 
     fn vjp_optional(
@@ -570,275 +988,82 @@ impl TracedTensorAdExt for TracedTensor {
         wrt: &TracedTensor,
         cotangent: &TracedTensor,
     ) -> Result<Option<TracedTensor>> {
-        let rules = SemanticExtensionRuleSet::default();
-        vjp_many_with_transform_and_cache(self, &[wrt], cotangent, &rules, "vjp", None)
-            .map(|mut results| results.pop().flatten())
-    }
-}
-
-fn jvp_many_optional_impl(
-    output: &TracedTensor,
-    wrt_tangents: &[(&TracedTensor, &TracedTensor)],
-    rules: &SemanticExtensionRuleSet,
-    ad_transform_cache: Option<&AdTransformCache>,
-) -> Result<Option<TracedTensor>> {
-    if wrt_tangents.is_empty() {
-        return Ok(None);
-    }
-
-    let mut seen = HashSet::with_capacity(wrt_tangents.len());
-    let mut requested = Vec::with_capacity(wrt_tangents.len());
-    for (wrt, tangent) in wrt_tangents {
-        let key = leaf_input_key(wrt)?;
-        if !seen.insert(key.clone()) {
-            return Err(Error::invalid_argument(
-                "jvp",
-                ErrorPhase::GraphBuild,
-                "wrt_tangents",
-                "wrt_tangents contains duplicate wrt leaves",
-            ));
-        }
-        let tangent_data = tangent.attached_value().cloned().ok_or_else(|| {
-            Error::invalid_argument(
-                "jvp",
-                ErrorPhase::GraphBuild,
-                "tangent",
-                "jvp tangent must have concrete tensor data",
-            )
-        })?;
-        requested.push((key, tangent_data));
-    }
-
-    let mut compiler = GraphCompiler::new();
-    let source = compile_ad_source(&mut compiler, output)?;
-    let mut active_inputs = vec![false; source.input_count()];
-    let mut source_indices = Vec::with_capacity(requested.len());
-    for (key, _) in &requested {
-        let source_index = source.input_key_index(key);
-        if let Some(index) = source_index {
-            active_inputs[index] = true;
-        }
-        source_indices.push(source_index);
-    }
-    if !active_inputs.iter().any(|active| *active) {
-        return Ok(None);
-    }
-
-    let derivative = semantic_jvp_with_cache(
-        source.frozen_program(),
-        &active_inputs,
-        rules,
-        ad_transform_cache,
-    )?;
-    let Some(derivative_output_index) = derivative
-        .derivative_output_indices()
-        .first()
-        .copied()
-        .flatten()
-    else {
-        return Ok(None);
-    };
-
-    let mut seed_tensors = Vec::with_capacity(requested.len());
-    for ((_, tangent_data), source_index) in requested.iter().zip(source_indices) {
-        let Some(source_index) = source_index else {
-            continue;
-        };
-        let Some(seed_input_index) = derivative
-            .derivative_input_indices()
-            .get(source_index)
-            .copied()
-            .flatten()
-        else {
-            continue;
-        };
-        seed_tensors.push((seed_input_index, Arc::clone(tangent_data)));
-    }
-    let mut inherited_tensors = Vec::with_capacity(1 + 2 * wrt_tangents.len());
-    inherited_tensors.push(output);
-    for (wrt, tangent) in wrt_tangents {
-        inherited_tensors.push(*wrt);
-        inherited_tensors.push(*tangent);
-    }
-    let mut traces = derivative_tensors_from_program(
-        &source,
-        &derivative,
-        &[derivative_output_index],
-        &seed_tensors,
-        &inherited_tensors,
-        &[tensor_shape_hint(output)],
-        "jvp",
-    )?;
-    traces.pop().map(Some).ok_or_else(|| {
-        Error::runtime_state(
-            "jvp",
-            ErrorPhase::GraphBuild,
-            "derivative program returned no requested output",
+        vjp_optional_with_rules_and_cache(
+            self,
+            wrt,
+            cotangent,
+            &SemanticExtensionRuleSet::default(),
+            None,
         )
-    })
-}
-
-fn vjp_many_optional_impl(
-    output: &TracedTensor,
-    wrts: &[&TracedTensor],
-    cotangent: &TracedTensor,
-    rules: &SemanticExtensionRuleSet,
-    transform: &'static str,
-    ad_transform_cache: Option<&AdTransformCache>,
-) -> Result<Vec<Option<TracedTensor>>> {
-    let cotangent_data = cotangent.attached_value().cloned().ok_or_else(|| {
-        Error::invalid_argument(
-            transform,
-            ErrorPhase::GraphBuild,
-            "cotangent",
-            "vjp cotangent must have concrete tensor data",
-        )
-    })?;
-    if wrts.is_empty() {
-        return Ok(Vec::new());
     }
 
-    let requested_keys = wrts
-        .iter()
-        .map(|wrt| leaf_input_key(wrt))
-        .collect::<Result<Vec<_>>>()?;
-    let mut compiler = GraphCompiler::new();
-    let source = compile_ad_source(&mut compiler, output)?;
-    let source_indices: Vec<_> = requested_keys
-        .iter()
-        .map(|key| source.input_key_index(key))
-        .collect();
-    let mut active_inputs = vec![false; source.input_count()];
-    for source_index in source_indices.iter().flatten().copied() {
-        active_inputs[source_index] = true;
-    }
-    if !active_inputs.iter().any(|active| *active) {
-        return Ok(vec![None; wrts.len()]);
-    }
-
-    let active_outputs = vec![true; source.output_count()];
-    let derivative = semantic_vjp_with_cache(
-        source.frozen_program(),
-        &active_inputs,
-        &active_outputs,
-        rules,
-        ad_transform_cache,
-    )?;
-    let Some(seed_input_index) = derivative
-        .derivative_input_indices()
-        .first()
-        .copied()
-        .flatten()
-    else {
-        return Ok(vec![None; wrts.len()]);
-    };
-
-    let mut output_slots = vec![None; source.input_count()];
-    let mut derivative_output_indices = Vec::new();
-    let mut fallback_shape_hints = Vec::new();
-    for (request_index, source_index) in source_indices.iter().enumerate() {
-        let Some(source_index) = source_index else {
-            continue;
-        };
-        if output_slots[*source_index].is_some() {
-            continue;
+    fn grad_many(&self, wrts: &[&TracedTensor]) -> Result<Vec<Option<TracedTensor>>> {
+        if self.rank() != 0 {
+            return Err(Error::NonScalarGrad {
+                shape: error_shape_hint(self),
+            });
         }
-        let Some(derivative_output_index) = derivative
-            .derivative_output_indices()
-            .get(*source_index)
-            .copied()
-            .flatten()
-        else {
-            continue;
-        };
-        output_slots[*source_index] = Some(derivative_output_indices.len());
-        derivative_output_indices.push(derivative_output_index);
-        fallback_shape_hints.push(tensor_shape_hint(wrts[request_index]));
-    }
-    if derivative_output_indices.is_empty() {
-        return Ok(vec![None; wrts.len()]);
+        let ones = ones_tensor(self.dtype(), vec![])?;
+        let seed = self
+            .context()
+            .from_tensor_concrete_shape(ones)
+            .map_err(|source| {
+                Error::runtime_state_source("grad_many", ErrorPhase::GraphBuild, source)
+            })?;
+        vjp_many_impl(
+            self,
+            wrts,
+            &seed,
+            &SemanticExtensionRuleSet::default(),
+            None,
+            "grad_many",
+        )
     }
 
-    let inherited_tensors: Vec<&TracedTensor> = std::iter::once(output)
-        .chain(wrts.iter().copied())
-        .chain(std::iter::once(cotangent))
-        .collect();
-    let traces = derivative_tensors_from_program(
-        &source,
-        &derivative,
-        &derivative_output_indices,
-        &[(seed_input_index, cotangent_data)],
-        &inherited_tensors,
-        &fallback_shape_hints,
-        transform,
-    )?;
-    Ok(source_indices
-        .into_iter()
-        .map(|source_index| {
-            source_index
-                .and_then(|index| output_slots[index])
-                .map(|slot| traces[slot].clone())
-        })
-        .collect())
+    fn value_and_grad(
+        &self,
+        wrts: &[&TracedTensor],
+    ) -> Result<(TracedTensor, Vec<Option<TracedTensor>>)> {
+        let gradients = self.grad_many(wrts)?;
+        Ok((self.clone(), gradients))
+    }
+
+    fn jvp_many(
+        &self,
+        wrt_tangents: &[(&TracedTensor, &TracedTensor)],
+    ) -> Result<Option<TracedTensor>> {
+        jvp_many_impl(
+            self,
+            wrt_tangents,
+            &SemanticExtensionRuleSet::default(),
+            None,
+            "jvp_many",
+        )
+    }
+
+    fn vjp_many(
+        &self,
+        wrts: &[&TracedTensor],
+        cotangent: &TracedTensor,
+    ) -> Result<Vec<Option<TracedTensor>>> {
+        vjp_many_with_rules_and_cache(
+            self,
+            wrts,
+            cotangent,
+            &SemanticExtensionRuleSet::default(),
+            None,
+        )
+    }
 }
 
-fn semantic_jvp_with_cache(
-    source: &FrozenProgram,
-    active_inputs: &[bool],
-    rules: &SemanticExtensionRuleSet,
-    ad_transform_cache: Option<&AdTransformCache>,
-) -> Result<SemanticAdProgram> {
-    let key = SemanticAdTransformCacheKey::jvp(source, active_inputs);
-    if let Some(cache) = ad_transform_cache
-        && let Some(cached) = cache.get_semantic(&key, source)?
-    {
-        return cached
-            .as_ref()
-            .with_input_prefix_bindings_from(source)
-            .map_err(|source| {
-                Error::runtime_state_source(
-                    "semantic traced jvp cache",
-                    ErrorPhase::GraphBuild,
-                    source,
-                )
-            });
+fn single_runtime_output(mut outputs: Vec<Tensor>, op: &'static str) -> Result<Tensor> {
+    if outputs.len() != 1 {
+        return Err(Error::Internal(format!(
+            "{op}: expected exactly one execution output, got {}",
+            outputs.len()
+        )));
     }
-    let derivative =
-        semantic_jvp(source, active_inputs, rules).map_err(semantic_transform_error("jvp"))?;
-    if let Some(cache) = ad_transform_cache {
-        cache.put_semantic(key, source, Arc::new(derivative.clone()))?;
-    }
-    Ok(derivative)
-}
-
-fn semantic_vjp_with_cache(
-    source: &FrozenProgram,
-    active_inputs: &[bool],
-    active_outputs: &[bool],
-    rules: &SemanticExtensionRuleSet,
-    ad_transform_cache: Option<&AdTransformCache>,
-) -> Result<SemanticAdProgram> {
-    let key = SemanticAdTransformCacheKey::vjp(source, active_inputs, active_outputs);
-    if let Some(cache) = ad_transform_cache
-        && let Some(cached) = cache.get_semantic(&key, source)?
-    {
-        return cached
-            .as_ref()
-            .with_input_prefix_bindings_from(source)
-            .map_err(|source| {
-                Error::runtime_state_source(
-                    "semantic traced vjp cache",
-                    ErrorPhase::GraphBuild,
-                    source,
-                )
-            });
-    }
-    let derivative = semantic_vjp(source, active_inputs, active_outputs, rules)
-        .map_err(semantic_transform_error("vjp"))?;
-    if let Some(cache) = ad_transform_cache {
-        cache.put_semantic(key, source, Arc::new(derivative.clone()))?;
-    }
-    Ok(derivative)
+    Ok(outputs.remove(0))
 }
 
 fn semantic_transform_error(
@@ -880,313 +1105,6 @@ fn semantic_transform_validation_error(
         "semantic_ad_rule",
         format!("{op}: {message}"),
     ))
-}
-
-fn derivative_tensors_from_program(
-    source: &CompiledGraph,
-    derivative: &SemanticAdProgram,
-    derivative_output_indices: &[usize],
-    seed_tensors: &[(usize, Arc<RetainedValue>)],
-    inherited_tensors: &[&TracedTensor],
-    fallback_shape_hints: &[Option<Vec<SymDim>>],
-    transform: &'static str,
-) -> Result<Vec<TracedTensor>> {
-    derivative_traces_from_frozen_program(
-        source,
-        derivative.frozen(),
-        derivative_output_indices,
-        seed_tensors,
-        inherited_tensors,
-        fallback_shape_hints,
-        transform,
-    )
-}
-
-fn derivative_traces_from_frozen_program(
-    source: &CompiledGraph,
-    frozen: &FrozenProgram,
-    derivative_output_indices: &[usize],
-    seed_tensors: &[(usize, Arc<RetainedValue>)],
-    inherited_tensors: &[&TracedTensor],
-    fallback_shape_hints: &[Option<Vec<SymDim>>],
-    transform: &'static str,
-) -> Result<Vec<TracedTensor>> {
-    let input_shapes = symbolic_input_shapes(frozen)?;
-    let input_shape_refs: Vec<_> = input_shapes.iter().map(Vec::as_slice).collect();
-    let input_metas = frozen
-        .program
-        .inputs()
-        .iter()
-        .copied()
-        .map(|value| tensor_meta_for_value(frozen, value, &input_shape_refs, transform))
-        .collect::<Result<Vec<_>>>()?;
-
-    if derivative_output_indices.len() != fallback_shape_hints.len() {
-        return Err(Error::runtime_state(
-            transform,
-            ErrorPhase::GraphBuild,
-            "derivative output indices and fallback shape hints differ in length",
-        ));
-    }
-    let output_metas = derivative_output_indices
-        .iter()
-        .map(|&derivative_output_index| {
-            let output_value = *frozen
-                .program
-                .outputs()
-                .get(derivative_output_index)
-                .ok_or_else(|| {
-                    Error::runtime_state(
-                        transform,
-                        ErrorPhase::GraphBuild,
-                        format!(
-                            "derivative output index {derivative_output_index} is outside {} outputs",
-                            frozen.program.outputs().len()
-                        ),
-                    )
-                })?;
-            tensor_meta_for_value(frozen, output_value, &input_shape_refs, transform)
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let mut builder = GraphBuilder::<StdTensorOp>::new();
-    let mut value_map = HashMap::<ProgramValue, LocalValueId>::new();
-    let mut input_keys = Vec::with_capacity(frozen.program.inputs().len());
-    for (input_index, input) in frozen.program.inputs().iter().copied().enumerate() {
-        let key = if input_index < source.input_keys().len() {
-            source.input_keys()[input_index].clone()
-        } else {
-            allocate_input_key()
-        };
-        let local = builder.add_input(key.clone());
-        value_map.insert(input, local);
-        input_keys.push(key);
-    }
-
-    for operation in frozen.program.operations() {
-        let inputs = operation
-            .inputs()
-            .iter()
-            .copied()
-            .map(|value| {
-                value_map
-                    .get(&value)
-                    .copied()
-                    .map(ValueRef::Local)
-                    .ok_or_else(|| missing_program_value(transform, "operation input"))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let op = match operation.op() {
-            SemanticOpRef::Core(op) => StdTensorOp::from(op),
-            SemanticOpRef::Extension(op) => StdTensorOp::Extension(op.clone_arc()),
-            _ => {
-                return Err(Error::runtime_state(
-                    transform,
-                    ErrorPhase::GraphBuild,
-                    "unsupported semantic operation variant in derivative graph",
-                ));
-            }
-        };
-        let outputs = builder.add_operation(op, inputs, OperationRole::Primary);
-        if outputs.len() != operation.outputs().len() {
-            return Err(Error::runtime_state(
-                transform,
-                ErrorPhase::GraphBuild,
-                format!(
-                    "semantic operation expected {} outputs, graph builder produced {}",
-                    operation.outputs().len(),
-                    outputs.len()
-                ),
-            ));
-        }
-        for (value, local) in operation.outputs().iter().copied().zip(outputs) {
-            value_map.insert(value, local);
-        }
-    }
-
-    let graph_outputs = frozen
-        .program
-        .outputs()
-        .iter()
-        .copied()
-        .map(|value| {
-            value_map
-                .get(&value)
-                .copied()
-                .ok_or_else(|| missing_program_value(transform, "program output"))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let vals = derivative_output_indices
-        .iter()
-        .map(|&index| {
-            graph_outputs.get(index).copied().ok_or_else(|| {
-                Error::runtime_state(
-                    transform,
-                    ErrorPhase::GraphBuild,
-                    "derivative output index missing after graph conversion",
-                )
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    builder.set_outputs(graph_outputs);
-    let graph = Arc::new(builder.build());
-
-    let Some(primary_tensor) = inherited_tensors.first() else {
-        return Err(Error::runtime_state(
-            transform,
-            ErrorPhase::GraphBuild,
-            "derivative trace construction requires inherited source tensors",
-        ));
-    };
-    let mut inputs_map = (*tensor_inputs_map(primary_tensor)).clone();
-    for (input_index, key) in input_keys.iter().enumerate() {
-        if let Some(tensor) = frozen_input_value(frozen, input_index) {
-            inputs_map.insert(key.clone(), tensor);
-        }
-    }
-    for (seed_input_index, tensor) in seed_tensors {
-        let meta = input_metas.get(*seed_input_index).ok_or_else(|| {
-            Error::runtime_state(
-                transform,
-                ErrorPhase::GraphBuild,
-                format!("seed input index {seed_input_index} is outside derivative inputs"),
-            )
-        })?;
-        validate_seed_tensor(transform, *seed_input_index, tensor.as_ref(), meta)?;
-        let key = input_keys.get(*seed_input_index).ok_or_else(|| {
-            Error::runtime_state(
-                transform,
-                ErrorPhase::GraphBuild,
-                format!("seed input key {seed_input_index} is outside derivative inputs"),
-            )
-        })?;
-        inputs_map.insert(key.clone(), Arc::clone(tensor));
-    }
-
-    let source_input_count = source.input_keys().len();
-    let graph_input_metadata = graph
-        .inputs()
-        .iter()
-        .copied()
-        .zip(input_metas.iter().cloned())
-        .enumerate()
-        .filter_map(|(input_index, (input, meta))| {
-            // Source input keys are reused so derivative traces compose with the
-            // original eager tensor. Keep those keys owned by the source tensor's
-            // metadata scopes; derivative input metadata may be shape-specialized
-            // for the current run and must not shadow the source while the VJP/JVP
-            // result stays alive.
-            if input_index < source_input_count {
-                None
-            } else {
-                Some((graph.values()[input].key.clone(), meta))
-            }
-        });
-    let analysis = register_scoped_graph_analysis(graph.as_ref(), graph_input_metadata)?;
-    let inherited_constraint_scopes = inherited_tensors
-        .iter()
-        .map(|tensor| ConstraintScopeTransfer::from_tensor(tensor))
-        .collect::<Vec<_>>();
-
-    let inputs_map = Arc::new(inputs_map);
-    // The derivative graph is standalone (its input keys reference the source
-    // leaves directly), so inherited leaf metadata covers every leaf key the
-    // deferred eager analysis may re-seed from these traces.
-    let leaf_metas = merge_traced_leaf_metas(inherited_tensors.iter().copied());
-    let metadata_scopes = metadata_scopes_with_new(
-        analysis.metadata,
-        inherited_tensors
-            .iter()
-            .map(|tensor| tensor_metadata_scopes(tensor)),
-    );
-    let constraint_scope_transfer =
-        ConstraintScopeTransfer::with_new(analysis.constraints, inherited_constraint_scopes.iter());
-
-    Ok(vals
-        .into_iter()
-        .zip(output_metas)
-        .zip(fallback_shape_hints)
-        .map(|((val, output_meta), fallback_shape_hint)| {
-            tensor_from_parts(TracedTensorParts {
-                rank: output_meta.rank(),
-                dtype: output_meta.dtype,
-                graph: Arc::clone(&graph),
-                val,
-                data: None,
-                shape_hint: output_meta
-                    .exact_shape()
-                    .or_else(|| fallback_shape_hint.clone()),
-                inputs_map: Arc::clone(&inputs_map),
-                leaf_metas: Arc::clone(&leaf_metas),
-                extra_roots: Vec::new(),
-                checkpoint_chain: None,
-                metadata_scopes: metadata_scopes.clone(),
-                constraint_scope_transfer: constraint_scope_transfer.clone(),
-            })
-        })
-        .collect())
-}
-
-fn missing_program_value(transform: &'static str, role: &'static str) -> Error {
-    Error::runtime_state(
-        transform,
-        ErrorPhase::GraphBuild,
-        format!("semantic derivative graph references missing {role}"),
-    )
-}
-
-fn symbolic_input_shapes(frozen: &FrozenProgram) -> Result<Vec<Vec<SymDim>>> {
-    frozen
-        .program
-        .inputs()
-        .iter()
-        .copied()
-        .map(|value| {
-            let meta = frozen.program.value_metadata(value).map_err(|source| {
-                Error::runtime_state_source(
-                    "semantic traced AD input metadata",
-                    ErrorPhase::GraphBuild,
-                    source,
-                )
-            })?;
-            let tensor_id = allocate_shape_tensor_id();
-            Ok((0..meta.shape().len())
-                .map(|axis| SymDim::tensor_axis(tensor_id, axis))
-                .collect())
-        })
-        .collect()
-}
-
-fn tensor_meta_for_value(
-    frozen: &FrozenProgram,
-    value: ProgramValue,
-    input_shapes: &[&[SymDim]],
-    transform: &'static str,
-) -> Result<TensorMeta> {
-    let meta = frozen
-        .program
-        .value_metadata(value)
-        .map_err(|source| Error::runtime_state_source(transform, ErrorPhase::GraphBuild, source))?;
-    Ok(program_metadata_to_tensor_meta(meta, input_shapes))
-}
-
-fn program_metadata_to_tensor_meta(
-    metadata: &ProgramValueMetadata,
-    input_shapes: &[&[SymDim]],
-) -> TensorMeta {
-    let extents = metadata
-        .shape()
-        .iter()
-        .cloned()
-        .map(|extent| extent.map(|dim| SymDim::from_dim_expr(&dim, input_shapes)))
-        .collect();
-    // An externally defined scalar keeps the canonical identity its program declared,
-    // so a differentiated value can still be given a reproducible program identity.
-    let meta = TensorMeta::with_extents(metadata.dtype(), extents);
-    match metadata.scalar_identity() {
-        Some(identity) => meta.with_scalar_identity(identity),
-        None => meta,
-    }
 }
 
 fn validate_seed_tensor(

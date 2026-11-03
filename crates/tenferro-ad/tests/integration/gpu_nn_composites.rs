@@ -15,7 +15,8 @@ use tenferro_gpu::cuda::{
     CudaEngine,
 };
 use tenferro_runtime::{
-    DType, GraphCompiler, Runtime, Tensor, TensorRead, TensorSessionOpsExt, TracedTensor,
+    DType, GraphCompiler, Runtime, Tensor, TensorRead, TensorSessionOpsExt, TraceContext,
+    TracedTensor,
 };
 
 fn cuda_engine() -> CudaEngine {
@@ -379,11 +380,19 @@ fn cpu_runtime() -> Runtime {
 }
 
 /// Build `op` over placeholder inputs; returns the output and its placeholders.
-fn traced_op(op: Op, host: &Inputs) -> (TracedTensor, Vec<(TracedTensor, Tensor)>) {
-    let x = TracedTensor::input_concrete_shape(host.x.dtype(), host.x.shape()).unwrap();
+fn traced_op(
+    trace: &TraceContext,
+    op: Op,
+    host: &Inputs,
+) -> (TracedTensor, Vec<(TracedTensor, Tensor)>) {
+    let x = trace
+        .input_concrete_shape(host.x.dtype(), host.x.shape())
+        .unwrap();
     let mut bindings = vec![(x.clone(), host.x.duplicate().unwrap())];
     let mut placeholder = |tensor: &Tensor| {
-        let p = TracedTensor::input_concrete_shape(tensor.dtype(), tensor.shape()).unwrap();
+        let p = trace
+            .input_concrete_shape(tensor.dtype(), tensor.shape())
+            .unwrap();
         bindings.push((p.clone(), tensor.duplicate().unwrap()));
         p
     };
@@ -439,6 +448,7 @@ fn run_traced(
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn test_gpu_composites_traced_values_match_cpu() {
+    let trace = TraceContext::new();
     assert!(gpu_available(), "CUDA test requires an available device");
     let mut backend = cuda_engine();
     let gpu = cuda_runtime(&backend);
@@ -447,7 +457,7 @@ fn test_gpu_composites_traced_values_match_cpu() {
     for dtype in [DType::F64, DType::F32] {
         let host = inputs(dtype);
         for op in OPS {
-            let (y, bindings) = traced_op(op, &host);
+            let (y, bindings) = traced_op(&trace, op, &host);
             let cpu_value = host_f64(&run_traced(&cpu, &mut cpu_engine, &y, &bindings));
             let device_bindings: Vec<(TracedTensor, Tensor)> = bindings
                 .iter()

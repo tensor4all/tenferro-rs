@@ -1,8 +1,7 @@
 use crate::support;
 use support::{cpu_runtime, RunTraced};
 
-use tenferro_runtime::traced::TracedTensor;
-use tenferro_runtime::{Error as RuntimeError, ErrorPhase};
+use tenferro_runtime::{Error as RuntimeError, ErrorPhase, TraceContext};
 use tenferro_tensor::{
     DotGeneralConfig, Error as TensorError, ErrorKind, Tensor, TypedTensor, ValidationError,
     ValidationKind,
@@ -12,13 +11,17 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
-fn assert_validation_error(config: DotGeneralConfig, expected_kind: ValidationKind) {
-    let a =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]))
-            .unwrap();
-    let b =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]))
-            .unwrap();
+fn assert_validation_error(
+    trace: &TraceContext,
+    config: DotGeneralConfig,
+    expected_kind: ValidationKind,
+) {
+    let a = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]))
+        .unwrap();
+    let b = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]))
+        .unwrap();
     let err = a
         .dot_general(&b, config)
         .expect_err("invalid dot_general config should return an error");
@@ -39,7 +42,9 @@ fn assert_validation_error(config: DotGeneralConfig, expected_kind: ValidationKi
 
 #[test]
 fn traced_dot_general_rejects_out_of_bounds_contracting_dim() {
+    let trace = TraceContext::new();
     assert_validation_error(
+        &trace,
         DotGeneralConfig {
             lhs_contracting_dims: [5].as_slice().into(),
             rhs_contracting_dims: [0].as_slice().into(),
@@ -52,7 +57,9 @@ fn traced_dot_general_rejects_out_of_bounds_contracting_dim() {
 
 #[test]
 fn traced_dot_general_rejects_contracting_batch_overlap() {
+    let trace = TraceContext::new();
     assert_validation_error(
+        &trace,
         DotGeneralConfig {
             lhs_contracting_dims: [1].as_slice().into(),
             rhs_contracting_dims: [0].as_slice().into(),
@@ -65,12 +72,13 @@ fn traced_dot_general_rejects_contracting_batch_overlap() {
 
 #[test]
 fn traced_dot_general_accepts_valid_config() {
-    let a =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]))
-            .unwrap();
-    let b =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]))
-            .unwrap();
+    let trace = TraceContext::new();
+    let a = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]))
+        .unwrap();
+    let b = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]))
+        .unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),
@@ -149,7 +157,9 @@ fn dot_general_config_validate_dims_batch_count_mismatch() {
 
 #[test]
 fn traced_dot_general_rejects_rhs_out_of_bounds_contracting_dim() {
+    let trace = TraceContext::new();
     assert_validation_error(
+        &trace,
         DotGeneralConfig {
             lhs_contracting_dims: [1].as_slice().into(),
             rhs_contracting_dims: [5].as_slice().into(),
@@ -162,7 +172,9 @@ fn traced_dot_general_rejects_rhs_out_of_bounds_contracting_dim() {
 
 #[test]
 fn traced_dot_general_rejects_lhs_batch_out_of_bounds() {
+    let trace = TraceContext::new();
     assert_validation_error(
+        &trace,
         DotGeneralConfig {
             lhs_contracting_dims: [1].as_slice().into(),
             rhs_contracting_dims: [0].as_slice().into(),
@@ -175,7 +187,9 @@ fn traced_dot_general_rejects_lhs_batch_out_of_bounds() {
 
 #[test]
 fn traced_dot_general_rejects_rhs_batch_out_of_bounds() {
+    let trace = TraceContext::new();
     assert_validation_error(
+        &trace,
         DotGeneralConfig {
             lhs_contracting_dims: [1].as_slice().into(),
             rhs_contracting_dims: [0].as_slice().into(),
@@ -188,7 +202,9 @@ fn traced_dot_general_rejects_rhs_batch_out_of_bounds() {
 
 #[test]
 fn traced_dot_general_rejects_rhs_contracting_batch_overlap() {
+    let trace = TraceContext::new();
     assert_validation_error(
+        &trace,
         DotGeneralConfig {
             lhs_contracting_dims: [1].as_slice().into(),
             rhs_contracting_dims: [0].as_slice().into(),
@@ -201,7 +217,9 @@ fn traced_dot_general_rejects_rhs_contracting_batch_overlap() {
 
 #[test]
 fn traced_dot_general_rejects_duplicate_contracting_dims() {
+    let trace = TraceContext::new();
     assert_validation_error(
+        &trace,
         DotGeneralConfig {
             lhs_contracting_dims: [0, 0].as_slice().into(),
             rhs_contracting_dims: [0, 1].as_slice().into(),
@@ -258,16 +276,19 @@ fn dot_general_config_validate_dims_duplicate_batch_dims() {
 
 #[test]
 fn traced_dot_general_accepts_batched_valid_config() {
-    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(
-        vec![2, 2, 2],
-        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-    ))
-    .unwrap();
-    let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(
-        vec![2, 2, 2],
-        vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0],
-    ))
-    .unwrap();
+    let trace = TraceContext::new();
+    let a = trace
+        .from_tensor_concrete_shape(f64_tensor(
+            vec![2, 2, 2],
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        ))
+        .unwrap();
+    let b = trace
+        .from_tensor_concrete_shape(f64_tensor(
+            vec![2, 2, 2],
+            vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0],
+        ))
+        .unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),
