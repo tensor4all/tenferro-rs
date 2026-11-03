@@ -558,7 +558,8 @@ fn import_preserves_ordered_duplicate_roots_structure_binding_and_provenance() {
     let imported = destination
         .import(ProgramImport {
             program: source.program.as_ref(),
-            bindings: &source.bindings,
+            bindings: Some(&source.bindings),
+            input_map: &[],
             roots: &[y, x, y],
         })
         .unwrap();
@@ -613,7 +614,8 @@ fn import_empty_roots_is_a_noop_and_foreign_roots_roll_back() {
     let empty = destination
         .import(ProgramImport {
             program: source.program.as_ref(),
-            bindings: &source.bindings,
+            bindings: Some(&source.bindings),
+            input_map: &[],
             roots: &[],
         })
         .unwrap();
@@ -621,7 +623,8 @@ fn import_empty_roots_is_a_noop_and_foreign_roots_roll_back() {
     assert!(matches!(
         destination.import(ProgramImport {
             program: source.program.as_ref(),
-            bindings: &source.bindings,
+            bindings: Some(&source.bindings),
+            input_map: &[],
             roots: &[source_input, foreign],
         }),
         Err(ProgramBuildError::ForeignImportRoot)
@@ -651,7 +654,8 @@ fn import_rejects_bindings_from_another_frozen_program() {
     assert!(matches!(
         destination.import(ProgramImport {
             program: left.program.as_ref(),
-            bindings: &right.bindings,
+            bindings: Some(&right.bindings),
+            input_map: &[],
             roots: &[left_input],
         }),
         Err(ProgramBuildError::ForeignBindings)
@@ -682,7 +686,8 @@ fn import_uses_value_dependency_closure_and_keeps_observable_effects() {
     let imported = destination
         .import(ProgramImport {
             program: source.program.as_ref(),
-            bindings: &source.bindings,
+            bindings: Some(&source.bindings),
+            input_map: &[],
             roots: &[selected_output],
         })
         .unwrap();
@@ -779,7 +784,8 @@ fn semantic_identity_is_normalized_cached_and_excludes_bindings() {
     let roots = imported
         .import(ProgramImport {
             program: bound.program.as_ref(),
-            bindings: &bound.bindings,
+            bindings: Some(&bound.bindings),
+            input_map: &[],
             roots: bound.program.outputs(),
         })
         .unwrap();
