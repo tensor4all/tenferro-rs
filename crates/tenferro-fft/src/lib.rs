@@ -1503,10 +1503,10 @@ impl ExtensionOp for FftOp {
             let len = self.lengths.as_ref().map(|lengths| lengths[index]);
             out_shape[axis] = match self.operation.step_operation(index, count) {
                 FftOperation::C2cForward | FftOperation::C2cInverse => {
-                    transform_len_dim(len, &input_shape[axis])
+                    transform_len_dim(len, &input_shape[axis])?
                 }
                 FftOperation::R2cFull | FftOperation::R2cOnesided => {
-                    let len = transform_len_dim(len, &input_shape[axis]);
+                    let len = transform_len_dim(len, &input_shape[axis])?;
                     if self.operation.is_onesided() {
                         len / 2usize + 1usize
                     } else {
@@ -2653,8 +2653,21 @@ fn runtime_unsupported_dtype(op: &'static str, dtype: DType, expected: &'static 
     )
 }
 
-fn transform_len_dim(n: Option<usize>, input_dim: &SymDim) -> SymDim {
-    n.map(SymDim::from).unwrap_or_else(|| input_dim.clone())
+/// Symbolic companion of [`transform_len`].
+///
+/// It has to apply the same "transform length must be positive" rule: otherwise
+/// compile-time preparation publishes a zero extent for an input that the
+/// concrete path rejects.
+fn transform_len_dim(n: Option<usize>, input_dim: &SymDim) -> tenferro_tensor::Result<SymDim> {
+    let len = n.map(SymDim::from).unwrap_or_else(|| input_dim.clone());
+    if len.constant_value() == Some(0) {
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "fft",
+            "transform length",
+            "must be positive",
+        ));
+    }
+    Ok(len)
 }
 
 fn expected_dtype_description(operation: FftOperation) -> &'static str {
@@ -2742,7 +2755,17 @@ fn output_dim_c2r(input_dim: &SymDim, n: Option<usize>) -> tenferro_tensor::Resu
             validate_c2r_spectrum_len(input_len, output_len)?;
             Ok(SymDim::from(output_len))
         }
-        (Some(input_len), None) => Ok(SymDim::from(default_c2r_output_len(input_len)?)),
+        (Some(input_len), None) => {
+            let output_len = default_c2r_output_len(input_len)?;
+            if output_len == 0 {
+                return Err(tenferro_tensor::Error::invalid_argument(
+                    "irfft",
+                    "output length",
+                    "must be positive",
+                ));
+            }
+            Ok(SymDim::from(output_len))
+        }
         (None, Some(output_len)) => {
             if output_len == 0 {
                 return Err(tenferro_tensor::Error::invalid_argument(
@@ -2854,6 +2877,51 @@ mod tests {
             &[&shape]
         )
         .is_err());
+    }
+
+    #[test]
+    fn symbolic_irfft_rejects_a_length_one_spectrum_like_the_concrete_path() {
+        let op = FftOp::new(FftOperation::C2r, vec![0], None, FftNorm::Backward);
+        let shape = [SymDim::from(1usize)];
+
+        let symbolic =
+            tenferro_ops::ext_op::invoke_extension_shape_inference(&op, &[DType::C64], &[&shape])
+                .expect_err("a length-1 one-sided spectrum has output length 0");
+        let concrete =
+            output_shape_c2r(&[1usize], 0, None).expect_err("the concrete path rejects the same");
+
+        assert_eq!(symbolic.to_string(), concrete.to_string());
+    }
+
+    #[test]
+    fn symbolic_transform_length_rejects_zero_like_the_concrete_path() {
+        for (operation, dtype) in [
+            (FftOperation::C2cForward, DType::C64),
+            (FftOperation::R2cOnesided, DType::F64),
+        ] {
+            let concrete = transform_len(&[0usize], 0, None)
+                .expect_err("the concrete path rejects a zero transform length");
+
+            let zero_input = FftOp::new(operation, vec![0], None, FftNorm::Backward);
+            let shape = [SymDim::from(0usize)];
+            let symbolic = tenferro_ops::ext_op::invoke_extension_shape_inference(
+                &zero_input,
+                &[dtype],
+                &[&shape],
+            )
+            .expect_err("a symbolic zero extent must be rejected the same way");
+            assert_eq!(symbolic.to_string(), concrete.to_string(), "{operation:?}");
+
+            let zero_length = FftOp::new(operation, vec![0], Some(vec![0]), FftNorm::Backward);
+            let shape = [SymDim::from(4usize)];
+            let symbolic = tenferro_ops::ext_op::invoke_extension_shape_inference(
+                &zero_length,
+                &[dtype],
+                &[&shape],
+            )
+            .expect_err("an explicit zero transform length must be rejected");
+            assert_eq!(symbolic.to_string(), concrete.to_string(), "{operation:?}");
+        }
     }
 
     #[test]
