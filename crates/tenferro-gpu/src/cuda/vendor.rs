@@ -107,8 +107,9 @@ impl Cublas {
     /// # Errors
     ///
     /// [`GpuError::Unsupported`] for an operand layout the adapter does not take (a
-    /// non-positive extent or a leading dimension below the operand's row count), and the
-    /// library's typed failure.
+    /// non-positive extent, a leading dimension below the operand's row count, or an extent,
+    /// leading dimension or batch count above `i32::MAX`, which these 32-bit cuBLAS entry
+    /// points cannot express), and the library's typed failure.
     pub fn gemm(&mut self, call: &GemmRequest<'_>) -> Result<(), GpuError> {
         let (m, n, k) = call.shape;
         let (lda, ldb, ldc) = call.leading;
@@ -131,10 +132,19 @@ impl Cublas {
         let handle = self.handle;
         let dtype = call.dtype;
         let (a, b, c) = (call.a, call.b, call.c);
-        let (m, n, k) = (m as i32, n as i32, k as i32);
-        let (lda, ldb, ldc) = (lda as i32, ldb as i32, ldc as i32);
-        let (batches, stride_a, stride_b, stride_c) =
-            (batches as i32, stride_a, stride_b, stride_c);
+        let (m, n, k) = (
+            narrow_i32("gemm", "m", m)?,
+            narrow_i32("gemm", "n", n)?,
+            narrow_i32("gemm", "k", k)?,
+        );
+        let (lda, ldb, ldc) = (
+            narrow_i32("gemm", "lda", lda)?,
+            narrow_i32("gemm", "ldb", ldb)?,
+            narrow_i32("gemm", "ldc", ldc)?,
+        );
+        let batches = narrow_i32("gemm", "batch count", batches)?;
+        // The strides travel in the 64-bit strided-batched ABI (`c_longlong`), so they are
+        // not narrowed here.
         // SAFETY: the raw scope registered all three operands in this runtime, so the
         // addresses belong to it and stay alive until the scope's completion; the
         // library call runs on the runtime's stream.
@@ -194,6 +204,28 @@ impl Drop for Cublas {
             });
         }
     }
+}
+
+/// Narrow one cuBLAS size argument to its 32-bit entry-point type.
+///
+/// cuBLAS's extents, leading dimensions and batch count are `i32`. An `as` cast above
+/// `i32::MAX` wraps silently and runs a GEMM of a different size, so the value is refused
+/// with the field and its value instead of being narrowed.
+///
+/// # Errors
+///
+/// [`GpuError::Unsupported`] naming `field` and `value` when it does not fit.
+pub(crate) fn narrow_i32(
+    op: &'static str,
+    field: &'static str,
+    value: i64,
+) -> Result<i32, GpuError> {
+    i32::try_from(value).map_err(|_| {
+        GpuError::unsupported(
+            op,
+            format!("{field} = {value} does not fit the i32 range of the cuBLAS entry points"),
+        )
+    })
 }
 
 fn transpose(transposed: bool) -> cublas::cublasOperation_t {

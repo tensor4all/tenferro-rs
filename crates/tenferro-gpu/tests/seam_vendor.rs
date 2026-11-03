@@ -7,6 +7,7 @@ use t4a_cuda_kernels::DType;
 use tenferro_gpu::cuda::{
     gpu_available, Cublas, CudaDeviceId, CudaEngine, CudaRuntime, GemmRequest,
 };
+use tenferro_gpu::gpu::GpuError;
 
 fn runtime() -> Option<CudaRuntime> {
     if !gpu_available() {
@@ -184,4 +185,66 @@ fn an_impossible_leading_dimension_is_refused() {
             batches: (1, 0, 0, 0),
         })
         .is_err());
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn sizes_that_do_not_fit_the_cublas_entry_points_are_refused_before_launch() {
+    // tenferro-rs #2424: an extent, leading dimension or batch count above `i32::MAX` used
+    // to be narrowed with `as` and silently ran a GEMM of a different size. The request is
+    // refused before any operand is touched, so 4-element buffers are enough.
+    let Some(runtime) = runtime() else { return };
+    let a_buf = runtime.upload_bytes(&f64_bytes(&[1.0; 4])).expect("a");
+    let b_buf = runtime.upload_bytes(&f64_bytes(&[1.0; 4])).expect("b");
+    let c_buf = runtime.upload_bytes(&[0u8; 4 * 8]).expect("c");
+    let mut cublas = Cublas::new(&runtime).expect("cuBLAS");
+    let too_large = i64::from(i32::MAX) + 1;
+    let request = |shape: (i64, i64, i64),
+                   leading: (i64, i64, i64),
+                   batches: (i64, i64, i64, i64)| GemmRequest {
+        dtype: DType::F64,
+        a: &a_buf,
+        trans_a: false,
+        b: &b_buf,
+        trans_b: false,
+        c: &c_buf,
+        shape,
+        leading,
+        batches,
+    };
+    // Every leading dimension still covers its operand's row count, so the request reaches
+    // the narrowing step instead of being refused by the earlier layout checks.
+    let cases = [
+        (
+            "m",
+            request((too_large, 1, 1), (too_large, 1, too_large), (1, 0, 0, 0)),
+        ),
+        ("n", request((1, too_large, 1), (1, 1, 1), (1, 0, 0, 0))),
+        (
+            "k",
+            request((1, 1, too_large), (1, too_large, 1), (1, 0, 0, 0)),
+        ),
+        ("lda", request((1, 1, 1), (too_large, 1, 1), (1, 0, 0, 0))),
+        ("ldb", request((1, 1, 1), (1, too_large, 1), (1, 0, 0, 0))),
+        ("ldc", request((1, 1, 1), (1, 1, too_large), (1, 0, 0, 0))),
+        (
+            "batch count",
+            request((1, 1, 1), (1, 1, 1), (too_large, 0, 0, 0)),
+        ),
+    ];
+    for (field, call) in cases {
+        let error = cublas
+            .gemm(&call)
+            .expect_err("a size above i32::MAX must not reach cuBLAS");
+        match error {
+            GpuError::Unsupported { op, detail } => {
+                assert_eq!(op, "gemm");
+                assert!(
+                    detail.contains(&format!("{field} = {too_large}")),
+                    "{field}: expected the error to name this field and value, got {detail}"
+                );
+            }
+            other => panic!("{field}: expected a typed Unsupported error, got {other:?}"),
+        }
+    }
 }
