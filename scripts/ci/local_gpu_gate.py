@@ -47,7 +47,11 @@ ALLOWED_ROLES = ("admin", "maintain")
 SUMMARY_LIMIT = 60000
 
 ROOT = Path(__file__).resolve().parents[2]
-CUDA_CRATES = ("tenferro-gpu", "tenferro-ad", "tenferro-linalg", "tenferro-fft")
+CUDA_CRATES = ("tenferro-gpu", "tenferro-ad", "tenferro-linalg", "tenferro-fft",
+               "tenferro-einsum")
+# tenferro-einsum's CUDA tests are autodiff-gated (`cuda_eager_tensor.rs`), so the
+# archive selects that feature for it explicitly.
+CUDA_FEATURES = "cuda,tenferro-einsum/autodiff"
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -312,7 +316,7 @@ def lane_steps(
     return [
         ("CUDA archive", ["cargo", "nextest", "archive",
                           "--cargo-profile", "ci", "--archive-file", str(cuda_archive),
-                          *packages, "--features", "cuda"], env),
+                          *packages, "--features", CUDA_FEATURES], env),
         ("PJRT archive", ["cargo", "nextest", "archive",
                           "--cargo-profile", "ci", "--archive-file", str(pjrt_archive),
                           "-p", "tenferro-xla", "--features", "pjrt"], env),

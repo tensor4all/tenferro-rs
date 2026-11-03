@@ -275,7 +275,7 @@ class LaneStepTests(unittest.TestCase):
         cuda_archive = by_name["CUDA archive"][0]
         for crate in gate.CUDA_CRATES:
             self.assertIn(crate, cuda_archive)
-        self.assertEqual(cuda_archive[cuda_archive.index("--features") + 1], "cuda")
+        self.assertEqual(cuda_archive[cuda_archive.index("--features") + 1], gate.CUDA_FEATURES)
         self.assertEqual(by_name["CUDA host lane"][1]["CUDA_VISIBLE_DEVICES"], "")
         self.assertIn("gpu", by_name["CUDA device lane"][0])
         self.assertEqual(by_name["CUDA tutorial"][0], ["/t/ci/cuda_tutorial"])
