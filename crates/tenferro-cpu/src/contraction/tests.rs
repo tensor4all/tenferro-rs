@@ -95,7 +95,7 @@ mod plan_slot_reuse {
             out: Layout::new(&[m, n], &out_strides, 0),
             lhs_conj: false,
             rhs_conj: false,
-            serial: true,
+            budget: 1,
         }
     }
 
@@ -253,13 +253,51 @@ mod plan_slot_reuse {
     }
 }
 
-/// c64 products above tcontract's default `FaerLimit` volume (`1 << 17`) take
-/// faer at a thread budget of one (tensor4all-rs#1040), and equal a direct
-/// faer matmul to within a few ULP.
+/// How the c64 `FaerLimit` follows the host class and the thread budget.
+///
+/// tcontract's default sends c64 above `m*n*k = 1 << 17` to its packed driver.
+/// That driver is host-dependent (tcontract-rs#156): on AVX2 at a thread budget
+/// of one it never beats faer, while aarch64 (packed wins at `m = 16`) and
+/// AVX-512 keep the bound. A plan is not re-selected per call and one
+/// `CpuPlanCache` may be shared by engines of different widths, so the budget is
+/// part of the key.
 #[cfg(feature = "native")]
-mod faer_at_budget_one {
+mod faer_limit {
+    use crate::contraction::{default_faer_limit, take_last_route_was_faer};
     use crate::test_support::{cpu_engine, with_cpu_session};
     use tenferro_tensor::{Complex64, DotGeneralConfig, Tensor, TensorDot, TensorRead};
+    use threadteam::HostClass;
+
+    /// tcontract's own bound for c64.
+    const DEFAULT_BOUND: u64 = 1 << 17;
+    const HOSTS: [HostClass; 6] = [
+        HostClass::X86_64Avx512,
+        HostClass::X86_64Avx2,
+        HostClass::X86_64Scalar,
+        HostClass::Aarch64Apple,
+        HostClass::Aarch64,
+        HostClass::Generic,
+    ];
+
+    /// Only AVX2 at a budget of one lifts the c64 bound, and no other dtype is
+    /// bounded on any host.
+    #[test]
+    fn only_serial_avx2_lifts_the_c64_bound() {
+        for host in HOSTS {
+            for budget in [1, 2, 4] {
+                let limit = default_faer_limit(host, budget);
+                let c64 = if host == HostClass::X86_64Avx2 && budget == 1 {
+                    None
+                } else {
+                    Some(DEFAULT_BOUND)
+                };
+                assert_eq!(limit.c64, c64, "{} at a budget of {budget}", host.name());
+                assert_eq!(limit.f32, None, "{}: f32 is unbounded", host.name());
+                assert_eq!(limit.f64, None, "{}: f64 is unbounded", host.name());
+                assert_eq!(limit.c32, None, "{}: c32 is unbounded", host.name());
+            }
+        }
+    }
 
     fn config() -> DotGeneralConfig {
         DotGeneralConfig {
@@ -279,6 +317,23 @@ mod faer_at_budget_one {
                     ((x * 7 + i) % 211) as f64 / 105.0 - 1.0,
                 )
             })
+            .collect()
+    }
+
+    fn faer_f64_product(a: &[f64], b: &[f64], m: usize, k: usize, n: usize) -> Vec<f64> {
+        use crate::faer::{linalg::matmul::matmul, Accum, Mat, MatRef, Par};
+        let mut out = Mat::<f64>::zeros(m, n);
+        matmul(
+            out.as_mut(),
+            Accum::Replace,
+            MatRef::from_column_major_slice(a, m, k),
+            MatRef::from_column_major_slice(b, k, n),
+            1.0,
+            Par::Seq,
+        );
+        (0..n)
+            .flat_map(|j| (0..m).map(move |i| (i, j)))
+            .map(|(i, j)| *out.as_ref().get(i, j))
             .collect()
     }
 
@@ -373,20 +428,31 @@ mod faer_at_budget_one {
         })
     }
 
-    /// The #1040 shapes, all above the old `1 << 17` bound except `1x141x282`.
+    /// The #1040 shapes: budget one routes to faer exactly where the host class
+    /// lifts the c64 bound, and either route stays within the forward error
+    /// bound of a direct faer product.
     #[test]
-    fn serial_c64_takes_faer_and_matches_direct_faer() {
+    fn serial_c64_route_follows_the_host_class() {
+        let host = HostClass::detect();
+        let lifted = default_faer_limit(host, 1).c64.is_none();
         for (m, k, n) in [(1, 141, 282), (8, 141, 282), (141, 282, 141)] {
             let (av, bv) = (data(m * k, 1), data(k * n, 2));
             let a = Tensor::from_vec_col_major(vec![m, k], av.clone()).unwrap();
             let b = Tensor::from_vec_col_major(vec![k, n], bv.clone()).unwrap();
             let mut engine = cpu_engine(1).unwrap();
-            let _ = crate::contraction::take_last_route_was_faer();
+            let _ = take_last_route_was_faer();
             let got = run(&mut engine, &a, &b);
+            let below_bound = (m * k * n) as u64 <= DEFAULT_BOUND;
             assert_eq!(
-                crate::contraction::take_last_route_was_faer(),
-                Some(true),
-                "{m}x{k}x{n}: budget one must route to faer"
+                take_last_route_was_faer(),
+                Some(below_bound || lifted),
+                "{m}x{k}x{n}: {} at a budget of one must {}",
+                host.name(),
+                if below_bound || lifted {
+                    "route to faer"
+                } else {
+                    "keep tcontract's packed driver"
+                }
             );
             let want = faer_product(&av, &bv, m, k, n);
             let got = got.as_slice::<Complex64>().unwrap();
@@ -418,25 +484,78 @@ mod faer_at_budget_one {
         }
     }
 
-    /// The budget class is part of the plan key: a plan prepared by a serial
-    /// engine is not handed to a wider engine sharing the cache, and back.
+    /// The budget is part of the plan key: a plan prepared by a serial engine is
+    /// not handed to a wider engine sharing the cache, and back.
     #[test]
     fn shared_plan_cache_separates_budget_classes() {
         let (m, k, n) = (8, 141, 282);
+        let lifted = default_faer_limit(HostClass::detect(), 1).c64.is_none();
         let a = Tensor::from_vec_col_major(vec![m, k], data(m * k, 1)).unwrap();
         let b = Tensor::from_vec_col_major(vec![k, n], data(k * n, 2)).unwrap();
         let plans = crate::CpuPlanCache::new();
         let mut serial = cpu_engine(1).unwrap().with_plan_cache(plans.clone());
-        let mut wide = cpu_engine(4).unwrap().with_plan_cache(plans);
+        let mut wide = cpu_engine(4).unwrap().with_plan_cache(plans.clone());
         let _ = run(&mut serial, &a, &b);
-        assert_eq!(crate::contraction::take_last_route_was_faer(), Some(true));
+        assert_eq!(take_last_route_was_faer(), Some(lifted));
+        let misses = plans.stats().misses;
         let _ = run(&mut wide, &a, &b);
         assert_eq!(
-            crate::contraction::take_last_route_was_faer(),
+            plans.stats().misses,
+            misses + 1,
+            "a wider budget must plan again, not reuse the serial plan"
+        );
+        assert_eq!(
+            take_last_route_was_faer(),
             Some(false),
             "a wider budget keeps tcontract's default FaerLimit"
         );
         let _ = run(&mut serial, &a, &b);
-        assert_eq!(crate::contraction::take_last_route_was_faer(), Some(true));
+        assert_eq!(take_last_route_was_faer(), Some(lifted));
+    }
+
+    /// f64 is unbounded on every host, so the c64 change cannot move it.
+    ///
+    /// The bits are pinned by the configuration, not by this comparison: `f64`
+    /// is `None` for every class and budget, and `None` is also what the
+    /// previous code produced, so the plan, kernel and accumulation order are
+    /// unchanged. A direct faer matmul is a different entry point and is not
+    /// required to agree bitwise, so this checks the route and the error bound.
+    #[test]
+    fn serial_f64_keeps_the_faer_route() {
+        for (m, k, n) in [(8, 141, 282), (141, 282, 141)] {
+            let real = |len: usize, seed: usize| -> Vec<f64> {
+                (0..len)
+                    .map(|i| ((i * 2654435761 + seed * 40503) % 1009) as f64 / 503.0 - 1.0)
+                    .collect()
+            };
+            let (av, bv) = (real(m * k, 1), real(k * n, 2));
+            let a = Tensor::from_vec_col_major(vec![m, k], av.clone()).unwrap();
+            let b = Tensor::from_vec_col_major(vec![k, n], bv.clone()).unwrap();
+            let mut engine = cpu_engine(1).unwrap();
+            let _ = take_last_route_was_faer();
+            let got = run(&mut engine, &a, &b);
+            assert_eq!(
+                take_last_route_was_faer(),
+                Some(true),
+                "{m}x{k}x{n}: f64 above the c64 bound must route to faer"
+            );
+            let want = faer_f64_product(&av, &bv, m, k, n);
+            let got = got.as_slice::<f64>().unwrap();
+            let mut max_err: f64 = 0.0;
+            let mut scale: f64 = 0.0;
+            for (g, w) in got.iter().zip(&want) {
+                assert!(
+                    g.is_finite() && w.is_finite(),
+                    "{m}x{k}x{n}: non-finite value"
+                );
+                max_err = max_err.max((g - w).abs());
+                scale = scale.max(w.abs());
+            }
+            let bound = GAMMA_SAFETY * k as f64 * f64::EPSILON * scale;
+            assert!(
+                max_err <= bound,
+                "{m}x{k}x{n}: max error {max_err:e} exceeds {bound:e}"
+            );
+        }
     }
 }
