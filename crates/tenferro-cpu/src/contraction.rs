@@ -1,5 +1,7 @@
 //! Tensor-boundary adapters; numerical plans and scheduling belong to cpueinsum.
 
+#[cfg(feature = "blas")]
+mod blas_plan;
 #[cfg(test)]
 mod tests;
 mod workspaces;
@@ -23,10 +25,10 @@ use tenferro_tensor::{
 use threadteam::HostClass;
 use tinyvec::TinyVec;
 
+#[cfg(feature = "blas")]
+use blas_plan::BinaryPlan;
 #[cfg(feature = "native")]
 use cpueinsum::BinaryPlan;
-#[cfg(feature = "blas")]
-use cpueinsum_blas::BinaryPlan;
 
 /// The numerical route a binary contraction took, for allocation/route tests.
 ///
