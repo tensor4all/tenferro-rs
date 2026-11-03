@@ -90,6 +90,14 @@ impl Drop for ActivatedContext {
 
 /// State shared by every handle to one runtime.
 pub(crate) struct CudaRuntimeState {
+    /// Pinned host staging reused by explicit downloads. Allocating and freeing one per download
+    /// cost far more than the copy (a 4-byte `cuMemHostAlloc` measured 1.9 ms beside a 19 us
+    /// device-to-host copy), so one buffer lives here and grows on demand.
+    pub(crate) pinned_staging: Mutex<Option<crate::cuda::raw::PinnedStaging>>,
+    /// Pinned staging allocations this runtime made, whoever asked. One for the first download and
+    /// one per later growth; a per-call allocation would count every download.
+    pub(crate) pinned_staging_allocations: std::sync::atomic::AtomicU64,
+
     /// The execution owner. Explicit transfers take this lock for one admission;
     /// numerical submission borrows it mutably through the engine.
     pub(crate) runtime: Mutex<t4a_cuda_runtime::Runtime>,
@@ -263,6 +271,8 @@ impl CudaRuntime {
                 deferred_completions: std::sync::atomic::AtomicUsize::new(0),
                 stream_waits: std::sync::atomic::AtomicU64::new(0),
                 completion_checkpoints: std::sync::atomic::AtomicU64::new(0),
+                pinned_staging: Mutex::new(None),
+                pinned_staging_allocations: std::sync::atomic::AtomicU64::new(0),
             }),
         })
     }
@@ -514,6 +524,18 @@ impl CudaRuntime {
                 operation: "t4a_cuda_runtime::Runtime::alloc_pinned",
                 source: Box::new(error),
             })
+    }
+
+    /// Pinned staging allocations this runtime made, whoever asked.
+    ///
+    /// One for the first download and one per later growth of the staging buffer: a download that
+    /// allocated per call would count every download instead.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn pinned_staging_allocations(&self) -> u64 {
+        self.inner
+            .pinned_staging_allocations
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Wait for every queued operation and retire the detached handles it completes.
