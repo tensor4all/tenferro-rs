@@ -1,6 +1,9 @@
 # TracedTensor as a typed operation layer over TraceContext
 
-Status: proposed design for [#2417]. No implementation before maintainer review.
+Status: **accepted** (maintainer review on #2418 at `38877fabe`). D1-D5 approved
+with the decisions recorded in §5, plus two accepted additions: public multi-`wrt`
+reverse mode in P2 (§3.6, §7) and an end-to-end `samples/kdv-pinn` check in §8.
+No implementation before this design was approved; P1 may start after merge.
 
 Every count, line number and size below was taken from the checkout at
 `bdde3f2b6e82f0c9991f4170a642ad80dca7b707` with the command quoted next to it.
@@ -394,6 +397,26 @@ inside one context grows the context; the documented contract is one snapshot an
 a new context per iteration, which is what callers do today by starting new
 tensors.
 
+**Public multi-`wrt` reverse mode.** Today `jvp_many`/`vjp_many` are
+`pub(crate)` and `TracedTensorAdExt` exposes only single-`wrt` `grad`,
+`grad_optional`, `jvp`, `vjp`, so a caller with several parameters builds one
+program per parameter. `samples/kdv-pinn/src/main.rs:114-141` is the concrete
+case: `net.parameters().map(|p| total_loss.grad(p))` followed by one
+`compile_with_input_specs` per gradient, and one program run per parameter per
+epoch (`:173-175`). tenferro-rs#2419 lists this as a prerequisite.
+
+P2 exposes, on the same snapshot/transform/import path:
+
+```rust
+fn grad_many(&self, wrts: &[&TracedTensor]) -> Result<Vec<Option<TracedTensor>>>;
+fn value_and_grad(&self, wrts: &[&TracedTensor]) -> Result<(TracedTensor, Vec<Option<TracedTensor>>)>;
+```
+
+Both run one snapshot, one program-level transform for the whole `wrt` set and
+one import, so the backward is a single sweep. `jvp_many`/`vjp_many` become
+public at the same time, since they are the same operation with an explicit
+seed. The per-`wrt` methods stay as thin wrappers.
+
 ### 3.7 GraphCompiler
 
 After the change `GraphCompiler` has one lowering path,
@@ -516,18 +539,28 @@ is the per-tensor `inputs_map` copy, not bindings.
 
 ## 5. Decisions that need maintainer sign-off
 
-* **D1 handle representation.** `Rc<RefCell<_>>`, `&self` methods, `finish` no
-  longer consuming, `TracedTensor: !Send` (§3.1).
-* **D2 eager recording.** A private immutable op-application DAG replayed into a
-  fresh context per backward, instead of a frozen `SemanticProgram` per tensor
-  (§3.8). This is the design's one exception to "one representation".
-* **D3 import contract.** `ProgramImport` gains an input remap and optional
-  bindings, and the semantic AD transform imports structure without bindings
-  (§3.6).
-* **D4 extension trait count.** Two delegating traits per family instead of one
-  (§3.3), or dropping the traced method-chaining entry point.
-* **D5 checkpoint alias substitution.** Context alias table with the prefix-slice
-  refinement preserved (§3.5).
+All five were approved in the maintainer review of #2418 at `38877fabe`.
+
+* **D1 approved — handle representation.** `Rc<RefCell<TraceInner>>`, `&self`
+  methods, non-consuming `finish`, `TracedTensor: !Send` (§3.1). No public path
+  may panic on a borrow.
+* **D2 approved — eager recording.** A private immutable op-application journal
+  replayed into a fresh context per backward, as the design's one exception to
+  "one representation": it is never read by inference, identity, merge or
+  compile, only replayed into the canonical builder (§3.8). It stays private to
+  tenferro-ad, with `Send + Sync` assertions on both `EagerTensor` and the
+  journal type.
+* **D3 approved — import contract.** `ProgramImport` gains an input remap and
+  optional bindings; the semantic AD transform imports structure only (§3.6).
+* **D4 approved, option (b) — extension trait count.** Two traits per family, the
+  traced trait delegating in one line; method chaining stays (§3.3).
+* **D5 approved — checkpoint alias substitution.** Context alias table with the
+  `Slice(0..shape)` refinement preserved; the nested-truncate tests are the gate
+  (§3.5).
+
+Accepted additions beyond the original open questions: public multi-`wrt` reverse
+mode in P2 (§3.6, §7 test 4b) and the end-to-end `samples/kdv-pinn` epoch-time
+check in §8.
 
 ## 6. Migration phases
 
@@ -536,9 +569,21 @@ Each phase is one PR into `main`, green on its own; the last one closes #2417.
 | phase | scope | removed | public API broken | guards |
 |---|---|---|---|---|
 | P1 eager journal | tenferro-ad only: the `Node`/`ValueRef` journal (§3.8), one node per op, leaf nodes, replay at backward, residual identity by `(node, output)`, `Program` node for derivative results; replay uses the **existing** `SemanticProgramBuilder` API, so P1 does not depend on §3.1/§3.6 | eager's `append_raw_eager_outputs` use, residual `TracedTensor`, eager's deferred-analysis and graph-rebuild calls | none | `eager_tensor.rs:1431` Send+Sync (exists) plus a `Send + Sync` assertion on the journal; existing eager AD tests unchanged; counters: one node per op, one replay per backward; journal replay fingerprint equals the traced path's for the same op sequence, symbolic after shape change |
-| P2 context core | `TraceContext` handle, typed standard ops + composites (§3.2), `TracedTensor{ctx,value}`, context constructors, AD via snapshot/transform/import, checkpoint aliases, `GraphCompiler` single lowering path | §2.2 in full: merge regions of `compiler.rs`, graph assembly in `traced.rs`, `ad_support.rs` (641 lines) except thin helpers, `checkpoint.rs` (234), metadata scope chain, `extra_roots`, `inputs_map`/`leaf_metas` carriers, AD graph rebuild (400+ lines of `tenferro-ad/src/traced.rs`) | §3.9, plus `extension::apply` kept working and `public_surface_contract.rs` updated in the same PR | existing traced/AD/eager suites pass with migrated call sites only; new properties §7; docs/samples/ext migrated in the same PR |
+| P2 context core | `TraceContext` handle, typed standard ops + composites (§3.2), `TracedTensor{ctx,value}`, context constructors, AD via snapshot/transform/import, public multi-`wrt` `grad_many`/`value_and_grad` (§3.6), checkpoint aliases, `GraphCompiler` single lowering path | §2.2 in full: merge regions of `compiler.rs`, graph assembly in `traced.rs`, `ad_support.rs` (641 lines) except thin helpers, `checkpoint.rs` (234), metadata scope chain, `extra_roots`, `inputs_map`/`leaf_metas` carriers, AD graph rebuild (400+ lines of `tenferro-ad/src/traced.rs`) | §3.9, plus `extension::apply` kept working and `public_surface_contract.rs` updated in the same PR | existing traced/AD/eager suites pass with migrated call sites only; new properties §7; docs/samples/ext migrated in the same PR |
 | P3 extensions | `TraceContextLinalgExt`, `TraceContextFftExt`, merged einsum, sparse, tropical; traced traits delegate; composites written once on `(ctx, value)` | 19 `apply` sites in linalg `traced.rs`, 8 fft wrappers, sparse/tropical wrappers, duplicated composite bodies, `extension::apply` | family traits keep their names; `SparseCooTracedTensor` construction moves to the context | extension tests, oracle replay, `traced_ad_explicit.rs`, `householder_qr_small_appends` bench |
 | P4 downstream and cleanup | final docs/samples/skills pass, remaining hidden `pub` hooks removed, tensor4all-rs and yao-rs local build check against the new API (patch only, no push) | `TracedTensorParts`, `tensor_from_parts`, remaining `ad_support` accessors | closes the §3.9 removal list | `Closes #2417`; downstream build summary in the PR body |
+
+P2 stays one PR (two live representations on `main` between phases is worse), cut
+as a reviewable commit series so each commit builds:
+
+1. context handle and typed core ops (§3.1, §3.2);
+2. AD snapshot / transform / import, including public multi-`wrt` (§3.6);
+3. checkpoint aliases (§3.5);
+4. `GraphCompiler` single lowering path and the §2.2 deletions (§3.7);
+5. call-site migration in `crates/`, `ext/`, `samples/`;
+6. docs.
+
+The PR body maps each commit to the section of this document it implements.
 
 P2 is the large one: it rewrites `traced.rs` (3498 lines) and touches the 110
 `docs/` files and 62 integration test files that name `TracedTensor`. Splitting
@@ -573,6 +618,11 @@ New properties, one per mechanism that changes:
    does not duplicate program inputs (assert input count); symbolic extents are
    preserved through the transform (program fingerprint with two different
    concrete input shapes is identical).
+4b. **Multi-`wrt` (accepted addition).** `grad_many`/`value_and_grad` equal the
+   per-`wrt` `grad` results elementwise, and the backward runs once: count the
+   program-level transform calls (one, not one per `wrt`) and the program runs
+   per epoch in the migrated `samples/kdv-pinn`, which drops from one program per
+   parameter to one.
 5. **Checkpoint.** Gradient equals the un-checkpointed gradient, including a
    nested `dynamic_truncate` checkpoint; the forward provider-call count is one
    per checkpoint (counted, not timed).
@@ -594,6 +644,14 @@ pinned; the change is not accepted with a measured regression:
 * `crates/tenferro-runtime/benches/session_chain.rs`
 * new: op-count scaling (1, 10, 100, 1000 chained ops) for record, compile and
   grad, to catch an accidental O(n²) in the journal or the snapshot.
+
+End-to-end check (accepted addition): the migrated `samples/kdv-pinn`, wall time
+per epoch before and after on the same host, same thread and engine settings,
+reported next to the micro benchmarks. Its epoch loop is the one place where the
+multi-`wrt` change is visible end to end: at HEAD it compiles one gradient
+program per parameter (`main.rs:114-141`) and runs one program per parameter per
+epoch (`:173-175`), so the epoch time is the metric the multi-`wrt` API is
+supposed to move.
 
 Expected direction: per-op cost falls (one builder append instead of a graph
 fragment plus three map merges and a metadata registration), and compile becomes
