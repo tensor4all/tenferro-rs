@@ -559,16 +559,53 @@ impl TracedTensor {
     }
 
     /// Return the tensor element dtype recorded for this traced value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{DType, TraceContext};
+    ///
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert_eq!(x.dtype(), DType::F64);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn dtype(&self) -> DType {
         self.dtype
     }
 
     /// Return the rank recorded for this traced value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let matrix = trace.from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?;
+    /// assert_eq!(matrix.rank(), 2);
+    /// assert_eq!(matrix.neg()?.rank(), 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn rank(&self) -> usize {
         self.rank
     }
 
     /// Borrow the trace context this value belongs to.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let y = x.neg()?;
+    ///
+    /// // A derived value stays in its producer's context.
+    /// assert!(y.context().same_context(&trace));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn context(&self) -> &TraceContext {
         &self.ctx
     }

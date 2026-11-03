@@ -887,6 +887,21 @@ pub trait TracedTensorAdExt {
 
     /// Forward-mode JVPs for several leaves from one transform.
     ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_runtime::{DType, TraceContext};
+    ///
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let dx = trace.from_vec_col_major(vec![2], vec![1.0_f64, 0.0])?;
+    /// let loss = (&(&x * &x)?).reduce_sum(None)?;
+    /// let tangent = loss.jvp_many(&[(&x, &dx)])?;
+    /// assert!(tangent.is_some());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`Error::UnsupportedAdRule`] when a rule is unavailable, or a
@@ -897,6 +912,21 @@ pub trait TracedTensorAdExt {
     ) -> Result<Option<TracedTensor>>;
 
     /// Reverse-mode VJPs for several leaves from one transform.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::TracedTensorAdExt;
+    /// use tenferro_runtime::{DType, TraceContext};
+    ///
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let loss = (&(&x * &x)?).reduce_sum(None)?;
+    /// let seed = trace.from_vec_col_major(vec![], vec![1.0_f64])?;
+    /// let grads = loss.vjp_many(&[&x], &seed)?;
+    /// assert!(grads[0].is_some());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     ///
     /// # Errors
     ///

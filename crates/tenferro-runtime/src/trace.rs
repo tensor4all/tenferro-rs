@@ -53,6 +53,22 @@ impl TraceInner {
 /// cannot be used by another, and the handle is deliberately not `Send`: the
 /// trace is a single-threaded construction value, while eager execution keeps a
 /// frozen program instead of a live handle.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{DType, TraceContext};
+///
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// let y = x.reshape([2])?;
+///
+/// // A clone is the same trace; a second context is a different one.
+/// let same = trace.clone();
+/// assert!(same.same_context(&trace));
+/// assert!(!TraceContext::new().same_context(&trace));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub struct TraceContext {
     inner: Rc<RefCell<TraceInner>>,
 }
