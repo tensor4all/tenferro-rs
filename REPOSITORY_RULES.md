@@ -568,28 +568,10 @@ split.
 
 ## Unit Test Organization
 
-Keep production source files focused on production code. No inline
-`#[cfg(test)]` blocks in normal modules unless the file is a genuinely tiny
-leaf module and the test is trivially small. Prefer module-local test
-directories such as `src/<module>/tests/*.rs`, leaving only
-`#[cfg(test)] mod tests;` in the source file. Reserve crate-root `tests/` for
-integration tests. Do not use `include!` to inject test files.
-
-A developer reading `src/**` should not scroll through large unit-test blocks;
-split larger extracted suites by concern rather than keeping one monolithic
-module.
-
-Tests follow implementation ownership.
-
-- Public facade crates should prefer integration tests for user-visible
-  behavior.
-- Private implementation details must be tested in the owning crate, typically
-  an internal crate, not through a public facade.
-- If a crate sets `[lib] test = false`, do not add `src/**/tests`, inline
-  `#[cfg(test)] mod tests`, or other crate-local unit-test entrypoints.
-- If a private helper in a facade crate needs direct unit testing, move it into
-  the owning internal crate instead of re-enabling facade-crate lib tests.
-- Repository contract tests enforce this rule and must stay green in CI.
+The normative rule is the shared `tensor4all-agent-rules`
+`rules/rust/index.md` § Unit Test Organization. This heading stays because
+`scripts/repository-rules-review.py` routes it to the reviewer and enforces the
+inline `#[cfg(test)]` restriction from it.
 
 ## Device Transfer And Backend Buffer Errors
 
