@@ -293,38 +293,8 @@ pub fn inputs_map(tensor: &TracedTensor) -> Arc<HashMap<TensorInputKey, Arc<Reta
     Arc::clone(&tensor.inputs_map)
 }
 
-/// Return the retained construction-time leaf metadata map of a traced tensor.
-#[doc(hidden)]
-pub fn leaf_metas(tensor: &TracedTensor) -> Arc<HashMap<TensorInputKey, TensorMeta>> {
-    Arc::clone(&tensor.leaf_metas)
-}
-
-pub fn extra_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
-    tensor.extra_roots.clone()
-}
-
-pub fn checkpoint_chain(tensor: &TracedTensor) -> Option<Arc<CheckpointNode>> {
-    tensor.checkpoint_chain.clone()
-}
-
 pub fn metadata_scopes(tensor: &TracedTensor) -> &[Arc<GlobalMetadataScope>] {
     tensor.metadata_scopes.as_slice()
-}
-
-pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
-    tensor.resolve_roots()
-}
-
-/// Merge the input-value maps of several traced tensors into one bindings map.
-///
-/// The eager-AD raw carrier needs the same merged leaf bindings (`inputs_map`)
-/// that [`crate::extension::apply`] attaches to analyzed traces, so the
-/// deferred `compile_ad_source` can bind concrete values without re-walking.
-#[doc(hidden)]
-pub fn merge_traced_inputs_map<'a>(
-    inputs: impl IntoIterator<Item = &'a TracedTensor>,
-) -> Arc<HashMap<TensorInputKey, Arc<RetainedValue>>> {
-    crate::traced::merge_traced_inputs_map(inputs)
 }
 
 /// Merge the retained construction-time leaf metadata maps of several traced
@@ -350,22 +320,6 @@ pub fn compile_ad_source(
     output: &TracedTensor,
 ) -> Result<CompiledGraph> {
     compiler.compile_ad_source(output)
-}
-
-/// Compile an AD source with additional residual roots, preserving checkpoint aliases.
-///
-/// # Errors
-///
-/// Returns [`Error::Validation`] when the graph metadata or resolved shape
-/// constraints are invalid, [`Error::RuntimeState`] when a referenced value,
-/// input key, or registration table is missing or inconsistent, and
-/// [`Error::Internal`] when the graph violates a compiler invariant. Extension
-/// lowering failures retain their typed [`Error::Extension`] source.
-pub fn compile_ad_source_many(
-    compiler: &mut GraphCompiler,
-    outputs: &[&TracedTensor],
-) -> Result<CompiledGraph> {
-    compiler.compile_ad_source_many(outputs)
 }
 
 ///
