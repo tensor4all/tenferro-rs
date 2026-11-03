@@ -4,7 +4,7 @@
 //! computational graph can be compiled once and executed many times with
 //! different concrete parameter bindings.
 
-use tenferro_runtime::{DType, DotGeneralConfig, Result, TracedTensor};
+use tenferro_runtime::{TraceContext, DType, DotGeneralConfig, Result, TracedTensor};
 use tenferro_tensor::Tensor;
 
 /// A fully-connected layer using `TracedTensor` placeholders for weight and bias.
@@ -16,8 +16,9 @@ pub(crate) struct Linear {
 impl Linear {
     /// Create a new `Linear` layer with the given input/output feature sizes.
     pub(crate) fn new(in_features: usize, out_features: usize) -> Result<Self> {
-        let weight = TracedTensor::input_concrete_shape(DType::F64, &[in_features, out_features])?;
-        let bias = TracedTensor::input_concrete_shape(DType::F64, &[out_features])?;
+        let trace = tenferro_runtime::TraceContext::new();
+        let weight = trace.input_concrete_shape(DType::F64, &[in_features, out_features])?;
+        let bias = trace.input_concrete_shape(DType::F64, &[out_features])?;
         Ok(Self { weight, bias })
     }
 

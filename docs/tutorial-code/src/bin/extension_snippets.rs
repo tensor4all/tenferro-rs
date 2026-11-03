@@ -54,19 +54,20 @@ let product = sparse_matmul_eager(&left, &right)?;
         // snippet-start:sparse_extension_3
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_ext_sparse::{extension_modules, sparse_matmul, SparseCooTracedTensor};
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
+let trace = TraceContext::new();
 
 let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?;
 let left = SparseCooTracedTensor::from_parts(
     vec![1, 1],
     Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?,
-    TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64])?,
+    trace.from_vec_col_major(vec![1], vec![2.0_f64])?,
 )?;
 let right = SparseCooTracedTensor::from_parts(
     vec![1, 1],
     coords,
-    TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64])?,
+    trace.from_vec_col_major(vec![1], vec![3.0_f64])?,
 )?;
 let out = sparse_matmul(&left, &right)?;
 
@@ -108,10 +109,11 @@ let out = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->
         // snippet-start:tropical_extension_6
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_ext_tropical::{extension_modules, traced::tropical_dot_general_fused};
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+let trace = TraceContext::new();
 
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 4.0, 0.0])?;
-let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, -1.0, 5.0])?;
+let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 4.0, 0.0])?;
+let b = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, -1.0, 5.0])?;
 let out = tropical_dot_general_fused(&a, &b)?;
 
 let mut compiler = GraphCompiler::new();
