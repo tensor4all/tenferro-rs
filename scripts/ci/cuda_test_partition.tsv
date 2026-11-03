@@ -6,7 +6,6 @@ host	tenferro-ad	eager::tests::availability::backward_rejects_absent_derivative_
 host	tenferro-ad	eager::tests::availability::backward_rejects_empty_gradients_but_storage_allows_empty_groups
 host	tenferro-ad	eager::tests::availability::semantic_ad_ignores_retired_switch_in_fresh_processes
 host	tenferro-ad	eager::tests::availability::semantic_ad_returns_gradients_without_an_enable_switch
-host	tenferro-ad	eager::tests::deferred_eager_semantic_analysis_seeds_symbolic_leaf_metadata
 host	tenferro-ad	eager::tests::dropped_values_do_not_accumulate_in_the_runtime_registries
 host	tenferro-ad	eager::tests::eager_backward_with_accepts_vector_cotangent_seed
 host	tenferro-ad	eager::tests::eager_backward_with_rejects_mismatched_seed_shape
@@ -27,6 +26,13 @@ host	tenferro-ad	eager::tests::eager_retention_exposes_borrowed_values_and_expli
 host	tenferro-ad	eager::tests::eager_runtime_ad_transform_cache_reuses_recorded_graph_linearization
 host	tenferro-ad	eager::tests::eager_runtime_gradient_helpers_do_not_unwrap_poisoned_locks
 host	tenferro-ad	eager::tests::eager_runtime_jvp_returns_composable_semantic_trace
+host	tenferro-ad	eager::semantic::tests::semantic_values_and_nodes_are_send_and_sync
+host	tenferro-ad	eager::semantic::tests::one_node_is_recorded_per_applied_op
+host	tenferro-ad	eager::semantic::tests::multi_output_values_share_a_node_and_keep_distinct_identities
+host	tenferro-ad	eager::semantic::tests::replay_rejects_a_recorded_output_count_the_op_cannot_produce
+host	tenferro-ad	eager::semantic::tests::replayed_program_binds_each_leaf_once
+host	tenferro-ad	eager::tests::backward_replays_the_eager_record_once
+host	tenferro-ad	eager::tests::eager_journal_replay_matches_the_traced_path
 host	tenferro-ad	eager::tests::eager_runtime_vjp_can_use_semantic_trace_when_gate_enabled
 host	tenferro-ad	eager::tests::eager_runtime_vjp_returns_composable_tensor_without_touching_grad_slot
 host	tenferro-ad	eager::tests::eager_runtime_vjp_uses_semantic_trace_for_multi_input_graph_when_gate_enabled

@@ -727,7 +727,7 @@ fn runtime_bound_captured_views_materialize_untracked_inputs_in_session() -> Res
     let untracked = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
         session.add(&constant, &constant)
     })?;
-    assert!(untracked.semantic_trace.is_none());
+    assert!(untracked.semantic.is_none());
     let (reshaped, transposed, sliced, broadcast) =
         ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let _capture = ctx.capture_trace();
@@ -748,10 +748,7 @@ fn runtime_bound_captured_views_materialize_untracked_inputs_in_session() -> Res
         .iter()
         .enumerate()
     {
-        assert!(
-            value.semantic_trace.is_some(),
-            "missing trace for view {index}"
-        );
+        assert!(value.semantic.is_some(), "missing trace for view {index}");
     }
     assert_eq!(
         broadcast
