@@ -2,13 +2,14 @@ use tenferro_einsum::Subscripts;
 use tenferro_ext_tropical::{
     einsum::tropical_einsum_with_argmax, traced::tropical_einsum_subscripts, TropicalKind,
 };
-use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
+use tenferro_runtime::{DType, GraphCompiler};
 use tenferro_tensor::{Error, ErrorKind, Tensor, ValidationError};
 
 #[test]
 fn independent_symbolic_contract_enforces_repeated_tropical_labels() {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let trace = tenferro_runtime::TraceContext::new();
+    let lhs = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    let rhs = trace.input_symbolic_shape(DType::F64, 2).unwrap();
     assert_ne!(lhs.axis_sym_dim(1).unwrap(), rhs.axis_sym_dim(0).unwrap());
     let subscripts = Subscripts::parse("ij,jk->ik").unwrap();
     let output =

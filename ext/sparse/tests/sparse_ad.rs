@@ -7,7 +7,8 @@ use tenferro_ext_sparse::{
     SparseCooTensor, SparseCooTracedTensor,
 };
 use tenferro_runtime::{
-    Error, ErrorPhase, ExecutionEngine, GraphCompiler, Runtime, TensorRead, TracedTensor,
+    Error, ErrorPhase, ExecutionEngine, GraphCompiler, Runtime, TensorRead, TraceContext,
+    TracedTensor,
 };
 use tenferro_tensor::Tensor;
 
@@ -55,20 +56,24 @@ fn right_sparse(values: &[f64]) -> SparseCooTensor {
     .unwrap()
 }
 
-fn left_traced(values: &[f64]) -> SparseCooTracedTensor {
+fn left_traced(trace: &TraceContext, values: &[f64]) -> SparseCooTracedTensor {
     SparseCooTracedTensor::from_parts(
         vec![2, 2],
         coordinates(&[[0, 0], [0, 1], [1, 0]]),
-        TracedTensor::from_vec_col_major(vec![values.len()], values.to_vec()).unwrap(),
+        trace
+            .from_vec_col_major(vec![values.len()], values.to_vec())
+            .unwrap(),
     )
     .unwrap()
 }
 
-fn right_traced(values: &[f64]) -> SparseCooTracedTensor {
+fn right_traced(trace: &TraceContext, values: &[f64]) -> SparseCooTracedTensor {
     SparseCooTracedTensor::from_parts(
         vec![2, 2],
         coordinates(&[[0, 0], [1, 0], [0, 1]]),
-        TracedTensor::from_vec_col_major(vec![values.len()], values.to_vec()).unwrap(),
+        trace
+            .from_vec_col_major(vec![values.len()], values.to_vec())
+            .unwrap(),
     )
     .unwrap()
 }
@@ -83,11 +88,12 @@ fn right_symbolic(values: TracedTensor) -> SparseCooTracedTensor {
         .unwrap()
 }
 
-fn symbolic_values(len: usize) -> TracedTensor {
-    TracedTensor::from_tensor_symbolic_shape(
-        Tensor::from_vec_col_major(vec![len], vec![1.0_f64; len]).unwrap(),
-    )
-    .unwrap()
+fn symbolic_values(trace: &TraceContext, len: usize) -> TracedTensor {
+    trace
+        .from_tensor_symbolic_shape(
+            Tensor::from_vec_col_major(vec![len], vec![1.0_f64; len]).unwrap(),
+        )
+        .unwrap()
 }
 
 fn cpu_runtime_with_sparse(engine: &CpuEngine) -> Runtime {
@@ -152,8 +158,9 @@ fn eager_sparse_matmul_matches_dense_reference() -> TestResult {
 
 #[test]
 fn traced_sparse_matmul_executes_through_extension_runtime() -> TestResult {
-    let lhs = left_traced(&[2.0, 1.0, 3.0]);
-    let rhs = right_traced(&[10.0, 70.0, 20.0]);
+    let trace = TraceContext::new();
+    let lhs = left_traced(&trace, &[2.0, 1.0, 3.0]);
+    let rhs = right_traced(&trace, &[10.0, 70.0, 20.0]);
 
     let out = sparse_matmul(&lhs, &rhs)?;
     let values = run_values(out.values());
@@ -164,8 +171,9 @@ fn traced_sparse_matmul_executes_through_extension_runtime() -> TestResult {
 
 #[test]
 fn sparse_matmul_sum_gradients_match_dense_reference() -> TestResult {
-    let lhs = left_traced(&[2.0, 1.0, 3.0]);
-    let rhs = right_traced(&[10.0, 70.0, 20.0]);
+    let trace = TraceContext::new();
+    let lhs = left_traced(&trace, &[2.0, 1.0, 3.0]);
+    let rhs = right_traced(&trace, &[10.0, 70.0, 20.0]);
     let out = sparse_matmul(&lhs, &rhs)?;
     let loss = out.values().reduce_sum(Some(&[0]))?;
     let ad = sparse_ad();
@@ -183,9 +191,10 @@ fn sparse_matmul_sum_gradients_match_dense_reference() -> TestResult {
 
 #[test]
 fn tangent_shape_constraint_rejects_independent_sparse_tangent_mismatch() -> TestResult {
-    let lhs_values = symbolic_values(3);
-    let rhs_values = symbolic_values(3);
-    let tangent = symbolic_values(3);
+    let trace = TraceContext::new();
+    let lhs_values = symbolic_values(&trace, 3);
+    let rhs_values = symbolic_values(&trace, 3);
+    let tangent = symbolic_values(&trace, 3);
     assert_ne!(
         lhs_values.axis_sym_dim(0)?,
         tangent.axis_sym_dim(0)?,
@@ -198,7 +207,7 @@ fn tangent_shape_constraint_rejects_independent_sparse_tangent_mismatch() -> Tes
     let mut compiler = GraphCompiler::new();
     compiler.compile(&jvp)?;
 
-    let mismatched_tangent = symbolic_values(4);
+    let mismatched_tangent = symbolic_values(&trace, 4);
     let error = sparse_ad()
         .jvp(output.values(), lhs.values(), &mismatched_tangent)
         .expect_err("mismatched sparse tangent shape must fail during JVP seed validation");
@@ -216,8 +225,9 @@ fn tangent_shape_constraint_rejects_independent_sparse_tangent_mismatch() -> Tes
 
 #[test]
 fn primal_payload_shape_constraint_rejects_symbolic_nnz_mismatch() -> TestResult {
-    let lhs_values = symbolic_values(4);
-    let rhs_values = symbolic_values(3);
+    let trace = TraceContext::new();
+    let lhs_values = symbolic_values(&trace, 4);
+    let rhs_values = symbolic_values(&trace, 3);
     let lhs = left_symbolic(lhs_values);
     let rhs = right_symbolic(rhs_values);
     let output = sparse_matmul(&lhs, &rhs)?;
@@ -237,12 +247,13 @@ fn primal_payload_shape_constraint_rejects_symbolic_nnz_mismatch() -> TestResult
 
 #[test]
 fn cotangent_shape_constraint_rejects_sparse_vjp_output_nnz_mismatch() -> TestResult {
-    let lhs_values = symbolic_values(3);
-    let rhs_values = symbolic_values(3);
+    let trace = TraceContext::new();
+    let lhs_values = symbolic_values(&trace, 3);
+    let rhs_values = symbolic_values(&trace, 3);
     let lhs = left_symbolic(lhs_values);
     let rhs = right_symbolic(rhs_values);
     let output = sparse_matmul(&lhs, &rhs)?;
-    let cotangent = symbolic_values(5);
+    let cotangent = symbolic_values(&trace, 5);
     assert_ne!(
         output.values().axis_sym_dim(0)?,
         cotangent.axis_sym_dim(0)?,

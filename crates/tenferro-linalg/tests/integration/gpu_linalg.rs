@@ -13,7 +13,7 @@ use tenferro_linalg::{
     RankRevealingQrOptions, SvdDriver, SvdOptions, TensorLinalgExt, TensorReadLinalgExt,
     TracedTensorLinalgExt,
 };
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext, TracedTensor};
 use tenferro_tensor::{DType, Error, Tensor, TensorRead, TypedTensor};
 
 #[path = "gpu_linalg/svd_auto.rs"]
@@ -1978,12 +1978,18 @@ fn cuda_empty_rectangular_solve_and_inv_are_rejected() {
 
 /// Return the first error from building, compiling, preparing, or running a
 /// traced CUDA solve, or panic if every stage accepted the graph.
-fn cuda_traced_solve_error(gpu: &mut CudaEngine, shape: &[usize]) -> tenferro_runtime::Error {
+fn cuda_traced_solve_error(
+    trace: &TraceContext,
+    gpu: &mut CudaEngine,
+    shape: &[usize],
+) -> tenferro_runtime::Error {
     use tenferro_gpu::cuda::cuda_runtime_engine_registration;
 
-    let a = TracedTensor::from_vec_col_major(shape.to_vec(), Vec::<f64>::new())
+    let a = trace
+        .from_vec_col_major(shape.to_vec(), Vec::<f64>::new())
         .expect("empty traced coefficient");
-    let b = TracedTensor::from_vec_col_major(rhs_shape(shape), Vec::<f64>::new())
+    let b = trace
+        .from_vec_col_major(rhs_shape(shape), Vec::<f64>::new())
         .expect("empty traced rhs");
     let x = match a.solve(&b) {
         Ok(x) => x,
@@ -2030,10 +2036,11 @@ fn cuda_traced_solve_error(gpu: &mut CudaEngine, shape: &[usize]) -> tenferro_ru
 #[test]
 #[ignore = "requires a CUDA device"]
 fn cuda_traced_empty_rectangular_solve_is_rejected() {
+    let trace = TraceContext::new();
     assert!(gpu_available(), "CUDA test requires an available device");
     let mut gpu = gpu_backend();
     for shape in [&[0usize, 3][..], &[2, 3, 0][..]] {
-        let error = cuda_traced_solve_error(&mut gpu, shape);
+        let error = cuda_traced_solve_error(&trace, &mut gpu, shape);
         assert!(
             matches!(error, tenferro_runtime::Error::TensorRuntime(_)),
             "traced empty rectangular solve with {shape:?} must report a tensor validation error, got {error:?}"

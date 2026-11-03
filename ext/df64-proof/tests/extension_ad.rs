@@ -16,7 +16,7 @@ use tenferro_df64_proof::ad::Df64VjpRule;
 use tenferro_df64_proof::extension::{module, Df64Total, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime};
 use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
@@ -52,6 +52,7 @@ fn runtime_with_module() -> Runtime {
 
 #[test]
 fn the_total_sum_adjoint_broadcasts_the_cotangent() {
+    let trace = tenferro_runtime::TraceContext::new();
     let rules = SemanticExtensionRuleSet::new()
         .with_primal_vjp(Arc::new(Df64VjpRule))
         .expect("one rule per family");
@@ -62,19 +63,17 @@ fn the_total_sum_adjoint_broadcasts_the_cotangent() {
         .expect("ad context");
 
     let dtype = DType::External(std::any::TypeId::of::<Df64>());
-    let input =
-        TracedTensor::input_concrete_shape_declaring_scalar(dtype, &[2], DF64_SCALAR_IDENTITY)
-            .expect("traced input");
+    let input = trace
+        .input_concrete_shape_declaring_scalar(dtype, &[2], DF64_SCALAR_IDENTITY)
+        .expect("traced input");
     let total = apply(Arc::new(Df64Total), &[&input])
         .expect("traced total sum")
         .remove(0);
     let cotangent_value = external(vec![Df64::from_f64(3.0)], vec![]);
     let cotangent_input = cotangent_value.duplicate().expect("independent copy");
-    let cotangent = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
-        cotangent_value,
-        DF64_SCALAR_IDENTITY,
-    )
-    .expect("traced cotangent");
+    let cotangent = trace
+        .from_tensor_concrete_shape_declaring_scalar(cotangent_value, DF64_SCALAR_IDENTITY)
+        .expect("traced cotangent");
 
     let gradients = ad
         .vjp_many(&total, &[&input], &cotangent)
@@ -99,6 +98,7 @@ fn the_total_sum_adjoint_broadcasts_the_cotangent() {
 
 #[test]
 fn the_adjoint_retains_low_order_information() {
+    let trace = tenferro_runtime::TraceContext::new();
     let rules = SemanticExtensionRuleSet::new()
         .with_primal_vjp(Arc::new(Df64VjpRule))
         .expect("one rule per family");
@@ -110,19 +110,17 @@ fn the_adjoint_retains_low_order_information() {
 
     let low = 2f64.powi(-80);
     let dtype = DType::External(std::any::TypeId::of::<Df64>());
-    let input =
-        TracedTensor::input_concrete_shape_declaring_scalar(dtype, &[2], DF64_SCALAR_IDENTITY)
-            .expect("traced input");
+    let input = trace
+        .input_concrete_shape_declaring_scalar(dtype, &[2], DF64_SCALAR_IDENTITY)
+        .expect("traced input");
     let total = apply(Arc::new(Df64Total), &[&input])
         .expect("traced total sum")
         .remove(0);
     let cotangent_value = external(vec![Df64::from_f64(1.0) + Df64::from_f64(low)], vec![]);
     let cotangent_input = cotangent_value.duplicate().expect("independent copy");
-    let cotangent = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
-        cotangent_value,
-        DF64_SCALAR_IDENTITY,
-    )
-    .expect("traced cotangent");
+    let cotangent = trace
+        .from_tensor_concrete_shape_declaring_scalar(cotangent_value, DF64_SCALAR_IDENTITY)
+        .expect("traced cotangent");
     let gradients = ad
         .vjp_many(&total, &[&input], &cotangent)
         .expect("the registered rule emits the adjoint");
@@ -142,6 +140,7 @@ fn the_adjoint_retains_low_order_information() {
 
 #[test]
 fn the_total_sum_linearization_sums_the_tangents() {
+    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_df64_proof::ad::Df64LinearizeRule;
 
     let rules = SemanticExtensionRuleSet::new()
@@ -155,19 +154,17 @@ fn the_total_sum_linearization_sums_the_tangents() {
 
     let low = 2f64.powi(-80);
     let dtype = DType::External(std::any::TypeId::of::<Df64>());
-    let input =
-        TracedTensor::input_concrete_shape_declaring_scalar(dtype, &[2], DF64_SCALAR_IDENTITY)
-            .expect("traced input");
+    let input = trace
+        .input_concrete_shape_declaring_scalar(dtype, &[2], DF64_SCALAR_IDENTITY)
+        .expect("traced input");
     let total = apply(Arc::new(Df64Total), &[&input])
         .expect("traced total sum")
         .remove(0);
     let tangent_value = external(vec![Df64::from_f64(1.0), Df64::from_f64(low)], vec![2]);
     let tangent_input = tangent_value.duplicate().expect("independent copy");
-    let tangent = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
-        tangent_value,
-        DF64_SCALAR_IDENTITY,
-    )
-    .expect("traced tangent");
+    let tangent = trace
+        .from_tensor_concrete_shape_declaring_scalar(tangent_value, DF64_SCALAR_IDENTITY)
+        .expect("traced tangent");
 
     let jvp = ad
         .jvp(&total, &input, &tangent)

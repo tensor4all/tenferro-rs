@@ -28,7 +28,7 @@ use tenferro_cpu::{scalar_fold, CpuEngine};
 use tenferro_df64_proof::extension::{Df64Total, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime};
 use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
@@ -102,6 +102,7 @@ fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
 
 #[test]
 fn report_dispatch_overhead_for_a_contribution_operation() {
+    let trace = tenferro_runtime::TraceContext::new();
     let iterations = 2_000;
     let (runtime, mut engine, threads) = runtime();
     let mut compiler = GraphCompiler::new();
@@ -126,7 +127,9 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
     );
 
     // (a) A preset program through the runtime's prepared hot path.
-    let ordinary = TracedTensor::input_concrete_shape(DType::F64, &[2]).expect("traced input");
+    let ordinary = trace
+        .input_concrete_shape(DType::F64, &[2])
+        .expect("traced input");
     let doubled = (&ordinary + &ordinary).expect("traced add");
     let ordinary_program = compiler
         .compile_with_input_specs(&doubled, &[(&ordinary, DType::F64, &[2])])
@@ -139,11 +142,12 @@ fn report_dispatch_overhead_for_a_contribution_operation() {
 
     // (b) The contribution's program through the same path.
     let values = vec![Df64::from_f64(1.0), Df64::from_f64(2.0)];
-    let input = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
-        external(values.clone(), vec![2]),
-        DF64_SCALAR_IDENTITY,
-    )
-    .expect("traced leaf");
+    let input = trace
+        .from_tensor_concrete_shape_declaring_scalar(
+            external(values.clone(), vec![2]),
+            DF64_SCALAR_IDENTITY,
+        )
+        .expect("traced leaf");
     let outputs = apply(Arc::new(Df64Total), &[&input]).expect("traced total");
     let contribution_program = compiler
         .compile(&outputs[0])

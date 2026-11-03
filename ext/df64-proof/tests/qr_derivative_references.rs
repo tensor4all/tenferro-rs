@@ -29,7 +29,7 @@ use tenferro_df64_proof::ad::{Df64LinearizeRule, Df64VjpRule};
 use tenferro_df64_proof::extension::{module, Df64Qr, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TraceContext, TracedTensor};
 use tenferro_tensor::Tensor;
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
@@ -85,12 +85,10 @@ fn cotangent_context() -> AdContext {
         .expect("ad context")
 }
 
-fn leaf(values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
-    TracedTensor::from_tensor_concrete_shape_declaring_scalar(
-        external(values, shape),
-        DF64_SCALAR_IDENTITY,
-    )
-    .expect("traced leaf")
+fn leaf(trace: &TraceContext, values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
+    trace
+        .from_tensor_concrete_shape_declaring_scalar(external(values, shape), DF64_SCALAR_IDENTITY)
+        .expect("traced leaf")
 }
 
 /// `A = [[3], [4]]`, the orientation case, so the results can also be read by hand.
@@ -100,7 +98,8 @@ fn orientation_input() -> Vec<Df64> {
 
 /// Run `A -> QR` and return `(Q, R)` as `Df64` vectors.
 fn factorize(values: &[Df64], rows: usize, columns: usize) -> (Vec<Df64>, Vec<Df64>) {
-    let input = leaf(values.to_vec(), vec![rows, columns]);
+    let trace = TraceContext::new();
+    let input = leaf(&trace, values.to_vec(), vec![rows, columns]);
     let outputs = apply(Arc::new(Df64Qr), &[&input]).expect("traced QR");
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -135,17 +134,18 @@ fn relative_gap(lhs: Df64, rhs: Df64) -> f64 {
 
 #[test]
 fn the_jvp_and_vjp_satisfy_the_duality_identity() {
+    let trace = TraceContext::new();
     let (rows, columns) = (2, 1);
     let values = orientation_input();
     let tangent_values = vec![Df64::from_f64(1.0), Df64::from_f64(2.0)];
     let q_cotangent = vec![Df64::from_f64(0.5), Df64::from_f64(-0.25)];
     let r_cotangent = vec![Df64::from_f64(2.0)];
 
-    let input = leaf(values.clone(), vec![rows, columns]);
+    let input = leaf(&trace, values.clone(), vec![rows, columns]);
     let outputs = apply(Arc::new(Df64Qr), &[&input]).expect("traced QR");
 
     // Forward mode, one factor at a time: the tangent of Q and of R for the same tangent of A.
-    let tangent_leaf = leaf(tangent_values.clone(), vec![rows, columns]);
+    let tangent_leaf = leaf(&trace, tangent_values.clone(), vec![rows, columns]);
     let linearize = linearize_context();
     let q_dot = linearize
         .jvp(&outputs[0], &input, &tangent_leaf)
@@ -156,8 +156,8 @@ fn the_jvp_and_vjp_satisfy_the_duality_identity() {
 
     // Reverse mode, one factor at a time. The adjoint is linear in the cotangent, so the two
     // results add up to the cotangent of the input.
-    let q_leaf = leaf(q_cotangent.clone(), vec![rows, columns]);
-    let r_leaf = leaf(r_cotangent.clone(), vec![columns, columns]);
+    let q_leaf = leaf(&trace, q_cotangent.clone(), vec![rows, columns]);
+    let r_leaf = leaf(&trace, r_cotangent.clone(), vec![columns, columns]);
     let cotangents = cotangent_context();
     let q_bar = cotangents
         .vjp(&outputs[0], &input, &q_leaf)
@@ -237,6 +237,7 @@ fn the_jvp_and_vjp_satisfy_the_duality_identity() {
 
 #[test]
 fn the_factor_gradient_matches_a_central_difference_of_the_loss() {
+    let trace = TraceContext::new();
     // L(A) = sum(R * R), so dL/dR = 2R and the adjoint with that cotangent gives dL/dA, which is
     // [[6], [8]] for the orientation input.
     let (rows, columns) = (2, 1);
@@ -246,12 +247,12 @@ fn the_factor_gradient_matches_a_central_difference_of_the_loss() {
     // enough that the extended scalar resolves it many digits above its own rounding.
     let step = Df64::from_f64(1e-16);
 
-    let input = leaf(values.clone(), vec![rows, columns]);
+    let input = leaf(&trace, values.clone(), vec![rows, columns]);
     let outputs = apply(Arc::new(Df64Qr), &[&input]).expect("traced QR");
     let (_, r) = factorize(&values, rows, columns);
     let r_cotangent: Vec<Df64> = r.iter().map(|value| *value * Df64::from_f64(2.0)).collect();
 
-    let r_leaf = leaf(r_cotangent.clone(), vec![columns, columns]);
+    let r_leaf = leaf(&trace, r_cotangent.clone(), vec![columns, columns]);
     let gradient = cotangent_context()
         .vjp(&outputs[1], &input, &r_leaf)
         .expect("traced VJP of the loss");
