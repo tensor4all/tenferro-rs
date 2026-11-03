@@ -344,6 +344,10 @@ impl Coefficient {
 
 /// How many contraction plans (and their device workspaces) one handle retains.
 const MAX_CACHED_PLANS: usize = 32;
+/// Largest descriptor rank a contraction operand may have. cuTENSOR takes the rank as a
+/// `u32` and the mode labels as `i32`, so `i32::MAX` is the tighter of the two; the bound
+/// also keeps the `i32` label counter in `dot_modes` from overflowing.
+pub(crate) const MAX_TENSOR_MODES: usize = i32::MAX as usize;
 
 /// A cached plan and the workspace it was planned with.
 struct CachedPlan {
@@ -453,6 +457,19 @@ impl Cutensor {
                 return Err(GpuError::unsupported(
                     "contract",
                     "an operand's mode, extent and stride lists disagree",
+                ));
+            }
+            // cuTENSOR takes the descriptor rank as a `u32`, and the mode labels the caller
+            // builds are `i32`: both must be able to hold this operand's axis count
+            // (tenferro-rs #2424). A rank beyond either is refused here rather than truncated.
+            if operand.modes.len() > MAX_TENSOR_MODES {
+                return Err(GpuError::unsupported(
+                    "contract",
+                    format!(
+                        "a contraction operand has {} modes; the cuTENSOR descriptor rank \
+                         supports at most {MAX_TENSOR_MODES}",
+                        operand.modes.len()
+                    ),
                 ));
             }
         }

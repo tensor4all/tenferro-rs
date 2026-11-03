@@ -972,6 +972,10 @@ host	tenferro-gpu	cuda::runtime::tests::the_environment_names_the_persistent_art
 host	tenferro-gpu	event_retirement::tests::explicit_retirement_then_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_retirement_contains_provider_panic
+host	tenferro-gpu	cuda::tests::vendor_narrowing::a_negative_value_still_narrows
+host	tenferro-gpu	cuda::tests::vendor_narrowing::one_past_the_bound_is_refused_by_name_and_value
+host	tenferro-gpu	cuda::tests::vendor_narrowing::the_descriptor_rank_bound_fits_both_narrowing_types
+host	tenferro-gpu	cuda::tests::vendor_narrowing::the_largest_representable_value_is_accepted
 gpu	tenferro-gpu::blas1_cuda	cuda_axpby_accepts_a_non_contiguous_read
 gpu	tenferro-gpu::blas1_cuda	cuda_axpby_accepts_compact_views_with_offsets
 gpu	tenferro-gpu::blas1_cuda	cuda_axpby_accepts_strided_destination_regions
@@ -1170,6 +1174,7 @@ gpu	tenferro-gpu::seam_vendor	a_plain_gemm_matches_the_host
 gpu	tenferro-gpu::seam_vendor	a_strided_batched_gemm_matches_the_host
 gpu	tenferro-gpu::seam_vendor	a_transposed_operand_matches_the_host
 gpu	tenferro-gpu::seam_vendor	an_impossible_leading_dimension_is_refused
+gpu	tenferro-gpu::seam_vendor	sizes_that_do_not_fit_the_cublas_entry_points_are_refused_before_launch
 gpu	tenferro-gpu::storage_provider_cuda	cuda_duplicate_is_explicit_same_placement_allocation
 host	tenferro-gpu::storage_provider_cuda	cuda_provider_does_not_expose_safe_unscoped_raw_access
 gpu	tenferro-gpu::storage_provider_cuda	cuda_tensor_view_keeps_the_single_root_identity

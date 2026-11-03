@@ -5375,6 +5375,10 @@ fn dot_modes(
 ) -> DotModes {
     let batches = config.lhs_batch_dims.len();
     let contracted = config.lhs_contracting_dims.len();
+    // These are mode indices, not sizes. The total label count is one per axis across both
+    // operands, and `Cutensor::contract` refuses an operand above `MAX_TENSOR_MODES`
+    // (`i32::MAX`) before any cast reaches the descriptor, so `next` cannot overflow here
+    // (tenferro-rs #2424).
     let mut next = (batches + contracted) as i32;
     let assign = |named: [&[usize]; 2], modes: &mut [i32], next: &mut i32| -> Vec<usize> {
         for (index, &axis) in named[0].iter().enumerate() {

@@ -1462,7 +1462,7 @@ where
                     batch_a,
                     lda,
                     workspace_ptr,
-                    lwork as i32,
+                    lwork,
                     batch_info,
                     OP,
                 )

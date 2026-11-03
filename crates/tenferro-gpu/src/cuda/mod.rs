@@ -106,3 +106,6 @@ pub use publication::{
 pub use runtime::{CudaRuntime, CudaRuntimeIdentity};
 pub use transfer::{download_pending, download_tensor, upload_pending, upload_tensor};
 pub use vendor::{Cublas, GemmRequest};
+
+#[cfg(test)]
+mod tests;
