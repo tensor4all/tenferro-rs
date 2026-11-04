@@ -1184,3 +1184,80 @@ fn irfft_jvp_unsupported_error_names_irfft_and_jvp() {
         "{message}"
     );
 }
+
+/// A symbolic `irfft` with `n = None` whose spectrum axis is 1 at prepare time
+/// publishes a zero output extent, so preparation must refuse it exactly like the
+/// concrete path does instead of deferring the failure to execution (#2434).
+#[test]
+fn irfft_length_one_spectrum_is_rejected_at_preparation() {
+    let trace = tenferro_runtime::TraceContext::new();
+    let symbolic = trace.input_symbolic_shape(DType::C64, 1).unwrap();
+    let output = symbolic.irfft(None, -1, FftNorm::Backward).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&output).unwrap();
+    assert_eq!(program.input_count(), 1);
+
+    let engine = CpuEngine::serial();
+    let runtime = support::cpu_runtime_with_fft(&engine).unwrap();
+    let spectrum = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 0.0)]).unwrap();
+    let reads = [tenferro_tensor::TensorRead::from_tensor(&spectrum)];
+    let error = runtime
+        .prepare(&program, &reads, &[engine.target()])
+        .expect_err("a length-1 spectrum would publish a zero output extent");
+
+    match &error {
+        RuntimeError::Validation { phase, source, .. } => {
+            assert_eq!(
+                *phase,
+                ErrorPhase::Compile,
+                "preparation must reject the input, not execution: {error:?}"
+            );
+            assert!(
+                matches!(
+                    source,
+                    ValidationError::InvalidArgument { argument, .. } if *argument == "output length"
+                ),
+                "the concrete path's typed validation must survive: {error:?}"
+            );
+        }
+        other => panic!("expected typed validation at preparation, got {other:?}"),
+    }
+    assert!(error.to_string().contains("must be positive"), "{error}");
+}
+
+/// The preparation guard must not reject a symbolic `irfft` whose resolved
+/// spectrum length does publish a positive output extent.
+#[test]
+fn symbolic_irfft_with_a_positive_resolved_extent_still_prepares() {
+    let trace = tenferro_runtime::TraceContext::new();
+    let symbolic = trace.input_symbolic_shape(DType::C64, 1).unwrap();
+    let output = symbolic.irfft(None, -1, FftNorm::Backward).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&output).unwrap();
+
+    let mut engine = CpuEngine::serial();
+    let runtime = support::cpu_runtime_with_fft(&engine).unwrap();
+    let spectrum = Tensor::from_vec_col_major(
+        vec![3],
+        vec![
+            Complex64::new(10.0, 0.0),
+            Complex64::new(-2.0, 2.0),
+            Complex64::new(-2.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let reads = [tenferro_tensor::TensorRead::from_tensor(&spectrum)];
+    let prepared = runtime
+        .prepare(&program, &reads, &[engine.target()])
+        .expect("a length-3 spectrum publishes a positive output extent");
+    let outputs = runtime
+        .run(&mut [&mut engine], &prepared, &reads)
+        .expect("run");
+    let output = outputs
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_tensor(&mut engine)
+        .unwrap();
+    assert_eq!(output.shape(), &[4]);
+}
