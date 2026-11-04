@@ -321,6 +321,19 @@ fn cpu_registration(
     assemble_cpu_registration(engine, metadata, storage, state)
 }
 
+/// Build a runtime from the production CPU registration.
+///
+/// Unlike [`runtime_with_cpu`], this is the registration a caller installs, so
+/// `folds_metadata_views()` reports what the CPU engine really supports and
+/// `PreparedProgramRoot` folds metadata views. Tests that assert a broadcast reaches
+/// execution as a view need this one.
+fn runtime_with_production_cpu() -> Result<Runtime, RuntimeConfigError> {
+    let engine = CpuEngine::serial();
+    let mut builder = Runtime::builder();
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
+    builder.build()
+}
+
 fn runtime_with_cpu(backend: &CpuEngine) -> Result<Runtime, RuntimeConfigError> {
     let mut builder = Runtime::builder();
     builder.register_engine(cpu_registration(
@@ -3784,7 +3797,7 @@ fn run_outer_product(
     )?;
     let program = GraphCompiler::new().compile(&outer)?;
     let mut backend = CpuEngine::serial();
-    let runtime = runtime_with_cpu(&backend)?;
+    let runtime = runtime_with_production_cpu()?;
     Ok(run_compiled(
         &mut [&mut backend],
         &runtime,
@@ -3861,7 +3874,7 @@ fn outer_product_of_a_reshaped_operand_reads_only_its_own_shape() -> Result<(), 
     let program = GraphCompiler::new().compile(&output)?;
 
     let mut backend = CpuEngine::serial();
-    let runtime = runtime_with_cpu(&backend)?;
+    let runtime = runtime_with_production_cpu()?;
     let scalar_value = Tensor::from_vec_col_major(vec![], vec![7.0_f64])?;
     let x_value = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
     let result = run_compiled(
