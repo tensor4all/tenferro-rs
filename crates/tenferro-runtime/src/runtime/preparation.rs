@@ -2017,6 +2017,17 @@ fn validate_signature_arity(
 /// rule, and the caller sees the concrete path's typed validation at preparation
 /// (`ErrorPhase::Compile`) instead of a deferred execution failure.
 ///
+/// A zero extent is only refused on an axis the operation *derives*. A zero that
+/// merely carries an empty input axis through is a legitimate empty batch — the
+/// design allows it (`docs/design/fft-backend-execution.md`) and the backends return
+/// early for it — so `irfft` over a symbolic `[0, 3]` spectrum infers `[0, 4]` and
+/// prepares, exactly as it does when the same numbers arrive concretely (#2449).
+/// Which axes are derived is not declared anywhere in the extension metadata, so it
+/// is established from the operation's own inference: raising one empty input axis
+/// to 1 and re-inferring moves a copied axis with it, while a derived axis does not
+/// follow. An axis that no empty input axis explains stays refused, which is the
+/// #2434 shape (there the transformed extent itself becomes zero).
+///
 /// Extents that stay symbolic at preparation are left alone.
 pub(super) fn validate_resolved_extension_extents(
     frozen: &FrozenProgram,
@@ -2048,15 +2059,65 @@ pub(super) fn validate_resolved_extension_extents(
         let inferred =
             tenferro_ops::ext_op::invoke_extension_shape_inference(extension, &dtypes, &shape_refs)
                 .map_err(extension_prepare_error)?;
-        for (dtype, shape) in &inferred.output_metas {
-            for dim in shape {
-                if dim.constant_value() == Some(0) {
+        for (output_index, (dtype, shape)) in inferred.output_metas.iter().enumerate() {
+            for (axis, extent) in shape.iter().enumerate() {
+                if extent.constant_value() != Some(0) {
+                    continue;
+                }
+                if !empty_batch_explains_zero(&inputs, extension, output_index, axis) {
                     return Err(extension_zero_extent(extension, dtype));
                 }
             }
         }
     }
     Ok(())
+}
+
+/// Whether an empty input axis carries an output axis's zero through unchanged.
+///
+/// The operation derives this from nothing we can read, so it is probed: raise one
+/// empty input axis to 1 and re-infer. An output axis that is a copy of an empty
+/// batch moves with it; an axis the operation computes stays zero. Only the empty
+/// axes are probed, so a program without an empty input never pays for this, and a
+/// probe that the operation rejects cannot explain the zero.
+fn empty_batch_explains_zero(
+    inputs: &[ResolvedExtensionInput],
+    extension: &dyn ExtensionOp,
+    output_index: usize,
+    output_axis: usize,
+) -> bool {
+    let dtypes: Vec<DType> = inputs.iter().map(|input| input.dtype).collect();
+    for (input_index, input) in inputs.iter().enumerate() {
+        for empty_axis in 0..input.shape.len() {
+            if input.shape[empty_axis] != 0 {
+                continue;
+            }
+            let mut probed: Vec<Vec<SymDim>> = inputs
+                .iter()
+                .map(|input| input.shape.iter().copied().map(SymDim::from).collect())
+                .collect();
+            probed[input_index][empty_axis] = SymDim::from(1usize);
+            let shape_refs: Vec<&[SymDim]> = probed.iter().map(Vec::as_slice).collect();
+            let Ok(inferred) = tenferro_ops::ext_op::invoke_extension_shape_inference(
+                extension,
+                &dtypes,
+                &shape_refs,
+            ) else {
+                continue;
+            };
+            let Some((_, shape)) = inferred.output_metas.get(output_index) else {
+                continue;
+            };
+            if shape
+                .get(output_axis)
+                .and_then(SymDim::constant_value)
+                .is_some_and(|extent| extent != 0)
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// One extension input, resolved against the preparation signature.

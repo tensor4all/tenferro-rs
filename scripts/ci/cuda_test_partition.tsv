@@ -922,6 +922,7 @@ host	tenferro-fft::fft_ndim	outer_product_of_a_truncated_fft_uses_the_truncated_
 host	tenferro-fft::fft_ndim	rfftn_irfftn_round_trip_restores_the_real_grid
 host	tenferro-fft::fft_ndim	rfftn_matches_the_golden_fixture_and_the_onesided_half_of_fftn
 host	tenferro-fft::fft_ndim	traced_fftn_family_matches_the_eager_executor
+host	tenferro-fft::fft_ops	concrete_irfft_over_an_empty_batch_prepares_and_runs
 host	tenferro-fft::fft_ops	fft_c32_uses_host_runtime
 host	tenferro-fft::fft_ops	fft_c64_matches_numpy_convention
 host	tenferro-fft::fft_ops	fft_cpu_execution_reuses_cached_rustfft_plans
@@ -941,6 +942,7 @@ host	tenferro-fft::fft_ops	publishes_extension_family_id
 host	tenferro-fft::fft_ops	registered_runtime_rejects_gpu_input_without_ingress
 host	tenferro-fft::fft_ops	rfft_f32_returns_onesided_spectrum
 host	tenferro-fft::fft_ops	rfft_f64_returns_onesided_spectrum
+host	tenferro-fft::fft_ops	symbolic_irfft_over_an_empty_batch_prepares_and_runs
 host	tenferro-fft::fft_ops	symbolic_irfft_with_a_positive_resolved_extent_still_prepares
 host	tenferro-fft::fft_ops	traced_fft_rejects_invalid_dtype_axis_and_length
 host	tenferro-fft::fft_ops	traced_tensor_fft_ext_exposes_fft
