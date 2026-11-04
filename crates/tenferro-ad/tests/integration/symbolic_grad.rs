@@ -237,3 +237,22 @@ fn derivative_of_a_bound_symbolic_input_keeps_symbolic_extents() {
     let out = grad.run_with(&engine).expect("grad eval");
     assert_eq!(f64_data(&out), &[1.0, 1.0]);
 }
+
+#[test]
+fn grad_of_a_broadcast_singleton_bound_symbolic_input_matches_the_reduction() {
+    let trace = TraceContext::new();
+    // Declared symbolically, bound to a singleton axis, then broadcast and summed.
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let bound = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    trace
+        .bind_input(x.trace_value(), bound)
+        .expect("bind the symbolic leaf");
+    let broadcast = x.broadcast_in_dim(&[3], &[0]).unwrap();
+    let loss = broadcast.reduce_sum(Some(&[0])).unwrap();
+    let grad = loss.grad(&x).expect("grad build");
+
+    let engine = cpu_runtime();
+    let out = grad.run_with(&engine).expect("grad eval");
+    assert_eq!(out.shape(), &[1]);
+    assert_eq!(f64_data(&out), &[3.0]);
+}

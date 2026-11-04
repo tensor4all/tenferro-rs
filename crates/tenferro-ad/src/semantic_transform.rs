@@ -1284,6 +1284,32 @@ fn reshape_ad_value_to_input(
     truncate_ad_value_to_dynamic_axes(builder, reshaped, primal_input, &shape.dynamic_axes)
 }
 
+/// Whether `value`'s `axis` is known to have extent 1.
+///
+/// The rule has to decide whether a broadcast expanded a singleton axis, so it
+/// needs the length itself. A program imported for the transform keeps its symbolic
+/// extents, so the answer comes from the binding when the declaration is symbolic;
+/// the emitted payload still uses the symbolic expression.
+fn axis_is_known_singleton(
+    builder: &SemanticProgramBuilder,
+    value: ProgramValue,
+    axis: usize,
+) -> bool {
+    builder
+        .resolved_extents(value)
+        .ok()
+        .and_then(|extents| {
+            extents.get(axis).map(|extent| {
+                matches!(
+                    extent,
+                    ShapeExtent::Exact(DimExpr::Const(1))
+                        | ShapeExtent::UpperBound(DimExpr::Const(1))
+                )
+            })
+        })
+        .unwrap_or(false)
+}
+
 fn transpose_broadcast(
     builder: &mut SemanticProgramBuilder,
     value: AdValue,
@@ -1340,10 +1366,8 @@ fn transpose_broadcast(
             .copied()
             .enumerate()
             .filter_map(|(input_axis, output_axis)| {
-                (matches!(
-                    input_shape.shape[input_axis],
-                    tenferro_ops::dim_expr::DimExpr::Const(1)
-                ) && input_shape.shape[input_axis] != output_shape.shape[output_axis])
+                (axis_is_known_singleton(builder, primal_input, input_axis)
+                    && input_shape.shape[input_axis] != output_shape.shape[output_axis])
                     .then_some(output_axis)
             }),
     );
@@ -2035,7 +2059,7 @@ fn normalize_ad_value(
             .zip(value_shape.shape.iter().skip(leading))
             .enumerate()
             .filter_map(|(axis, (target, actual))| {
-                (matches!(target, tenferro_ops::dim_expr::DimExpr::Const(1)) && target != actual)
+                (axis_is_known_singleton(builder, primal_input, axis + leading) && target != actual)
                     .then_some(axis + leading)
             }),
     );
