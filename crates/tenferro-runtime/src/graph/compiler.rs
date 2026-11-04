@@ -677,6 +677,9 @@ fn validate_placeholder_shape(placeholder: &TracedTensor, shape: &[usize]) -> Re
 }
 
 #[cfg(test)]
+mod compile_contract_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::program::{CoreSemanticOp, ProgramInputSpec, SemanticProgramBuilder};

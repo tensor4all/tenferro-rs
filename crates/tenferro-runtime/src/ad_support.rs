@@ -71,3 +71,6 @@ pub fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
         )),
     }
 }
+
+#[cfg(test)]
+mod tests;
