@@ -564,3 +564,57 @@ fn test_dot_decomposer_scalar_operand_becomes_a_transpose_and_scale() {
     assert!(matches!(program.instructions[2].op, ExecOp::Multiply));
     assert_eq!(program.instructions[2].output_slots, vec![2]);
 }
+
+#[test]
+fn test_degenerate_dot_with_symbolic_output_shape_reads_its_shape_reference() {
+    // An outer product of `[InputDim(slot 0, 0)]` with a scalar. The emitted
+    // broadcast names the vector slot, not its own operand, so it has to read that
+    // slot as a shape reference instead of leaving the program input index in place.
+    let instr = dot_general_exec_instr(
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![0, 1],
+        2,
+        vec![DimExpr::InputDim {
+            input_idx: 0,
+            axis: 0,
+        }],
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    rewrite_degenerate_dots(
+        &mut program,
+        &[
+            vec![DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            }],
+            vec![],
+        ],
+    )
+    .unwrap();
+
+    let broadcast = program
+        .instructions
+        .iter()
+        .find(|instruction| matches!(instruction.op, ExecOp::BroadcastInDim { .. }))
+        .expect("an outer product broadcasts its scalar operand");
+    assert_eq!(
+        broadcast.input_slots.len(),
+        2,
+        "the broadcast reads the vector slot as its shape reference: {:?}",
+        broadcast.input_slots
+    );
+    assert_eq!(
+        broadcast.input_slots[1], 0,
+        "the appended shape reference is the program input slot the payload named"
+    );
+    assert!(matches!(
+        &broadcast.op,
+        ExecOp::BroadcastInDim { shape, dims }
+            if dims.is_empty()
+                && shape == &[DimExpr::InputDim { input_idx: 1, axis: 0 }]
+    ));
+}

@@ -476,6 +476,55 @@ fn rewrite_degenerate_dot(
     Ok(true)
 }
 
+/// Rewrite one shape payload expression from program-slot coordinates into the
+/// coordinates of the instruction that will carry it.
+///
+/// Every program input slot an expression names is appended to `input_slots` (once)
+/// and its reference is renumbered to that position, which the emitting instruction
+/// then reads as a shape reference instead of data.
+fn translate_shape_payload(expr: &DimExpr, input_slots: &mut Vec<usize>) -> DimExpr {
+    match expr {
+        DimExpr::Const(value) => DimExpr::Const(*value),
+        DimExpr::InputDim { input_idx, axis } => {
+            let positioned = match input_slots.iter().position(|slot| slot == input_idx) {
+                Some(position) => position,
+                None => {
+                    input_slots.push(*input_idx);
+                    input_slots.len() - 1
+                }
+            };
+            DimExpr::InputDim {
+                input_idx: positioned,
+                axis: *axis,
+            }
+        }
+        DimExpr::Add(lhs, rhs) => DimExpr::Add(
+            Box::new(translate_shape_payload(lhs, input_slots)),
+            Box::new(translate_shape_payload(rhs, input_slots)),
+        ),
+        DimExpr::Sub(lhs, rhs) => DimExpr::Sub(
+            Box::new(translate_shape_payload(lhs, input_slots)),
+            Box::new(translate_shape_payload(rhs, input_slots)),
+        ),
+        DimExpr::Mul(lhs, rhs) => DimExpr::Mul(
+            Box::new(translate_shape_payload(lhs, input_slots)),
+            Box::new(translate_shape_payload(rhs, input_slots)),
+        ),
+        DimExpr::FloorDiv(lhs, rhs) => DimExpr::FloorDiv(
+            Box::new(translate_shape_payload(lhs, input_slots)),
+            Box::new(translate_shape_payload(rhs, input_slots)),
+        ),
+        DimExpr::Min(lhs, rhs) => DimExpr::Min(
+            Box::new(translate_shape_payload(lhs, input_slots)),
+            Box::new(translate_shape_payload(rhs, input_slots)),
+        ),
+        DimExpr::Max(lhs, rhs) => DimExpr::Max(
+            Box::new(translate_shape_payload(lhs, input_slots)),
+            Box::new(translate_shape_payload(rhs, input_slots)),
+        ),
+    }
+}
+
 /// The permutation that reads `operand_shape` in `output_shape`'s order, or
 /// `None` when the shapes are not a permutation of each other.
 fn permutation_into(operand_shape: &[DimExpr], output_shape: &[DimExpr]) -> Option<Vec<usize>> {
@@ -506,14 +555,21 @@ fn emit_broadcast(
     builder: &mut InstructionBuilder<'_>,
 ) -> EmittedOperand {
     let out_slot = builder.next_slot();
-    let shape = output_shape.to_vec();
+    // `output_shape` names program input slots, while this instruction names only
+    // its own inputs: translate the payload and read every referenced slot as an
+    // auxiliary shape reference, exactly as the semantic layer does.
+    let mut input_slots = vec![operand.slot];
+    let shape: Vec<DimExpr> = output_shape
+        .iter()
+        .map(|dim| translate_shape_payload(dim, &mut input_slots))
+        .collect();
     builder.push(ExecInstruction {
         op: ExecOp::BroadcastInDim {
             shape: shape.clone(),
             dims,
         },
         semantic_operation_index: instr.semantic_operation_index,
-        input_slots: vec![operand.slot],
+        input_slots,
         output_slots: vec![out_slot],
         dtype: instr.dtype,
         output_extents: vec![exact_extents_from_shape(&shape)].into_iter().collect(),
