@@ -88,28 +88,24 @@ fn extended_context() -> AdContext {
 }
 
 fn standard_input() -> TracedTensor {
-    let trace = tenferro_runtime::TraceContext::new();
-    trace
-        .from_tensor_concrete_shape(
-            Tensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).expect("shape matches data"),
-        )
-        .expect("traced input")
+    TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).expect("shape matches data"),
+    )
+    .expect("traced input")
 }
 
 fn extended_input() -> TracedTensor {
-    let trace = tenferro_runtime::TraceContext::new();
-    trace
-        .from_tensor_concrete_shape_declaring_scalar(
-            Tensor::external(ErasedHostTensor::new(
-                TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
-                    vec![2, 1],
-                    vec![Df64::from_f64(3.0), Df64::from_f64(4.0)],
-                )
-                .expect("shape matches data"),
-            )),
-            DF64_SCALAR_IDENTITY,
-        )
-        .expect("traced input")
+    TracedTensor::from_tensor_concrete_shape_declaring_scalar(
+        Tensor::external(ErasedHostTensor::new(
+            TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+                vec![2, 1],
+                vec![Df64::from_f64(3.0), Df64::from_f64(4.0)],
+            )
+            .expect("shape matches data"),
+        )),
+        DF64_SCALAR_IDENTITY,
+    )
+    .expect("traced input")
 }
 
 fn run<S: ScalarSupport>(
@@ -119,12 +115,10 @@ fn run<S: ScalarSupport>(
     runtime: &Runtime,
     engine: &mut CpuEngine,
 ) -> Tensor {
-    let seed = input
-        .context()
-        .from_tensor_concrete_shape(
-            Tensor::from_vec_col_major(vec![], vec![1.0_f64]).expect("shape matches data"),
-        )
-        .expect("traced seed");
+    let seed = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![], vec![1.0_f64]).expect("shape matches data"),
+    )
+    .expect("traced seed");
     let gradient = factor_norm_gradient(ad, &input, &seed, support).expect("the program runs");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&gradient).expect("compiled program");
@@ -351,7 +345,6 @@ fn the_cooperating_configuration_serves_each_family_from_its_own_engine() {
 /// runtime refuses it with a typed error that names the disagreement.
 #[test]
 fn a_value_from_one_owner_reaches_the_other_owner_explicitly() {
-    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_df64_proof::extension::Df64FromF64;
 
     let Some((runtime, mut standard_engine, mut contribution_engine)) = two_owner_runtime() else {
@@ -360,11 +353,10 @@ fn a_value_from_one_owner_reaches_the_other_owner_explicitly() {
     };
 
     // The standard owner factors the matrix, so its factor is an ordinary f64 value.
-    let standard_input = trace
-        .from_tensor_concrete_shape(
-            Tensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).expect("shape matches data"),
-        )
-        .expect("traced input");
+    let standard_input = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).expect("shape matches data"),
+    )
+    .expect("traced input");
     let (q, _r) = standard_input.qr().expect("traced QR");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&q).expect("compiled the standard program");
@@ -376,9 +368,7 @@ fn a_value_from_one_owner_reaches_the_other_owner_explicitly() {
     assert_eq!(produced.dtype(), DType::F64);
 
     // The contribution's owner then reads that produced value.
-    let handed = trace
-        .from_tensor_concrete_shape(produced)
-        .expect("traced handoff");
+    let handed = TracedTensor::from_tensor_concrete_shape(produced).expect("traced handoff");
     let widened = apply(Arc::new(Df64FromF64), &[&handed]).expect("traced widening");
     let program = compiler
         .compile(&widened[0])

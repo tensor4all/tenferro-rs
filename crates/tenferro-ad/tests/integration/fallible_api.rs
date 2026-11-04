@@ -1,7 +1,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
-use tenferro_runtime::{DType, ErrorPhase, TraceContext};
+use tenferro_runtime::{DType, ErrorPhase, TracedTensor};
 use tenferro_tensor::{Error as TensorError, Tensor};
 
 #[test]
@@ -154,11 +154,10 @@ fn eager_dot_general_surfaces_validate_config_before_dispatch_source_contract() 
 
 #[test]
 fn traced_jvp_vjp_grad_return_typed_errors_for_inactive_inputs() {
-    let trace = TraceContext::new();
-    let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    let y = trace.from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
-    let tangent = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
-    let cotangent = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
+    let tangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let cotangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     let loss = (&y * &y).unwrap();
 
     // The documented inactive-`wrt` state is user-reachable input validation, not
@@ -188,11 +187,10 @@ fn traced_jvp_vjp_grad_return_typed_errors_for_inactive_inputs() {
 
 #[test]
 fn traced_jvp_vjp_return_errors_for_symbolic_seed_tensors() {
-    let trace = TraceContext::new();
-    let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
     let loss = (&x * &x).unwrap();
-    let tangent = trace.input_symbolic_shape(DType::F64, 0).unwrap();
-    let cotangent = trace.input_symbolic_shape(DType::F64, 0).unwrap();
+    let tangent = TracedTensor::input_symbolic_shape(DType::F64, 0).unwrap();
+    let cotangent = TracedTensor::input_symbolic_shape(DType::F64, 0).unwrap();
 
     let jvp = catch_unwind(AssertUnwindSafe(|| loss.jvp(&x, &tangent)));
     assert!(jvp.is_ok(), "jvp should return Err, not panic");

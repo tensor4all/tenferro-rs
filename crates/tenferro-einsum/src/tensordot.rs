@@ -119,7 +119,7 @@ pub(crate) fn validate_traced_contract_dims(
     config: &DotGeneralConfig,
 ) -> Result<()> {
     config
-        .validate_dims_with_ranks(lhs.rank(), rhs.rank())
+        .validate_dims_with_ranks(lhs.rank, rhs.rank)
         .map_err(|error| graph_build_tensor_error("tensordot", error))?;
     for (&lhs_axis, &rhs_axis) in config
         .lhs_contracting_dims

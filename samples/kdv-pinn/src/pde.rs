@@ -36,9 +36,9 @@ fn ones_like(tensor: &TracedTensor) -> Result<TracedTensor> {
         .try_concrete_shape()
         .ok_or_else(|| Error::Internal("placeholder shape must be concrete".to_string()))?;
     let len = shape.iter().product::<usize>();
-    let ones = match tensor.dtype() {
+    let ones = match tensor.dtype {
         tenferro_runtime::DType::F64 => {
-            tensor.context().from_vec_col_major(shape.clone(), vec![1.0_f64; len])
+            TracedTensor::from_vec_col_major(shape.clone(), vec![1.0_f64; len])
         }
         dtype => {
             return Err(Error::Internal(format!(

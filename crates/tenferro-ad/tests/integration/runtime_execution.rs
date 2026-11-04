@@ -1,15 +1,21 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use computegraph::graph::GraphBuilder;
 use tenferro_ad::TracedTensorAdExt;
+use tenferro_ops::input_key::TensorInputKey;
+use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::error::Error;
-use tenferro_runtime::{DType, GraphCompiler, Tensor, TraceContext};
+use tenferro_runtime::{
+    ad_support::{tensor_from_parts, ConstraintScopeTransfer, RetainedValue, TracedTensorParts},
+    DType, GraphCompiler, SymDim, Tensor, TracedTensor,
+};
 
 use crate::support::{cpu_runtime, run_compiled_one};
 
 #[test]
 fn runtime_runs_compiled_single_output_program() {
-    let trace = TraceContext::new();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -23,10 +29,7 @@ fn runtime_runs_compiled_single_output_program() {
 
 #[test]
 fn runtime_runs_compiled_multi_output_program() {
-    let trace = TraceContext::new();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let sum = (&x + &x).unwrap();
     let product = (&x * &x).unwrap();
 
@@ -43,8 +46,7 @@ fn runtime_runs_compiled_multi_output_program() {
 
 #[test]
 fn checkpoint_uses_explicit_compiler_and_runtime() {
-    let trace = TraceContext::new();
-    let x = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
     let mut y = (&x * &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -63,10 +65,7 @@ fn checkpoint_uses_explicit_compiler_and_runtime() {
 
 #[test]
 fn checkpoint_reuses_existing_cached_data_without_recompiling() {
-    let trace = TraceContext::new();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let mut y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -92,8 +91,7 @@ fn checkpoint_reuses_existing_cached_data_without_recompiling() {
 
 #[test]
 fn checkpoint_gradient_runs_through_runtime() {
-    let trace = TraceContext::new();
-    let x = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
     let mut y = (&x * &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -115,8 +113,7 @@ fn checkpoint_gradient_runs_through_runtime() {
 
 #[test]
 fn runtime_validates_runtime_bindings() {
-    let trace = TraceContext::new();
-    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -136,8 +133,7 @@ fn runtime_validates_runtime_bindings() {
 
 #[test]
 fn runtime_rejects_invalid_ordered_inputs() {
-    let trace = TraceContext::new();
-    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -180,43 +176,8 @@ fn runtime_rejects_invalid_ordered_inputs() {
 }
 
 #[test]
-fn a_default_bound_to_one_input_never_satisfies_another_input() {
-    let trace = TraceContext::new();
-    // Two inputs with the same dtype and shape. Only the first carries a default,
-    // so the second stays unbound: a binding belongs to the input it names, never
-    // to a sibling that happens to look the same.
-    let with_default = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
-    trace
-        .bind_input(
-            with_default.trace_value(),
-            Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
-        )
-        .expect("default binding");
-    let needs_a_value = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
-    let output = (&with_default + &needs_a_value).unwrap();
-
-    let mut compiler = GraphCompiler::new();
-    let program = compiler.compile(&output).unwrap();
-    let executor = cpu_runtime();
-
-    let err = run_compiled_one(&executor, &program, &[]).unwrap_err();
-    assert!(
-        matches!(err, Error::UnboundPlaceholder { .. }),
-        "a sibling's default must not bind this input: {err:?}"
-    );
-
-    // Supplying the missing input explicitly is enough; the default fills the other.
-    let filled = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-    let out = run_compiled_one(&executor, &program, &[&filled]).unwrap();
-    assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-}
-
-#[test]
 fn runtime_cache_stats_are_separate_from_compiler_stats() {
-    let trace = TraceContext::new();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -244,4 +205,38 @@ fn runtime_cache_controls_are_available() {
     let stats = executor.cache_stats().unwrap();
     assert_eq!(stats.extensions.entries, 0);
     assert_eq!(stats.prepared_plans.entries, 0);
+}
+
+#[test]
+fn graph_compiler_rejects_unbound_tangent_even_when_primal_has_default() {
+    let primal_key = TensorInputKey::User { id: 1234 };
+    let tangent_key = primal_key.tangent_of(7);
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let tangent_id = builder.add_input(tangent_key);
+    builder.set_outputs(vec![tangent_id]);
+    let graph = Arc::new(builder.build());
+
+    let primal = Arc::new(RetainedValue::from_tensor(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+    ));
+    let output = tensor_from_parts(TracedTensorParts {
+        rank: 1,
+        dtype: DType::F64,
+        graph,
+        val: tangent_id,
+        data: None,
+        shape_hint: Some(vec![SymDim::from(2usize)]),
+        inputs_map: Arc::new(HashMap::from([(primal_key, primal)])),
+        leaf_metas: Arc::new(HashMap::new()),
+        extra_roots: Vec::new(),
+        checkpoint_chain: None,
+        metadata_scopes: Vec::new(),
+        constraint_scope_transfer: ConstraintScopeTransfer::empty(),
+    });
+
+    let err = GraphCompiler::new().compile(&output).unwrap_err();
+    assert!(
+        matches!(err, Error::UnboundPlaceholder { ref input_key } if input_key.contains("Tangent")),
+        "dangling tangent inputs must not be silently bound from primal defaults: {err:?}"
+    );
 }

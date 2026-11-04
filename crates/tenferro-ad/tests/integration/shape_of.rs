@@ -1,7 +1,7 @@
 use crate::support;
 use support::{cpu_runtime, RunTraced};
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_runtime::{Tensor, TraceContext, TypedTensor};
+use tenferro_runtime::{Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -15,10 +15,8 @@ fn get_f64_scalar(tensor: &Tensor) -> f64 {
 
 #[test]
 fn shape_of_returns_axis_size() {
-    let trace = TraceContext::new();
     let engine = cpu_runtime();
-    let x = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![3, 5, 7], vec![0.0; 105]))
+    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 5, 7], vec![0.0; 105]))
         .unwrap();
     let s0 = x.shape_of(0).unwrap();
     let s1 = x.shape_of(1).unwrap();
@@ -31,10 +29,8 @@ fn shape_of_returns_axis_size() {
 
 #[test]
 fn shape_of_grad_is_zero() {
-    let trace = TraceContext::new();
-    let x = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![4, 3], vec![0.0; 12]))
-        .unwrap();
+    let x =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4, 3], vec![0.0; 12])).unwrap();
     let s = x.shape_of(0).unwrap();
     assert!(s.grad_optional(&x).unwrap().is_none());
 }

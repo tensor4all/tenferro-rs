@@ -1,7 +1,7 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 fn cpu_runtime_with_fft(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>> {
     let mut builder = Runtime::builder();
@@ -13,18 +13,16 @@ fn cpu_runtime_with_fft(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::erro
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let trace = TraceContext::new();
-    let x = trace
-        .from_vec_col_major(
-            vec![4],
-            vec![
-                Complex64::new(1.0, 0.0),
-                Complex64::new(2.0, 0.0),
-                Complex64::new(3.0, 0.0),
-                Complex64::new(4.0, 0.0),
-            ],
-        )
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ],
+    )
+    .unwrap();
     let y = x.fft(None, -1, FftNorm::Backward)?;
 
     let mut compiler = GraphCompiler::new();

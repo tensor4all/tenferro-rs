@@ -6,20 +6,10 @@ use super::{ProgramBindings, ProgramValue, SemanticProgram};
 pub struct ProgramImport<'a> {
     /// Immutable source semantic program.
     pub program: &'a SemanticProgram,
-    /// Tensor bindings frozen with the source program, when structure and
-    /// bindings should travel together.
-    ///
-    /// A structural import passes `None` so symbolic extents stay symbolic; a
-    /// caller that wants the frozen defaults re-attaches them afterwards.
-    pub bindings: Option<&'a ProgramBindings>,
+    /// Tensor bindings frozen with the source program.
+    pub bindings: &'a ProgramBindings,
     /// Ordered source roots to remap; empty and duplicate roots are valid.
     pub roots: &'a [ProgramValue],
-    /// Source inputs that already exist in the destination.
-    ///
-    /// A mapped source input reuses the destination value (and its metadata)
-    /// instead of creating a fresh input, which is how a derivative program
-    /// lands back on the leaves it was differentiated from.
-    pub input_map: &'a [(ProgramValue, ProgramValue)],
 }
 
 impl fmt::Debug for ProgramImport<'_> {
@@ -28,9 +18,8 @@ impl fmt::Debug for ProgramImport<'_> {
             .debug_struct("ProgramImport")
             .field("program_inputs", &self.program.inputs().len())
             .field("program_outputs", &self.program.outputs().len())
-            .field("bindings", &self.bindings.map(ProgramBindings::len))
+            .field("bindings", &self.bindings.len())
             .field("roots", &self.roots.len())
-            .field("input_map", &self.input_map.len())
             .finish()
     }
 }

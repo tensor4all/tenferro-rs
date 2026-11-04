@@ -160,10 +160,9 @@ fn slice_config_distinguishes_take_only_from_ranges_and_rejects_bad_ranges() {
 
 #[test]
 fn public_slice_stack_and_concatenate_paths_preserve_structured_errors() {
-    let trace = crate::TraceContext::new();
-    let x = trace
-        .from_vec_col_major(vec![4, 5], (0..20).map(|value| value as f64).collect())
-        .unwrap();
+    let x =
+        TracedTensor::from_vec_col_major(vec![4, 5], (0..20).map(|value| value as f64).collect())
+            .unwrap();
     let sliced = x
         .slice_builder()
         .axis(0, 1..4)
@@ -183,7 +182,7 @@ fn public_slice_stack_and_concatenate_paths_preserve_structured_errors() {
         })
     ));
 
-    let symbolic = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    let symbolic = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     assert!(matches!(
         concrete_shape_for_axis_slice(&symbolic, "slice_builder"),
         Err(crate::Error::Validation {
@@ -205,12 +204,8 @@ fn public_slice_stack_and_concatenate_paths_preserve_structured_errors() {
         })
     ));
 
-    let a = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
-    let b = trace
-        .from_vec_col_major(vec![2], vec![3.0_f64, 4.0])
-        .unwrap();
+    let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     let stacked = TracedTensor::stack(&[&a, &b], -1).unwrap();
     assert_eq!(stacked.try_concrete_shape(), Some(vec![2, 2]));
     assert!(matches!(
@@ -238,9 +233,7 @@ fn public_slice_stack_and_concatenate_paths_preserve_structured_errors() {
         })
     ));
 
-    let c = trace
-        .from_vec_col_major(vec![2], vec![3.0_f32, 4.0])
-        .unwrap();
+    let c = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f32, 4.0]).unwrap();
     let concatenated = TracedTensor::concatenate(&[&a, &c], 0).unwrap();
     assert_eq!(concatenated.dtype, DType::F64);
     assert_eq!(concatenated.try_concrete_shape(), Some(vec![4]));
@@ -261,9 +254,7 @@ fn public_slice_stack_and_concatenate_paths_preserve_structured_errors() {
             ..
         })
     ));
-    let rank_one = trace
-        .from_vec_col_major(vec![1, 2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let rank_one = TracedTensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 2.0]).unwrap();
     assert!(matches!(
         TracedTensor::concatenate(&[&a, &rank_one], 0),
         Err(crate::Error::Validation {

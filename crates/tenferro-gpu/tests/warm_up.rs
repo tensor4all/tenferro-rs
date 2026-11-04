@@ -8,14 +8,13 @@ use tenferro_gpu::cuda::{
     cuda_runtime_engine_registration, gpu_available, upload_tensor, CudaDeviceId, CudaEngine,
 };
 use tenferro_runtime::{
-    DType, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TypedTensor,
+    DType, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TracedTensor, TypedTensor,
 };
 use tenferro_tensor::TensorDeviceTransfer;
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn runtime_warm_up_runs_the_program_and_leaves_it_runnable() {
-    let trace = tenferro_runtime::TraceContext::new();
     assert!(gpu_available(), "CUDA test requires an available device");
 
     let mut engine = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("open CUDA engine");
@@ -26,9 +25,7 @@ fn runtime_warm_up_runs_the_program_and_leaves_it_runnable() {
     let runtime = builder.build().expect("build runtime");
 
     // An elementwise chain plus a reduction: two kernel families, both compiled on first launch.
-    let x = trace
-        .input_symbolic_shape(DType::F64, 1)
-        .expect("symbolic input");
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("symbolic input");
     let squared = (&x * &x).expect("square");
     let shifted = (&squared + &x).expect("shift");
     let summed = shifted.reduce_sum(None).expect("sum all");

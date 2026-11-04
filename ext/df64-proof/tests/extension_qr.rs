@@ -13,7 +13,7 @@ use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::extension::{Df64Qr, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime, TraceContext};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
@@ -37,12 +37,7 @@ fn payload(tensor: &Tensor) -> Vec<Df64> {
 
 /// Factor one column-major matrix through the traced, compiled, and executed path,
 /// which is the path a consumer uses.
-fn factor(
-    trace: &TraceContext,
-    values: Vec<Df64>,
-    rows: usize,
-    columns: usize,
-) -> (Vec<Df64>, Vec<Df64>) {
+fn factor(values: Vec<Df64>, rows: usize, columns: usize) -> (Vec<Df64>, Vec<Df64>) {
     let backend = CpuEngine::serial();
     let mut builder = Runtime::builder();
     builder
@@ -56,15 +51,13 @@ fn factor(
     // The traced leaf needs bound data to compile, and the values the runtime is given
     // below are what the factorization actually reads.
     let dtype = DType::External(std::any::TypeId::of::<Df64>());
-    let traced_input = trace
-        .from_tensor_concrete_shape_declaring_scalar(
-            external(vec![Df64::zero(); rows * columns], vec![rows, columns]),
-            DF64_SCALAR_IDENTITY,
-        )
-        .expect("traced input");
+    let traced_input = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
+        external(vec![Df64::zero(); rows * columns], vec![rows, columns]),
+        DF64_SCALAR_IDENTITY,
+    )
+    .expect("traced input");
     assert_eq!(
-        traced_input.rank(),
-        2,
+        traced_input.rank, 2,
         "the traced input keeps the rank for {dtype:?}"
     );
     let outputs = apply(Arc::new(Df64Qr), &[&traced_input]).expect("traced QR");
@@ -87,7 +80,6 @@ fn factor(
 
 #[test]
 fn a_square_factorization_reconstructs_orthogonally_with_a_positive_diagonal() {
-    let trace = TraceContext::new();
     let low = 2f64.powi(-80);
     let source = vec![
         Df64::from_f64(3.0),
@@ -100,7 +92,7 @@ fn a_square_factorization_reconstructs_orthogonally_with_a_positive_diagonal() {
         Df64::from_f64(0.0),
         Df64::from_f64(1.0) + Df64::from_f64(low),
     ];
-    let (q, r) = factor(&trace, source.clone(), 3, 3);
+    let (q, r) = factor(source.clone(), 3, 3);
 
     // A = Q R in the external scalar, so a reconstruction error below the f64
     // resolution is only reachable when both factors keep the low components.
@@ -143,9 +135,8 @@ fn a_square_factorization_reconstructs_orthogonally_with_a_positive_diagonal() {
 
 #[test]
 fn the_single_column_case_returns_the_norm_and_a_unit_column() {
-    let trace = TraceContext::new();
     // A = [[3], [4]] is the 3-4-5 triangle, so R = [[5]] and Q = [[0.6], [0.8]].
-    let (q, r) = factor(&trace, vec![Df64::from_f64(3.0), Df64::from_f64(4.0)], 2, 1);
+    let (q, r) = factor(vec![Df64::from_f64(3.0), Df64::from_f64(4.0)], 2, 1);
     assert_eq!(r[0].hi, 5.0, "R is {r:?}");
     assert_eq!(q[0].hi, 0.6, "Q is {q:?}");
     assert_eq!(q[1].hi, 0.8, "Q is {q:?}");
@@ -158,12 +149,10 @@ fn the_single_column_case_returns_the_norm_and_a_unit_column() {
 
 #[test]
 fn a_low_component_in_the_input_reaches_the_factors() {
-    let trace = TraceContext::new();
     let low = 2f64.powi(-80);
     // The norm of [[3], [4 + 2^-80]] differs from 5 in its low component, so a
     // factorization that narrowed to f64 would return exactly 5.
     let (q, r) = factor(
-        &trace,
         vec![
             Df64::from_f64(3.0),
             Df64::from_f64(4.0) + Df64::from_f64(low),
@@ -200,7 +189,6 @@ fn the_arithmetic_refines_beyond_f64_precision() {
 
 #[test]
 fn the_adjoint_of_the_factorization_matches_the_analytic_gradient() {
-    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_df64_proof::extension::Df64QrVjp;
 
     // dL/dA for L = R[0,0]^2 at A = [[3], [4]] is 2 R A / |A| = [[6], [8]].
@@ -222,22 +210,22 @@ fn the_adjoint_of_the_factorization_matches_the_analytic_gradient() {
     let runtime = builder.build().expect("runtime");
 
     let dtype = DType::External(std::any::TypeId::of::<Df64>());
-    let q_leaf = trace
-        .from_tensor_concrete_shape_declaring_scalar(
-            external(q.clone(), vec![2, 1]),
-            DF64_SCALAR_IDENTITY,
-        )
-        .expect("traced Q");
-    let r_leaf = trace
-        .from_tensor_concrete_shape_declaring_scalar(external(r, vec![1, 1]), DF64_SCALAR_IDENTITY)
-        .expect("traced R");
-    let r_bar_leaf = trace
-        .from_tensor_concrete_shape_declaring_scalar(
-            external(r_bar, vec![1, 1]),
-            DF64_SCALAR_IDENTITY,
-        )
-        .expect("traced cotangent");
-    assert_eq!(q_leaf.dtype(), dtype);
+    let q_leaf = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
+        external(q.clone(), vec![2, 1]),
+        DF64_SCALAR_IDENTITY,
+    )
+    .expect("traced Q");
+    let r_leaf = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
+        external(r, vec![1, 1]),
+        DF64_SCALAR_IDENTITY,
+    )
+    .expect("traced R");
+    let r_bar_leaf = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
+        external(r_bar, vec![1, 1]),
+        DF64_SCALAR_IDENTITY,
+    )
+    .expect("traced cotangent");
+    assert_eq!(q_leaf.dtype, dtype);
 
     // The adjoint is told that only the triangular factor carries a cotangent.
     let adjoint = apply(

@@ -17,7 +17,7 @@ use tenferro_runtime::{Error, ErrorPhase, TracedTensor};
 /// # Examples
 ///
 /// ```rust
-/// # use tenferro_runtime::{TraceContext, Error, ErrorPhase, TracedTensor};
+/// # use tenferro_runtime::{Error, ErrorPhase, TracedTensor};
 /// # use tenferro_scalar_consumer_algorithm::{squared_factor_norm, ScalarSupport};
 /// struct Refusing;
 ///
@@ -30,8 +30,7 @@ use tenferro_runtime::{Error, ErrorPhase, TracedTensor};
 ///     }
 /// }
 ///
-/// let trace = TraceContext::new();
-/// let input = trace.input_concrete_shape(tenferro_tensor::DType::F64, &[2, 1])?;
+/// let input = TracedTensor::input_concrete_shape(tenferro_tensor::DType::F64, &[2, 1])?;
 /// // The factorization is the first capability the algorithm needs.
 /// assert!(squared_factor_norm(&input, &Refusing).is_err());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -61,11 +60,9 @@ pub trait ScalarSupport {
     ///     }
     /// }
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let input = trace.input_concrete_shape(tenferro_tensor::DType::F64, &[2, 1])?;
+    /// let input = TracedTensor::input_concrete_shape(tenferro_tensor::DType::F64, &[2, 1])?;
     /// let (_q, r) = Identity.qr(&input)?;
-    /// assert_eq!(r.rank(), 2);
+    /// assert_eq!(r.rank, 2);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn qr(&self, input: &TracedTensor) -> Result<(TracedTensor, TracedTensor), Error>;
@@ -94,9 +91,7 @@ pub trait ScalarSupport {
     ///     }
     /// }
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let input = trace.input_concrete_shape(tenferro_tensor::DType::F64, &[1])?;
+    /// let input = TracedTensor::input_concrete_shape(tenferro_tensor::DType::F64, &[1])?;
     /// assert_eq!(AlreadyF64.to_f64(&input)?.dtype(), tenferro_tensor::DType::F64);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -124,12 +119,10 @@ pub trait ScalarSupport {
 ///     }
 /// }
 ///
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
-/// let input = trace.input_concrete_shape(tenferro_tensor::DType::F64, &[2, 2])?;
+/// let input = TracedTensor::input_concrete_shape(tenferro_tensor::DType::F64, &[2, 2])?;
 /// // The loss is the squared norm of the factor the binding returned, as ordinary f64.
 /// let loss = squared_factor_norm(&input, &PassThrough)?;
-/// assert_eq!(loss.rank(), 0);
+/// assert_eq!(loss.rank, 0);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
@@ -166,10 +159,8 @@ pub fn squared_factor_norm<S: ScalarSupport + ?Sized>(
 /// }
 ///
 /// let ad = tenferro_ad::AdContext::builder().build()?;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
-/// let input = trace.input_concrete_shape(tenferro_tensor::DType::F64, &[2, 1])?;
-/// let seed = trace.input_concrete_shape(tenferro_tensor::DType::F64, &[])?;
+/// let input = TracedTensor::input_concrete_shape(tenferro_tensor::DType::F64, &[2, 1])?;
+/// let seed = TracedTensor::input_concrete_shape(tenferro_tensor::DType::F64, &[])?;
 /// // A binding that cannot factor stops the program before the reverse pass.
 /// assert!(factor_norm_gradient(&ad, &input, &seed, &Refusing).is_err());
 /// # Ok::<(), Box<dyn std::error::Error>>(())

@@ -1,8 +1,14 @@
+use std::collections::HashMap;
+use std::error::Error as StdError;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use computegraph::graph::{Graph, GraphBuilder};
+use computegraph::types::{OperationRole, ValueKey, ValueRef};
+use computegraph::LocalValueId;
 use num_complex::{Complex32, Complex64};
+use tenferro_ops::ad::context::GlobalMetadataScope;
 use tenferro_ops::broadcast::{
     broadcast_error_to_validation, broadcast_in_dim_extent_error, broadcast_input_plan,
     broadcast_shape, broadcast_shapes, BroadcastError,
@@ -10,19 +16,27 @@ use tenferro_ops::broadcast::{
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::TensorMeta;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, Error as TensorError, GatherConfig, IntoShapeVec,
-    PadConfig, ScatterConfig, ShapeMismatch, SliceConfig, ValidationError,
+    PadConfig, ScatterConfig, ShapeMismatch, SliceConfig, Tensor, TensorScalar, TensorValue,
+    ValidationError,
 };
 
 use super::error::{Error, ErrorPhase, Result};
 use super::sym_dim::SymDim;
-use crate::checkpoint::RetainedValue;
+use crate::checkpoint::{CheckpointNode, RetainedInputMap, RetainedValue};
+use crate::metadata::{
+    concrete_tensor_meta, register_scoped_graph_metadata, register_scoped_value_metadata,
+    symbolic_input_meta, tensor_meta, MetadataScopeChain,
+};
 use crate::scalar_semantics::{bool_from_real_for_op, round_real_to_i32_for_op, round_real_to_i64};
-use crate::trace::{TraceContext, TraceValue};
-use crate::trace_ops::{append_core, finish_value};
+use crate::shape_constraint::ConstraintScopeChain;
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
+static NEXT_TRACED_ID: AtomicU64 = AtomicU64::new(0);
+
+pub type TracedTensorId = u64;
 
 pub(crate) fn next_input_key() -> TensorInputKey {
     TensorInputKey::User {
@@ -30,30 +44,138 @@ pub(crate) fn next_input_key() -> TensorInputKey {
     }
 }
 
-/// A typed view of one semantic value inside a [`TraceContext`].
-///
-/// `rank`, `dtype` and `shape_hint` are an immutable cache of the context
-/// metadata this value was appended with; the context keeps the authoritative
-/// metadata.
+pub(crate) fn next_traced_id() -> TracedTensorId {
+    NEXT_TRACED_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+type TracedInputMap = RetainedInputMap;
+
 #[derive(Clone)]
 pub struct TracedTensor {
-    pub(crate) ctx: TraceContext,
-    pub(crate) value: TraceValue,
-    pub(crate) rank: usize,
-    pub(crate) dtype: DType,
-    pub(crate) shape_hint: Option<Vec<SymDim>>,
+    pub id: TracedTensorId,
+    pub rank: usize,
+    pub dtype: DType,
+    pub(crate) graph: Arc<Graph<StdTensorOp>>,
+    pub val: LocalValueId,
     pub(crate) data: Option<Arc<RetainedValue>>,
+    pub(crate) shape_hint: Option<Vec<SymDim>>,
+    pub(crate) inputs_map: Arc<TracedInputMap>,
+    /// Retained construction-time metadata per bound leaf input key.
+    ///
+    /// Populated by data-attached leaf constructors with the exact
+    /// `TensorMeta` they register (symbolic `tensor_axis` extents for
+    /// [`TracedTensor::from_shared_tensor_value_symbolic_shape`]), so the
+    /// deferred eager-AD analysis can seed symbolic leaf metadata without
+    /// deriving concrete extents from the bound values.
+    pub(crate) leaf_metas: Arc<HashMap<TensorInputKey, TensorMeta>>,
+    pub(crate) extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
+    pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
+    pub(crate) metadata_scopes: MetadataScopeChain,
+    pub(crate) constraint_scopes: ConstraintScopeChain,
 }
 
 impl fmt::Debug for TracedTensor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TracedTensor")
+            .field("id", &self.id)
             .field("rank", &self.rank)
             .field("dtype", &self.dtype)
+            .field("val", &self.val)
             .field("shape_hint", &self.shape_hint)
             .field("has_data", &self.data.is_some())
             .finish_non_exhaustive()
     }
+}
+
+pub(crate) fn merge_traced_inputs_map<'a>(
+    inputs: impl IntoIterator<Item = &'a TracedTensor>,
+) -> Arc<TracedInputMap> {
+    let maps: Vec<_> = inputs
+        .into_iter()
+        .map(|input| &input.inputs_map)
+        .filter(|map| !map.is_empty())
+        .collect();
+    match maps.as_slice() {
+        [] => return Arc::new(HashMap::new()),
+        [single] => return Arc::clone(*single),
+        _ => {}
+    }
+
+    for &candidate in &maps {
+        if input_map_matches_ordered_merge(candidate.as_ref(), &maps) {
+            return Arc::clone(candidate);
+        }
+    }
+
+    let mut merged = (**maps[0]).clone();
+    for map in maps.iter().skip(1) {
+        merged.extend(
+            map.iter()
+                .map(|(key, tensor)| (key.clone(), tensor.clone())),
+        );
+    }
+    Arc::new(merged)
+}
+
+fn input_map_matches_ordered_merge(
+    candidate: &TracedInputMap,
+    maps: &[&Arc<TracedInputMap>],
+) -> bool {
+    merged_map_matches_ordered(candidate, maps, Arc::ptr_eq)
+}
+
+/// Merge the retained leaf-metadata maps of several traced tensors into one.
+///
+/// Sibling of [`merge_traced_inputs_map`]: the merged map covers exactly the
+/// same leaf keys as the merged bindings map, mapping each to the
+/// construction-time `TensorMeta` its leaf registered (symbolic for symbolic
+/// leaves).
+pub(crate) fn merge_traced_leaf_metas<'a>(
+    inputs: impl IntoIterator<Item = &'a TracedTensor>,
+) -> Arc<HashMap<TensorInputKey, TensorMeta>> {
+    let maps: Vec<_> = inputs
+        .into_iter()
+        .map(|input| &input.leaf_metas)
+        .filter(|map| !map.is_empty())
+        .collect();
+    match maps.as_slice() {
+        [] => return Arc::new(HashMap::new()),
+        [single] => return Arc::clone(*single),
+        _ => {}
+    }
+
+    for &candidate in &maps {
+        if merged_map_matches_ordered(candidate.as_ref(), &maps, |a, b| a == b) {
+            return Arc::clone(candidate);
+        }
+    }
+
+    let mut merged = (**maps[0]).clone();
+    for map in maps.iter().skip(1) {
+        merged.extend(map.iter().map(|(key, meta)| (key.clone(), meta.clone())));
+    }
+    Arc::new(merged)
+}
+
+fn merged_map_matches_ordered<V>(
+    candidate: &HashMap<TensorInputKey, V>,
+    maps: &[&Arc<HashMap<TensorInputKey, V>>],
+    matches: impl Fn(&V, &V) -> bool,
+) -> bool {
+    for map in maps {
+        for key in map.keys() {
+            let Some(final_value) = maps.iter().rev().find_map(|source| source.get(key)) else {
+                return false;
+            };
+            let Some(candidate_value) = candidate.get(key) else {
+                return false;
+            };
+            if !matches(candidate_value, final_value) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 pub(crate) fn try_concrete_shape(tensor: &TracedTensor) -> Option<Vec<usize>> {
@@ -109,10 +231,7 @@ pub(crate) fn concrete_shape(tensor: &TracedTensor) -> Result<Vec<usize>> {
             graph_invalid_argument(
                 "TracedTensor::concrete_shape",
                 "shape",
-                format!(
-                    "missing shape hint for traced tensor at rank {}",
-                    tensor.rank
-                ),
+                format!("missing shape hint for traced tensor {}", tensor.id),
             )
         })?
         .iter()
@@ -121,10 +240,7 @@ pub(crate) fn concrete_shape(tensor: &TracedTensor) -> Result<Vec<usize>> {
                 graph_invalid_argument(
                     "TracedTensor::concrete_shape",
                     "shape",
-                    format!(
-                        "symbolic dimension in shape hint for tensor at rank {}",
-                        tensor.rank
-                    ),
+                    format!("symbolic dimension in shape hint for tensor {}", tensor.id),
                 )
             })
         })
@@ -188,7 +304,7 @@ pub(crate) fn broadcast_ternary(
 }
 
 fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> Result<TracedTensor> {
-    let scalar = apply_nullary(op, 0, input.dtype, Some(vec![]), &input.ctx)?;
+    let scalar = apply_nullary(op, 0, input.dtype, Some(vec![]))?;
     // A binary op applies to operands of one shape, so the rank-0 factor has to be
     // broadcast here, exactly as `TracedTensor::add`/`mul` do through
     // `broadcast_binary`. Without it the graph carries a rank-0 `Mul` operand: the
@@ -260,7 +376,7 @@ fn traced_input_shape_exprs(input_idx: usize, tensor: &TracedTensor) -> Vec<DimE
 fn traced_input_sym_shape(tensor: &TracedTensor) -> Vec<SymDim> {
     tensor.shape_hint.clone().unwrap_or_else(|| {
         (0..tensor.rank)
-            .map(|axis| SymDim::tensor_axis(tensor.symbolic_id(), axis))
+            .map(|axis| SymDim::tensor_axis(tensor.id, axis))
             .collect()
     })
 }
@@ -298,6 +414,15 @@ pub(crate) fn infer_traced_single_output_shape(
         .map(|dim| SymDim::from_dim_expr(dim, &input_sym_refs))
         .collect();
     Ok((output_shape.len(), Some(out_shape_hint)))
+}
+
+pub(crate) fn register_metadata_or_runtime_state<E>(
+    result: std::result::Result<GlobalMetadataScope, E>,
+) -> Result<GlobalMetadataScope>
+where
+    E: StdError + Send + Sync + 'static,
+{
+    result.map_err(|err| Error::runtime_state_source("metadata", ErrorPhase::Compile, err))
 }
 
 fn reduction_output_meta(
@@ -536,6 +661,20 @@ impl std::ops::Rem for &TracedTensor {
 }
 
 impl TracedTensor {
+    /// Return the graph that owns this traced tensor's current value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    /// let _graph = x.graph();
+    /// ```
+    pub fn graph(&self) -> &Arc<Graph<StdTensorOp>> {
+        &self.graph
+    }
+
     /// Return the concrete tensor data attached to this traced value, if any.
     ///
     /// Placeholder tensors created with `input_concrete_shape` or
@@ -545,94 +684,402 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{TraceContext, DType, TracedTensor};
+    /// use tenferro_runtime::{DType, TracedTensor};
     ///
-    /// let trace = TraceContext::new();
-    /// let concrete = trace.from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    /// let concrete = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     /// assert!(concrete.attached_value().is_some());
     ///
-    /// let placeholder = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    /// let placeholder = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// assert!(placeholder.attached_value().is_none());
     /// ```
     pub fn attached_value(&self) -> Option<&Arc<RetainedValue>> {
         self.data.as_ref()
     }
 
-    /// Return the tensor element dtype recorded for this traced value.
+    /// Build a [`TracedTensor`] leaf from a concrete [`Tensor`], keeping its
+    /// shape as a concrete `shape_hint`.
+    ///
+    /// This is the common constructor when you have concrete tensor data that
+    /// you want to use both for graph building and for evaluation. The
+    /// resulting tensor is treated as a concrete-shape leaf by downstream
+    /// passes (binary einsum decomposition, build-time reshape folding, etc.).
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{DType, TraceContext};
+    /// use tenferro_runtime::{Tensor, TracedTensor};
     ///
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    /// assert_eq!(x.dtype(), DType::F64);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// let a = TracedTensor::from_tensor_concrete_shape(
+    ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+    /// )
+    /// .unwrap();
+    /// assert_eq!(a.rank, 2);
+    /// assert!(a.is_concrete_shape());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when graph metadata registration
+    /// cannot retain the concrete tensor's shape or dtype.
+    pub fn from_tensor_concrete_shape(tensor: Tensor) -> Result<Self> {
+        Self::from_tensor_concrete_shape_with_identity(tensor, None)
+    }
+
+    /// Build a [`TracedTensor`] leaf from a concrete tensor that declares the
+    /// canonical identity of its externally defined scalar.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_tensor::DType;
+    ///
+    /// let dtype = DType::External(std::any::TypeId::of::<f64>());
+    /// let leaf = TracedTensor::input_concrete_shape_declaring_scalar(dtype, &[2], "example.scalar.v1")?;
+    /// assert!(leaf.is_concrete_shape());
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when graph metadata registration
+    /// cannot retain the concrete tensor's shape or dtype.
+    pub fn from_tensor_concrete_shape_declaring_scalar(
+        tensor: Tensor,
+        identity: &'static str,
+    ) -> Result<Self> {
+        Self::from_tensor_concrete_shape_with_identity(tensor, Some(identity))
+    }
+
+    fn from_tensor_concrete_shape_with_identity(
+        tensor: Tensor,
+        identity: Option<&'static str>,
+    ) -> Result<Self> {
+        let shape = tensor.shape().to_vec();
+        let rank = shape.len();
+        let dtype = tensor.dtype();
+        let key = next_input_key();
+        let id = next_traced_id();
+        let data = Arc::new(RetainedValue::from_tensor(tensor));
+        let meta = concrete_tensor_meta(dtype, &shape);
+        let meta = match identity {
+            Some(identity) => meta.with_scalar_identity(identity),
+            None => meta,
+        };
+
+        let mut builder = GraphBuilder::new();
+        let val = builder.add_input(key.clone());
+        builder.set_outputs(vec![val]);
+        let graph = Arc::new(builder.build());
+        let metadata_scope = register_metadata_or_runtime_state(register_scoped_value_metadata(
+            graph.values()[val].key.clone(),
+            meta.clone(),
+        ))?;
+
+        let mut map = HashMap::new();
+        map.insert(key.clone(), Arc::clone(&data));
+        let mut leaf_metas = HashMap::new();
+        leaf_metas.insert(key, meta);
+
+        Ok(Self {
+            id,
+            rank,
+            dtype,
+            graph,
+            val,
+            data: Some(data),
+            shape_hint: Some(shape.into_iter().map(SymDim::from).collect()),
+            inputs_map: Arc::new(map),
+            leaf_metas: Arc::new(leaf_metas),
+            extra_roots: Vec::new(),
+            checkpoint_chain: None,
+            metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+            constraint_scopes: ConstraintScopeChain::empty(),
+        })
+    }
+
+    /// Build a [`TracedTensor`] leaf from a concrete [`Tensor`] but advertise
+    /// a symbolic shape during graph construction.
+    ///
+    /// The tensor data is still attached (so plain `eval` works without
+    /// bindings), but graph passes see the leaf as shape-symbolic. This is
+    /// useful for building a single traced program that should not bake in
+    /// shape-specific optimizations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{Tensor, TracedTensor};
+    ///
+    /// let t = TracedTensor::from_tensor_symbolic_shape(
+    ///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+    /// )
+    /// .unwrap();
+    /// assert_eq!(t.rank, 2);
+    /// assert!(!t.is_concrete_shape());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when symbolic graph metadata
+    /// registration is unavailable or its registry state is poisoned.
+    pub fn from_tensor_symbolic_shape(tensor: Tensor) -> Result<Self> {
+        Self::from_tensor_value_symbolic_shape(TensorValue::from_tensor(tensor))
+    }
+
+    /// Build a data-attached symbolic-shape traced leaf from shared tensor data.
+    ///
+    /// This is an internal crate-boundary helper for eager AD recording. It
+    /// preserves the same tensor allocation used by the eager value while graph
+    /// passes see symbolic input extents.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tenferro_runtime::{Tensor, TracedTensor};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// let traced = TracedTensor::from_tensor_symbolic_shape(tensor)?;
+    /// assert_eq!(traced.rank, 1);
+    /// assert!(!traced.is_concrete_shape());
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when symbolic graph metadata
+    /// registration is unavailable or its registry state is poisoned.
+    #[doc(hidden)]
+    pub fn from_tensor_value_symbolic_shape(value: TensorValue) -> Result<Self> {
+        let data = Arc::new(RetainedValue::from_tensor_value(value)?);
+        Self::from_shared_tensor_value_symbolic_shape(data)
+    }
+
+    #[doc(hidden)]
+    pub fn from_shared_tensor_value_symbolic_shape(data: Arc<RetainedValue>) -> Result<Self> {
+        let rank = data.shape().len();
+        let dtype = data.dtype();
+        let key = next_input_key();
+        let id = next_traced_id();
+        let meta = symbolic_input_meta(dtype, id, rank);
+
+        let mut builder = GraphBuilder::new();
+        let val = builder.add_input(key.clone());
+        builder.set_outputs(vec![val]);
+        let graph = Arc::new(builder.build());
+        let metadata_scope = register_metadata_or_runtime_state(register_scoped_value_metadata(
+            graph.values()[val].key.clone(),
+            meta.clone(),
+        ))?;
+
+        let mut map = HashMap::new();
+        map.insert(key.clone(), Arc::clone(&data));
+        let mut leaf_metas = HashMap::new();
+        leaf_metas.insert(key, meta);
+
+        Ok(Self {
+            id,
+            rank,
+            dtype,
+            graph,
+            val,
+            data: Some(data),
+            shape_hint: None,
+            inputs_map: Arc::new(map),
+            leaf_metas: Arc::new(leaf_metas),
+            extra_roots: Vec::new(),
+            checkpoint_chain: None,
+            metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+            constraint_scopes: ConstraintScopeChain::empty(),
+        })
+    }
+
+    /// Build a data-less placeholder leaf with a fixed (concrete) shape.
+    ///
+    /// Must be passed as an input to [`crate::Runtime::prepare`] before evaluation.
+    /// Use this when you know the exact shape of the input but want to build
+    /// the graph once and feed different concrete tensors at execution time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DType;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]).unwrap();
+    /// assert_eq!(x.rank, 2);
+    /// assert!(x.is_concrete_shape());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when graph metadata registration
+    /// fails or the registry state is poisoned. `dtype` and `shape` are
+    /// metadata values and are not revalidated by this constructor.
+    pub fn input_concrete_shape(dtype: DType, shape: &[usize]) -> Result<Self> {
+        Self::input_concrete_shape_with_identity(dtype, shape, None)
+    }
+
+    /// Build a data-less placeholder leaf of a concrete shape that declares the
+    /// canonical identity of its externally defined scalar.
+    ///
+    /// A semantic program's identity must be reproducible across processes, while an
+    /// externally defined scalar's tag is a process-local `TypeId`, so an input whose
+    /// dtype is external must declare the stable name its contribution owns.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_tensor::DType;
+    ///
+    /// let dtype = DType::External(std::any::TypeId::of::<f64>());
+    /// let x = TracedTensor::input_concrete_shape_declaring_scalar(dtype, &[2], "example.scalar.v1")?;
+    /// assert_eq!(x.rank, 1);
+    /// assert!(x.is_concrete_shape());
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when graph metadata registration fails
+    /// or the registry state is poisoned.
+    pub fn input_concrete_shape_declaring_scalar(
+        dtype: DType,
+        shape: &[usize],
+        identity: &'static str,
+    ) -> Result<Self> {
+        Self::input_concrete_shape_with_identity(dtype, shape, Some(identity))
+    }
+
+    fn input_concrete_shape_with_identity(
+        dtype: DType,
+        shape: &[usize],
+        identity: Option<&'static str>,
+    ) -> Result<Self> {
+        let shape = shape.to_vec();
+        let rank = shape.len();
+        let key = next_input_key();
+        let id = next_traced_id();
+
+        let mut builder = GraphBuilder::new();
+        let val = builder.add_input(key.clone());
+        builder.set_outputs(vec![val]);
+        let graph = Arc::new(builder.build());
+        let meta = concrete_tensor_meta(dtype, &shape);
+        let meta = match identity {
+            Some(identity) => meta.with_scalar_identity(identity),
+            None => meta,
+        };
+        let metadata_scope = register_metadata_or_runtime_state(register_scoped_value_metadata(
+            graph.values()[val].key.clone(),
+            meta,
+        ))?;
+
+        Ok(Self {
+            id,
+            rank,
+            dtype,
+            graph,
+            val,
+            data: None,
+            shape_hint: Some(shape.into_iter().map(SymDim::from).collect()),
+            inputs_map: Arc::new(HashMap::new()),
+            leaf_metas: Arc::new(HashMap::new()),
+            extra_roots: Vec::new(),
+            checkpoint_chain: None,
+            metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+            constraint_scopes: ConstraintScopeChain::empty(),
+        })
+    }
+
+    /// Build a data-less placeholder leaf with the given rank but fully
+    /// symbolic shape (every dim is a distinct `SymDim::TensorAxis`).
+    ///
+    /// Must be passed as an input to [`crate::Runtime::prepare`] before
+    /// evaluation. Use this to build shape-agnostic graphs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DType;
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    /// assert_eq!(x.rank, 2);
+    /// assert!(!x.is_concrete_shape());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when graph metadata registration
+    /// fails or the registry state is poisoned. `rank` is recorded as the
+    /// symbolic placeholder rank and is not otherwise rejected here.
+    pub fn input_symbolic_shape(dtype: DType, rank: usize) -> Result<Self> {
+        let key = next_input_key();
+        let id = next_traced_id();
+
+        let mut builder = GraphBuilder::new();
+        let val = builder.add_input(key.clone());
+        builder.set_outputs(vec![val]);
+        let graph = Arc::new(builder.build());
+        let metadata_scope = register_metadata_or_runtime_state(register_scoped_value_metadata(
+            graph.values()[val].key.clone(),
+            symbolic_input_meta(dtype, id, rank),
+        ))?;
+
+        Ok(Self {
+            id,
+            rank,
+            dtype,
+            graph,
+            val,
+            data: None,
+            shape_hint: None,
+            inputs_map: Arc::new(HashMap::new()),
+            leaf_metas: Arc::new(HashMap::new()),
+            extra_roots: Vec::new(),
+            checkpoint_chain: None,
+            metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+            constraint_scopes: ConstraintScopeChain::empty(),
+        })
+    }
+
+    /// Build a concrete-shape [`TracedTensor`] leaf from column-major typed
+    /// `Vec<T>` data.
+    ///
+    /// The data must already be in tenferro's physical column-major order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::TracedTensor;
+    ///
+    /// let a = TracedTensor::from_vec_col_major(
+    ///     vec![2, 3],
+    ///     vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0],
+    /// )?;
+    /// assert_eq!(a.rank, 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TensorRuntime`] containing
+    /// `ValidationError::ShapeDataLengthMismatch` when the shape product does
+    /// not equal `data.len()`, or `ValidationError::IntegerOverflow` when the
+    /// shape product cannot be represented by `usize`.
+    pub fn from_vec_col_major<T: TensorScalar>(
+        shape: impl IntoShapeVec,
+        data: Vec<T>,
+    ) -> Result<Self> {
+        Self::from_tensor_concrete_shape(Tensor::from_vec_col_major(shape, data)?)
+    }
+
+    /// Return the tensor element dtype recorded for this traced value.
     pub fn dtype(&self) -> DType {
         self.dtype
-    }
-
-    /// Return the rank recorded for this traced value.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::TraceContext;
-    ///
-    /// let trace = TraceContext::new();
-    /// let matrix = trace.from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?;
-    /// assert_eq!(matrix.rank(), 2);
-    /// assert_eq!(matrix.neg()?.rank(), 2);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn rank(&self) -> usize {
-        self.rank
-    }
-
-    /// Borrow the trace context this value belongs to.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::TraceContext;
-    ///
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    /// let y = x.neg()?;
-    ///
-    /// // A derived value stays in its producer's context.
-    /// assert!(y.context().same_context(&trace));
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn context(&self) -> &TraceContext {
-        &self.ctx
-    }
-
-    /// Return the context value behind this tensor.
-    #[doc(hidden)]
-    pub fn trace_value(&self) -> TraceValue {
-        self.value
-    }
-
-    /// Replace this tensor's value with a bound input of the same context.
-    ///
-    /// Used by checkpointing, which rebinds the traced value to the input that
-    /// holds the evaluated data.
-    #[doc(hidden)]
-    pub fn rebind_bound(&mut self, value: TraceValue, data: Arc<RetainedValue>) -> Result<()> {
-        let rebased = crate::trace_ops::finish_bound_value(&self.ctx, value, data)?;
-        *self = rebased;
-        Ok(())
-    }
-
-    /// Symbolic tensor id used for rank-only shape hints.
-    fn symbolic_id(&self) -> u64 {
-        self.ctx
-            .input_index(self.value)
-            .map(|index| index as u64)
-            .unwrap_or(u64::MAX)
     }
 
     /// Returns `true` iff every dim of this tensor's `shape_hint` is a
@@ -642,12 +1089,10 @@ impl TracedTensor {
     ///
     /// ```
     /// use tenferro_tensor::DType;
-    /// use tenferro_runtime::{TracedTensor};
+    /// use tenferro_runtime::TracedTensor;
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let a = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    /// let b = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     /// assert!(a.is_concrete_shape());
     /// assert!(!b.is_concrete_shape());
     /// ```
@@ -667,14 +1112,12 @@ impl TracedTensor {
     ///
     /// ```
     /// use tenferro_tensor::DType;
-    /// use tenferro_runtime::{TracedTensor};
+    /// use tenferro_runtime::TracedTensor;
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let a = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     /// assert_eq!(a.try_concrete_shape(), Some(vec![2, 3]));
     ///
-    /// let b = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     /// assert!(b.try_concrete_shape().is_none());
     /// ```
     pub fn try_concrete_shape(&self) -> Option<Vec<usize>> {
@@ -698,7 +1141,16 @@ impl TracedTensor {
     /// If this `TracedTensor` is a leaf (single-node input graph),
     /// return its input key. Computed tensors return `None`.
     pub fn input_key(&self) -> Option<TensorInputKey> {
-        self.ctx.input_key(self.value)
+        match &self.graph.values()[self.val].key {
+            ValueKey::Input(key) => Some(key.clone()),
+            _ => None,
+        }
+    }
+
+    /// Return whether this traced graph carries default data for `key`.
+    #[doc(hidden)]
+    pub fn has_attached_input_key(&self, key: &TensorInputKey) -> bool {
+        self.inputs_map.contains_key(key)
     }
 
     /// Elementwise addition with NumPy-style broadcasting.
@@ -715,10 +1167,8 @@ impl TracedTensor {
     ///
     /// ```rust
     /// # use tenferro_runtime::{Error, TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// # let z = trace.from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # let z = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     /// let y = x.add(&z);
     /// let y2 = &x + &z;
     /// # fn add_three(
@@ -793,11 +1243,9 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// # let z = trace.from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # let z = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     /// let y = x.mul(&z);
     /// let y2 = &x * &z;
     /// ```
@@ -831,11 +1279,9 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// # let z = trace.from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # let z = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     /// let y = x.div(&z);
     /// let y2 = &x / &z;
     /// ```
@@ -1015,10 +1461,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.neg().unwrap();
     /// let y2 = (-&x).unwrap();
     /// ```
@@ -1037,10 +1481,8 @@ impl TracedTensor {
     ///
     /// ```rust
     /// # use num_complex::Complex64;
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(
     /// #     vec![2],
     /// #     vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
     /// # )
@@ -1063,10 +1505,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]).unwrap();
     /// let y = x.abs().unwrap();
     /// ```
     ///
@@ -1083,10 +1523,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]).unwrap();
     /// let y = x.sign().unwrap();
     /// ```
     ///
@@ -1103,10 +1541,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.scale_real(2.0)?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
@@ -1147,10 +1583,8 @@ impl TracedTensor {
     ///
     /// ```rust
     /// use num_complex::Complex64;
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(
     /// #     vec![2],
     /// #     vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
     /// # )
@@ -1188,10 +1622,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.exp().unwrap();
     /// ```
     ///
@@ -1208,10 +1640,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.log().unwrap();
     /// ```
     ///
@@ -1228,10 +1658,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.sin().unwrap();
     /// ```
     ///
@@ -1248,10 +1676,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.cos().unwrap();
     /// ```
     ///
@@ -1268,10 +1694,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.tanh().unwrap();
     /// ```
     ///
@@ -1288,10 +1712,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
     /// let y = x.sqrt().unwrap();
     /// ```
     ///
@@ -1308,10 +1730,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
     /// let y = x.rsqrt().unwrap();
     /// ```
     ///
@@ -1328,11 +1748,9 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let base = trace.from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
-    /// # let exp = trace.from_vec_col_major(vec![2], vec![3.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let base = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
+    /// # let exp = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 2.0]).unwrap();
     /// let y = base.pow(&exp);
     /// ```
     ///
@@ -1365,10 +1783,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.expm1().unwrap();
     /// ```
     ///
@@ -1385,10 +1801,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.log1p().unwrap();
     /// ```
     ///
@@ -1408,10 +1822,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2], vec![0.0_f64, 1.0])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0])?;
     /// let y = x.erf()?;
     /// assert_eq!(y.dtype(), tenferro_runtime::DType::F64);
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -1445,10 +1857,8 @@ impl TracedTensor {
     ///
     /// ```rust
     /// use tenferro_runtime::DType;
-    /// use tenferro_runtime::TraceContext;
-    /// # use tenferro_runtime::{TracedTensor};
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     ///
     /// let y = x.convert(DType::C64)?;
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -1475,10 +1885,8 @@ impl TracedTensor {
     ///
     /// ```rust
     /// use tenferro_runtime::DType;
-    /// use tenferro_runtime::TraceContext;
-    /// # use tenferro_runtime::{TracedTensor};
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.2_f64, -2.8]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.2_f64, -2.8]).unwrap();
     ///
     /// let y = x.cast(DType::I32).unwrap();
     /// ```
@@ -1515,10 +1923,8 @@ impl TracedTensor {
     ///
     /// ```rust
     /// # use tenferro_runtime::{DotGeneralConfig, TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let a = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    /// # let b = trace.from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
+    /// # let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// # let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
     /// # let config = DotGeneralConfig {
     /// #     lhs_contracting_dims: [1].as_slice().into(),
     /// #     rhs_contracting_dims: [0].as_slice().into(),
@@ -1651,16 +2057,14 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
     /// let total = x.reduce_sum(None)?;
     /// let rows = x.reduce_sum(Some(&[1]))?;
     /// let identity = x.reduce_sum(Some(&[]))?;
-    /// assert_eq!(total.rank(), 0);
-    /// assert_eq!(rows.rank(), 1);
-    /// assert_eq!(identity.rank(), 2);
+    /// assert_eq!(total.rank, 0);
+    /// assert_eq!(rows.rank, 1);
+    /// assert_eq!(identity.rank, 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     ///
@@ -1706,17 +2110,15 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(
     /// #     vec![2, 2],
     /// #     vec![1.0_f64, 2.0, 3.0, 4.0],
     /// # )?;
     /// let squares = x.reduce_sum_squares(Some(&[1]))?;
-    /// assert_eq!(squares.rank(), 1);
+    /// assert_eq!(squares.rank, 1);
     /// let total = x.reduce_sum_squares(None)?;
-    /// assert_eq!(total.rank(), 0);
+    /// assert_eq!(total.rank, 0);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     pub fn reduce_sum_squares(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
@@ -1739,10 +2141,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
     /// let y = x.reduce_max(Some(&[0]))?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
@@ -1775,10 +2175,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
     /// let y = x.reduce_min(Some(&[0]))?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
@@ -1808,10 +2206,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
     /// let y = x.reduce_prod(Some(&[0]))?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
@@ -1839,10 +2235,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![4], vec![1.0_f64; 4]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64; 4]).unwrap();
     /// for y in [x.reshape([2, 2])?, x.reshape(vec![2, 2])?, x.reshape(&[2, 2][..])?] {
     ///     assert_eq!(y.try_concrete_shape(), Some(vec![2, 2]));
     /// }
@@ -1877,7 +2271,7 @@ impl TracedTensor {
     /// (non-constant) entry for `axis`, that entry is returned
     /// verbatim. Otherwise — including when `shape_hint[axis]` is a
     /// concrete `SymDim::Concrete(n)` — a
-    /// `SymDim::tensor_axis(self.symbolic_id(), axis)` reference is returned so the
+    /// `SymDim::tensor_axis(self.id, axis)` reference is returned so the
     /// resulting graph remains shape-polymorphic if the same graph is
     /// later evaluated against a differently-shaped binding.
     ///
@@ -1888,10 +2282,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     /// let rows = x.sym_size(0)?;
     /// let cols = x.sym_size(1)?;
     /// let y = x.reshape_sym(&[rows * cols]).unwrap();
@@ -1910,7 +2302,7 @@ impl TracedTensor {
             .and_then(|shape| shape.get(axis))
             .filter(|dim| dim.constant_value().is_none())
             .cloned()
-            .unwrap_or_else(|| SymDim::tensor_axis(self.symbolic_id(), axis)))
+            .unwrap_or_else(|| SymDim::tensor_axis(self.id, axis)))
     }
 
     /// Return the canonical `SymDim` for `axis` — the concrete
@@ -1927,15 +2319,13 @@ impl TracedTensor {
     ///
     /// ```
     /// use tenferro_tensor::DType;
-    /// use tenferro_runtime::{TracedTensor};
+    /// use tenferro_runtime::TracedTensor;
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let a = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     /// // Concrete axis: reports the constant size.
     /// assert_eq!(a.axis_sym_dim(0).unwrap().constant_value(), Some(2));
     ///
-    /// let b = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     /// // Fully symbolic leaf: reports a TensorAxis reference.
     /// assert!(b.axis_sym_dim(0).unwrap().constant_value().is_none());
     /// ```
@@ -1948,34 +2338,30 @@ impl TracedTensor {
         validate_traced_axis(self, axis, "TracedTensor::axis_sym_dim")?;
         match self.shape_hint.as_ref().and_then(|shape| shape.get(axis)) {
             Some(dim) => Ok(dim.clone()),
-            None => Ok(SymDim::tensor_axis(self.symbolic_id(), axis)),
+            None => Ok(SymDim::tensor_axis(self.id, axis)),
         }
     }
 
-    /// Return the full symbolic shape of this tensor when it is known.
+    /// Return the full symbolic shape of this tensor when a `shape_hint`
+    /// is present.
     ///
-    /// Every traced value carries its symbolic extents: a constant leaf reports
-    /// constant extents, a symbolic placeholder reports one
-    /// [`SymDim::tensor_axis`] per axis, and an operation reports whatever the
-    /// builder inferred. `None` only appears for a value whose extents the
-    /// builder left unknown; build those axis-by-axis via
+    /// Returns `None` for fully-symbolic placeholders produced via
+    /// [`Self::input_symbolic_shape`] (where `shape_hint` is intentionally
+    /// absent). For those, build the shape axis-by-axis via
     /// [`Self::axis_sym_dim`].
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_tensor::DType;
-    /// use tenferro_runtime::TraceContext;
+    /// use tenferro_runtime::TracedTensor;
     ///
-    /// let trace = TraceContext::new();
-    /// let a = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     /// assert!(a.sym_shape().is_some());
     /// assert_eq!(a.sym_shape().unwrap().len(), 2);
     ///
-    /// // A symbolic placeholder reports its symbolic extents, not `None`.
-    /// let b = trace.input_symbolic_shape(DType::F64, 2).unwrap();
-    /// assert_eq!(b.sym_shape().map(<[_]>::len), Some(2));
-    /// assert!(b.sym_shape().unwrap().iter().all(|dim| dim.constant_value().is_none()));
+    /// let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    /// assert!(b.sym_shape().is_none());
     /// ```
     pub fn sym_shape(&self) -> Option<&[SymDim]> {
         self.shape_hint.as_deref()
@@ -1986,10 +2372,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     /// let rows = x.sym_size(0)?;
     /// let cols = x.sym_size(1)?;
     /// let y = x.reshape_sym(&[rows * cols]).unwrap();
@@ -2008,7 +2392,7 @@ impl TracedTensor {
     /// concrete inputs reach compilation or execution. A mismatch is returned
     /// as [`Error::TensorRuntime`] with a typed `ShapeMismatch` source.
     pub fn reshape_sym(&self, shape: &[SymDim]) -> Result<TracedTensor> {
-        let tensor_map = [(self.symbolic_id(), 0usize)];
+        let tensor_map = [(self.id, 0usize)];
         let to_shape = shape
             .iter()
             .map(|dim| {
@@ -2034,10 +2418,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
     /// let y = x.broadcast_in_dim(&[2, 3], &[1])?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
@@ -2088,19 +2470,17 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{TracedTensor};
+    /// use tenferro_runtime::TracedTensor;
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let a = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    /// let b = trace.from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
     /// let m = a.axis_sym_dim(0)?;
     /// let k = a.axis_sym_dim(1)?;
     /// let n = b.axis_sym_dim(1)?;
     /// // Broadcast `a[m, k]` to `[m, k, n]`, placing `a`'s axes at 0, 1
     /// // and taking `n` from `b` as an auxiliary shape reference.
     /// let a_b = a.broadcast_in_dim_sym(&[m, k, n], &[0, 1], &[&b])?;
-    /// assert_eq!(a_b.rank(), 3);
+    /// assert_eq!(a_b.rank, 3);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     ///
@@ -2130,11 +2510,11 @@ impl TracedTensor {
         // wins) and index them starting at 1 — the primary input `self`
         // is at 0.
         let mut dedup_refs: Vec<&TracedTensor> = Vec::with_capacity(shape_refs.len());
-        let mut tensor_map: Vec<(u64, usize)> = vec![(self.symbolic_id(), 0)];
+        let mut tensor_map: Vec<(u64, usize)> = vec![(self.id, 0)];
         for &t in shape_refs {
-            if !tensor_map.iter().any(|(id, _)| *id == t.symbolic_id()) {
+            if !tensor_map.iter().any(|(id, _)| *id == t.id) {
                 let idx = tensor_map.len();
-                tensor_map.push((t.symbolic_id(), idx));
+                tensor_map.push((t.id, idx));
                 dedup_refs.push(t);
             }
         }
@@ -2343,12 +2723,10 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let matrix = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let matrix = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
     /// let lower = matrix.tril(0)?;
-    /// assert_eq!(lower.rank(), 2);
+    /// assert_eq!(lower.rank, 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     ///
@@ -2370,12 +2748,10 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let matrix = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let matrix = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
     /// let upper = matrix.triu(0)?;
-    /// assert_eq!(upper.rank(), 2);
+    /// assert_eq!(upper.rank, 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     ///
@@ -2397,10 +2773,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     /// let y = x.transpose(&[1, 0])?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
@@ -2432,10 +2806,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
     /// let y = x.extract_diag(0, 1)?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
@@ -2465,10 +2837,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// # let x = trace.from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
+    /// # use tenferro_runtime::TracedTensor;
+    /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
     /// let y = x.embed_diag(0, 1)?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
@@ -2504,9 +2874,7 @@ impl TracedTensor {
     /// use tenferro_cpu::CpuEngine;
     /// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     /// let cols = x.shape_of(1)?;
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&cols).unwrap();
@@ -2555,10 +2923,8 @@ impl TracedTensor {
     /// use tenferro_cpu::CpuEngine;
     /// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    /// let size = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    /// let size = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
     /// let y = x.dynamic_truncate(&size, 0)?;
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
@@ -2621,10 +2987,8 @@ impl TracedTensor {
     /// use tenferro_cpu::CpuEngine;
     /// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let reference = trace.from_vec_col_major(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]).unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    /// let reference = TracedTensor::from_vec_col_major(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]).unwrap();
     /// let y = x.pad_to_match(&reference, 0)?;
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
@@ -2698,8 +3062,30 @@ pub(crate) fn apply_unary_with_dtype(
     out_shape_hint: Option<Vec<SymDim>>,
     out_dtype: DType,
 ) -> Result<TracedTensor> {
-    let outputs = append_core(&input.ctx, &op, &[input.value])?;
-    finish_value(&input.ctx, outputs[0], out_rank, out_dtype, out_shape_hint)
+    let mut builder = GraphBuilder::new();
+    builder.add_parent(input.graph.clone());
+    let input_ref = ValueRef::External(input.graph.values()[input.val].key.clone());
+    let outputs = builder.add_operation(op, vec![input_ref], OperationRole::Primary);
+    builder.set_outputs(outputs.clone());
+    let graph = Arc::new(builder.build());
+    let metadata_scope =
+        register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint)?;
+
+    Ok(TracedTensor {
+        id: next_traced_id(),
+        rank: out_rank,
+        dtype: out_dtype,
+        graph,
+        val: outputs[0],
+        data: None,
+        shape_hint: out_shape_hint,
+        inputs_map: input.inputs_map.clone(),
+        leaf_metas: input.leaf_metas.clone(),
+        extra_roots: input.extra_roots.clone(),
+        checkpoint_chain: input.checkpoint_chain.clone(),
+        metadata_scopes: MetadataScopeChain::with_new(metadata_scope, [&input.metadata_scopes]),
+        constraint_scopes: input.constraint_scopes.clone(),
+    })
 }
 
 /// Apply a unary-primary op that additionally references one or more
@@ -2717,20 +3103,62 @@ pub(crate) fn apply_unary_with_shape_refs(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> Result<TracedTensor> {
-    let mut inputs = Vec::with_capacity(1 + shape_refs.len());
-    inputs.push(input.value);
-    for tensor in shape_refs {
-        ensure_same_context(input, tensor)?;
-        inputs.push(tensor.value);
+    let mut builder = GraphBuilder::new();
+    builder.add_parent(input.graph.clone());
+    for t in shape_refs {
+        builder.add_parent(t.graph.clone());
     }
-    let outputs = append_core(&input.ctx, &op, &inputs)?;
-    finish_value(
-        &input.ctx,
-        outputs[0],
-        out_rank,
-        input.dtype,
-        out_shape_hint,
-    )
+    let mut op_inputs: Vec<ValueRef<StdTensorOp>> = Vec::with_capacity(1 + shape_refs.len());
+    op_inputs.push(ValueRef::External(
+        input.graph.values()[input.val].key.clone(),
+    ));
+    for t in shape_refs {
+        op_inputs.push(ValueRef::External(t.graph.values()[t.val].key.clone()));
+    }
+    let outputs = builder.add_operation(op, op_inputs, OperationRole::Primary);
+    builder.set_outputs(outputs.clone());
+    let graph = Arc::new(builder.build());
+    let metadata_scope =
+        register_single_output_metadata(graph.as_ref(), outputs[0], input.dtype, &out_shape_hint)?;
+
+    let inputs_map =
+        merge_traced_inputs_map(std::iter::once(input).chain(shape_refs.iter().copied()));
+    let leaf_metas =
+        merge_traced_leaf_metas(std::iter::once(input).chain(shape_refs.iter().copied()));
+
+    let mut extra_roots = input.extra_roots.clone();
+    for t in shape_refs {
+        extra_roots.extend(t.extra_roots.iter().cloned());
+    }
+
+    let mut checkpoint_chain = input.checkpoint_chain.clone();
+    for t in shape_refs {
+        checkpoint_chain =
+            CheckpointNode::merge_chains(checkpoint_chain, t.checkpoint_chain.clone());
+    }
+
+    Ok(TracedTensor {
+        id: next_traced_id(),
+        rank: out_rank,
+        dtype: input.dtype,
+        graph,
+        val: outputs[0],
+        data: None,
+        shape_hint: out_shape_hint,
+        inputs_map,
+        leaf_metas,
+        extra_roots,
+        checkpoint_chain,
+        metadata_scopes: MetadataScopeChain::with_new(
+            metadata_scope,
+            std::iter::once(&input.metadata_scopes)
+                .chain(shape_refs.iter().map(|tensor| &tensor.metadata_scopes)),
+        ),
+        constraint_scopes: ConstraintScopeChain::merge(
+            std::iter::once(&input.constraint_scopes)
+                .chain(shape_refs.iter().map(|tensor| &tensor.constraint_scopes)),
+        ),
+    })
 }
 
 pub(crate) fn apply_nullary(
@@ -2738,10 +3166,29 @@ pub(crate) fn apply_nullary(
     rank: usize,
     dtype: DType,
     shape_hint: Option<Vec<SymDim>>,
-    ctx: &TraceContext,
 ) -> Result<TracedTensor> {
-    let outputs = append_core(ctx, &op, &[])?;
-    finish_value(ctx, outputs[0], rank, dtype, shape_hint)
+    let mut builder = GraphBuilder::new();
+    let outputs = builder.add_operation(op, vec![], OperationRole::Primary);
+    builder.set_outputs(outputs.clone());
+    let graph = Arc::new(builder.build());
+    let metadata_scope =
+        register_single_output_metadata(graph.as_ref(), outputs[0], dtype, &shape_hint)?;
+
+    Ok(TracedTensor {
+        id: next_traced_id(),
+        rank,
+        dtype,
+        graph,
+        val: outputs[0],
+        data: None,
+        shape_hint,
+        inputs_map: Arc::new(HashMap::new()),
+        leaf_metas: Arc::new(HashMap::new()),
+        extra_roots: Vec::new(),
+        checkpoint_chain: None,
+        metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+        constraint_scopes: ConstraintScopeChain::empty(),
+    })
 }
 
 pub(crate) fn apply_binary(
@@ -2905,9 +3352,45 @@ fn apply_binary_with_output_dtype(
     out_shape_hint: Option<Vec<SymDim>>,
     out_dtype: DType,
 ) -> Result<TracedTensor> {
-    ensure_same_context(lhs, rhs)?;
-    let outputs = append_core(&lhs.ctx, &op, &[lhs.value, rhs.value])?;
-    finish_value(&lhs.ctx, outputs[0], out_rank, out_dtype, out_shape_hint)
+    let lhs_ref = ValueRef::External(lhs.graph.values()[lhs.val].key.clone());
+    let rhs_ref = ValueRef::External(rhs.graph.values()[rhs.val].key.clone());
+
+    let mut builder = GraphBuilder::new();
+    builder.add_parent(lhs.graph.clone());
+    builder.add_parent(rhs.graph.clone());
+    let outputs = builder.add_operation(op, vec![lhs_ref, rhs_ref], OperationRole::Primary);
+    builder.set_outputs(outputs.clone());
+    let graph = Arc::new(builder.build());
+    let metadata_scope =
+        register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint)?;
+
+    let mut extra_roots = lhs.extra_roots.clone();
+    extra_roots.extend(rhs.extra_roots.iter().cloned());
+
+    Ok(TracedTensor {
+        id: next_traced_id(),
+        rank: out_rank,
+        dtype: out_dtype,
+        graph,
+        val: outputs[0],
+        data: None,
+        shape_hint: out_shape_hint,
+        inputs_map: merge_traced_inputs_map([lhs, rhs]),
+        leaf_metas: merge_traced_leaf_metas([lhs, rhs]),
+        extra_roots,
+        checkpoint_chain: CheckpointNode::merge_chains(
+            lhs.checkpoint_chain.clone(),
+            rhs.checkpoint_chain.clone(),
+        ),
+        metadata_scopes: MetadataScopeChain::with_new(
+            metadata_scope,
+            [&lhs.metadata_scopes, &rhs.metadata_scopes],
+        ),
+        constraint_scopes: ConstraintScopeChain::merge([
+            &lhs.constraint_scopes,
+            &rhs.constraint_scopes,
+        ]),
+    })
 }
 
 fn apply_ternary_with_output_dtype(
@@ -2919,23 +3402,94 @@ fn apply_ternary_with_output_dtype(
     out_shape_hint: Option<Vec<SymDim>>,
     out_dtype: DType,
 ) -> Result<TracedTensor> {
-    ensure_same_context(first, second)?;
-    ensure_same_context(first, third)?;
-    let outputs = append_core(&first.ctx, &op, &[first.value, second.value, third.value])?;
-    finish_value(&first.ctx, outputs[0], out_rank, out_dtype, out_shape_hint)
+    let first_ref = ValueRef::External(first.graph.values()[first.val].key.clone());
+    let second_ref = ValueRef::External(second.graph.values()[second.val].key.clone());
+    let third_ref = ValueRef::External(third.graph.values()[third.val].key.clone());
+
+    let mut builder = GraphBuilder::new();
+    builder.add_parent(first.graph.clone());
+    builder.add_parent(second.graph.clone());
+    builder.add_parent(third.graph.clone());
+    let outputs = builder.add_operation(
+        op,
+        vec![first_ref, second_ref, third_ref],
+        OperationRole::Primary,
+    );
+    builder.set_outputs(outputs.clone());
+    let graph = Arc::new(builder.build());
+    let metadata_scope =
+        register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint)?;
+
+    let mut extra_roots = first.extra_roots.clone();
+    extra_roots.extend(second.extra_roots.iter().cloned());
+    extra_roots.extend(third.extra_roots.iter().cloned());
+
+    let checkpoint_chain = CheckpointNode::merge_chains(
+        CheckpointNode::merge_chains(
+            first.checkpoint_chain.clone(),
+            second.checkpoint_chain.clone(),
+        ),
+        third.checkpoint_chain.clone(),
+    );
+
+    Ok(TracedTensor {
+        id: next_traced_id(),
+        rank: out_rank,
+        dtype: out_dtype,
+        graph,
+        val: outputs[0],
+        data: None,
+        shape_hint: out_shape_hint,
+        inputs_map: merge_traced_inputs_map([first, second, third]),
+        leaf_metas: merge_traced_leaf_metas([first, second, third]),
+        extra_roots,
+        checkpoint_chain,
+        metadata_scopes: MetadataScopeChain::with_new(
+            metadata_scope,
+            [
+                &first.metadata_scopes,
+                &second.metadata_scopes,
+                &third.metadata_scopes,
+            ],
+        ),
+        constraint_scopes: ConstraintScopeChain::merge([
+            &first.constraint_scopes,
+            &second.constraint_scopes,
+            &third.constraint_scopes,
+        ]),
+    })
 }
 
-/// Reject a combination of traced values that belong to different contexts.
-pub(crate) fn ensure_same_context(lhs: &TracedTensor, rhs: &TracedTensor) -> Result<()> {
-    if lhs.ctx.same_context(&rhs.ctx) {
-        return Ok(());
+fn register_single_output_metadata(
+    graph: &Graph<StdTensorOp>,
+    output: LocalValueId,
+    dtype: DType,
+    shape_hint: &Option<Vec<SymDim>>,
+) -> Result<GlobalMetadataScope> {
+    if let Some(shape) = shape_hint {
+        // Fresh graph output keys are generated in this builder, so metadata
+        // registration failure would indicate a global metadata invariant bug.
+        register_metadata_or_runtime_state(register_scoped_value_metadata(
+            graph.values()[output].key.clone(),
+            tensor_meta(dtype, shape.clone()),
+        ))
+    } else {
+        // Fresh graph output keys are generated in this builder, so metadata
+        // registration failure would indicate a global metadata invariant bug.
+        register_metadata_or_runtime_state(register_scoped_graph_metadata(
+            graph,
+            std::iter::empty(),
+        ))
     }
-    Err(Error::invalid_argument(
-        "TracedTensor",
-        ErrorPhase::GraphBuild,
-        "context",
-        "traced values from different contexts cannot be combined; build both in the same trace",
-    ))
+}
+
+impl TracedTensor {
+    pub(crate) fn resolve_roots(&self) -> Vec<Arc<Graph<StdTensorOp>>> {
+        let mut roots = Vec::with_capacity(1 + self.extra_roots.len());
+        roots.push(self.graph.clone());
+        roots.extend(self.extra_roots.iter().cloned());
+        roots
+    }
 }
 
 mod composite_ops;

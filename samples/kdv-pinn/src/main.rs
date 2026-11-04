@@ -83,26 +83,25 @@ const LR: f64 = 0.001;
 const EPOCHS: usize = 3000;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let trace = tenferro_runtime::TraceContext::new();
     let net = Mlp::new(&[2, 64, 64, 1])?;
     let mut rng = rand::thread_rng();
     let mut params = net.init_tensors(&mut rng);
 
-    let x_ic = trace.input_concrete_shape(DType::F64, &[N_IC, 1])?;
-    let u_ic_true = trace.input_concrete_shape(DType::F64, &[N_IC, 1])?;
+    let x_ic = TracedTensor::input_concrete_shape(DType::F64, &[N_IC, 1])?;
+    let u_ic_true = TracedTensor::input_concrete_shape(DType::F64, &[N_IC, 1])?;
 
-    let t_zero = trace.from_vec_col_major(vec![N_IC, 1], vec![0.0_f64; N_IC])?;
+    let t_zero = TracedTensor::from_vec_col_major(vec![N_IC, 1], vec![0.0_f64; N_IC])?;
     let xt_ic = TracedTensor::stack(&[&x_ic, &t_zero], 1)?.reshape(&[N_IC, 2])?;
     let u_ic = net.forward(&xt_ic)?;
 
-    let x_col = trace.input_concrete_shape(DType::F64, &[N_COL, 1])?;
-    let t_col = trace.input_concrete_shape(DType::F64, &[N_COL, 1])?;
+    let x_col = TracedTensor::input_concrete_shape(DType::F64, &[N_COL, 1])?;
+    let t_col = TracedTensor::input_concrete_shape(DType::F64, &[N_COL, 1])?;
     let xt_col = TracedTensor::stack(&[&x_col, &t_col], 1)?.reshape(&[N_COL, 2])?;
     let u_col = net.forward(&xt_col)?;
 
-    let x_bc = trace.input_concrete_shape(DType::F64, &[N_BC, 1])?;
-    let t_bc = trace.input_concrete_shape(DType::F64, &[N_BC, 1])?;
-    let u_bc_true = trace.input_concrete_shape(DType::F64, &[N_BC, 1])?;
+    let x_bc = TracedTensor::input_concrete_shape(DType::F64, &[N_BC, 1])?;
+    let t_bc = TracedTensor::input_concrete_shape(DType::F64, &[N_BC, 1])?;
+    let u_bc_true = TracedTensor::input_concrete_shape(DType::F64, &[N_BC, 1])?;
     let xt_bc = TracedTensor::stack(&[&x_bc, &t_bc], 1)?.reshape(&[N_BC, 2])?;
     let u_bc = net.forward(&xt_bc)?;
 
@@ -190,8 +189,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Evaluation grid at t = 0.5.
-    let x_eval = trace.input_concrete_shape(DType::F64, &[N_EVAL, 1])?;
-    let t_eval = trace.input_concrete_shape(DType::F64, &[N_EVAL, 1])?;
+    let x_eval = TracedTensor::input_concrete_shape(DType::F64, &[N_EVAL, 1])?;
+    let t_eval = TracedTensor::input_concrete_shape(DType::F64, &[N_EVAL, 1])?;
     let xt_eval = TracedTensor::stack(&[&x_eval, &t_eval], 1)?.reshape(&[N_EVAL, 2])?;
     let u_eval = net.forward(&xt_eval)?;
 

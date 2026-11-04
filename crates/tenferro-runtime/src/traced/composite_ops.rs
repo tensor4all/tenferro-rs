@@ -12,11 +12,9 @@ use crate::composite::{
 use crate::error::{Error, Result};
 
 /// [`CompositeOps`] over traced graph construction.
-pub(crate) struct TracedComposite<'a> {
-    ctx: &'a crate::trace::TraceContext,
-}
+pub(crate) struct TracedComposite;
 
-impl CompositeOps for TracedComposite<'_> {
+impl CompositeOps for TracedComposite {
     type Value = TracedTensor;
     type Error = Error;
 
@@ -35,7 +33,6 @@ impl CompositeOps for TracedComposite<'_> {
             0,
             dtype,
             Some(vec![]),
-            self.ctx,
         )
     }
 
@@ -138,9 +135,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TraceContext, TracedTensor};
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![3], vec![-1.0_f64, 0.0, 1.0])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![3], vec![-1.0_f64, 0.0, 1.0])?;
     /// let y = x.sigmoid()?;
     /// assert_eq!(y.try_concrete_shape(), Some(vec![3]));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -153,7 +149,7 @@ impl TracedTensor {
     /// `InvalidArgument` when the input shape is symbolic, or
     /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
     pub fn sigmoid(&self) -> Result<TracedTensor> {
-        composite::sigmoid(&mut TracedComposite { ctx: &self.ctx }, self)
+        composite::sigmoid(&mut TracedComposite, self)
     }
 
     /// SiLU (swish) `x * sigmoid(x)`, for real `F32`/`F64` tensors.
@@ -161,10 +157,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2], vec![-1.0_f64, 1.0])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 1.0])?;
     /// let y = x.silu()?;
     /// assert_eq!(y.dtype(), tenferro_runtime::DType::F64);
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -177,7 +171,7 @@ impl TracedTensor {
     /// `InvalidArgument` when the input shape is symbolic, or
     /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
     pub fn silu(&self) -> Result<TracedTensor> {
-        composite::silu(&mut TracedComposite { ctx: &self.ctx }, self)
+        composite::silu(&mut TracedComposite, self)
     }
 
     /// Softplus `log(1 + exp(x))` in the stable form `max(x, 0) + log1p(exp(-|x|))`.
@@ -187,10 +181,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2], vec![-1000.0_f64, 1000.0])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![-1000.0_f64, 1000.0])?;
     /// let y = x.softplus()?;
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -203,7 +195,7 @@ impl TracedTensor {
     /// `InvalidArgument` when the input shape is symbolic, or
     /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
     pub fn softplus(&self) -> Result<TracedTensor> {
-        composite::softplus(&mut TracedComposite { ctx: &self.ctx }, self)
+        composite::softplus(&mut TracedComposite, self)
     }
 
     /// Exact GELU `x/2 * (1 + erf(x / sqrt(2)))` (PyTorch `approximate="none"`).
@@ -211,10 +203,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2], vec![-1.0_f64, 1.0])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 1.0])?;
     /// let y = x.gelu()?;
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -227,7 +217,7 @@ impl TracedTensor {
     /// `InvalidArgument` when the input shape is symbolic, or
     /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
     pub fn gelu(&self) -> Result<TracedTensor> {
-        composite::gelu(&mut TracedComposite { ctx: &self.ctx }, self)
+        composite::gelu(&mut TracedComposite, self)
     }
 
     /// GELU tanh approximation (PyTorch `approximate="tanh"`).
@@ -237,10 +227,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2], vec![-1.0_f64, 1.0])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 1.0])?;
     /// let y = x.gelu_tanh()?;
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -253,7 +241,7 @@ impl TracedTensor {
     /// `InvalidArgument` when the input shape is symbolic, or
     /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
     pub fn gelu_tanh(&self) -> Result<TracedTensor> {
-        composite::gelu_tanh(&mut TracedComposite { ctx: &self.ctx }, self)
+        composite::gelu_tanh(&mut TracedComposite, self)
     }
 
     /// Arithmetic mean over `axes` (`None` reduces every axis).
@@ -264,10 +252,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
     /// let y = x.reduce_mean(Some(&[0]))?;
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -281,7 +267,7 @@ impl TracedTensor {
     /// input shape is symbolic, or [`Error::RuntimeStateSource`] when graph
     /// metadata registration fails.
     pub fn reduce_mean(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
-        composite::reduce_mean(&mut TracedComposite { ctx: &self.ctx }, self, axes)
+        composite::reduce_mean(&mut TracedComposite, self, axes)
     }
 
     /// Max-subtracted softmax along `axis`, for real `F32`/`F64` tensors.
@@ -293,10 +279,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
     /// let y = x.softmax(1)?;
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2, 3]));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -310,7 +294,7 @@ impl TracedTensor {
     /// symbolic, or [`Error::RuntimeStateSource`] when graph metadata
     /// registration fails.
     pub fn softmax(&self, axis: usize) -> Result<TracedTensor> {
-        composite::softmax(&mut TracedComposite { ctx: &self.ctx }, self, axis)
+        composite::softmax(&mut TracedComposite, self, axis)
     }
 
     /// Max-subtracted log-softmax along `axis`, for real `F32`/`F64` tensors.
@@ -321,10 +305,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
     /// let y = x.log_softmax(0)?;
     /// assert_eq!(y.try_concrete_shape(), Some(vec![3]));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -338,7 +320,7 @@ impl TracedTensor {
     /// symbolic, or [`Error::RuntimeStateSource`] when graph metadata
     /// registration fails.
     pub fn log_softmax(&self, axis: usize) -> Result<TracedTensor> {
-        composite::log_softmax(&mut TracedComposite { ctx: &self.ctx }, self, axis)
+        composite::log_softmax(&mut TracedComposite, self, axis)
     }
 
     /// Softmax along `axis` over the entries where the `Bool` `mask` is true.
@@ -350,11 +332,9 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
-    /// let mask = trace.from_vec_col_major(vec![3], vec![true, true, false])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+    /// let mask = TracedTensor::from_vec_col_major(vec![3], vec![true, true, false])?;
     /// let y = x.masked_softmax(&mask, 0)?;
     /// assert_eq!(y.try_concrete_shape(), Some(vec![3]));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -368,7 +348,7 @@ impl TracedTensor {
     /// [`Error::Validation`] with `InvalidArgument` for symbolic shapes; or
     /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
     pub fn masked_softmax(&self, mask: &TracedTensor, axis: usize) -> Result<TracedTensor> {
-        composite::masked_softmax(&mut TracedComposite { ctx: &self.ctx }, self, mask, axis)
+        composite::masked_softmax(&mut TracedComposite, self, mask, axis)
     }
 
     /// Log-softmax along `axis` over the entries where the `Bool` `mask` is true.
@@ -379,11 +359,9 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
-    /// let mask = trace.from_vec_col_major(vec![3], vec![true, false, true])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+    /// let mask = TracedTensor::from_vec_col_major(vec![3], vec![true, false, true])?;
     /// let y = x.masked_log_softmax(&mask, 0)?;
     /// assert_eq!(y.try_concrete_shape(), Some(vec![3]));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -397,7 +375,7 @@ impl TracedTensor {
     /// [`Error::Validation`] with `InvalidArgument` for symbolic shapes; or
     /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
     pub fn masked_log_softmax(&self, mask: &TracedTensor, axis: usize) -> Result<TracedTensor> {
-        composite::masked_log_softmax(&mut TracedComposite { ctx: &self.ctx }, self, mask, axis)
+        composite::masked_log_softmax(&mut TracedComposite, self, mask, axis)
     }
 
     /// Layer normalization along `axis` with optional affine `weight` / `bias`.
@@ -409,11 +387,9 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![4, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 0.0, 0.0, 1.0, 1.0])?;
-    /// let w = trace.from_vec_col_major(vec![4], vec![1.0_f64, 1.0, 2.0, 2.0])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 0.0, 0.0, 1.0, 1.0])?;
+    /// let w = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 1.0, 2.0, 2.0])?;
     /// let y = x.layer_norm(0, Some(&w), None, 1e-5)?;
     /// assert_eq!(y.try_concrete_shape(), Some(vec![4, 2]));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -434,14 +410,7 @@ impl TracedTensor {
         bias: Option<&TracedTensor>,
         eps: f64,
     ) -> Result<TracedTensor> {
-        composite::layer_norm(
-            &mut TracedComposite { ctx: &self.ctx },
-            self,
-            axis,
-            weight,
-            bias,
-            eps,
-        )
+        composite::layer_norm(&mut TracedComposite, self, axis, weight, bias, eps)
     }
 
     /// RMS normalization along `axis` with optional affine `weight` / `bias`.
@@ -452,10 +421,8 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
     /// let y = x.rms_norm(0, None, None, 1e-6)?;
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2, 2]));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -476,14 +443,7 @@ impl TracedTensor {
         bias: Option<&TracedTensor>,
         eps: f64,
     ) -> Result<TracedTensor> {
-        composite::rms_norm(
-            &mut TracedComposite { ctx: &self.ctx },
-            self,
-            axis,
-            weight,
-            bias,
-            eps,
-        )
+        composite::rms_norm(&mut TracedComposite, self, axis, weight, bias, eps)
     }
 
     /// NumPy-style `take_along_axis` over `gather`.
@@ -496,12 +456,10 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::{TracedTensor};
+    /// # use tenferro_runtime::TracedTensor;
     /// // Gather whole rows of each matrix in a [2, 2, batch=2] stack.
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2, 2, 2], (0..8).map(f64::from).collect::<Vec<_>>())?;
-    /// let rows = trace.from_vec_col_major(vec![2, 1, 2], vec![1_i64, 0, 0, 0])?;
+    /// let x = TracedTensor::from_vec_col_major(vec![2, 2, 2], (0..8).map(f64::from).collect::<Vec<_>>())?;
+    /// let rows = TracedTensor::from_vec_col_major(vec![2, 1, 2], vec![1_i64, 0, 0, 0])?;
     /// let y = x.take_along_axis(&rows, 0)?;
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2, 2, 2]));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -516,6 +474,6 @@ impl TracedTensor {
     /// `InvalidArgument` for symbolic shapes; or
     /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
     pub fn take_along_axis(&self, indices: &TracedTensor, axis: usize) -> Result<TracedTensor> {
-        composite::take_along_axis(&mut TracedComposite { ctx: &self.ctx }, self, indices, axis)
+        composite::take_along_axis(&mut TracedComposite, self, indices, axis)
     }
 }

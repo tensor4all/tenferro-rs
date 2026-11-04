@@ -1,15 +1,22 @@
 use std::ops::Range;
+use std::sync::Arc;
 
+use computegraph::graph::GraphBuilder;
+use computegraph::types::{OperationRole, ValueRef};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{
     GatherConfig, ShapeMismatch, SliceConfig, Tensor, TypedTensor, ValidationError,
 };
 
+use crate::checkpoint::CheckpointNode;
 use crate::error::{Error, ErrorPhase, Result};
+use crate::metadata::{register_scoped_value_metadata, tensor_meta, MetadataScopeChain};
+use crate::shape_constraint::ConstraintScopeChain;
 use crate::shape_infer::promote_dtypes;
 use crate::sym_dim::SymDim;
 use crate::traced::{
-    apply_binary_preserve_input_dtypes, infer_traced_single_output_shape, try_concrete_shape,
+    apply_binary_preserve_input_dtypes, infer_traced_single_output_shape, merge_traced_inputs_map,
+    merge_traced_leaf_metas, next_traced_id, try_concrete_shape,
 };
 use crate::TracedTensor;
 
@@ -280,10 +287,9 @@ fn apply_slice_axis_config(
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_runtime::{TraceContext, TracedTensor};
+/// use tenferro_runtime::TracedTensor;
 ///
-/// let trace = TraceContext::new();
-/// let x = trace.from_vec_col_major(vec![3, 4], vec![0.0_f64; 12]).unwrap();
+/// let x = TracedTensor::from_vec_col_major(vec![3, 4], vec![0.0_f64; 12]).unwrap();
 /// let y = x.slice_builder().axis(0, 0..2).axis_step(1, 0..4, 2).apply().unwrap();
 /// assert_eq!(y.try_concrete_shape(), Some(vec![2, 2]));
 /// ```
@@ -306,11 +312,9 @@ impl<'a> TracedSliceBuilder<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_runtime::{TracedTensor};
+    /// use tenferro_runtime::TracedTensor;
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     /// let y = x.slice_builder().axis(0, 1..3).apply().unwrap();
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
     /// ```
@@ -328,11 +332,9 @@ impl<'a> TracedSliceBuilder<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_runtime::{TracedTensor};
+    /// use tenferro_runtime::TracedTensor;
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]).unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]).unwrap();
     /// let y = x.slice_builder().axis_step(0, 0..5, 2).apply().unwrap();
     /// assert_eq!(y.try_concrete_shape(), Some(vec![3]));
     /// ```
@@ -347,11 +349,9 @@ impl<'a> TracedSliceBuilder<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_runtime::{TracedTensor};
+    /// use tenferro_runtime::TracedTensor;
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     /// let y = x.slice_builder().take_axis(0, &[2, 0]).apply().unwrap();
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
     /// ```
@@ -368,11 +368,9 @@ impl<'a> TracedSliceBuilder<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_runtime::{TracedTensor};
+    /// use tenferro_runtime::TracedTensor;
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     /// let y = x.slice_builder().axis(0, 1..4).apply().unwrap();
     /// assert_eq!(y.try_concrete_shape(), Some(vec![3]));
     /// ```
@@ -412,11 +410,9 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_runtime::{TracedTensor};
+    /// use tenferro_runtime::TracedTensor;
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     /// let y = x.slice_axis(0, 1..3).unwrap();
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
     /// ```
@@ -435,11 +431,9 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_runtime::{TracedTensor};
+    /// use tenferro_runtime::TracedTensor;
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     /// let y = x.slice_builder().axis(0, 0..2).apply().unwrap();
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
     /// ```
@@ -452,11 +446,9 @@ impl TracedTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_runtime::{TracedTensor};
+    /// use tenferro_runtime::TracedTensor;
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap();
+    /// let x = TracedTensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap();
     /// let y = x.take_axis(0, &[2, 0]).unwrap();
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
     /// ```
@@ -488,9 +480,7 @@ impl TracedTensor {
     /// use tenferro_cpu::CpuEngine;
     /// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TracedTensor};
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_tensor_concrete_shape(
+    /// let x = TracedTensor::from_tensor_concrete_shape(
     ///     Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap(),
     /// )
     /// .unwrap();
@@ -535,7 +525,7 @@ impl TracedTensor {
             )
         })?;
         let (indices_tensor, config, out_shape) = index_select_config(&shape, axis, positions)?;
-        let indices = self.context().from_tensor_concrete_shape(indices_tensor)?;
+        let indices = TracedTensor::from_tensor_concrete_shape(indices_tensor)?;
         apply_binary_preserve_input_dtypes(
             StdTensorOp::Gather(config),
             self,
@@ -554,10 +544,8 @@ impl TracedTensor {
     /// use tenferro_cpu::CpuEngine;
     /// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TracedTensor};
     ///
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let a = trace.from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap()).unwrap();
-    /// let b = trace.from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap()).unwrap();
+    /// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap()).unwrap();
+    /// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap()).unwrap();
     /// let stacked = TracedTensor::stack(&[&a, &b], -1).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&stacked).unwrap();
@@ -713,30 +701,60 @@ fn apply_nary_concatenate(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let Some(first) = tensors.first() else {
-        return Err(Error::invalid_argument(
-            "TracedSliceBuilder::concatenate",
-            ErrorPhase::GraphBuild,
-            "tensors",
-            "at least one tensor is required",
-        ));
-    };
-    for tensor in tensors.iter().skip(1) {
-        crate::traced::ensure_same_context(first, tensor)?;
+    let mut builder = GraphBuilder::new();
+    for tensor in &tensors {
+        builder.add_parent(tensor.graph.clone());
     }
-    let values: Vec<_> = tensors.iter().map(|tensor| tensor.value).collect();
-    let op = StdTensorOp::Concatenate {
-        axis,
-        input_count: tensors.len(),
-    };
-    let outputs = crate::trace_ops::append_core(&first.ctx, &op, &values)?;
-    crate::trace_ops::finish_value(
-        &first.ctx,
-        outputs[0],
-        out_shape.len(),
-        out_dtype,
-        Some(out_shape),
-    )
+    let input_refs = tensors
+        .iter()
+        .map(|tensor| ValueRef::External(tensor.graph.values()[tensor.val].key.clone()))
+        .collect::<Vec<_>>();
+    let outputs = builder.add_operation(
+        StdTensorOp::Concatenate {
+            axis,
+            input_count: tensors.len(),
+        },
+        input_refs,
+        OperationRole::Primary,
+    );
+    builder.set_outputs(outputs.clone());
+    let graph = Arc::new(builder.build());
+    // Callers route through shape inference before graph construction.
+    let metadata_scope =
+        super::traced::register_metadata_or_runtime_state(register_scoped_value_metadata(
+            graph.values()[outputs[0]].key.clone(),
+            tensor_meta(out_dtype, out_shape.clone()),
+        ))?;
+
+    let inputs_map = merge_traced_inputs_map(tensors.iter());
+    let leaf_metas = merge_traced_leaf_metas(tensors.iter());
+    let mut extra_roots = Vec::new();
+    let mut checkpoint_chain = None;
+    for tensor in &tensors {
+        extra_roots.extend(tensor.extra_roots.iter().cloned());
+        checkpoint_chain =
+            CheckpointNode::merge_chains(checkpoint_chain, tensor.checkpoint_chain.clone());
+    }
+    Ok(TracedTensor {
+        id: next_traced_id(),
+        rank: out_shape.len(),
+        dtype: out_dtype,
+        graph,
+        val: outputs[0],
+        data: None,
+        shape_hint: Some(out_shape),
+        inputs_map,
+        leaf_metas,
+        extra_roots,
+        checkpoint_chain,
+        metadata_scopes: MetadataScopeChain::with_new(
+            metadata_scope,
+            tensors.iter().map(|tensor| &tensor.metadata_scopes),
+        ),
+        constraint_scopes: ConstraintScopeChain::merge(
+            tensors.iter().map(|tensor| &tensor.constraint_scopes),
+        ),
+    })
 }
 
 #[cfg(test)]

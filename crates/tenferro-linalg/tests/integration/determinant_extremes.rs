@@ -52,7 +52,6 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
 #[test]
 #[ignore = "requires CUDA"]
 fn cuda_complex_determinant_retains_existing_support() {
-    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_gpu::cuda::{
         cuda_runtime_engine_registration, download_tensor, upload_tensor, CudaDeviceId, CudaEngine,
     };
@@ -66,7 +65,7 @@ fn cuda_complex_determinant_retains_existing_support() {
     ];
     let host = Tensor::from_vec_col_major([2, 2], data.clone()).unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
-    let traced = trace.from_vec_col_major([2, 2], data).unwrap();
+    let traced = TracedTensor::from_vec_col_major([2, 2], data).unwrap();
     let program = GraphCompiler::new()
         .compile(&traced.det().unwrap())
         .unwrap();
@@ -97,7 +96,6 @@ fn cuda_complex_determinant_retains_existing_support() {
 
 #[test]
 fn determinant_extremes_preserve_value_and_sign() {
-    let trace = tenferro_runtime::TraceContext::new();
     // Each tuple is one diagonal matrix, expected determinant, and expected sign.
     for (diagonal, det, sign) in [
         (vec![2.0, 3.0], 6.0, 1.0),
@@ -113,7 +111,7 @@ fn determinant_extremes_preserve_value_and_sign() {
             data[i + n * i] = value;
         }
         let input = Tensor::from_vec_col_major([n, n], data.clone()).unwrap();
-        let a = trace.from_vec_col_major([n, n], data).unwrap();
+        let a = TracedTensor::from_vec_col_major([n, n], data).unwrap();
         let result = evaluate(&a, input);
         let actual_det = result[0].as_slice::<f64>().unwrap()[0];
         let actual_sign = result[1].as_slice::<f64>().unwrap()[0];
@@ -129,10 +127,9 @@ fn determinant_extremes_preserve_value_and_sign() {
 
 #[test]
 fn batched_slogdet_tracks_pivot_parity_and_each_batch() {
-    let trace = tenferro_runtime::TraceContext::new();
     let data = vec![0.0, 1e-200, 1e-200, 0.0, 2.0, 0.0, 0.0, 3.0];
     let input = Tensor::from_vec_col_major([2, 2, 2], data.clone()).unwrap();
-    let a = trace.from_vec_col_major([2, 2, 2], data).unwrap();
+    let a = TracedTensor::from_vec_col_major([2, 2, 2], data).unwrap();
     let result = evaluate(&a, input);
     assert_eq!(result[1].as_slice::<f64>().unwrap(), &[-1.0, 1.0]);
     let det = result[0].as_slice::<f64>().unwrap();
@@ -145,7 +142,6 @@ fn batched_slogdet_tracks_pivot_parity_and_each_batch() {
 
 #[test]
 fn complex_slogdet_preserves_tiny_phase_and_singular_zero() {
-    let trace = tenferro_runtime::TraceContext::new();
     for (first, expected_sign) in [
         (Complex64::new(0.0, 1e-200), Complex64::new(0.0, 1.0)),
         (Complex64::new(0.0, 0.0), Complex64::new(0.0, 0.0)),
@@ -157,7 +153,7 @@ fn complex_slogdet_preserves_tiny_phase_and_singular_zero() {
             first,
         ];
         let input = Tensor::from_vec_col_major([2, 2], data.clone()).unwrap();
-        let a = trace.from_vec_col_major([2, 2], data).unwrap();
+        let a = TracedTensor::from_vec_col_major([2, 2], data).unwrap();
         let result = evaluate(&a, input);
         assert_eq!(result[1].as_slice::<Complex64>().unwrap(), &[expected_sign]);
         assert_eq!(

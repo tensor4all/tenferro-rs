@@ -7,12 +7,11 @@
 use tenferro_gpu::cuda::{
     cuda_runtime_engine_registration, gpu_available, CudaDeviceId, CudaEngine,
 };
-use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Runtime, TensorRead};
+use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Runtime, TensorRead, TracedTensor};
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn a_single_domain_run_keeps_no_per_node_completion() {
-    let trace = tenferro_runtime::TraceContext::new();
     assert!(gpu_available(), "CUDA test requires an available device");
     let mut engine = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("open CUDA engine");
     let mut builder = Runtime::builder();
@@ -22,9 +21,7 @@ fn a_single_domain_run_keeps_no_per_node_completion() {
     let runtime = builder.build().expect("build runtime");
 
     // Four elementwise nodes plus a reduction: several launches in one domain, no transfer.
-    let x = trace
-        .input_symbolic_shape(DType::F64, 1)
-        .expect("symbolic input");
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("symbolic input");
     let squared = (&x * &x).expect("square");
     let shifted = (&squared + &x).expect("shift");
     let scaled = (&shifted * &shifted).expect("scale");

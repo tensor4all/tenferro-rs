@@ -12,7 +12,7 @@ use tenferro_runtime::extension::{
     apply, define_extension_runtime, ExtensionAliasDeclaration, ExtensionEffectDeclaration,
     ExtensionOp, ExtensionShapeContext,
 };
-use tenferro_runtime::{DType, GraphCompiler, Runtime, Tensor, TraceContext};
+use tenferro_runtime::{DType, GraphCompiler, Runtime, Tensor, TracedTensor};
 use tenferro_tensor::TensorRead;
 
 use crate::support::{cpu_runtime, RunTraced};
@@ -204,7 +204,6 @@ impl SemanticPrimalVjpRule for ActionRule {
 
 #[test]
 fn four_input_extension_vjp_emits_one_force_node_and_executes_once() {
-    let trace = TraceContext::new();
     FORCE_EXECUTIONS.store(0, Ordering::SeqCst);
     let rules = SemanticExtensionRuleSet::new()
         .with_primal_vjp(Arc::new(ActionRule))
@@ -216,22 +215,21 @@ fn four_input_extension_vjp_emits_one_force_node_and_executes_once() {
         .unwrap();
     let inputs = [2.0_f64, 3.0, 4.0, 5.0]
         .into_iter()
-        .map(|value| trace.from_vec_col_major(vec![], vec![value]).unwrap())
+        .map(|value| TracedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
         .collect::<Vec<_>>();
     let input_refs = inputs.iter().collect::<Vec<_>>();
     let action = apply(Arc::new(ActionOp), &input_refs).unwrap().remove(0);
-    let cotangent = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let cotangent = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
     let vjp = ad.vjp_many(&action, &input_refs, &cotangent).unwrap();
     assert_eq!(ad.cache_stats().unwrap().ad_transforms.entries, 1);
     let force_outputs = vjp
         .iter()
         .map(|value| value.as_ref().unwrap())
         .collect::<Vec<_>>();
-    // One transform imports every derivative into the same context.
-    let first_context = force_outputs[0].context();
+    let first_graph = force_outputs[0].graph();
     assert!(force_outputs
         .iter()
-        .all(|value| value.context().same_context(first_context)));
+        .all(|value| Arc::ptr_eq(value.graph(), first_graph)));
 
     let backend = tenferro_cpu::CpuEngine::serial();
     let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
@@ -278,14 +276,13 @@ fn four_input_extension_vjp_emits_one_force_node_and_executes_once() {
 
 #[test]
 fn many_jvp_and_vjp_cover_two_inputs_in_one_request() {
-    let trace = TraceContext::new();
     let ad = AdContext::builder().build().unwrap();
-    let x = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
-    let y = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    let dx = trace.from_vec_col_major(vec![], vec![5.0_f64]).unwrap();
-    let dy = trace.from_vec_col_major(vec![], vec![7.0_f64]).unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let y = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    let dx = TracedTensor::from_vec_col_major(vec![], vec![5.0_f64]).unwrap();
+    let dy = TracedTensor::from_vec_col_major(vec![], vec![7.0_f64]).unwrap();
     let output = (&x + &y).unwrap();
-    let cotangent = trace.from_vec_col_major(vec![], vec![11.0_f64]).unwrap();
+    let cotangent = TracedTensor::from_vec_col_major(vec![], vec![11.0_f64]).unwrap();
 
     let jvp = ad
         .jvp_many(&output, &[(&x, &dx), (&y, &dy)])
@@ -323,19 +320,18 @@ fn many_jvp_and_vjp_cover_two_inputs_in_one_request() {
 
 #[test]
 fn four_input_requests_use_one_transform_and_one_shared_derivative_graph() {
-    let trace = TraceContext::new();
     let ad = AdContext::builder().build().unwrap();
     let inputs = [2.0_f64, 3.0, 4.0, 5.0]
         .into_iter()
-        .map(|value| trace.from_vec_col_major(vec![], vec![value]).unwrap())
+        .map(|value| TracedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
         .collect::<Vec<_>>();
     let tangents = [1.0_f64, 2.0, 3.0, 4.0]
         .into_iter()
-        .map(|value| trace.from_vec_col_major(vec![], vec![value]).unwrap())
+        .map(|value| TracedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
         .collect::<Vec<_>>();
     let output =
         (&(&inputs[0] * &inputs[1]).unwrap() + &(&inputs[2] * &inputs[3]).unwrap()).unwrap();
-    let cotangent = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let cotangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
 
     let jvp = ad
         .jvp_many(
@@ -354,11 +350,11 @@ fn four_input_requests_use_one_transform_and_one_shared_derivative_graph() {
     let wrts = inputs.iter().collect::<Vec<_>>();
     let vjp = ad.vjp_many(&output, &wrts, &cotangent).unwrap();
     assert_eq!(ad.cache_stats().unwrap().ad_transforms.entries, 2);
-    let first_context = vjp[0].as_ref().unwrap().context();
+    let first_graph = vjp[0].as_ref().unwrap().graph();
     assert!(vjp
         .iter()
         .flatten()
-        .all(|value| value.context().same_context(first_context)));
+        .all(|value| std::sync::Arc::ptr_eq(value.graph(), first_graph)));
 
     let runtime = cpu_runtime();
     assert_eq!(
@@ -382,13 +378,12 @@ fn four_input_requests_use_one_transform_and_one_shared_derivative_graph() {
 
 #[test]
 fn many_requests_preserve_unreachable_and_duplicate_policies() {
-    let trace = TraceContext::new();
     let ad = AdContext::builder().build().unwrap();
-    let x = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
-    let y = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    let tangent = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let y = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    let tangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     let output = (&x * &x).unwrap();
-    let cotangent = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let cotangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
 
     let vjp = ad.vjp_many(&output, &[&y, &x, &x], &cotangent).unwrap();
     assert!(vjp[0].is_none());
@@ -403,17 +398,16 @@ fn many_requests_preserve_unreachable_and_duplicate_policies() {
 
 #[test]
 fn many_requests_cover_empty_and_seed_metadata_errors() {
-    let trace = TraceContext::new();
     let ad = AdContext::builder().build().unwrap();
-    let x = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
     let output = (&x * &x).unwrap();
-    let seed = trace.from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
+    let seed = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
 
     assert!(ad.jvp_many(&output, &[]).unwrap().is_none());
     assert!(ad.vjp_many(&output, &[], &seed).unwrap().is_empty());
     assert_eq!(ad.cache_stats().unwrap().ad_transforms.entries, 0);
 
-    let wrong_shape = trace.from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let wrong_shape = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     assert!(ad.jvp_many(&output, &[(&x, &wrong_shape)]).is_err());
     assert!(ad.vjp_many(&output, &[&x], &wrong_shape).is_err());
 }

@@ -10,7 +10,7 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::{
     DType, ExecutionEngine, GraphCompiler, PadConfig, Runtime, SliceConfig, Tensor, TensorRead,
-    TraceContext, TracedTensor,
+    TracedTensor,
 };
 
 use crate::support::cpu_runtime;
@@ -78,7 +78,6 @@ fn assert_read_parity(
 
 #[test]
 fn eager_and_traced_agree_on_a_borrowed_view_operand() {
-    let trace = TraceContext::new();
     let ctx = EagerRuntime::new().expect("eager runtime");
     // `2 x 3 x 4` column-major, so the transposed rank-3 view below is not
     // compact: shape `[3, 4, 2]` with strides `[2, 6, 1]`.
@@ -104,9 +103,7 @@ fn eager_and_traced_agree_on_a_borrowed_view_operand() {
         .expect("materialize the eager input");
     let compact = TensorRead::from_view(TensorRead::from_tensor(&logical).tensor_view());
     let strided = view.tensor_read();
-    let placeholder = trace
-        .input_symbolic_shape(DType::F64, 3)
-        .expect("placeholder");
+    let placeholder = TracedTensor::input_symbolic_shape(DType::F64, 3).expect("placeholder");
 
     let eager =
         |f: &dyn Fn(&mut tenferro_ad::EagerSession<'_>) -> tenferro_ad::Result<EagerTensor>| {
@@ -219,9 +216,7 @@ fn eager_and_traced_agree_on_a_borrowed_view_operand() {
             s.apply_standard_op(StdTensorOp::DynamicTruncate { axis: 0 }, &[&view, &size])
         })
         .expect("eager dynamic_truncate");
-    let size = trace
-        .from_vec_col_major(vec![], vec![2.0_f64])
-        .expect("traced size");
+    let size = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).expect("traced size");
     let traced = placeholder
         .dynamic_truncate(&size, 0)
         .expect("traced dynamic_truncate");
@@ -243,8 +238,7 @@ fn eager_and_traced_agree_on_a_borrowed_view_operand() {
             s.apply_standard_op(StdTensorOp::PadToMatch { axis: 0 }, &[&view, &reference])
         })
         .expect("eager pad_to_match");
-    let reference = trace
-        .from_vec_col_major(vec![5, 4, 2], vec![0.0_f64; 40])
+    let reference = TracedTensor::from_vec_col_major(vec![5, 4, 2], vec![0.0_f64; 40])
         .expect("traced reference");
     let traced = placeholder
         .pad_to_match(&reference, 0)

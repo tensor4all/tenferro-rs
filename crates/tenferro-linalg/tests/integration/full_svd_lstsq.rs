@@ -8,24 +8,22 @@
 
 use num_complex::Complex64;
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{GraphCompiler, Tensor, TraceContext, TracedTensor, TypedTensor};
+use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor, TypedTensor};
 
 use super::support;
 
-fn f64_tensor(trace: &TraceContext, shape: Vec<usize>, data: Vec<f64>) -> TracedTensor {
-    trace
-        .from_tensor_concrete_shape(Tensor::from_typed::<f64>(
-            TypedTensor::from_vec_col_major(shape, data).unwrap(),
-        ))
-        .unwrap()
+fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> TracedTensor {
+    TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(shape, data).unwrap(),
+    ))
+    .unwrap()
 }
 
-fn c64_tensor(trace: &TraceContext, shape: Vec<usize>, data: Vec<Complex64>) -> TracedTensor {
-    trace
-        .from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
-            TypedTensor::from_vec_col_major(shape, data).unwrap(),
-        ))
-        .unwrap()
+fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> TracedTensor {
+    TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
+        TypedTensor::from_vec_col_major(shape, data).unwrap(),
+    ))
+    .unwrap()
 }
 
 fn run_many(outputs: &[&TracedTensor]) -> Vec<Tensor> {
@@ -97,11 +95,10 @@ fn max_abs_diff_real(lhs: &[f64], rhs: &[f64]) -> f64 {
 #[cfg(any(feature = "native", feature = "blas"))]
 #[test]
 fn svd_full_tall_real_returns_square_factors_and_reconstructs() {
-    let trace = TraceContext::new();
     let m = 3;
     let n = 2;
     let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 7.0];
-    let a = f64_tensor(&trace, vec![m, n], data.clone());
+    let a = f64_tensor(vec![m, n], data.clone());
     let (u, s, vh) = a.svd_full().unwrap();
     let out = run_many(&[&u, &s, &vh]);
     assert_eq!(out[0].shape(), &[m, m]);
@@ -125,12 +122,11 @@ fn svd_full_tall_real_returns_square_factors_and_reconstructs() {
 #[cfg(any(feature = "native", feature = "blas"))]
 #[test]
 fn svd_full_wide_real_reconstructs_and_recovers_nullspace() {
-    let trace = TraceContext::new();
     // rank-2 wide matrix (2 x 3): the trailing Vh row spans the 1-D kernel.
     let m = 2;
     let n = 3;
     let data = vec![1.0_f64, 0.0, 0.0, 1.0, 1.0, 1.0];
-    let a = f64_tensor(&trace, vec![m, n], data.clone());
+    let a = f64_tensor(vec![m, n], data.clone());
     let (u, s, vh) = a.svd_full().unwrap();
     let out = run_many(&[&u, &s, &vh]);
     assert_eq!(out[0].shape(), &[m, m]);
@@ -159,9 +155,8 @@ fn svd_full_wide_real_reconstructs_and_recovers_nullspace() {
 #[cfg(any(feature = "native", feature = "blas"))]
 #[test]
 fn svd_full_1x2_recovers_one_dimensional_nullspace() {
-    let trace = TraceContext::new();
     // Smallest wide system: thin SVD would drop the kernel row entirely.
-    let a = f64_tensor(&trace, vec![1, 2], vec![1.0_f64, 1.0]);
+    let a = f64_tensor(vec![1, 2], vec![1.0_f64, 1.0]);
     let (u, s, vh) = a.svd_full().unwrap();
     let out = run_many(&[&u, &s, &vh]);
     assert_eq!(out[0].shape(), &[1, 1]);
@@ -180,7 +175,6 @@ fn svd_full_1x2_recovers_one_dimensional_nullspace() {
 #[cfg(any(feature = "native", feature = "blas"))]
 #[test]
 fn svd_full_random_wide_recovers_nullspace_dimension() {
-    let trace = TraceContext::new();
     // Deterministic rank-3 (3 x 5) matrix: rows are 3 independent vectors, so
     // the trailing two Vh rows span the 2-D kernel.
     let m = 3;
@@ -197,7 +191,7 @@ fn svd_full_random_wide_recovers_nullspace_dimension() {
             data[i + j * m] = data_row_major[i][j];
         }
     }
-    let a = f64_tensor(&trace, vec![m, n], data.clone());
+    let a = f64_tensor(vec![m, n], data.clone());
     let (_u, _s, vh) = a.svd_full().unwrap();
     let out = run_many(&[&vh]);
     let vh = f64_data(&out[0]);
@@ -217,7 +211,6 @@ fn svd_full_random_wide_recovers_nullspace_dimension() {
 #[cfg(any(feature = "native", feature = "blas"))]
 #[test]
 fn svd_full_complex_tall_reconstructs() {
-    let trace = TraceContext::new();
     let m = 3;
     let n = 2;
     let data = vec![
@@ -228,7 +221,7 @@ fn svd_full_complex_tall_reconstructs() {
         Complex64::new(4.0, 0.0),
         Complex64::new(1.0, -2.0),
     ];
-    let a = c64_tensor(&trace, vec![m, n], data.clone());
+    let a = c64_tensor(vec![m, n], data.clone());
     let (u, s, vh) = a.svd_full().unwrap();
     let out = run_many(&[&u, &s, &vh]);
     assert_eq!(out[0].shape(), &[m, m]);
@@ -255,7 +248,6 @@ fn svd_full_complex_tall_reconstructs() {
 #[cfg(any(feature = "native", feature = "blas"))]
 #[test]
 fn svd_full_batch_returns_square_factor_shapes() {
-    let trace = TraceContext::new();
     // Leading matrix dims [m, n], trailing batch dim.
     let m = 3;
     let n = 2;
@@ -263,7 +255,7 @@ fn svd_full_batch_returns_square_factor_shapes() {
     let data: Vec<f64> = (0..(m * n * batch))
         .map(|v| (v as f64) * 0.5 + 1.0)
         .collect();
-    let a = f64_tensor(&trace, vec![m, n, batch], data);
+    let a = f64_tensor(vec![m, n, batch], data);
     let (u, s, vh) = a.svd_full().unwrap();
     let out = run_many(&[&u, &s, &vh]);
     assert_eq!(out[0].shape(), &[m, m, batch]);
@@ -277,11 +269,10 @@ fn svd_full_batch_returns_square_factor_shapes() {
 #[cfg(feature = "blas")]
 #[test]
 fn svd_full_lapack_provider_returns_square_unitary_factors() {
-    let trace = TraceContext::new();
     let m = 3;
     let n = 2;
     let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 7.0];
-    let a = f64_tensor(&trace, vec![m, n], data.clone());
+    let a = f64_tensor(vec![m, n], data.clone());
     let (u, s, vh) = a.svd_full().unwrap();
     let out = run_many(&[&u, &s, &vh]);
     assert_eq!(out[0].shape(), &[m, m]);
@@ -324,7 +315,6 @@ fn svd_full_lapack_provider_returns_square_unitary_factors() {
 
 #[test]
 fn lstsq_solves_tall_consistent_real_system() {
-    let trace = TraceContext::new();
     // Overdetermined 3 x 2 full-column-rank system with a consistent RHS: the
     // least-squares solution recovers the exact generating x.
     let m = 3;
@@ -338,8 +328,8 @@ fn lstsq_solves_tall_consistent_real_system() {
             b_data[i] += a_data[i + j * m] * xj;
         }
     }
-    let a = f64_tensor(&trace, vec![m, n], a_data);
-    let b = f64_tensor(&trace, vec![m, 1], b_data);
+    let a = f64_tensor(vec![m, n], a_data);
+    let b = f64_tensor(vec![m, 1], b_data);
     let x = a.lstsq(&b).unwrap();
     let out = run_many(&[&x]);
     assert_eq!(out[0].shape(), &[n, 1]);
@@ -349,9 +339,8 @@ fn lstsq_solves_tall_consistent_real_system() {
 
 #[test]
 fn lstsq_solves_square_real_system() {
-    let trace = TraceContext::new();
-    let a = f64_tensor(&trace, vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]);
-    let b = f64_tensor(&trace, vec![2, 1], vec![4.0_f64, 8.0]);
+    let a = f64_tensor(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]);
+    let b = f64_tensor(vec![2, 1], vec![4.0_f64, 8.0]);
     let x = a.lstsq(&b).unwrap();
     let out = run_many(&[&x]);
     let x = f64_data(&out[0]);
@@ -360,7 +349,6 @@ fn lstsq_solves_square_real_system() {
 
 #[test]
 fn lstsq_solves_tall_consistent_complex_system() {
-    let trace = TraceContext::new();
     let m = 3;
     let n = 2;
     let a_data = vec![
@@ -378,8 +366,8 @@ fn lstsq_solves_tall_consistent_complex_system() {
             b_data[i] += a_data[i + j * m] * xj;
         }
     }
-    let a = c64_tensor(&trace, vec![m, n], a_data);
-    let b = c64_tensor(&trace, vec![m, 1], b_data);
+    let a = c64_tensor(vec![m, n], a_data);
+    let b = c64_tensor(vec![m, 1], b_data);
     let x = a.lstsq(&b).unwrap();
     let out = run_many(&[&x]);
     let x = c64_data(&out[0]);
@@ -396,9 +384,8 @@ fn lstsq_solves_tall_consistent_complex_system() {
 
 #[test]
 fn lstsq_rejects_wide_system() {
-    let trace = TraceContext::new();
-    let a = f64_tensor(&trace, vec![2, 3], vec![1.0_f64, 0.0, 0.0, 1.0, 1.0, 1.0]);
-    let b = f64_tensor(&trace, vec![2, 1], vec![1.0_f64, 2.0]);
+    let a = f64_tensor(vec![2, 3], vec![1.0_f64, 0.0, 0.0, 1.0, 1.0, 1.0]);
+    let b = f64_tensor(vec![2, 1], vec![1.0_f64, 2.0]);
     let err = a.lstsq(&b).unwrap_err();
     assert!(
         format!("{err}").contains("tall or square"),

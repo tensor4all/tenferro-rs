@@ -346,36 +346,3 @@ fn extension_operation_ownership_is_ad_engine_independent() {
         );
     }
 }
-
-#[test]
-fn lowering_error_constructors_keep_their_classification_and_source() {
-    use std::error::Error as _;
-    use tenferro_tensor::{ErrorKind, ValidationKind};
-
-    let message = ExtensionLoweringError::new("shape must be static");
-    assert_eq!(message.to_string(), "shape must be static");
-    assert_eq!(
-        message.kind(),
-        ErrorKind::Validation(ValidationKind::InvalidArgument)
-    );
-
-    let unsupported =
-        ExtensionLoweringError::new_with_kind(ErrorKind::Unsupported, "not supported here");
-    assert_eq!(unsupported.kind(), ErrorKind::Unsupported);
-    assert_eq!(unsupported.to_string(), "not supported here");
-
-    let source = std::io::Error::other("shape unavailable");
-    let from_source = ExtensionLoweringError::from_source(source);
-    assert_eq!(
-        from_source.kind(),
-        ErrorKind::Validation(ValidationKind::InvalidArgument)
-    );
-    assert!(from_source.source().is_some());
-
-    let with_kind = ExtensionLoweringError::from_source_with_kind(
-        ErrorKind::BackendFailure,
-        std::io::Error::other("device lost"),
-    );
-    assert_eq!(with_kind.kind(), ErrorKind::BackendFailure);
-    assert!(with_kind.source().is_some());
-}

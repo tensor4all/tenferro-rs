@@ -555,6 +555,17 @@ pub(crate) fn resolve_tensor_shape_exprs<'input>(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn validate_shape_guards(
+    program: &ExecProgram,
+    input_shapes: &[&[usize]],
+) -> Result<()> {
+    for guard in &program.shape_guards {
+        guard.evaluate(input_shapes)?;
+    }
+    Ok(())
+}
+
 fn validate_exec_input_count(program: &ExecProgram, actual: usize, caller: &str) -> Result<()> {
     let expected = program.input_slots.len();
     if actual != expected {

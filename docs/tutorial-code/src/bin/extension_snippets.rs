@@ -6,41 +6,6 @@
 
 #[rustfmt::skip]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    snippet_context_constructor_migration()?;
-
-    // snippet source: docs/guides/custom-operations.md:146
-    fn snippet_context_constructor_migration() -> Result<(), Box<dyn std::error::Error>> {
-        // snippet-start:context_constructor_migration
-use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{
-    DType, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TraceContext,
-};
-
-// A traced value belongs to the context that issued it.
-let trace = TraceContext::new();
-let input = trace.input_concrete_shape(DType::F64, &[2])?;
-let doubled = input.scale_real(2.0)?;
-
-let mut compiler = GraphCompiler::new();
-let program = compiler.compile_with_input_specs(&doubled, &[(&input, DType::F64, &[2])])?;
-
-let mut engine = CpuEngine::serial();
-let mut builder = Runtime::builder();
-builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
-let runtime = builder.build()?;
-let data = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
-let reads = [TensorRead::from_tensor(&data)];
-let prepared = runtime.prepare(&program, &reads, &[engine.target()])?;
-let value = runtime
-    .run(&mut [&mut engine], &prepared, &reads)?
-    .pop()
-    .unwrap()
-    .into_tensor(&mut engine)?;
-assert_eq!(value.as_slice::<f64>()?, &[2.0, 6.0]);
-        // snippet-end:context_constructor_migration
-        Ok(())
-    }
-
     snippet_sparse_extension_1()?;
 
     // snippet source: docs/tutorials/sparse-extension.md:16
@@ -89,20 +54,19 @@ let product = sparse_matmul_eager(&left, &right)?;
         // snippet-start:sparse_extension_3
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_ext_sparse::{extension_modules, sparse_matmul, SparseCooTracedTensor};
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
-let trace = TraceContext::new();
 
 let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?;
 let left = SparseCooTracedTensor::from_parts(
     vec![1, 1],
     Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?,
-    trace.from_vec_col_major(vec![1], vec![2.0_f64])?,
+    TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64])?,
 )?;
 let right = SparseCooTracedTensor::from_parts(
     vec![1, 1],
     coords,
-    trace.from_vec_col_major(vec![1], vec![3.0_f64])?,
+    TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64])?,
 )?;
 let out = sparse_matmul(&left, &right)?;
 
@@ -144,11 +108,10 @@ let out = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->
         // snippet-start:tropical_extension_6
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_ext_tropical::{extension_modules, traced::tropical_dot_general_fused};
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
-let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 4.0, 0.0])?;
-let b = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, -1.0, 5.0])?;
+let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 4.0, 0.0])?;
+let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, -1.0, 5.0])?;
 let out = tropical_dot_general_fused(&a, &b)?;
 
 let mut compiler = GraphCompiler::new();

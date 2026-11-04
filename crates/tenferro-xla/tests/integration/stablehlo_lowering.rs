@@ -1,13 +1,12 @@
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_ops::dim_expr::DimExpr;
-use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
-use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, TraceContext};
+use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, TraceContext, TracedTensor};
 use tenferro_xla::lower_to_stablehlo;
 
 #[test]
 fn lowers_elementwise_reduce_and_static_shapes() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let y = (&x + &x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -26,8 +25,7 @@ fn lowers_elementwise_reduce_and_static_shapes() {
 
 #[test]
 fn lowers_sum_squares_to_multiply_then_reduce() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let y = x.reduce_sum_squares(Some(&[0])).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -44,8 +42,7 @@ fn lowers_sum_squares_to_multiply_then_reduce() {
 
 #[test]
 fn lowers_phase_one_real_elementwise_ops() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let unary = x
         .abs()
         .unwrap()
@@ -94,8 +91,7 @@ fn lowers_phase_one_real_elementwise_ops() {
 
 #[test]
 fn lowers_structural_ops_and_convert() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_symbolic_shape(DType::F32, 1).unwrap();
+    let x = TracedTensor::input_symbolic_shape(DType::F32, 1).unwrap();
     let y = x
         .broadcast_in_dim(&[2, 3], &[1])
         .unwrap()
@@ -124,9 +120,8 @@ fn lowers_structural_ops_and_convert() {
 
 #[test]
 fn lowers_unbatched_dot_general() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let lhs = trace.input_symbolic_shape(DType::F64, 2).unwrap();
-    let rhs = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let product = lhs
         .dot_general(
             &rhs,
@@ -197,9 +192,8 @@ fn compile_nary_einsum() -> tenferro_runtime::CompiledGraph {
 
 #[test]
 fn batched_dot_general_transposes_stablehlo_batch_first_result() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let lhs = trace.input_symbolic_shape(DType::F64, 3).unwrap();
-    let rhs = trace.input_symbolic_shape(DType::F64, 3).unwrap();
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 3).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 3).unwrap();
     let product = lhs
         .dot_general(
             &rhs,
@@ -234,9 +228,8 @@ fn batched_dot_general_transposes_stablehlo_batch_first_result() {
 
 #[test]
 fn equal_extent_batched_dot_general_still_transposes_batch_last_result() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let lhs = trace.input_symbolic_shape(DType::F64, 3).unwrap();
-    let rhs = trace.input_symbolic_shape(DType::F64, 3).unwrap();
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 3).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 3).unwrap();
     let product = lhs
         .dot_general(
             &rhs,
@@ -269,10 +262,7 @@ fn equal_extent_batched_dot_general_still_transposes_batch_last_result() {
 
 #[test]
 fn lowers_multi_output_program_and_special_scalar_constants() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let scaled_nan = x.scale_real(f64::NAN).unwrap();
     let scaled_neg_inf = x.scale_real(f64::NEG_INFINITY).unwrap();
     let scaled_pos_inf = x.scale_real(f64::INFINITY).unwrap();
@@ -297,10 +287,7 @@ fn lowers_multi_output_program_and_special_scalar_constants() {
 
 #[test]
 fn lowers_f32_scalar_constant() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f32, 2.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let scaled = x.scale_real(2.5).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&scaled).unwrap();
@@ -314,11 +301,11 @@ fn lowers_f32_scalar_constant() {
 
 #[test]
 fn lowers_empty_output_program_to_unit_return() {
-    // `GraphCompiler::compile_many` requires at least one output because it takes
-    // the trace from the first value, so a zero-output program is built directly.
-    let program = SemanticProgramBuilder::new().finish(&[]).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let outputs: [&TracedTensor; 0] = [];
+    let program = compiler.compile_many(&outputs).unwrap();
 
-    let module = lower_to_stablehlo(&program.program).unwrap();
+    let module = lower_to_stablehlo(program.program()).unwrap();
     let text = module.as_str();
 
     assert!(text.contains("func.func @main() -> ()"));

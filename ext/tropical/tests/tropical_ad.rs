@@ -6,8 +6,7 @@ use tenferro_ext_tropical::traced::tropical_dot_general_fused;
 use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 use tenferro_ext_tropical::{extension_modules, tropical_semantic_ad_rules};
 use tenferro_runtime::{
-    Error, ErrorPhase, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TraceContext,
-    TracedTensor,
+    Error, ErrorPhase, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TracedTensor,
 };
 
 fn cpu_runtime_with_tropical(engine: &CpuEngine) -> Runtime {
@@ -149,9 +148,8 @@ fn assert_sum_gradients(
     expected_a: &[f64],
     expected_b: &[f64],
 ) {
-    let trace = TraceContext::new();
-    let a = trace.from_vec_col_major(a_shape, a_data).unwrap();
-    let b = trace.from_vec_col_major(b_shape, b_data).unwrap();
+    let a = TracedTensor::from_vec_col_major(a_shape, a_data).unwrap();
+    let b = TracedTensor::from_vec_col_major(b_shape, b_data).unwrap();
     let out = tropical_dot_general_fused(&a, &b).unwrap();
     let loss = out.reduce_sum(Some(&[0, 1])).unwrap();
     let ad = tropical_ad();
@@ -165,24 +163,15 @@ fn assert_sum_gradients(
 
 #[test]
 fn finite_difference_jvp_matches_unique_winner_max_plus_lhs_and_rhs() {
-    let trace = TraceContext::new();
     let a_data = vec![1.0_f64, 3.0, 4.0, 0.0];
     let b_data = vec![2.0_f64, 0.0, -1.0, 5.0];
     let da_data = vec![0.25_f64, -0.5, 0.75, 1.25];
     let db_data = vec![-0.4_f64, 0.3, 1.1, -0.2];
 
-    let a = trace
-        .from_vec_col_major(vec![2, 2], a_data.clone())
-        .unwrap();
-    let b = trace
-        .from_vec_col_major(vec![2, 2], b_data.clone())
-        .unwrap();
-    let da = trace
-        .from_vec_col_major(vec![2, 2], da_data.clone())
-        .unwrap();
-    let db = trace
-        .from_vec_col_major(vec![2, 2], db_data.clone())
-        .unwrap();
+    let a = TracedTensor::from_vec_col_major(vec![2, 2], a_data.clone()).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![2, 2], b_data.clone()).unwrap();
+    let da = TracedTensor::from_vec_col_major(vec![2, 2], da_data.clone()).unwrap();
+    let db = TracedTensor::from_vec_col_major(vec![2, 2], db_data.clone()).unwrap();
     let out = tropical_dot_general_fused(&a, &b).unwrap();
     let ad = tropical_ad();
 
@@ -205,20 +194,13 @@ fn finite_difference_jvp_matches_unique_winner_max_plus_lhs_and_rhs() {
 
 #[test]
 fn finite_difference_gradient_matches_unique_winner_weighted_scalarization() {
-    let trace = TraceContext::new();
     let a_data = vec![1.0_f64, 3.0, 4.0, 0.0];
     let b_data = vec![2.0_f64, 0.0, -1.0, 5.0];
     let weights_data = vec![0.5_f64, -1.25, 2.0, 0.75];
 
-    let a = trace
-        .from_vec_col_major(vec![2, 2], a_data.clone())
-        .unwrap();
-    let b = trace
-        .from_vec_col_major(vec![2, 2], b_data.clone())
-        .unwrap();
-    let weights = trace
-        .from_vec_col_major(vec![2, 2], weights_data.clone())
-        .unwrap();
+    let a = TracedTensor::from_vec_col_major(vec![2, 2], a_data.clone()).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![2, 2], b_data.clone()).unwrap();
+    let weights = TracedTensor::from_vec_col_major(vec![2, 2], weights_data.clone()).unwrap();
     let out = tropical_dot_general_fused(&a, &b).unwrap();
     let weighted = (&out * &weights).unwrap();
     let loss = weighted.reduce_sum(Some(&[0, 1])).unwrap();
@@ -243,14 +225,12 @@ fn finite_difference_gradient_matches_unique_winner_weighted_scalarization() {
 
 #[test]
 fn jvp_rejects_independent_tropical_tangent_shape_mismatch() {
-    let trace = TraceContext::new();
     let symbolic_matrix = |shape: Vec<usize>| {
         let len = shape.iter().product();
-        trace
-            .from_tensor_symbolic_shape(
-                Tensor::from_vec_col_major(shape, vec![1.0_f64; len]).unwrap(),
-            )
-            .unwrap()
+        TracedTensor::from_tensor_symbolic_shape(
+            Tensor::from_vec_col_major(shape, vec![1.0_f64; len]).unwrap(),
+        )
+        .unwrap()
     };
     let lhs = symbolic_matrix(vec![2, 3]);
     let rhs = symbolic_matrix(vec![3, 4]);
@@ -284,15 +264,10 @@ fn jvp_rejects_independent_tropical_tangent_shape_mismatch() {
 
 #[test]
 fn traced_fused_forward_matches_eager_max_plus_einsum() {
-    let trace = TraceContext::new();
     let a_data = vec![1.0_f64, 2.0, 3.0, 4.0];
     let b_data = vec![10.0_f64, 20.0, 30.0, 40.0];
-    let a = trace
-        .from_vec_col_major(vec![2, 2], a_data.clone())
-        .unwrap();
-    let b = trace
-        .from_vec_col_major(vec![2, 2], b_data.clone())
-        .unwrap();
+    let a = TracedTensor::from_vec_col_major(vec![2, 2], a_data.clone()).unwrap();
+    let b = TracedTensor::from_vec_col_major(vec![2, 2], b_data.clone()).unwrap();
     let fused = tropical_dot_general_fused(&a, &b).unwrap();
 
     let eager_a = Tensor::from_vec_col_major(vec![2, 2], a_data).unwrap();

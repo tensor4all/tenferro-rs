@@ -23,10 +23,9 @@
 //!
 //! ```rust
 //! use tenferro_cpu::CpuEngine;
-//! use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+//! use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 //!
-//! let trace = TraceContext::new();
-//! let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 //! let y = (&x + &x).unwrap();
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
@@ -76,7 +75,6 @@ mod shape_packing;
 pub mod sym_dim;
 mod tensor;
 mod trace;
-mod trace_ops;
 pub mod traced;
 mod typed_session_ext;
 mod typed_tensor;
@@ -135,8 +133,6 @@ pub use tenferro_tensor::{
     TypedTensor, TypedTensorView,
 };
 pub use trace::{TraceContext, TraceValue, TracedGraph};
-#[doc(hidden)]
-pub use trace_ops::dim_expr_to_sym_dim_public;
 pub use typed_session_ext::{TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt};
 
 pub use traced::TracedTensor;

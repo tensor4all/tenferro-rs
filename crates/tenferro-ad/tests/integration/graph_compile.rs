@@ -1,13 +1,10 @@
 use tenferro_ops::{dim_expr::DimExpr, shape_extent::ShapeExtent};
-use tenferro_runtime::{CompilerOptions, OptimizerConfig, TraceContext};
-use tenferro_runtime::{DType, GraphCompiler};
+use tenferro_runtime::{CompilerOptions, OptimizerConfig};
+use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
 
 #[test]
 fn graph_compiler_compiles_without_backend() {
-    let trace = TraceContext::new();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -19,14 +16,9 @@ fn graph_compiler_compiles_without_backend() {
 
 #[test]
 fn graph_compiler_default_inputs_use_concrete_extent_identity() {
-    let trace = TraceContext::new();
-    let x2 = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let x2 = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y2 = (&x2 + &x2).unwrap();
-    let x3 = trace
-        .from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])
-        .unwrap();
+    let x3 = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let y3 = (&x3 + &x3).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -51,8 +43,7 @@ fn graph_compiler_default_inputs_use_concrete_extent_identity() {
 
 #[test]
 fn graph_compiler_validates_placeholder_specs() {
-    let trace = TraceContext::new();
-    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -70,7 +61,7 @@ fn graph_compiler_validates_placeholder_specs() {
         .unwrap_err();
     assert!(format!("{err}").contains("dtype"));
 
-    let z = trace.input_concrete_shape(DType::F64, &[3]).unwrap();
+    let z = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
     let err = compiler
         .compile_with_input_specs(&z.neg().unwrap(), &[(&z, DType::F64, &[2])])
         .unwrap_err();
@@ -79,8 +70,7 @@ fn graph_compiler_validates_placeholder_specs() {
 
 #[test]
 fn graph_program_input_accessors_report_compiled_contract() {
-    let trace = TraceContext::new();
-    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.neg().unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -99,11 +89,8 @@ fn graph_program_input_accessors_report_compiled_contract() {
 
 #[test]
 fn graph_compiler_compiler_options_setter_updates_options() {
-    let trace = TraceContext::new();
     let mut compiler = GraphCompiler::new();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let _ = compiler.compile(&x.neg().unwrap()).unwrap();
 
     let options = CompilerOptions {
@@ -119,10 +106,7 @@ fn graph_compiler_compiler_options_setter_updates_options() {
 
 #[test]
 fn graph_compiler_compile_many_returns_multi_output_program() {
-    let trace = TraceContext::new();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
     let z = x.neg().unwrap();
 

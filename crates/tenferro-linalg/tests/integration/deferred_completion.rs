@@ -19,9 +19,7 @@ use tenferro_gpu::cuda::{
     CudaEngine,
 };
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{
-    DType, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TraceContext,
-};
+use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead};
 use tenferro_tensor::TypedTensor;
 
 /// A diagonally dominant matrix: the QR stays well conditioned at a size that still launches many
@@ -44,7 +42,6 @@ fn well_conditioned_matrix(n: usize) -> Tensor {
 #[test]
 #[ignore = "requires a CUDA device"]
 fn a_scheduled_run_defers_launch_completion_and_keeps_vendor_handles() {
-    let trace = TraceContext::new();
     assert!(gpu_available(), "CUDA test requires an available device");
     let n = 32usize;
 
@@ -62,8 +59,7 @@ fn a_scheduled_run_defers_launch_completion_and_keeps_vendor_handles() {
     let runtime = builder.build().expect("CUDA runtime");
 
     // A QR (cuSOLVER) feeding an elementwise chain: several launches in one prepared program.
-    let x = trace
-        .input_symbolic_shape(DType::F64, 2)
+    let x = tenferro_runtime::TracedTensor::input_symbolic_shape(DType::F64, 2)
         .expect("symbolic input");
     let (q, r) = x.qr().expect("qr");
     let scaled = (&q * &r).expect("multiply");

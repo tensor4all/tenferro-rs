@@ -1,13 +1,11 @@
-use tenferro_runtime::{GraphCompiler, Tensor, TraceContext};
+use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor};
 
 use crate::support::{cpu_runtime, run_compiled_one};
 
 #[test]
 fn traced_tensor_col_major_constructor_preserves_shape_and_storage() {
-    let trace = TraceContext::new();
-    let traced = trace
-        .from_vec_col_major([2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0])
-        .unwrap();
+    let traced =
+        TracedTensor::from_vec_col_major([2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
     assert_eq!(traced.dtype(), tenferro_runtime::DType::F64);
 
     let mut compiler = GraphCompiler::new();
@@ -23,10 +21,7 @@ fn traced_tensor_col_major_constructor_preserves_shape_and_storage() {
 
 #[test]
 fn traced_tensor_col_major_constructor_keeps_physical_order() {
-    let trace = TraceContext::new();
-    let traced = trace
-        .from_vec_col_major(vec![2, 2], vec![1_i64, 3, 2, 4])
-        .unwrap();
+    let traced = TracedTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 3, 2, 4]).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&traced).unwrap();

@@ -43,9 +43,8 @@
 //! let mut destination = SemanticProgramBuilder::new();
 //! let imported = destination.import(ProgramImport {
 //!     program: frozen.program.as_ref(),
-//!     bindings: Some(&frozen.bindings),
+//!     bindings: &frozen.bindings,
 //!     roots: frozen.program.outputs(),
-//!     input_map: &[],
 //! })?;
 //! let roundtrip = destination.finish(imported.roots())?;
 //! assert!(frozen.program.semantic_eq(roundtrip.program.as_ref()));

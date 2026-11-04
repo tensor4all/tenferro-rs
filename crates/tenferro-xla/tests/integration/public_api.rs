@@ -1,4 +1,4 @@
-use tenferro_runtime::GraphCompiler;
+use tenferro_runtime::{GraphCompiler, TracedTensor};
 use tenferro_tensor::Tensor;
 use tenferro_xla::{
     Error, StableHloModule, StableHloModuleFingerprint, XlaExecutor, XlaExecutorOptions,
@@ -30,7 +30,6 @@ fn stablehlo_module_fingerprint_is_deterministic_and_hex_encoded() {
 
 #[test]
 fn xla_executor_options_debug_and_lowering_are_stable() {
-    let trace = tenferro_runtime::TraceContext::new();
     let options = XlaExecutorOptions::default();
     let executor = XlaExecutor::new(options);
 
@@ -42,7 +41,7 @@ fn xla_executor_options_debug_and_lowering_are_stable() {
     assert!(debug.contains("has_loaded_pjrt_plugin"));
     assert_eq!(XlaExecutor::default().options(), options);
 
-    let x = trace.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&x.neg().unwrap()).unwrap();
     let module = executor.lower_compiled_to_stablehlo(&program).unwrap();
@@ -51,8 +50,7 @@ fn xla_executor_options_debug_and_lowering_are_stable() {
 
 #[test]
 fn xla_executor_run_with_inputs_requires_pjrt_plugin_boundary() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&x.neg().unwrap()).unwrap();
     let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
@@ -69,8 +67,7 @@ fn xla_executor_run_with_inputs_requires_pjrt_plugin_boundary() {
 
 #[test]
 fn xla_accepts_compiled_graph_without_program_peeking() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&x.neg().unwrap()).unwrap();
     let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();

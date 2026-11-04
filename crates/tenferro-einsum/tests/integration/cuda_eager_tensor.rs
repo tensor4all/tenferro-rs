@@ -58,7 +58,6 @@ fn tensordot(
 #[test]
 #[ignore]
 fn cuda_einsum_ownership_copies_stay_resident() {
-    let trace = TraceContext::new();
     assert!(gpu_available(), "this test requires a CUDA device");
     let mut engine = CudaEngine::open(CudaDeviceId::from_ordinal(0)).unwrap();
     let mut builder = Runtime::builder();

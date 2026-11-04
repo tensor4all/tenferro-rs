@@ -11,9 +11,6 @@ pub enum ProgramBuildError {
     /// Import bindings were frozen for another semantic program.
     #[error("import bindings do not belong to the source semantic program")]
     ForeignBindings,
-    /// A trace context was re-entered while an operation still borrowed it.
-    #[error("trace context is already borrowed by an operation in progress")]
-    ReentrantContextBorrow,
     /// Structured control flow is reserved for the later region/block model.
     #[error("semantic control-flow construct {construct:?} is not supported")]
     UnsupportedControlFlow {
@@ -192,23 +189,6 @@ pub enum ProgramFinishError {
     /// One requested output belongs to another builder or names no value.
     #[error("program output does not belong to this semantic-program builder")]
     ForeignOutput,
-    /// Rebuilding the live closure failed while snapshotting.
-    #[error("snapshot rebuild failed: {source}")]
-    SnapshotRebuild {
-        /// Typed failure from replaying the live operations.
-        #[source]
-        source: ProgramBuildError,
-    },
-    /// A checkpoint alias could not be materialized as a prefixed slice.
-    #[error("checkpoint alias substitution failed: {source}")]
-    AliasSubstitution {
-        /// Typed failure from building the substituted slice.
-        #[source]
-        source: ProgramBuildError,
-    },
-    /// A trace context was re-entered while a snapshot still borrowed it.
-    #[error("trace context is already borrowed by an operation in progress")]
-    ReentrantContextBorrow,
     /// Frozen structure failed an invariant check.
     #[error("semantic-program structural validation failed: {source}")]
     StructuralValidation {

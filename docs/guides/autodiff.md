@@ -79,10 +79,9 @@ it to keep the first example short.
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
-let x = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
 let loss = (&x * &x)?.reduce_sum(Some(&[0]))?;
 let ad = AdContext::builder().build()?;
 let grad = ad.grad(&loss, &x)?;
@@ -108,12 +107,11 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 4.0, 6.0]);
 ```rust
 use tenferro_ad::AdContext;
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
-let trace = TraceContext::new();
 
 let mut compiler = GraphCompiler::new();
-let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
+let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
 let factor = a.cholesky()?;
 let ad = AdContext::builder()
     .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules()?)?
@@ -142,18 +140,17 @@ assert_eq!(result.shape(), &[2, 2]);
 ```rust
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
-let a = trace.from_vec_col_major(
+let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let b = trace.from_vec_col_major(
+let b = TracedTensor::from_vec_col_major(
     vec![3, 2],
     vec![0.5_f64, -1.0, 2.0, 1.5, -0.25, 3.0],
 )?;
-let cotangent = trace.from_vec_col_major(
+let cotangent = TracedTensor::from_vec_col_major(
     vec![2, 2],
     vec![1.0_f64, -0.5, 0.25, 2.0],
 )?;
@@ -186,18 +183,17 @@ assert_eq!(
 ```rust
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
-let a = trace.from_vec_col_major(
+let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let b = trace.from_vec_col_major(
+let b = TracedTensor::from_vec_col_major(
     vec![3, 2],
     vec![0.5_f64, -1.0, 2.0, 1.5, -0.25, 3.0],
 )?;
-let tangent = trace.from_vec_col_major(
+let tangent = TracedTensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, -0.5, 0.25, 0.0, 2.0, -1.0],
 )?;

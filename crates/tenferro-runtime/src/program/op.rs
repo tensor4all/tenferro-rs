@@ -344,13 +344,11 @@ impl From<&CoreSemanticOp> for StdTensorOp {
     }
 }
 
-#[derive(Clone)]
 pub(crate) enum SemanticOp {
     Core(CoreSemanticOp),
     Extension(Arc<dyn ExtensionOp>),
 }
 
-#[derive(Clone)]
 pub(crate) struct SemanticOperation {
     pub(crate) op: SemanticOp,
     pub(crate) inputs: Box<[ProgramValue]>,

@@ -126,7 +126,7 @@ tenferro-ad = "0.9"
 ```rust
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -153,8 +153,7 @@ fn run(tensor: &TracedTensor) -> Result<tenferro_runtime::Tensor, Box<dyn std::e
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let trace = TraceContext::new();
-    let x = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+    let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
     let y = (&x * &x)?.reduce_sum(Some(&[0]))?;
 
     let y_value = run(&y)?;
@@ -166,7 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(grad_value.shape(), &[3]);
     assert_close(grad_value.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 
-    let tangent = trace.from_vec_col_major(vec![3], vec![0.1_f64, 1.0, -2.0])?;
+    let tangent = TracedTensor::from_vec_col_major(vec![3], vec![0.1_f64, 1.0, -2.0])?;
     let directional = y.jvp(&x, &tangent)?;
     let directional_value = run(&directional)?;
     assert_eq!(directional_value.shape(), &[] as &[usize]);

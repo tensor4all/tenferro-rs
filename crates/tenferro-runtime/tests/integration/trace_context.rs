@@ -14,11 +14,11 @@ fn cpu_runtime(engine: &CpuEngine) -> Runtime {
 
 #[test]
 fn trace_values_are_context_owned_and_opaque() {
-    let left = TraceContext::new();
+    let mut left = TraceContext::new();
     let value = left
         .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
         .unwrap();
-    let right = TraceContext::new();
+    let mut right = TraceContext::new();
 
     assert!(matches!(
         right.add_op(CoreSemanticOp::Neg, &[value]),
@@ -29,7 +29,7 @@ fn trace_values_are_context_owned_and_opaque() {
 
 #[test]
 fn trace_finish_preserves_ordered_inputs_defaults_and_duplicate_outputs() {
-    let trace = TraceContext::new();
+    let mut trace = TraceContext::new();
     let lhs_tensor =
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("test tensor must be valid");
     let lhs = trace
@@ -63,7 +63,7 @@ fn trace_finish_preserves_ordered_inputs_defaults_and_duplicate_outputs() {
 
 #[test]
 fn traced_graph_compiles_and_executes_with_ordered_inputs() {
-    let trace = TraceContext::new();
+    let mut trace = TraceContext::new();
     let lhs = trace
         .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
         .unwrap();
@@ -102,7 +102,7 @@ fn traced_graph_compiles_and_executes_with_ordered_inputs() {
 
 #[test]
 fn duplicate_finish_outputs_execute_in_order_as_independent_results() {
-    let trace = TraceContext::new();
+    let mut trace = TraceContext::new();
     let lhs = trace
         .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
         .unwrap();

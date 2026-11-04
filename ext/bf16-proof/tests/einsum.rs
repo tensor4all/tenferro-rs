@@ -12,8 +12,9 @@ use tenferro_bf16_proof::einsum::{module, Bf16Einsum};
 use tenferro_bf16_proof::Bf16;
 use tenferro_cpu::CpuEngine;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::TraceContext;
-use tenferro_runtime::{CompiledGraph, Error, ExecutionEngine, GraphCompiler, Runtime};
+use tenferro_runtime::{
+    CompiledGraph, Error, ExecutionEngine, GraphCompiler, Runtime, TracedTensor,
+};
 use tenferro_tensor::{DType, Error as TensorError, Tensor, ValidationError};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
@@ -91,12 +92,11 @@ fn run_pattern(
 ) -> tenferro_runtime::Result<Vec<f32>> {
     let (lhs_labels, rhs_labels, out_labels) = pattern;
     let op = Bf16Einsum::new(lhs_labels, rhs_labels, out_labels)?;
-    let trace = tenferro_runtime::TraceContext::new();
-    let lhs_leaf = trace.from_tensor_concrete_shape_declaring_scalar(
+    let lhs_leaf = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
         external(lhs, lhs_shape.to_vec()),
         tenferro_bf16_proof::einsum::BF16_SCALAR_IDENTITY,
     )?;
-    let rhs_leaf = trace.from_tensor_concrete_shape_declaring_scalar(
+    let rhs_leaf = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
         external(rhs, rhs_shape.to_vec()),
         tenferro_bf16_proof::einsum::BF16_SCALAR_IDENTITY,
     )?;
@@ -164,15 +164,10 @@ fn the_output_is_rounded_once_to_the_storage_type() {
 
 #[test]
 fn the_operation_refuses_a_preset_scalar() {
-    let trace = TraceContext::new();
     // The body is defined for the externally defined scalar, so a preset dtype fails explicitly.
     let op = Bf16Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
-    let lhs = trace
-        .input_concrete_shape(DType::F32, &[1, 2])
-        .expect("traced operand");
-    let rhs = trace
-        .input_concrete_shape(DType::F32, &[2, 1])
-        .expect("traced operand");
+    let lhs = TracedTensor::input_concrete_shape(DType::F32, &[1, 2]).expect("traced operand");
+    let rhs = TracedTensor::input_concrete_shape(DType::F32, &[2, 1]).expect("traced operand");
     let error = apply(Arc::new(op), &[&lhs, &rhs])
         .expect_err("the body is defined for the externally defined scalar only");
     assert!(

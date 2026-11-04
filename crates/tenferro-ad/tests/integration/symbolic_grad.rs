@@ -15,7 +15,7 @@
 use crate::support;
 use support::{cpu_runtime, RunTraced};
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_runtime::{Tensor, TraceContext};
+use tenferro_runtime::{Tensor, TracedTensor};
 use tenferro_tensor::DType;
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
@@ -24,9 +24,8 @@ fn f64_data(tensor: &Tensor) -> &[f64] {
 
 #[test]
 fn grad_of_sum_of_squares_against_symbolic_input() {
-    let trace = TraceContext::new();
     // f(x) = sum(x * x), df/dx = 2 * x
-    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let sq = (&x * &x).unwrap();
     let loss = sq.reduce_sum(Some(&[0])).unwrap();
 
@@ -44,9 +43,8 @@ fn grad_of_sum_of_squares_against_symbolic_input() {
 
 #[test]
 fn grad_evaluates_with_different_shapes_from_same_symbolic_graph() {
-    let trace = TraceContext::new();
     // Same symbolic grad graph, eval with shape [3] then shape [5].
-    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let sq = (&x * &x).unwrap();
     let loss = sq.reduce_sum(Some(&[0])).unwrap();
     let g_template = loss.grad(&x).expect("grad build");
@@ -70,11 +68,10 @@ fn grad_evaluates_with_different_shapes_from_same_symbolic_graph() {
 
 #[test]
 fn grad_of_dot_product_against_two_symbolic_inputs() {
-    let trace = TraceContext::new();
     // f(a, b) = sum(a * b)
     // df/da = b, df/db = a
-    let a = trace.input_symbolic_shape(DType::F64, 1).unwrap();
-    let b = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let a = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let b = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let loss = (&a * &b).unwrap().reduce_sum(Some(&[0])).unwrap();
 
     let grad_a = loss.grad(&a).expect("grad a");
@@ -97,9 +94,8 @@ fn grad_of_dot_product_against_two_symbolic_inputs() {
 
 #[test]
 fn grad_with_concrete_shape_placeholder() {
-    let trace = TraceContext::new();
     // input_concrete_shape placeholder works for AD too.
-    let x = trace.input_concrete_shape(DType::F64, &[3]).unwrap();
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
     let sq = (&x * &x).unwrap();
     let loss = sq.reduce_sum(Some(&[0])).unwrap();
     let g = loss.grad(&x).expect("grad build");
@@ -115,20 +111,17 @@ fn grad_with_concrete_shape_placeholder() {
 
 #[test]
 fn grad_embed_diag_shifted_axis_restores_input_layout() {
-    let trace = TraceContext::new();
     // Shape alone is not enough: a permutation between equal-sized axes is
     // invisible to it, and a uniform `reduce_sum` cotangent is invariant under
     // every permutation. First evaluate the VJP with a distinct cotangent `w`
     // and assert each entry. For `embed_diag(1, 0)` on `x: [m, n]` the primal
     // writes `x[i, j]` to `out[j, i, j]` (output shape `[n, m, n]`), so
     // `d(sum(w * embed_diag(x))) / d x[i, j] = w[j, i, j]`.
-    fn assert_shifted_axis_vjp(trace: &TraceContext, m: usize, n: usize) {
+    fn assert_shifted_axis_vjp(m: usize, n: usize) {
         let w_data: Vec<f64> = (0..n * m * n).map(|k| k as f64 + 1.0).collect();
 
-        let x = trace.input_concrete_shape(DType::F64, &[m, n]).unwrap();
-        let w = trace
-            .from_vec_col_major(vec![n, m, n], w_data.clone())
-            .unwrap();
+        let x = TracedTensor::input_concrete_shape(DType::F64, &[m, n]).unwrap();
+        let w = TracedTensor::from_vec_col_major(vec![n, m, n], w_data.clone()).unwrap();
         let loss = (&x.embed_diag(1, 0).unwrap() * &w)
             .unwrap()
             .reduce_sum(Some(&[0, 1, 2]))
@@ -157,20 +150,20 @@ fn grad_embed_diag_shifted_axis_restores_input_layout() {
 
     // Equal-sized axes: restoring the trailing `Transpose` is shape-preserving
     // here, so only the values expose it - exactly the gap review found.
-    assert_shifted_axis_vjp(&trace, 3, 3);
-    assert_shifted_axis_vjp(&trace, 2, 3);
+    assert_shifted_axis_vjp(3, 3);
+    assert_shifted_axis_vjp(2, 3);
 
     // Regression for #2107: the adjoint of `EmbedDiag { axis_a: 1, axis_b: 0 }`
     // must land back in the `[2, 3]` input layout, not a transposed `[3, 2]`.
     // The spurious trailing `Transpose` made the VJP metadata `[3, 2]`.
-    let x = trace.input_concrete_shape(DType::F64, &[2, 3]).unwrap();
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]).unwrap();
     let embedded = x.embed_diag(1, 0).unwrap();
     let loss = embedded.reduce_sum(Some(&[0, 1, 2])).unwrap();
     let grad = loss.grad(&x).unwrap();
     assert_eq!(grad.try_concrete_shape(), Some(vec![2, 3]));
 
     // Higher rank: the reported failure mode permuted the trailing axes.
-    let cube = trace.input_concrete_shape(DType::F64, &[2, 3, 4]).unwrap();
+    let cube = TracedTensor::input_concrete_shape(DType::F64, &[2, 3, 4]).unwrap();
     let cube_loss = cube
         .embed_diag(1, 0)
         .unwrap()

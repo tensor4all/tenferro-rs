@@ -3,7 +3,7 @@ use std::sync::Arc;
 use num_complex::{Complex32, Complex64};
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{
-    CompareDir, DType, DotGeneralConfig, Error, ErrorPhase, Result, TraceContext, TracedTensor,
+    CompareDir, DType, DotGeneralConfig, Error, ErrorPhase, Result, TracedTensor,
 };
 
 use crate::extension::{
@@ -96,9 +96,7 @@ pub trait TracedTensorLinalgExt {
     /// ```rust
     /// use tenferro_linalg::TracedTensorLinalgExt;
     /// use tenferro_runtime::TracedTensor;
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let a = trace.from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
     /// let qr = a.householder_qr()?;
     /// assert!(format!("{qr:?}").starts_with("HouseholderQr"));
     /// # Ok::<(), tenferro_runtime::Error>(())
@@ -133,13 +131,11 @@ pub trait TracedTensorLinalgExt {
     /// ```rust
     /// use tenferro_linalg::{RankRevealingQrOptions, TracedTensorLinalgExt};
     /// use tenferro_runtime::TracedTensor;
-    /// use tenferro_runtime::TraceContext;
-    /// let trace = TraceContext::new();
-    /// let a = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64, 0.0, 0.0, 1.0, 1.0, 1.0])?;
+    /// let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 0.0, 0.0, 1.0, 1.0, 1.0])?;
     /// let result = a.rank_revealing_qr(RankRevealingQrOptions::default())?;
-    /// assert_eq!(result.q.rank(), 2);
-    /// assert_eq!(result.column_permutation.rank(), 1);
-    /// assert_eq!(result.rank.rank(), 0);
+    /// assert_eq!(result.q.rank, 2);
+    /// assert_eq!(result.column_permutation.rank, 1);
+    /// assert_eq!(result.rank.rank, 0);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     fn rank_revealing_qr(
@@ -543,14 +539,12 @@ impl TracedTensorLinalgExt for TracedTensor {
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
 /// let (u, s, vt) = a.svd().unwrap();
-/// assert_eq!(u.rank(), 2);
-/// assert_eq!(s.rank(), 1);
-/// assert_eq!(vt.rank(), 2);
+/// assert_eq!(u.rank, 2);
+/// assert_eq!(s.rank, 1);
+/// assert_eq!(vt.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -579,15 +573,13 @@ pub fn svd(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor
 /// ```
 /// use tenferro_linalg::{SvdGauge, SvdOptions, TracedTensorLinalgExt};
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
 /// let options = SvdOptions::default()
 ///     .gauge(SvdGauge::CanonicalPivot)
 ///     .derivative_eps(1e-10);
 /// let (_u, s, _vt) = a.svd_with_options(options).unwrap();
-/// assert_eq!(s.rank(), 1);
+/// assert_eq!(s.rank, 1);
 /// ```
 ///
 /// # Errors
@@ -606,7 +598,7 @@ pub fn svd_with_options(
     options: SvdOptions,
 ) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
     validate_derivative_eps("svd_with_options", options.derivative_eps)?;
-    ensure_float_or_complex("svd", a.dtype())?;
+    ensure_float_or_complex("svd", a.dtype)?;
     three_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Svd {
@@ -632,15 +624,13 @@ pub fn svd_with_options(
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
 /// // A wide 1x2 system: the trailing row of the 2x2 Vh spans the nullspace.
-/// let a = trace.from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap();
 /// let (u, s, vh) = a.svd_full().unwrap();
-/// assert_eq!(u.rank(), 2);
-/// assert_eq!(s.rank(), 1);
-/// assert_eq!(vh.rank(), 2);
+/// assert_eq!(u.rank, 2);
+/// assert_eq!(s.rank, 1);
+/// assert_eq!(vh.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -658,7 +648,7 @@ pub fn svd_with_options(
 /// intentionally unsupported for the full variant (see the linalg AD support
 /// manifest) and surfaces a typed AD error, not a silent thin-SVD fallback.
 pub fn svd_full(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
-    ensure_float_or_complex("svd_full", a.dtype())?;
+    ensure_float_or_complex("svd_full", a.dtype)?;
     three_outputs(
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::SvdFull)), &[a])?,
         "svd_full",
@@ -678,13 +668,11 @@ pub fn svd_full(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedT
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
 /// let (q, r) = a.qr().unwrap();
-/// assert_eq!(q.rank(), 2);
-/// assert_eq!(r.rank(), 2);
+/// assert_eq!(q.rank, 2);
+/// assert_eq!(r.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -713,7 +701,7 @@ pub fn qr(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// Symbolic shape constraints and backend provider failures may be reported
 /// during compile or execution.
 pub fn householder_qr(a: &TracedTensor) -> Result<crate::HouseholderQr<TracedTensor>> {
-    ensure_float_or_complex("householder_qr", a.dtype())?;
+    ensure_float_or_complex("householder_qr", a.dtype)?;
     let mut outputs = apply(
         Arc::new(LinalgExtensionOp::new(LinalgOp::HouseholderQrFactor)),
         &[a],
@@ -736,13 +724,11 @@ pub fn householder_qr(a: &TracedTensor) -> Result<crate::HouseholderQr<TracedTen
 /// ```
 /// use tenferro_linalg::{QrGauge, QrOptions, TracedTensorLinalgExt};
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
 /// let (q, r) = a.qr_with_options(QrOptions::default().gauge(QrGauge::PositiveDiagonal)).unwrap();
-/// assert_eq!(q.rank(), 2);
-/// assert_eq!(r.rank(), 2);
+/// assert_eq!(q.rank, 2);
+/// assert_eq!(r.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -759,7 +745,7 @@ pub fn qr_with_options(
     a: &TracedTensor,
     options: QrOptions,
 ) -> Result<(TracedTensor, TracedTensor)> {
-    ensure_float_or_complex("qr", a.dtype())?;
+    ensure_float_or_complex("qr", a.dtype)?;
     two_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Qr {
@@ -786,12 +772,10 @@ pub fn qr_with_options(
 /// ```rust
 /// use tenferro_linalg::{RankRevealingQrOptions, TracedTensorLinalgExt};
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
 /// let result = a.rank_revealing_qr(RankRevealingQrOptions::default())?;
-/// assert_eq!(result.column_permutation.rank(), 1);
-/// assert_eq!(result.rank.rank(), 0);
+/// assert_eq!(result.column_permutation.rank, 1);
+/// assert_eq!(result.rank.rank, 0);
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
 pub fn rank_revealing_qr(
@@ -799,7 +783,7 @@ pub fn rank_revealing_qr(
     options: RankRevealingQrOptions,
 ) -> Result<RankRevealingQrResult<TracedTensor>> {
     validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
-    ensure_float_or_complex("rank_revealing_qr", a.dtype())?;
+    ensure_float_or_complex("rank_revealing_qr", a.dtype)?;
     let (q, r, column_permutation, rank) = four_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::RankRevealingQr {
@@ -826,13 +810,11 @@ pub fn rank_revealing_qr(
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
 /// let (values, vectors) = a.eigh().unwrap();
-/// assert_eq!(values.rank(), 1);
-/// assert_eq!(vectors.rank(), 2);
+/// assert_eq!(values.rank, 1);
+/// assert_eq!(vectors.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -862,10 +844,8 @@ pub fn eigh(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// ```
 /// use tenferro_linalg::{EighGauge, EighOptions, TracedTensorLinalgExt};
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
 /// let (values, _vectors) = a
 ///     .eigh_with_options(
 ///         EighOptions::default()
@@ -873,7 +853,7 @@ pub fn eigh(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 ///             .derivative_eps(1e-10),
 ///     )
 ///     .unwrap();
-/// assert_eq!(values.rank(), 1);
+/// assert_eq!(values.rank, 1);
 /// ```
 ///
 /// # Errors
@@ -894,7 +874,7 @@ pub fn eigh_with_options(
     options: EighOptions,
 ) -> Result<(TracedTensor, TracedTensor)> {
     validate_derivative_eps("eigh_with_options", options.derivative_eps)?;
-    ensure_float_or_complex("eigh", a.dtype())?;
+    ensure_float_or_complex("eigh", a.dtype)?;
     two_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eigh {
@@ -915,12 +895,10 @@ pub fn eigh_with_options(
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]).unwrap();
 /// let factor = a.cholesky().unwrap();
-/// assert_eq!(factor.rank(), 2);
+/// assert_eq!(factor.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -937,7 +915,7 @@ pub fn eigh_with_options(
 /// factorization; no symbolic square equality is recorded. A non-positive
 /// definite matrix fails during execution.
 pub fn cholesky(a: &TracedTensor) -> Result<TracedTensor> {
-    ensure_float_or_complex("cholesky", a.dtype())?;
+    ensure_float_or_complex("cholesky", a.dtype)?;
     one_output(
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Cholesky)), &[a])?,
         "cholesky",
@@ -951,15 +929,13 @@ pub fn cholesky(a: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
 /// let (p, l, u, parity) = a.lu().unwrap();
-/// assert_eq!(p.rank(), 2);
-/// assert_eq!(l.rank(), 2);
-/// assert_eq!(u.rank(), 2);
-/// assert_eq!(parity.rank(), 0);
+/// assert_eq!(p.rank, 2);
+/// assert_eq!(l.rank, 2);
+/// assert_eq!(u.rank, 2);
+/// assert_eq!(parity.rank, 0);
 /// ```
 ///
 /// # Errors
@@ -992,16 +968,14 @@ pub fn lu(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor,
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
 /// let (p, l, u, q, parity) = a.full_piv_lu().unwrap();
-/// assert_eq!(p.rank(), 2);
-/// assert_eq!(l.rank(), 2);
-/// assert_eq!(u.rank(), 2);
-/// assert_eq!(q.rank(), 2);
-/// assert_eq!(parity.rank(), 0);
+/// assert_eq!(p.rank, 2);
+/// assert_eq!(l.rank, 2);
+/// assert_eq!(u.rank, 2);
+/// assert_eq!(q.rank, 2);
+/// assert_eq!(parity.rank, 0);
 /// ```
 ///
 /// # Errors
@@ -1039,13 +1013,11 @@ pub fn full_piv_lu(
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
 /// let (values, vectors) = a.eig().unwrap();
-/// assert_eq!(values.rank(), 1);
-/// assert_eq!(vectors.rank(), 2);
+/// assert_eq!(values.rank, 1);
+/// assert_eq!(vectors.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -1065,7 +1037,7 @@ pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eig {
-                input_dtype: a.dtype(),
+                input_dtype: a.dtype,
             })),
             &[a],
         )?,
@@ -1080,13 +1052,11 @@ pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
-/// let b = trace.from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
+/// let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0]).unwrap();
 /// let x = a.solve(&b).unwrap();
-/// assert_eq!(x.rank(), 2);
+/// assert_eq!(x.rank, 2);
 /// ```
 ///
 /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
@@ -1140,18 +1110,16 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
 /// // Overdetermined 3x2 system.
-/// let a = trace.from_vec_col_major(
+/// let a = TracedTensor::from_vec_col_major(
 ///     vec![3, 2],
 ///     vec![1.0_f64, 1.0, 1.0, 0.0, 1.0, 2.0],
 /// )
 /// .unwrap();
-/// let b = trace.from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 2.0]).unwrap();
+/// let b = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 2.0]).unwrap();
 /// let x = a.lstsq(&b).unwrap();
-/// assert_eq!(x.rank(), 2);
+/// assert_eq!(x.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -1170,9 +1138,9 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
 pub fn lstsq(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     validate_lstsq(
         "lstsq",
-        a.dtype(),
-        a.rank(),
-        b.rank(),
+        a.dtype,
+        a.rank,
+        b.rank,
         || {
             let shape = require_concrete_shape("lstsq", a)?;
             Ok((shape[0], shape[1]))
@@ -1184,7 +1152,7 @@ pub fn lstsq(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
         },
     )?;
     let (q, r) = qr(a)?;
-    let qh = q.conj()?.transpose(&matrix_transpose_perm(q.rank()))?;
+    let qh = q.conj()?.transpose(&matrix_transpose_perm(q.rank))?;
     let qh_b = matmul_preserve_trailing_batch(&qh, b)?;
     triangular_solve(&r, &qh_b, true, false, false, false)
 }
@@ -1196,13 +1164,11 @@ pub fn lstsq(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
-/// let b = trace.from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
+/// let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0]).unwrap();
 /// let x = a.full_piv_lu_solve(&b).unwrap();
-/// assert_eq!(x.rank(), 2);
+/// assert_eq!(x.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -1236,13 +1202,11 @@ pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTen
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]).unwrap();
-/// let b = trace.from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]).unwrap();
+/// let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0]).unwrap();
 /// let x = a.triangular_solve(&b, true, true, false, false).unwrap();
-/// assert_eq!(x.rank(), 2);
+/// assert_eq!(x.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -1286,13 +1250,11 @@ pub fn triangular_solve(
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
 /// let (sign, logabsdet) = a.slogdet().unwrap();
-/// assert_eq!(sign.rank(), 0);
-/// assert_eq!(logabsdet.rank(), 0);
+/// assert_eq!(sign.rank, 0);
+/// assert_eq!(logabsdet.rank, 0);
 /// ```
 ///
 /// # Errors
@@ -1357,12 +1319,10 @@ pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
 /// let determinant = a.det().unwrap();
-/// assert_eq!(determinant.rank(), 0);
+/// assert_eq!(determinant.rank, 0);
 /// ```
 ///
 /// # Errors
@@ -1386,7 +1346,6 @@ pub fn det(a: &TracedTensor) -> Result<TracedTensor> {
 }
 
 fn slogdet_empty_square(a: &TracedTensor) -> Result<Option<(TracedTensor, TracedTensor)>> {
-    let ctx = a.context();
     let Some(shape) = a.try_concrete_shape() else {
         return Ok(None);
     };
@@ -1395,8 +1354,8 @@ fn slogdet_empty_square(a: &TracedTensor) -> Result<Option<(TracedTensor, Traced
     }
     let batch_shape = shape[2..].to_vec();
     Ok(Some((
-        filled_real(ctx, a.dtype(), batch_shape.clone(), 1.0)?,
-        filled_real(ctx, real_values_dtype(a.dtype()), batch_shape, 0.0)?,
+        filled_real(a.dtype, batch_shape.clone(), 1.0)?,
+        filled_real(real_values_dtype(a.dtype), batch_shape, 0.0)?,
     )))
 }
 
@@ -1407,12 +1366,10 @@ fn slogdet_empty_square(a: &TracedTensor) -> Result<Option<(TracedTensor, Traced
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
 /// let inverse = a.inv().unwrap();
-/// assert_eq!(inverse.rank(), 2);
+/// assert_eq!(inverse.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -1428,7 +1385,7 @@ fn slogdet_empty_square(a: &TracedTensor) -> Result<Option<(TracedTensor, Traced
 /// The composed solve checks the coefficient's concrete square shape during
 /// execution; no symbolic square equality is recorded.
 pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
-    ensure_min_rank("inv", a.rank(), 2)?;
+    ensure_min_rank("inv", a.rank, 2)?;
     let shape = require_concrete_shape("inv", a)?;
     let eye = eye_like(a, shape[0])?;
     solve(a, &eye)
@@ -1441,12 +1398,10 @@ pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
 /// let values = a.eigvalsh().unwrap();
-/// assert_eq!(values.rank(), 1);
+/// assert_eq!(values.rank, 1);
 /// ```
 ///
 /// # Errors
@@ -1463,7 +1418,7 @@ pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
 /// factorization; no symbolic square equality is recorded. Numerical
 /// eigensolver failures are reported during execution.
 pub fn eigvalsh(a: &TracedTensor) -> Result<TracedTensor> {
-    ensure_float_or_complex("eigvalsh", a.dtype())?;
+    ensure_float_or_complex("eigvalsh", a.dtype)?;
     eigh_values(a)
 }
 
@@ -1474,12 +1429,10 @@ pub fn eigvalsh(a: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
 /// let values = a.eigvals().unwrap();
-/// assert_eq!(values.rank(), 1);
+/// assert_eq!(values.rank, 1);
 /// ```
 ///
 /// # Errors
@@ -1512,12 +1465,10 @@ pub fn eigvals(a: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
 /// let inverse = a.pinv().unwrap();
-/// assert_eq!(inverse.rank(), 2);
+/// assert_eq!(inverse.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -1532,14 +1483,14 @@ pub fn eigvals(a: &TracedTensor) -> Result<TracedTensor> {
 /// Symbolic shapes are materialized by this helper; failures are reported as
 /// `ShapeConstraintEvaluation` or `ShapeExpressionEvaluation`.
 pub fn pinv(a: &TracedTensor) -> Result<TracedTensor> {
-    ensure_float_or_complex("pinv", a.dtype())?;
+    ensure_float_or_complex("pinv", a.dtype)?;
     let shape = require_concrete_shape("pinv", a)?;
     let max_dim = match (shape.first(), shape.get(1)) {
         (Some(&m), Some(&n)) => m.max(n),
         (Some(&m), None) => m,
         _ => 0,
     };
-    pinv_with_rtol(a, default_pinv_rtol(a.dtype(), max_dim))
+    pinv_with_rtol(a, default_pinv_rtol(a.dtype, max_dim))
 }
 
 /// Build a traced Moore-Penrose pseudoinverse op with an explicit relative tolerance.
@@ -1552,12 +1503,10 @@ pub fn pinv(a: &TracedTensor) -> Result<TracedTensor> {
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
+/// let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
 /// let inverse = a.pinv_with_rtol(1e-12).unwrap();
-/// assert_eq!(inverse.rank(), 2);
+/// assert_eq!(inverse.rank, 2);
 /// ```
 ///
 /// # Errors
@@ -1572,35 +1521,32 @@ pub fn pinv(a: &TracedTensor) -> Result<TracedTensor> {
 /// Symbolic shapes are materialized by this helper; failures are reported as
 /// `ShapeConstraintEvaluation` or `ShapeExpressionEvaluation`.
 pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
-    ensure_float_or_complex("pinv_with_rtol", a.dtype())?;
+    ensure_float_or_complex("pinv_with_rtol", a.dtype)?;
     require_concrete_shape("pinv_with_rtol", a)?;
     let (u, s, vt) = svd(a)?;
     let abs_s = s.abs()?;
     let s_max = abs_s.reduce_max(Some(&[0]))?;
     let s_max_shape = s_max.concrete_shape()?;
-    let threshold_scalar = broadcast_scalar(
-        scalar_real(s.context(), s.dtype(), rtol.max(0.0))?,
-        &s_max_shape,
-    )?;
+    let threshold_scalar = broadcast_scalar(scalar_real(s.dtype, rtol.max(0.0))?, &s_max_shape)?;
     let threshold = (&s_max * &threshold_scalar)?;
     let s_shape = s.concrete_shape()?;
     let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, &s_shape)?;
     let mask = abs_s.compare(&threshold, CompareDir::Gt)?;
-    let mask = mask.convert(s.dtype())?;
+    let mask = mask.convert(s.dtype)?;
     let ones = ones_like(&s)?;
     let neg_mask = (-&mask)?;
     let denom = (&s + &(&ones + &neg_mask)?)?;
     let s_inv = (&mask / &denom)?;
 
-    let v = vt.conj()?.transpose(&matrix_transpose_perm(vt.rank()))?;
-    let uh = u.conj()?.transpose(&matrix_transpose_perm(u.rank()))?;
+    let v = vt.conj()?.transpose(&matrix_transpose_perm(vt.rank))?;
+    let uh = u.conj()?.transpose(&matrix_transpose_perm(u.rank))?;
     // See the concrete builder: a complex input has real singular values, so
     // `s_inv` is real while `v` is complex, and the multiply requires one dtype
     // (#2049).
-    let s_inv = if s_inv.dtype() == v.dtype() {
+    let s_inv = if s_inv.dtype == v.dtype {
         s_inv
     } else {
-        s_inv.convert(v.dtype())?
+        s_inv.convert(v.dtype)?
     };
     let vs = scale_matrix_columns(&v, &s_inv)?;
     matmul_preserve_trailing_batch(&vs, &uh)
@@ -1616,12 +1562,10 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
 /// ```
 /// use tenferro_linalg::TracedTensorLinalgExt;
 /// use tenferro_runtime::TracedTensor;
-/// use tenferro_runtime::TraceContext;
-/// let trace = TraceContext::new();
 ///
-/// let x = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+/// let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
 /// let length = x.norm(Some(2.0), Some(&[0]), false).unwrap();
-/// assert_eq!(length.rank(), 0);
+/// assert_eq!(length.rank, 0);
 /// ```
 ///
 /// # Errors
@@ -1644,21 +1588,20 @@ pub fn norm(
     dim: Option<&[usize]>,
     keepdim: bool,
 ) -> Result<TracedTensor> {
-    ensure_float_or_complex("norm", a.dtype())?;
+    ensure_float_or_complex("norm", a.dtype)?;
     let shape = require_concrete_shape("norm", a)?;
-    let axes = dim.map_or_else(|| (0..a.rank()).collect::<Vec<_>>(), |dims| dims.to_vec());
-    validate_axes("norm", a.rank(), &axes)?;
+    let axes = dim.map_or_else(|| (0..a.rank).collect::<Vec<_>>(), |dims| dims.to_vec());
+    validate_axes("norm", a.rank, &axes)?;
     if axes.is_empty() {
         return Ok(a.clone());
     }
     if reduced_axes_have_zero_extent(&shape, &axes)
-        && let Some(zero) =
-            zero_norm_for_empty_reduction(a.context(), a.dtype(), &shape, &axes, keepdim, ord)?
+        && let Some(zero) = zero_norm_for_empty_reduction(a.dtype, &shape, &axes, keepdim, ord)?
     {
         return Ok(zero);
     }
 
-    let out = if can_square_without_abs(a.dtype(), axes.len(), ord) {
+    let out = if can_square_without_abs(a.dtype, axes.len(), ord) {
         frobenius_norm(a, &axes)?
     } else {
         match axes.len() {
@@ -1760,15 +1703,17 @@ fn five_outputs(
     }
 }
 
-fn scalar_real(ctx: &TraceContext, dtype: DType, value: f64) -> Result<TracedTensor> {
+fn scalar_real(dtype: DType, value: f64) -> Result<TracedTensor> {
     match dtype {
-        DType::F64 => ctx.from_vec_col_major(vec![], vec![value]),
-        DType::F32 => ctx.from_vec_col_major(vec![], vec![value as f32]),
-        DType::I32 => ctx.from_vec_col_major(vec![], vec![value.round() as i32]),
-        DType::I64 => ctx.from_vec_col_major(vec![], vec![value.round() as i64]),
-        DType::Bool => ctx.from_vec_col_major(vec![], vec![value != 0.0]),
-        DType::C64 => ctx.from_vec_col_major(vec![], vec![Complex64::new(value, 0.0)]),
-        DType::C32 => ctx.from_vec_col_major(vec![], vec![Complex32::new(value as f32, 0.0)]),
+        DType::F64 => TracedTensor::from_vec_col_major(vec![], vec![value]),
+        DType::F32 => TracedTensor::from_vec_col_major(vec![], vec![value as f32]),
+        DType::I32 => TracedTensor::from_vec_col_major(vec![], vec![value.round() as i32]),
+        DType::I64 => TracedTensor::from_vec_col_major(vec![], vec![value.round() as i64]),
+        DType::Bool => TracedTensor::from_vec_col_major(vec![], vec![value != 0.0]),
+        DType::C64 => TracedTensor::from_vec_col_major(vec![], vec![Complex64::new(value, 0.0)]),
+        DType::C32 => {
+            TracedTensor::from_vec_col_major(vec![], vec![Complex32::new(value as f32, 0.0)])
+        }
         // An externally defined scalar has no traced scalar literal.
         DType::External(_) => Err(Error::TensorRuntime(
             tenferro_tensor::Error::invalid_argument(
@@ -1780,21 +1725,20 @@ fn scalar_real(ctx: &TraceContext, dtype: DType, value: f64) -> Result<TracedTen
     }
 }
 
-fn filled_real(
-    ctx: &TraceContext,
-    dtype: DType,
-    shape: Vec<usize>,
-    value: f64,
-) -> Result<TracedTensor> {
+fn filled_real(dtype: DType, shape: Vec<usize>, value: f64) -> Result<TracedTensor> {
     let len = tenferro_tensor::validate::checked_shape_product("slogdet", "output shape", &shape)?;
     match dtype {
-        DType::F64 => ctx.from_vec_col_major(shape, vec![value; len]),
-        DType::F32 => ctx.from_vec_col_major(shape, vec![value as f32; len]),
-        DType::I32 => ctx.from_vec_col_major(shape, vec![value.round() as i32; len]),
-        DType::I64 => ctx.from_vec_col_major(shape, vec![value.round() as i64; len]),
-        DType::Bool => ctx.from_vec_col_major(shape, vec![value != 0.0; len]),
-        DType::C64 => ctx.from_vec_col_major(shape, vec![Complex64::new(value, 0.0); len]),
-        DType::C32 => ctx.from_vec_col_major(shape, vec![Complex32::new(value as f32, 0.0); len]),
+        DType::F64 => TracedTensor::from_vec_col_major(shape, vec![value; len]),
+        DType::F32 => TracedTensor::from_vec_col_major(shape, vec![value as f32; len]),
+        DType::I32 => TracedTensor::from_vec_col_major(shape, vec![value.round() as i32; len]),
+        DType::I64 => TracedTensor::from_vec_col_major(shape, vec![value.round() as i64; len]),
+        DType::Bool => TracedTensor::from_vec_col_major(shape, vec![value != 0.0; len]),
+        DType::C64 => {
+            TracedTensor::from_vec_col_major(shape, vec![Complex64::new(value, 0.0); len])
+        }
+        DType::C32 => {
+            TracedTensor::from_vec_col_major(shape, vec![Complex32::new(value as f32, 0.0); len])
+        }
         // An externally defined scalar has no traced filled literal.
         DType::External(_) => Err(Error::TensorRuntime(
             tenferro_tensor::Error::invalid_argument(
@@ -1843,24 +1787,24 @@ fn require_concrete_shape(op: &'static str, input: &TracedTensor) -> Result<Vec<
     })
 }
 
-fn zero_scalar(ctx: &TraceContext, dtype: DType) -> Result<TracedTensor> {
-    scalar_real(ctx, dtype, 0.0)
+fn zero_scalar(dtype: DType) -> Result<TracedTensor> {
+    scalar_real(dtype, 0.0)
 }
 
-fn one_scalar(ctx: &TraceContext, dtype: DType) -> Result<TracedTensor> {
-    scalar_real(ctx, dtype, 1.0)
+fn one_scalar(dtype: DType) -> Result<TracedTensor> {
+    scalar_real(dtype, 1.0)
 }
 
 fn ones_like(input: &TracedTensor) -> Result<TracedTensor> {
     let shape = input.concrete_shape()?;
-    broadcast_scalar(one_scalar(input.context(), input.dtype())?, &shape)
+    broadcast_scalar(one_scalar(input.dtype)?, &shape)
 }
 
 fn eye_like(anchor: &TracedTensor, size: usize) -> Result<TracedTensor> {
     let mut vector_shape = vec![size];
     let anchor_shape = anchor.concrete_shape()?;
     vector_shape.extend_from_slice(&anchor_shape[2..]);
-    let diagonal = broadcast_scalar(one_scalar(anchor.context(), anchor.dtype())?, &vector_shape)?;
+    let diagonal = broadcast_scalar(one_scalar(anchor.dtype)?, &vector_shape)?;
     diagonal.embed_diag(0, 1)
 }
 
@@ -1885,7 +1829,7 @@ fn broadcast_batch_scalar_to_leading_axis(
 }
 
 fn matmul_preserve_trailing_batch(lhs: &TracedTensor, rhs: &TracedTensor) -> Result<TracedTensor> {
-    let rank = lhs.rank();
+    let rank = lhs.rank;
     let batch_dims: Vec<usize> = (2..rank).collect();
     lhs.dot_general(
         rhs,
@@ -1920,8 +1864,8 @@ fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
     if p == 2.0 {
         return frobenius_norm(abs, axes);
     }
-    let power = abs.pow(&scalar_real(abs.context(), abs.dtype(), p)?)?;
-    let inv_p = scalar_real(abs.context(), abs.dtype(), 1.0 / p)?;
+    let power = abs.pow(&scalar_real(abs.dtype, p)?)?;
+    let inv_p = scalar_real(abs.dtype, 1.0 / p)?;
     power.reduce_sum(Some(axes))?.pow(&inv_p)
 }
 
@@ -1930,7 +1874,6 @@ fn reduced_axes_have_zero_extent(shape: &[usize], axes: &[usize]) -> bool {
 }
 
 fn zero_norm_for_empty_reduction(
-    ctx: &TraceContext,
     dtype: DType,
     input_shape: &[usize],
     axes: &[usize],
@@ -1941,7 +1884,7 @@ fn zero_norm_for_empty_reduction(
         return Ok(None);
     }
     let output_shape = reduction_shape(input_shape, axes, keepdim);
-    zero_traced_tensor(ctx, real_norm_dtype(dtype)?, output_shape).map(Some)
+    zero_traced_tensor(real_norm_dtype(dtype)?, output_shape).map(Some)
 }
 
 fn empty_reduction_norm_is_zero(axis_count: usize, ord: Option<f64>) -> bool {
@@ -1988,13 +1931,13 @@ fn real_norm_dtype(dtype: DType) -> Result<DType> {
     }
 }
 
-fn zero_traced_tensor(ctx: &TraceContext, dtype: DType, shape: Vec<usize>) -> Result<TracedTensor> {
+fn zero_traced_tensor(dtype: DType, shape: Vec<usize>) -> Result<TracedTensor> {
     let len = checked_element_count("norm", &shape)?;
     match dtype {
-        DType::F32 => ctx.from_vec_col_major(shape, vec![0.0_f32; len]),
-        DType::F64 => ctx.from_vec_col_major(shape, vec![0.0_f64; len]),
-        DType::C32 => ctx.from_vec_col_major(shape, vec![Complex32::new(0.0, 0.0); len]),
-        DType::C64 => ctx.from_vec_col_major(shape, vec![Complex64::new(0.0, 0.0); len]),
+        DType::F32 => TracedTensor::from_vec_col_major(shape, vec![0.0_f32; len]),
+        DType::F64 => TracedTensor::from_vec_col_major(shape, vec![0.0_f64; len]),
+        DType::C32 => TracedTensor::from_vec_col_major(shape, vec![Complex32::new(0.0, 0.0); len]),
+        DType::C64 => TracedTensor::from_vec_col_major(shape, vec![Complex64::new(0.0, 0.0); len]),
         _ => Err(Error::TensorRuntime(
             tenferro_tensor::Error::unsupported_dtype(
                 "norm",
@@ -2097,7 +2040,7 @@ fn eig_values(a: &TracedTensor) -> Result<TracedTensor> {
     let (values, _vectors) = two_outputs(
         apply(
             Arc::new(LinalgExtensionOp::new(LinalgOp::Eig {
-                input_dtype: a.dtype(),
+                input_dtype: a.dtype,
             })),
             &[a],
         )?,
@@ -2122,8 +2065,8 @@ fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
     // `ord = 0` counts `x != 0` (#2359); equality with zero, then negated,
     // keeps NaN entries because IEEE 754 makes `NaN > 0` false while
     // `NaN != 0` is true.
-    let is_zero = abs.compare(&zero_scalar(abs.context(), abs.dtype())?, CompareDir::Eq)?;
-    let is_zero = is_zero.convert(abs.dtype())?;
+    let is_zero = abs.compare(&zero_scalar(abs.dtype)?, CompareDir::Eq)?;
+    let is_zero = is_zero.convert(abs.dtype)?;
     let ones = ones_like(abs)?;
     let mask = (&ones - &is_zero)?;
     mask.reduce_sum(Some(axes))
@@ -2152,14 +2095,14 @@ fn move_axes_to_front(tensor: &TracedTensor, axes: &[usize]) -> Result<TracedTen
         return Ok(tensor.clone());
     }
 
-    let mut selected = vec![false; tensor.rank()];
+    let mut selected = vec![false; tensor.rank];
     for &axis in axes {
         selected[axis] = true;
     }
 
-    let mut perm = Vec::with_capacity(tensor.rank());
+    let mut perm = Vec::with_capacity(tensor.rank);
     perm.extend_from_slice(axes);
-    for (axis, is_selected) in selected.iter().enumerate().take(tensor.rank()) {
+    for (axis, is_selected) in selected.iter().enumerate().take(tensor.rank) {
         if !*is_selected {
             perm.push(axis);
         }
@@ -2186,14 +2129,11 @@ fn restore_keepdim(
 #[cfg(test)]
 mod tests {
     use super::p_norm;
-    use tenferro_runtime::TraceContext;
+    use tenferro_runtime::TracedTensor;
 
     #[test]
     fn p_norm_rejects_zero_and_non_finite_orders() {
-        let trace = TraceContext::new();
-        let x = trace
-            .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-            .unwrap();
+        let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
         let abs = x.abs().unwrap();
 
         for p in [0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {

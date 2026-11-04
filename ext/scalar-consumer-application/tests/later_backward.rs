@@ -13,7 +13,7 @@ use tenferro_df64_proof::ad::Df64VjpRule;
 use tenferro_df64_proof::extension::{module, Df64Qr, Df64QrVjp, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{DType, Tensor, TensorStructural};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
@@ -66,15 +66,13 @@ fn overwrite(tensor: &mut Tensor, index: usize, value: Df64) {
 
 #[test]
 fn the_factors_outlive_the_forward_runtime_and_still_serve_a_later_program() {
-    let trace = tenferro_runtime::TraceContext::new();
     // 1. The forward program runs in its own runtime and its factors leave with it.
     let (forward_runtime, mut forward_engine) = runtime();
-    let input = trace
-        .from_tensor_concrete_shape_declaring_scalar(
-            external(vec![Df64::from_f64(3.0), Df64::from_f64(4.0)], vec![2, 1]),
-            DF64_SCALAR_IDENTITY,
-        )
-        .expect("traced input");
+    let input = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
+        external(vec![Df64::from_f64(3.0), Df64::from_f64(4.0)], vec![2, 1]),
+        DF64_SCALAR_IDENTITY,
+    )
+    .expect("traced input");
     let outputs = apply(Arc::new(Df64Qr), &[&input]).expect("traced QR");
 
     let mut compiler = GraphCompiler::new();
@@ -99,18 +97,15 @@ fn the_factors_outlive_the_forward_runtime_and_still_serve_a_later_program() {
     // 3. A later program consumes the retained factors in a new runtime. The adjoint is
     // `Q (R R_bar^T) R^{-T}`, which for one column is `Q R_bar`, so the retained factor's
     // written values are exactly what the later program must produce.
-    let q_leaf = trace
-        .from_tensor_concrete_shape_declaring_scalar(q, DF64_SCALAR_IDENTITY)
+    let q_leaf = TracedTensor::from_tensor_concrete_shape_declaring_scalar(q, DF64_SCALAR_IDENTITY)
         .expect("traced factor");
-    let r_leaf = trace
-        .from_tensor_concrete_shape_declaring_scalar(r, DF64_SCALAR_IDENTITY)
+    let r_leaf = TracedTensor::from_tensor_concrete_shape_declaring_scalar(r, DF64_SCALAR_IDENTITY)
         .expect("traced triangular factor");
-    let cotangent = trace
-        .from_tensor_concrete_shape_declaring_scalar(
-            external(vec![Df64::from_f64(1.0)], vec![1, 1]),
-            DF64_SCALAR_IDENTITY,
-        )
-        .expect("traced cotangent");
+    let cotangent = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
+        external(vec![Df64::from_f64(1.0)], vec![1, 1]),
+        DF64_SCALAR_IDENTITY,
+    )
+    .expect("traced cotangent");
     let adjoint = apply(
         Arc::new(Df64QrVjp::of(false, true)),
         &[&q_leaf, &r_leaf, &cotangent],

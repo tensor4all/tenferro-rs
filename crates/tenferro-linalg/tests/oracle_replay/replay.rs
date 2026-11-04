@@ -9,9 +9,7 @@ use serde_json::Value;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{HouseholderQr, QrGauge, QrOptions, TracedTensorLinalgExt};
-use tenferro_runtime::{
-    DType, DotGeneralConfig, GraphCompiler, Runtime, Tensor, TraceContext, TracedTensor,
-};
+use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, Runtime, Tensor, TracedTensor};
 
 use super::db::{self, CaseRecord, ComparisonTolerance, DbTensor};
 use super::support::{self, RecordSupport};
@@ -320,21 +318,17 @@ fn replay_case_with_config(case: &CaseRecord, config: ReplayConfig) -> Result<()
         }
     }
 
-    // One trace for the whole case: inputs, outputs, directions and cotangents
-    // must live in the same context to form one JVP/VJP program.
-    let trace = TraceContext::new();
-    let execution = dispatch_case(&trace, case)?;
+    let execution = dispatch_case(case)?;
     let outputs = apply_observable(case, execution.outputs)?;
     let runtime = cpu_runtime_with_linalg()?;
     let ad = ad_context_with_linalg()?;
 
     for probe in &case.probes {
         let first_order = required_tolerance(case.comparison.first_order(), "first_order", case)?;
-        let directions = decode_named_tensors(&trace, &probe.direction)?;
-        let cotangents = decode_named_tensors(&trace, &probe.cotangent)?;
+        let directions = decode_named_tensors(&probe.direction)?;
+        let cotangents = decode_named_tensors(&probe.cotangent)?;
 
         let jvp_outputs = build_jvp_outputs(
-            &trace,
             &ad,
             case,
             &outputs,
@@ -357,14 +351,9 @@ fn replay_case_with_config(case: &CaseRecord, config: ReplayConfig) -> Result<()
 
         let scalar = cotangent_scalar(case, &outputs, &cotangents, &probe.probe_id)
             .map_err(|err| format!("probe {} build cotangent scalar: {err}", probe.probe_id))?;
-        let vjp_outputs = build_grad_outputs(
-            &trace,
-            &ad,
-            &scalar,
-            &execution.inputs,
-            &probe.pytorch_ref.vjp,
-        )
-        .map_err(|err| format!("probe {} build VJP: {err}", probe.probe_id))?;
+        let vjp_outputs =
+            build_grad_outputs(&ad, &scalar, &execution.inputs, &probe.pytorch_ref.vjp)
+                .map_err(|err| format!("probe {} build VJP: {err}", probe.probe_id))?;
         let vjp_results = eval_named_tensors(&runtime, &vjp_outputs)
             .map_err(|err| format!("probe {} eval VJP: {err}", probe.probe_id))?;
         compare_named_results(
@@ -384,7 +373,6 @@ fn replay_case_with_config(case: &CaseRecord, config: ReplayConfig) -> Result<()
             let second_order =
                 required_tolerance(case.comparison.second_order(), "second_order", case)?;
             let hvp_outputs = build_hvp_outputs(
-                &trace,
                 &ad,
                 &vjp_outputs,
                 &execution.inputs,
@@ -488,8 +476,8 @@ fn cpu_runtime_with_linalg() -> Result<Runtime, String> {
     builder.build().map_err(to_string)
 }
 
-fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecution, String> {
-    let inputs = decode_case_inputs(trace, case)?;
+fn dispatch_case(case: &CaseRecord) -> Result<CaseExecution, String> {
+    let inputs = decode_case_inputs(case)?;
     if case.op == "incremental_householder_qr" {
         return dispatch_incremental_householder_qr(case, inputs);
     }
@@ -668,7 +656,7 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
             single_output(inputs, "value", tenferro_to_oracle(&inverse, 2)?)
         }
         "norm" | "vector_norm" | "matrix_norm" => {
-            let (ord, dim, keepdim) = norm_arguments(case, a.rank())?;
+            let (ord, dim, keepdim) = norm_arguments(case, a.rank)?;
             let dim_ref = dim.as_deref();
             let value = a.norm(ord, dim_ref, keepdim).map_err(to_string)?;
             single_output(inputs, "value", value)
@@ -680,8 +668,7 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
             let b_tf = oracle_to_tenferro(b, rhs_core_rank)?;
             let b_lstsq = promote_vector_rhs_for_solve(&b_tf, rhs_core_rank)?;
             let solution_lstsq = a_tf.lstsq(&b_lstsq).map_err(to_string)?;
-            let residuals =
-                lstsq_residuals(trace, &a_tf, &b_lstsq, &solution_lstsq, rhs_core_rank)?;
+            let residuals = lstsq_residuals(&a_tf, &b_lstsq, &solution_lstsq, rhs_core_rank)?;
             let solution = demote_vector_solution_after_solve(&solution_lstsq, rhs_core_rank)?;
             Ok(CaseExecution {
                 inputs,
@@ -818,31 +805,25 @@ fn svd_observable_execution(
     Ok(CaseExecution { inputs, outputs })
 }
 
-fn decode_case_inputs(
-    trace: &TraceContext,
-    case: &CaseRecord,
-) -> Result<BTreeMap<String, TracedTensor>, String> {
+fn decode_case_inputs(case: &CaseRecord) -> Result<BTreeMap<String, TracedTensor>, String> {
     let mut inputs = BTreeMap::new();
     for (name, tensor_data) in &case.inputs {
-        inputs.insert(name.clone(), decode_traced_tensor(trace, tensor_data)?);
+        inputs.insert(name.clone(), decode_traced_tensor(tensor_data)?);
     }
     Ok(inputs)
 }
 
 fn decode_named_tensors(
-    trace: &TraceContext,
     tensors: &BTreeMap<String, DbTensor>,
 ) -> Result<BTreeMap<String, TracedTensor>, String> {
     tensors
         .iter()
-        .map(|(name, tensor)| Ok((name.clone(), decode_traced_tensor(trace, tensor)?)))
+        .map(|(name, tensor)| Ok((name.clone(), decode_traced_tensor(tensor)?)))
         .collect()
 }
 
-fn decode_traced_tensor(trace: &TraceContext, tensor: &DbTensor) -> Result<TracedTensor, String> {
-    trace
-        .from_tensor_concrete_shape(decode_tensor(tensor)?)
-        .map_err(to_string)
+fn decode_traced_tensor(tensor: &DbTensor) -> Result<TracedTensor, String> {
+    TracedTensor::from_tensor_concrete_shape(decode_tensor(tensor)?).map_err(to_string)
 }
 
 fn decode_tensor(tensor: &DbTensor) -> Result<Tensor, String> {
@@ -1027,7 +1008,6 @@ fn apply_observable(
 }
 
 fn build_jvp_outputs(
-    trace: &TraceContext,
     ad: &AdContext,
     _case: &CaseRecord,
     outputs: &[NamedTensor],
@@ -1044,17 +1024,13 @@ fn build_jvp_outputs(
         if checked_product(&expected_output.shape)? == 0 {
             tangents.push(NamedTensor {
                 name: output.name.clone(),
-                tensor: zero_traced_tensor(
-                    trace,
-                    output.tensor.dtype(),
-                    expected_output.shape.clone(),
-                )?,
+                tensor: zero_traced_tensor(output.tensor.dtype, expected_output.shape.clone())?,
             });
             continue;
         }
         let tangent =
             directional_jvp(ad, &output.tensor, inputs, directions)?.unwrap_or_else(|| {
-                zero_traced_tensor(trace, output.tensor.dtype(), expected_output.shape.clone())
+                zero_traced_tensor(output.tensor.dtype, expected_output.shape.clone())
                     .expect("zero fallback should build")
             });
         tangents.push(NamedTensor {
@@ -1066,7 +1042,6 @@ fn build_jvp_outputs(
 }
 
 fn build_grad_outputs(
-    trace: &TraceContext,
     ad: &AdContext,
     scalar: &TracedTensor,
     inputs: &BTreeMap<String, TracedTensor>,
@@ -1081,7 +1056,7 @@ fn build_grad_outputs(
             let expected_shape = expected.get(name).expect("expected gradient").shape.clone();
             gradients.push(NamedTensor {
                 name: name.clone(),
-                tensor: zero_traced_tensor(trace, input.dtype(), expected_shape)?,
+                tensor: zero_traced_tensor(input.dtype, expected_shape)?,
             });
             continue;
         }
@@ -1089,7 +1064,7 @@ fn build_grad_outputs(
             .grad_optional(scalar, input)
             .map_err(|err| format!("failed to build VJP for input {name}: {err}"))?
             .unwrap_or_else(|| {
-                zero_traced_tensor(trace, input.dtype(), tensor_shape(input))
+                zero_traced_tensor(input.dtype, tensor_shape(input))
                     .expect("zero fallback should build")
             });
         gradients.push(NamedTensor {
@@ -1101,7 +1076,6 @@ fn build_grad_outputs(
 }
 
 fn build_hvp_outputs(
-    trace: &TraceContext,
     ad: &AdContext,
     gradients: &[NamedTensor],
     inputs: &BTreeMap<String, TracedTensor>,
@@ -1125,13 +1099,13 @@ fn build_hvp_outputs(
                 .clone();
             hvps.push(NamedTensor {
                 name: gradient.name.clone(),
-                tensor: zero_traced_tensor(trace, gradient.tensor.dtype(), expected_shape)?,
+                tensor: zero_traced_tensor(gradient.tensor.dtype, expected_shape)?,
             });
             continue;
         }
         let tangent =
             directional_jvp(ad, &gradient.tensor, inputs, directions)?.unwrap_or_else(|| {
-                zero_traced_tensor(trace, gradient.tensor.dtype(), fallback_shape)
+                zero_traced_tensor(gradient.tensor.dtype, fallback_shape)
                     .expect("zero fallback should build")
             });
         hvps.push(NamedTensor {
@@ -1179,13 +1153,13 @@ fn cotangent_scalar(
             continue;
         };
         let cotangent = align_cotangent_dtype(&output.tensor, cotangent)?;
-        let cotangent = match output.tensor.dtype() {
+        let cotangent = match output.tensor.dtype {
             DType::C32 | DType::C64 => cotangent.conj().map_err(to_string)?,
             DType::F32 | DType::F64 => cotangent,
             _ => continue,
         };
         let product = (&output.tensor * &cotangent).map_err(to_string)?;
-        let axes: Vec<usize> = (0..product.rank()).collect();
+        let axes: Vec<usize> = (0..product.rank).collect();
         scalar_terms.push(product.reduce_sum(Some(&axes)).map_err(to_string)?);
     }
 
@@ -1456,10 +1430,10 @@ fn required_input<'a>(
 }
 
 fn oracle_to_tenferro(tensor: &TracedTensor, core_rank: usize) -> Result<TracedTensor, String> {
-    if tensor.rank() <= core_rank {
+    if tensor.rank <= core_rank {
         return Ok(tensor.clone());
     }
-    let rank = tensor.rank();
+    let rank = tensor.rank;
     let split = rank - core_rank;
     let mut perm = Vec::with_capacity(rank);
     perm.extend(split..rank);
@@ -1468,10 +1442,10 @@ fn oracle_to_tenferro(tensor: &TracedTensor, core_rank: usize) -> Result<TracedT
 }
 
 fn tenferro_to_oracle(tensor: &TracedTensor, core_rank: usize) -> Result<TracedTensor, String> {
-    if tensor.rank() <= core_rank {
+    if tensor.rank <= core_rank {
         return Ok(tensor.clone());
     }
-    let rank = tensor.rank();
+    let rank = tensor.rank;
     let mut perm = Vec::with_capacity(rank);
     perm.extend(core_rank..rank);
     perm.extend(0..core_rank);
@@ -1479,7 +1453,7 @@ fn tenferro_to_oracle(tensor: &TracedTensor, core_rank: usize) -> Result<TracedT
 }
 
 fn rhs_core_rank(a: &TracedTensor, b: &TracedTensor) -> usize {
-    if b.rank() + 1 == a.rank() {
+    if b.rank + 1 == a.rank {
         1
     } else {
         2
@@ -1516,7 +1490,6 @@ fn demote_vector_solution_after_solve(
 }
 
 fn lstsq_residuals(
-    trace: &TraceContext,
     a: &TracedTensor,
     b: &TracedTensor,
     solution: &TracedTensor,
@@ -1525,7 +1498,7 @@ fn lstsq_residuals(
     let shape = tensor_shape(a);
     let (m, n) = (shape[0], shape[1]);
     if m <= n {
-        return zero_traced_tensor(trace, solution.dtype(), vec![0]);
+        return zero_traced_tensor(solution.dtype, vec![0]);
     }
 
     let fitted = matmul_tenferro_matrix_axes(a, solution)?;
@@ -1607,10 +1580,10 @@ fn named(name: &str, tensor: TracedTensor) -> NamedTensor {
 }
 
 fn swap_tenferro_matrix_axes(tensor: &TracedTensor) -> Result<TracedTensor, String> {
-    if tensor.rank() < 2 {
+    if tensor.rank < 2 {
         return Ok(tensor.clone());
     }
-    let mut perm: Vec<usize> = (0..tensor.rank()).collect();
+    let mut perm: Vec<usize> = (0..tensor.rank).collect();
     perm.swap(0, 1);
     tensor.transpose(&perm).map_err(to_string)
 }
@@ -1780,21 +1753,16 @@ fn align_cotangent_dtype(
     output: &TracedTensor,
     cotangent: &TracedTensor,
 ) -> Result<TracedTensor, String> {
-    if output.dtype() == cotangent.dtype() {
+    if output.dtype == cotangent.dtype {
         return Ok(cotangent.clone());
     }
     Err(format!(
         "cotangent dtype {:?} does not match output dtype {:?}",
-        cotangent.dtype(),
-        output.dtype()
+        cotangent.dtype, output.dtype
     ))
 }
 
-fn zero_traced_tensor(
-    trace: &TraceContext,
-    dtype: DType,
-    shape: Vec<usize>,
-) -> Result<TracedTensor, String> {
+fn zero_traced_tensor(dtype: DType, shape: Vec<usize>) -> Result<TracedTensor, String> {
     let len = checked_product(&shape)?;
     let tensor = match dtype {
         DType::F32 => Tensor::from_vec_col_major(shape, vec![0.0_f32; len]).map_err(to_string)?,
@@ -1805,7 +1773,7 @@ fn zero_traced_tensor(
             .map_err(to_string)?,
         other => return Err(format!("unsupported zero tensor dtype {other:?}")),
     };
-    trace.from_tensor_concrete_shape(tensor).map_err(to_string)
+    TracedTensor::from_tensor_concrete_shape(tensor).map_err(to_string)
 }
 
 fn tensor_shape(tensor: &TracedTensor) -> Vec<usize> {
@@ -1825,7 +1793,7 @@ fn matmul_tenferro_matrix_axes(
     lhs: &TracedTensor,
     rhs: &TracedTensor,
 ) -> Result<TracedTensor, String> {
-    let rank = lhs.rank();
+    let rank = lhs.rank;
     let batch_dims: Vec<usize> = (2..rank).collect();
     lhs.dot_general(
         rhs,
