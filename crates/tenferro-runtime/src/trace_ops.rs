@@ -80,13 +80,15 @@ pub(crate) fn finish_value(
         "cached dtype must match the appended value"
     );
     let derived = metadata_sym_shape(&metadata);
+    let symbolic_id = next_symbolic_id();
     Ok(TracedTensor {
         ctx: ctx.clone(),
         value,
         rank: metadata.shape().len(),
         dtype: metadata.dtype(),
-        shape_hint: restamp_hint(derived.or(hint), symbolic_id(value.program_value())),
+        shape_hint: restamp_hint(derived.or(hint), symbolic_id),
         data: None,
+        symbolic_id,
     })
 }
 
@@ -160,13 +162,14 @@ pub(crate) fn dim_expr_to_sym_dim(expr: &DimExpr) -> Option<SymDim> {
     })
 }
 
-/// Symbolic identity of one traced value.
+/// Allocate the symbolic identity of one traced value.
 ///
-/// A value's slot is unique and stable inside its context, and the owning
-/// builder nonce keeps two contexts' identities apart, so a foreign
-/// [`SymDim`] fails to convert instead of naming a local value.
-pub(crate) fn symbolic_id(value: crate::program::ProgramValue) -> u64 {
-    (value.owner.raw() << 32) | u64::from(value.slot)
+/// The identity is unique per handle rather than derived from the program value,
+/// so no two tensors — in one context or across contexts — can name the same
+/// symbolic axis by accident.
+fn next_symbolic_id() -> u64 {
+    static NEXT_SYMBOLIC_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT_SYMBOLIC_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Re-express a symbolic shape in terms of the value that owns it.

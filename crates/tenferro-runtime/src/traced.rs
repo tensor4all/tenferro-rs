@@ -43,6 +43,8 @@ pub struct TracedTensor {
     pub(crate) dtype: DType,
     pub(crate) shape_hint: Option<Vec<SymDim>>,
     pub(crate) data: Option<Arc<RetainedValue>>,
+    /// Identity this tensor's axes use in `shape_hint`, unique per handle.
+    pub(crate) symbolic_id: u64,
 }
 
 impl fmt::Debug for TracedTensor {
@@ -629,7 +631,7 @@ impl TracedTensor {
 
     /// Symbolic tensor id used for rank-only shape hints.
     fn symbolic_id(&self) -> u64 {
-        crate::trace_ops::symbolic_id(self.value.program_value())
+        self.symbolic_id
     }
 
     /// Returns `true` iff every dim of this tensor's `shape_hint` is a

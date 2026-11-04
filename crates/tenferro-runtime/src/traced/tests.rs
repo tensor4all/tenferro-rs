@@ -633,3 +633,43 @@ fn broadcast_in_dim_sym_keeps_computed_shape_references_distinct() {
         &[-1.0, -2.0, -1.0, -2.0, -1.0, -2.0]
     );
 }
+
+#[test]
+fn symbolic_axis_identity_is_unique_per_traced_value() {
+    let trace = crate::TraceContext::new();
+    let other = crate::TraceContext::new();
+    let first = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap()
+        .neg()
+        .unwrap();
+    let second = trace
+        .from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])
+        .unwrap()
+        .neg()
+        .unwrap();
+    let foreign = other
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap()
+        .neg()
+        .unwrap();
+
+    let ids: Vec<u64> = [&first, &second, &foreign]
+        .into_iter()
+        .map(|tensor| tensor.symbolic_id())
+        .collect();
+    // Distinct tensors must not share an axis identity, or a shape built from one
+    // silently resolves against another.
+    let mut unique = ids.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), ids.len(), "symbolic ids collided: {ids:?}");
+
+    // A shape naming a foreign context's axis must be rejected, not resolved.
+    let target = [foreign.sym_size(0).unwrap()];
+    let error = first.reshape_sym(&target).unwrap_err();
+    assert!(
+        matches!(error, Error::SymbolicShapeConversion { .. }),
+        "unexpected error: {error}"
+    );
+}
