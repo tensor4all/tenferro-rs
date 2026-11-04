@@ -391,6 +391,19 @@ the graph reconstruction in `tenferro-ad/src/traced.rs`
 (`derivative_tensors_from_program`, 400+ lines with its metadata plumbing)
 disappears.
 
+As built, `ProgramImport::bindings` keeps its meaning (process-local tensor
+defaults) but no longer drives extent resolution: import copies the source's
+declared extents and translates their `InputDim`s into destination input
+positions, so a transformed program never inherits the bound shapes. The bindings
+are attached during the import itself rather than afterwards with
+`with_input_prefix_bindings_from`. The four derivative rules that must emit
+literal lengths (slice, pad, concatenate, dynamic update) read them from those
+bindings through `SemanticProgramBuilder::resolved_extents`, and a symbolic
+`Reshape`/`BroadcastInDim` payload is translated from program input positions
+into the consuming operation's own input coordinates. The derivative program is
+therefore shape-polymorphic, including for a symbolically declared input that
+carries data.
+
 As built, dead extension outputs are pruned at **snapshot** time, so the graph a
 snapshot exposes (and therefore the primal program a caller compiles) already
 carries the values-only form of a decomposition whose factor outputs are unused;

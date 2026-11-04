@@ -51,10 +51,14 @@
   kept inputs (input declarations are rewritten) so guards keep referring to the
   right program input.
 - AD rules that need extents (slice, pad, reductions) required the semantic
-  transform to keep importing the source bindings; design D3's "structure only"
-  import broke them. The derivative inputs are still remapped onto the live
-  values on the final import, so the traced program does not inherit concrete
-  extents.
+  transform to import the source bindings; design D3's "structure only" import
+  broke them at the time. Import now keeps the source's symbolic extents and only
+  re-attaches the bindings, and the four rules that must emit literal lengths
+  read them from the bindings (`SemanticProgramBuilder::resolved_extents`). The
+  earlier note that the final remap alone kept concrete extents out of the traced
+  program was wrong: the payloads copied from concretised metadata survived the
+  remap, and a derivative of a bound symbolic input was specialised to that
+  binding (review of #2432, finding 6).
 
 ### Open items at this checkpoint
 
