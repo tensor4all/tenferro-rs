@@ -377,7 +377,9 @@ cargo doc --workspace --no-deps
 python3 scripts/check-docs-site.py
 
 # GPU (CUDA) tests: requires NVIDIA GPU + CUDA 12.6.2+ (12.8+ enables the full CUDA feature set).
-# The floor is cuSOLVER >= 11.7.1, which ships `cusolverDnXsyevBatched` (issue #1852).
+# cuSOLVER is dlopen'd and symbol-resolved: a library older than 11.7.1 still opens and runs
+# geqrf/orgqr/syevd/gesvd. Only batched divide-and-conquer eigh falls back to the per-matrix
+# syevd loop, because `cusolverDnXsyevBatched` (11.7.1, issue #1852) is loaded optionally (#2413).
 # GPU tests are #[ignore]; --ignored runs them.
 # Find the installed CUDA root with `ls -d /usr/local/cuda*`.
 CUDA_PATH=/usr/local/cuda-12.6 \
