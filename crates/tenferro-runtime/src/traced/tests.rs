@@ -676,47 +676,6 @@ fn symbolic_axis_identity_is_unique_per_traced_value() {
 }
 
 #[test]
-fn outer_product_of_a_reshaped_operand_reads_only_its_own_shape() {
-    let trace = crate::TraceContext::new();
-    let scalar = trace.from_vec_col_major(vec![], vec![7.0_f64]).unwrap();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
-    // The reshape payload names *its own* input 0, not program input 0.
-    let rows = x.sym_size(0).unwrap();
-    let reshaped = x
-        .reshape_sym(&[rows, tenferro_ops::SymDim::from(1usize)])
-        .unwrap();
-    // An empty DotGeneral config is an outer product.
-    let outer = reshaped
-        .dot_general(
-            &reshaped,
-            DotGeneralConfig {
-                lhs_contracting_dims: Default::default(),
-                rhs_contracting_dims: Default::default(),
-                lhs_batch_dims: Default::default(),
-                rhs_batch_dims: Default::default(),
-            },
-        )
-        .unwrap();
-    assert_eq!(outer.rank, 4);
-    // Keep the scalar live so it stays program input 0: the reshape payload names
-    // *its own* operand, which is the second program input.
-    let output = (&outer + &scalar).unwrap();
-
-    let program = GraphCompiler::new().compile(&output).unwrap();
-    let result = run_compiled_one(
-        &program,
-        vec![
-            Tensor::from_vec_col_major(vec![], vec![7.0_f64]).unwrap(),
-            Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
-        ],
-    );
-    assert_eq!(result.shape(), &[2, 1, 2, 1]);
-    assert_eq!(result.as_slice::<f64>().unwrap(), &[8.0, 9.0, 9.0, 11.0]);
-}
-
-#[test]
 fn fixed_shape_outer_product_folds_its_broadcasts_into_views() {
     let trace = crate::TraceContext::new();
     let column = trace
@@ -784,49 +743,5 @@ fn fixed_shape_outer_product_folds_its_broadcasts_into_views() {
     assert_eq!(
         result.as_slice::<f64>().unwrap()[..5],
         [1.0, 2.0, 3.0, 4.0, 5.0]
-    );
-}
-
-#[test]
-fn outer_product_of_a_truncated_operand_broadcasts_to_the_truncated_length() {
-    // `DynamicTruncate` keeps the declared shape but narrows the extent to an upper
-    // bound, so the value is shorter than its shape says. A literal target built from
-    // the shape would broadcast to 4 and fail; it must use the bound.
-    let trace = crate::TraceContext::new();
-    let x = trace
-        .from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])
-        .unwrap();
-    let keep = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
-    let truncated = x.dynamic_truncate(&keep, 0).unwrap();
-    assert_eq!(truncated.rank, 1);
-    let other = trace
-        .from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0])
-        .unwrap();
-    let outer = truncated
-        .dot_general(
-            &other,
-            DotGeneralConfig {
-                lhs_contracting_dims: Default::default(),
-                rhs_contracting_dims: Default::default(),
-                lhs_batch_dims: Default::default(),
-                rhs_batch_dims: Default::default(),
-            },
-        )
-        .unwrap();
-
-    let program = GraphCompiler::new().compile(&outer).unwrap();
-    let result = run_compiled_one(
-        &program,
-        vec![
-            Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-            Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap(),
-            Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap(),
-        ],
-    );
-    assert_eq!(result.shape(), &[2, 3]);
-    // Column-major [2, 3]: (i, j) = x_i * y_j with x = [1, 2].
-    assert_eq!(
-        result.as_slice::<f64>().unwrap(),
-        &[10.0, 20.0, 20.0, 40.0, 30.0, 60.0]
     );
 }

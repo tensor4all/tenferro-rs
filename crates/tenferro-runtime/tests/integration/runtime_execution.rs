@@ -28,9 +28,9 @@ use tenferro_runtime::{
     TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendStorage, HostAccessError, HostReadGuard,
-    HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, StorageBuffer, Tensor,
-    TensorRead, TensorView, TypedTensor,
+    AllocationDomainId, AllocationId, BackendStorage, DotGeneralConfig, HostAccessError,
+    HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain,
+    StorageBuffer, Tensor, TensorRead, TensorView, TypedTensor,
 };
 
 /// The Rust scalar type behind a preset variant name a macro received.
@@ -3761,5 +3761,117 @@ fn an_engine_without_in_place_view_reads_keeps_metadata_commands() -> Result<(),
         outputs[0].as_slice::<f64>()?,
         &[9.0, 17.0, 25.0, 38.0, 46.0, 54.0]
     );
+    Ok(())
+}
+
+/// Outer products through the production prepare/run path.
+///
+/// `Runtime::prepare` runs the placement-aware metadata-view folding, so these also
+/// pin that a degenerate dot reaches execution with the right shapes and values.
+fn run_outer_product(
+    left: &TracedTensor,
+    right: &TracedTensor,
+    inputs: &[&Tensor],
+) -> Result<Vec<Tensor>, Box<dyn StdError>> {
+    let outer = left.dot_general(
+        right,
+        DotGeneralConfig {
+            lhs_contracting_dims: Default::default(),
+            rhs_contracting_dims: Default::default(),
+            lhs_batch_dims: Default::default(),
+            rhs_batch_dims: Default::default(),
+        },
+    )?;
+    let program = GraphCompiler::new().compile(&outer)?;
+    let mut backend = CpuEngine::serial();
+    let runtime = runtime_with_cpu(&backend)?;
+    Ok(run_compiled(
+        &mut [&mut backend],
+        &runtime,
+        &program,
+        inputs,
+    )?)
+}
+
+#[test]
+fn outer_product_of_a_truncated_operand_uses_the_truncated_length() -> Result<(), Box<dyn StdError>>
+{
+    let trace = TraceContext::new();
+    let x = trace.from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    let keep = trace.from_vec_col_major(vec![], vec![2.0_f64])?;
+    let other = trace.from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0])?;
+    let truncated = x.dynamic_truncate(&keep, 0)?;
+
+    let x_value = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    let keep_value = Tensor::from_vec_col_major(vec![], vec![2.0_f64])?;
+    let other_value = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0])?;
+    let output = run_outer_product(&truncated, &other, &[&x_value, &keep_value, &other_value])?;
+
+    assert_eq!(output[0].shape(), &[2, 3]);
+    assert_eq!(
+        tensor_f64_values(&output[0])?,
+        [10.0, 20.0, 20.0, 40.0, 30.0, 60.0]
+    );
+    Ok(())
+}
+
+#[test]
+fn outer_product_of_a_negated_truncation_uses_the_truncated_length() -> Result<(), Box<dyn StdError>>
+{
+    // `Neg` keeps its input's declared shape, so its extent precision must survive
+    // the shape inference; otherwise the outer product broadcasts to the untruncated
+    // length.
+    let trace = TraceContext::new();
+    let x = trace.from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    let keep = trace.from_vec_col_major(vec![], vec![2.0_f64])?;
+    let other = trace.from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0])?;
+    let shortened = x.dynamic_truncate(&keep, 0)?.neg()?;
+
+    let x_value = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    let keep_value = Tensor::from_vec_col_major(vec![], vec![2.0_f64])?;
+    let other_value = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0])?;
+    let output = run_outer_product(&shortened, &other, &[&x_value, &keep_value, &other_value])?;
+
+    assert_eq!(output[0].shape(), &[2, 3]);
+    assert_eq!(
+        tensor_f64_values(&output[0])?,
+        [-10.0, -20.0, -20.0, -40.0, -30.0, -60.0]
+    );
+    Ok(())
+}
+
+#[test]
+fn outer_product_of_a_reshaped_operand_reads_only_its_own_shape() -> Result<(), Box<dyn StdError>> {
+    // The reshape payload names its *own* input 0, which is the second program input.
+    let trace = TraceContext::new();
+    let scalar = trace.from_vec_col_major(vec![], vec![7.0_f64])?;
+    let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    let rows = x.sym_size(0)?;
+    let reshaped = x.reshape_sym(&[rows, tenferro_ops::SymDim::from(1usize)])?;
+    let outer = reshaped.dot_general(
+        &reshaped,
+        DotGeneralConfig {
+            lhs_contracting_dims: Default::default(),
+            rhs_contracting_dims: Default::default(),
+            lhs_batch_dims: Default::default(),
+            rhs_batch_dims: Default::default(),
+        },
+    )?;
+    let output = (&outer + &scalar)?;
+    let program = GraphCompiler::new().compile(&output)?;
+
+    let mut backend = CpuEngine::serial();
+    let runtime = runtime_with_cpu(&backend)?;
+    let scalar_value = Tensor::from_vec_col_major(vec![], vec![7.0_f64])?;
+    let x_value = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    let result = run_compiled(
+        &mut [&mut backend],
+        &runtime,
+        &program,
+        &[&scalar_value, &x_value],
+    )?;
+
+    assert_eq!(result[0].shape(), &[2, 1, 2, 1]);
+    assert_eq!(tensor_f64_values(&result[0])?, [8.0, 9.0, 9.0, 11.0]);
     Ok(())
 }
