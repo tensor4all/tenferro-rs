@@ -81,6 +81,16 @@ pub(crate) fn finish_value(
     );
     let derived = metadata_sym_shape(&metadata);
     let symbolic_id = next_symbolic_id();
+    // An extent the program only bounds must not resurface as a concrete shape, and a
+    // caller-supplied hint describes the shape the caller asked for, not the precision
+    // the program proved: drop it unless every extent is exact.
+    let hint = if crate::shape_infer::extent_precision(metadata.shape().iter())
+        == crate::shape_infer::ExtentPrecision::Exact
+    {
+        hint
+    } else {
+        None
+    };
     Ok(TracedTensor {
         ctx: ctx.clone(),
         value,
