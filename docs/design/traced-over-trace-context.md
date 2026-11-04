@@ -396,13 +396,18 @@ defaults) but no longer drives extent resolution: import copies the source's
 declared extents and translates their `InputDim`s into destination input
 positions, so a transformed program never inherits the bound shapes. The bindings
 are attached during the import itself rather than afterwards with
-`with_input_prefix_bindings_from`. The four derivative rules that must emit
-literal lengths (slice, pad, concatenate, dynamic update) read them from those
-bindings through `SemanticProgramBuilder::resolved_extents`, and a symbolic
-`Reshape`/`BroadcastInDim` payload is translated from program input positions
-into the consuming operation's own input coordinates. The derivative program is
+`with_input_prefix_bindings_from`, and a symbolic `Reshape`/`BroadcastInDim`
+payload is translated from program input positions into the consuming
+operation's own input coordinates. A derivative built from symbolic extents is
 therefore shape-polymorphic, including for a symbolically declared input that
 carries data.
+
+One limit stays: a rule whose *op payload* is a literal cannot be polymorphic.
+`Slice`, `Pad`, `DynamicSlice` and the concatenate transpose take `usize` offsets
+and sizes, so those rules read the lengths from the bindings through
+`SemanticProgramBuilder::resolved_extents` and the resulting derivative is
+specialised to the binding present at differentiation time. Everything derived
+from extents (`Reshape`, `BroadcastInDim`, `DynamicTruncate`) stays symbolic.
 
 As built, dead extension outputs are pruned at **snapshot** time, so the graph a
 snapshot exposes (and therefore the primal program a caller compiles) already

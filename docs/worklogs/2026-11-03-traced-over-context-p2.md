@@ -58,7 +58,9 @@
   earlier note that the final remap alone kept concrete extents out of the traced
   program was wrong: the payloads copied from concretised metadata survived the
   remap, and a derivative of a bound symbolic input was specialised to that
-  binding (review of #2432, finding 6).
+  binding (review of #2432, finding 6). Rules whose payload is a literal
+  (`Slice`, `Pad`, `DynamicSlice`, concatenate transpose) remain binding-specialised
+  by construction; see the design note in `traced-over-trace-context.md`.
 
 ### Open items at this checkpoint
 
