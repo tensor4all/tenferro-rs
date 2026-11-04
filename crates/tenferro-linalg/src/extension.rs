@@ -260,6 +260,8 @@ pub enum EighDriver {
     /// uses `cusolverDnXsyevBatched`, which solves the whole batch in one
     /// launch at the same accuracy. On an A100 that is about 100x to 280x
     /// faster than the per-matrix loop this default used before.
+    /// An older cuSOLVER that does not export `cusolverDnXsyevBatched` still
+    /// opens and takes the per-matrix loop for a batch (issue #2413).
     ///
     /// The batched routine is a different cuSOLVER entry point, so batched
     /// results can differ from the per-matrix loop in the last ULPs.

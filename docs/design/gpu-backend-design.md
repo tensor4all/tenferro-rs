@@ -257,11 +257,13 @@ values. The existing `svd_full` API has no driver option and uses `Auto`; full
 Xgesvdp factors are covered internally without extending that public API.
 
 CUDA eigh routes by batch count, not by order. A real batch
-(`batch_total > 1`) always takes a batched cuSOLVER routine, because that
-replaces one launch per matrix with a single launch; a single matrix keeps the
-per-matrix entry point. Which batched routine depends only on the driver:
-`EighDriver::Auto` and `Syevd` take divide-and-conquer
-`cusolverDnXsyevBatched`, and `Syevj` takes Jacobi `syevjBatched`.
+(`batch_total > 1`) takes a batched cuSOLVER routine whenever the loaded
+library exports one, because that replaces one launch per matrix with a single
+launch; a single matrix keeps the per-matrix entry point. Which batched routine
+depends only on the driver: `EighDriver::Auto` and `Syevd` take
+divide-and-conquer `cusolverDnXsyevBatched`, and `Syevj` takes Jacobi
+`syevjBatched`. A cuSOLVER that exports neither (older than 11.7.1) still
+opens, and a real batch then takes the per-matrix `syevd` loop (issue #2413).
 
 There is deliberately no size threshold. An earlier revision capped batched
 Jacobi at order 32 and described that as a cuSOLVER restriction; issue #1852
@@ -277,14 +279,19 @@ same algorithm at the same accuracy, and it made the default about 100x to
 280x faster on batches (105 ms to 0.37 ms for 1024 8x8 `f64`; 70 ms to 0.69 ms
 for 256 32x32). `Syevj` retains a narrow advantage only up to about order 32.
 
-`cusolverDnXsyevBatched` requires cuSOLVER 11.7.1 or newer, which is why the
-supported CUDA floor is 12.6.2. That is a library floor: the loader resolves
-cuSOLVER at runtime, and CUDA 12.x supports the same GPU architectures
-throughout, so no hardware or driver requirement changes. Making the symbol
-optional was rejected — the cuSOLVER loader treats every symbol as mandatory,
-so an optional entry point would need a second loading mode, and leaving the
-floor at 12.4 with a mandatory symbol would turn a missing optimisation into a
-total cuSOLVER load failure.
+`cusolverDnXsyevBatched` first ships in cuSOLVER 11.7.1 (CUDA 12.6 Update 2),
+so it is an optional capability, not a load requirement (issues #1852,
+#2413). The loader resolves the two batched entry points without failing, and
+enables them only when both resolve *and* the library reports a version of at
+least 11701. A library below that boundary still opens, and `geqrf`, `orgqr`,
+`syevd` and `gesvd` keep working: only a real batch of divide-and-conquer eigh
+falls back to the per-matrix `syevd` loop, logged at open time as
+`cuSOLVER <version>: batched eigh unavailable, using per-matrix syevd`. The
+fallback is chosen at execution time from that capability rather than from the
+link call, so a host that resolves the symbols but reports an older version
+takes the same path. The CUDA 12.6.2 baseline the guide names is the toolkit
+the CI images pin, not a loader-enforced floor; CUDA 12.x supports the same GPU
+architectures throughout, so no hardware or driver requirement follows.
 
 As with the SVD driver, the eigh driver is part of the traced op identity and
 survives pruning to the values-only op, and CPU providers ignore it.

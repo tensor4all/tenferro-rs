@@ -225,10 +225,13 @@ and [`runpod-gpu-test.yml`](https://github.com/tensor4all/tenferro-rs/blob/main/
 Use NVIDIA's [CUDA compatibility documentation](https://docs.nvidia.com/deploy/cuda-compatibility/)
 to map a driver release to the CUDA API levels it supports; tenferro's 12.6.2
 minimum can be narrower than NVIDIA's general minor-version compatibility. It
-is a *library* floor, not a GPU one: CUDA 12.x supports the same architectures
-throughout, and tenferro `dlopen`s cuSOLVER, so a cuSOLVER >= 11.7.1 package is
-enough. The floor exists because `cusolverDnXsyevBatched`, which every batched
-eigh now uses, first ships in that version (issue #1852).
+is a *library* baseline, not a GPU one: CUDA 12.x supports the same
+architectures throughout, and tenferro `dlopen`s cuSOLVER.
+`cusolverDnXsyevBatched`, the batched divide-and-conquer eigh that first ships
+in cuSOLVER 11.7.1 (CUDA 12.6.2), is an optional capability: an older cuSOLVER
+still opens, `geqrf`, `orgqr`, `syevd` and `gesvd` keep working, and only a real
+batch of divide-and-conquer eigh falls back to the per-matrix `syevd` loop
+(issue #2413). The 12.6.2 figure is the toolkit the CI images pin.
 tenferro compiles against CUDA 12.8 `cudarc` bindings, resolves driver
 functions dynamically, and gates newer functions using the loaded driver and
 NVRTC versions.
