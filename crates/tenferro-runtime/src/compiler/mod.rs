@@ -566,12 +566,30 @@ fn resolve_output_extents(
     input_shapes: &[&[DimExpr]],
     input_extents: &[&[ShapeExtent<DimExpr>]],
 ) -> Result<Vec<Vec<ShapeExtent<DimExpr>>>> {
+    // An operation that keeps its input's shape still only knows an upper bound
+    // when that input was bounded: `DynamicTruncate` declares `[4]` and holds two
+    // elements, so a `Neg` of it must not report `[4]` as exact. Nothing in the
+    // expression algebra can recover that, so the whole instruction is downgraded
+    // whenever any input is imprecise. Exactness is never claimed, only withheld.
+    let inputs_are_exact = input_extents.iter().all(|shape| {
+        shape
+            .iter()
+            .all(|extent| matches!(extent, ShapeExtent::Exact(_)))
+    });
     extents
         .into_iter()
         .map(|shape_extents| {
             shape_extents
                 .into_iter()
-                .map(|extent| resolve_extent(extent, input_shapes, input_extents))
+                .map(|extent| {
+                    let resolved = resolve_extent(extent, input_shapes, input_extents)?;
+                    Ok(match resolved {
+                        ShapeExtent::Exact(dim) if !inputs_are_exact => {
+                            ShapeExtent::upper_bound(dim)
+                        }
+                        other => other,
+                    })
+                })
                 .collect()
         })
         .collect()
