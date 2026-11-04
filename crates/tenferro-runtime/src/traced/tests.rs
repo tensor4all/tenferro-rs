@@ -590,7 +590,10 @@ fn symbolic_reshape_of_a_computed_value_resolves_its_own_axes() {
         assert_eq!(result.shape(), shape.as_slice());
         assert_eq!(
             result.as_slice::<f64>().unwrap(),
-            data.iter().map(|value| -value).collect::<Vec<_>>().as_slice()
+            data.iter()
+                .map(|value| -value)
+                .collect::<Vec<_>>()
+                .as_slice()
         );
     }
 }

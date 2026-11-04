@@ -752,11 +752,18 @@ fn import_maps_source_input_positions_not_value_slots() {
         axis: 0,
     })];
     assert_eq!(
-        program.value_metadata(program.outputs()[1]).unwrap().shape(),
+        program
+            .value_metadata(program.outputs()[1])
+            .unwrap()
+            .shape(),
         &expected,
         "an imported extent must keep naming the source input it came from"
     );
-    assert_eq!(program.shape_guards().len(), 1, "the source guard must survive");
+    assert_eq!(
+        program.shape_guards().len(),
+        1,
+        "the source guard must survive"
+    );
     assert_eq!(
         program.shape_guards()[0].lhs(),
         &DimExpr::InputDim {
@@ -794,7 +801,10 @@ fn import_numbers_new_inputs_after_the_destination_inputs() {
         axis: 0,
     })];
     assert_eq!(
-        program.value_metadata(program.outputs()[0]).unwrap().shape(),
+        program
+            .value_metadata(program.outputs()[0])
+            .unwrap()
+            .shape(),
         &expected,
         "an imported extent must point at the imported input, not a destination input"
     );
