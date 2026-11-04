@@ -374,6 +374,7 @@ fn rewrite_degenerate_dot(
             output_extents: vec![instr.output_extents[0].clone()].into_iter().collect(),
             last_use: Vec::new(),
             input_views: Vec::new(),
+            effectful: false,
         });
         return Ok(true);
     }
@@ -416,6 +417,7 @@ fn rewrite_degenerate_dot(
             output_extents: vec![instr.output_extents[0].clone()].into_iter().collect(),
             last_use: Vec::new(),
             input_views: Vec::new(),
+            effectful: false,
         });
         return Ok(true);
     }
@@ -450,6 +452,7 @@ fn rewrite_degenerate_dot(
         output_extents: vec![transposed_extents.clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     let transposed = EmittedOperand {
         slot: transposed_slot,
@@ -468,6 +471,7 @@ fn rewrite_degenerate_dot(
         output_extents: vec![instr.output_extents[0].clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     Ok(true)
 }
@@ -516,6 +520,7 @@ fn emit_broadcast(
         output_shapes: vec![shape.clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     EmittedOperand {
         slot: out_slot,
@@ -541,6 +546,7 @@ fn rewrite_full_contraction(input: DotDecomposeInput<'_>, builder: &mut Instruct
         output_extents: vec![lhs_operand.extents.clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     builder.push(ExecInstruction {
         op: ExecOp::ReduceSum {
@@ -554,6 +560,7 @@ fn rewrite_full_contraction(input: DotDecomposeInput<'_>, builder: &mut Instruct
         output_extents: vec![instr.output_extents[0].clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
 }
 
@@ -583,6 +590,7 @@ fn emit_conj_if_needed(
         output_extents: vec![operand.extents.to_vec()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     EmittedOperand {
         slot: out_slot,
@@ -741,6 +749,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
         output_extents: vec![canonical_output_extents].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
 
     if needs_output_reshape {
@@ -776,6 +785,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
             output_extents: instr.output_extents.clone(),
             last_use: Vec::new(),
             input_views: Vec::new(),
+            effectful: false,
         });
     }
     Ok(())
@@ -817,6 +827,7 @@ fn emit_transpose_if_needed(
         output_extents: vec![transposed_extents.clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     EmittedOperand {
         slot: out_slot,
@@ -852,6 +863,7 @@ fn emit_merge_reshape(
         output_extents: vec![output_extents_meta.clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     EmittedOperand {
         slot: out_slot,

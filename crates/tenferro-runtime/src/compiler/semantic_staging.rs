@@ -5,7 +5,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeExtent;
 
-use crate::compiler::{compile_std_to_exec_with_options_and_constraints, CompilerOptions};
+use crate::compiler::{compile_std_to_exec_with_effects, CompilerOptions};
 use crate::exec::ExecProgram;
 use crate::program::{ProgramShapeRelation, SemanticOpRef, SemanticProgram};
 use crate::shape_constraint::{ConstraintSource, LocalShapeConstraint, SlotScopedShapeConstraint};
@@ -50,6 +50,7 @@ fn build_exec_staging(program: &SemanticProgram, options: CompilerOptions) -> Re
 
     let mut instructions = Vec::with_capacity(program.operations().len());
     let mut semantic_constraints = Vec::new();
+    let mut effectful = Vec::with_capacity(program.operations().len());
     for semantic_operation in program.operations() {
         let inputs = semantic_operation
             .inputs()
@@ -103,6 +104,7 @@ fn build_exec_staging(program: &SemanticProgram, options: CompilerOptions) -> Re
                 },
             });
         }
+        effectful.push(!semantic_operation.effects().is_empty());
         instructions.push(Instruction {
             operation,
             inputs,
@@ -126,7 +128,7 @@ fn build_exec_staging(program: &SemanticProgram, options: CompilerOptions) -> Re
         output_slots,
         n_slots: slots.len(),
     };
-    compile_std_to_exec_with_options_and_constraints(
+    compile_std_to_exec_with_effects(
         &staged,
         &input_dtypes,
         &input_shapes,
@@ -134,6 +136,7 @@ fn build_exec_staging(program: &SemanticProgram, options: CompilerOptions) -> Re
         &semantic_constraints,
         &analysis_input_shapes,
         false,
+        &effectful,
     )
 }
 

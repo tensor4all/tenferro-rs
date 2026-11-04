@@ -113,6 +113,7 @@ fn instruction(
         output_extents: Default::default(),
         last_use: vec![last_use],
         input_views: Vec::new(),
+        effectful: false,
     }
 }
 
@@ -246,6 +247,7 @@ fn operation_dependencies_follow_input_order_and_are_deduplicated() {
                 output_extents: Default::default(),
                 last_use: vec![true, true, true],
                 input_views: Vec::new(),
+                effectful: false,
             },
         ],
         input_slots: vec![0],

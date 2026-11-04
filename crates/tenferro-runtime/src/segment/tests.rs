@@ -34,6 +34,7 @@ fn broadcast_with_shape(
         output_extents: vec![exact_extents(shape)].into_iter().collect(),
         last_use: vec![true],
         input_views: Vec::new(),
+        effectful: false,
     }
 }
 
@@ -48,6 +49,7 @@ fn multiply_with_shape(lhs: usize, rhs: usize, output: usize, shape: &[usize]) -
         output_extents: vec![exact_extents(shape)].into_iter().collect(),
         last_use: vec![true, true],
         input_views: Vec::new(),
+        effectful: false,
     }
 }
 
@@ -62,6 +64,7 @@ fn add_with_shape(lhs: usize, rhs: usize, output: usize, shape: &[usize]) -> Exe
         output_extents: vec![exact_extents(shape)].into_iter().collect(),
         last_use: vec![true, true],
         input_views: Vec::new(),
+        effectful: false,
     }
 }
 
@@ -86,6 +89,7 @@ fn broadcast(input: usize, output: usize, dims: Vec<usize>) -> ExecInstruction {
         .collect(),
         last_use: vec![true],
         input_views: Vec::new(),
+        effectful: false,
     }
 }
 
@@ -107,6 +111,7 @@ fn multiply(lhs: usize, rhs: usize, output: usize) -> ExecInstruction {
         .collect(),
         last_use: vec![true, true],
         input_views: Vec::new(),
+        effectful: false,
     }
 }
 
@@ -128,6 +133,7 @@ fn fused_segment_with_a_foreign_input_dtype_declines_fusion() {
                 output_extents: vec![exact_extents(&[2, 2])].into_iter().collect(),
                 last_use: vec![true],
                 input_views: Vec::new(),
+                effectful: false,
             },
             ExecInstruction {
                 op: ExecOp::BroadcastInDim {
@@ -142,6 +148,7 @@ fn fused_segment_with_a_foreign_input_dtype_declines_fusion() {
                 output_extents: vec![exact_extents(&[])].into_iter().collect(),
                 last_use: vec![true],
                 input_views: Vec::new(),
+                effectful: false,
             },
             multiply_with_shape(3, 2, 4, &[2, 2]),
         ],
@@ -365,6 +372,7 @@ fn elementwise_fusion_plan_declines_other_folded_views() {
         output_extents: vec![exact_extents(&[2, 2])].into_iter().collect(),
         last_use: vec![true],
         input_views: Vec::new(),
+        effectful: false,
     };
     exp.input_views = vec![(0, InputView::Transpose { perm: vec![1, 0] })];
     let instructions = vec![exp, add_with_shape(1, 1, 2, &[2, 2])];
@@ -404,6 +412,7 @@ fn folded_broadcast_multiply_keeps_its_segment_boundary() {
                 output_extents: vec![exact_extents(&[2, 2])].into_iter().collect(),
                 last_use: vec![true],
                 input_views: Vec::new(),
+                effectful: false,
             },
             multiply,
             ExecInstruction {
@@ -416,6 +425,7 @@ fn folded_broadcast_multiply_keeps_its_segment_boundary() {
                 output_extents: vec![exact_extents(&[2, 2])].into_iter().collect(),
                 last_use: vec![true],
                 input_views: Vec::new(),
+                effectful: false,
             },
         ],
         input_slots: vec![0, 2, 3],

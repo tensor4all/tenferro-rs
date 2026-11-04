@@ -24,6 +24,7 @@ fn dot_general_exec_instr(
         output_shapes: vec![output_shape].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     }
 }
 
@@ -214,6 +215,7 @@ fn test_dot_decomposer_preserves_upper_bound_extents_in_merge_reshape() {
         .collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     };
     let dot = dot_general_exec_instr(
         vec![2],

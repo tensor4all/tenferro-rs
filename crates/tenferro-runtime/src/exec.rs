@@ -42,6 +42,11 @@ pub struct ExecInstruction {
     /// the moment it reads the operand. Empty for every instruction that reads
     /// its inputs as they are, which keeps the common path to one branch.
     pub input_views: Vec<(usize, InputView)>,
+    /// This instruction performs an observable effect.
+    ///
+    /// Its outputs may have no consumer, so dead-code elimination keeps it: the
+    /// effect is the reason it was requested.
+    pub effectful: bool,
 }
 
 /// A metadata-only transform of one operand.
