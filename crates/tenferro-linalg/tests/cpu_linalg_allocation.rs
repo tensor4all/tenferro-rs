@@ -296,9 +296,47 @@ const REMAINING_FAMILY_CEILINGS: &[(&str, usize)] = &[
     ("blas/eig/complex32", 8),
 ];
 
+/// Steady-state ceilings measured on `aarch64` (macOS, `libmalloc`), rustc 1.96.0.
+///
+/// Only the `faer` cases move, and every one that moves is a case that returns factor
+/// matrices; the byte totals stay far below one problem-sized buffer (`48 x 48` f64 is
+/// 18 KiB, and `faer/svd/48` peaks at 11 KiB across 33 allocations), so this is not a
+/// missed workspace or a scratch buffer taken per call. What grows with the arch is the
+/// *number* of small allocations the factor paths make: faer's blocking and its `Vec`
+/// growth both differ between a NEON and an AVX2 build, and macOS `libmalloc` rounds a
+/// growing `Vec` differently from glibc. Those mechanisms are inferred from the byte
+/// profile, not established by a controlled experiment, and this budget is keyed on the
+/// arch as agreed while the two CI baselines (Linux x86_64) stay untouched. A Linux
+/// `aarch64` host has not been measured, so it would need its own row.
+#[cfg(target_arch = "aarch64")]
+const ARCH_CEILING_OVERRIDES: &[(&str, usize)] = &[
+    ("faer/lu_factor/48", 4),
+    ("faer/lu_solve_prepared/48", 9),
+    ("faer/lu_factor_solve/48", 12),
+    ("faer/svd/48", 33),
+    ("faer/svd/tall", 18),
+    ("faer/svdvals/tall", 4),
+    ("faer/triangular_solve/48", 3),
+    ("faer/lu/48", 5),
+    ("faer/full_piv_lu_solve/48", 7),
+    ("faer/solve/48", 10),
+    ("faer/qr/48", 29),
+    ("faer/qr/tall", 18),
+    ("faer/rank_revealing_qr/tall", 15),
+    ("faer/eigh/48", 18),
+    ("faer/eig/48", 32),
+    ("faer/solve/complex32", 5),
+    ("faer/eig/complex32", 8),
+];
+
+/// No override on an arch whose baseline is the recorded one.
+#[cfg(not(target_arch = "aarch64"))]
+const ARCH_CEILING_OVERRIDES: &[(&str, usize)] = &[];
+
 fn ceiling(name: &str) -> usize {
-    F64_LU_CEILINGS
+    ARCH_CEILING_OVERRIDES
         .iter()
+        .chain(F64_LU_CEILINGS)
         .chain(REMAINING_FAMILY_CEILINGS)
         .find(|(case, _)| *case == name)
         .map(|(_, ceiling)| *ceiling)
