@@ -1261,3 +1261,79 @@ fn symbolic_irfft_with_a_positive_resolved_extent_still_prepares() {
         .unwrap();
     assert_eq!(output.shape(), &[4]);
 }
+
+/// A zero on the batch axis is a legitimate empty transform, not an invalid extent.
+///
+/// `irfft` transforms the last axis only, so a symbolic `[0, 3]` spectrum infers
+/// `[0, 4]`: the leading zero is an empty batch that the design allows
+/// (`docs/design/fft-backend-execution.md`) and the CPU lanes return early for, while
+/// the transformed axis carries the positive length 4. Preparation must accept it
+/// (#2449 narrowed an over-broad guard here).
+#[test]
+fn symbolic_irfft_over_an_empty_batch_prepares_and_runs() {
+    let trace = tenferro_runtime::TraceContext::new();
+    let symbolic = trace.input_symbolic_shape(DType::C64, 2).unwrap();
+    let output = symbolic.irfft(None, -1, FftNorm::Backward).unwrap();
+    assert_eq!(
+        output.sym_shape().map(<[_]>::len),
+        Some(2),
+        "the transform keeps the batch rank"
+    );
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&output).unwrap();
+
+    let mut engine = CpuEngine::serial();
+    let runtime = support::cpu_runtime_with_fft(&engine).unwrap();
+    let spectrum = Tensor::from_vec_col_major(vec![0, 3], Vec::<Complex64>::new()).unwrap();
+    let reads = [tenferro_tensor::TensorRead::from_tensor(&spectrum)];
+    let prepared = runtime
+        .prepare(&program, &reads, &[engine.target()])
+        .expect("an empty batch is a legitimate input");
+    let outputs = runtime
+        .run(
+            &mut [&mut engine as &mut dyn ExecutionEngine],
+            &prepared,
+            &reads,
+        )
+        .unwrap();
+    assert_eq!(outputs.len(), 1);
+    let tensor = outputs
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_tensor(&mut engine)
+        .unwrap();
+    assert_eq!(tensor.shape(), &[0, 4]);
+}
+
+/// The concrete route takes the same decision for the same numbers.
+#[test]
+fn concrete_irfft_over_an_empty_batch_prepares_and_runs() {
+    let trace = tenferro_runtime::TraceContext::new();
+    let concrete = trace.input_concrete_shape(DType::C64, &[0, 3]).unwrap();
+    let output = concrete.irfft(None, -1, FftNorm::Backward).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&output).unwrap();
+
+    let mut engine = CpuEngine::serial();
+    let runtime = support::cpu_runtime_with_fft(&engine).unwrap();
+    let spectrum = Tensor::from_vec_col_major(vec![0, 3], Vec::<Complex64>::new()).unwrap();
+    let reads = [tenferro_tensor::TensorRead::from_tensor(&spectrum)];
+    let prepared = runtime
+        .prepare(&program, &reads, &[engine.target()])
+        .expect("a concrete empty batch must take the symbolic route's decision");
+    let outputs = runtime
+        .run(
+            &mut [&mut engine as &mut dyn ExecutionEngine],
+            &prepared,
+            &reads,
+        )
+        .unwrap();
+    let tensor = outputs
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_tensor(&mut engine)
+        .unwrap();
+    assert_eq!(tensor.shape(), &[0, 4]);
+}
