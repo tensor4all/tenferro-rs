@@ -177,3 +177,6 @@ pub fn apply_standard_op(op: StdTensorOp, inputs: &[&TracedTensor]) -> Result<Ve
         .map(|&value| finish_derived(&first.ctx, value))
         .collect()
 }
+
+#[cfg(test)]
+mod tests;
