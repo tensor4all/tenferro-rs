@@ -136,11 +136,9 @@ pub(crate) fn finish_bound_value(
 
 /// Rebuild a symbolic extent from a program dimension expression.
 ///
-/// Program extents name inputs by program input index; the traced layer names the
-/// same axis by that index as its symbolic tensor id, so
-/// [`SymDim::to_dim_expr`](tenferro_ops::SymDim::to_dim_expr) round-trips with the
-/// identity tensor map.
-/// Rebuild a symbolic extent from a program dimension expression.
+/// Program extents name program inputs by position, so the result names those
+/// positions as tensor ids; a consumer translates them into its own coordinates
+/// with an explicit tensor map.
 ///
 /// Owner-scoped hook for the traced AD layer, which validates seed metadata
 /// against program extents.

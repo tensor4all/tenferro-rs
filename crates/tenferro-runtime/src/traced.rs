@@ -1953,12 +1953,12 @@ impl TracedTensor {
 
     /// Return the full symbolic shape of this tensor when it is known.
     ///
-    /// Every traced value carries its symbolic extents: a constant leaf reports
-    /// constant extents, a symbolic placeholder reports one
-    /// [`SymDim::tensor_axis`] per axis, and an operation reports whatever the
-    /// builder inferred. `None` only appears for a value whose extents the
-    /// builder left unknown; build those axis-by-axis via
-    /// [`Self::axis_sym_dim`].
+    /// Every traced value carries its symbolic extents: a constant axis reports
+    /// its constant size, and every other axis reports a [`SymDim::tensor_axis`]
+    /// naming this handle's own axis, whatever the builder inferred, so a shape
+    /// built from several handles can be converted without confusing them. `None`
+    /// only appears for a value whose extents the builder left unknown; build
+    /// those axis-by-axis via [`Self::axis_sym_dim`].
     ///
     /// # Examples
     ///

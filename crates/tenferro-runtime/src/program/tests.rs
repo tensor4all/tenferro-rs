@@ -1014,6 +1014,10 @@ fn snapshot_keeps_an_effectful_operation_with_no_outputs() {
         "an operation whose only observable result is its effect must survive a snapshot"
     );
     assert_eq!(frozen.program.inputs().len(), 1);
+
+    // execution-staging-shortcoming: the execution pipeline still rejects a
+    // zero-output instruction, so this shape fails loudly at preparation rather than
+    // running. The snapshot contract above is what must hold either way.
 }
 
 #[test]

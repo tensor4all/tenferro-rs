@@ -46,6 +46,10 @@ pub struct ExecInstruction {
     ///
     /// Its outputs may have no consumer, so dead-code elimination keeps it: the
     /// effect is the reason it was requested.
+    ///
+    /// shortcoming: an unconsumed output is reclaimed only at the end of the run, so
+    /// repeated effectful calls retain one output buffer each; include these slots in
+    /// `last_use` reclamation if that becomes measurable.
     pub effectful: bool,
 }
 
