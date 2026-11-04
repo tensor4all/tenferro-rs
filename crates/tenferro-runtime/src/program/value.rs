@@ -15,6 +15,10 @@ impl ProgramBuilderNonce {
             }
         }
     }
+
+    pub(crate) const fn raw(self) -> u64 {
+        self.0
+    }
 }
 
 /// An opaque SSA value owned by one semantic-program builder.

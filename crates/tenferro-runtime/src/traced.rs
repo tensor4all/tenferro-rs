@@ -629,10 +629,7 @@ impl TracedTensor {
 
     /// Symbolic tensor id used for rank-only shape hints.
     fn symbolic_id(&self) -> u64 {
-        self.ctx
-            .input_index(self.value)
-            .map(|index| index as u64)
-            .unwrap_or(u64::MAX)
+        crate::trace_ops::symbolic_id(self.value.program_value())
     }
 
     /// Returns `true` iff every dim of this tensor's `shape_hint` is a

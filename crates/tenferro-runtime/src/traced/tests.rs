@@ -568,3 +568,65 @@ fn slice_rejects_a_limit_beyond_a_concrete_operand_extent_when_the_graph_is_buil
         .unwrap();
     assert_eq!(sliced.rank, 1);
 }
+
+#[test]
+fn symbolic_reshape_of_a_computed_value_resolves_its_own_axes() {
+    let trace = crate::TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    let y = x.neg().unwrap();
+    let target = [y.sym_size(0).unwrap(), y.sym_size(1).unwrap()];
+    let reshaped = y
+        .reshape_sym(&target)
+        .expect("a computed value's own axes must convert to its reshape coordinates");
+
+    let mut compiler = GraphCompiler::new();
+    for shape in [vec![2usize, 3], vec![4, 5]] {
+        let program = compiler
+            .compile_with_input_specs(&reshaped, &[(&x, DType::F64, &shape)])
+            .unwrap();
+        let data: Vec<f64> = (0..shape[0] * shape[1]).map(|i| i as f64).collect();
+        let input = Tensor::from_vec_col_major(shape.clone(), data.clone()).unwrap();
+        let result = run_compiled_one(&program, vec![input]);
+        assert_eq!(result.shape(), shape.as_slice());
+        assert_eq!(
+            result.as_slice::<f64>().unwrap(),
+            data.iter().map(|value| -value).collect::<Vec<_>>().as_slice()
+        );
+    }
+}
+
+#[test]
+fn broadcast_in_dim_sym_keeps_computed_shape_references_distinct() {
+    let trace = crate::TraceContext::new();
+    // Both operands are computed, so neither is identified by an input index.
+    let a = trace
+        .from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])
+        .unwrap()
+        .neg()
+        .unwrap();
+    let b = trace
+        .from_vec_col_major(vec![1, 3], vec![1.0_f64, 2.0, 3.0])
+        .unwrap()
+        .neg()
+        .unwrap();
+    let target = [
+        a.sym_size(0).unwrap(),
+        a.sym_size(1).unwrap(),
+        b.sym_size(1).unwrap(),
+    ];
+    let output = a.broadcast_in_dim_sym(&target, &[0, 1], &[&b]).unwrap();
+
+    let program = GraphCompiler::new().compile(&output).unwrap();
+    let result = run_compiled_one(
+        &program,
+        vec![
+            Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]).unwrap(),
+            Tensor::from_vec_col_major(vec![1, 3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
+        ],
+    );
+    assert_eq!(result.shape(), &[2, 1, 3]);
+    assert_eq!(
+        result.as_slice::<f64>().unwrap(),
+        &[-1.0, -2.0, -1.0, -2.0, -1.0, -2.0]
+    );
+}

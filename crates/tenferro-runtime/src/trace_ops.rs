@@ -85,7 +85,7 @@ pub(crate) fn finish_value(
         value,
         rank: metadata.shape().len(),
         dtype: metadata.dtype(),
-        shape_hint: derived.or(hint),
+        shape_hint: restamp_hint(derived.or(hint), symbolic_id(value.program_value())),
         data: None,
     })
 }
@@ -157,6 +157,36 @@ pub(crate) fn dim_expr_to_sym_dim(expr: &DimExpr) -> Option<SymDim> {
         DimExpr::FloorDiv(lhs, rhs) => dim_expr_to_sym_dim(lhs)? / dim_expr_to_sym_dim(rhs)?,
         DimExpr::Min(lhs, rhs) => dim_expr_to_sym_dim(lhs)?.min(dim_expr_to_sym_dim(rhs)?),
         DimExpr::Max(lhs, rhs) => dim_expr_to_sym_dim(lhs)?.max(dim_expr_to_sym_dim(rhs)?),
+    })
+}
+
+/// Symbolic identity of one traced value.
+///
+/// A value's slot is unique and stable inside its context, and the owning
+/// builder nonce keeps two contexts' identities apart, so a foreign
+/// [`SymDim`] fails to convert instead of naming a local value.
+pub(crate) fn symbolic_id(value: crate::program::ProgramValue) -> u64 {
+    (value.owner.raw() << 32) | u64::from(value.slot)
+}
+
+/// Re-express a symbolic shape in terms of the value that owns it.
+///
+/// `sym_size`/`axis_sym_dim` must hand back expressions that a *consumer* of this
+/// value can convert into its own input coordinates, so every non-constant axis
+/// names this value's axis instead of the axes of the operation that produced it.
+fn restamp_hint(hint: Option<Vec<SymDim>>, own_id: u64) -> Option<Vec<SymDim>> {
+    hint.map(|shape| {
+        shape
+            .into_iter()
+            .enumerate()
+            .map(|(axis, dim)| {
+                if dim.constant_value().is_some() {
+                    dim
+                } else {
+                    SymDim::tensor_axis(own_id, axis)
+                }
+            })
+            .collect()
     })
 }
 
