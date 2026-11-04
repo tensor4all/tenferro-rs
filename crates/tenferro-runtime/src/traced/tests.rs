@@ -740,8 +740,11 @@ fn fixed_shape_outer_product_folds_its_broadcasts_into_views() {
     let program = GraphCompiler::new().compile(&outer).unwrap();
     let mut staged = stage_semantic_program(program.program(), program.compiler_options()).unwrap();
 
-    // A literal target must stay a metadata view: `PreparedProgramRoot::new` folds
-    // exactly this way, and a multi-input broadcast would be refused there.
+    // A literal target must stay foldable. This calls the pass
+    // `PreparedProgramRoot::new` runs with the placement predicate always true, so it
+    // pins the program shape that decides buffering, not the placement check itself:
+    // a multi-input broadcast is refused by that pass and would keep its own buffer,
+    // and a single-input constant-target broadcast folds into a view.
     for instruction in &staged.instructions {
         if matches!(instruction.op, ExecOp::BroadcastInDim { .. }) {
             assert_eq!(
@@ -781,5 +784,49 @@ fn fixed_shape_outer_product_folds_its_broadcasts_into_views() {
     assert_eq!(
         result.as_slice::<f64>().unwrap()[..5],
         [1.0, 2.0, 3.0, 4.0, 5.0]
+    );
+}
+
+#[test]
+fn outer_product_of_a_truncated_operand_broadcasts_to_the_truncated_length() {
+    // `DynamicTruncate` keeps the declared shape but narrows the extent to an upper
+    // bound, so the value is shorter than its shape says. A literal target built from
+    // the shape would broadcast to 4 and fail; it must use the bound.
+    let trace = crate::TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])
+        .unwrap();
+    let keep = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let truncated = x.dynamic_truncate(&keep, 0).unwrap();
+    assert_eq!(truncated.rank, 1);
+    let other = trace
+        .from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0])
+        .unwrap();
+    let outer = truncated
+        .dot_general(
+            &other,
+            DotGeneralConfig {
+                lhs_contracting_dims: Default::default(),
+                rhs_contracting_dims: Default::default(),
+                lhs_batch_dims: Default::default(),
+                rhs_batch_dims: Default::default(),
+            },
+        )
+        .unwrap();
+
+    let program = GraphCompiler::new().compile(&outer).unwrap();
+    let result = run_compiled_one(
+        &program,
+        vec![
+            Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+            Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap(),
+            Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap(),
+        ],
+    );
+    assert_eq!(result.shape(), &[2, 3]);
+    // Column-major [2, 3]: (i, j) = x_i * y_j with x = [1, 2].
+    assert_eq!(
+        result.as_slice::<f64>().unwrap(),
+        &[10.0, 20.0, 20.0, 40.0, 30.0, 60.0]
     );
 }

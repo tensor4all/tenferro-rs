@@ -402,7 +402,7 @@ fn rewrite_degenerate_dot(
         // stays a one-input view; otherwise the payload names its own inputs, the
         // operand at 0 and the partner at 1, read only for its axes. Either way no
         // payload depends on whether the metadata names program slots.
-        let literal = literal_target(&[(0, &lhs_operand), (1, &rhs_operand)]);
+        let literal = literal_target(&[&lhs_operand, &rhs_operand]);
         let (lhs_inputs, lhs_target) = match &literal {
             Some(target) => (vec![lhs_operand.slot], DimExpr::from_concrete(target)),
             None => (
@@ -575,20 +575,27 @@ fn emit_broadcast(
 ///
 /// A fully literal target lets the broadcast stay a metadata view that the backend
 /// never materialises, so the decomposition keeps that path wherever it can.
-fn literal_target(operands: &[(usize, &EmittedOperand)]) -> Option<Vec<usize>> {
+fn literal_target(operands: &[&EmittedOperand]) -> Option<Vec<usize>> {
     let mut target = Vec::new();
-    for (_, operand) in operands {
+    for operand in operands {
         target.extend(literal_extents(operand)?);
     }
     Some(target)
 }
 
+/// The literal lengths of `operand`, when every axis is a *known* length.
+///
+/// `shape` is the declared expression and `extents` the precision: a
+/// `DynamicTruncate` keeps its declared shape while narrowing the extent to an upper
+/// bound, so reading `shape` alone would broadcast to the untruncated length. Only an
+/// exact constant counts here; anything bounded falls back to the shape-reference
+/// path, which reads the value's real size.
 fn literal_extents(operand: &EmittedOperand) -> Option<Vec<usize>> {
     operand
-        .shape
+        .extents
         .iter()
         .map(|extent| match extent {
-            DimExpr::Const(size) => Some(*size),
+            ShapeExtent::Exact(DimExpr::Const(size)) => Some(*size),
             _ => None,
         })
         .collect()
