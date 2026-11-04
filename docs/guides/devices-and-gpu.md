@@ -226,9 +226,20 @@ Use NVIDIA's [CUDA compatibility documentation](https://docs.nvidia.com/deploy/c
 to map a driver release to the CUDA API levels it supports; tenferro's 12.6.2
 minimum can be narrower than NVIDIA's general minor-version compatibility. It
 is a *library* floor, not a GPU one: CUDA 12.x supports the same architectures
-throughout, and tenferro `dlopen`s cuSOLVER, so a cuSOLVER >= 11.7.1 package is
-enough. The floor exists because `cusolverDnXsyevBatched`, which every batched
-eigh now uses, first ships in that version (issue #1852).
+throughout, and tenferro `dlopen`s cuSOLVER at runtime.
+
+cuSOLVER itself is resolved for its symbols, not version-checked against the
+baseline: a library older than 11.7.1 still opens and still provides
+`geqrf`/`orgqr`/`syevd`/`gesvd`. Only batched divide-and-conquer eigh needs
+`cusolverDnXsyevBatched`, which first ships in cuSOLVER 11.7.1 (CUDA 12.6 Update
+2, issue #1852). Those two entry points are loaded optionally, so on an older
+cuSOLVER a batch takes the per-matrix `syevd` loop instead of failing, and the
+loader says so once when the library opens (issue #2413):
+
+```text
+tenferro-linalg: cuSOLVER 11.6.1: batched eigh unavailable, using per-matrix syevd
+```
+
 tenferro compiles against CUDA 12.8 `cudarc` bindings, resolves driver
 functions dynamically, and gates newer functions using the loaded driver and
 NVRTC versions.
