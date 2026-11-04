@@ -507,6 +507,7 @@ host	tenferro-ad::integration	sym_dim::sym_dim_sub_and_div_operators
 host	tenferro-ad::integration	sym_dim::sym_dim_sub_operator
 host	tenferro-ad::integration	sym_dim::sym_dim_usize_lhs_operators
 host	tenferro-ad::integration	sym_dim::sym_dim_usize_sub_and_div_lhs
+host	tenferro-ad::integration	symbolic_grad::derivative_of_a_bound_symbolic_input_keeps_symbolic_extents
 host	tenferro-ad::integration	symbolic_grad::grad_embed_diag_shifted_axis_restores_input_layout
 host	tenferro-ad::integration	symbolic_grad::grad_evaluates_with_different_shapes_from_same_symbolic_graph
 host	tenferro-ad::integration	symbolic_grad::grad_of_dot_product_against_two_symbolic_inputs
