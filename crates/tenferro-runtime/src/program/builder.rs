@@ -750,9 +750,10 @@ impl SemanticProgramBuilder {
     /// Resolve one of `value`'s declared extents against the shapes bound to the
     /// inputs it names.
     ///
-    /// A caller asking about a single axis pays one binding scan and one expression
-    /// walk per input that axis references — never a pass over every input. An
-    /// expression that is already constant needs no binding at all.
+    /// Cost for one axis query is one binding scan and one expression walk per input
+    /// that axis references, i.e. `O(E + R log R + K(B + E))` for `E` expression
+    /// nodes, `R` referenced inputs, `K` bindings and `B` bound axes; a constant
+    /// expression returns without either.
     ///
     /// # Examples
     ///
