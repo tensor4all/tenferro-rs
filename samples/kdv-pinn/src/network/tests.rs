@@ -4,10 +4,11 @@ use tenferro_tensor::Tensor;
 
 #[test]
 fn mlp_forward_shape() {
+    let trace = tenferro_runtime::TraceContext::new();
     let net = Mlp::new(&[2, 16, 16, 1]).unwrap();
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[4, 2]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[4, 2]).unwrap();
     let y = net.forward(&x).unwrap();
-    assert_eq!(y.rank, 2);
+    assert_eq!(y.rank(), 2);
     assert_eq!(y.try_concrete_shape(), Some(vec![4, 1]));
 
     let specs = net.input_specs();

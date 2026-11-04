@@ -32,7 +32,9 @@ use std::time::{Duration, Instant};
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{GraphCompiler, Prepared, Runtime, TensorSessionOpsExt, TracedTensor};
+use tenferro_runtime::{
+    GraphCompiler, Prepared, Runtime, TensorSessionOpsExt, TraceContext, TracedTensor,
+};
 use tenferro_tensor::{Tensor, TypedTensor};
 
 struct CountingAllocator;
@@ -78,8 +80,10 @@ fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
-fn traced(shape: &[usize], data: Vec<f64>) -> TracedTensor {
-    TracedTensor::from_tensor_concrete_shape(f64_tensor(shape.to_vec(), data)).unwrap()
+fn traced(trace: &TraceContext, shape: &[usize], data: Vec<f64>) -> TracedTensor {
+    trace
+        .from_tensor_concrete_shape(f64_tensor(shape.to_vec(), data))
+        .unwrap()
 }
 
 fn ad_context() -> AdContext {
@@ -111,7 +115,8 @@ fn well_conditioned_matrix(n: usize, seed: u64) -> Vec<f64> {
 }
 
 fn scalar_one() -> TracedTensor {
-    traced(&[], vec![1.0])
+    let trace = TraceContext::new();
+    traced(&trace, &[], vec![1.0])
 }
 
 fn probe_threads() -> Vec<usize> {
@@ -280,6 +285,7 @@ fn prepare(engine: &CpuEngine, runtime: &Runtime, outputs: &[&TracedTensor]) -> 
 }
 
 fn main() {
+    let trace = TraceContext::new();
     let runs = probe_runs();
     let iterations = probe_iterations();
     let allocations = probe_allocations();
@@ -293,7 +299,7 @@ fn main() {
         // The benchmark's `small/grad_sum_qr_vjp` arm: qr, a summed loss over q
         // and r, and the VJP with respect to the matrix.
         for n in [2usize, 4, 8] {
-            let a = traced(&[n, n], well_conditioned_matrix(n, 4));
+            let a = traced(&trace, &[n, n], well_conditioned_matrix(n, 4));
             let (q, r) = a.qr().unwrap();
             let loss = (&q.reduce_sum(Some(&[0, 1])).unwrap()
                 + &r.reduce_sum(Some(&[0, 1])).unwrap())
@@ -325,7 +331,7 @@ fn main() {
         // the arm where the planner offers a fused region that the CPU declines
         // below its element floor.
         for length in [1usize, 10, 50, 200] {
-            let mut value = traced(&[8], vec![0.5; 8]);
+            let mut value = traced(&trace, &[8], vec![0.5; 8]);
             for _ in 0..length {
                 value = value.exp().unwrap();
             }

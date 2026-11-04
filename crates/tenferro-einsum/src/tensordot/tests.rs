@@ -1,5 +1,4 @@
 use super::{dot_general_config, validate_traced_contract_dims, TensorDotAxes};
-use tenferro_runtime::TracedTensor;
 
 #[test]
 fn dot_general_config_rejects_invalid_count_and_explicit_axes() {
@@ -31,21 +30,30 @@ fn dot_general_config_rejects_invalid_count_and_explicit_axes() {
 
 #[test]
 fn validate_traced_contract_dims_allows_symbolic_and_rejects_concrete_mismatch() {
-    let lhs = TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 2).unwrap();
-    let rhs = TracedTensor::input_symbolic_shape(tenferro_runtime::DType::F64, 2).unwrap();
+    let trace = tenferro_runtime::TraceContext::new();
+    let lhs = trace
+        .input_symbolic_shape(tenferro_runtime::DType::F64, 2)
+        .unwrap();
+    let rhs = trace
+        .input_symbolic_shape(tenferro_runtime::DType::F64, 2)
+        .unwrap();
     let config = dot_general_config(
         TensorDotAxes::Axes {
             lhs: &[1],
             rhs: &[0],
         },
-        lhs.rank,
-        rhs.rank,
+        lhs.rank(),
+        rhs.rank(),
     )
     .unwrap();
     validate_traced_contract_dims(&lhs, &rhs, &config).unwrap();
 
-    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    let rhs = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap();
+    let lhs = trace
+        .from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])
+        .unwrap();
+    let rhs = trace
+        .from_vec_col_major(vec![4, 2], vec![1.0_f64; 8])
+        .unwrap();
     let err = validate_traced_contract_dims(&lhs, &rhs, &config).unwrap_err();
     assert!(err.to_string().contains("contracted dimensions differ"));
 }

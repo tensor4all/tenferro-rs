@@ -65,10 +65,11 @@ fn connected_program(
     tangent: Option<Tensor>,
 ) -> (TracedTensor, TracedTensor, TracedTensor) {
     let dtype = DType::External(std::any::TypeId::of::<Df64>());
-    let input =
-        TracedTensor::from_tensor_concrete_shape_declaring_scalar(input, DF64_SCALAR_IDENTITY)
-            .expect("traced input");
-    assert_eq!(input.dtype, dtype);
+    let trace = tenferro_runtime::TraceContext::new();
+    let input = trace
+        .from_tensor_concrete_shape_declaring_scalar(input, DF64_SCALAR_IDENTITY)
+        .expect("traced input");
+    assert_eq!(input.dtype(), dtype);
     let outputs = apply(Arc::new(Df64Qr), &[&input]).expect("traced QR");
     let factor = outputs[1].clone();
     let narrowed = apply(Arc::new(Df64ToF64), &[&factor])
@@ -77,10 +78,9 @@ fn connected_program(
     // The loss is R[0,0]^2, an ordinary f64 operation.
     let loss = narrowed.mul(&narrowed).expect("ordinary f64 loss");
     let tangent_leaf = match tangent {
-        Some(tensor) => {
-            TracedTensor::from_tensor_concrete_shape_declaring_scalar(tensor, DF64_SCALAR_IDENTITY)
-                .expect("traced tangent")
-        }
+        Some(tensor) => trace
+            .from_tensor_concrete_shape_declaring_scalar(tensor, DF64_SCALAR_IDENTITY)
+            .expect("traced tangent"),
         None => input.clone(),
     };
     (input, loss, tangent_leaf)
@@ -88,6 +88,7 @@ fn connected_program(
 
 #[test]
 fn the_connected_qr_program_gives_the_expected_gradient() {
+    let trace = tenferro_runtime::TraceContext::new();
     let rules = SemanticExtensionRuleSet::new()
         .with_primal_vjp(Arc::new(Df64VjpRule))
         .expect("one rule per family");
@@ -99,10 +100,11 @@ fn the_connected_qr_program_gives_the_expected_gradient() {
     );
 
     // The seed is the derivative of the loss with respect to itself.
-    let seed = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]).expect("shape matches data"),
-    )
-    .expect("traced seed");
+    let seed = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]).expect("shape matches data"),
+        )
+        .expect("traced seed");
     let gradients = ad
         .vjp_many(&loss, &[&input], &seed)
         .expect("the connected reverse pass runs");
@@ -173,6 +175,7 @@ fn the_connected_qr_program_forward_tangent_matches_an_independent_derivative() 
 
 #[test]
 fn the_second_connected_graph_returns_a_gradient_in_the_input_dtype() {
+    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_df64_proof::extension::Df64FromF64;
 
     let rules = SemanticExtensionRuleSet::new()
@@ -182,7 +185,9 @@ fn the_second_connected_graph_returns_a_gradient_in_the_input_dtype() {
 
     // f64 input -> widen -> QR -> narrow -> ordinary f64 loss.
     let source = Tensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).expect("shape");
-    let input = TracedTensor::from_tensor_concrete_shape(source).expect("traced f64 input");
+    let input = trace
+        .from_tensor_concrete_shape(source)
+        .expect("traced f64 input");
     let widened = apply(Arc::new(Df64FromF64), &[&input])
         .expect("traced widening")
         .remove(0);
@@ -193,10 +198,11 @@ fn the_second_connected_graph_returns_a_gradient_in_the_input_dtype() {
         .remove(0);
     let loss = narrowed.mul(&narrowed).expect("ordinary f64 loss");
 
-    let seed = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]).expect("shape matches data"),
-    )
-    .expect("traced seed");
+    let seed = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![1, 1], vec![1.0_f64]).expect("shape matches data"),
+        )
+        .expect("traced seed");
     let gradients = ad
         .vjp_many(&loss, &[&input], &seed)
         .expect("the second connected reverse pass runs");

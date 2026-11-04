@@ -49,10 +49,10 @@ use crate::eager_backend::{
 use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
 use crate::eager_exec::{eager_input_promotion_plan, exec_extension_op_on_tensor_reads};
 use crate::error::{ContextId, Error, Result};
-use crate::metadata::tensor_meta_from_tensor;
 use crate::semantic_extension::SemanticExtensionRuleSet;
-use crate::traced::next_input_key;
 use crate::transform_cache::{AdTransformCache, AdTransformCacheLimits};
+use tenferro_runtime::ad_support::next_input_key;
+use tenferro_runtime::ad_support::tensor_meta_from_tensor;
 
 use crate::AdContext;
 

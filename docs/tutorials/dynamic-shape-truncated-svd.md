@@ -15,7 +15,7 @@ use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{SvdOptions, TracedTensorLinalgExt};
 use tenferro_runtime::{
     CompareDir, CompiledGraph, DType, DotGeneralConfig, ExecutionEngine, GraphCompiler, Runtime,
-    Tensor, TracedTensor,
+    Tensor, TraceContext,
 };
 
 fn assert_close(actual: &[f64], expected: &[f64], tolerance: f64) {
@@ -106,10 +106,11 @@ fn cpu_runtime_with_linalg_and_einsum(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[4, 4])?;
+    let trace = TraceContext::new();
+    let x = trace.input_concrete_shape(DType::F64, &[4, 4])?;
     let (u, s, vt) = x.svd_with_options(SvdOptions::default().derivative_eps(1.0e-12))?;
 
-    let threshold = TracedTensor::from_vec_col_major(vec![], vec![0.5_f64])?;
+    let threshold = trace.from_vec_col_major(vec![], vec![0.5_f64])?;
     let keep_count = s
         .compare(&threshold, CompareDir::Gt)?
         .convert(DType::F64)?

@@ -458,19 +458,20 @@ pub fn extension_modules<B: Engine + 'static>(
 ///
 /// ```
 /// use tenferro_ext_sparse::{sparse_matmul, SparseCooTracedTensor};
-/// use tenferro_runtime::TracedTensor;
+/// use tenferro_runtime::{TraceContext, TracedTensor};
 /// use tenferro_tensor::Tensor;
 ///
 /// let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?;
+/// let trace = TraceContext::new();
 /// let a = SparseCooTracedTensor::from_parts(
 ///     vec![1, 1],
 ///     coords.duplicate()?,
-///     TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64])?,
+///     trace.from_vec_col_major(vec![1], vec![2.0_f64])?,
 /// )?;
 /// let b = SparseCooTracedTensor::from_parts(
 ///     vec![1, 1],
 ///     coords,
-///     TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64])?,
+///     trace.from_vec_col_major(vec![1], vec![3.0_f64])?,
 /// )?;
 /// let out = sparse_matmul(&a, &b)?;
 /// assert_eq!(out.shape(), &[1, 1]);

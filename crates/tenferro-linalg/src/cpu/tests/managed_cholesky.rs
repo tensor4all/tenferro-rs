@@ -580,11 +580,14 @@ fn managed_eager_cholesky_preserves_domain_and_values() {
 #[test]
 fn managed_traced_cholesky_preserves_domain_and_values() {
     use crate::TracedTensorLinalgExt;
-    use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+    use tenferro_runtime::{GraphCompiler, Runtime, TraceContext, TracedTensor};
+    let trace = TraceContext::new();
     let domain = FakeDomain::new();
     let input = domain.tensor(&[2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]);
     let input_id = input.allocation_id();
-    let traced = TracedTensor::from_tensor_concrete_shape(Tensor::from_typed(input)).unwrap();
+    let traced = trace
+        .from_tensor_concrete_shape(Tensor::from_typed(input))
+        .unwrap();
     let program = GraphCompiler::new()
         .compile(&traced.cholesky().unwrap())
         .unwrap();

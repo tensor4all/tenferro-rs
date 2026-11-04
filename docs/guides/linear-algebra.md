@@ -234,9 +234,10 @@ not change the forward decomposition algorithm.
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_5 -->
 ```rust
 use tenferro_linalg::{SvdGauge, SvdOptions, TracedTensorLinalgExt};
-use tenferro_runtime::TracedTensor;
+use tenferro_runtime::{TraceContext, TracedTensor};
+let trace = TraceContext::new();
 
-let a = TracedTensor::from_vec_col_major(
+let a = trace.from_vec_col_major(
     vec![3, 3],
     vec![
         3.0_f64, 0.0, 0.0,
@@ -280,9 +281,10 @@ rank-deficient `F32`/`C32` explicit request. CPU providers ignore the driver.
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_svd_driver -->
 ```rust
 use tenferro_linalg::{SvdDriver, SvdOptions, TracedTensorLinalgExt};
-use tenferro_runtime::TracedTensor;
+use tenferro_runtime::{TraceContext, TracedTensor};
+let trace = TraceContext::new();
 
-let a = TracedTensor::from_vec_col_major(
+let a = trace.from_vec_col_major(
     vec![3, 2],
     vec![
         3.0_f64, 1.0, 0.5,
@@ -316,10 +318,11 @@ ignore the driver.
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_eigh_driver -->
 ```rust
 use tenferro_linalg::{EighDriver, EighOptions, TracedTensorLinalgExt};
-use tenferro_runtime::TracedTensor;
+use tenferro_runtime::{TraceContext, TracedTensor};
+let trace = TraceContext::new();
 
 // A batch of two 2x2 symmetric matrices, batch on the trailing axis.
-let a = TracedTensor::from_vec_col_major(
+let a = trace.from_vec_col_major(
     vec![2, 2, 2],
     vec![
         2.0_f64, 0.5, 0.5, 3.0,
@@ -342,9 +345,10 @@ selected axis needs repeated or reordered indices:
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_6 -->
 ```rust
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::TracedTensor;
+use tenferro_runtime::{TraceContext, TracedTensor};
+let trace = TraceContext::new();
 
-let a = TracedTensor::from_vec_col_major(
+let a = trace.from_vec_col_major(
     vec![3, 3],
     vec![
         3.0_f64, 0.0, 0.0,
@@ -510,10 +514,11 @@ assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_9 -->
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
+let trace = TraceContext::new();
 
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
+let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
 let factor = a.cholesky()?;
 
 let mut compiler = GraphCompiler::new();
@@ -541,11 +546,12 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 0.0, 0.0, 3.0]);
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_10 -->
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
+let trace = TraceContext::new();
 
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
-let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0])?;
+let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
+let b = trace.from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0])?;
 let x = a.solve(&b)?;
 
 let mut compiler = GraphCompiler::new();

@@ -5,17 +5,18 @@ use std::sync::MutexGuard;
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{CoreSemanticOp, ProgramInputSpec};
-use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, TraceContext, TracedTensor};
+use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, TraceContext};
 use tenferro_tensor::Tensor;
 use tenferro_xla::{XlaExecutor, TENFERRO_PJRT_PLUGIN_ENV};
 
 #[test]
 fn pjrt_executes_phase_one_elementwise_from_rust_when_configured() {
+    let trace = tenferro_runtime::TraceContext::new();
     let Some((_guard, executor)) = configured_executor() else {
         return;
     };
 
-    let x = TracedTensor::input_symbolic_shape(DType::F32, 1).unwrap();
+    let x = trace.input_symbolic_shape(DType::F32, 1).unwrap();
     let positive = x.abs().unwrap().exp().unwrap();
     let analytic = positive
         .log()

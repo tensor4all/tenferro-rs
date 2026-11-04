@@ -230,7 +230,8 @@ Use the traced route when einsum should be part of a graph compiled by
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext};
+use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, Tensor};
+let trace = TraceContext::new();
 
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
@@ -327,13 +328,14 @@ negative axes.
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_einsum::{TensorDotAxes, TracedTensorEinsumExt};
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+let trace = TraceContext::new();
 
-let lhs = TracedTensor::from_vec_col_major(
+let lhs = trace.from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let rhs = TracedTensor::from_vec_col_major(
+let rhs = trace.from_vec_col_major(
     vec![3, 4],
     vec![
         1.0_f64, 2.0, 3.0,
@@ -388,7 +390,8 @@ concrete traced op is built.
 use tenferro_einsum::{EinsumOptimize, TraceContextEinsumExt};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{DType, TraceContext};
+use tenferro_runtime::{TraceContext, DType};
+let trace = TraceContext::new();
 
 let mut trace = TraceContext::new();
 let a = trace.input(ProgramInputSpec::new(

@@ -265,10 +265,11 @@ Use `TracedTensor` when operations should build a graph first and execute later.
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_19 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+let trace = TraceContext::new();
 
-let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
-let b = TracedTensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
+let a = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+let b = trace.from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
 let sum = (&a + &b).unwrap();
 let product = (&a * &b).unwrap();
 

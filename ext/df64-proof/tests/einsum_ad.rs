@@ -19,7 +19,7 @@ use tenferro_df64_proof::ad::{Df64LinearizeRule, Df64VjpRule};
 use tenferro_df64_proof::extension::{module, Df64Einsum, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TraceContext, TracedTensor};
 use tenferro_tensor::Tensor;
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
@@ -84,14 +84,15 @@ fn tangent(
     lhs_dot: Option<Vec<Df64>>,
     rhs_dot: Option<Vec<Df64>>,
 ) -> Vec<Df64> {
+    let trace = TraceContext::new();
     let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
-    let lhs_leaf = leaf(lhs.clone(), lhs_shape.to_vec());
-    let rhs_leaf = leaf(rhs.clone(), rhs_shape.to_vec());
+    let lhs_leaf = leaf(&trace, lhs.clone(), lhs_shape.to_vec());
+    let rhs_leaf = leaf(&trace, rhs.clone(), rhs_shape.to_vec());
     let output = apply(Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
 
     let (wrt, tangent_leaf) = match (&lhs_dot, &rhs_dot) {
-        (Some(values), _) => (&lhs_leaf, leaf(values.clone(), lhs_shape.to_vec())),
-        (None, Some(values)) => (&rhs_leaf, leaf(values.clone(), rhs_shape.to_vec())),
+        (Some(values), _) => (&lhs_leaf, leaf(&trace, values.clone(), lhs_shape.to_vec())),
+        (None, Some(values)) => (&rhs_leaf, leaf(&trace, values.clone(), rhs_shape.to_vec())),
         (None, None) => panic!("a tangent needs one operand's tangent"),
     };
     let forward = linearize_context()
@@ -117,12 +118,10 @@ fn tangent(
     payload(&results[0])
 }
 
-fn leaf(values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
-    TracedTensor::from_tensor_concrete_shape_declaring_scalar(
-        external(values, shape),
-        DF64_SCALAR_IDENTITY,
-    )
-    .expect("traced leaf")
+fn leaf(trace: &TraceContext, values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
+    trace
+        .from_tensor_concrete_shape_declaring_scalar(external(values, shape), DF64_SCALAR_IDENTITY)
+        .expect("traced leaf")
 }
 
 fn numbers(values: &[f64]) -> Vec<Df64> {
@@ -136,9 +135,10 @@ fn contract(
     rhs: Vec<Df64>,
     rhs_shape: [usize; 2],
 ) -> Vec<Df64> {
+    let trace = TraceContext::new();
     let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
-    let lhs_leaf = leaf(lhs.clone(), lhs_shape.to_vec());
-    let rhs_leaf = leaf(rhs.clone(), rhs_shape.to_vec());
+    let lhs_leaf = leaf(&trace, lhs.clone(), lhs_shape.to_vec());
+    let rhs_leaf = leaf(&trace, rhs.clone(), rhs_shape.to_vec());
     let output = apply(Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output[0]).expect("compiled contraction");
@@ -164,11 +164,12 @@ fn adjoint(
     cotangent_shape: [usize; 2],
     wrt_lhs: bool,
 ) -> Vec<Df64> {
+    let trace = TraceContext::new();
     let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2]).expect("a contraction");
-    let lhs_leaf = leaf(lhs.clone(), lhs_shape.to_vec());
-    let rhs_leaf = leaf(rhs.clone(), rhs_shape.to_vec());
+    let lhs_leaf = leaf(&trace, lhs.clone(), lhs_shape.to_vec());
+    let rhs_leaf = leaf(&trace, rhs.clone(), rhs_shape.to_vec());
     let output = apply(Arc::new(op), &[&lhs_leaf, &rhs_leaf]).expect("traced contraction");
-    let cotangent_leaf = leaf(cotangent.clone(), cotangent_shape.to_vec());
+    let cotangent_leaf = leaf(&trace, cotangent.clone(), cotangent_shape.to_vec());
     let wrt = if wrt_lhs { &lhs_leaf } else { &rhs_leaf };
     let gradient = cotangent_context()
         .vjp(&output[0], wrt, &cotangent_leaf)
@@ -383,15 +384,16 @@ fn the_forward_tangent_and_the_adjoint_satisfy_duality() {
 
 #[test]
 fn the_adjoint_of_a_three_operand_contraction_matches_the_hand_written_products() {
+    let trace = TraceContext::new();
     // "ij,jk,kl->il" with A = [[1, 2], [3, 4]], B = I and C = I. The output is A, so with an
     // all-ones cotangent the cotangent of A is the ones matrix, and the cotangents of B and C are
     // A^T times ones, which is [[3, 3], [7, 7]] in column-major order as [3, 7, 3, 7].
     let op = Df64Einsum::new_nary(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]).expect("a contraction");
-    let a = leaf(numbers(&[1.0, 3.0, 2.0, 4.0]), vec![2, 2]);
-    let b = leaf(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]);
-    let c = leaf(numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]);
+    let a = leaf(&trace, numbers(&[1.0, 3.0, 2.0, 4.0]), vec![2, 2]);
+    let b = leaf(&trace, numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]);
+    let c = leaf(&trace, numbers(&[1.0, 0.0, 0.0, 1.0]), vec![2, 2]);
     let output = apply(Arc::new(op), &[&a, &b, &c]).expect("traced contraction");
-    let cotangent = leaf(numbers(&[1.0, 1.0, 1.0, 1.0]), vec![2, 2]);
+    let cotangent = leaf(&trace, numbers(&[1.0, 1.0, 1.0, 1.0]), vec![2, 2]);
 
     let gradient = cotangent_context()
         .vjp(&output[0], &a, &cotangent)
@@ -422,15 +424,16 @@ fn nary_tangent(
     tangent_at: usize,
     tangent: Vec<Df64>,
 ) -> Vec<Df64> {
+    let trace = TraceContext::new();
     let op = Df64Einsum::new_nary(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]).expect("a contraction");
     let leaves: Vec<TracedTensor> = operands
         .iter()
-        .map(|(values, shape)| leaf(values.clone(), shape.clone()))
+        .map(|(values, shape)| leaf(&trace, values.clone(), shape.clone()))
         .collect();
     let refs: Vec<&TracedTensor> = leaves.iter().collect();
     let output = apply(Arc::new(op), &refs).expect("traced contraction");
 
-    let tangent_leaf = leaf(tangent.clone(), operands[tangent_at].1.clone());
+    let tangent_leaf = leaf(&trace, tangent.clone(), operands[tangent_at].1.clone());
     let forward = linearize_context()
         .jvp(&output[0], &leaves[tangent_at], &tangent_leaf)
         .expect("traced tangent");
@@ -467,6 +470,7 @@ fn the_forward_tangent_of_a_three_operand_contraction_matches_the_hand_written_p
 
 #[test]
 fn the_three_operand_tangent_and_adjoint_satisfy_duality() {
+    let trace = TraceContext::new();
     // <JVP(v), w> == <v, VJP(w)> for the three-operand pattern, one operand at a time.
     let operands = three_operands();
     let tangent_values = numbers(&[1.0, 0.5, -0.5, 2.0]);
@@ -482,11 +486,11 @@ fn the_three_operand_tangent_and_adjoint_satisfy_duality() {
     let op = Df64Einsum::new_nary(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]).expect("a contraction");
     let leaves: Vec<TracedTensor> = operands
         .iter()
-        .map(|(values, shape)| leaf(values.clone(), shape.clone()))
+        .map(|(values, shape)| leaf(&trace, values.clone(), shape.clone()))
         .collect();
     let refs: Vec<&TracedTensor> = leaves.iter().collect();
     let output = apply(Arc::new(op), &refs).expect("traced contraction");
-    let cotangent_leaf = leaf(cotangent.clone(), vec![2, 2]);
+    let cotangent_leaf = leaf(&trace, cotangent.clone(), vec![2, 2]);
     let gradient = cotangent_context()
         .vjp(&output[0], &leaves[0], &cotangent_leaf)
         .expect("traced adjoint");

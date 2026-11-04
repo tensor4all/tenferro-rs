@@ -13,7 +13,7 @@ use tenferro_runtime::extension::{
 use tenferro_runtime::{
     CompiledGraph, CoreCapabilityKind, DType, ErasedExecutionContext, Error,
     ExecutionContextIdentity, ExecutionContextMismatch, ExecutionEngine, GraphCompiler,
-    PrepareError, ProviderContractError, Runtime, RuntimeFailureReasonRef, Tensor, TracedTensor,
+    PrepareError, ProviderContractError, Runtime, RuntimeFailureReasonRef, Tensor, TraceContext,
 };
 use tenferro_tensor::{
     BackendStorageHandle, Engine, Placement, StorageBuffer, TensorRead, TensorView, TypedTensor,
@@ -210,7 +210,10 @@ mod borrowed_runtime {
 fn compile_op(
     op: Arc<dyn ExtensionOp>,
 ) -> tenferro_runtime::Result<tenferro_runtime::CompiledGraph> {
-    let input = TracedTensor::input_concrete_shape(DType::F64, &[2])?;
+    // A traced value belongs to the context that created it, so the fixture
+    // creates its inputs through the context it compiles.
+    let trace = TraceContext::new();
+    let input = trace.input_concrete_shape(DType::F64, &[2])?;
     let output = apply(op, &[&input])?.remove(0);
     let program =
         GraphCompiler::new().compile_with_input_specs(&output, &[(&input, DType::F64, &[2])])?;
@@ -218,8 +221,9 @@ fn compile_op(
 }
 
 fn compile_borrowed_op() -> tenferro_runtime::Result<tenferro_runtime::CompiledGraph> {
+    let trace = TraceContext::new();
     let inputs = (0..4)
-        .map(|_| TracedTensor::input_concrete_shape(DType::F64, &[1024]))
+        .map(|_| trace.input_concrete_shape(DType::F64, &[1024]))
         .collect::<tenferro_runtime::Result<Vec<_>>>()?;
     let output = apply(
         Arc::new(BorrowedOp),

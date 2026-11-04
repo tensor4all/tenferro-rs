@@ -11,10 +11,11 @@ pub type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
+/// use tenferro_runtime::{TraceContext, DType, GraphCompiler, TracedTensor};
 /// use tenferro_xla::{lower_compiled_to_stablehlo, Error};
 ///
-/// let x = TracedTensor::input_symbolic_shape(DType::I64, 1).unwrap();
+/// let trace = TraceContext::new();
+/// let x = trace.input_symbolic_shape(DType::I64, 1).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let y = x.neg().unwrap();
 /// let program = compiler

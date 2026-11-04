@@ -241,15 +241,16 @@ fn concrete_from_factors_requires_upper_trapezoidal_r() {
 
 #[test]
 fn traced_compact_qr_preserves_known_shapes() {
+    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_linalg::TracedTensorLinalgExt;
-    use tenferro_runtime::{GraphCompiler, TracedTensor};
+    use tenferro_runtime::GraphCompiler;
 
-    let a = TracedTensor::from_vec_col_major(
-        vec![4, 2],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0],
-    )
-    .unwrap();
-    let b = TracedTensor::from_vec_col_major(vec![4, 1], vec![3.0_f64, -1.0, 2.0, 1.0]).unwrap();
+    let a = trace
+        .from_vec_col_major(vec![4, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0])
+        .unwrap();
+    let b = trace
+        .from_vec_col_major(vec![4, 1], vec![3.0_f64, -1.0, 2.0, 1.0])
+        .unwrap();
     let state = a.householder_qr().unwrap().append_columns(&b).unwrap();
     let q = state.q_columns(1..3, QrOptions::default()).unwrap();
     let r = state.r(QrOptions::default()).unwrap();
@@ -262,12 +263,15 @@ fn traced_compact_qr_preserves_known_shapes() {
 #[cfg(feature = "autodiff")]
 #[test]
 fn householder_qr_r_grad_matches_finite_difference() {
+    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_ad::AdContext;
     use tenferro_linalg::TracedTensorLinalgExt;
-    use tenferro_runtime::{GraphCompiler, TracedTensor};
+    use tenferro_runtime::GraphCompiler;
 
     let values = vec![1.0_f64, 0.0, 1.0, 0.0, 1.0, 1.0];
-    let a = TracedTensor::from_vec_col_major(vec![3, 2], values.clone()).unwrap();
+    let a = trace
+        .from_vec_col_major(vec![3, 2], values.clone())
+        .unwrap();
     let r = a.householder_qr().unwrap().r(QrOptions::default()).unwrap();
     let loss = r.reduce_sum(None).unwrap();
     let ad = AdContext::builder()
@@ -309,13 +313,20 @@ fn householder_qr_r_grad_matches_finite_difference() {
 #[cfg(feature = "autodiff")]
 #[test]
 fn householder_qr_two_appends_produce_all_input_gradients() {
+    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_ad::AdContext;
     use tenferro_linalg::{QrGauge, TracedTensorLinalgExt};
-    use tenferro_runtime::{GraphCompiler, TracedTensor};
+    use tenferro_runtime::GraphCompiler;
 
-    let a = TracedTensor::from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 0.0, -1.0]).unwrap();
-    let b = TracedTensor::from_vec_col_major(vec![4, 1], vec![0.0_f64, 1.0, 2.0, 1.0]).unwrap();
-    let c = TracedTensor::from_vec_col_major(vec![4, 1], vec![2.0_f64, -1.0, 1.0, 0.5]).unwrap();
+    let a = trace
+        .from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 0.0, -1.0])
+        .unwrap();
+    let b = trace
+        .from_vec_col_major(vec![4, 1], vec![0.0_f64, 1.0, 2.0, 1.0])
+        .unwrap();
+    let c = trace
+        .from_vec_col_major(vec![4, 1], vec![2.0_f64, -1.0, 1.0, 0.5])
+        .unwrap();
     let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
     let state = a
         .householder_qr()
@@ -623,14 +634,13 @@ fn q_column_ranges_past_the_full_q_width_are_rejected() {
 
 #[test]
 fn traced_full_q_columns_carry_the_full_width_shape() {
+    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_linalg::TracedTensorLinalgExt;
-    use tenferro_runtime::{GraphCompiler, TracedTensor};
+    use tenferro_runtime::GraphCompiler;
 
-    let a = TracedTensor::from_vec_col_major(
-        vec![4, 2],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0],
-    )
-    .unwrap();
+    let a = trace
+        .from_vec_col_major(vec![4, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0])
+        .unwrap();
     let state = a.householder_qr().unwrap();
     let full = state.q_columns(0..4, QrOptions::default()).unwrap();
     let complement = state.q_columns(2..4, QrOptions::default()).unwrap();
@@ -657,18 +667,16 @@ fn traced_full_q_columns_carry_the_full_width_shape() {
 #[cfg(feature = "autodiff")]
 #[test]
 fn differentiating_through_complement_q_columns_is_refused() {
+    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_ad::AdContext;
     use tenferro_linalg::TracedTensorLinalgExt;
-    use tenferro_runtime::TracedTensor;
 
     // The complement basis is only defined up to a rotation inside the
     // nullspace, and the thin `dQ` this rule builds has no column there, so the
     // AD rule must refuse rather than return a silently wrong derivative.
-    let a = TracedTensor::from_vec_col_major(
-        vec![4, 2],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0],
-    )
-    .unwrap();
+    let a = trace
+        .from_vec_col_major(vec![4, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0])
+        .unwrap();
     let state = a.householder_qr().unwrap();
     let q = state.q_columns(0..4, QrOptions::default()).unwrap();
     let loss = q.reduce_sum(Some(&[0, 1])).unwrap();

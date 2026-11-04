@@ -26,9 +26,7 @@ use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
-use tenferro_runtime::{
-    DType, ExecutionEngine, GraphCompiler, Output, Prepared, Runtime, TracedTensor,
-};
+use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Output, Prepared, Runtime};
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TensorRead, TensorScalar, TensorWrite};
 
 const SIZES: &[usize] = &[8, 64, 256];
@@ -265,10 +263,11 @@ fn engine_runtime(backend: &CudaEngine) -> Runtime {
 
 /// A small fused elementwise chain: the cost is admission and launch, not kernel work.
 fn prepared_routes(c: &mut Criterion) {
+    let trace = tenferro_runtime::TraceContext::new();
     let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let runtime = engine_runtime(&backend);
 
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).expect("input");
+    let x = trace.input_symbolic_shape(DType::F64, 1).expect("input");
     let squared = (&x * &x).expect("square");
     let y = (&squared + &x).expect("shift");
     let program = GraphCompiler::new()
@@ -336,13 +335,14 @@ fn prepared_routes(c: &mut Criterion) {
 /// it cannot show a per-node cost. This chain schedules eight `dot_general`
 /// nodes (#2182 B3).
 fn prepared_matmul_chain(c: &mut Criterion) {
+    let trace = tenferro_runtime::TraceContext::new();
     const SIZE: usize = 16;
     const MATMULS: usize = 8;
 
     let mut backend = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("CUDA backend");
     let runtime = engine_runtime(&backend);
 
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).expect("input");
+    let x = trace.input_symbolic_shape(DType::F64, 2).expect("input");
     let mut y = x.matmul(&x).expect("first matmul");
     for _ in 1..MATMULS {
         y = y.matmul(&x).expect("chained matmul");

@@ -4,7 +4,7 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use num_complex::Complex64;
 use tenferro_runtime::{
     DType, DotGeneralConfig, Error as RuntimeError, ErrorPhase, GatherConfig, PadConfig,
-    SliceConfig, Tensor, TensorRead, TensorView,
+    SliceConfig, Tensor, TensorRead, TensorView, TraceContext,
 };
 use tenferro_tensor::{Error as TensorError, ErrorKind, ValidationError, ValidationKind};
 
@@ -989,7 +989,8 @@ fn eager_reduce_sum_squares_gradient_matches_finite_difference() {
 /// on the eager, traced and concrete surfaces.
 #[test]
 fn reduce_sum_squares_none_reduces_all_axes_on_every_surface() {
-    use tenferro_runtime::{GraphCompiler, TensorSessionOpsExt, TracedTensor};
+    let trace = TraceContext::new();
+    use tenferro_runtime::{GraphCompiler, TensorSessionOpsExt};
 
     let data = vec![1.0_f64, -2.0, 3.0, 0.5];
     let x = EagerTensor::from_tensor_in(
@@ -1023,9 +1024,9 @@ fn reduce_sum_squares_none_reduces_all_axes_on_every_surface() {
         &[14.25]
     );
 
-    let traced = TracedTensor::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
+    let traced = trace.from_vec_col_major(vec![2, 2], data.clone()).unwrap();
     let total = traced.reduce_sum_squares(None).unwrap();
-    assert_eq!(total.rank, 0);
+    assert_eq!(total.rank(), 0);
     let program = GraphCompiler::new().compile_many(&[&total]).unwrap();
     let cpu = tenferro_cpu::CpuEngine::serial();
     let mut builder = tenferro_runtime::Runtime::builder();

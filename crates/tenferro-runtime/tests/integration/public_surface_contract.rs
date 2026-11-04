@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use tenferro_runtime::{CompiledGraph, GraphCompiler, TracedTensor};
+use tenferro_runtime::{CompiledGraph, GraphCompiler};
 
 fn repo_file(path: &str) -> String {
     std::fs::read_to_string(repo_path(path)).expect("source file must be readable")
@@ -43,7 +43,10 @@ fn compiled_graph_is_the_semantic_artifact_boundary() {
 
 #[test]
 fn compiled_graph_exposes_only_semantic_program_structure() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let trace = tenferro_runtime::TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap();
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
@@ -138,9 +141,15 @@ fn traced_tensor_graph_and_attached_data_are_accessor_based() {
         !source.contains("pub data:"),
         "TracedTensor attached data storage must not be a public field"
     );
+    // A traced value is owned by its `TraceContext`, so inspection goes through
+    // the context and trace-value accessors rather than a per-tensor graph.
     assert!(
-        source.contains("pub fn graph(&self)"),
-        "TracedTensor should expose graph inspection through an accessor"
+        source.contains("pub fn context(&self)"),
+        "TracedTensor should expose its owning trace context through an accessor"
+    );
+    assert!(
+        source.contains("pub fn trace_value(&self)"),
+        "TracedTensor should expose its trace value through an accessor"
     );
     assert!(
         source.contains("pub fn attached_value(&self)"),
@@ -240,13 +249,29 @@ fn traced_dtype_inference_must_not_fall_back_in_release_builds() {
 
 #[test]
 fn traced_metadata_registration_is_fallible_without_panic_helpers() {
-    let traced = repo_file("crates/tenferro-runtime/src/traced.rs");
-    let registration = traced
-        .split_once("fn register_single_output_metadata(")
-        .and_then(|(_, rest)| rest.split_once("impl TracedTensor").map(|(body, _)| body))
-        .expect("single-output metadata helper should exist");
-    assert!(registration.contains(") -> Result<GlobalMetadataScope>"));
-    assert!(!registration.contains(".expect("));
+    // Metadata inference lives in the semantic program builder; every inference
+    // step returns a typed error instead of panicking.
+    let builder = repo_file("crates/tenferro-runtime/src/program/builder.rs");
+    let core = builder
+        .split_once("fn infer_core_metadata(")
+        .and_then(|(_, rest)| {
+            rest.split_once("fn infer_extension_metadata(")
+                .map(|(body, _)| body)
+        })
+        .expect("core metadata inference should exist");
+    assert!(core.contains("-> Result<Vec<ProgramValueMetadata>, ProgramBuildError>"));
+    assert!(!core.contains(".expect("));
+    assert!(!core.contains("panic!("));
+    let extension = builder
+        .split_once("fn infer_extension_metadata(")
+        .and_then(|(_, rest)| {
+            rest.split_once("fn append_operation(")
+                .map(|(body, _)| body)
+        })
+        .expect("extension metadata inference should exist");
+    assert!(extension.contains("-> Result<(Vec<ProgramValueMetadata>, Vec<ShapeGuard>), "));
+    assert!(!extension.contains(".expect("));
+    assert!(!extension.contains("panic!("));
 
     let packing = repo_file("crates/tenferro-runtime/src/shape_packing.rs");
     let concatenate = packing

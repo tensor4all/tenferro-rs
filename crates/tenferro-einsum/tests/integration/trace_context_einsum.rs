@@ -143,7 +143,7 @@ fn trace_context_einsum_ext_exposes_all_four_entry_points() {
 #[test]
 fn trace_context_einsum_rejects_foreign_values_without_mutating_the_trace() {
     let vector = || ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]);
-    let mut owner = TraceContext::new();
+    let owner = TraceContext::new();
     let foreign = owner.input(vector()).unwrap();
     let mut trace = TraceContext::new();
     let local = trace.input(vector()).unwrap();

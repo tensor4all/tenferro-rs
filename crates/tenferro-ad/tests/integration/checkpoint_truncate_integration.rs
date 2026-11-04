@@ -1,7 +1,7 @@
 use crate::support;
 use support::{cpu_runtime, RunTraced};
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{GraphCompiler, Tensor, TraceContext, TypedTensor};
 
 const TOL: f64 = 1.0e-4;
 const FD_H: f64 = 1.0e-5;
@@ -24,6 +24,7 @@ fn get_f64_scalar(tensor: &Tensor) -> f64 {
 
 #[test]
 fn checkpoint_truncate_loop_grad() {
+    let trace = TraceContext::new();
     let steps = 3;
     let a_value = 0.5_f64;
     let x0_data = vec![1.0, 2.0, 3.0];
@@ -31,10 +32,13 @@ fn checkpoint_truncate_loop_grad() {
     let mut compiler = GraphCompiler::new();
     let executor = cpu_runtime();
 
-    let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_value)).unwrap();
-    let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
-    let mut x =
-        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], x0_data.clone())).unwrap();
+    let a = trace
+        .from_tensor_concrete_shape(f64_scalar(a_value))
+        .unwrap();
+    let size = trace.from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
+    let mut x = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![3], x0_data.clone()))
+        .unwrap();
 
     for _ in 0..steps {
         x = (&a * &x).unwrap();

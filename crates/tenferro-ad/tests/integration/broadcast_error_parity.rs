@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_runtime::{Error, ErrorPhase, TracedTensor};
+use tenferro_runtime::{Error, ErrorPhase, TraceContext};
 use tenferro_tensor::{Error as TensorError, ShapeMismatch, ValidationError};
 
 fn eager_tensor(ctx: Arc<EagerRuntime>, shape: Vec<usize>) -> EagerTensor {
@@ -34,6 +34,7 @@ fn assert_rank_mismatch(source: &ValidationError, expected: usize, actual: usize
 
 #[test]
 fn eager_and_traced_broadcast_errors_share_payloads_across_discovery_phases() {
+    let trace = TraceContext::new();
     let ctx = EagerRuntime::new().unwrap();
     let cases = [
         "incompatible_binary",
@@ -70,16 +71,20 @@ fn eager_and_traced_broadcast_errors_share_payloads_across_discovery_phases() {
 
         let traced_error = match case {
             "incompatible_binary" => {
-                let lhs = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
-                let rhs = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+                let lhs = trace.from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
+                let rhs = trace.from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
                 lhs.add(&rhs).unwrap_err()
             }
             "incompatible_input" => {
-                let input = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+                let input = trace
+                    .from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])
+                    .unwrap();
                 input.broadcast_in_dim(&[2, 4], &[0, 1]).unwrap_err()
             }
             "rank_too_large" => {
-                let input = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+                let input = trace
+                    .from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])
+                    .unwrap();
                 input.broadcast_in_dim(&[3], &[0, 0]).unwrap_err()
             }
             _ => unreachable!(),

@@ -196,8 +196,8 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
@@ -397,8 +397,8 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
@@ -599,8 +599,8 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
@@ -830,8 +830,8 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
@@ -1032,8 +1032,8 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
@@ -1241,8 +1241,8 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
@@ -1446,8 +1446,8 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
@@ -1654,8 +1654,8 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
