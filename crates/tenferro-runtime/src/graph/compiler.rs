@@ -213,8 +213,9 @@ impl GraphCompiler {
     /// Compile one traced output with concrete placeholder specs.
     ///
     /// Every declared placeholder must be a data-less input of the output's
-    /// context, with the declared dtype and shape. The compiled program keeps the
-    /// context's input order.
+    /// context, with the declared dtype and shape. The compiled program lists the
+    /// declared placeholders first, in the order given here, followed by the
+    /// remaining live inputs in context order.
     ///
     /// # Errors
     ///
