@@ -707,6 +707,49 @@ fn import_uses_value_dependency_closure_and_keeps_observable_effects() {
 }
 
 #[test]
+fn snapshot_keeps_effectful_operations_whose_outputs_are_not_requested() {
+    let mut builder = SemanticProgramBuilder::new();
+    let state = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let selected = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let selected_output = builder.add_op(CoreSemanticOp::Neg, &[selected]).unwrap()[0];
+    let effect: Arc<dyn ExtensionOp> = Arc::new(IdentityExtension {
+        declares_semantics: true,
+        effectful: true,
+        guarded: false,
+        view_alias: false,
+    });
+    let _unused_effect_output = builder.add_extension(effect, &[state]).unwrap()[0];
+
+    for outputs in [&[selected_output][..], &[][..]] {
+        let (frozen, _) = builder.snapshot_pruned(outputs).unwrap();
+        assert_eq!(
+            frozen
+                .program
+                .operations()
+                .filter(|operation| !operation.effects().is_empty())
+                .count(),
+            1,
+            "an effectful operation must survive a snapshot that does not request its output"
+        );
+        // The effectful operation keeps the input it writes through, and its own
+        // output stays in the frozen program.
+        assert_eq!(frozen.program.inputs().len(), 1 + outputs.len());
+        assert_eq!(
+            frozen
+                .program
+                .operations()
+                .map(|operation| operation.outputs().len())
+                .sum::<usize>(),
+            outputs.len() + 1
+        );
+    }
+}
+
+#[test]
 fn dot_general_identity_uses_ordered_axes_not_storage() {
     use tenferro_tensor::DotGeneralConfig;
     for count in [2, 5] {

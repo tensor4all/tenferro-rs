@@ -265,6 +265,16 @@ impl SemanticProgramBuilder {
             }
             live[output.slot as usize] = true;
         }
+        // An effectful operation is observable even when no caller asks for its
+        // outputs, so its outputs seed liveness exactly like a requested output.
+        for operation in &self.operations {
+            if operation.effects.is_empty() {
+                continue;
+            }
+            for output in &operation.outputs {
+                live[output.slot as usize] = true;
+            }
+        }
         for alias in aliases {
             let slot = alias.input.slot as usize;
             if live[slot] {
