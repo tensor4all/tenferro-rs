@@ -36,7 +36,26 @@ fn traced_binary_rejects_values_from_another_context() {
         "expected a typed validation error, got {error:?}"
     );
     let same_context = trace.from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
-    assert!(lhs.add(&same_context).is_ok());
+    // A same-context operand must both combine and evaluate to the right value:
+    // `is_ok()` alone would pass if the operand were dropped or mis-bound.
+    let sum = lhs
+        .add(&same_context)
+        .expect("same-context operands must combine");
+    let program = GraphCompiler::new().compile(&sum).unwrap();
+    let lhs_key = lhs.input_key().unwrap();
+    let rhs_key = same_context.input_key().unwrap();
+    let mut ordered: [Option<Tensor>; 2] = [None, None];
+    ordered[program.input_key_index(&lhs_key).unwrap()] =
+        Some(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap());
+    ordered[program.input_key_index(&rhs_key).unwrap()] =
+        Some(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap());
+    let inputs = ordered.into_iter().map(Option::unwrap).collect();
+    assert_eq!(
+        run_compiled_one(&program, inputs)
+            .as_slice::<f64>()
+            .unwrap(),
+        &[4.0]
+    );
 }
 
 #[test]
