@@ -1,6 +1,36 @@
 use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan};
 use tenferro_tensor::{DType, StridedSliceSpec, Tensor, TensorRead, TensorView, TypedTensor};
 
+/// Distance between two values in units in the last place, so that a check names a
+/// precision rather than a particular libm bit pattern.
+fn ulp_distance(left: f64, right: f64) -> u64 {
+    fn ordered(value: f64) -> i64 {
+        let bits = value.to_bits() as i64;
+        if bits < 0 {
+            i64::MIN.wrapping_sub(bits)
+        } else {
+            bits
+        }
+    }
+    ordered(left).abs_diff(ordered(right))
+}
+
+/// A contiguous run goes through the vector kernel and every other layout through `map_into`, and
+/// `simd_math` documents that the two agree element for element but differ in rounding by at most
+/// one ulp. So both the layout comparison and the libm reference are bounded in ulp, not exact; on
+/// aarch64 macOS `sin(4.0)` is one ulp away on both counts.
+fn assert_within_one_ulp(got: &[f64], want: &[f64], what: &str) {
+    const MAX_ULP: u64 = 1;
+    assert_eq!(got.len(), want.len(), "{what}: length");
+    for (index, (&got, &want)) in got.iter().zip(want).enumerate() {
+        let ulps = ulp_distance(got, want);
+        assert!(
+            ulps <= MAX_ULP,
+            "{what}: element {index} is {ulps} ulp apart (got {got:?}, want {want:?})"
+        );
+    }
+}
+
 #[test]
 fn static_analytic_replay_preserves_owned_and_reversed_values() {
     let mut backend = crate::engine(1);
@@ -68,7 +98,8 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
             _ => unreachable!(),
         }
         .unwrap();
-        assert_eq!(output.as_slice::<f64>().unwrap(), expected);
+        let owned_values = output.as_slice::<f64>().unwrap().to_vec();
+        assert_within_one_ulp(&owned_values, &expected, "owned read against libm");
         crate::run(&mut backend, |__s| __s.reclaim_buffer(output)).unwrap();
         let read = TensorRead::from_view(TensorView::F64(reversed.clone()));
         let output = match op {
@@ -84,9 +115,16 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
             _ => unreachable!(),
         }
         .unwrap();
-        assert_eq!(
-            output.as_slice::<f64>().unwrap(),
-            expected.into_iter().rev().collect::<Vec<_>>()
+        let reversed_values = output.as_slice::<f64>().unwrap();
+        assert_within_one_ulp(
+            reversed_values,
+            &owned_values.iter().rev().copied().collect::<Vec<_>>(),
+            "reversed read against the owned read",
+        );
+        assert_within_one_ulp(
+            reversed_values,
+            &expected.iter().rev().copied().collect::<Vec<_>>(),
+            "reversed read against libm",
         );
         crate::run(&mut backend, |__s| __s.reclaim_buffer(output)).unwrap();
     }
