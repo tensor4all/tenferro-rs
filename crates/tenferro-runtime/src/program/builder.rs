@@ -739,11 +739,80 @@ impl SemanticProgramBuilder {
         &self,
         value: ProgramValue,
     ) -> Result<Vec<ShapeExtent<DimExpr>>, ProgramBuildError> {
-        let bound_input_shapes: Vec<Option<Vec<DimExpr>>> = self
-            .inputs
+        self.value_metadata(value)?
+            .shape()
             .iter()
-            .map(|input| {
-                self.bindings
+            .enumerate()
+            .map(|(axis, _)| self.resolved_extent(value, axis))
+            .collect()
+    }
+
+    /// Resolve one of `value`'s declared extents against the shapes bound to the
+    /// inputs it names.
+    ///
+    /// A caller asking about a single axis pays only for the inputs that axis
+    /// references; an expression that is already constant needs no binding at all.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::dim_expr::DimExpr;
+    /// use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
+    /// use tenferro_runtime::DType;
+    ///
+    /// let mut builder = SemanticProgramBuilder::new();
+    /// let input = builder.input(ProgramInputSpec::new(
+    ///     DType::F64,
+    ///     [DimExpr::InputDim { input_idx: 0, axis: 0 }],
+    /// ))?;
+    /// let extent = builder.resolved_extent(input, 0)?;
+    /// // Nothing is bound, so the symbolic declaration is unchanged.
+    /// assert_eq!(
+    ///     extent,
+    ///     tenferro_ops::ShapeExtent::Exact(DimExpr::InputDim { input_idx: 0, axis: 0 })
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProgramBuildError::ForeignValue`] for a value of another builder,
+    /// or a metadata error when `axis` is outside the value's rank.
+    #[doc(hidden)]
+    pub fn resolved_extent(
+        &self,
+        value: ProgramValue,
+        axis: usize,
+    ) -> Result<ShapeExtent<DimExpr>, ProgramBuildError> {
+        let metadata = self.value_metadata(value)?;
+        let extent =
+            metadata
+                .shape()
+                .get(axis)
+                .ok_or_else(|| ProgramBuildError::InvalidImport {
+                    source: ProgramStructuralError::InvalidValueReference,
+                })?;
+        // Resolve only the inputs this one expression names: a constant extent, or
+        // one whose inputs carry no binding, needs no lookup at all.
+        let resolve = |expr: &DimExpr| -> DimExpr {
+            let mut positions = Vec::new();
+            collect_input_positions(expr, &mut positions);
+            if positions.is_empty() || self.bindings.is_empty() {
+                // Nothing to resolve: a constant expression, or no binding at all.
+                return expr.clone();
+            }
+            positions.sort_unstable();
+            positions.dedup();
+            // Only the referenced positions are needed, so the table stops at the
+            // highest of them instead of spanning every input.
+            let mut shapes: Vec<Option<Vec<DimExpr>>> =
+                vec![None; positions.last().map_or(0, |position| position + 1)];
+            for position in positions {
+                let Some(input) = self.inputs.get(position) else {
+                    continue;
+                };
+                shapes[position] = self
+                    .bindings
                     .iter()
                     .find(|binding| binding.input == *input)
                     .map(|binding| {
@@ -753,24 +822,15 @@ impl SemanticProgramBuilder {
                             .iter()
                             .map(|&size| DimExpr::Const(size))
                             .collect()
-                    })
-            })
-            .collect();
-        Ok(self
-            .value_metadata(value)?
-            .shape()
-            .iter()
-            .map(|extent| match extent {
-                ShapeExtent::Exact(expr) => ShapeExtent::Exact(resolve_dim_expr_from_input_shapes(
-                    expr,
-                    &bound_input_shapes,
-                )),
-                ShapeExtent::UpperBound(expr) => ShapeExtent::UpperBound(
-                    resolve_dim_expr_from_input_shapes(expr, &bound_input_shapes),
-                ),
-                ShapeExtent::Unknown => ShapeExtent::Unknown,
-            })
-            .collect())
+                    });
+            }
+            resolve_dim_expr_from_input_shapes(expr, &shapes)
+        };
+        Ok(match extent {
+            ShapeExtent::Exact(expr) => ShapeExtent::Exact(resolve(expr)),
+            ShapeExtent::UpperBound(expr) => ShapeExtent::UpperBound(resolve(expr)),
+            ShapeExtent::Unknown => ShapeExtent::Unknown,
+        })
     }
 
     #[cfg(test)]
