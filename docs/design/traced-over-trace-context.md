@@ -398,7 +398,9 @@ positions, so a transformed program never inherits the bound shapes. The binding
 are attached during the import itself rather than afterwards with
 `with_input_prefix_bindings_from`, and a symbolic `Reshape`/`BroadcastInDim`
 payload is translated from program input positions into the consuming
-operation's own input coordinates. A derivative built from symbolic extents is
+operation's own input coordinates by
+`SemanticProgramBuilder::translate_input_shape_payload`, which the AD transform
+and the einsum rule share. A derivative built from symbolic extents is
 therefore shape-polymorphic, including for a symbolically declared input that
 carries data.
 
@@ -420,8 +422,11 @@ it builds that structure. Two exceptions are as-built and accepted:
    differs is out of contract.
 
 Everything derived from extents (`Reshape`, `BroadcastInDim`, `DynamicTruncate`)
-stays symbolic, so a derivative is reusable across bindings that share the
-singleton pattern of the one it was built from.
+stays symbolic, so a derivative is reusable across any binding for which the
+literal payloads it was built with are still valid: the same singleton pattern
+*and* the same lengths where a rule embedded one (a `Slice` inverse padding built
+for length 5 is wrong for length 7, whatever its singleton pattern). A derivative
+is not reusable across a binding that changes either.
 
 As built, dead extension outputs are pruned at **snapshot** time, so the graph a
 snapshot exposes (and therefore the primal program a caller compiles) already
