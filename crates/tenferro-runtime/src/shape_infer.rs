@@ -421,6 +421,57 @@ pub fn infer_output_extents(
     }
 }
 
+/// How precise the extents of an operation's inputs are.
+///
+/// This is the single statement of the rule that an output may only claim an exact
+/// extent when nothing it derives from is merely bounded. Every lowering path and the
+/// traced shape cache read it, so a new caller cannot invent a weaker variant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExtentPrecision {
+    /// Every input extent is exact.
+    Exact,
+    /// Some input extent is only an upper bound.
+    Bounded,
+    /// Some input extent is unknown, so no bound can be derived at all.
+    Unknown,
+}
+
+/// Summarise the precision of a set of extents.
+pub(crate) fn extent_precision<'a>(
+    extents: impl IntoIterator<Item = &'a ShapeExtent<DimExpr>>,
+) -> ExtentPrecision {
+    let mut precision = ExtentPrecision::Exact;
+    for extent in extents {
+        match extent {
+            ShapeExtent::Unknown => return ExtentPrecision::Unknown,
+            ShapeExtent::UpperBound(_) => precision = ExtentPrecision::Bounded,
+            ShapeExtent::Exact(_) => {}
+        }
+    }
+    precision
+}
+
+/// Withhold exactness that `precision` does not justify.
+///
+/// A bounded input turns every `Exact` output into an `UpperBound`, and an unknown
+/// input turns every output into `Unknown`. Exactness is never claimed, only withheld;
+/// an all-exact instruction keeps its extents unchanged.
+pub(crate) fn withhold_unproved_exactness(
+    extents: impl IntoIterator<Item = ShapeExtent<DimExpr>>,
+    precision: ExtentPrecision,
+) -> impl Iterator<Item = ShapeExtent<DimExpr>> {
+    extents.into_iter().map(move |extent| match precision {
+        ExtentPrecision::Exact => extent,
+        ExtentPrecision::Bounded => match extent {
+            ShapeExtent::Exact(expression) | ShapeExtent::UpperBound(expression) => {
+                ShapeExtent::UpperBound(expression)
+            }
+            ShapeExtent::Unknown => ShapeExtent::Unknown,
+        },
+        ExtentPrecision::Unknown => ShapeExtent::Unknown,
+    })
+}
+
 /// Compute the full `(dtype, shape)` meta for every output of a
 /// `StdTensorOp::Extension(op)` instruction.
 ///

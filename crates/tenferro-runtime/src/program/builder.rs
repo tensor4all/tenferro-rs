@@ -981,7 +981,9 @@ impl SemanticProgramBuilder {
         inputs: &[ProgramValue],
     ) -> Result<Vec<ProgramValueMetadata>, ProgramBuildError> {
         let input_metadata = self.input_metadata(inputs)?;
-        let precision = input_extent_precision(&input_metadata);
+        let precision = crate::shape_infer::extent_precision(
+            input_metadata.iter().flat_map(|metadata| metadata.shape()),
+        );
         let input_dtypes: Vec<_> = input_metadata
             .iter()
             .map(|metadata| metadata.dtype())
@@ -1020,7 +1022,8 @@ impl SemanticProgramBuilder {
                 .map(|shape| {
                     ProgramValueMetadata::from_extents(
                         dtype,
-                        conservatively_bound_extents(shape, precision),
+                        crate::shape_infer::withhold_unproved_exactness(shape, precision)
+                            .collect::<Vec<_>>(),
                     )
                 })
                 .collect())
@@ -1033,7 +1036,9 @@ impl SemanticProgramBuilder {
         inputs: &[ProgramValue],
     ) -> Result<(Vec<ProgramValueMetadata>, Vec<ShapeGuard>), ProgramBuildError> {
         let input_metadata = self.input_metadata(inputs)?;
-        let precision = input_extent_precision(&input_metadata);
+        let precision = crate::shape_infer::extent_precision(
+            input_metadata.iter().flat_map(|metadata| metadata.shape()),
+        );
         let input_dtypes: Vec<_> = input_metadata
             .iter()
             .map(|metadata| metadata.dtype())
@@ -1052,10 +1057,11 @@ impl SemanticProgramBuilder {
             .map(|(dtype, shape)| {
                 ProgramValueMetadata::from_extents(
                     dtype,
-                    conservatively_bound_extents(
+                    crate::shape_infer::withhold_unproved_exactness(
                         shape.into_iter().map(ShapeExtent::Exact),
                         precision,
-                    ),
+                    )
+                    .collect::<Vec<_>>(),
                 )
             })
             .collect();
@@ -1680,13 +1686,6 @@ impl ImportTransaction {
     }
 }
 
-#[derive(Clone, Copy)]
-enum InputExtentPrecision {
-    Exact,
-    Bounded,
-    Unknown,
-}
-
 /// Replace every `InputDim { input_idx: position, .. }` in `expr` with the
 /// corresponding axis of `bound`.
 ///
@@ -1902,43 +1901,15 @@ fn remap_imported_dim_expr(
     }
 }
 
-fn input_extent_precision(metadata: &[&ProgramValueMetadata]) -> InputExtentPrecision {
-    let mut precision = InputExtentPrecision::Exact;
-    for extent in metadata.iter().flat_map(|metadata| metadata.shape()) {
-        match extent {
-            ShapeExtent::Unknown => return InputExtentPrecision::Unknown,
-            ShapeExtent::UpperBound(_) => precision = InputExtentPrecision::Bounded,
-            ShapeExtent::Exact(_) => {}
-        }
-    }
-    precision
-}
-
-fn conservatively_bound_extents(
-    extents: impl IntoIterator<Item = ShapeExtent<DimExpr>>,
-    precision: InputExtentPrecision,
-) -> impl Iterator<Item = ShapeExtent<DimExpr>> {
-    extents.into_iter().map(move |extent| match precision {
-        InputExtentPrecision::Exact => extent,
-        InputExtentPrecision::Bounded => match extent {
-            ShapeExtent::Exact(expression) | ShapeExtent::UpperBound(expression) => {
-                ShapeExtent::UpperBound(expression)
-            }
-            ShapeExtent::Unknown => ShapeExtent::Unknown,
-        },
-        InputExtentPrecision::Unknown => ShapeExtent::Unknown,
-    })
-}
-
 fn resolve_inferred_extents(
     extents: impl IntoIterator<Item = ShapeExtent<DimExpr>>,
-    precision: InputExtentPrecision,
+    precision: crate::shape_infer::ExtentPrecision,
     input_shapes: &[&[DimExpr]],
 ) -> Result<Vec<ShapeExtent<DimExpr>>, ProgramBuildError> {
     extents
         .into_iter()
         .map(|extent| {
-            if matches!(precision, InputExtentPrecision::Unknown) {
+            if matches!(precision, crate::shape_infer::ExtentPrecision::Unknown) {
                 return Ok(ShapeExtent::Unknown);
             }
             let resolved = match extent {
@@ -1953,14 +1924,14 @@ fn resolve_inferred_extents(
                 ShapeExtent::Unknown => ShapeExtent::Unknown,
             };
             Ok(match precision {
-                InputExtentPrecision::Exact => resolved,
-                InputExtentPrecision::Bounded => match resolved {
+                crate::shape_infer::ExtentPrecision::Exact => resolved,
+                crate::shape_infer::ExtentPrecision::Bounded => match resolved {
                     ShapeExtent::Exact(expression) | ShapeExtent::UpperBound(expression) => {
                         ShapeExtent::UpperBound(expression)
                     }
                     ShapeExtent::Unknown => ShapeExtent::Unknown,
                 },
-                InputExtentPrecision::Unknown => unreachable!("handled above"),
+                crate::shape_infer::ExtentPrecision::Unknown => unreachable!("handled above"),
             })
         })
         .collect()

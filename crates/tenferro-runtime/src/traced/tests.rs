@@ -764,3 +764,27 @@ fn fixed_shape_outer_product_folds_its_broadcasts_into_views() {
         [1.0, 2.0, 3.0, 4.0, 5.0]
     );
 }
+
+#[test]
+fn a_bound_only_extent_is_never_reported_as_a_concrete_shape() {
+    let trace = crate::TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])
+        .unwrap();
+    let keep = trace.from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let truncated = x.dynamic_truncate(&keep, 0).unwrap();
+    // The truncation declares `[4]` but holds two elements, so the extent is only an
+    // upper bound and must not surface as a concrete shape.
+    assert_eq!(truncated.try_concrete_shape(), None);
+
+    // A caller-supplied hint must not restore the declared length.
+    let reshaped = truncated.reshape([4]).unwrap();
+    assert_eq!(
+        reshaped.try_concrete_shape(),
+        None,
+        "the reshape hint must not turn a bounded extent into a concrete shape"
+    );
+    // The value has no exact extents, so it carries no symbolic cache at all; callers
+    // build one axis at a time with `axis_sym_dim`.
+    assert!(reshaped.sym_shape().is_none());
+}
