@@ -567,9 +567,9 @@ fn test_dot_decomposer_scalar_operand_becomes_a_transpose_and_scale() {
 
 #[test]
 fn test_degenerate_dot_with_symbolic_output_shape_reads_its_shape_reference() {
-    // An outer product of `[InputDim(slot 0, 0)]` with a scalar. The emitted
-    // broadcast names the vector slot, not its own operand, so it has to read that
-    // slot as a shape reference instead of leaving the program input index in place.
+    // An outer product whose operand shapes are symbolic. The emitted broadcasts
+    // must build their payload from their own inputs, so no program-slot index can
+    // be mistaken for an operation-local one.
     let instr = dot_general_exec_instr(
         vec![],
         vec![],
@@ -577,10 +577,16 @@ fn test_degenerate_dot_with_symbolic_output_shape_reads_its_shape_reference() {
         vec![],
         vec![0, 1],
         2,
-        vec![DimExpr::InputDim {
-            input_idx: 0,
-            axis: 0,
-        }],
+        vec![
+            DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            },
+            DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            },
+        ],
     );
     let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
 
@@ -591,30 +597,44 @@ fn test_degenerate_dot_with_symbolic_output_shape_reads_its_shape_reference() {
                 input_idx: 0,
                 axis: 0,
             }],
-            vec![],
+            vec![DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
         ],
     )
     .unwrap();
 
-    let broadcast = program
+    let broadcasts: Vec<_> = program
         .instructions
         .iter()
-        .find(|instruction| matches!(instruction.op, ExecOp::BroadcastInDim { .. }))
-        .expect("an outer product broadcasts its scalar operand");
+        .filter(|instruction| matches!(instruction.op, ExecOp::BroadcastInDim { .. }))
+        .collect();
     assert_eq!(
-        broadcast.input_slots.len(),
+        broadcasts.len(),
         2,
-        "the broadcast reads the vector slot as its shape reference: {:?}",
-        broadcast.input_slots
+        "an outer product broadcasts both sides"
     );
-    assert_eq!(
-        broadcast.input_slots[1], 0,
-        "the appended shape reference is the program input slot the payload named"
-    );
-    assert!(matches!(
-        &broadcast.op,
-        ExecOp::BroadcastInDim { shape, dims }
-            if dims.is_empty()
-                && shape == &[DimExpr::InputDim { input_idx: 1, axis: 0 }]
-    ));
+    for broadcast in broadcasts {
+        assert_eq!(
+            broadcast.input_slots.len(),
+            2,
+            "each broadcast reads its own operand and its partner's axes"
+        );
+        assert!(matches!(
+            &broadcast.op,
+            ExecOp::BroadcastInDim { shape, .. }
+                if shape.len() == 2 && shape.iter().all(DimExpr::is_const).eq(&false)
+        ));
+        // Both payload references stay inside this instruction's inputs.
+        let ExecOp::BroadcastInDim { shape, .. } = &broadcast.op else {
+            unreachable!()
+        };
+        for extent in shape {
+            assert!(
+                extent.max_input_idx().is_none_or(|axis| axis < 2),
+                "payload {extent:?} names a position outside the broadcast's inputs"
+            );
+        }
+    }
 }

@@ -393,17 +393,29 @@ fn rewrite_degenerate_dot(
         }
         let lhs_operand = emit_conj_if_needed(lhs, input.lhs_conj, instr, builder);
         let rhs_operand = emit_conj_if_needed(rhs, input.rhs_conj, instr, builder);
+        // Both sides expand to the dot's output shape, [lhs axes..., rhs axes...],
+        // built from each broadcast's own inputs: the operand is input 0 and the
+        // other operand is input 1, read only for its axes. No payload names a
+        // program slot, so no coordinate convention has to be inferred.
+        let lhs_target: Vec<DimExpr> = shape_of_operand(0, lhs_operand.shape.len())
+            .into_iter()
+            .chain(shape_of_operand(1, rhs.shape.len()))
+            .collect();
         let lhs_broadcast = emit_broadcast(
-            lhs_operand,
+            vec![lhs_operand.slot, rhs_operand.slot],
             (0..lhs.shape.len()).collect(),
-            &instr.output_shapes[0],
+            lhs_target,
             instr,
             builder,
         );
+        let rhs_target: Vec<DimExpr> = shape_of_operand(1, lhs.shape.len())
+            .into_iter()
+            .chain(shape_of_operand(0, rhs_operand.shape.len()))
+            .collect();
         let rhs_broadcast = emit_broadcast(
-            rhs_operand,
+            vec![rhs_operand.slot, lhs_operand.slot],
             (lhs.shape.len()..lhs.shape.len() + rhs.shape.len()).collect(),
-            &instr.output_shapes[0],
+            rhs_target,
             instr,
             builder,
         );
@@ -460,7 +472,16 @@ fn rewrite_degenerate_dot(
         extents: transposed_extents,
     };
     let scalar = emit_conj_if_needed(scalar, scalar_conj, instr, builder);
-    let scalar = emit_broadcast(scalar, Vec::new(), &instr.output_shapes[0], instr, builder);
+    // The transposed value is this broadcast's second input, so the scalar reaches
+    // the output shape without naming any program-slot index.
+    let scalar_target = shape_of_operand(1, transposed.shape.len());
+    let scalar = emit_broadcast(
+        vec![scalar.slot, transposed.slot],
+        Vec::new(),
+        scalar_target,
+        instr,
+        builder,
+    );
     builder.push(ExecInstruction {
         op: ExecOp::Multiply,
         semantic_operation_index: instr.semantic_operation_index,
@@ -474,55 +495,6 @@ fn rewrite_degenerate_dot(
         effectful: false,
     });
     Ok(true)
-}
-
-/// Rewrite one shape payload expression from program-slot coordinates into the
-/// coordinates of the instruction that will carry it.
-///
-/// Every program input slot an expression names is appended to `input_slots` (once)
-/// and its reference is renumbered to that position, which the emitting instruction
-/// then reads as a shape reference instead of data.
-fn translate_shape_payload(expr: &DimExpr, input_slots: &mut Vec<usize>) -> DimExpr {
-    match expr {
-        DimExpr::Const(value) => DimExpr::Const(*value),
-        DimExpr::InputDim { input_idx, axis } => {
-            let positioned = match input_slots.iter().position(|slot| slot == input_idx) {
-                Some(position) => position,
-                None => {
-                    input_slots.push(*input_idx);
-                    input_slots.len() - 1
-                }
-            };
-            DimExpr::InputDim {
-                input_idx: positioned,
-                axis: *axis,
-            }
-        }
-        DimExpr::Add(lhs, rhs) => DimExpr::Add(
-            Box::new(translate_shape_payload(lhs, input_slots)),
-            Box::new(translate_shape_payload(rhs, input_slots)),
-        ),
-        DimExpr::Sub(lhs, rhs) => DimExpr::Sub(
-            Box::new(translate_shape_payload(lhs, input_slots)),
-            Box::new(translate_shape_payload(rhs, input_slots)),
-        ),
-        DimExpr::Mul(lhs, rhs) => DimExpr::Mul(
-            Box::new(translate_shape_payload(lhs, input_slots)),
-            Box::new(translate_shape_payload(rhs, input_slots)),
-        ),
-        DimExpr::FloorDiv(lhs, rhs) => DimExpr::FloorDiv(
-            Box::new(translate_shape_payload(lhs, input_slots)),
-            Box::new(translate_shape_payload(rhs, input_slots)),
-        ),
-        DimExpr::Min(lhs, rhs) => DimExpr::Min(
-            Box::new(translate_shape_payload(lhs, input_slots)),
-            Box::new(translate_shape_payload(rhs, input_slots)),
-        ),
-        DimExpr::Max(lhs, rhs) => DimExpr::Max(
-            Box::new(translate_shape_payload(lhs, input_slots)),
-            Box::new(translate_shape_payload(rhs, input_slots)),
-        ),
-    }
 }
 
 /// The permutation that reads `operand_shape` in `output_shape`'s order, or
@@ -545,24 +517,20 @@ fn permutation_into(operand_shape: &[DimExpr], output_shape: &[DimExpr]) -> Opti
     Some(perm)
 }
 
-/// Broadcast one operand's axes into the output shape (`dims` maps each of the
-/// operand's axes to the output axis it lands on).
+/// Emit a broadcast whose payload and input slots are already in *this*
+/// instruction's own coordinates.
+///
+/// Callers build `shape` with [`shape_of_operand`] and pass the slots it refers
+/// to, so the payload never depends on whether the surrounding slot metadata names
+/// program inputs or an operation-local payload.
 fn emit_broadcast(
-    operand: EmittedOperand,
+    input_slots: Vec<usize>,
     dims: Vec<usize>,
-    output_shape: &[DimExpr],
+    shape: Vec<DimExpr>,
     instr: &ExecInstruction,
     builder: &mut InstructionBuilder<'_>,
 ) -> EmittedOperand {
     let out_slot = builder.next_slot();
-    // `output_shape` names program input slots, while this instruction names only
-    // its own inputs: translate the payload and read every referenced slot as an
-    // auxiliary shape reference, exactly as the semantic layer does.
-    let mut input_slots = vec![operand.slot];
-    let shape: Vec<DimExpr> = output_shape
-        .iter()
-        .map(|dim| translate_shape_payload(dim, &mut input_slots))
-        .collect();
     builder.push(ExecInstruction {
         op: ExecOp::BroadcastInDim {
             shape: shape.clone(),
@@ -580,9 +548,14 @@ fn emit_broadcast(
     });
     EmittedOperand {
         slot: out_slot,
+        extents: exact_extents_from_shape(&shape),
         shape,
-        extents: exact_extents_from_shape(output_shape),
     }
+}
+
+/// The axes of the instruction input at `position`, as a broadcast payload.
+fn shape_of_operand(position: usize, rank: usize) -> Vec<DimExpr> {
+    DimExpr::input_shape(position, rank)
 }
 
 /// Rewrite a fully contracting `DotGeneral` (rank-0 output) into an elementwise

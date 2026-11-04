@@ -673,3 +673,44 @@ fn symbolic_axis_identity_is_unique_per_traced_value() {
         "unexpected error: {error}"
     );
 }
+
+#[test]
+fn outer_product_of_a_reshaped_operand_reads_only_its_own_shape() {
+    let trace = crate::TraceContext::new();
+    let scalar = trace.from_vec_col_major(vec![], vec![7.0_f64]).unwrap();
+    let x = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap();
+    // The reshape payload names *its own* input 0, not program input 0.
+    let rows = x.sym_size(0).unwrap();
+    let reshaped = x
+        .reshape_sym(&[rows, tenferro_ops::SymDim::from(1usize)])
+        .unwrap();
+    // An empty DotGeneral config is an outer product.
+    let outer = reshaped
+        .dot_general(
+            &reshaped,
+            DotGeneralConfig {
+                lhs_contracting_dims: Default::default(),
+                rhs_contracting_dims: Default::default(),
+                lhs_batch_dims: Default::default(),
+                rhs_batch_dims: Default::default(),
+            },
+        )
+        .unwrap();
+    assert_eq!(outer.rank, 4);
+    // Keep the scalar live so it stays program input 0: the reshape payload names
+    // *its own* operand, which is the second program input.
+    let output = (&outer + &scalar).unwrap();
+
+    let program = GraphCompiler::new().compile(&output).unwrap();
+    let result = run_compiled_one(
+        &program,
+        vec![
+            Tensor::from_vec_col_major(vec![], vec![7.0_f64]).unwrap(),
+            Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+        ],
+    );
+    assert_eq!(result.shape(), &[2, 1, 2, 1]);
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[8.0, 9.0, 9.0, 11.0]);
+}
