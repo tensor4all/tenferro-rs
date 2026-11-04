@@ -88,15 +88,54 @@ impl Drop for ActivatedContext {
     }
 }
 
+/// Default bound on the retained download staging: 8 MiB.
+///
+/// Pinning costs about 1.9 ms, so the buffer is kept — but it is page-locked memory the allocator
+/// cannot reclaim. 8 MiB covers the readbacks this path exists for (solver `info` words, norms,
+/// ranks, a 1024x1024 f64 matrix) with room to spare; a larger download stages through a temporary
+/// buffer and leaves nothing resident. Raise it with
+/// [`CudaRuntime::set_pinned_staging_limit_bytes`] when large downloads repeat.
+pub const DEFAULT_PINNED_STAGING_LIMIT_BYTES: usize = 8 * 1024 * 1024;
+
+/// What a runtime's download staging retains, and the bound it retains it under.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), tenferro_gpu::cuda::CudaEngineError> {
+/// use tenferro_gpu::cuda::{gpu_available, CudaDeviceId, CudaRuntime};
+///
+/// # if gpu_available() {
+/// let runtime = CudaRuntime::new(CudaDeviceId::from_ordinal(0))?;
+/// let stats = runtime.pinned_staging_stats();
+/// if stats.retained_bytes > stats.limit_bytes {
+///     runtime.clear_pinned_staging();
+/// }
+/// println!("{stats:?}");
+/// # }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PinnedStagingStats {
+    /// Bytes the cached staging buffer holds right now.
+    pub retained_bytes: usize,
+    /// Pinned host allocations this runtime made for staging, cumulative: the first download, each
+    /// later growth, and each temporary buffer used above the bound or re-pinned after a clear.
+    pub allocations: u64,
+    /// Largest download whose staging is retained.
+    pub limit_bytes: usize,
+}
+
 /// State shared by every handle to one runtime.
 pub(crate) struct CudaRuntimeState {
     /// Pinned host staging reused by explicit downloads. Allocating and freeing one per download
     /// cost far more than the copy (a 4-byte `cuMemHostAlloc` measured 1.9 ms beside a 19 us
     /// device-to-host copy), so one buffer lives here and grows on demand.
     pub(crate) pinned_staging: Mutex<Option<crate::cuda::raw::PinnedStaging>>,
-    /// Pinned staging allocations this runtime made, whoever asked. One for the first download and
-    /// one per later growth; a per-call allocation would count every download.
-    pub(crate) pinned_staging_allocations: std::sync::atomic::AtomicU64,
+    /// What that buffer retains, the bound it retains it under, and how many pinned allocations
+    /// this runtime made for staging.
+    pub(crate) pinned_staging_accounting: crate::cuda::raw::StagingAccounting,
 
     /// The execution owner. Explicit transfers take this lock for one admission;
     /// numerical submission borrows it mutably through the engine.
@@ -272,7 +311,9 @@ impl CudaRuntime {
                 stream_waits: std::sync::atomic::AtomicU64::new(0),
                 completion_checkpoints: std::sync::atomic::AtomicU64::new(0),
                 pinned_staging: Mutex::new(None),
-                pinned_staging_allocations: std::sync::atomic::AtomicU64::new(0),
+                pinned_staging_accounting: crate::cuda::raw::StagingAccounting::new(
+                    DEFAULT_PINNED_STAGING_LIMIT_BYTES,
+                ),
             }),
         })
     }
@@ -533,9 +574,127 @@ impl CudaRuntime {
     #[doc(hidden)]
     #[must_use]
     pub fn pinned_staging_allocations(&self) -> u64 {
-        self.inner
-            .pinned_staging_allocations
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.inner.pinned_staging_accounting.allocations()
+    }
+
+    /// What the download staging currently retains: bytes, pinned allocations, and the bound.
+    ///
+    /// Downloads reuse one page-locked host buffer, because pinning it costs about 1.9 ms beside a
+    /// 19 us copy. The buffer is memory the OS cannot reclaim, so it is bounded (see
+    /// [`CudaRuntime::set_pinned_staging_limit_bytes`]) and can be released early with
+    /// [`CudaRuntime::clear_pinned_staging`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), tenferro_gpu::cuda::CudaEngineError> {
+    /// use tenferro_gpu::cuda::{gpu_available, CudaDeviceId, CudaRuntime};
+    ///
+    /// # if gpu_available() {
+    /// let runtime = CudaRuntime::new(CudaDeviceId::from_ordinal(0))?;
+    /// let stats = runtime.pinned_staging_stats();
+    /// println!("{} bytes retained, {} allocations", stats.retained_bytes, stats.allocations);
+    /// # }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn pinned_staging_stats(&self) -> PinnedStagingStats {
+        let accounting = &self.inner.pinned_staging_accounting;
+        PinnedStagingStats {
+            retained_bytes: accounting.retained(),
+            allocations: accounting.allocations(),
+            limit_bytes: accounting.limit(),
+        }
+    }
+
+    /// Bound the download staging, releasing a larger buffer at once.
+    ///
+    /// A download above this size still stages through host memory, but through a buffer released
+    /// when that download returns, so nothing above the bound stays resident. Lowering the bound
+    /// below what is retained releases the cached buffer; `usize::MAX` keeps every download.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), tenferro_gpu::cuda::CudaEngineError> {
+    /// use tenferro_gpu::cuda::{gpu_available, CudaDeviceId, CudaRuntime};
+    ///
+    /// # if gpu_available() {
+    /// let runtime = CudaRuntime::new(CudaDeviceId::from_ordinal(0))?;
+    /// runtime.set_pinned_staging_limit_bytes(1024 * 1024);
+    /// assert_eq!(runtime.pinned_staging_stats().limit_bytes, 1024 * 1024);
+    /// # }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_pinned_staging_limit_bytes(&self, limit: usize) {
+        self.inner.pinned_staging_accounting.set_limit(limit);
+        self.release_staging_above(limit);
+    }
+
+    /// Release the retained download staging now.
+    ///
+    /// The next download pins a buffer again. Returns the bytes released, so a caller can tell the
+    /// call apart from one that found nothing to release.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), tenferro_gpu::cuda::CudaEngineError> {
+    /// use tenferro_gpu::cuda::{gpu_available, CudaDeviceId, CudaRuntime};
+    ///
+    /// # if gpu_available() {
+    /// let runtime = CudaRuntime::new(CudaDeviceId::from_ordinal(0))?;
+    /// let released = runtime.clear_pinned_staging();
+    /// assert_eq!(runtime.pinned_staging_stats().retained_bytes, 0);
+    /// # let _ = released;
+    /// # }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn clear_pinned_staging(&self) -> usize {
+        self.release_staging_above(0)
+    }
+
+    /// Drop the cached buffer when it exceeds `limit`, and report the bytes actually released.
+    ///
+    /// The free runs inside this runtime's raw scope, which makes the owning context current on
+    /// this thread; without it `cuMemFreeHost` can fail with `CUDA_ERROR_INVALID_CONTEXT` on a
+    /// thread that never activated the context. A failed free keeps the buffer and its accounting,
+    /// because dropping the pointer would leak the allocation while reporting it released.
+    fn release_staging_above(&self, limit: usize) -> usize {
+        let Ok(mut slot) = self.inner.pinned_staging.lock() else {
+            return 0;
+        };
+        let Some(entry) = slot.as_ref() else {
+            return 0;
+        };
+        let released = entry.bytes();
+        if released == 0 || released <= limit {
+            return 0;
+        }
+        // No download is in flight: it would hold this lock, and it synchronizes before releasing
+        // it, so nothing queued still reads this buffer.
+        let pointer = entry.pointer();
+        let freed = unsafe {
+            self.with_raw_locked(Vec::new(), |_raw| {
+                cudarc::driver::sys::cuMemFreeHost(pointer)
+            })
+        };
+        match freed {
+            Ok(cudarc::driver::sys::CUresult::CUDA_SUCCESS) => {
+                *slot = None;
+                self.inner.pinned_staging_accounting.record_retained(0);
+                released
+            }
+            other => {
+                // Keep the buffer: it is still allocated, so the accounting stays truthful and a
+                // later clear can retry.
+                let _ = other;
+                0
+            }
+        }
     }
 
     /// Wait for every queued operation and retire the detached handles it completes.

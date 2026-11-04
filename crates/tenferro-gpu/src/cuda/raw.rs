@@ -251,18 +251,32 @@ impl<'s> Session<'s> {
         op: &'static str,
     ) -> crate::Result<TypedTensor<T>> {
         let (pointer, bytes) = self.address(tensor, op)?;
-        // One pinned staging buffer per runtime, reused by every later download. A nested
-        // download (the caller still holds a session resource, so the lock is taken) keeps its
-        // own buffer instead of blocking on the cache.
-        let allocations = &self.runtime.inner.pinned_staging_allocations;
+        // One pinned staging buffer per runtime, reused by every later download; a download that
+        // cannot take the cache (a nested one) keeps its own buffer instead of blocking on it.
+        //
+        // Above the retained bound nothing is kept: the download stages through a temporary
+        // buffer that its `Drop` releases when this call returns, so a single large readback
+        // cannot pin that much memory for the runtime's lifetime (tenferro-rs #2440). The bound
+        // is read while holding the same lock a limit change takes, so a concurrent
+        // `set_pinned_staging_limit_bytes` cannot race a decision made from the old value.
+        let accounting = &self.runtime.inner.pinned_staging_accounting;
         let mut cached = self.runtime.inner.pinned_staging.try_lock().ok();
+        if cached
+            .as_ref()
+            .is_some_and(|_| bytes.max(1) > accounting.limit())
+        {
+            cached = None;
+        }
         let mut fallback = PinnedStaging::empty();
         let destination = match cached.as_mut() {
             Some(slot) => {
-                slot.get_or_insert_with(PinnedStaging::empty)
-                    .ensure(bytes, op, allocations)?
+                let entry = slot.get_or_insert_with(PinnedStaging::empty);
+                let pointer = entry.ensure(bytes, op, accounting)?;
+                // Only the cached buffer is retained; a temporary one never enters the count.
+                accounting.record_retained(entry.bytes());
+                pointer
             }
-            None => fallback.ensure(bytes, op, allocations)?,
+            None => fallback.ensure(bytes, op, accounting)?,
         };
         let status = unsafe {
             cudarc::driver::sys::cuMemcpyDtoHAsync_v2(
@@ -566,10 +580,57 @@ pub(crate) struct PinnedStaging {
     bytes: usize,
 }
 
+/// What a runtime's download staging retains, and the bound it retains it under.
+///
+/// The buffer is page-locked host memory, so an unbounded one holds memory the allocator cannot
+/// reclaim: a single large download would keep that much pinned for the runtime's lifetime. The
+/// bound decides what is kept; a download above it stages through a temporary buffer that is
+/// released when the call returns.
+pub(crate) struct StagingAccounting {
+    /// Bytes the cached buffer currently holds.
+    retained: std::sync::atomic::AtomicUsize,
+    /// Pinned allocations this runtime made for staging, growth included.
+    allocations: std::sync::atomic::AtomicU64,
+    /// Largest download whose staging is retained.
+    limit: std::sync::atomic::AtomicUsize,
+}
+
+impl StagingAccounting {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            retained: std::sync::atomic::AtomicUsize::new(0),
+            allocations: std::sync::atomic::AtomicU64::new(0),
+            limit: std::sync::atomic::AtomicUsize::new(limit),
+        }
+    }
+
+    pub(crate) fn retained(&self) -> usize {
+        self.retained.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn allocations(&self) -> u64 {
+        self.allocations.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn limit(&self) -> usize {
+        self.limit.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_limit(&self, limit: usize) {
+        self.limit
+            .store(limit, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Publish what the cached buffer holds. The runtime resets it when it releases the buffer.
+    pub(crate) fn record_retained(&self, retained: usize) {
+        self.retained
+            .store(retained, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 // SAFETY: the buffer is a plain page-locked host allocation with no interior aliasing. It lives
-// behind the runtime state's mutex, so one download borrows it at a time.
+// behind the runtime state's mutex, so one thread owns it at a time; the mutex needs `Send` only.
 unsafe impl Send for PinnedStaging {}
-unsafe impl Sync for PinnedStaging {}
 
 impl PinnedStaging {
     /// The empty staging entry the runtime fills on its first download.
@@ -580,24 +641,29 @@ impl PinnedStaging {
         }
     }
 
+    /// Bytes this entry retains, zero for an empty one.
+    pub(crate) fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    /// The raw pinned allocation, which the runtime frees inside its own scope.
+    pub(crate) fn pointer(&self) -> *mut std::ffi::c_void {
+        self.pointer
+    }
+
     /// A writable staging area of at least `bytes` bytes, growing once if needed.
+    ///
+    /// Growth allocates the replacement before releasing the old buffer, so a failed allocation
+    /// leaves both the buffer and the accounting exactly as they were; every path publishes the
+    /// size actually retained.
     fn ensure(
         &mut self,
         bytes: usize,
         op: &'static str,
-        allocations: &std::sync::atomic::AtomicU64,
+        accounting: &StagingAccounting,
     ) -> crate::Result<*mut std::ffi::c_void> {
         let bytes = bytes.max(1);
         if self.pointer.is_null() || self.bytes < bytes {
-            // SAFETY: `pointer` is null or this entry's own live pinned allocation, released once
-            // here before the field is overwritten.
-            unsafe {
-                if !self.pointer.is_null() {
-                    let _ = cudarc::driver::sys::cuMemFreeHost(self.pointer);
-                }
-            }
-            self.pointer = std::ptr::null_mut();
-            self.bytes = 0;
             let mut pointer: *mut std::ffi::c_void = std::ptr::null_mut();
             let status = unsafe {
                 cudarc::driver::sys::cuMemHostAlloc(
@@ -612,9 +678,18 @@ impl PinnedStaging {
                     format!("cuMemHostAlloc failed with {status:?}"),
                 ));
             }
+            // SAFETY: `pointer` is null or this entry's own live pinned allocation, released once
+            // here after its replacement exists.
+            unsafe {
+                if !self.pointer.is_null() {
+                    let _ = cudarc::driver::sys::cuMemFreeHost(self.pointer);
+                }
+            }
             self.pointer = pointer;
             self.bytes = bytes;
-            allocations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            accounting
+                .allocations
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(self.pointer)
     }

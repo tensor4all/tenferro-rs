@@ -103,7 +103,9 @@ pub use publication::{
     PublicationAdmissionError, PublicationDownload, PublicationError, RejectedPublication,
     SourcePublication,
 };
-pub use runtime::{CudaRuntime, CudaRuntimeIdentity};
+pub use runtime::{
+    CudaRuntime, CudaRuntimeIdentity, PinnedStagingStats, DEFAULT_PINNED_STAGING_LIMIT_BYTES,
+};
 pub use transfer::{download_pending, download_tensor, upload_pending, upload_tensor};
 pub use vendor::{Cublas, GemmRequest};
 
