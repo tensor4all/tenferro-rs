@@ -20,7 +20,7 @@ use tenferro_fft::{FftExecutor, FftNorm, FftPlanCache, TracedTensorFftExt};
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::TracedTensor;
 use tenferro_runtime::{GraphCompiler, TraceContext};
-use tenferro_tensor::Tensor;
+use tenferro_tensor::{DotGeneralConfig, Tensor};
 
 const GOLDEN_3D_SHAPE: [usize; 3] = [2, 3, 4];
 
@@ -805,4 +805,49 @@ fn fftn_with_one_axis_shares_the_ad_rule_of_the_one_axis_transform() {
         expected.as_slice::<Complex64>().unwrap(),
         "one-axis fftn vjp",
     );
+}
+
+/// A truncated operand keeps its bound through an extension op.
+///
+/// `DynamicTruncate` declares `[4]` and holds two elements. The FFT extension keeps
+/// the axis length, so its output must not be published as an exact `[4]`: an outer
+/// product with a literal `[3]` would otherwise broadcast to `[4, 3]` instead of
+/// `[2, 3]`. Runs through `Runtime::prepare` with the production CPU registration, so
+/// the placement-aware view folding is active.
+#[test]
+fn outer_product_of_a_truncated_fft_uses_the_truncated_length() {
+    let trace = TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])
+        .expect("complex input");
+    let keep = trace
+        .from_vec_col_major(vec![], vec![2.0_f64])
+        .expect("truncation length");
+    let truncated = x.dynamic_truncate(&keep, 0).expect("truncate");
+    let transformed = truncated
+        .fft(None, 0, FftNorm::Backward)
+        .expect("traced fft");
+    let other = trace
+        .from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0])
+        .expect("second operand");
+    let outer = transformed
+        .dot_general(
+            &other,
+            DotGeneralConfig {
+                lhs_contracting_dims: Default::default(),
+                rhs_contracting_dims: Default::default(),
+                lhs_batch_dims: Default::default(),
+                rhs_batch_dims: Default::default(),
+            },
+        )
+        .expect("outer product");
+    let program = GraphCompiler::new().compile(&outer).expect("compile");
+
+    let x_value = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let keep_value = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let other_value = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap();
+    let output = support::run_one(&program, &[&x_value, &keep_value, &other_value])
+        .expect("execute prepared outer product");
+
+    assert_eq!(output.shape(), &[2, 3]);
 }

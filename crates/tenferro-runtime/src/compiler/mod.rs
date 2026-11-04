@@ -258,7 +258,10 @@ pub(crate) fn compile_std_to_exec_with_effects(
                     let shapes = resolve_shapes(&local_shapes, &input_shapes_refs)?;
                     let analysis_shapes =
                         resolve_shapes(&local_shapes, &analysis_input_shape_refs)?;
-                    let extents = exact_extents_from_shapes(&shapes);
+                    let extents = withhold_unproved_exactness(
+                        exact_extents_from_shapes(&shapes),
+                        &input_extents_refs,
+                    );
                     (dtypes, shapes, extents, analysis_shapes)
                 } else {
                     let dtype = infer_output_dtype(&instr.operation, &input_dtypes)?;
@@ -566,29 +569,48 @@ fn resolve_output_extents(
     input_shapes: &[&[DimExpr]],
     input_extents: &[&[ShapeExtent<DimExpr>]],
 ) -> Result<Vec<Vec<ShapeExtent<DimExpr>>>> {
-    // An operation that keeps its input's shape still only knows an upper bound
-    // when that input was bounded: `DynamicTruncate` declares `[4]` and holds two
-    // elements, so a `Neg` of it must not report `[4]` as exact. Nothing in the
-    // expression algebra can recover that, so the whole instruction is downgraded
-    // whenever any input is imprecise. Exactness is never claimed, only withheld.
-    let inputs_are_exact = input_extents.iter().all(|shape| {
+    let resolved = extents
+        .into_iter()
+        .map(|shape_extents| {
+            shape_extents
+                .into_iter()
+                .map(|extent| resolve_extent(extent, input_shapes, input_extents))
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(withhold_unproved_exactness(resolved, input_extents))
+}
+
+/// Stop claiming an exact extent that the inputs only bound.
+///
+/// An operation that keeps its input's shape still only knows an upper bound when
+/// that input was bounded: `DynamicTruncate` declares `[4]` and holds two elements, so
+/// a `Neg` or an FFT of it must not publish `[4]` as exact. Nothing in the expression
+/// algebra can recover an axis's precision, so every `Exact` of the instruction is
+/// downgraded whenever any input is imprecise. Exactness is never claimed, only
+/// withheld, and an all-exact instruction keeps its extents unchanged.
+///
+/// Both lowering branches call this: a core operation through
+/// [`resolve_output_extents`], an extension through its inferred shapes.
+fn withhold_unproved_exactness(
+    extents: Vec<Vec<ShapeExtent<DimExpr>>>,
+    input_extents: &[&[ShapeExtent<DimExpr>]],
+) -> Vec<Vec<ShapeExtent<DimExpr>>> {
+    if input_extents.iter().all(|shape| {
         shape
             .iter()
             .all(|extent| matches!(extent, ShapeExtent::Exact(_)))
-    });
+    }) {
+        return extents;
+    }
     extents
         .into_iter()
         .map(|shape_extents| {
             shape_extents
                 .into_iter()
-                .map(|extent| {
-                    let resolved = resolve_extent(extent, input_shapes, input_extents)?;
-                    Ok(match resolved {
-                        ShapeExtent::Exact(dim) if !inputs_are_exact => {
-                            ShapeExtent::upper_bound(dim)
-                        }
-                        other => other,
-                    })
+                .map(|extent| match extent {
+                    ShapeExtent::Exact(dim) => ShapeExtent::upper_bound(dim),
+                    other => other,
                 })
                 .collect()
         })

@@ -918,6 +918,7 @@ host	tenferro-fft::fft_ndim	fftn_real_input_matches_sequential_full_spectrum_fft
 host	tenferro-fft::fft_ndim	fftn_rejects_empty_repeated_and_mismatched_axes
 host	tenferro-fft::fft_ndim	fftn_reuses_one_plan_per_distinct_length_and_dtype
 host	tenferro-fft::fft_ndim	fftn_with_one_axis_is_exactly_the_one_axis_fft
+host	tenferro-fft::fft_ndim	outer_product_of_a_truncated_fft_uses_the_truncated_length
 host	tenferro-fft::fft_ndim	rfftn_irfftn_round_trip_restores_the_real_grid
 host	tenferro-fft::fft_ndim	rfftn_matches_the_golden_fixture_and_the_onesided_half_of_fftn
 host	tenferro-fft::fft_ndim	traced_fftn_family_matches_the_eager_executor
