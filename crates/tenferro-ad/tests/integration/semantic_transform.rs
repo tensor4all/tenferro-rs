@@ -1902,3 +1902,43 @@ fn semantic_program_transform_cache_reuses_bound_programs_without_stale_bindings
         .semantic_eq(second_vjp.frozen().program.as_ref()));
     assert_eq!(only_bound_f64_values(second_vjp.frozen()), vec![5.0, 7.0]);
 }
+
+#[test]
+fn dynamic_update_vjp_accepts_a_symbolically_declared_bound_update() {
+    let ad = ad_context();
+    let mut builder = SemanticProgramBuilder::new();
+    let operand = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(5)]))
+        .unwrap();
+    // The update arrives as a symbolically declared, data-attached input.
+    let update = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+        ))
+        .unwrap();
+    builder
+        .bind_input(
+            update,
+            Tensor::from_vec_col_major(vec![2], vec![8.0_f64, 9.0]).unwrap(),
+        )
+        .unwrap();
+    let starts = builder
+        .input(ProgramInputSpec::new(DType::I64, [DimExpr::Const(1)]))
+        .unwrap();
+    let updated = builder
+        .add_op(
+            CoreSemanticOp::DynamicUpdateSlice,
+            &[operand, update, starts],
+        )
+        .unwrap()[0];
+    let program = builder.finish(&[updated]).unwrap();
+
+    let vjp = ad
+        .vjp_program(&program, &[false, true, false], &[true])
+        .expect("a bound symbolic update must differentiate");
+    assert!(!vjp.derivative_output_indices().is_empty());
+}

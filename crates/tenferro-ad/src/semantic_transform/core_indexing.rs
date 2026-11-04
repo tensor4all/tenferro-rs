@@ -258,7 +258,8 @@ fn dynamic_update_slice_vjp(
         result[0] = normalize_ad_value(builder, AdValue::Value(value), true, primal_inputs[0])?;
     }
     if active_inputs[1] {
-        let update_shape = exact_usize_shape(builder, primal_inputs[1], "dynamic update input")?;
+        let update_shape =
+            bounded_usize_shape(builder, primal_inputs[1], "dynamic update input", false)?;
         let value = builder.add_op(
             CoreSemanticOp::DynamicSlice {
                 slice_sizes: update_shape,
@@ -356,22 +357,6 @@ fn zero_like(
     role: SemanticTransformRole,
 ) -> Result<ProgramValue, SemanticAdTransformError> {
     zero_constant_like(builder, anchor, role)
-}
-
-fn exact_usize_shape(
-    builder: &SemanticProgramBuilder,
-    value: ProgramValue,
-    field: &'static str,
-) -> Result<Vec<usize>, SemanticAdTransformError> {
-    builder
-        .value_metadata(value)?
-        .shape()
-        .iter()
-        .map(|extent| match extent {
-            ShapeExtent::Exact(DimExpr::Const(value)) => Ok(*value),
-            _ => Err(metadata_error(format!("{field} requires concrete extents"))),
-        })
-        .collect()
 }
 
 fn metadata_error(message: impl Into<String>) -> SemanticAdTransformError {

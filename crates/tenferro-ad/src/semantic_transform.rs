@@ -2115,6 +2115,40 @@ fn shape_plan(
     })
 }
 
+/// Literal axis lengths of `value`, for the rules that must emit them.
+///
+/// Programs imported for the transform keep their symbolic extents, so a value
+/// that carries a binding reads its concrete shape from the binding instead of
+/// forcing the whole transformed program to become concrete.
+pub(super) fn bounded_usize_shape(
+    builder: &SemanticProgramBuilder,
+    value: ProgramValue,
+    field: &'static str,
+    accept_upper_bound: bool,
+) -> Result<Vec<usize>, SemanticAdTransformError> {
+    let extents = builder.resolved_extents(value)?;
+    let lengths = extents
+        .iter()
+        .map(|extent| match extent {
+            ShapeExtent::Exact(DimExpr::Const(value)) => Some(*value),
+            ShapeExtent::UpperBound(DimExpr::Const(value)) if accept_upper_bound => Some(*value),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    if let Some(lengths) = lengths {
+        return Ok(lengths);
+    }
+    let expected = if accept_upper_bound {
+        "constant exact or upper-bound extents"
+    } else {
+        "concrete extents"
+    };
+    Err(SemanticAdTransformError::UnsupportedMetadata {
+        role: SemanticTransformRole::Vjp,
+        message: format!("{field} requires {expected}"),
+    })
+}
+
 fn reshape_ad_value_to_shape(
     builder: &mut SemanticProgramBuilder,
     value: AdValue,
