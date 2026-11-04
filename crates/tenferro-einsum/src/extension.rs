@@ -641,8 +641,12 @@ fn semantic_broadcast_einsum_vjp(
             "einsum VJP cannot remap labels {cotangent_labels:?} into {input_labels:?}"
         ))
     })?;
-    let broadcast =
-        builder.add_op(CoreSemanticOp::BroadcastInDim { shape, dims }, &[cotangent])?[0];
+    // `shape` names program inputs because it came from value metadata; the
+    // broadcast names only its own inputs, so translate it and pass the referenced
+    // program inputs as shape references.
+    let mut inputs = vec![cotangent];
+    let shape = builder.translate_input_shape_payload(&shape, &mut inputs);
+    let broadcast = builder.add_op(CoreSemanticOp::BroadcastInDim { shape, dims }, &inputs)?[0];
     semantic_project_repeated_labels(builder, broadcast, input_labels)
 }
 

@@ -633,6 +633,96 @@ impl SemanticProgramBuilder {
         })
     }
 
+    /// Translate a shape payload written in program coordinates into the
+    /// coordinates of the operation that will carry it.
+    ///
+    /// A rule derives a `Reshape`/`BroadcastInDim` payload from value metadata, so
+    /// its `InputDim`s name *program* inputs. The operation it lands on names only
+    /// its own inputs, so every referenced program input is appended to
+    /// `operation_inputs` as an auxiliary shape reference. Extents stay symbolic.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::dim_expr::DimExpr;
+    /// use tenferro_runtime::program::{CoreSemanticOp, ProgramInputSpec, SemanticProgramBuilder};
+    /// use tenferro_runtime::DType;
+    ///
+    /// let mut builder = SemanticProgramBuilder::new();
+    /// let operand = builder.input(ProgramInputSpec::new(
+    ///     DType::F64,
+    ///     [DimExpr::InputDim { input_idx: 0, axis: 0 }],
+    /// ))?;
+    /// let mut inputs = vec![operand];
+    /// let shape = builder.translate_input_shape_payload(
+    ///     &[DimExpr::InputDim { input_idx: 0, axis: 0 }],
+    ///     &mut inputs,
+    /// );
+    /// assert_eq!(shape, [DimExpr::InputDim { input_idx: 0, axis: 0 }]);
+    /// assert_eq!(inputs.len(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn translate_input_shape_payload(
+        &self,
+        payload: &[DimExpr],
+        operation_inputs: &mut Vec<ProgramValue>,
+    ) -> Vec<DimExpr> {
+        payload
+            .iter()
+            .map(|extent| self.translate_input_shape_extent(extent, operation_inputs))
+            .collect()
+    }
+
+    fn translate_input_shape_extent(
+        &self,
+        extent: &DimExpr,
+        operation_inputs: &mut Vec<ProgramValue>,
+    ) -> DimExpr {
+        match extent {
+            DimExpr::Const(value) => DimExpr::Const(*value),
+            DimExpr::InputDim { input_idx, axis } => {
+                let Some(input) = self.inputs.get(*input_idx) else {
+                    return extent.clone();
+                };
+                let positioned = match operation_inputs.iter().position(|value| value == input) {
+                    Some(position) => position,
+                    None => {
+                        operation_inputs.push(*input);
+                        operation_inputs.len() - 1
+                    }
+                };
+                DimExpr::InputDim {
+                    input_idx: positioned,
+                    axis: *axis,
+                }
+            }
+            DimExpr::Add(lhs, rhs) => DimExpr::Add(
+                Box::new(self.translate_input_shape_extent(lhs, operation_inputs)),
+                Box::new(self.translate_input_shape_extent(rhs, operation_inputs)),
+            ),
+            DimExpr::Sub(lhs, rhs) => DimExpr::Sub(
+                Box::new(self.translate_input_shape_extent(lhs, operation_inputs)),
+                Box::new(self.translate_input_shape_extent(rhs, operation_inputs)),
+            ),
+            DimExpr::Mul(lhs, rhs) => DimExpr::Mul(
+                Box::new(self.translate_input_shape_extent(lhs, operation_inputs)),
+                Box::new(self.translate_input_shape_extent(rhs, operation_inputs)),
+            ),
+            DimExpr::FloorDiv(lhs, rhs) => DimExpr::FloorDiv(
+                Box::new(self.translate_input_shape_extent(lhs, operation_inputs)),
+                Box::new(self.translate_input_shape_extent(rhs, operation_inputs)),
+            ),
+            DimExpr::Min(lhs, rhs) => DimExpr::Min(
+                Box::new(self.translate_input_shape_extent(lhs, operation_inputs)),
+                Box::new(self.translate_input_shape_extent(rhs, operation_inputs)),
+            ),
+            DimExpr::Max(lhs, rhs) => DimExpr::Max(
+                Box::new(self.translate_input_shape_extent(lhs, operation_inputs)),
+                Box::new(self.translate_input_shape_extent(rhs, operation_inputs)),
+            ),
+        }
+    }
+
     /// Borrow the program inputs in program input order.
     #[doc(hidden)]
     pub fn inputs(&self) -> &[ProgramValue] {
