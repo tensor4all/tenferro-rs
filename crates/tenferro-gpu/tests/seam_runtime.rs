@@ -155,8 +155,9 @@ fn the_driver_orders_a_launch_behind_its_dependency_and_retires_it() {
 #[test]
 #[ignore = "requires CUDA"]
 fn a_prepared_elementwise_program_runs_on_the_new_engine() {
+    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_gpu::cuda::{download_tensor, upload_tensor};
-    use tenferro_runtime::{ExecutionEngine, GraphCompiler, Output, Runtime, TracedTensor};
+    use tenferro_runtime::{ExecutionEngine, GraphCompiler, Output, Runtime};
     use tenferro_tensor::{DType, Tensor, TensorRead};
 
     let Some(mut engine) = engine() else { return };
@@ -167,7 +168,9 @@ fn a_prepared_elementwise_program_runs_on_the_new_engine() {
     let runtime = builder.build().expect("runtime");
 
     // `x + x`, one elementwise node.
-    let input = TracedTensor::input_symbolic_shape(DType::F32, 1).expect("graph input");
+    let input = trace
+        .input_symbolic_shape(DType::F32, 1)
+        .expect("graph input");
     let sum = input.add(&input).expect("graph add");
     let program = GraphCompiler::new()
         .compile_with_input_specs(&sum, &[(&input, DType::F32, &[4])])
@@ -202,8 +205,9 @@ fn a_prepared_elementwise_program_runs_on_the_new_engine() {
 #[test]
 #[ignore = "requires CUDA"]
 fn a_prepared_comparison_runs_on_the_new_engine() {
+    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_gpu::cuda::{download_tensor, upload_tensor};
-    use tenferro_runtime::{ExecutionEngine, GraphCompiler, Output, Runtime, TracedTensor};
+    use tenferro_runtime::{ExecutionEngine, GraphCompiler, Output, Runtime};
     use tenferro_tensor::{DType, Tensor, TensorRead};
 
     let Some(mut engine) = engine() else { return };
@@ -215,7 +219,9 @@ fn a_prepared_comparison_runs_on_the_new_engine() {
 
     // A comparison's result is a Bool tensor, so the prepared program's output is Bool and its
     // residency check has to reach a Bool allocation.
-    let input = TracedTensor::input_symbolic_shape(DType::F32, 1).expect("graph input");
+    let input = trace
+        .input_symbolic_shape(DType::F32, 1)
+        .expect("graph input");
     // Comparing the input with itself needs no second operand: every element is `x < x`, false.
     let compared = input
         .compare(&input, tenferro_tensor::CompareDir::Lt)

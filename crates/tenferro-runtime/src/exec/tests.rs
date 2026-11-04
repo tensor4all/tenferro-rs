@@ -140,6 +140,7 @@ fn exec_instruction_single_output_metadata_stays_inline() {
             .collect(),
         last_use: vec![true],
         input_views: Vec::new(),
+        effectful: false,
     };
 
     assert!(!instr.output_shapes.is_heap());
@@ -235,6 +236,7 @@ fn validate_exec_program_rejects_empty_instruction_outputs() {
         output_extents: Vec::new().into_iter().collect(),
         last_use: vec![true],
         input_views: Vec::new(),
+        effectful: false,
     });
 
     let err = validate_exec_program(&program, "test").unwrap_err();
@@ -261,6 +263,7 @@ fn validate_exec_program_rejects_terminal_value_instruction_input_arity() {
             .collect(),
         last_use: vec![],
         input_views: Vec::new(),
+        effectful: false,
     });
 
     let err = validate_exec_program(&program, "test").unwrap_err();
@@ -301,6 +304,7 @@ fn validate_exec_program_accepts_symbolic_shape_reference_inputs() {
         .collect(),
         last_use: vec![true],
         input_views: Vec::new(),
+        effectful: false,
     });
 
     validate_exec_program(&program, "test").unwrap();
@@ -329,6 +333,7 @@ fn negate_instruction(input_slots: Vec<usize>) -> ExecInstruction {
         output_extents: Default::default(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     }
 }
 
@@ -682,6 +687,7 @@ fn missing_extension_executor_reports_typed_fields_on_both_execution_paths() {
         output_extents: Vec::new().into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     };
     let operations = vec![PreparedOperationPlan::metadata(
         metadata_only_prepared_operation(),

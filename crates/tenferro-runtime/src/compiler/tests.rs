@@ -59,6 +59,7 @@ fn make_exec_instr(
         output_extents: vec![Vec::new(); output_slots.len()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     }
 }
 
@@ -82,6 +83,7 @@ fn make_exec_instr_with_meta(
         output_shapes: output_shapes.into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     }
 }
 
@@ -1213,4 +1215,32 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
             "index {i}: got {got}, expected {want}"
         );
     }
+}
+
+#[test]
+fn dead_code_elimination_keeps_an_effectful_instruction_without_consumers() {
+    let negate = make_exec_instr(ExecOp::Negate, vec![0], vec![1]);
+    let mut effectful = make_exec_instr(ExecOp::Negate, vec![0], vec![2]);
+    effectful.effectful = true;
+    let mut program = make_exec_program(vec![negate, effectful], vec![0], vec![1], 3);
+
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(
+        program.instructions.len(),
+        2,
+        "an observable effect must survive dead-code elimination"
+    );
+    assert!(program.instructions[1].effectful);
+}
+
+#[test]
+fn dead_code_elimination_keeps_a_zero_output_effectful_instruction() {
+    let mut effectful = make_exec_instr(ExecOp::Negate, vec![0], vec![]);
+    effectful.effectful = true;
+    let mut program = make_exec_program(vec![effectful], vec![0], vec![], 2);
+
+    eliminate_dead_code(&mut program);
+
+    assert_eq!(program.instructions.len(), 1);
 }

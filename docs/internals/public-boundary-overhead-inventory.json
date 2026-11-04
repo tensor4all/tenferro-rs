@@ -196,14 +196,14 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
                   {
                     "path": "crates/tenferro-runtime/src/compiler/mod.rs",
-                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                    "symbol": "compile_std_to_exec_with_effects"
                   }
                 ],
                 "validation": [
@@ -397,14 +397,14 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
                   {
                     "path": "crates/tenferro-runtime/src/compiler/mod.rs",
-                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                    "symbol": "compile_std_to_exec_with_effects"
                   }
                 ],
                 "validation": [
@@ -599,14 +599,14 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
                   {
                     "path": "crates/tenferro-runtime/src/compiler/mod.rs",
-                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                    "symbol": "compile_std_to_exec_with_effects"
                   }
                 ],
                 "validation": [
@@ -830,14 +830,14 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
                   {
                     "path": "crates/tenferro-runtime/src/compiler/mod.rs",
-                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                    "symbol": "compile_std_to_exec_with_effects"
                   }
                 ],
                 "validation": [
@@ -1032,14 +1032,14 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
                   {
                     "path": "crates/tenferro-runtime/src/compiler/mod.rs",
-                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                    "symbol": "compile_std_to_exec_with_effects"
                   }
                 ],
                 "validation": [
@@ -1241,14 +1241,14 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
                   {
                     "path": "crates/tenferro-runtime/src/compiler/mod.rs",
-                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                    "symbol": "compile_std_to_exec_with_effects"
                   }
                 ],
                 "validation": [
@@ -1446,14 +1446,14 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
                   {
                     "path": "crates/tenferro-runtime/src/compiler/mod.rs",
-                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                    "symbol": "compile_std_to_exec_with_effects"
                   }
                 ],
                 "validation": [
@@ -1654,14 +1654,14 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-runtime/src/ad_support.rs",
-                    "symbol": "metadata_scopes"
+                    "path": "crates/tenferro-runtime/src/program/builder.rs",
+                    "symbol": "infer_core_metadata"
                   }
                 ],
                 "planning": [
                   {
                     "path": "crates/tenferro-runtime/src/compiler/mod.rs",
-                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                    "symbol": "compile_std_to_exec_with_effects"
                   }
                 ],
                 "validation": [
@@ -2383,7 +2383,7 @@
                 "planning": [
                   {
                     "path": "crates/tenferro-runtime/src/compiler/mod.rs",
-                    "symbol": "compile_std_to_exec_with_options_and_constraints"
+                    "symbol": "compile_std_to_exec_with_effects"
                   }
                 ],
                 "validation": [

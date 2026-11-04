@@ -17,8 +17,10 @@ mod support;
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftExecutor, FftNorm, FftPlanCache, TracedTensorFftExt};
-use tenferro_runtime::{GraphCompiler, TracedTensor};
-use tenferro_tensor::Tensor;
+#[cfg(feature = "autodiff")]
+use tenferro_runtime::TracedTensor;
+use tenferro_runtime::{GraphCompiler, TraceContext};
+use tenferro_tensor::{DotGeneralConfig, Tensor};
 
 const GOLDEN_3D_SHAPE: [usize; 3] = [2, 3, 4];
 
@@ -436,6 +438,7 @@ fn fftn_reuses_one_plan_per_distinct_length_and_dtype() {
 
 #[test]
 fn traced_fftn_family_matches_the_eager_executor() {
+    let trace = TraceContext::new();
     let shape = [2usize, 3, 4];
     let complex_values = complex_grid(&shape, 12);
     let real_values = real_grid(&shape, 13);
@@ -454,7 +457,8 @@ fn traced_fftn_family_matches_the_eager_executor() {
         .unwrap();
 
     let mut compiler = GraphCompiler::new();
-    let traced = TracedTensor::from_vec_col_major(shape.to_vec(), complex_values)
+    let traced = trace
+        .from_vec_col_major(shape.to_vec(), complex_values)
         .unwrap()
         .fftn(None, &[0, 1, 2], FftNorm::Backward)
         .unwrap();
@@ -476,13 +480,14 @@ fn traced_fftn_family_matches_the_eager_executor() {
         )
         .unwrap();
     let mut compiler = GraphCompiler::new();
-    let traced = TracedTensor::from_vec_col_major(
-        eager_full.shape().to_vec(),
-        eager_full.as_slice::<Complex64>().unwrap().to_vec(),
-    )
-    .unwrap()
-    .ifftn(None, &[0, 1, 2], FftNorm::Backward)
-    .unwrap();
+    let traced = trace
+        .from_vec_col_major(
+            eager_full.shape().to_vec(),
+            eager_full.as_slice::<Complex64>().unwrap().to_vec(),
+        )
+        .unwrap()
+        .ifftn(None, &[0, 1, 2], FftNorm::Backward)
+        .unwrap();
     let program = compiler.compile(&traced).unwrap();
     let traced_inverse = support::run_one(&program, &[]).unwrap();
     assert_c64_close(
@@ -502,7 +507,8 @@ fn traced_fftn_family_matches_the_eager_executor() {
         )
         .unwrap();
     let mut compiler = GraphCompiler::new();
-    let traced = TracedTensor::from_vec_col_major(shape.to_vec(), real_values)
+    let traced = trace
+        .from_vec_col_major(shape.to_vec(), real_values)
         .unwrap()
         .rfftn(None, &[0, 1, 2], FftNorm::Backward)
         .unwrap();
@@ -524,13 +530,14 @@ fn traced_fftn_family_matches_the_eager_executor() {
         )
         .unwrap();
     let mut compiler = GraphCompiler::new();
-    let traced = TracedTensor::from_vec_col_major(
-        eager_rfftn.shape().to_vec(),
-        eager_rfftn.as_slice::<Complex64>().unwrap().to_vec(),
-    )
-    .unwrap()
-    .irfftn(Some(&shape), &[0, 1, 2], FftNorm::Backward)
-    .unwrap();
+    let traced = trace
+        .from_vec_col_major(
+            eager_rfftn.shape().to_vec(),
+            eager_rfftn.as_slice::<Complex64>().unwrap().to_vec(),
+        )
+        .unwrap()
+        .irfftn(Some(&shape), &[0, 1, 2], FftNorm::Backward)
+        .unwrap();
     let program = compiler.compile(&traced).unwrap();
     let traced_irfftn = support::run_one(&program, &[]).unwrap();
     let traced_irfftn = traced_irfftn.as_slice::<f64>().unwrap();
@@ -571,8 +578,9 @@ fn directional_finite_difference(
     direction: &[Complex64],
     step: f64,
 ) -> Vec<Complex64> {
+    let trace = TraceContext::new();
     let evaluate = |values: Vec<Complex64>| {
-        let input = TracedTensor::from_vec_col_major(shape.to_vec(), values).unwrap();
+        let input = trace.from_vec_col_major(shape.to_vec(), values).unwrap();
         run_traced(&transform(&input))
             .as_slice::<Complex64>()
             .unwrap()
@@ -599,14 +607,19 @@ fn directional_finite_difference(
 #[cfg(feature = "autodiff")]
 #[test]
 fn fftn_jvp_matches_finite_differences_and_the_transform_of_the_tangent() {
+    let trace = TraceContext::new();
     let shape = [2usize, 3, 4];
     let base = complex_grid(&shape, 14);
     let direction = complex_grid(&shape, 15);
     let mut executor = FftExecutor::default();
     let mut engine = CpuEngine::serial();
 
-    let x = TracedTensor::from_vec_col_major(shape.to_vec(), base.clone()).unwrap();
-    let dx = TracedTensor::from_vec_col_major(shape.to_vec(), direction.clone()).unwrap();
+    let x = trace
+        .from_vec_col_major(shape.to_vec(), base.clone())
+        .unwrap();
+    let dx = trace
+        .from_vec_col_major(shape.to_vec(), direction.clone())
+        .unwrap();
     let y = x.fftn(None, &[0, 1, 2], FftNorm::Backward).unwrap();
     let dy = fft_ad_context().jvp(&y, &x, &dx).unwrap();
     let jvp = run_traced(&dy);
@@ -643,14 +656,17 @@ fn fftn_jvp_matches_finite_differences_and_the_transform_of_the_tangent() {
 #[cfg(feature = "autodiff")]
 #[test]
 fn fftn_vjp_matches_the_closed_form_adjoint_in_three_dimensions() {
+    let trace = TraceContext::new();
     let shape = [2usize, 3, 4];
     let base = complex_grid(&shape, 16);
     let cotangent = complex_grid(&shape, 17);
     let mut executor = FftExecutor::default();
     let mut engine = CpuEngine::serial();
 
-    let x = TracedTensor::from_vec_col_major(shape.to_vec(), base).unwrap();
-    let g = TracedTensor::from_vec_col_major(shape.to_vec(), cotangent.clone()).unwrap();
+    let x = trace.from_vec_col_major(shape.to_vec(), base).unwrap();
+    let g = trace
+        .from_vec_col_major(shape.to_vec(), cotangent.clone())
+        .unwrap();
     let y = x.fftn(None, &[0, 1, 2], FftNorm::Backward).unwrap();
     let dx = fft_ad_context().vjp(&y, &x, &g).unwrap();
     let vjp = run_traced(&dx);
@@ -687,6 +703,7 @@ fn hermitian_inner(left: &[Complex64], right: &[Complex64]) -> Complex64 {
 #[cfg(feature = "autodiff")]
 #[test]
 fn fftn_vjp_restores_every_resized_axis() {
+    let trace = TraceContext::new();
     let shape = [2usize, 3, 4];
     let lengths = [3usize, 2, 6];
     let base = complex_grid(&shape, 22);
@@ -705,9 +722,12 @@ fn fftn_vjp_restores_every_resized_axis() {
     assert_eq!(transformed.shape(), &[3, 2, 6], "pad 2->3, 3->2, 4->6");
     let cotangent = complex_grid(transformed.shape(), 23);
 
-    let x = TracedTensor::from_vec_col_major(shape.to_vec(), base.clone()).unwrap();
-    let g =
-        TracedTensor::from_vec_col_major(transformed.shape().to_vec(), cotangent.clone()).unwrap();
+    let x = trace
+        .from_vec_col_major(shape.to_vec(), base.clone())
+        .unwrap();
+    let g = trace
+        .from_vec_col_major(transformed.shape().to_vec(), cotangent.clone())
+        .unwrap();
     let y = x
         .fftn(Some(&lengths), &[0, 1, 2], FftNorm::Backward)
         .unwrap();
@@ -732,6 +752,7 @@ fn fftn_vjp_restores_every_resized_axis() {
 #[cfg(feature = "autodiff")]
 #[test]
 fn fftn_with_one_axis_shares_the_ad_rule_of_the_one_axis_transform() {
+    let trace = TraceContext::new();
     let shape = [4usize, 3];
     let base = complex_grid(&shape, 18);
     let direction = complex_grid(&shape, 19);
@@ -739,8 +760,10 @@ fn fftn_with_one_axis_shares_the_ad_rule_of_the_one_axis_transform() {
     let mut executor = FftExecutor::default();
     let mut engine = CpuEngine::serial();
 
-    let x = TracedTensor::from_vec_col_major(shape.to_vec(), base).unwrap();
-    let dx = TracedTensor::from_vec_col_major(shape.to_vec(), direction.clone()).unwrap();
+    let x = trace.from_vec_col_major(shape.to_vec(), base).unwrap();
+    let dx = trace
+        .from_vec_col_major(shape.to_vec(), direction.clone())
+        .unwrap();
     let y = x.fftn(None, &[1], FftNorm::Backward).unwrap();
     let dy = fft_ad_context().jvp(&y, &x, &dx).unwrap();
     let jvp = run_traced(&dy);
@@ -759,8 +782,12 @@ fn fftn_with_one_axis_shares_the_ad_rule_of_the_one_axis_transform() {
         "one-axis fftn jvp",
     );
 
-    let x = TracedTensor::from_vec_col_major(shape.to_vec(), complex_grid(&shape, 21)).unwrap();
-    let g = TracedTensor::from_vec_col_major(shape.to_vec(), cotangent.clone()).unwrap();
+    let x = trace
+        .from_vec_col_major(shape.to_vec(), complex_grid(&shape, 21))
+        .unwrap();
+    let g = trace
+        .from_vec_col_major(shape.to_vec(), cotangent.clone())
+        .unwrap();
     let y = x.fftn(None, &[1], FftNorm::Backward).unwrap();
     let dx = fft_ad_context().vjp(&y, &x, &g).unwrap();
     let vjp = run_traced(&dx);
@@ -778,4 +805,49 @@ fn fftn_with_one_axis_shares_the_ad_rule_of_the_one_axis_transform() {
         expected.as_slice::<Complex64>().unwrap(),
         "one-axis fftn vjp",
     );
+}
+
+/// A truncated operand keeps its bound through an extension op.
+///
+/// `DynamicTruncate` declares `[4]` and holds two elements. The FFT extension keeps
+/// the axis length, so its output must not be published as an exact `[4]`: an outer
+/// product with a literal `[3]` would otherwise broadcast to `[4, 3]` instead of
+/// `[2, 3]`. Runs through `Runtime::prepare` with the production CPU registration, so
+/// the placement-aware view folding is active.
+#[test]
+fn outer_product_of_a_truncated_fft_uses_the_truncated_length() {
+    let trace = TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])
+        .expect("complex input");
+    let keep = trace
+        .from_vec_col_major(vec![], vec![2.0_f64])
+        .expect("truncation length");
+    let truncated = x.dynamic_truncate(&keep, 0).expect("truncate");
+    let transformed = truncated
+        .fft(None, 0, FftNorm::Backward)
+        .expect("traced fft");
+    let other = trace
+        .from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0])
+        .expect("second operand");
+    let outer = transformed
+        .dot_general(
+            &other,
+            DotGeneralConfig {
+                lhs_contracting_dims: Default::default(),
+                rhs_contracting_dims: Default::default(),
+                lhs_batch_dims: Default::default(),
+                rhs_batch_dims: Default::default(),
+            },
+        )
+        .expect("outer product");
+    let program = GraphCompiler::new().compile(&outer).expect("compile");
+
+    let x_value = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let keep_value = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let other_value = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap();
+    let output = support::run_one(&program, &[&x_value, &keep_value, &other_value])
+        .expect("execute prepared outer product");
+
+    assert_eq!(output.shape(), &[2, 3]);
 }

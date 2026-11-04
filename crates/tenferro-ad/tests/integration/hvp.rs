@@ -7,7 +7,7 @@ use crate::support;
 use support::{cpu_runtime, RunTraced};
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_runtime::traced::TracedTensor;
-use tenferro_runtime::{DotGeneralConfig, Tensor, TypedTensor};
+use tenferro_runtime::{DotGeneralConfig, Tensor, TraceContext, TypedTensor};
 
 const TOL: f64 = 1e-5;
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -80,14 +80,15 @@ fn vector_dot(lhs: &TracedTensor, rhs: &TracedTensor) -> TracedTensor {
 // ─────────────────────────────────────────────────────────────
 #[test]
 fn hvp_for_scalar_cubic() {
+    let trace = TraceContext::new();
     let x_val = 2.5_f64;
 
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_val)).unwrap();
+    let x = trace.from_tensor_concrete_shape(f64_scalar(x_val)).unwrap();
     let x_squared = (&x * &x).unwrap();
     let y = (&x_squared * &x).unwrap();
 
     let g = y.grad(&x).unwrap(); // reverse: f'(x) = 3x^2
-    let v = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0)).unwrap();
+    let v = trace.from_tensor_concrete_shape(f64_scalar(1.0)).unwrap();
     let hv = g.jvp(&x, &v).unwrap(); // forward-of-reverse: f''(x)
 
     let hv_tensor = eval_tensor(hv);
@@ -106,13 +107,14 @@ fn hvp_for_scalar_cubic() {
 // ─────────────────────────────────────────────────────────────
 #[test]
 fn hvp_for_scalar_exp_sin() {
+    let trace = TraceContext::new();
     let x_val = 1.3_f64;
 
-    let x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x_val)).unwrap();
+    let x = trace.from_tensor_concrete_shape(f64_scalar(x_val)).unwrap();
     let y = x.sin().unwrap().exp().unwrap();
 
     let g = y.grad(&x).unwrap();
-    let v = TracedTensor::from_tensor_concrete_shape(f64_scalar(1.0)).unwrap();
+    let v = trace.from_tensor_concrete_shape(f64_scalar(1.0)).unwrap();
     let hv = g.jvp(&x, &v).unwrap();
 
     let hv_tensor = eval_tensor(hv);
@@ -131,15 +133,20 @@ fn hvp_for_scalar_exp_sin() {
 // ─────────────────────────────────────────────────────────────
 #[test]
 fn hvp_for_vector_exp_sum() {
+    let trace = TraceContext::new();
     let x_data = vec![0.5, 1.0, -0.3];
     let v_data = vec![1.0, 2.0, 3.0];
     let n = x_data.len();
 
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], x_data.clone())).unwrap();
+    let x = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![n], x_data.clone()))
+        .unwrap();
     let y = x.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
 
     let g = y.grad(&x).unwrap(); // shape [n]
-    let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data.clone())).unwrap();
+    let v = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![n], v_data.clone()))
+        .unwrap();
     let hv = g.jvp(&x, &v).unwrap(); // FoR: shape [n]
 
     let hv_tensor = eval_tensor(hv);
@@ -158,6 +165,7 @@ fn hvp_for_vector_exp_sum() {
 // ─────────────────────────────────────────────────────────────
 #[test]
 fn hvp_for_quadratic_form() {
+    let trace = TraceContext::new();
     #[rustfmt::skip]
     let a_data = vec![
         2.0, 0.5,
@@ -167,9 +175,15 @@ fn hvp_for_quadratic_form() {
     let v_data = vec![0.5, 2.0];
     let n = 2;
 
-    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n, n], a_data)).unwrap();
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], x_data)).unwrap();
-    let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data)).unwrap();
+    let a = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![n, n], a_data))
+        .unwrap();
+    let x = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![n], x_data))
+        .unwrap();
+    let v = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![n], v_data))
+        .unwrap();
 
     let ax = matvec(&a, &x);
     let y = vector_dot(&x, &ax);
@@ -190,6 +204,7 @@ fn hvp_for_quadratic_form() {
 // ─────────────────────────────────────────────────────────────
 #[test]
 fn hvp_ror_quadratic_form() {
+    let trace = TraceContext::new();
     #[rustfmt::skip]
     let a_data = vec![
         2.0, 0.5,
@@ -199,9 +214,15 @@ fn hvp_ror_quadratic_form() {
     let v_data = vec![0.5, 2.0];
     let n = 2;
 
-    let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n, n], a_data)).unwrap();
-    let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], x_data)).unwrap();
-    let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data)).unwrap();
+    let a = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![n, n], a_data))
+        .unwrap();
+    let x = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![n], x_data))
+        .unwrap();
+    let v = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![n], v_data))
+        .unwrap();
 
     let ax = matvec(&a, &x);
     let y = vector_dot(&x, &ax);

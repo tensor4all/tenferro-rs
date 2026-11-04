@@ -391,6 +391,50 @@ the graph reconstruction in `tenferro-ad/src/traced.rs`
 (`derivative_tensors_from_program`, 400+ lines with its metadata plumbing)
 disappears.
 
+As built, `ProgramImport::bindings` keeps its meaning (process-local tensor
+defaults) but no longer drives extent resolution: import copies the source's
+declared extents and translates their `InputDim`s into destination input
+positions, so a transformed program never inherits the bound shapes. The bindings
+are attached during the import itself rather than afterwards with
+`with_input_prefix_bindings_from`, and a symbolic `Reshape`/`BroadcastInDim`
+payload is translated from program input positions into the consuming
+operation's own input coordinates by
+`SemanticProgramBuilder::translate_input_shape_payload`, which the AD transform
+and the einsum rule share. A derivative built from symbolic extents is
+therefore shape-polymorphic, including for a symbolically declared input that
+carries data.
+
+Polymorphism holds for the *structure*, not for every decision a rule makes while
+it builds that structure. Two exceptions are as-built and accepted:
+
+1. **A literal payload cannot be polymorphic.** `Slice`, `Pad`, `DynamicSlice` and
+   the concatenate transpose take `usize` offsets and sizes, so those rules read
+   the lengths from the bindings through
+   `SemanticProgramBuilder::resolved_extents` (one axis at a time through
+   `resolved_extent`) and the resulting derivative is specialised to the binding
+   present at differentiation time.
+2. **A broadcast's reduction axes depend on the construction-time binding.** A
+   broadcast VJP has to know whether the primal axis was a singleton, which is a
+   fact about the binding, not about the expression: no operation reduces "only if
+   the axis is 1". The reduce axes are therefore fixed when the derivative is
+   built. The payload of every `Reshape`/`BroadcastInDim` it emits stays symbolic,
+   and re-running the same derivative against a binding whose singleton structure
+   differs is out of contract.
+
+Everything derived from extents (`Reshape`, `BroadcastInDim`, `DynamicTruncate`)
+stays symbolic, so a derivative is reusable across any binding for which the
+literal payloads it was built with are still valid: the same singleton pattern
+*and* the same lengths where a rule embedded one (a `Slice` inverse padding built
+for length 5 is wrong for length 7, whatever its singleton pattern). A derivative
+is not reusable across a binding that changes either.
+
+As built, dead extension outputs are pruned at **snapshot** time, so the graph a
+snapshot exposes (and therefore the primal program a caller compiles) already
+carries the values-only form of a decomposition whose factor outputs are unused;
+the full-factor residuals a derivative rule needs live in the AD context's own
+record, not in the primal graph. A test that inspects the primal graph for
+residuals therefore observes `SvdVals`, not `Svd`.
+
 Cost: snapshot and import are O(program) per AD call, not per op. Today's path is
 also O(program) per AD call (compile + transform + rebuild). Repeated `grad`
 inside one context grows the context; the documented contract is one snapshot and
@@ -429,6 +473,11 @@ After the change `GraphCompiler` has one lowering path,
 the core phase (implemented over the handle) so that the extension crates
 continue to compile, and is removed in the extension phase, after every caller
 uses the context methods.
+
+As built, `compile_many(&outputs)` requires at least one output: the snapshot is
+taken through the first output's context, so an empty output list has no context
+to freeze and is a typed `InvalidArgument`. A zero-output program is built with
+`SemanticProgramBuilder::finish(&[])` instead.
 
 ### 3.8 Eager: immutable journal, materialisation per backward
 

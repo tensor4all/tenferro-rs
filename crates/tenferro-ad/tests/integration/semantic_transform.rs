@@ -1902,3 +1902,167 @@ fn semantic_program_transform_cache_reuses_bound_programs_without_stale_bindings
         .semantic_eq(second_vjp.frozen().program.as_ref()));
     assert_eq!(only_bound_f64_values(second_vjp.frozen()), vec![5.0, 7.0]);
 }
+
+#[test]
+fn dynamic_update_vjp_accepts_a_symbolically_declared_bound_update() {
+    let ad = ad_context();
+    let mut builder = SemanticProgramBuilder::new();
+    let operand = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(5)]))
+        .unwrap();
+    // The update arrives as a symbolically declared, data-attached input.
+    let update = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+        ))
+        .unwrap();
+    builder
+        .bind_input(
+            update,
+            Tensor::from_vec_col_major(vec![2], vec![8.0_f64, 9.0]).unwrap(),
+        )
+        .unwrap();
+    let starts = builder
+        .input(ProgramInputSpec::new(DType::I64, [DimExpr::Const(1)]))
+        .unwrap();
+    let updated = builder
+        .add_op(
+            CoreSemanticOp::DynamicUpdateSlice,
+            &[operand, update, starts],
+        )
+        .unwrap()[0];
+    let program = builder.finish(&[updated]).unwrap();
+
+    let vjp = ad
+        .vjp_program(&program, &[false, true, false], &[true])
+        .expect("a bound symbolic update must differentiate");
+    assert!(!vjp.derivative_output_indices().is_empty());
+}
+
+#[test]
+fn semantic_core_gather_dynamic_slice_sizes_jvp_vjp_execute_numerically() {
+    let ad = ad_context();
+    let mut builder = SemanticProgramBuilder::new();
+    let operand = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(5)]))
+        .unwrap();
+    let indices = builder
+        .input(ProgramInputSpec::new(
+            DType::I64,
+            [DimExpr::Const(3), DimExpr::Const(1)],
+        ))
+        .unwrap();
+    // The window size stays symbolic: it names a third input, so the VJP has to
+    // rebuild the inverse gather with a symbolic payload.
+    let window = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(1)]))
+        .unwrap();
+    let gathered = builder
+        .add_op(
+            CoreSemanticOp::GatherDynamicSliceSizes {
+                offset_dims: vec![],
+                collapsed_slice_dims: vec![0],
+                start_index_map: vec![0],
+                index_vector_dim: 1,
+                slice_sizes: vec![DimExpr::InputDim {
+                    input_idx: 2,
+                    axis: 0,
+                }],
+            },
+            &[operand, indices, window],
+        )
+        .unwrap()[0];
+    let gather = builder.finish(&[gathered]).unwrap();
+    let operand_value =
+        Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]).unwrap();
+    let indices_value = Tensor::from_vec_col_major(vec![3, 1], vec![0_i64, 2, 2]).unwrap();
+    let operand_tangent =
+        Tensor::from_vec_col_major(vec![5], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]).unwrap();
+    let window_value = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+
+    let jvp = ad.jvp_program(&gather, &[true, false, false]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(jvp.frozen())
+        .unwrap();
+    let result = cpu_runtime()
+        .run_compiled_one_output(
+            &compiled,
+            &[
+                &operand_value,
+                &indices_value,
+                &window_value,
+                &operand_tangent,
+            ],
+        )
+        .unwrap();
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[10.0, 30.0, 30.0]);
+
+    let gather_cotangent = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let vjp = ad
+        .vjp_program(&gather, &[true, false, false], &[true])
+        .unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(vjp.frozen())
+        .unwrap();
+    let result = cpu_runtime()
+        .run_compiled_one_output(
+            &compiled,
+            &[
+                &operand_value,
+                &indices_value,
+                &window_value,
+                &gather_cotangent,
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        result.as_slice::<f64>().unwrap(),
+        &[1.0, 0.0, 5.0, 0.0, 0.0]
+    );
+}
+
+#[test]
+fn unequal_rank_add_vjp_reduces_every_broadcast_axis() {
+    let ad = ad_context();
+    let mut builder = SemanticProgramBuilder::new();
+    // `[1]` joins `[2, 3]`: the cotangent carries one more axis than the smaller
+    // operand, so that leading axis and the singleton axis both have to be reduced.
+    let small = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(1)]))
+        .unwrap();
+    let large = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(2), DimExpr::Const(3)],
+        ))
+        .unwrap();
+    let sum = builder
+        .add_op(CoreSemanticOp::Add, &[small, large])
+        .unwrap()[0];
+    let program = builder.finish(&[sum]).unwrap();
+
+    let vjp = ad
+        .vjp_program(&program, &[true, false], &[true])
+        .expect("a broadcast add must differentiate for its smaller operand");
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(vjp.frozen())
+        .unwrap();
+    let small_value = Tensor::from_vec_col_major(vec![1], vec![7.0_f64]).unwrap();
+    let large_value =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let cotangent =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 1.0, 1.0, 1.0, 1.0, 1.0]).unwrap();
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&small_value, &large_value, &cotangent])
+        .unwrap();
+    assert_eq!(result.shape(), &[1]);
+    assert_eq!(
+        result.as_slice::<f64>().unwrap(),
+        &[6.0],
+        "the cotangent must be summed over both broadcast axes"
+    );
+}

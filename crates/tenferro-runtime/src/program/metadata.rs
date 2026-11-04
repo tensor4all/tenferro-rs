@@ -228,6 +228,7 @@ impl ShapeGuard {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn with_source_family(mut self, family: &'static str) -> Self {
         self.source_family = Some(family);
         self

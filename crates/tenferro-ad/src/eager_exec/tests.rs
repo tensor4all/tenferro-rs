@@ -891,10 +891,11 @@ fn eager_promoting_read_entries_convert_only_the_mismatched_operand() {
 
 #[test]
 fn traced_host_ops_do_not_stage_a_borrowed_operand_or_shape_reference() {
+    let trace = tenferro_runtime::TraceContext::new();
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::eager_backend::RecordingEngine;
-    use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+    use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Runtime};
     use tenferro_tensor::{SliceConfig, TensorValue};
 
     fn cpu_runtime() -> Runtime {
@@ -910,7 +911,9 @@ fn traced_host_ops_do_not_stage_a_borrowed_operand_or_shape_reference() {
     }
 
     let copies = Arc::new(AtomicUsize::new(0));
-    let placeholder = TracedTensor::input_symbolic_shape(DType::F64, 2).expect("placeholder");
+    let placeholder = trace
+        .input_symbolic_shape(DType::F64, 2)
+        .expect("placeholder");
     let source = f64t(vec![5, 4], (0..20).map(|index| index as f64).collect());
     let view = TensorValue::from_tensor(source)
         .slice_view(&SliceConfig {
@@ -920,7 +923,9 @@ fn traced_host_ops_do_not_stage_a_borrowed_operand_or_shape_reference() {
         })
         .expect("offset view");
 
-    let size = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).expect("size scalar");
+    let size = trace
+        .from_vec_col_major(vec![], vec![2.0_f64])
+        .expect("size scalar");
     let truncated = placeholder
         .dynamic_truncate(&size, 0)
         .expect("traced dynamic_truncate");
@@ -948,8 +953,9 @@ fn traced_host_ops_do_not_stage_a_borrowed_operand_or_shape_reference() {
 
     // The reference is a borrowed view too, so the old staging of both inputs
     // would move the counter; the new path must read only its shape.
-    let reference_placeholder =
-        TracedTensor::input_symbolic_shape(DType::F64, 2).expect("reference placeholder");
+    let reference_placeholder = trace
+        .input_symbolic_shape(DType::F64, 2)
+        .expect("reference placeholder");
     let wider = TensorValue::from_tensor(f64t(vec![5, 4], vec![0.0; 20]));
     let wider_shape = wider.shape().to_vec();
     let padded = placeholder

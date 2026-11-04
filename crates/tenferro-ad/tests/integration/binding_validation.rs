@@ -5,12 +5,15 @@
 use crate::support;
 use support::{cpu_runtime, run_compiled_one, RunTraced};
 use tenferro_runtime::error::Error;
-use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Tensor, TraceContext};
 use tenferro_tensor::DType;
 
 #[test]
 fn unexpected_binding_for_data_carrying_leaf() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let trace = TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap();
     let y = x.clone();
 
     let engine = cpu_runtime();
@@ -27,7 +30,8 @@ fn unexpected_binding_for_data_carrying_leaf() {
 
 #[test]
 fn unbound_placeholder() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let trace = TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.clone();
 
     let engine = cpu_runtime();
@@ -43,7 +47,8 @@ fn unbound_placeholder() {
 
 #[test]
 fn duplicate_binding() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let trace = TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.clone();
 
     let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
@@ -57,7 +62,8 @@ fn duplicate_binding() {
 
 #[test]
 fn placeholder_dtype_mismatch() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let trace = TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.clone();
 
     let wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
@@ -80,7 +86,8 @@ fn placeholder_dtype_mismatch() {
 
 #[test]
 fn placeholder_shape_mismatch_for_concrete_shape_placeholder() {
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]).unwrap();
+    let trace = TraceContext::new();
+    let x = trace.input_concrete_shape(DType::F64, &[2, 3]).unwrap();
     let y = x.clone();
 
     let wrong_shape = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
@@ -100,7 +107,8 @@ fn placeholder_shape_mismatch_for_concrete_shape_placeholder() {
 
 #[test]
 fn placeholder_rank_mismatch_for_symbolic_shape_placeholder() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let trace = TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 2).unwrap();
     let y = x.clone();
 
     let wrong_rank = Tensor::from_vec_col_major(vec![4], vec![1.0_f64; 4]).unwrap();
@@ -123,8 +131,9 @@ fn placeholder_rank_mismatch_for_symbolic_shape_placeholder() {
 
 #[test]
 fn symbolic_shape_placeholder_accepts_any_shape_of_matching_rank() {
+    let trace = TraceContext::new();
     // Sanity check that with the right rank + dtype, binding succeeds.
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.clone();
 
     let engine = cpu_runtime();
@@ -137,7 +146,8 @@ fn symbolic_shape_placeholder_accepts_any_shape_of_matching_rank() {
 
 #[test]
 fn runtime_run_compiled_validates_and_uses_bound_tensors() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let trace = TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
     let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 
@@ -161,7 +171,8 @@ fn runtime_run_compiled_validates_and_uses_bound_tensors() {
 
 #[test]
 fn compile_with_input_specs_validates_specs_without_tensor_values() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let trace = TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
     let shape = [2usize];
 
@@ -194,7 +205,7 @@ fn compile_with_input_specs_validates_specs_without_tensor_values() {
         }
     ));
 
-    let concrete = TracedTensor::input_concrete_shape(DType::F64, &[2]).unwrap();
+    let concrete = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
     let concrete_y = concrete.clone();
     let wrong_shape = [3usize];
     let err = compiler
@@ -205,7 +216,9 @@ fn compile_with_input_specs_validates_specs_without_tensor_values() {
         .unwrap_err();
     assert!(matches!(err, Error::PlaceholderShapeMismatch { .. }));
 
-    let data_leaf = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let data_leaf = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap();
     let err = compiler
         .compile_with_input_specs(&data_leaf, &[(&data_leaf, DType::F64, shape.as_slice())])
         .unwrap_err();
@@ -222,6 +235,8 @@ fn compile_with_input_specs_validates_specs_without_tensor_values() {
         .unwrap_err();
     assert!(matches!(err, Error::DuplicateBinding { .. }));
 
-    let err = compiler.compile_with_input_specs(&y, &[]).unwrap_err();
-    assert!(matches!(err, Error::UnboundPlaceholder { .. }));
+    // A data-less placeholder without a declared spec is an explicit program
+    // input: the caller supplies it at prepare time.
+    let program = compiler.compile_with_input_specs(&y, &[]).unwrap();
+    assert_eq!(program.input_count(), 1);
 }

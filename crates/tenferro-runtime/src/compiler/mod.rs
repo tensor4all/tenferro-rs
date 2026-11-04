@@ -58,7 +58,7 @@ pub(crate) fn compile_std_to_exec(
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
 ) -> Result<ExecProgram> {
-    compile_std_to_exec_with_options_and_constraints(
+    compile_std_to_exec_with_effects(
         prog,
         input_dtypes,
         input_shapes,
@@ -66,6 +66,7 @@ pub(crate) fn compile_std_to_exec(
         &[],
         input_shapes,
         true,
+        &[],
     )
 }
 
@@ -93,7 +94,7 @@ pub(crate) fn compile_std_to_exec_with_options(
     input_shapes: &[Vec<DimExpr>],
     options: CompilerOptions,
 ) -> Result<ExecProgram> {
-    compile_std_to_exec_with_options_and_constraints(
+    compile_std_to_exec_with_effects(
         prog,
         input_dtypes,
         input_shapes,
@@ -101,10 +102,17 @@ pub(crate) fn compile_std_to_exec_with_options(
         &[],
         input_shapes,
         true,
+        &[],
     )
 }
 
-pub(crate) fn compile_std_to_exec_with_options_and_constraints(
+/// Compile a standard operation program, marking which instructions are observable.
+///
+/// `effectful` runs parallel to `prog.instructions`; an instruction marked there
+/// performs an effect, so dead-code elimination keeps it even when nothing consumes
+/// its outputs.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compile_std_to_exec_with_effects(
     prog: &CompiledProgram<StdTensorOp>,
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
@@ -112,6 +120,7 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
     scoped_constraints: &[SlotScopedShapeConstraint],
     analysis_input_shapes: &[Vec<DimExpr>],
     infer_extension_constraints: bool,
+    effectful: &[bool],
 ) -> Result<ExecProgram> {
     validate_unique_output_producers(prog)?;
     if prog.input_slots.len() != input_dtypes.len() {
@@ -249,7 +258,10 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
                     let shapes = resolve_shapes(&local_shapes, &input_shapes_refs)?;
                     let analysis_shapes =
                         resolve_shapes(&local_shapes, &analysis_input_shape_refs)?;
-                    let extents = exact_extents_from_shapes(&shapes);
+                    let extents = withhold_unproved_exactness(
+                        exact_extents_from_shapes(&shapes),
+                        &input_extents_refs,
+                    );
                     (dtypes, shapes, extents, analysis_shapes)
                 } else {
                     let dtype = infer_output_dtype(&instr.operation, &input_dtypes)?;
@@ -333,6 +345,10 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
                 output_extents: output_extents.into_iter().collect(),
                 last_use: Vec::new(),
                 input_views: Vec::new(),
+                effectful: effectful
+                    .get(semantic_operation_index)
+                    .copied()
+                    .unwrap_or(false),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -553,12 +569,49 @@ fn resolve_output_extents(
     input_shapes: &[&[DimExpr]],
     input_extents: &[&[ShapeExtent<DimExpr>]],
 ) -> Result<Vec<Vec<ShapeExtent<DimExpr>>>> {
-    extents
+    let resolved = extents
         .into_iter()
         .map(|shape_extents| {
             shape_extents
                 .into_iter()
                 .map(|extent| resolve_extent(extent, input_shapes, input_extents))
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(withhold_unproved_exactness(resolved, input_extents))
+}
+
+/// Stop claiming an exact extent that the inputs only bound.
+///
+/// An operation that keeps its input's shape still only knows an upper bound when
+/// that input was bounded: `DynamicTruncate` declares `[4]` and holds two elements, so
+/// a `Neg` or an FFT of it must not publish `[4]` as exact. Nothing in the expression
+/// algebra can recover an axis's precision, so every `Exact` of the instruction is
+/// downgraded whenever any input is imprecise. Exactness is never claimed, only
+/// withheld, and an all-exact instruction keeps its extents unchanged.
+///
+/// Both lowering branches call this: a core operation through
+/// [`resolve_output_extents`], an extension through its inferred shapes.
+fn withhold_unproved_exactness(
+    extents: Vec<Vec<ShapeExtent<DimExpr>>>,
+    input_extents: &[&[ShapeExtent<DimExpr>]],
+) -> Vec<Vec<ShapeExtent<DimExpr>>> {
+    if input_extents.iter().all(|shape| {
+        shape
+            .iter()
+            .all(|extent| matches!(extent, ShapeExtent::Exact(_)))
+    }) {
+        return extents;
+    }
+    extents
+        .into_iter()
+        .map(|shape_extents| {
+            shape_extents
+                .into_iter()
+                .map(|extent| match extent {
+                    ShapeExtent::Exact(dim) => ShapeExtent::upper_bound(dim),
+                    other => other,
+                })
                 .collect()
         })
         .collect()
@@ -937,6 +990,7 @@ impl ConjSinkingState<'_> {
             output_extents: vec![meta.extents].into_iter().collect(),
             last_use: Vec::new(),
             input_views: Vec::new(),
+            effectful: false,
         };
         record_producer(self.producer_by_slot, &instr)?;
         self.new_instructions.push(instr);
@@ -1868,6 +1922,9 @@ fn is_conj_transparent_layout_op(op: &ExecOp) -> bool {
 // remains in the program), and DCE reclaims that wasted runtime work.
 
 /// Drop instructions with no downstream consumer.
+///
+/// An observable-effect instruction stays even when none of its outputs is
+/// consumed: the effect is why it is in the program.
 pub(crate) fn eliminate_dead_code(program: &mut ExecProgram) {
     let mut live_slots = vec![false; program.n_slots];
     for &slot in &program.output_slots {
@@ -1879,10 +1936,11 @@ pub(crate) fn eliminate_dead_code(program: &mut ExecProgram) {
     let mut keep = vec![false; program.instructions.len()];
     for idx in (0..program.instructions.len()).rev() {
         let instr = &program.instructions[idx];
-        let has_live_output = instr
-            .output_slots
-            .iter()
-            .any(|&slot| live_slots.get(slot).copied().unwrap_or(false));
+        let has_live_output = instr.effectful
+            || instr
+                .output_slots
+                .iter()
+                .any(|&slot| live_slots.get(slot).copied().unwrap_or(false));
         if has_live_output {
             keep[idx] = true;
             for &slot in &instr.input_slots {

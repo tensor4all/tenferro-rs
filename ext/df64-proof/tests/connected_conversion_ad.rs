@@ -16,7 +16,7 @@ use tenferro_df64_proof::ad::Df64VjpRule;
 use tenferro_df64_proof::extension::{module, Df64FromF64, Df64ToF64, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime};
 use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
@@ -63,6 +63,7 @@ fn ad_context() -> AdContext {
 
 #[test]
 fn a_narrowing_program_differentiates_and_does_not_recover_discarded_information() {
+    let trace = tenferro_runtime::TraceContext::new();
     let low = 2f64.powi(-80);
     let source = vec![
         Df64::from_f64(1.0) + Df64::from_f64(low),
@@ -71,11 +72,9 @@ fn a_narrowing_program_differentiates_and_does_not_recover_discarded_information
     let source_input = external(source.clone(), vec![2]);
 
     // The forward program narrows the external scalar and then does ordinary f64 work.
-    let input = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
-        source_input,
-        DF64_SCALAR_IDENTITY,
-    )
-    .expect("traced external input");
+    let input = trace
+        .from_tensor_concrete_shape_declaring_scalar(source_input, DF64_SCALAR_IDENTITY)
+        .expect("traced external input");
     let narrowed = apply(Arc::new(Df64ToF64), &[&input])
         .expect("traced narrowing")
         .remove(0);
@@ -84,10 +83,11 @@ fn a_narrowing_program_differentiates_and_does_not_recover_discarded_information
         .expect("ordinary f64 loss");
 
     // The reverse pass crosses the conversion back into the external scalar.
-    let seed = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![], vec![1.0_f64]).expect("shape matches data"),
-    )
-    .expect("traced seed");
+    let seed = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![], vec![1.0_f64]).expect("shape matches data"),
+        )
+        .expect("traced seed");
     let gradients = ad_context()
         .vjp_many(&loss, &[&input], &seed)
         .expect("the connected reverse pass runs");
@@ -118,11 +118,13 @@ fn a_narrowing_program_differentiates_and_does_not_recover_discarded_information
 
 #[test]
 fn a_widening_program_differentiates_across_the_conversion() {
+    let trace = tenferro_runtime::TraceContext::new();
     let source = vec![3.0_f64, 4.0];
-    let input = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![2], source.clone()).expect("shape matches data"),
-    )
-    .expect("traced f64 input");
+    let input = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![2], source.clone()).expect("shape matches data"),
+        )
+        .expect("traced f64 input");
     let widened = apply(Arc::new(Df64FromF64), &[&input])
         .expect("traced widening")
         .remove(0);
@@ -134,10 +136,11 @@ fn a_widening_program_differentiates_across_the_conversion() {
         .reduce_sum_squares(Some(&[0]))
         .expect("ordinary f64 loss");
 
-    let seed = TracedTensor::from_tensor_concrete_shape(
-        Tensor::from_vec_col_major(vec![], vec![1.0_f64]).expect("shape matches data"),
-    )
-    .expect("traced seed");
+    let seed = trace
+        .from_tensor_concrete_shape(
+            Tensor::from_vec_col_major(vec![], vec![1.0_f64]).expect("shape matches data"),
+        )
+        .expect("traced seed");
     let gradients = ad_context()
         .vjp_many(&loss, &[&input], &seed)
         .expect("the connected reverse pass runs");

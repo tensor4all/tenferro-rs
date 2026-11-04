@@ -6,7 +6,7 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_ops::{ext_op::ExtensionOp, std_tensor_op::StdTensorOp, SymDim};
 use tenferro_runtime::{
     CompareDir, DType, Error as RuntimeError, ErrorPhase, GraphCompiler, Tensor,
-    TensorSessionOpsExt, TracedTensor, TypedTensor, TypedTensorMaskSessionOpsExt,
+    TensorSessionOpsExt, TraceContext, TracedTensor, TypedTensor, TypedTensorMaskSessionOpsExt,
     TypedTensorSessionOpsExt,
 };
 use tenferro_tensor::ValidationError;
@@ -71,9 +71,13 @@ impl ExtensionOp for TestExtensionOp {
 
 #[test]
 fn traced_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
-    let lhs = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap();
-    let rhs =
-        TracedTensor::from_vec_col_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
+    let trace = TraceContext::new();
+    let lhs = trace
+        .from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0])
+        .unwrap();
+    let rhs = trace
+        .from_vec_col_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0])
+        .unwrap();
     let y = lhs.add(&rhs).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -90,8 +94,13 @@ fn traced_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 
 #[test]
 fn traced_tensor_methods_cover_core_elementwise_surface() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
-    let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
+    let trace = TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![2], vec![2.0_f64, 4.0])
+        .unwrap();
+    let y = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 8.0])
+        .unwrap();
     let cond = x.compare(&y, CompareDir::Gt).unwrap();
 
     let _ = x.sub(&y).unwrap();
@@ -119,6 +128,7 @@ fn traced_tensor_methods_cover_core_elementwise_surface() {
 
 #[test]
 fn traced_unary_methods_forward_to_distinct_primal_ops() {
+    let trace = TraceContext::new();
     fn run(output: &TracedTensor) -> Tensor {
         let mut compiler = GraphCompiler::new();
         let program = compiler.compile(output).unwrap();
@@ -126,7 +136,9 @@ fn traced_unary_methods_forward_to_distinct_primal_ops() {
         run_compiled_one(&executor, &program, &[]).unwrap()
     }
 
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
+    let x = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 4.0])
+        .unwrap();
     assert_eq!(
         run(&x.neg().unwrap()).as_slice::<f64>().unwrap(),
         &[-1.0, -4.0]
@@ -148,7 +160,9 @@ fn traced_unary_methods_forward_to_distinct_primal_ops() {
         &[1.0, 0.5]
     );
 
-    let analytic = TracedTensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]).unwrap();
+    let analytic = trace
+        .from_vec_col_major(vec![2], vec![0.0_f64, 1.0])
+        .unwrap();
     let exp = run(&analytic.exp().unwrap());
     let log = run(&x.log().unwrap());
     let sin = run(&analytic.sin().unwrap());
@@ -167,11 +181,12 @@ fn traced_unary_methods_forward_to_distinct_primal_ops() {
     assert_close(&expm1, &[0.0, 1.0_f64.exp_m1()]);
     assert_close(&log1p, &[0.0, 1.0_f64.ln_1p()]);
 
-    let z = TracedTensor::from_vec_col_major(
-        vec![2],
-        vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)],
-    )
-    .unwrap();
+    let z = trace
+        .from_vec_col_major(
+            vec![2],
+            vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)],
+        )
+        .unwrap();
     assert_eq!(
         run(&z.conj().unwrap()).as_slice::<Complex64>().unwrap(),
         &[Complex64::new(1.0, -2.0), Complex64::new(3.0, 4.0)]
@@ -180,10 +195,15 @@ fn traced_unary_methods_forward_to_distinct_primal_ops() {
 
 #[test]
 fn traced_compare_returns_bool_and_where_select_accepts_bool_condition() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
-    let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
+    let trace = TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![2], vec![2.0_f64, 4.0])
+        .unwrap();
+    let y = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 8.0])
+        .unwrap();
     let cond = x.compare(&y, CompareDir::Gt).unwrap();
-    assert_eq!(cond.dtype, DType::Bool);
+    assert_eq!(cond.dtype(), DType::Bool);
 
     let selected = TracedTensor::where_select(&cond, &x, &y).unwrap();
 

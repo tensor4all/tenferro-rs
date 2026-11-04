@@ -46,7 +46,7 @@ pub(super) fn slice_vjp(
     let AdValue::Value(cotangent) = cotangent else {
         return Ok(vec![AdValue::Absent]);
     };
-    let input_shape = const_usize_shape_for_inverse_slice_padding(builder, input, "slice input")?;
+    let input_shape = bounded_usize_shape(builder, input, "slice input", true)?;
     let rank = input_shape.len();
     if config.starts.len() != rank || config.limits.len() != rank || config.strides.len() != rank {
         return Err(metadata_error(
@@ -121,7 +121,7 @@ pub(super) fn pad_vjp(
     let AdValue::Value(cotangent) = cotangent else {
         return Ok(vec![AdValue::Absent]);
     };
-    let input_shape = exact_usize_shape(builder, input, "pad input")?;
+    let input_shape = bounded_usize_shape(builder, input, "pad input", false)?;
     let rank = input_shape.len();
     if config.edge_padding_low.len() != rank
         || config.edge_padding_high.len() != rank
@@ -236,8 +236,12 @@ pub(super) fn concatenate_vjp(
     let mut result = vec![AdValue::Absent; input_count];
     let mut axis_offset = 0usize;
     for input_index in 0..input_count {
-        let input_shape =
-            exact_usize_shape(builder, primal_inputs[input_index], "concatenate input")?;
+        let input_shape = bounded_usize_shape(
+            builder,
+            primal_inputs[input_index],
+            "concatenate input",
+            false,
+        )?;
         if axis >= input_shape.len() {
             return Err(metadata_error(
                 SemanticTransformRole::Vjp,
@@ -281,45 +285,6 @@ fn zero_like(
     role: SemanticTransformRole,
 ) -> Result<ProgramValue, SemanticAdTransformError> {
     zero_constant_like(builder, anchor, role)
-}
-
-fn exact_usize_shape(
-    builder: &SemanticProgramBuilder,
-    value: ProgramValue,
-    field: &'static str,
-) -> Result<Vec<usize>, SemanticAdTransformError> {
-    exact_value_shape(builder, value, SemanticTransformRole::Vjp, field)?
-        .into_iter()
-        .map(|extent| match extent {
-            tenferro_ops::dim_expr::DimExpr::Const(value) => Ok(value),
-            _ => Err(metadata_error(
-                SemanticTransformRole::Vjp,
-                format!("{field} requires concrete extents"),
-            )),
-        })
-        .collect()
-}
-
-fn const_usize_shape_for_inverse_slice_padding(
-    builder: &SemanticProgramBuilder,
-    value: ProgramValue,
-    field: &'static str,
-) -> Result<Vec<usize>, SemanticAdTransformError> {
-    builder
-        .value_metadata(value)?
-        .shape()
-        .iter()
-        .map(|extent| match extent {
-            ShapeExtent::Exact(DimExpr::Const(value))
-            | ShapeExtent::UpperBound(DimExpr::Const(value)) => Ok(*value),
-            ShapeExtent::Exact(_) | ShapeExtent::UpperBound(_) | ShapeExtent::Unknown => {
-                Err(metadata_error(
-                    SemanticTransformRole::Vjp,
-                    format!("{field} requires constant exact or upper-bound extents"),
-                ))
-            }
-        })
-        .collect()
 }
 
 fn ceil_div(numerator: i128, denominator: i128) -> Result<i128, SemanticAdTransformError> {

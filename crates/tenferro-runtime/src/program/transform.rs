@@ -43,8 +43,9 @@ impl SemanticTransformContext<'_> {
         self.builder
             .import(ProgramImport {
                 program: input.program.as_ref(),
-                bindings: &input.bindings,
+                bindings: Some(&input.bindings),
                 roots,
+                input_map: &[],
             })
             .map_err(SemanticTransformError::from)
     }

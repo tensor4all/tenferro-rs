@@ -151,6 +151,7 @@ impl SemanticProgramBuilder {
         self.operations.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn add_shape_guards_to_output(
         &mut self,
         output: ProgramValue,
@@ -193,6 +194,393 @@ impl SemanticProgramBuilder {
         self.operations.extend(transaction.operations);
         self.bindings.extend(transaction.bindings);
         Ok(ImportedProgramValues::new(roots))
+    }
+
+    /// Snapshot the live closure of `outputs`, pruning dead operation outputs.
+    ///
+    /// Only values reachable from `outputs` are kept. An extension operation whose
+    /// dead outputs are prunable is replaced by its pruned form (for example
+    /// `Svd` used for its values only becomes `SvdVals`), so a values-only use
+    /// never executes the unused kernels.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed failures of [`finish`](Self::finish), or
+    /// [`ProgramFinishError::SnapshotRebuild`] when replaying the live closure
+    /// fails.
+    pub(crate) fn snapshot_pruned(
+        &self,
+        outputs: &[ProgramValue],
+    ) -> Result<(FrozenProgram, Vec<ProgramValue>), ProgramFinishError> {
+        self.snapshot_pruned_with_aliases_and_specs(outputs, &[], &[])
+    }
+
+    /// Snapshot with explicit declarations for kept inputs.
+    ///
+    /// A declared input spec replaces the traced declaration, which is how
+    /// `compile_with_input_specs` specializes placeholder extents to the concrete
+    /// shapes the caller declares.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed failures as
+    /// [`snapshot_pruned_with_aliases`](Self::snapshot_pruned_with_aliases).
+    pub(crate) fn snapshot_pruned_with_input_specs(
+        &self,
+        outputs: &[ProgramValue],
+        input_specs: &[(usize, ProgramInputSpec)],
+    ) -> Result<(FrozenProgram, Vec<ProgramValue>), ProgramFinishError> {
+        self.snapshot_pruned_with_aliases_and_specs(outputs, &[], input_specs)
+    }
+
+    /// Snapshot the live closure of `outputs`, substituting checkpoint aliases.
+    ///
+    /// An aliased input is replaced by a prefix `Slice` of its pre-checkpoint
+    /// value, inserted just before its first use so the rebuilt SSA order stays
+    /// valid. Dead operation outputs are pruned at the same time.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed failures as
+    /// [`snapshot_pruned`](Self::snapshot_pruned).
+    pub(crate) fn snapshot_pruned_with_aliases(
+        &self,
+        outputs: &[ProgramValue],
+        aliases: &[crate::trace::CheckpointAlias],
+    ) -> Result<(FrozenProgram, Vec<ProgramValue>), ProgramFinishError> {
+        self.snapshot_pruned_with_aliases_and_specs(outputs, aliases, &[])
+    }
+
+    fn snapshot_pruned_with_aliases_and_specs(
+        &self,
+        outputs: &[ProgramValue],
+        aliases: &[crate::trace::CheckpointAlias],
+        input_specs: &[(usize, ProgramInputSpec)],
+    ) -> Result<(FrozenProgram, Vec<ProgramValue>), ProgramFinishError> {
+        let value_count = self.values.len();
+        let mut live = vec![false; value_count];
+        for output in outputs {
+            if output.owner != self.owner || output.slot as usize >= value_count {
+                return Err(ProgramFinishError::ForeignOutput);
+            }
+            live[output.slot as usize] = true;
+        }
+        // An effectful operation is observable even when no caller asks for its
+        // outputs, so the operation itself seeds liveness like a requested output,
+        // and its outputs stay live so the rebuilt operation keeps its arity.
+        let mut live_operation = vec![false; self.operations.len()];
+        for (index, operation) in self.operations.iter().enumerate() {
+            if operation.effects.is_empty() {
+                continue;
+            }
+            live_operation[index] = true;
+            for output in &operation.outputs {
+                live[output.slot as usize] = true;
+            }
+        }
+        for alias in aliases {
+            let slot = alias.input.slot as usize;
+            if live[slot] {
+                live[alias.target.slot as usize] = true;
+            }
+        }
+        let alias_of = |value: ProgramValue| {
+            aliases
+                .iter()
+                .find(|alias| alias.input == value)
+                .map(|alias| (alias.target, alias.bound_shape.clone()))
+        };
+        for _ in 0..=aliases.len() {
+            let mut changed = false;
+            for (index, operation) in self.operations.iter().enumerate().rev() {
+                if !live_operation[index]
+                    && !operation
+                        .outputs
+                        .iter()
+                        .any(|output| live[output.slot as usize])
+                {
+                    continue;
+                }
+                live_operation[index] = true;
+                for input in &operation.inputs {
+                    if !live[input.slot as usize] {
+                        live[input.slot as usize] = true;
+                        changed = true;
+                    }
+                }
+            }
+            for alias in aliases {
+                if live[alias.input.slot as usize] && !live[alias.target.slot as usize] {
+                    live[alias.target.slot as usize] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        // An extension op that cannot prune its outputs must keep all of them, or
+        // the rebuilt operation would not match the recorded output count.
+        loop {
+            let mut changed = false;
+            for operation in self.operations.iter().rev() {
+                let SemanticOp::Extension(extension) = &operation.op else {
+                    continue;
+                };
+                if !operation.effects.is_empty() {
+                    continue;
+                }
+                let live_outputs: Vec<bool> = operation
+                    .outputs
+                    .iter()
+                    .map(|output| live[output.slot as usize])
+                    .collect();
+                if !live_outputs.iter().any(|live| *live) || live_outputs.iter().all(|live| *live) {
+                    continue;
+                }
+                if extension.prune_outputs(&live_outputs).is_some() {
+                    continue;
+                }
+                for output in &operation.outputs {
+                    live[output.slot as usize] = true;
+                }
+                changed = true;
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        // Declared inputs are created first, in the declared order, so a caller's
+        // explicit input order becomes the compiled program's input order.
+        let mut creation_order: Vec<(usize, Option<ProgramInputSpec>)> =
+            Vec::with_capacity(self.inputs.len());
+        for (source_index, declared) in input_specs {
+            if self.input_specs.get(*source_index).is_some() {
+                creation_order.push((*source_index, Some(declared.clone())));
+            }
+        }
+        for index in 0..self.inputs.len() {
+            if input_specs.iter().any(|(declared, _)| *declared == index) {
+                continue;
+            }
+            creation_order.push((index, None));
+        }
+
+        // Program dimension expressions name inputs by program input position; the
+        // kept inputs are renumbered into creation order, so their declarations are
+        // rewritten against that order.
+        let mut input_index = std::collections::HashMap::new();
+        for (source_index, _) in &creation_order {
+            let Some(input) = self.inputs.get(*source_index) else {
+                continue;
+            };
+            if !live[input.slot as usize] || alias_of(*input).is_some() {
+                continue;
+            }
+            input_index.insert(*source_index, input_index.len());
+        }
+        fn remap_expr(
+            expr: &DimExpr,
+            input_index: &std::collections::HashMap<usize, usize>,
+        ) -> Option<DimExpr> {
+            Some(match expr {
+                DimExpr::Const(value) => DimExpr::Const(*value),
+                DimExpr::InputDim { input_idx, axis } => DimExpr::InputDim {
+                    input_idx: *input_index.get(input_idx)?,
+                    axis: *axis,
+                },
+                DimExpr::Add(lhs, rhs) => DimExpr::Add(
+                    Box::new(remap_expr(lhs, input_index)?),
+                    Box::new(remap_expr(rhs, input_index)?),
+                ),
+                DimExpr::Sub(lhs, rhs) => DimExpr::Sub(
+                    Box::new(remap_expr(lhs, input_index)?),
+                    Box::new(remap_expr(rhs, input_index)?),
+                ),
+                DimExpr::Mul(lhs, rhs) => DimExpr::Mul(
+                    Box::new(remap_expr(lhs, input_index)?),
+                    Box::new(remap_expr(rhs, input_index)?),
+                ),
+                DimExpr::FloorDiv(lhs, rhs) => DimExpr::FloorDiv(
+                    Box::new(remap_expr(lhs, input_index)?),
+                    Box::new(remap_expr(rhs, input_index)?),
+                ),
+                DimExpr::Min(lhs, rhs) => DimExpr::Min(
+                    Box::new(remap_expr(lhs, input_index)?),
+                    Box::new(remap_expr(rhs, input_index)?),
+                ),
+                DimExpr::Max(lhs, rhs) => DimExpr::Max(
+                    Box::new(remap_expr(lhs, input_index)?),
+                    Box::new(remap_expr(rhs, input_index)?),
+                ),
+            })
+        }
+
+        let mut rebuild = Self::new();
+        let mut kept_inputs = Vec::new();
+        let mut mapped: Vec<Option<ProgramValue>> = vec![None; value_count];
+        for (source_index, declared) in creation_order {
+            let (Some(input), Some(spec)) = (
+                self.inputs.get(source_index),
+                self.input_specs.get(source_index),
+            ) else {
+                continue;
+            };
+            if !live[input.slot as usize] || alias_of(*input).is_some() {
+                continue;
+            }
+            kept_inputs.push(*input);
+            let built = match declared {
+                Some(declared) => declared,
+                None => {
+                    let metadata = spec.metadata();
+                    let extents: Vec<ShapeExtent<DimExpr>> = metadata
+                        .shape()
+                        .iter()
+                        .map(
+                            |extent| -> Result<ShapeExtent<DimExpr>, ProgramFinishError> {
+                                let invalid = || ProgramFinishError::SnapshotRebuild {
+                                    source: ProgramBuildError::InvalidImport {
+                                        source: ProgramStructuralError::InvalidValueReference,
+                                    },
+                                };
+                                Ok(match extent {
+                                    ShapeExtent::Exact(expr) => ShapeExtent::Exact(
+                                        remap_expr(expr, &input_index).ok_or_else(invalid)?,
+                                    ),
+                                    ShapeExtent::UpperBound(expr) => ShapeExtent::UpperBound(
+                                        remap_expr(expr, &input_index).ok_or_else(invalid)?,
+                                    ),
+                                    ShapeExtent::Unknown => ShapeExtent::Unknown,
+                                })
+                            },
+                        )
+                        .collect::<Result<_, _>>()?;
+                    let mut built = ProgramInputSpec::from_metadata(
+                        ProgramValueMetadata::from_extents(metadata.dtype(), extents),
+                    );
+                    if let Some(identity) = metadata.scalar_identity() {
+                        built = built.with_scalar_identity(identity);
+                    }
+                    built
+                }
+            };
+            let rebuilt = rebuild.input(built).map_err(snapshot_rebuild)?;
+            if let Some(binding) = self.bindings.iter().find(|binding| binding.input == *input) {
+                rebuild
+                    .bind_input_retained(rebuilt, Arc::clone(&binding.tensor))
+                    .map_err(snapshot_rebuild)?;
+            }
+            mapped[input.slot as usize] = Some(rebuilt);
+        }
+
+        let materialize_alias = |rebuild: &mut Self,
+                                 mapped: &mut Vec<Option<ProgramValue>>,
+                                 input: ProgramValue|
+         -> Result<(), ProgramFinishError> {
+            if mapped[input.slot as usize].is_some() {
+                return Ok(());
+            }
+            let Some((target, shape)) = alias_of(input) else {
+                return Err(ProgramFinishError::SnapshotRebuild {
+                    source: ProgramBuildError::InvalidImport {
+                        source: ProgramStructuralError::InvalidValueReference,
+                    },
+                });
+            };
+            let Some(mapped_target) = mapped[target.slot as usize] else {
+                return Err(ProgramFinishError::SnapshotRebuild {
+                    source: ProgramBuildError::InvalidImport {
+                        source: ProgramStructuralError::InvalidSsaOrder,
+                    },
+                });
+            };
+            let rank = shape.len();
+            let slice = CoreSemanticOp::Slice(tenferro_tensor::SliceConfig {
+                starts: vec![0; rank],
+                limits: shape,
+                strides: vec![1; rank],
+            });
+            let sliced = rebuild
+                .add_op(slice, &[mapped_target])
+                .map_err(snapshot_rebuild)?[0];
+            mapped[input.slot as usize] = Some(sliced);
+            Ok(())
+        };
+
+        for (index, operation) in self.operations.iter().enumerate() {
+            if !live_operation[index] {
+                continue;
+            }
+            let live_outputs: Vec<bool> = operation
+                .outputs
+                .iter()
+                .map(|output| live[output.slot as usize])
+                .collect();
+            for input in &operation.inputs {
+                if alias_of(*input).is_some() {
+                    materialize_alias(&mut rebuild, &mut mapped, *input)?;
+                }
+            }
+            let inputs = operation
+                .inputs
+                .iter()
+                .map(|input| {
+                    mapped[input.slot as usize].ok_or(ProgramFinishError::SnapshotRebuild {
+                        source: ProgramBuildError::InvalidImport {
+                            source: ProgramStructuralError::InvalidSsaOrder,
+                        },
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let rebuilt_outputs = match &operation.op {
+                SemanticOp::Core(core) => rebuild.add_op(core.clone(), &inputs),
+                SemanticOp::Extension(extension) => rebuild.add_extension(
+                    extension
+                        .prune_outputs(&live_outputs)
+                        .unwrap_or_else(|| extension.clone_arc()),
+                    &inputs,
+                ),
+            }
+            .map_err(snapshot_rebuild)?;
+            discharge_static_guards(&mut rebuild);
+            let kept: Vec<ProgramValue> = operation
+                .outputs
+                .iter()
+                .zip(live_outputs.iter())
+                .filter(|(_, live)| **live)
+                .map(|(output, _)| *output)
+                .collect();
+            if rebuilt_outputs.len() != kept.len() {
+                return Err(ProgramFinishError::SnapshotRebuild {
+                    source: ProgramBuildError::OutputMetadataCount {
+                        expected: kept.len(),
+                        actual: rebuilt_outputs.len(),
+                    },
+                });
+            }
+            for (source, rebuilt) in kept.iter().zip(rebuilt_outputs.iter()) {
+                mapped[source.slot as usize] = Some(*rebuilt);
+            }
+        }
+
+        for output in outputs {
+            if alias_of(*output).is_some() {
+                materialize_alias(&mut rebuild, &mut mapped, *output)?;
+            }
+        }
+        let mapped_outputs = outputs
+            .iter()
+            .map(|output| {
+                mapped[output.slot as usize].ok_or(ProgramFinishError::SnapshotRebuild {
+                    source: ProgramBuildError::InvalidImport {
+                        source: ProgramStructuralError::InvalidValueReference,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((rebuild.finish(&mapped_outputs)?, kept_inputs))
     }
 
     /// Consume this builder and atomically freeze semantic structure and bindings.
@@ -242,6 +630,204 @@ impl SemanticProgramBuilder {
         Ok(FrozenProgram {
             program: Arc::new(program),
             bindings,
+        })
+    }
+
+    /// Translate a shape payload written in program coordinates into the
+    /// coordinates of the operation that will carry it.
+    ///
+    /// A rule derives a `Reshape`/`BroadcastInDim` payload from value metadata, so
+    /// its `InputDim`s name *program* inputs. The operation it lands on names only
+    /// its own inputs, so every referenced program input is appended to
+    /// `operation_inputs` as an auxiliary shape reference. Extents stay symbolic.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::dim_expr::DimExpr;
+    /// use tenferro_runtime::program::{CoreSemanticOp, ProgramInputSpec, SemanticProgramBuilder};
+    /// use tenferro_runtime::DType;
+    ///
+    /// let mut builder = SemanticProgramBuilder::new();
+    /// let operand = builder.input(ProgramInputSpec::new(
+    ///     DType::F64,
+    ///     [DimExpr::InputDim { input_idx: 0, axis: 0 }],
+    /// ))?;
+    /// let mut inputs = vec![operand];
+    /// let shape = builder.translate_input_shape_payload(
+    ///     &[DimExpr::InputDim { input_idx: 0, axis: 0 }],
+    ///     &mut inputs,
+    /// );
+    /// assert_eq!(shape, [DimExpr::InputDim { input_idx: 0, axis: 0 }]);
+    /// assert_eq!(inputs.len(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn translate_input_shape_payload(
+        &self,
+        payload: &[DimExpr],
+        operation_inputs: &mut Vec<ProgramValue>,
+    ) -> Vec<DimExpr> {
+        payload
+            .iter()
+            .map(|extent| self.translate_input_shape_extent(extent, operation_inputs))
+            .collect()
+    }
+
+    fn translate_input_shape_extent(
+        &self,
+        extent: &DimExpr,
+        operation_inputs: &mut Vec<ProgramValue>,
+    ) -> DimExpr {
+        match extent {
+            DimExpr::Const(value) => DimExpr::Const(*value),
+            DimExpr::InputDim { input_idx, axis } => {
+                let Some(input) = self.inputs.get(*input_idx) else {
+                    return extent.clone();
+                };
+                let positioned = match operation_inputs.iter().position(|value| value == input) {
+                    Some(position) => position,
+                    None => {
+                        operation_inputs.push(*input);
+                        operation_inputs.len() - 1
+                    }
+                };
+                DimExpr::InputDim {
+                    input_idx: positioned,
+                    axis: *axis,
+                }
+            }
+            DimExpr::Add(lhs, rhs) => DimExpr::Add(
+                Box::new(self.translate_input_shape_extent(lhs, operation_inputs)),
+                Box::new(self.translate_input_shape_extent(rhs, operation_inputs)),
+            ),
+            DimExpr::Sub(lhs, rhs) => DimExpr::Sub(
+                Box::new(self.translate_input_shape_extent(lhs, operation_inputs)),
+                Box::new(self.translate_input_shape_extent(rhs, operation_inputs)),
+            ),
+            DimExpr::Mul(lhs, rhs) => DimExpr::Mul(
+                Box::new(self.translate_input_shape_extent(lhs, operation_inputs)),
+                Box::new(self.translate_input_shape_extent(rhs, operation_inputs)),
+            ),
+            DimExpr::FloorDiv(lhs, rhs) => DimExpr::FloorDiv(
+                Box::new(self.translate_input_shape_extent(lhs, operation_inputs)),
+                Box::new(self.translate_input_shape_extent(rhs, operation_inputs)),
+            ),
+            DimExpr::Min(lhs, rhs) => DimExpr::Min(
+                Box::new(self.translate_input_shape_extent(lhs, operation_inputs)),
+                Box::new(self.translate_input_shape_extent(rhs, operation_inputs)),
+            ),
+            DimExpr::Max(lhs, rhs) => DimExpr::Max(
+                Box::new(self.translate_input_shape_extent(lhs, operation_inputs)),
+                Box::new(self.translate_input_shape_extent(rhs, operation_inputs)),
+            ),
+        }
+    }
+
+    /// Borrow the program inputs in program input order.
+    #[doc(hidden)]
+    pub fn inputs(&self) -> &[ProgramValue] {
+        &self.inputs
+    }
+
+    /// Resolve `value`'s declared extents against the shapes bound to the inputs.
+    ///
+    /// A program keeps symbolic extents so it stays shape-polymorphic; a caller
+    /// that needs a literal length reads it here instead of asking the program to
+    /// become concrete.
+    #[doc(hidden)]
+    pub fn resolved_extents(
+        &self,
+        value: ProgramValue,
+    ) -> Result<Vec<ShapeExtent<DimExpr>>, ProgramBuildError> {
+        self.value_metadata(value)?
+            .shape()
+            .iter()
+            .enumerate()
+            .map(|(axis, _)| self.resolved_extent(value, axis))
+            .collect()
+    }
+
+    /// Resolve one of `value`'s declared extents against the shapes bound to the
+    /// inputs it names.
+    ///
+    /// Cost for one axis query is one binding scan and one expression walk per input
+    /// that axis references, i.e. `O(E + R log R + K(B + E))` for `E` expression
+    /// nodes, `R` referenced inputs, `K` bindings and `B` bound axes; a constant
+    /// expression returns without either.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::dim_expr::DimExpr;
+    /// use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
+    /// use tenferro_runtime::DType;
+    ///
+    /// let mut builder = SemanticProgramBuilder::new();
+    /// let input = builder.input(ProgramInputSpec::new(
+    ///     DType::F64,
+    ///     [DimExpr::InputDim { input_idx: 0, axis: 0 }],
+    /// ))?;
+    /// let extent = builder.resolved_extent(input, 0)?;
+    /// // Nothing is bound, so the symbolic declaration is unchanged.
+    /// assert_eq!(
+    ///     extent,
+    ///     tenferro_ops::ShapeExtent::Exact(DimExpr::InputDim { input_idx: 0, axis: 0 })
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProgramBuildError::ForeignValue`] for a value of another builder,
+    /// or a metadata error when `axis` is outside the value's rank.
+    #[doc(hidden)]
+    pub fn resolved_extent(
+        &self,
+        value: ProgramValue,
+        axis: usize,
+    ) -> Result<ShapeExtent<DimExpr>, ProgramBuildError> {
+        let metadata = self.value_metadata(value)?;
+        let extent =
+            metadata
+                .shape()
+                .get(axis)
+                .ok_or_else(|| ProgramBuildError::InvalidImport {
+                    source: ProgramStructuralError::InvalidValueReference,
+                })?;
+        // Resolve only the inputs this one expression names: a constant extent, or
+        // one whose inputs carry no binding, needs no lookup at all.
+        let resolve = |expr: &DimExpr| -> DimExpr {
+            // A constant extent, or a builder with no bindings at all, needs no work.
+            if expr.max_input_idx().is_none() || self.bindings.is_empty() {
+                return expr.clone();
+            }
+            // Substitute one referenced input at a time, so nothing proportional to
+            // the input count is allocated per axis query.
+            let mut resolved = expr.clone();
+            let mut positions = Vec::new();
+            collect_input_positions(expr, &mut positions);
+            positions.sort_unstable();
+            positions.dedup();
+            for position in positions {
+                let Some(input) = self.inputs.get(position) else {
+                    continue;
+                };
+                let Some(bound) = self
+                    .bindings
+                    .iter()
+                    .find(|binding| binding.input == *input)
+                    .map(|binding| binding.tensor.shape())
+                else {
+                    continue;
+                };
+                resolved = substitute_input_extents(&resolved, position, bound);
+            }
+            resolved
+        };
+        Ok(match extent {
+            ShapeExtent::Exact(expr) => ShapeExtent::Exact(resolve(expr)),
+            ShapeExtent::UpperBound(expr) => ShapeExtent::UpperBound(resolve(expr)),
+            ShapeExtent::Unknown => ShapeExtent::Unknown,
         })
     }
 
@@ -542,6 +1128,50 @@ impl SemanticProgramBuilder {
     }
 }
 
+/// Drop shape guards whose both sides are already constant and equal.
+///
+/// A snapshot of a fully concrete program has nothing left to check at
+/// execution; keeping the guard would make the runtime re-evaluate an equality
+/// the builder already decided.
+fn discharge_static_guards(builder: &mut SemanticProgramBuilder) {
+    let Some(operation) = builder.operations.last_mut() else {
+        return;
+    };
+    let kept: Vec<ShapeGuard> = operation
+        .shape_guards
+        .iter()
+        .filter(|guard| {
+            let lhs = static_dim_value(guard.lhs());
+            let rhs = static_dim_value(guard.rhs());
+            match (lhs, rhs) {
+                (Some(lhs), Some(rhs)) => lhs != rhs,
+                _ => true,
+            }
+        })
+        .cloned()
+        .collect();
+    operation.shape_guards = kept.into_boxed_slice();
+}
+
+fn static_dim_value(expr: &DimExpr) -> Option<usize> {
+    Some(match expr {
+        DimExpr::Const(value) => *value,
+        DimExpr::InputDim { .. } => return None,
+        DimExpr::Add(lhs, rhs) => static_dim_value(lhs)?.checked_add(static_dim_value(rhs)?)?,
+        DimExpr::Sub(lhs, rhs) => static_dim_value(lhs)?.checked_sub(static_dim_value(rhs)?)?,
+        DimExpr::Mul(lhs, rhs) => static_dim_value(lhs)?.checked_mul(static_dim_value(rhs)?)?,
+        DimExpr::FloorDiv(lhs, rhs) => {
+            static_dim_value(lhs)?.checked_div(static_dim_value(rhs)?)?
+        }
+        DimExpr::Min(lhs, rhs) => static_dim_value(lhs)?.min(static_dim_value(rhs)?),
+        DimExpr::Max(lhs, rhs) => static_dim_value(lhs)?.max(static_dim_value(rhs)?),
+    })
+}
+
+fn snapshot_rebuild(source: ProgramBuildError) -> ProgramFinishError {
+    ProgramFinishError::SnapshotRebuild { source }
+}
+
 fn core_output_uses_local_shape_coordinates(op: &CoreSemanticOp) -> bool {
     matches!(
         op,
@@ -736,8 +1366,18 @@ impl ImportTransaction {
         request: ProgramImport<'_>,
     ) -> Result<Self, ProgramBuildError> {
         let source = request.program;
-        if !request.bindings.belongs_to(source.owner) {
+        if let Some(bindings) = request.bindings
+            && !bindings.belongs_to(source.owner)
+        {
             return Err(ProgramBuildError::ForeignBindings);
+        }
+        for (mapped_source, mapped_destination) in request.input_map {
+            if mapped_source.owner != source.owner
+                || mapped_source.slot as usize >= source.values.len()
+            {
+                return Err(ProgramBuildError::ForeignValue);
+            }
+            destination.validate_value(*mapped_destination)?;
         }
         if request
             .roots
@@ -761,12 +1401,9 @@ impl ImportTransaction {
             .iter()
             .map(|root| root.slot as usize)
             .collect();
-        pending.extend(
-            request
-                .bindings
-                .bound_inputs()
-                .map(|input| input.slot as usize),
-        );
+        if let Some(bindings) = request.bindings {
+            pending.extend(bindings.bound_inputs().map(|input| input.slot as usize));
+        }
         for (operation_index, operation) in source.operations.iter().enumerate() {
             if !operation.effects.is_empty() {
                 needed_operations[operation_index] = true;
@@ -790,6 +1427,45 @@ impl ImportTransaction {
                     needed_values[output.slot as usize] = true;
                 }
                 pending.extend(operation.inputs.iter().map(|input| input.slot as usize));
+            }
+        }
+
+        // A kept value's declared extent and a kept operation's guard name source
+        // inputs by position, which is a dependency the value graph does not carry.
+        // Pull those inputs in, or the declaration would have to be dropped.
+        loop {
+            let mut positions = Vec::new();
+            for input in &source.inputs {
+                if !needed_values[input.slot as usize] {
+                    continue;
+                }
+                for extent in source.values[input.slot as usize].shape() {
+                    if let ShapeExtent::Exact(expr) | ShapeExtent::UpperBound(expr) = extent {
+                        collect_input_positions(expr, &mut positions);
+                    }
+                }
+            }
+            for (operation, needed) in source.operations.iter().zip(&needed_operations) {
+                if !needed {
+                    continue;
+                }
+                for guard in operation.shape_guards.iter() {
+                    collect_input_positions(guard.lhs(), &mut positions);
+                    collect_input_positions(guard.rhs(), &mut positions);
+                }
+            }
+            let mut changed = false;
+            for position in positions {
+                let Some(input) = source.inputs.get(position) else {
+                    continue;
+                };
+                if !needed_values[input.slot as usize] {
+                    needed_values[input.slot as usize] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
             }
         }
 
@@ -827,60 +1503,73 @@ impl ImportTransaction {
             bindings: Vec::new(),
             roots: Box::new([]),
         };
-        // Pre-resolve concrete input shapes from tensor bindings for InputDim
-        // resolution in imported metadata.
-        let bound_input_shapes: Vec<Option<Vec<DimExpr>>> = source
-            .inputs
-            .iter()
-            .map(|input| {
-                request.bindings.tensor_for_input(*input).map(|tensor| {
-                    tensor
-                        .shape()
-                        .iter()
-                        .map(|&size| DimExpr::Const(size))
-                        .collect()
-                })
-            })
-            .collect();
-
-        let resolve_extent = |extent: &ShapeExtent<DimExpr>| -> ShapeExtent<DimExpr> {
-            match extent {
-                ShapeExtent::Exact(expr) => ShapeExtent::Exact(resolve_dim_expr_from_input_shapes(
-                    expr,
-                    &bound_input_shapes,
-                )),
-                ShapeExtent::UpperBound(expr) => ShapeExtent::UpperBound(
-                    resolve_dim_expr_from_input_shapes(expr, &bound_input_shapes),
-                ),
-                ShapeExtent::Unknown => ShapeExtent::Unknown,
-            }
-        };
+        // Imported metadata keeps the source's expressions: resolving `InputDim`
+        // against the bound shapes would turn a symbolic program into a concrete one,
+        // and an operation payload built from that metadata cannot be made symbolic
+        // again. A rule that needs a concrete length reads it from the binding.
+        let mapped_input: std::collections::HashMap<ProgramValue, ProgramValue> =
+            request.input_map.iter().copied().collect();
 
         let mut remap = vec![None; source.values.len()];
+        // Program dimension expressions name inputs by program input *position*,
+        // and the destination already owns `destination.inputs.len()` inputs, so
+        // the map is keyed by source position and holds destination positions.
+        let mut source_input_index = vec![None; source.inputs.len()];
 
-        for &input in &source.inputs {
+        // Reserve one destination input per needed source input first: an imported
+        // declaration can name any imported input, so every position must be known
+        // before any declaration is written in destination coordinates.
+        let mut reserved = Vec::new();
+        for (position, &input) in source.inputs.iter().enumerate() {
             if !needed_values[input.slot as usize] {
                 continue;
             }
-            let metadata = source.values[input.slot as usize].clone();
-            let identity = metadata.scalar_identity();
+            if let Some(&existing) = mapped_input.get(&input) {
+                remap[input.slot as usize] = Some(existing);
+                continue;
+            }
+            let slot = destination
+                .values
+                .len()
+                .checked_add(transaction.values.len())
+                .and_then(|slot| slot.checked_add(reserved.len()))
+                .ok_or(ProgramBuildError::TooManyValues)?;
+            let slot = u32::try_from(slot).map_err(|_| ProgramBuildError::TooManyValues)?;
+            let imported = ProgramValue::new(slot, destination.owner);
+            source_input_index[position] = Some(destination.inputs.len() + reserved.len());
+            let tensor = request
+                .bindings
+                .and_then(|bindings| bindings.tensor_for_input(input));
+            reserved.push((imported, &source.values[input.slot as usize], tensor));
+            remap[input.slot as usize] = Some(imported);
+        }
+
+        for (imported, source_metadata, tensor) in reserved {
+            let identity = source_metadata.scalar_identity();
             let metadata = ProgramValueMetadata::from_extents(
-                metadata.dtype(),
-                metadata
+                source_metadata.dtype(),
+                source_metadata
                     .shape()
                     .iter()
-                    .map(&resolve_extent)
+                    .cloned()
+                    .map(|extent| {
+                        remap_imported_extent(
+                            extent,
+                            source,
+                            &source_input_index,
+                            &mapped_input,
+                            destination,
+                        )
+                    })
                     .collect::<Vec<_>>(),
             );
             let metadata = keep_scalar_identity(&identity, metadata);
-            let imported = transaction.next_value(destination.values.len(), destination.owner)?;
             transaction.inputs.push(imported);
             transaction
                 .input_specs
                 .push(ProgramInputSpec::from_metadata(metadata.clone()));
             transaction.values.push(metadata);
-            remap[input.slot as usize] = Some(imported);
-            if let Some(tensor) = request.bindings.tensor_for_input(input) {
+            if let Some(tensor) = tensor {
                 transaction.bindings.push(PendingBinding {
                     key: BindingKey::new(imported.slot, destination.owner),
                     input: imported,
@@ -910,7 +1599,19 @@ impl ImportTransaction {
                 let identity = meta.scalar_identity();
                 let resolved = ProgramValueMetadata::from_extents(
                     meta.dtype(),
-                    meta.shape().iter().map(&resolve_extent).collect::<Vec<_>>(),
+                    meta.shape()
+                        .iter()
+                        .cloned()
+                        .map(|extent| {
+                            remap_imported_extent(
+                                extent,
+                                source,
+                                &source_input_index,
+                                &mapped_input,
+                                destination,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
                 );
                 transaction
                     .values
@@ -922,13 +1623,33 @@ impl ImportTransaction {
                 SemanticOp::Core(op) => SemanticOp::Core(op.clone()),
                 SemanticOp::Extension(op) => SemanticOp::Extension(op.clone_arc()),
             };
+            let guards = operation
+                .shape_guards
+                .iter()
+                .filter_map(|guard| {
+                    let resolve = |expr: &DimExpr| -> Option<DimExpr> {
+                        remap_imported_dim_expr(
+                            expr,
+                            source,
+                            &source_input_index,
+                            &mapped_input,
+                            destination,
+                        )
+                    };
+                    Some(ShapeGuard::new(
+                        guard.relation(),
+                        resolve(guard.lhs())?,
+                        resolve(guard.rhs())?,
+                    ))
+                })
+                .collect::<Vec<_>>();
             transaction.operations.push(SemanticOperation {
                 op,
                 inputs,
                 outputs: outputs.into(),
                 effects: operation.effects.clone(),
                 aliases: operation.aliases.clone(),
-                shape_guards: operation.shape_guards.clone(),
+                shape_guards: guards.into_boxed_slice(),
                 placement: operation.placement,
                 provenance: operation.provenance.clone(),
             });
@@ -964,6 +1685,221 @@ enum InputExtentPrecision {
     Exact,
     Bounded,
     Unknown,
+}
+
+/// Replace every `InputDim { input_idx: position, .. }` in `expr` with the
+/// corresponding axis of `bound`.
+///
+/// Substitution is per input, so resolving an extent costs one pass over the
+/// expression per referenced input and nothing proportional to the input count.
+fn substitute_input_extents(expr: &DimExpr, position: usize, bound: &[usize]) -> DimExpr {
+    match expr {
+        DimExpr::Const(value) => DimExpr::Const(*value),
+        DimExpr::InputDim { input_idx, axis } if *input_idx == position => bound
+            .get(*axis)
+            .map_or_else(|| expr.clone(), |size| DimExpr::Const(*size)),
+        DimExpr::InputDim { .. } => expr.clone(),
+        DimExpr::Add(lhs, rhs) => DimExpr::Add(
+            Box::new(substitute_input_extents(lhs, position, bound)),
+            Box::new(substitute_input_extents(rhs, position, bound)),
+        ),
+        DimExpr::Sub(lhs, rhs) => DimExpr::Sub(
+            Box::new(substitute_input_extents(lhs, position, bound)),
+            Box::new(substitute_input_extents(rhs, position, bound)),
+        ),
+        DimExpr::Mul(lhs, rhs) => DimExpr::Mul(
+            Box::new(substitute_input_extents(lhs, position, bound)),
+            Box::new(substitute_input_extents(rhs, position, bound)),
+        ),
+        DimExpr::FloorDiv(lhs, rhs) => DimExpr::FloorDiv(
+            Box::new(substitute_input_extents(lhs, position, bound)),
+            Box::new(substitute_input_extents(rhs, position, bound)),
+        ),
+        DimExpr::Min(lhs, rhs) => DimExpr::Min(
+            Box::new(substitute_input_extents(lhs, position, bound)),
+            Box::new(substitute_input_extents(rhs, position, bound)),
+        ),
+        DimExpr::Max(lhs, rhs) => DimExpr::Max(
+            Box::new(substitute_input_extents(lhs, position, bound)),
+            Box::new(substitute_input_extents(rhs, position, bound)),
+        ),
+    }
+}
+
+/// Collect every program input position `expr` names.
+fn collect_input_positions(expr: &DimExpr, positions: &mut Vec<usize>) {
+    match expr {
+        DimExpr::Const(_) => {}
+        DimExpr::InputDim { input_idx, .. } => positions.push(*input_idx),
+        DimExpr::Add(lhs, rhs)
+        | DimExpr::Sub(lhs, rhs)
+        | DimExpr::Mul(lhs, rhs)
+        | DimExpr::FloorDiv(lhs, rhs)
+        | DimExpr::Min(lhs, rhs)
+        | DimExpr::Max(lhs, rhs) => {
+            collect_input_positions(lhs, positions);
+            collect_input_positions(rhs, positions);
+        }
+    }
+}
+
+/// Translate one imported extent into the destination input space.
+///
+/// An extent the destination cannot express becomes `Unknown` rather than keeping
+/// source coordinates that would name a different destination input.
+fn remap_imported_extent(
+    extent: ShapeExtent<DimExpr>,
+    source: &SemanticProgram,
+    source_input_index: &[Option<usize>],
+    mapped_input: &std::collections::HashMap<ProgramValue, ProgramValue>,
+    destination: &SemanticProgramBuilder,
+) -> ShapeExtent<DimExpr> {
+    match extent {
+        ShapeExtent::Exact(expr) => {
+            remap_imported_dim_expr(&expr, source, source_input_index, mapped_input, destination)
+                .map(ShapeExtent::Exact)
+                .unwrap_or(ShapeExtent::Unknown)
+        }
+        ShapeExtent::UpperBound(expr) => {
+            remap_imported_dim_expr(&expr, source, source_input_index, mapped_input, destination)
+                .map(ShapeExtent::UpperBound)
+                .unwrap_or(ShapeExtent::Unknown)
+        }
+        ShapeExtent::Unknown => ShapeExtent::Unknown,
+    }
+}
+
+/// Rewrite one imported guard expression into the destination input space.
+///
+/// A kept source input keeps its own extent with the destination index; an input
+/// that landed on an existing destination value is replaced by that value's
+/// declared exact extent; an expression the destination cannot express makes the
+/// guard unrepresentable, and the guard is dropped.
+fn remap_imported_dim_expr(
+    expr: &DimExpr,
+    source: &SemanticProgram,
+    source_input_index: &[Option<usize>],
+    mapped_input: &std::collections::HashMap<ProgramValue, ProgramValue>,
+    destination: &SemanticProgramBuilder,
+) -> Option<DimExpr> {
+    match expr {
+        DimExpr::Const(value) => Some(DimExpr::Const(*value)),
+        DimExpr::InputDim { input_idx, axis } => {
+            if let Some(index) = source_input_index.get(*input_idx).copied().flatten() {
+                return Some(DimExpr::InputDim {
+                    input_idx: index,
+                    axis: *axis,
+                });
+            }
+            let source_input = source.inputs.get(*input_idx)?;
+            let destination_value = mapped_input.get(source_input)?;
+            match destination
+                .values
+                .get(destination_value.slot as usize)?
+                .shape()
+                .get(*axis)?
+            {
+                ShapeExtent::Exact(expr) => Some(expr.clone()),
+                _ => None,
+            }
+        }
+        DimExpr::Add(lhs, rhs) => Some(DimExpr::Add(
+            Box::new(remap_imported_dim_expr(
+                lhs,
+                source,
+                source_input_index,
+                mapped_input,
+                destination,
+            )?),
+            Box::new(remap_imported_dim_expr(
+                rhs,
+                source,
+                source_input_index,
+                mapped_input,
+                destination,
+            )?),
+        )),
+        DimExpr::Sub(lhs, rhs) => Some(DimExpr::Sub(
+            Box::new(remap_imported_dim_expr(
+                lhs,
+                source,
+                source_input_index,
+                mapped_input,
+                destination,
+            )?),
+            Box::new(remap_imported_dim_expr(
+                rhs,
+                source,
+                source_input_index,
+                mapped_input,
+                destination,
+            )?),
+        )),
+        DimExpr::Mul(lhs, rhs) => Some(DimExpr::Mul(
+            Box::new(remap_imported_dim_expr(
+                lhs,
+                source,
+                source_input_index,
+                mapped_input,
+                destination,
+            )?),
+            Box::new(remap_imported_dim_expr(
+                rhs,
+                source,
+                source_input_index,
+                mapped_input,
+                destination,
+            )?),
+        )),
+        DimExpr::FloorDiv(lhs, rhs) => Some(DimExpr::FloorDiv(
+            Box::new(remap_imported_dim_expr(
+                lhs,
+                source,
+                source_input_index,
+                mapped_input,
+                destination,
+            )?),
+            Box::new(remap_imported_dim_expr(
+                rhs,
+                source,
+                source_input_index,
+                mapped_input,
+                destination,
+            )?),
+        )),
+        DimExpr::Min(lhs, rhs) => Some(DimExpr::Min(
+            Box::new(remap_imported_dim_expr(
+                lhs,
+                source,
+                source_input_index,
+                mapped_input,
+                destination,
+            )?),
+            Box::new(remap_imported_dim_expr(
+                rhs,
+                source,
+                source_input_index,
+                mapped_input,
+                destination,
+            )?),
+        )),
+        DimExpr::Max(lhs, rhs) => Some(DimExpr::Max(
+            Box::new(remap_imported_dim_expr(
+                lhs,
+                source,
+                source_input_index,
+                mapped_input,
+                destination,
+            )?),
+            Box::new(remap_imported_dim_expr(
+                rhs,
+                source,
+                source_input_index,
+                mapped_input,
+                destination,
+            )?),
+        )),
+    }
 }
 
 fn input_extent_precision(metadata: &[&ProgramValueMetadata]) -> InputExtentPrecision {

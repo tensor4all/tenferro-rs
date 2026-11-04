@@ -1,11 +1,12 @@
-use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Tensor, TraceContext, TypedTensor};
 
 use crate::support::{run_compiled_one, runtime_from_cpu_backend};
 
 #[test]
 fn graph_execution_with_borrowed_inputs_preserves_caller_tensors() {
-    let lhs_value = TracedTensor::input_symbolic_shape(DType::F64, 0).unwrap();
-    let rhs_value = TracedTensor::input_symbolic_shape(DType::F64, 0).unwrap();
+    let trace = TraceContext::new();
+    let lhs_value = trace.input_symbolic_shape(DType::F64, 0).unwrap();
+    let rhs_value = trace.input_symbolic_shape(DType::F64, 0).unwrap();
     let sum = (&lhs_value + &rhs_value).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -30,13 +31,14 @@ fn graph_execution_with_borrowed_inputs_preserves_caller_tensors() {
 
 #[test]
 fn warm_up_runs_the_prepared_program_and_leaves_it_runnable() {
+    let trace = TraceContext::new();
     // Warm-up is one ordinary run whose outputs are dropped, followed by an
     // engine synchronize: on a CPU engine that is a no-op, and the following
     // identical run must still produce the same value.
     use tenferro_runtime::TensorRead;
 
-    let lhs_value = TracedTensor::input_symbolic_shape(DType::F64, 0).unwrap();
-    let rhs_value = TracedTensor::input_symbolic_shape(DType::F64, 0).unwrap();
+    let lhs_value = trace.input_symbolic_shape(DType::F64, 0).unwrap();
+    let rhs_value = trace.input_symbolic_shape(DType::F64, 0).unwrap();
     let sum = (&lhs_value + &rhs_value).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler

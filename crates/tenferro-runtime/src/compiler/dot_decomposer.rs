@@ -61,9 +61,13 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
 }
 
 /// Rewrite degenerate `DotGeneral` forms (no contraction semantics) into the
-/// elementary operation they are, unconditionally: unlike the canonicalization
-/// below, this materializes no layout, it only keeps a degenerate contraction
-/// from reaching a backend (invariant I4).
+/// elementary operation they are, unconditionally, so a degenerate contraction
+/// never reaches a backend (invariant I4).
+///
+/// A literal operand shape yields a constant broadcast target, which stays a
+/// metadata view: nothing is materialised. A symbolic target needs the partner
+/// operand as a shape reference, so that broadcast is an ordinary instruction and
+/// the backend allocates its result.
 ///
 /// # Errors
 ///
@@ -374,6 +378,7 @@ fn rewrite_degenerate_dot(
             output_extents: vec![instr.output_extents[0].clone()].into_iter().collect(),
             last_use: Vec::new(),
             input_views: Vec::new(),
+            effectful: false,
         });
         return Ok(true);
     }
@@ -392,17 +397,43 @@ fn rewrite_degenerate_dot(
         }
         let lhs_operand = emit_conj_if_needed(lhs, input.lhs_conj, instr, builder);
         let rhs_operand = emit_conj_if_needed(rhs, input.rhs_conj, instr, builder);
+        // Both sides expand to the dot's output shape, [lhs axes..., rhs axes...].
+        // When every extent is literal the target is a constant and the broadcast
+        // stays a one-input view; otherwise the payload names its own inputs, the
+        // operand at 0 and the partner at 1, read only for its axes. Either way no
+        // payload depends on whether the metadata names program slots.
+        let literal = literal_target(&[&lhs_operand, &rhs_operand]);
+        let (lhs_inputs, lhs_target) = match &literal {
+            Some(target) => (vec![lhs_operand.slot], DimExpr::from_concrete(target)),
+            None => (
+                vec![lhs_operand.slot, rhs_operand.slot],
+                shape_of_operand(0, lhs_operand.shape.len())
+                    .into_iter()
+                    .chain(shape_of_operand(1, rhs.shape.len()))
+                    .collect(),
+            ),
+        };
         let lhs_broadcast = emit_broadcast(
-            lhs_operand,
+            lhs_inputs,
             (0..lhs.shape.len()).collect(),
-            &instr.output_shapes[0],
+            lhs_target,
             instr,
             builder,
         );
+        let (rhs_inputs, rhs_target) = match &literal {
+            Some(target) => (vec![rhs_operand.slot], DimExpr::from_concrete(target)),
+            None => (
+                vec![rhs_operand.slot, lhs_operand.slot],
+                shape_of_operand(1, lhs.shape.len())
+                    .into_iter()
+                    .chain(shape_of_operand(0, rhs_operand.shape.len()))
+                    .collect(),
+            ),
+        };
         let rhs_broadcast = emit_broadcast(
-            rhs_operand,
+            rhs_inputs,
             (lhs.shape.len()..lhs.shape.len() + rhs.shape.len()).collect(),
-            &instr.output_shapes[0],
+            rhs_target,
             instr,
             builder,
         );
@@ -416,6 +447,7 @@ fn rewrite_degenerate_dot(
             output_extents: vec![instr.output_extents[0].clone()].into_iter().collect(),
             last_use: Vec::new(),
             input_views: Vec::new(),
+            effectful: false,
         });
         return Ok(true);
     }
@@ -450,6 +482,7 @@ fn rewrite_degenerate_dot(
         output_extents: vec![transposed_extents.clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     let transposed = EmittedOperand {
         slot: transposed_slot,
@@ -457,7 +490,16 @@ fn rewrite_degenerate_dot(
         extents: transposed_extents,
     };
     let scalar = emit_conj_if_needed(scalar, scalar_conj, instr, builder);
-    let scalar = emit_broadcast(scalar, Vec::new(), &instr.output_shapes[0], instr, builder);
+    // A literal target keeps the scalar broadcast a one-input view; a symbolic one
+    // reads the transposed value as input 1, so nothing names a program slot.
+    let (scalar_inputs, scalar_target) = match literal_extents(&transposed) {
+        Some(target) => (vec![scalar.slot], DimExpr::from_concrete(&target)),
+        None => (
+            vec![scalar.slot, transposed.slot],
+            shape_of_operand(1, transposed.shape.len()),
+        ),
+    };
+    let scalar = emit_broadcast(scalar_inputs, Vec::new(), scalar_target, instr, builder);
     builder.push(ExecInstruction {
         op: ExecOp::Multiply,
         semantic_operation_index: instr.semantic_operation_index,
@@ -468,6 +510,7 @@ fn rewrite_degenerate_dot(
         output_extents: vec![instr.output_extents[0].clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     Ok(true)
 }
@@ -492,36 +535,75 @@ fn permutation_into(operand_shape: &[DimExpr], output_shape: &[DimExpr]) -> Opti
     Some(perm)
 }
 
-/// Broadcast one operand's axes into the output shape (`dims` maps each of the
-/// operand's axes to the output axis it lands on).
+/// Emit a broadcast whose payload and input slots are already in *this*
+/// instruction's own coordinates.
+///
+/// Callers build `shape` with [`shape_of_operand`] and pass the slots it refers
+/// to, so the payload never depends on whether the surrounding slot metadata names
+/// program inputs or an operation-local payload.
 fn emit_broadcast(
-    operand: EmittedOperand,
+    input_slots: Vec<usize>,
     dims: Vec<usize>,
-    output_shape: &[DimExpr],
+    shape: Vec<DimExpr>,
     instr: &ExecInstruction,
     builder: &mut InstructionBuilder<'_>,
 ) -> EmittedOperand {
     let out_slot = builder.next_slot();
-    let shape = output_shape.to_vec();
     builder.push(ExecInstruction {
         op: ExecOp::BroadcastInDim {
             shape: shape.clone(),
             dims,
         },
         semantic_operation_index: instr.semantic_operation_index,
-        input_slots: vec![operand.slot],
+        input_slots,
         output_slots: vec![out_slot],
         dtype: instr.dtype,
         output_extents: vec![exact_extents_from_shape(&shape)].into_iter().collect(),
         output_shapes: vec![shape.clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     EmittedOperand {
         slot: out_slot,
+        extents: exact_extents_from_shape(&shape),
         shape,
-        extents: exact_extents_from_shape(output_shape),
     }
+}
+
+/// The literal extents of every operand, when they are all known constants.
+///
+/// A fully literal target lets the broadcast stay a metadata view that the backend
+/// never materialises, so the decomposition keeps that path wherever it can.
+fn literal_target(operands: &[&EmittedOperand]) -> Option<Vec<usize>> {
+    let mut target = Vec::new();
+    for operand in operands {
+        target.extend(literal_extents(operand)?);
+    }
+    Some(target)
+}
+
+/// The literal lengths of `operand`, when every axis is a *known* length.
+///
+/// `shape` is the declared expression and `extents` the precision: a
+/// `DynamicTruncate` keeps its declared shape while narrowing the extent to an upper
+/// bound, so reading `shape` alone would broadcast to the untruncated length. Only an
+/// exact constant counts here; anything bounded falls back to the shape-reference
+/// path, which reads the value's real size.
+fn literal_extents(operand: &EmittedOperand) -> Option<Vec<usize>> {
+    operand
+        .extents
+        .iter()
+        .map(|extent| match extent {
+            ShapeExtent::Exact(DimExpr::Const(size)) => Some(*size),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The axes of the instruction input at `position`, as a broadcast payload.
+fn shape_of_operand(position: usize, rank: usize) -> Vec<DimExpr> {
+    DimExpr::input_shape(position, rank)
 }
 
 /// Rewrite a fully contracting `DotGeneral` (rank-0 output) into an elementwise
@@ -541,6 +623,7 @@ fn rewrite_full_contraction(input: DotDecomposeInput<'_>, builder: &mut Instruct
         output_extents: vec![lhs_operand.extents.clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     builder.push(ExecInstruction {
         op: ExecOp::ReduceSum {
@@ -554,6 +637,7 @@ fn rewrite_full_contraction(input: DotDecomposeInput<'_>, builder: &mut Instruct
         output_extents: vec![instr.output_extents[0].clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
 }
 
@@ -583,6 +667,7 @@ fn emit_conj_if_needed(
         output_extents: vec![operand.extents.to_vec()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     EmittedOperand {
         slot: out_slot,
@@ -741,6 +826,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
         output_extents: vec![canonical_output_extents].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
 
     if needs_output_reshape {
@@ -776,6 +862,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
             output_extents: instr.output_extents.clone(),
             last_use: Vec::new(),
             input_views: Vec::new(),
+            effectful: false,
         });
     }
     Ok(())
@@ -817,6 +904,7 @@ fn emit_transpose_if_needed(
         output_extents: vec![transposed_extents.clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     EmittedOperand {
         slot: out_slot,
@@ -852,6 +940,7 @@ fn emit_merge_reshape(
         output_extents: vec![output_extents_meta.clone()].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     });
     EmittedOperand {
         slot: out_slot,

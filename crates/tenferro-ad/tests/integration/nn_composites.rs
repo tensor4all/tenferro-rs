@@ -7,7 +7,7 @@ use crate::support::{cpu_runtime, RunTraced};
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerSession, EagerTensor, TracedTensorAdExt};
 use tenferro_runtime::{
-    DType, Runtime, Tensor, TensorSessionOpsExt, TracedTensor, TypedTensor,
+    DType, Runtime, Tensor, TensorSessionOpsExt, TraceContext, TracedTensor, TypedTensor,
     TypedTensorSessionOpsExt,
 };
 use tenferro_tensor::Engine;
@@ -170,6 +170,7 @@ const ACT_POINTS: [f64; 13] = [
 
 #[test]
 fn activations_match_closed_forms_on_all_surfaces_f64() {
+    let trace = TraceContext::new();
     let n = ACT_POINTS.len();
     for act in ACTS {
         let expected: Vec<f64> = ACT_POINTS.iter().map(|&x| act_ref(act, x).0).collect();
@@ -186,7 +187,9 @@ fn activations_match_closed_forms_on_all_surfaces_f64() {
 
         let traced = traced_act(
             act,
-            &TracedTensor::from_tensor_concrete_shape(input.duplicate().unwrap()).unwrap(),
+            &trace
+                .from_tensor_concrete_shape(input.duplicate().unwrap())
+                .unwrap(),
         )
         .unwrap();
         let traced = data64(&traced_value(&traced));
@@ -275,6 +278,7 @@ fn activation_infinities_and_nan_follow_the_documented_policy() {
 /// derivatives via traced forward-over-reverse, against closed forms.
 #[test]
 fn activation_first_and_second_derivatives_at_zero_and_extremes() {
+    let trace = TraceContext::new();
     let points = [-1000.0, -20.0, -1.0, 0.0, 0.5, 1.0, 20.0, 1000.0];
     let n = points.len();
     for act in ACTS {
@@ -306,7 +310,9 @@ fn activation_first_and_second_derivatives_at_zero_and_extremes() {
         );
 
         // Traced reverse mode, then forward-over-reverse for f''.
-        let xt = TracedTensor::from_tensor_concrete_shape(t64(&[n], points.to_vec())).unwrap();
+        let xt = trace
+            .from_tensor_concrete_shape(t64(&[n], points.to_vec()))
+            .unwrap();
         let y = traced_act(act, &xt).unwrap().reduce_sum(None).unwrap();
         let g = y.grad(&xt).unwrap();
         assert_close(
@@ -316,7 +322,9 @@ fn activation_first_and_second_derivatives_at_zero_and_extremes() {
             1e-300,
             &format!("traced d{act:?}"),
         );
-        let ones = TracedTensor::from_tensor_concrete_shape(t64(&[n], vec![1.0; n])).unwrap();
+        let ones = trace
+            .from_tensor_concrete_shape(t64(&[n], vec![1.0; n]))
+            .unwrap();
         let h = g.jvp(&xt, &ones).unwrap();
         let h = data64(&traced_value(&h));
         assert!(
@@ -329,9 +337,14 @@ fn activation_first_and_second_derivatives_at_zero_and_extremes() {
 
 #[test]
 fn softplus_derivatives_at_zero_are_one_half_and_one_quarter() {
-    let xt = TracedTensor::from_tensor_concrete_shape(t64(&[], vec![0.0])).unwrap();
+    let trace = TraceContext::new();
+    let xt = trace
+        .from_tensor_concrete_shape(t64(&[], vec![0.0]))
+        .unwrap();
     let g = xt.softplus().unwrap().grad(&xt).unwrap();
-    let one = TracedTensor::from_tensor_concrete_shape(t64(&[], vec![1.0])).unwrap();
+    let one = trace
+        .from_tensor_concrete_shape(t64(&[], vec![1.0]))
+        .unwrap();
     let h = g.jvp(&xt, &one).unwrap();
     assert_eq!(data64(&traced_value(&g)), vec![0.5]);
     assert_eq!(data64(&traced_value(&h)), vec![0.25]);
@@ -339,6 +352,7 @@ fn softplus_derivatives_at_zero_are_one_half_and_one_quarter() {
 
 #[test]
 fn activations_reject_non_real_dtypes_on_every_surface() {
+    let trace = TraceContext::new();
     let complex = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 0.0)]).unwrap();
     let int = Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap();
     for act in ACTS {
@@ -348,8 +362,9 @@ fn activations_reject_non_real_dtypes_on_every_surface() {
                 matches!(err, tenferro_tensor::Error::UnsupportedDType { .. }),
                 "{act:?}: {err:?}"
             );
-            let traced =
-                TracedTensor::from_tensor_concrete_shape(input.duplicate().unwrap()).unwrap();
+            let traced = trace
+                .from_tensor_concrete_shape(input.duplicate().unwrap())
+                .unwrap();
             assert!(traced_act(act, &traced).is_err(), "traced {act:?}");
             let eager = ctx().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                 let x = s.constant_from(input.duplicate()?)?;
@@ -366,6 +381,7 @@ fn activations_reject_non_real_dtypes_on_every_surface() {
 
 #[test]
 fn erf_gradient_and_second_derivative_match_closed_forms() {
+    let trace = TraceContext::new();
     let points: [f64; 8] = [-6.0, -1.0, -0.25, 0.0, 0.25, 1.0, 6.0, 30.0];
     let n = points.len();
     let c = std::f64::consts::FRAC_2_SQRT_PI;
@@ -392,7 +408,9 @@ fn erf_gradient_and_second_derivative_match_closed_forms() {
         .unwrap();
     assert_close(&data64(&grad), &first, 1e-15, 0.0, "eager d erf");
 
-    let xt = TracedTensor::from_tensor_concrete_shape(t64(&[n], points.to_vec())).unwrap();
+    let xt = trace
+        .from_tensor_concrete_shape(t64(&[n], points.to_vec()))
+        .unwrap();
     let g = xt
         .erf()
         .unwrap()
@@ -407,7 +425,9 @@ fn erf_gradient_and_second_derivative_match_closed_forms() {
         0.0,
         "traced d erf",
     );
-    let ones = TracedTensor::from_tensor_concrete_shape(t64(&[n], vec![1.0; n])).unwrap();
+    let ones = trace
+        .from_tensor_concrete_shape(t64(&[n], vec![1.0; n]))
+        .unwrap();
     let h = g.jvp(&xt, &ones).unwrap();
     assert_close(
         &data64(&traced_value(&h)),
@@ -418,7 +438,9 @@ fn erf_gradient_and_second_derivative_match_closed_forms() {
     );
 
     // Forward mode directly.
-    let v = TracedTensor::from_tensor_concrete_shape(t64(&[n], vec![2.0; n])).unwrap();
+    let v = trace
+        .from_tensor_concrete_shape(t64(&[n], vec![2.0; n]))
+        .unwrap();
     let jvp = xt.erf().unwrap().jvp(&xt, &v).unwrap();
     let doubled: Vec<f64> = first.iter().map(|d| 2.0 * d).collect();
     assert_close(
@@ -459,13 +481,16 @@ fn erf_f32_gradient_uses_the_f32_scale() {
 
 #[test]
 fn erf_rejects_complex_input_on_every_surface() {
+    let trace = TraceContext::new();
     let complex = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(0.5, 0.0)]).unwrap();
     let err = with_session(|s| complex.erf(s)).unwrap_err();
     assert!(
         matches!(err, tenferro_tensor::Error::UnsupportedDType { .. }),
         "{err:?}"
     );
-    let traced = TracedTensor::from_tensor_concrete_shape(complex.duplicate().unwrap()).unwrap();
+    let traced = trace
+        .from_tensor_concrete_shape(complex.duplicate().unwrap())
+        .unwrap();
     let err = traced.erf().unwrap_err();
     assert_eq!(
         err.kind(),
@@ -483,11 +508,14 @@ fn erf_rejects_complex_input_on_every_surface() {
 /// a region containing it and the ops run unfused with the same values.
 #[test]
 fn compiled_cpu_region_with_erf_runs_unfused_with_correct_values() {
+    let trace = TraceContext::new();
     let n = 32 * 1024;
     let data: Vec<f64> = (0..n)
         .map(|i| (i as f64) / (n as f64) * 6.0 - 3.0)
         .collect();
-    let x = TracedTensor::from_tensor_concrete_shape(t64(&[n], data.clone())).unwrap();
+    let x = trace
+        .from_tensor_concrete_shape(t64(&[n], data.clone()))
+        .unwrap();
     let y = x
         .exp()
         .unwrap()
@@ -508,6 +536,7 @@ fn compiled_cpu_region_with_erf_runs_unfused_with_correct_values() {
 
 #[test]
 fn reduce_mean_values_identity_and_empty_policy() {
+    let trace = TraceContext::new();
     let x = t64(&[2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let rows = with_session(|s| x.reduce_mean(Some(&[1]), s)).unwrap();
     assert_eq!(data64(&rows), vec![3.0, 4.0]);
@@ -520,7 +549,9 @@ fn reduce_mean_values_identity_and_empty_policy() {
     let mean = with_session(|s| empty.reduce_mean(Some(&[0]), s)).unwrap();
     assert_eq!(mean.shape(), &[3]);
     assert!(data64(&mean).iter().all(|v| v.is_nan()));
-    let traced = TracedTensor::from_tensor_concrete_shape(empty.duplicate().unwrap()).unwrap();
+    let traced = trace
+        .from_tensor_concrete_shape(empty.duplicate().unwrap())
+        .unwrap();
     let traced = traced_value(&traced.reduce_mean(None).unwrap());
     assert_eq!(traced.shape(), &[] as &[usize]);
     assert!(data64(&traced)[0].is_nan());
@@ -694,7 +725,13 @@ fn session_softmax(
 }
 
 /// Run one softmax case on every surface and check it against the reference.
-fn check_softmax_surfaces(shape: [usize; 2], x: Vec<f64>, mask: Vec<bool>, axis: usize) {
+fn check_softmax_surfaces(
+    trace: &TraceContext,
+    shape: [usize; 2],
+    x: Vec<f64>,
+    mask: Vec<bool>,
+    axis: usize,
+) {
     for case in SOFTMAX_CASES {
         let reference = softmax_ref(shape, &x, case.masked.then_some(&mask[..]), axis, case.log);
         let xt = t64(&shape, x.clone());
@@ -724,8 +761,12 @@ fn check_softmax_surfaces(shape: [usize; 2], x: Vec<f64>, mask: Vec<bool>, axis:
             &format!("eager {case:?}"),
         );
 
-        let x_tr = TracedTensor::from_tensor_concrete_shape(xt.duplicate().unwrap()).unwrap();
-        let m_tr = TracedTensor::from_tensor_concrete_shape(mt.duplicate().unwrap()).unwrap();
+        let x_tr = trace
+            .from_tensor_concrete_shape(xt.duplicate().unwrap())
+            .unwrap();
+        let m_tr = trace
+            .from_tensor_concrete_shape(mt.duplicate().unwrap())
+            .unwrap();
         let traced = traced_softmax(case, &x_tr, &m_tr, axis).unwrap();
         assert_close(
             &data64(&traced_value(&traced)),
@@ -739,6 +780,7 @@ fn check_softmax_surfaces(shape: [usize; 2], x: Vec<f64>, mask: Vec<bool>, axis:
 
 #[test]
 fn softmax_family_matches_reference_on_all_surfaces() {
+    let trace = TraceContext::new();
     let x = vec![
         0.5, -1.0, 2.0, 3.0, 0.0, -2.5, 1.5, 1.5, 7.0, -0.25, 4.0, 0.125,
     ];
@@ -746,16 +788,17 @@ fn softmax_family_matches_reference_on_all_surfaces() {
         true, false, true, true, true, false, false, true, true, true, true, false,
     ];
     for axis in [0, 1] {
-        check_softmax_surfaces([3, 4], x.clone(), mask.clone(), axis);
+        check_softmax_surfaces(&trace, [3, 4], x.clone(), mask.clone(), axis);
     }
 }
 
 #[test]
 fn all_masked_slice_is_zero_or_neg_inf_with_a_finite_zero_gradient() {
+    let trace = TraceContext::new();
     // Column 1 is fully masked; column 0 is partially masked.
     let x = vec![1.0, 2.0, 3.0, 4.0, f64::NAN, -1.0];
     let mask = vec![true, false, true, false, false, false];
-    check_softmax_surfaces([3, 2], x.clone(), mask.clone(), 0);
+    check_softmax_surfaces(&trace, [3, 2], x.clone(), mask.clone(), 0);
 
     for log in [false, true] {
         let xe = EagerTensor::requires_grad_in(t64(&[3, 2], x.clone()), ctx()).unwrap();
@@ -788,11 +831,14 @@ fn all_masked_slice_is_zero_or_neg_inf_with_a_finite_zero_gradient() {
         assert_eq!(grad[1], 0.0, "masked entry gradient (log={log})");
 
         // The traced transform agrees.
-        let xt = TracedTensor::from_tensor_concrete_shape(t64(&[3, 2], x.clone())).unwrap();
-        let mt = TracedTensor::from_tensor_concrete_shape(
-            Tensor::from_vec_col_major(vec![3, 2], mask.clone()).unwrap(),
-        )
-        .unwrap();
+        let xt = trace
+            .from_tensor_concrete_shape(t64(&[3, 2], x.clone()))
+            .unwrap();
+        let mt = trace
+            .from_tensor_concrete_shape(
+                Tensor::from_vec_col_major(vec![3, 2], mask.clone()).unwrap(),
+            )
+            .unwrap();
         let yt = if log {
             xt.masked_log_softmax(&mt, 0)
         } else {
@@ -800,17 +846,21 @@ fn all_masked_slice_is_zero_or_neg_inf_with_a_finite_zero_gradient() {
         }
         .unwrap();
         // sum over the finite (column 0, unmasked) outputs plus a zero-weighted rest.
-        let w = TracedTensor::from_tensor_concrete_shape(t64(
-            &[3, 2],
-            vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0],
-        ))
-        .unwrap();
-        let zero = TracedTensor::from_tensor_concrete_shape(t64(&[], vec![0.0])).unwrap();
-        let mask_w = TracedTensor::from_tensor_concrete_shape(
-            Tensor::from_vec_col_major(vec![3, 2], vec![true, false, true, false, false, false])
+        let w = trace
+            .from_tensor_concrete_shape(t64(&[3, 2], vec![1.0, 0.0, 1.0, 0.0, 0.0, 0.0]))
+            .unwrap();
+        let zero = trace
+            .from_tensor_concrete_shape(t64(&[], vec![0.0]))
+            .unwrap();
+        let mask_w = trace
+            .from_tensor_concrete_shape(
+                Tensor::from_vec_col_major(
+                    vec![3, 2],
+                    vec![true, false, true, false, false, false],
+                )
                 .unwrap(),
-        )
-        .unwrap();
+            )
+            .unwrap();
         let picked = TracedTensor::where_select(&mask_w, &yt, &zero).unwrap();
         let loss = (&picked * &w).unwrap().reduce_sum(None).unwrap();
         let gt = data64(&traced_value(&loss.grad(&xt).unwrap()));
@@ -886,14 +936,19 @@ fn softmax_nan_and_pos_inf_poison_only_their_slice() {
 
 #[test]
 fn softmax_over_an_empty_axis_returns_an_empty_result() {
+    let trace = TraceContext::new();
     for (shape, axis) in [([0_usize, 3], 0), ([3, 0], 0), ([2, 0], 1)] {
         let x = t64(&shape, vec![]);
         let mask = Tensor::from_vec_col_major(shape.to_vec(), Vec::<bool>::new()).unwrap();
         for case in SOFTMAX_CASES {
             let y = with_session(|s| session_softmax(case, &x, &mask, axis, s)).unwrap();
             assert_eq!(y.shape(), &shape, "{case:?}");
-            let xt = TracedTensor::from_tensor_concrete_shape(x.duplicate().unwrap()).unwrap();
-            let mt = TracedTensor::from_tensor_concrete_shape(mask.duplicate().unwrap()).unwrap();
+            let xt = trace
+                .from_tensor_concrete_shape(x.duplicate().unwrap())
+                .unwrap();
+            let mt = trace
+                .from_tensor_concrete_shape(mask.duplicate().unwrap())
+                .unwrap();
             let yt = traced_value(&traced_softmax(case, &xt, &mt, axis).unwrap());
             assert_eq!(yt.shape(), &shape, "traced {case:?}");
         }
@@ -1047,6 +1102,7 @@ fn norm_ref(
 
 #[test]
 fn layer_norm_and_rms_norm_match_reference_on_all_surfaces() {
+    let trace = TraceContext::new();
     let x = vec![
         0.5, -1.0, 2.0, 3.0, 0.0, -2.5, 1.5, 1.5, 7.0, -0.25, 4.0, 0.125,
     ];
@@ -1098,9 +1154,15 @@ fn layer_norm_and_rms_norm_match_reference_on_all_surfaces() {
                 &format!("eager rms={rms}"),
             );
 
-            let x_tr = TracedTensor::from_tensor_concrete_shape(xt.duplicate().unwrap()).unwrap();
-            let w_tr = TracedTensor::from_tensor_concrete_shape(wt.duplicate().unwrap()).unwrap();
-            let b_tr = TracedTensor::from_tensor_concrete_shape(bt.duplicate().unwrap()).unwrap();
+            let x_tr = trace
+                .from_tensor_concrete_shape(xt.duplicate().unwrap())
+                .unwrap();
+            let w_tr = trace
+                .from_tensor_concrete_shape(wt.duplicate().unwrap())
+                .unwrap();
+            let b_tr = trace
+                .from_tensor_concrete_shape(bt.duplicate().unwrap())
+                .unwrap();
             let traced = if rms {
                 x_tr.rms_norm(axis, Some(&w_tr), Some(&b_tr), 1e-5)
             } else {
@@ -1289,6 +1351,7 @@ fn take_ref(
 
 #[test]
 fn take_along_axis_rows_columns_and_batches_match_numpy() {
+    let trace = TraceContext::new();
     let shape = [3, 3, 2];
     let x: Vec<f64> = (0..18).map(|v| f64::from(v) * 1.5 - 4.0).collect();
     let cases: Vec<([usize; 3], Vec<i64>, usize)> = vec![
@@ -1336,8 +1399,12 @@ fn take_along_axis_rows_columns_and_batches_match_numpy() {
             "eager {idx_shape:?}"
         );
 
-        let x_tr = TracedTensor::from_tensor_concrete_shape(xt.duplicate().unwrap()).unwrap();
-        let i_tr = TracedTensor::from_tensor_concrete_shape(it32.duplicate().unwrap()).unwrap();
+        let x_tr = trace
+            .from_tensor_concrete_shape(xt.duplicate().unwrap())
+            .unwrap();
+        let i_tr = trace
+            .from_tensor_concrete_shape(it32.duplicate().unwrap())
+            .unwrap();
         let traced = x_tr.take_along_axis(&i_tr, axis).unwrap();
         assert_eq!(
             data64(&traced_value(&traced)),
@@ -1426,12 +1493,13 @@ fn take_along_axis_validates_shapes_and_dtypes() {
 
 #[test]
 fn reduce_mean_covers_complex_dtypes_on_traced_and_session_surfaces() {
+    let trace = TraceContext::new();
     let c64 = Tensor::from_vec_col_major(
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)],
     )
     .unwrap();
-    let traced = TracedTensor::from_tensor_concrete_shape(c64).unwrap();
+    let traced = trace.from_tensor_concrete_shape(c64).unwrap();
     let mean = traced_value(&traced.reduce_mean(None).unwrap());
     assert_eq!(
         mean.as_slice::<Complex64>().unwrap(),
@@ -1455,7 +1523,8 @@ fn reduce_mean_covers_complex_dtypes_on_traced_and_session_surfaces() {
 
 #[test]
 fn traced_composites_reject_symbolic_shapes_at_graph_build() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let trace = TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 2).unwrap();
     for result in [
         x.sigmoid(),
         x.gelu(),

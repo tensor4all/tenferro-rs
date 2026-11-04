@@ -34,8 +34,10 @@ impl ScalarSupport for Recording {
 
 #[test]
 fn the_algorithm_asks_only_for_the_declared_capabilities() {
+    let trace = tenferro_runtime::TraceContext::new();
     let support = Recording::default();
-    let input = TracedTensor::input_concrete_shape(tenferro_tensor::DType::F64, &[2, 1])
+    let input = trace
+        .input_concrete_shape(tenferro_tensor::DType::F64, &[2, 1])
         .expect("traced input");
 
     // The factorization is the first capability the algorithm needs, so a binding that
@@ -46,6 +48,7 @@ fn the_algorithm_asks_only_for_the_declared_capabilities() {
 
 #[test]
 fn the_algorithm_reports_a_loss_that_does_not_depend_on_its_input() {
+    let trace = tenferro_runtime::TraceContext::new();
     use tenferro_ad::AdContext;
     use tenferro_runtime::DType;
 
@@ -61,7 +64,7 @@ fn the_algorithm_reports_a_loss_that_does_not_depend_on_its_input() {
 
         fn to_f64(&self, _input: &TracedTensor) -> Result<TracedTensor, Error> {
             // The presented value does not depend on the input, so the input is inactive.
-            TracedTensor::from_tensor_concrete_shape(
+            _input.context().from_tensor_concrete_shape(
                 tenferro_tensor::Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).map_err(
                     |source| {
                         Error::runtime_state_source("constant loss", ErrorPhase::GraphBuild, source)
@@ -72,8 +75,12 @@ fn the_algorithm_reports_a_loss_that_does_not_depend_on_its_input() {
     }
 
     let ad = AdContext::builder().build().expect("ad context");
-    let input = TracedTensor::input_concrete_shape(DType::F64, &[1]).expect("traced input");
-    let seed = TracedTensor::input_concrete_shape(DType::F64, &[]).expect("traced seed");
+    let input = trace
+        .input_concrete_shape(DType::F64, &[1])
+        .expect("traced input");
+    let seed = trace
+        .input_concrete_shape(DType::F64, &[])
+        .expect("traced seed");
 
     // The algorithm refuses to report nothing when the input does not reach the loss.
     assert!(factor_norm_gradient(&ad, &input, &seed, &ConstantLoss).is_err());

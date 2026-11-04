@@ -146,12 +146,14 @@ fn broadcast_reduction_output(
     let kept_dims = (0..input_shape.len())
         .filter(|axis| !axes.contains(axis))
         .collect();
+    let mut inputs = vec![output];
+    let shape = builder.translate_input_shape_payload(&input_shape, &mut inputs);
     Ok(builder.add_op(
         CoreSemanticOp::BroadcastInDim {
-            shape: input_shape,
+            shape,
             dims: kept_dims,
         },
-        &[output],
+        &inputs,
     )?[0])
 }
 

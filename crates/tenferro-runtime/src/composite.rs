@@ -507,8 +507,9 @@ fn positive_and_neg_abs<O: CompositeOps>(
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![1], vec![0.0_f64])?;
+/// use tenferro_runtime::{TraceContext, TracedTensor};
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![1], vec![0.0_f64])?;
 /// let _y = x.sigmoid()?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
@@ -537,8 +538,10 @@ pub fn sigmoid<O: CompositeOps>(ops: &mut O, x: &O::Value) -> Result<O::Value, O
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+/// use tenferro_runtime::{TracedTensor};
+/// use tenferro_runtime::TraceContext;
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![1], vec![1.0_f64])?;
 /// let _y = x.silu()?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
@@ -557,8 +560,10 @@ pub fn silu<O: CompositeOps>(ops: &mut O, x: &O::Value) -> Result<O::Value, O::E
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![1], vec![0.0_f64])?;
+/// use tenferro_runtime::{TracedTensor};
+/// use tenferro_runtime::TraceContext;
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![1], vec![0.0_f64])?;
 /// let _y = x.softplus()?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
@@ -586,8 +591,10 @@ pub fn softplus<O: CompositeOps>(ops: &mut O, x: &O::Value) -> Result<O::Value, 
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+/// use tenferro_runtime::{TracedTensor};
+/// use tenferro_runtime::TraceContext;
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![1], vec![1.0_f64])?;
 /// let _y = x.gelu()?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
@@ -621,8 +628,10 @@ const GELU_TANH_CUBIC: f64 = 0.044_715;
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+/// use tenferro_runtime::{TracedTensor};
+/// use tenferro_runtime::TraceContext;
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![1], vec![1.0_f64])?;
 /// let _y = x.gelu_tanh()?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
@@ -662,8 +671,10 @@ pub fn gelu_tanh<O: CompositeOps>(ops: &mut O, x: &O::Value) -> Result<O::Value,
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
+/// use tenferro_runtime::{TracedTensor};
+/// use tenferro_runtime::TraceContext;
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
 /// let _y = x.reduce_mean(None)?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
@@ -836,8 +847,10 @@ fn softmax_impl<O: CompositeOps>(
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// use tenferro_runtime::{TracedTensor};
+/// use tenferro_runtime::TraceContext;
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 /// let _y = x.softmax(0)?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
@@ -860,8 +873,10 @@ pub fn softmax<O: CompositeOps>(
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// use tenferro_runtime::{TracedTensor};
+/// use tenferro_runtime::TraceContext;
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 /// let _y = x.log_softmax(0)?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
@@ -883,9 +898,11 @@ pub fn log_softmax<O: CompositeOps>(
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-/// let mask = TracedTensor::from_vec_col_major(vec![2], vec![true, false])?;
+/// use tenferro_runtime::{TracedTensor};
+/// use tenferro_runtime::TraceContext;
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// let mask = trace.from_vec_col_major(vec![2], vec![true, false])?;
 /// let _y = x.masked_softmax(&mask, 0)?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
@@ -910,9 +927,11 @@ pub fn masked_softmax<O: CompositeOps>(
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-/// let mask = TracedTensor::from_vec_col_major(vec![2], vec![true, false])?;
+/// use tenferro_runtime::{TracedTensor};
+/// use tenferro_runtime::TraceContext;
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// let mask = trace.from_vec_col_major(vec![2], vec![true, false])?;
 /// let _y = x.masked_log_softmax(&mask, 0)?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
@@ -1015,8 +1034,10 @@ fn validate_norm<O: CompositeOps>(
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
+/// use tenferro_runtime::{TracedTensor};
+/// use tenferro_runtime::TraceContext;
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
 /// let _y = x.layer_norm(0, None, None, 1e-5)?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
@@ -1075,8 +1096,10 @@ pub fn layer_norm<O: CompositeOps>(
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
+/// use tenferro_runtime::{TracedTensor};
+/// use tenferro_runtime::TraceContext;
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
 /// let _y = x.rms_norm(0, None, None, 1e-6)?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```
@@ -1171,9 +1194,11 @@ fn coordinate_overflow(dtype: DType) -> Error {
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::TracedTensor;
-/// let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-/// let idx = TracedTensor::from_vec_col_major(vec![1, 2], vec![1_i64, 0])?;
+/// use tenferro_runtime::{TracedTensor};
+/// use tenferro_runtime::TraceContext;
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+/// let idx = trace.from_vec_col_major(vec![1, 2], vec![1_i64, 0])?;
 /// let _y = x.take_along_axis(&idx, 0)?;
 /// # Ok::<(), tenferro_runtime::Error>(())
 /// ```

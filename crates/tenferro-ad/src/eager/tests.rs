@@ -24,7 +24,7 @@ use tenferro_runtime::{
     ErasedExecutionContext, Error, ExecutionContextIdentity, ExtensionEngine, ExtensionModule,
     ExtensionModuleError, ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig,
     ExtensionPrepareRequest, GraphCompiler, PrepareCapability, PrepareError, PreparedOperation,
-    PreparedOperationExecutor, Runtime,
+    PreparedOperationExecutor, Runtime, TraceContext,
 };
 use tenferro_tensor::TypedTensorView;
 use tenferro_tensor::{AllocationGroup, DescriptorSlot, GroupError, Tensor};
@@ -627,13 +627,14 @@ fn eager_recording_retains_symbolic_semantic_trace_for_shape_churn() {
 
 #[test]
 fn eager_journal_replay_matches_the_traced_path() {
+    let trace = TraceContext::new();
     // The replay must build the same semantic program as the traced path for the
     // same leaf and operation sequence: leaves are declared with symbolic
     // extents (InputDim), not concrete ones derived from the bound values, so the
     // fingerprint does not embed eager shapes.
     use std::sync::Arc;
-    use tenferro_runtime::ad_support::{compile_ad_source, RetainedValue};
-    use tenferro_runtime::{extension, TracedTensor};
+    use tenferro_runtime::ad_support::RetainedValue;
+    use tenferro_runtime::extension;
 
     let ctx = EagerRuntime::new().unwrap();
     let x = EagerTensor::requires_grad_in(
@@ -653,14 +654,14 @@ fn eager_journal_replay_matches_the_traced_path() {
     let data = Arc::new(RetainedValue::from_tensor(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ));
-    let leaf = TracedTensor::from_shared_tensor_value_symbolic_shape(data).unwrap();
+    let leaf = trace.from_shared_tensor_value_symbolic_shape(data).unwrap();
     let traced = extension::apply_standard_op(StdTensorOp::Mul, &[&leaf, &leaf]).unwrap();
 
     let replayed = super::replay(&[semantic]).unwrap();
     let mut compiler = GraphCompiler::new();
     let eager_source = compiler.compile_frozen_program(replayed.frozen()).unwrap();
     let mut compiler = GraphCompiler::new();
-    let traced_source = compile_ad_source(&mut compiler, &traced[0]).unwrap();
+    let traced_source = compiler.compile(&traced[0]).unwrap();
 
     assert_eq!(
         eager_source.program().semantic_fingerprint(),

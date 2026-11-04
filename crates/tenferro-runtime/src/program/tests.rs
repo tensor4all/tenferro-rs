@@ -558,7 +558,8 @@ fn import_preserves_ordered_duplicate_roots_structure_binding_and_provenance() {
     let imported = destination
         .import(ProgramImport {
             program: source.program.as_ref(),
-            bindings: &source.bindings,
+            bindings: Some(&source.bindings),
+            input_map: &[],
             roots: &[y, x, y],
         })
         .unwrap();
@@ -613,7 +614,8 @@ fn import_empty_roots_is_a_noop_and_foreign_roots_roll_back() {
     let empty = destination
         .import(ProgramImport {
             program: source.program.as_ref(),
-            bindings: &source.bindings,
+            bindings: Some(&source.bindings),
+            input_map: &[],
             roots: &[],
         })
         .unwrap();
@@ -621,7 +623,8 @@ fn import_empty_roots_is_a_noop_and_foreign_roots_roll_back() {
     assert!(matches!(
         destination.import(ProgramImport {
             program: source.program.as_ref(),
-            bindings: &source.bindings,
+            bindings: Some(&source.bindings),
+            input_map: &[],
             roots: &[source_input, foreign],
         }),
         Err(ProgramBuildError::ForeignImportRoot)
@@ -651,7 +654,8 @@ fn import_rejects_bindings_from_another_frozen_program() {
     assert!(matches!(
         destination.import(ProgramImport {
             program: left.program.as_ref(),
-            bindings: &right.bindings,
+            bindings: Some(&right.bindings),
+            input_map: &[],
             roots: &[left_input],
         }),
         Err(ProgramBuildError::ForeignBindings)
@@ -682,7 +686,8 @@ fn import_uses_value_dependency_closure_and_keeps_observable_effects() {
     let imported = destination
         .import(ProgramImport {
             program: source.program.as_ref(),
-            bindings: &source.bindings,
+            bindings: Some(&source.bindings),
+            input_map: &[],
             roots: &[selected_output],
         })
         .unwrap();
@@ -699,6 +704,320 @@ fn import_uses_value_dependency_closure_and_keeps_observable_effects() {
             .count(),
         1
     );
+}
+
+/// One declared symbolic axis: `SymDim` extents name program input positions.
+fn symbolic_axis_spec(input_idx: usize) -> ProgramInputSpec {
+    ProgramInputSpec::from_metadata(ProgramValueMetadata::from_extents(
+        DType::F64,
+        [ShapeExtent::Exact(DimExpr::InputDim { input_idx, axis: 0 })],
+    ))
+}
+
+fn guarded_identity() -> Arc<dyn ExtensionOp> {
+    Arc::new(IdentityExtension {
+        declares_semantics: true,
+        effectful: false,
+        guarded: true,
+        view_alias: false,
+    })
+}
+
+#[test]
+fn import_maps_source_input_positions_not_value_slots() {
+    // `second` is the second *input* but the third *value*: its extent and its
+    // guard name input position 1, while its value slot is 2.
+    let mut source = SemanticProgramBuilder::new();
+    let first = source.input(symbolic_axis_spec(0)).unwrap();
+    let neg_output = source.add_op(CoreSemanticOp::Neg, &[first]).unwrap()[0];
+    let second = source.input(symbolic_axis_spec(1)).unwrap();
+    let effect_output = source.add_extension(guarded_identity(), &[second]).unwrap()[0];
+    let source = source.finish(&[neg_output, effect_output]).unwrap();
+
+    let mut destination = SemanticProgramBuilder::new();
+    let imported = destination
+        .import(ProgramImport {
+            program: source.program.as_ref(),
+            bindings: None,
+            input_map: &[],
+            roots: &[neg_output, effect_output],
+        })
+        .unwrap();
+    let frozen = destination.finish(imported.roots()).unwrap();
+    let program = frozen.program.as_ref();
+
+    assert_eq!(program.inputs().len(), 2);
+    let expected = [ShapeExtent::Exact(DimExpr::InputDim {
+        input_idx: 1,
+        axis: 0,
+    })];
+    assert_eq!(
+        program
+            .value_metadata(program.outputs()[1])
+            .unwrap()
+            .shape(),
+        &expected,
+        "an imported extent must keep naming the source input it came from"
+    );
+    assert_eq!(
+        program.shape_guards().len(),
+        1,
+        "the source guard must survive"
+    );
+    assert_eq!(
+        program.shape_guards()[0].lhs(),
+        &DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0
+        }
+    );
+}
+
+#[test]
+fn import_keeps_an_input_that_only_a_shape_declaration_names() {
+    let mut source = SemanticProgramBuilder::new();
+    // `first`'s declared extent names input position 1, so `second` is a
+    // dependency of the declaration alone.
+    let first = source.input(symbolic_axis_spec(1)).unwrap();
+    let _second = source
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(3)]))
+        .unwrap();
+    let root = source.add_op(CoreSemanticOp::Neg, &[first]).unwrap()[0];
+    let source = source.finish(&[root]).unwrap();
+
+    let mut destination = SemanticProgramBuilder::new();
+    let imported = destination
+        .import(ProgramImport {
+            program: source.program.as_ref(),
+            bindings: None,
+            input_map: &[],
+            roots: &[root],
+        })
+        .unwrap();
+    let frozen = destination.finish(imported.roots()).unwrap();
+    let program = frozen.program.as_ref();
+
+    assert_eq!(
+        program.inputs().len(),
+        2,
+        "an input named only by a shape declaration is still a dependency"
+    );
+    assert_eq!(
+        program.value_metadata(program.inputs()[0]).unwrap().shape(),
+        &[ShapeExtent::Exact(DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0
+        })],
+        "the declaration must survive the import instead of degrading to `Unknown`"
+    );
+}
+
+#[test]
+fn import_numbers_new_inputs_after_the_destination_inputs() {
+    let mut source = SemanticProgramBuilder::new();
+    let input = source.input(symbolic_axis_spec(0)).unwrap();
+    let effect_output = source.add_extension(guarded_identity(), &[input]).unwrap()[0];
+    let source = source.finish(&[effect_output]).unwrap();
+
+    let mut destination = SemanticProgramBuilder::new();
+    let _local = destination
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(99)]))
+        .unwrap();
+    let imported = destination
+        .import(ProgramImport {
+            program: source.program.as_ref(),
+            bindings: None,
+            input_map: &[],
+            roots: &[effect_output],
+        })
+        .unwrap();
+    let frozen = destination.finish(imported.roots()).unwrap();
+    let program = frozen.program.as_ref();
+
+    assert_eq!(program.inputs().len(), 2);
+    let expected = [ShapeExtent::Exact(DimExpr::InputDim {
+        input_idx: 1,
+        axis: 0,
+    })];
+    assert_eq!(
+        program
+            .value_metadata(program.outputs()[0])
+            .unwrap()
+            .shape(),
+        &expected,
+        "an imported extent must point at the imported input, not a destination input"
+    );
+    assert_eq!(program.shape_guards().len(), 1);
+    assert_eq!(
+        program.shape_guards()[0].lhs(),
+        &DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0
+        }
+    );
+}
+
+#[test]
+fn snapshot_remaps_declared_extents_to_the_creation_order() {
+    let mut builder = SemanticProgramBuilder::new();
+    let first = builder.input(symbolic_axis_spec(0)).unwrap();
+    let second = builder.input(symbolic_axis_spec(1)).unwrap();
+    let first_sum = builder
+        .add_op(CoreSemanticOp::ReduceSum { axes: vec![0] }, &[first])
+        .unwrap()[0];
+    let second_sum = builder
+        .add_op(CoreSemanticOp::ReduceSum { axes: vec![0] }, &[second])
+        .unwrap()[0];
+    let total = builder
+        .add_op(CoreSemanticOp::Add, &[first_sum, second_sum])
+        .unwrap()[0];
+
+    // Only the second placeholder is specialized, so it is created first.
+    let (frozen, _) = builder
+        .snapshot_pruned_with_input_specs(
+            &[total],
+            &[(1, ProgramInputSpec::new(DType::F64, [DimExpr::Const(3)]))],
+        )
+        .unwrap();
+    let program = frozen.program.as_ref();
+    assert_eq!(program.inputs().len(), 2);
+
+    let declared = program.value_metadata(program.inputs()[0]).unwrap().shape();
+    let undeclared = program.value_metadata(program.inputs()[1]).unwrap().shape();
+    assert_eq!(
+        undeclared,
+        &[ShapeExtent::Exact(DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0
+        })],
+        "the unspecialized placeholder must keep naming itself after reordering"
+    );
+    assert_ne!(
+        declared, undeclared,
+        "reordering must not tie the unspecialized placeholder to the declared one"
+    );
+}
+
+#[test]
+fn snapshot_keeps_effectful_operations_whose_outputs_are_not_requested() {
+    let mut builder = SemanticProgramBuilder::new();
+    let state = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let selected = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let selected_output = builder.add_op(CoreSemanticOp::Neg, &[selected]).unwrap()[0];
+    let effect: Arc<dyn ExtensionOp> = Arc::new(IdentityExtension {
+        declares_semantics: true,
+        effectful: true,
+        guarded: false,
+        view_alias: false,
+    });
+    let _unused_effect_output = builder.add_extension(effect, &[state]).unwrap()[0];
+
+    for outputs in [&[selected_output][..], &[][..]] {
+        let (frozen, _) = builder.snapshot_pruned(outputs).unwrap();
+        assert_eq!(
+            frozen
+                .program
+                .operations()
+                .filter(|operation| !operation.effects().is_empty())
+                .count(),
+            1,
+            "an effectful operation must survive a snapshot that does not request its output"
+        );
+        // The effectful operation keeps the input it writes through, and its own
+        // output stays in the frozen program.
+        assert_eq!(frozen.program.inputs().len(), 1 + outputs.len());
+        assert_eq!(
+            frozen
+                .program
+                .operations()
+                .map(|operation| operation.outputs().len())
+                .sum::<usize>(),
+            outputs.len() + 1
+        );
+    }
+}
+
+/// An extension with no outputs at all: only its declaration of an effect can
+/// keep it in the program.
+#[derive(Debug)]
+struct EffectOnlyExtension;
+
+impl ExtensionOp for EffectOnlyExtension {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.write-only.v1"
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        hasher.write_u8(7);
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().is::<Self>()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(Self)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        0
+    }
+
+    fn infer_output_meta(
+        &self,
+        _context: &mut ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(Vec::new())
+    }
+
+    fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
+        static EFFECTS: [ExtensionEffect; 1] = [ExtensionEffect {
+            family: "tenferro-tests.state.v1",
+            key: 0,
+            access: ExtensionEffectAccess::Write,
+        }];
+        ExtensionEffectDeclaration::Declared(&EFFECTS)
+    }
+
+    fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
+        ExtensionAliasDeclaration::AllFresh
+    }
+}
+
+#[test]
+fn snapshot_keeps_an_effectful_operation_with_no_outputs() {
+    let mut builder = SemanticProgramBuilder::new();
+    let state = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    builder
+        .add_extension(Arc::new(EffectOnlyExtension), &[state])
+        .unwrap();
+
+    let (frozen, _) = builder.snapshot_pruned(&[]).unwrap();
+
+    assert_eq!(
+        frozen.program.operations().count(),
+        1,
+        "an operation whose only observable result is its effect must survive a snapshot"
+    );
+    assert_eq!(frozen.program.inputs().len(), 1);
+
+    // execution-staging-shortcoming: the execution pipeline still rejects a
+    // zero-output instruction, so this shape fails loudly at preparation rather than
+    // running. The snapshot contract above is what must hold either way.
 }
 
 #[test]
@@ -779,7 +1098,8 @@ fn semantic_identity_is_normalized_cached_and_excludes_bindings() {
     let roots = imported
         .import(ProgramImport {
             program: bound.program.as_ref(),
-            bindings: &bound.bindings,
+            bindings: Some(&bound.bindings),
+            input_map: &[],
             roots: bound.program.outputs(),
         })
         .unwrap();
@@ -1209,4 +1529,31 @@ fn a_core_operation_may_not_name_an_external_scalar() {
         .is_ok()
     );
     assert!(super::builder::reject_core_external_dtype(&CoreSemanticOp::Neg).is_ok());
+}
+
+#[test]
+fn import_request_and_result_debug_report_structure_only() {
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let output = builder.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
+    let frozen = builder.finish(&[output]).unwrap();
+
+    let request = ProgramImport {
+        program: &frozen.program,
+        bindings: Some(&frozen.bindings),
+        roots: &[output],
+        input_map: &[],
+    };
+    let text = format!("{request:?}");
+    assert!(text.contains("program_inputs: 1"), "{text}");
+    assert!(text.contains("program_outputs: 1"), "{text}");
+    assert!(text.contains("bindings: Some("), "{text}");
+    assert!(text.contains("roots: 1"), "{text}");
+    assert!(text.contains("input_map: 0"), "{text}");
+
+    let imported = super::ImportedProgramValues::new(vec![output, output].into_boxed_slice());
+    assert_eq!(imported.roots().len(), 2);
+    assert!(format!("{imported:?}").contains("roots: 2"));
 }

@@ -1,79 +1,24 @@
-use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
 
-use computegraph::compile::{compile, CompiledProgram};
-use computegraph::materialize::{
-    materialize_merge, MaterializedGraph, MaterializedOperation, MaterializedValue,
-};
-use computegraph::resolve::{resolve, ResolvedView, ValueDef};
-use computegraph::types::{OperationKey, ValueKey};
-use computegraph::GraphOperation;
-use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::{DimExpr, DimExprEvalError};
 use tenferro_ops::input_key::TensorInputKey;
-use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::{ShapeExtent, ShapeRelation, SymDim};
+use tenferro_ops::{ShapeExtent, ShapeRelation};
 #[cfg(test)]
 use tenferro_tensor::Tensor;
-use tenferro_tensor::{CacheStats, DType, SliceConfig, TensorScalar};
+use tenferro_tensor::{CacheStats, DType};
 
 use super::program::CompiledGraph;
-use crate::checkpoint::RetainedValue;
 #[cfg(test)]
 use crate::compiler::semantic_staging::stage_semantic_program;
-use crate::compiler::{lower_scoped_dim_expr, CompilerOptions};
-use crate::error::{Error, Result};
+use crate::compiler::CompilerOptions;
+use crate::error::{Error, ErrorPhase, Result};
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
-use crate::metadata::registered_meta;
 use crate::program::{
-    CoreSemanticOp, FrozenProgram, ProgramInputSpec, ProgramShapeRelation, ProgramValueMetadata,
-    SemanticOpRef, SemanticProgramBuilder, ShapeGuard as ProgramShapeGuard,
+    FrozenProgram, ProgramShapeRelation, ProgramValueMetadata, SemanticOpRef,
+    ShapeGuard as ProgramShapeGuard,
 };
-use crate::shape_constraint::{discharge, LocalShapeConstraint, SlotScopedShapeConstraint};
-use crate::shape_infer::{infer_extension_output_meta, infer_output_shapes};
 use crate::trace::TracedGraph;
 use crate::traced::{try_concrete_shape, TracedTensor};
-
-#[derive(Clone)]
-struct InputDescriptor {
-    dtype: DType,
-    shape: Vec<usize>,
-    extent_identity: InputExtentIdentity,
-    default_tensor: Option<Arc<RetainedValue>>,
-    /// Canonical identity declared for an externally defined scalar input.
-    scalar_identity: Option<&'static str>,
-}
-
-#[derive(Clone, Copy)]
-enum InputExtentIdentity {
-    Concrete,
-    Symbolic,
-}
-
-impl InputDescriptor {
-    fn semantic_shape(&self, input_idx: usize) -> Vec<DimExpr> {
-        match self.extent_identity {
-            InputExtentIdentity::Concrete => DimExpr::from_concrete(&self.shape),
-            InputExtentIdentity::Symbolic => (0..self.shape.len())
-                .map(|axis| DimExpr::InputDim { input_idx, axis })
-                .collect(),
-        }
-    }
-
-    fn constraint_guard_shape(&self, input_idx: usize) -> Vec<DimExpr> {
-        if self.default_tensor.is_some() {
-            return input_dim_shape(input_idx, self.shape.len());
-        }
-        self.semantic_shape(input_idx)
-    }
-}
-
-fn input_dim_shape(input_idx: usize, rank: usize) -> Vec<DimExpr> {
-    (0..rank)
-        .map(|axis| DimExpr::InputDim { input_idx, axis })
-        .collect()
-}
 
 /// Compiler for traced tensor graphs.
 ///
@@ -83,9 +28,10 @@ fn input_dim_shape(input_idx: usize, rank: usize) -> Vec<DimExpr> {
 /// # Examples
 ///
 /// ```
-/// use tenferro_runtime::{GraphCompiler, TracedTensor};
+/// use tenferro_runtime::{TraceContext, GraphCompiler, TracedTensor};
 ///
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+/// let trace = TraceContext::new();
+/// let x = trace.from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 /// let y = (&x + &x).unwrap();
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
@@ -103,6 +49,12 @@ impl fmt::Debug for GraphCompiler {
             .field("compiler_options", &self.compiler_options)
             .field("extension_cache", &self.extension_cache)
             .finish_non_exhaustive()
+    }
+}
+
+impl Default for GraphCompiler {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -129,8 +81,7 @@ impl GraphCompiler {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{CompilerOptions, OptimizerConfig};
-    /// use tenferro_runtime::GraphCompiler;
+    /// use tenferro_runtime::{CompilerOptions, GraphCompiler, OptimizerConfig};
     ///
     /// let compiler = GraphCompiler::with_compiler_options(CompilerOptions {
     ///     optimizer: OptimizerConfig {
@@ -147,53 +98,44 @@ impl GraphCompiler {
         }
     }
 
-    /// Compile one traced output into a graph program.
+    /// Compile one traced output by snapshotting its context.
+    ///
+    /// The output's reachable closure is frozen into one semantic program; the
+    /// compile leaves the context usable for further tracing.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    /// use tenferro_runtime::{GraphCompiler, TraceContext};
     ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let trace = TraceContext::new();
+    /// let x = trace.input_concrete_shape(tenferro_tensor::DType::F64, &[1])?;
+    /// let y = x.neg()?;
     /// let mut compiler = GraphCompiler::new();
-    /// let y = x.neg().unwrap();
-    /// let program = compiler.compile(&y).unwrap();
-    /// assert_eq!(program.input_count(), 1);
+    /// let program = compiler.compile(&y)?;
+    /// assert_eq!(program.output_count(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Validation`] with `ShapeMismatch`, `RankMismatch`,
-    /// `DTypeMismatch`, or `InvalidArgument` for invalid graph metadata or
-    /// shape constraints, [`Error::RuntimeState`] for missing/inconsistent
-    /// metadata or cache state, and [`Error::Internal`] when the graph
-    /// violates a compiler invariant. Extension lowering failures retain
-    /// their typed [`Error::Extension`] source.
+    /// Returns [`Error::Validation`] for an invalid snapshot or bound shape
+    /// guard, or [`Error::RuntimeState`] for inconsistent compiler state.
     pub fn compile(&mut self, output: &TracedTensor) -> Result<CompiledGraph> {
         self.compile_many(&[output])
     }
 
     /// Compile an immutable semantic trace without consulting a backend.
     ///
-    /// This is the forward-only trace boundary. The compiler preserves the
-    /// frozen semantic program and bindings without preparing backend/runtime
-    /// staging. Runtime preparation owns backend-private staging and plan caches.
-    ///
     /// # Errors
     ///
     /// Returns [`Error::Validation`] for invalid metadata or shape constraints,
-    /// [`Error::Extension`] when extension lowering fails,
-    /// [`Error::RuntimeState`] for inconsistent staging state, or
-    /// [`Error::Internal`] when compilation encounters an invariant violation.
+    /// or [`Error::RuntimeState`] for inconsistent staging state.
     pub fn compile_traced_graph(&mut self, graph: &TracedGraph) -> Result<CompiledGraph> {
-        self.compile_frozen(graph.frozen())
+        self.compile_frozen(graph.frozen(), Vec::new())
     }
 
     /// Compile an immutable semantic program for ordered execution.
-    ///
-    /// This entry is used by validation-preserving semantic transforms such as
-    /// whole-program AD. Tensor bindings remain outside semantic identity and
-    /// are preserved in the returned [`CompiledGraph`].
     ///
     /// # Examples
     ///
@@ -219,97 +161,61 @@ impl GraphCompiler {
     /// # Errors
     ///
     /// Returns [`Error::Validation`] for invalid metadata or shape constraints,
-    /// [`Error::Extension`] when extension lowering fails,
-    /// [`Error::RuntimeState`] for inconsistent staging state, or
-    /// [`Error::Internal`] when compilation encounters an invariant violation.
+    /// or [`Error::RuntimeState`] for inconsistent staging state.
     pub fn compile_frozen_program(&mut self, frozen: &FrozenProgram) -> Result<CompiledGraph> {
-        self.compile_frozen(frozen)
+        self.compile_frozen(frozen, Vec::new())
     }
 
-    fn compile_frozen(&mut self, frozen: &FrozenProgram) -> Result<CompiledGraph> {
+    fn compile_frozen(
+        &mut self,
+        frozen: &FrozenProgram,
+        input_keys: Vec<TensorInputKey>,
+    ) -> Result<CompiledGraph> {
         validate_bound_shape_guards(frozen)?;
         Ok(CompiledGraph::new(
             frozen.clone(),
             self.compiler_options,
-            [],
+            input_keys,
         ))
     }
 
-    /// Compile multiple traced outputs into one graph program.
+    /// Compile multiple traced outputs into one program.
     ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
-    ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    /// let y = x.neg().unwrap();
-    /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile_many(&[&x, &y]).unwrap();
-    /// assert_eq!(program.output_count(), 2);
-    /// ```
+    /// Every output must belong to the same trace context.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Validation`] with `ShapeMismatch`, `RankMismatch`,
-    /// `DTypeMismatch`, or `InvalidArgument` for invalid graph metadata or
-    /// shape constraints, [`Error::RuntimeState`] for missing/inconsistent
-    /// metadata or cache state, and [`Error::Internal`] when the graph
-    /// violates a compiler invariant. Extension lowering failures retain
-    /// their typed [`Error::Extension`] source.
+    /// Returns `Error::Validation` with `ValidationError::InvalidArgument` when
+    /// the output list is empty (`argument: "outputs"`) or when an output belongs
+    /// to a different trace context, and the typed snapshot error from
+    /// [`compile`](Self::compile) when the program cannot be frozen.
     pub fn compile_many(&mut self, outputs: &[&TracedTensor]) -> Result<CompiledGraph> {
-        let all_inputs = collect_default_inputs(outputs)?;
-        self.compile_many_with_descriptors(
-            outputs,
-            &HashMap::new(),
-            &all_inputs,
-            None,
-            false,
-            false,
-        )
-    }
-
-    pub(crate) fn compile_ad_source(&mut self, output: &TracedTensor) -> Result<CompiledGraph> {
-        self.compile_ad_source_many(&[output])
-    }
-
-    pub(crate) fn compile_ad_source_many(
-        &mut self,
-        outputs: &[&TracedTensor],
-    ) -> Result<CompiledGraph> {
-        let all_inputs = collect_default_inputs(outputs)?;
-        self.compile_many_with_descriptors(outputs, &HashMap::new(), &all_inputs, None, true, true)
+        let Some(first) = outputs.first() else {
+            return Err(Error::invalid_argument(
+                "GraphCompiler::compile_many",
+                ErrorPhase::Compile,
+                "outputs",
+                "at least one output is required",
+            ));
+        };
+        for output in outputs.iter().skip(1) {
+            crate::traced::ensure_same_context(first, output)?;
+        }
+        let values: Vec<_> = outputs.iter().map(|output| output.value).collect();
+        let (frozen, kept) = first
+            .ctx
+            .plain_snapshot_with_inputs(&values)
+            .map_err(graph_error_with_context("GraphCompiler::compile_many"))?;
+        let input_keys = kept.into_iter().map(|(key, _)| key).collect();
+        self.compile_frozen(&frozen, input_keys)
     }
 
     /// Compile one traced output with concrete placeholder specs.
     ///
-    /// The compiled program's explicit inputs follow the order of `bindings`,
-    /// and every declared placeholder must be one the output depends on. A
-    /// declared placeholder that the output does not use (for example the
-    /// variable of a derivative that is constant) is rejected at compile time:
-    /// it would not be a program input, so a tensor passed for it at run time
-    /// could not be matched to any placeholder.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
-    ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    /// let mut compiler = GraphCompiler::new();
-    /// let y = x.neg().unwrap();
-    /// let program = compiler
-    ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[3])])
-    ///     .unwrap();
-    /// assert_eq!(program.input_count(), 1);
-    ///
-    ///
-    /// // `z` does not depend on `x`, so declaring `x` is rejected.
-    /// let z = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
-    /// assert!(compiler
-    ///     .compile_with_input_specs(&z, &[(&x, DType::F64, &[3])])
-    ///     .is_err());
-    /// ```
+    /// Every declared placeholder must be a data-less input of the output's
+    /// context, with the declared dtype and shape. The compiled program lists the
+    /// declared placeholders first, in the order given here, followed by the
+    /// remaining live inputs in context order.
     ///
     /// # Errors
     ///
@@ -318,60 +224,52 @@ impl GraphCompiler {
     /// [`Error::PlaceholderDtypeMismatch`],
     /// [`Error::PlaceholderShapeMismatch`], or
     /// [`Error::PlaceholderRankMismatch`] for incompatible specs,
-    /// [`Error::Validation`] with `InvalidArgument` (phase
-    /// [`ErrorPhase::Compile`](crate::ErrorPhase::Compile)) for a declared placeholder the output does not
-    /// depend on, and [`Error::Validation`] with `ShapeMismatch`,
-    /// `RankMismatch`, `DTypeMismatch`, or `InvalidArgument` /
-    /// [`Error::RuntimeState`] when compilation or metadata lowering fails.
+    /// [`Error::Validation`] with `InvalidArgument` for a declared placeholder the
+    /// output does not depend on, and the snapshot failures of
+    /// [`compile`](Self::compile).
     pub fn compile_with_input_specs(
         &mut self,
         output: &TracedTensor,
         bindings: &[(&TracedTensor, DType, &[usize])],
     ) -> Result<CompiledGraph> {
-        let mut binding_specs = HashMap::new();
-        let mut input_order = Vec::with_capacity(bindings.len());
+        let mut seen = std::collections::HashSet::new();
+        let mut specs = Vec::with_capacity(bindings.len());
         for (index, (placeholder, dtype, shape)) in bindings.iter().enumerate() {
             validate_placeholder_spec(index, placeholder, *dtype, shape)?;
             let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
                 binding_index: index,
             })?;
-            if binding_specs
-                .insert(
-                    key.clone(),
-                    InputDescriptor {
-                        dtype: *dtype,
-                        shape: (*shape).to_vec(),
-                        extent_identity: InputExtentIdentity::Concrete,
-                        default_tensor: None,
-                        // A caller-supplied binding declares its own identity through
-                        // the traced value's metadata instead.
-                        scalar_identity: None,
-                    },
-                )
-                .is_some()
-            {
+            if !seen.insert(key.clone()) {
                 return Err(Error::DuplicateBinding {
-                    input_key: format!("{:?}", key),
+                    input_key: format!("{key:?}"),
                 });
             }
-            input_order.push(key);
+            specs.push((
+                key,
+                crate::program::ProgramInputSpec::new(
+                    *dtype,
+                    shape
+                        .iter()
+                        .map(|&size| tenferro_ops::dim_expr::DimExpr::Const(size)),
+                ),
+            ));
         }
-
-        let program = self.compile_many_with_descriptors(
-            &[output],
-            &binding_specs,
-            output.inputs_map.as_ref(),
-            Some(&input_order),
-            false,
-            false,
-        )?;
-        if let Some(binding_index) = input_order
-            .iter()
-            .position(|key| program.input_key_index(key).is_none())
-        {
+        let (frozen, kept) = output
+            .ctx
+            .snapshot_with_input_specs(&[output.value], &specs)
+            .map_err(graph_error_with_context(
+                "GraphCompiler::compile_with_input_specs",
+            ))?;
+        let input_keys = kept.into_iter().map(|(key, _)| key).collect();
+        let program = self.compile_frozen(&frozen, input_keys)?;
+        if let Some(binding_index) = bindings.iter().position(|(placeholder, _, _)| {
+            placeholder
+                .input_key()
+                .is_none_or(|key| program.input_key_index(&key).is_none())
+        }) {
             return Err(Error::invalid_argument(
                 "GraphCompiler::compile_with_input_specs",
-                crate::ErrorPhase::Compile,
+                ErrorPhase::Compile,
                 "bindings",
                 format!(
                     "binding {binding_index} declares a placeholder the output does not \
@@ -382,13 +280,12 @@ impl GraphCompiler {
         Ok(program)
     }
 
-    /// Return the compiler options used for future graph lowerings.
+    /// Return the compiler options used for future lowerings.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_runtime::CompilerOptions;
-    /// use tenferro_runtime::GraphCompiler;
+    /// use tenferro_runtime::{CompilerOptions, GraphCompiler};
     ///
     /// let compiler = GraphCompiler::new();
     /// assert_eq!(compiler.compiler_options(), CompilerOptions::default());
@@ -398,33 +295,12 @@ impl GraphCompiler {
     }
 
     /// Replace compiler options and clear compiler-owned extension cache entries.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{CompilerOptions, OptimizerConfig};
-    /// use tenferro_runtime::GraphCompiler;
-    ///
-    /// let mut compiler = GraphCompiler::new();
-    /// let options = CompilerOptions {
-    ///     optimizer: OptimizerConfig {
-    ///         dot_decomposer: true,
-    ///         ..OptimizerConfig::default()
-    ///     },
-    /// };
-    /// compiler.set_compiler_options(options);
-    /// assert_eq!(compiler.compiler_options(), options);
-    /// assert_eq!(compiler.cache_stats().entries, 0);
-    /// ```
     pub fn set_compiler_options(&mut self, compiler_options: CompilerOptions) {
-        if self.compiler_options == compiler_options {
-            return;
-        }
         self.compiler_options = compiler_options;
-        self.clear_extension_caches();
+        self.clear_caches();
     }
 
-    /// Clear generic extension compile-time cache entries.
+    /// Drop every extension cache entry owned by this compiler.
     ///
     /// # Examples
     ///
@@ -433,28 +309,18 @@ impl GraphCompiler {
     ///
     /// let mut compiler = GraphCompiler::new();
     /// compiler.clear_extension_caches();
-    /// assert_eq!(compiler.cache_stats().entries, 0);
+    /// assert!(compiler.extension_caches().is_empty());
     /// ```
     pub fn clear_extension_caches(&mut self) {
         self.extension_cache.clear();
     }
 
-    /// Clear every cache owned by the compiler.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::GraphCompiler;
-    ///
-    /// let mut compiler = GraphCompiler::new();
-    /// compiler.clear_caches();
-    /// assert_eq!(compiler.cache_stats().entries, 0);
-    /// ```
+    /// Drop every cache owned by this compiler.
     pub fn clear_caches(&mut self) {
         self.clear_extension_caches();
     }
 
-    /// Return compiler-owned extension cache-entry and retained-byte stats.
+    /// Return aggregate cache statistics for this compiler.
     ///
     /// # Examples
     ///
@@ -469,203 +335,14 @@ impl GraphCompiler {
         self.extension_cache.stats(ExtensionCacheSelector::All)
     }
 
-    /// Borrow generic compiler-owned extension cache storage.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::GraphCompiler;
-    ///
-    /// let compiler = GraphCompiler::new();
-    /// assert!(compiler.extension_caches().is_empty());
-    /// ```
+    /// Borrow the extension cache store owned by this compiler.
     pub fn extension_caches(&self) -> &ExtensionCacheStore {
         &self.extension_cache
     }
 
-    /// Mutably borrow generic compiler-owned extension cache storage.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::GraphCompiler;
-    ///
-    /// let mut compiler = GraphCompiler::new();
-    /// compiler.extension_caches_mut().clear();
-    /// ```
+    /// Borrow the extension cache store mutably.
     pub fn extension_caches_mut(&mut self) -> &mut ExtensionCacheStore {
         &mut self.extension_cache
-    }
-
-    fn compile_many_with_descriptors(
-        &mut self,
-        outputs: &[&TracedTensor],
-        binding_specs: &HashMap<TensorInputKey, InputDescriptor>,
-        default_inputs: &HashMap<TensorInputKey, Arc<RetainedValue>>,
-        explicit_input_order: Option<&[TensorInputKey]>,
-        include_checkpoint_aliases: bool,
-        allow_unbound_placeholders: bool,
-    ) -> Result<CompiledGraph> {
-        let mut constraint_scopes = Vec::new();
-        let mut seen_constraint_scopes = std::collections::HashSet::new();
-        for output in outputs {
-            for scope in output.constraint_scopes.as_slice() {
-                if seen_constraint_scopes.insert(Arc::as_ptr(scope)) {
-                    #[cfg(test)]
-                    test_support::record_constraint_scope_clones(1);
-                    constraint_scopes.push(Arc::clone(scope));
-                }
-            }
-        }
-
-        let mut roots = Vec::new();
-        let mut checkpoint_aliases = HashMap::new();
-        let mut output_keys = Vec::with_capacity(outputs.len());
-        for output in outputs {
-            roots.extend(output.resolve_roots());
-            if include_checkpoint_aliases && let Some(chain) = &output.checkpoint_chain {
-                roots.extend(chain.collect_graphs());
-                for (alias_key, target_key) in chain.collect_aliases() {
-                    insert_checkpoint_alias(&mut checkpoint_aliases, alias_key, target_key)?;
-                }
-            }
-            output_keys.push(output.graph.values()[output.val].key.clone());
-        }
-
-        let view = resolve(roots);
-        let graph = if checkpoint_aliases.is_empty() {
-            materialize_merge(&view, &output_keys)
-        } else {
-            let checkpoint_alias_shapes = checkpoint_aliases
-                .keys()
-                .filter_map(|key| {
-                    default_inputs
-                        .get(key)
-                        .map(|tensor| (key.clone(), tensor.shape().to_vec()))
-                })
-                .collect::<HashMap<_, _>>();
-            materialize_merge_with_input_aliases(
-                &view,
-                &output_keys,
-                &checkpoint_aliases,
-                &checkpoint_alias_shapes,
-            )
-        };
-        let mut compiled = compile(&graph);
-        prune_compiled_extension_outputs(&mut compiled)?;
-        let slot_by_key: HashMap<_, _> = graph
-            .values
-            .iter()
-            .enumerate()
-            .map(|(slot, value)| (value.key.clone(), slot))
-            .collect();
-        let mut scoped_constraints = Vec::new();
-        for scope in constraint_scopes {
-            for scoped in scope.constraints() {
-                let origin_slots: Vec<_> = scoped
-                    .origins
-                    .iter()
-                    .filter_map(|key| slot_by_key.get(key).copied())
-                    .collect();
-                if origin_slots.is_empty() {
-                    continue;
-                }
-                let origin_instruction = origin_slots.iter().find_map(|&slot| {
-                    graph
-                        .values
-                        .get(slot)
-                        .and_then(|value| value.producer.map(|p| p.0))
-                });
-                let mut local = scoped.local.clone();
-                if let Some(instruction_index) = origin_instruction {
-                    local.source = local.source.with_instruction(instruction_index);
-                }
-                let mut input_slots = Vec::with_capacity(scoped.inputs.len());
-                for (input_idx, key) in scoped.inputs.iter().enumerate() {
-                    let Some(slot) = slot_by_key.get(key).copied() else {
-                        return Err(Error::ShapeConstraintEvaluation {
-                            family: local.source.family_id,
-                            instruction_index: local.source.instruction_index,
-                            relation: local.relation,
-                            expression: format!("{:?}", local.lhs),
-                            cause: crate::ShapeConstraintEvalError::MissingInput {
-                                input_idx,
-                                input_count: scoped.inputs.len(),
-                            },
-                        });
-                    };
-                    input_slots.push(slot);
-                }
-                scoped_constraints.push(SlotScopedShapeConstraint {
-                    origin_slots,
-                    input_slots,
-                    local,
-                });
-            }
-        }
-
-        let mut descriptors = Vec::with_capacity(graph.inputs.len());
-        let mut input_keys = Vec::with_capacity(graph.inputs.len());
-        for key in &graph.inputs {
-            let ValueKey::Input(input_key) = key else {
-                return Err(Error::Internal(
-                    "expected Input key in graph inputs".to_string(),
-                ));
-            };
-            let descriptor = descriptor_for_input(
-                input_key,
-                binding_specs,
-                default_inputs,
-                allow_unbound_placeholders,
-            )?;
-            descriptors.push(descriptor);
-            input_keys.push(input_key.clone());
-        }
-        if let Some(explicit_input_order) = explicit_input_order {
-            let input_position_by_key: HashMap<_, _> = graph
-                .inputs
-                .iter()
-                .enumerate()
-                .filter_map(|(position, key)| match key {
-                    ValueKey::Input(key) => Some((key.clone(), position)),
-                    _ => None,
-                })
-                .collect();
-            let mut ordered_positions = Vec::with_capacity(graph.inputs.len());
-            let mut selected_positions = vec![false; graph.inputs.len()];
-            for key in explicit_input_order {
-                if let Some(&position) = input_position_by_key.get(key) {
-                    ordered_positions.push(position);
-                    selected_positions[position] = true;
-                }
-            }
-            for (position, selected) in selected_positions.iter().enumerate() {
-                if !selected {
-                    ordered_positions.push(position);
-                }
-            }
-            compiled.input_slots = ordered_positions
-                .iter()
-                .map(|&position| compiled.input_slots[position])
-                .collect();
-            descriptors = ordered_positions
-                .iter()
-                .map(|&position| descriptors[position].clone())
-                .collect();
-            input_keys = ordered_positions
-                .into_iter()
-                .map(|position| input_keys[position].clone())
-                .collect();
-        }
-
-        let semantic =
-            compile_materialized_semantic_program(&compiled, &descriptors, &scoped_constraints)?;
-        validate_bound_shape_guards(&semantic)?;
-        Ok(CompiledGraph::new(
-            semantic,
-            self.compiler_options,
-            input_keys,
-        ))
     }
 }
 
@@ -943,457 +620,14 @@ fn evaluate_static_dim_expr_with_inputs(
     }
 }
 
-fn compile_materialized_semantic_program(
-    compiled: &CompiledProgram<StdTensorOp>,
-    descriptors: &[InputDescriptor],
-    scoped_constraints: &[SlotScopedShapeConstraint],
-) -> Result<FrozenProgram> {
-    if compiled.input_slots.len() != descriptors.len() {
-        return Err(Error::runtime_state(
-            "graph_compile_semantic",
-            crate::ErrorPhase::Compile,
-            "materialized input count does not match semantic descriptors",
-        ));
-    }
-
-    let mut builder = SemanticProgramBuilder::new();
-    let mut values = vec![None; compiled.n_slots];
-    let mut slot_shapes = vec![None; compiled.n_slots];
-    let mut guard_slot_shapes = vec![None; compiled.n_slots];
-    let mut slot_dtypes = vec![None; compiled.n_slots];
-    for (input_idx, (&slot, descriptor)) in compiled.input_slots.iter().zip(descriptors).enumerate()
-    {
-        let Some(value_slot) = values.get_mut(slot) else {
-            return Err(invalid_compiled_graph(format!(
-                "semantic input slot {slot} is outside slot table of length {}",
-                compiled.n_slots
-            )));
-        };
-        let semantic_shape = descriptor.semantic_shape(input_idx);
-        let spec = match descriptor.scalar_identity {
-            Some(identity) => ProgramInputSpec::new(descriptor.dtype, semantic_shape.clone())
-                .with_scalar_identity(identity),
-            None => ProgramInputSpec::new(descriptor.dtype, semantic_shape.clone()),
-        };
-        let value = builder.input(spec).map_err(semantic_build_error)?;
-        if let Some(tensor) = &descriptor.default_tensor {
-            builder
-                .bind_input_retained(value, Arc::clone(tensor))
-                .map_err(semantic_build_error)?;
-        }
-        *value_slot = Some(value);
-        slot_shapes[slot] = Some(semantic_shape);
-        guard_slot_shapes[slot] = Some(descriptor.constraint_guard_shape(input_idx));
-        slot_dtypes[slot] = Some(descriptor.dtype);
-    }
-
-    for instruction in &compiled.instructions {
-        let inputs = instruction
-            .inputs
-            .iter()
-            .map(|&slot| {
-                values.get(slot).and_then(|value| *value).ok_or_else(|| {
-                    invalid_compiled_graph(format!(
-                        "semantic operation input slot {slot} is unavailable"
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let guard_input_shapes = instruction
-            .inputs
-            .iter()
-            .map(|&slot| {
-                guard_slot_shapes
-                    .get(slot)
-                    .and_then(|shape| shape.as_deref())
-                    .ok_or_else(|| {
-                        invalid_compiled_graph(format!(
-                            "semantic operation guard-shape input slot {slot} is unavailable"
-                        ))
-                    })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let guard_output_shapes = match &instruction.operation {
-            StdTensorOp::Extension(extension) => {
-                let input_dtypes = instruction
-                    .inputs
-                    .iter()
-                    .map(|&slot| {
-                        slot_dtypes
-                            .get(slot)
-                            .and_then(|dtype| *dtype)
-                            .ok_or_else(|| {
-                                invalid_compiled_graph(format!(
-                                    "semantic operation dtype input slot {slot} is unavailable"
-                                ))
-                            })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                infer_extension_output_meta(extension.as_ref(), &input_dtypes, &guard_input_shapes)?
-                    .into_iter()
-                    .map(|(_dtype, shape)| shape)
-                    .collect::<Vec<_>>()
-            }
-            operation => infer_output_shapes(operation, &guard_input_shapes)?,
-        };
-        let outputs = match &instruction.operation {
-            StdTensorOp::Extension(extension) => builder
-                .add_extension(Arc::clone(extension), &inputs)
-                .map_err(semantic_build_error)?,
-            operation => builder
-                .add_op(
-                    CoreSemanticOp::try_from(operation).map_err(|source| {
-                        Error::runtime_state_source(
-                            "graph_compile_semantic",
-                            crate::ErrorPhase::Compile,
-                            source,
-                        )
-                    })?,
-                    &inputs,
-                )
-                .map_err(semantic_build_error)?,
-        };
-        if outputs.len() != instruction.outputs.len() {
-            return Err(invalid_compiled_graph(format!(
-                "semantic operation produced {} outputs for {} materialized slots",
-                outputs.len(),
-                instruction.outputs.len()
-            )));
-        }
-        if guard_output_shapes.len() != instruction.outputs.len() {
-            return Err(invalid_compiled_graph(format!(
-                "semantic operation inferred {} guard shapes for {} materialized slots",
-                guard_output_shapes.len(),
-                instruction.outputs.len()
-            )));
-        }
-        for ((&slot, &value), guard_shape) in instruction
-            .outputs
-            .iter()
-            .zip(outputs.iter())
-            .zip(guard_output_shapes.iter())
-        {
-            let Some(value_slot) = values.get_mut(slot) else {
-                return Err(invalid_compiled_graph(format!(
-                    "semantic output slot {slot} is outside slot table of length {}",
-                    compiled.n_slots
-                )));
-            };
-            if value_slot.replace(value).is_some() {
-                return Err(invalid_compiled_graph(format!(
-                    "semantic output slot {slot} has multiple producers"
-                )));
-            }
-            let metadata = builder
-                .value_metadata(value)
-                .map_err(semantic_build_error)?;
-            slot_shapes[slot] = Some(
-                metadata
-                    .shape()
-                    .iter()
-                    .enumerate()
-                    .map(|(axis, extent)| match extent {
-                        tenferro_ops::ShapeExtent::Exact(expression)
-                        | tenferro_ops::ShapeExtent::UpperBound(expression) => expression.clone(),
-                        tenferro_ops::ShapeExtent::Unknown => DimExpr::InputDim {
-                            input_idx: slot,
-                            axis,
-                        },
-                    })
-                    .collect(),
-            );
-            guard_slot_shapes[slot] = Some(guard_shape.clone());
-            slot_dtypes[slot] = Some(metadata.dtype());
-        }
-    }
-
-    for scoped in scoped_constraints {
-        let target = scoped
-            .origin_slots
-            .iter()
-            .find_map(|&slot| values.get(slot).and_then(|value| *value))
-            .ok_or_else(|| {
-                invalid_compiled_graph(
-                    "semantic shape constraint has no available origin".to_string(),
-                )
-            })?;
-        let lhs = lower_scoped_dim_expr(
-            &scoped.local.lhs,
-            &scoped.input_slots,
-            &guard_slot_shapes,
-            &scoped.local,
-        )?;
-        let rhs = lower_scoped_dim_expr(
-            &scoped.local.rhs,
-            &scoped.input_slots,
-            &guard_slot_shapes,
-            &scoped.local,
-        )?;
-        let relation = match scoped.local.relation {
-            tenferro_ops::ShapeRelation::Equal => ProgramShapeRelation::Equal,
-        };
-        let lowered = LocalShapeConstraint {
-            source: scoped.local.source.clone(),
-            relation: scoped.local.relation,
-            lhs,
-            rhs,
-        };
-        let retained_guards = discharge(vec![lowered])?;
-        if retained_guards.is_empty() {
-            continue;
-        }
-        let guards = retained_guards.into_iter().map(|guard| {
-            ProgramShapeGuard::new(relation, guard.lhs, guard.rhs)
-                .with_source_family(guard.source.family_id)
-        });
-        builder
-            .add_shape_guards_to_output(target, guards)
-            .map_err(semantic_build_error)?;
-    }
-
-    let outputs = compiled
-        .output_slots
-        .iter()
-        .map(|&slot| {
-            values.get(slot).and_then(|value| *value).ok_or_else(|| {
-                invalid_compiled_graph(format!(
-                    "semantic program output slot {slot} is unavailable"
-                ))
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    builder.finish(&outputs).map_err(|source| {
-        Error::runtime_state_source("graph_compile_semantic", crate::ErrorPhase::Compile, source)
-    })
+fn invalid_compiled_graph(message: impl Into<String>) -> Error {
+    Error::Internal(message.into())
 }
 
-fn semantic_build_error(source: crate::program::ProgramBuildError) -> Error {
-    Error::runtime_state_source("graph_compile_semantic", crate::ErrorPhase::Compile, source)
-}
-
-impl Default for GraphCompiler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-fn collect_default_inputs(
-    outputs: &[&TracedTensor],
-) -> Result<HashMap<TensorInputKey, Arc<RetainedValue>>> {
-    let mut all_inputs = HashMap::new();
-    for output in outputs {
-        for (key, tensor) in output.inputs_map.iter() {
-            if let Some(existing) = all_inputs.get(key) {
-                if !default_tensors_equivalent(existing, tensor) {
-                    return Err(Error::DuplicateBinding {
-                        input_key: format!("{:?}", key),
-                    });
-                }
-                continue;
-            }
-            all_inputs.insert(key.clone(), tensor.clone());
-        }
-    }
-    Ok(all_inputs)
-}
-
-fn insert_checkpoint_alias(
-    aliases: &mut HashMap<TensorInputKey, ValueKey<StdTensorOp>>,
-    alias_key: TensorInputKey,
-    target_key: ValueKey<StdTensorOp>,
-) -> Result<()> {
-    if let Some(existing) = aliases.get(&alias_key) {
-        if existing != &target_key {
-            return Err(Error::Internal(format!(
-                "checkpoint alias {alias_key:?} targets both {existing:?} and {target_key:?}"
-            )));
-        }
-        return Ok(());
-    }
-    aliases.insert(alias_key, target_key);
-    Ok(())
-}
-
-struct AliasAwareMaterializer<'a> {
-    view: &'a ResolvedView<StdTensorOp>,
-    aliases: &'a HashMap<TensorInputKey, ValueKey<StdTensorOp>>,
-    alias_shapes: &'a HashMap<TensorInputKey, Vec<usize>>,
-    val_map: HashMap<ValueKey<StdTensorOp>, usize>,
-    op_map: HashMap<Arc<OperationKey<StdTensorOp>>, usize>,
-    values: Vec<MaterializedValue<StdTensorOp>>,
-    operations: Vec<MaterializedOperation<StdTensorOp>>,
-    input_keys: Vec<ValueKey<StdTensorOp>>,
-}
-
-impl<'a> AliasAwareMaterializer<'a> {
-    fn new(
-        view: &'a ResolvedView<StdTensorOp>,
-        aliases: &'a HashMap<TensorInputKey, ValueKey<StdTensorOp>>,
-        alias_shapes: &'a HashMap<TensorInputKey, Vec<usize>>,
-    ) -> Self {
-        Self {
-            view,
-            aliases,
-            alias_shapes,
-            val_map: HashMap::new(),
-            op_map: HashMap::new(),
-            values: Vec::new(),
-            operations: Vec::new(),
-            input_keys: Vec::new(),
-        }
-    }
-
-    fn visit(&mut self, key: &ValueKey<StdTensorOp>) -> usize {
-        if let Some(&index) = self.val_map.get(key) {
-            return index;
-        }
-        if let Some(target) = self.alias_target(key).cloned() {
-            let index = self.visit(&target);
-            let index = self.refine_alias_to_checkpoint_shape(key, index);
-            self.val_map.insert(key.clone(), index);
-            return index;
-        }
-
-        let resolved = self.view.resolve_value(key);
-        assert!(
-            resolved.is_some(),
-            "key not found in resolved view: {:?}",
-            key
-        );
-        match resolved {
-            Some(ValueDef::Input { .. }) => self.materialize_input(key),
-            Some(ValueDef::Produced {
-                operation,
-                input_keys,
-                role,
-                output_slot,
-            }) => self.materialize_produced(operation, input_keys, role, output_slot),
-            None => unreachable!("asserted above"),
-        }
-    }
-
-    fn alias_target(&self, key: &ValueKey<StdTensorOp>) -> Option<&ValueKey<StdTensorOp>> {
-        let ValueKey::Input(input_key) = key else {
-            return None;
-        };
-        self.aliases.get(input_key)
-    }
-
-    fn refine_alias_to_checkpoint_shape(
-        &mut self,
-        key: &ValueKey<StdTensorOp>,
-        target_index: usize,
-    ) -> usize {
-        let ValueKey::Input(input_key) = key else {
-            return target_index;
-        };
-        let Some(shape) = self.alias_shapes.get(input_key) else {
-            return target_index;
-        };
-        let target_key = self.values[target_index].key.clone();
-        let rank = shape.len();
-        self.materialize_produced(
-            StdTensorOp::Slice(SliceConfig {
-                starts: vec![0; rank],
-                limits: shape.clone(),
-                strides: vec![1; rank],
-            }),
-            vec![target_key],
-            computegraph::types::OperationRole::Primary,
-            0,
-        )
-    }
-
-    fn materialize_input(&mut self, key: &ValueKey<StdTensorOp>) -> usize {
-        let index = self.values.len();
-        self.values.push(MaterializedValue {
-            key: key.clone(),
-            producer: None,
-        });
-        self.val_map.insert(key.clone(), index);
-        self.input_keys.push(key.clone());
-        index
-    }
-
-    fn materialize_produced(
-        &mut self,
-        operation: StdTensorOp,
-        input_keys: Vec<ValueKey<StdTensorOp>>,
-        role: computegraph::types::OperationRole,
-        output_slot: usize,
-    ) -> usize {
-        let op_key = Arc::new(OperationKey::new(
-            operation.clone(),
-            input_keys.clone(),
-            role.clone(),
-        ));
-
-        if self.op_map.contains_key(&op_key) {
-            let output_key = ValueKey::Derived {
-                operation: op_key,
-                output_slot: output_slot as u8,
-            };
-            let val_index = self.val_map.get(&output_key).copied();
-            assert!(
-                val_index.is_some(),
-                "materialized op {:?} is missing output slot {}",
-                operation,
-                output_slot
-            );
-            return match val_index {
-                Some(index) => index,
-                None => unreachable!("asserted above"),
-            };
-        }
-
-        let materialized_inputs = input_keys.iter().map(|input| self.visit(input)).collect();
-        let op_index = self.operations.len();
-        self.op_map.insert(Arc::clone(&op_key), op_index);
-        self.operations.push(MaterializedOperation {
-            operation: operation.clone(),
-            inputs: materialized_inputs,
-            outputs: Vec::with_capacity(operation.output_count()),
-            role,
-        });
-
-        for slot in 0..operation.output_count() {
-            let output_key = ValueKey::Derived {
-                operation: Arc::clone(&op_key),
-                output_slot: slot as u8,
-            };
-            let val_index = self.values.len();
-            self.values.push(MaterializedValue {
-                key: output_key.clone(),
-                producer: Some((op_index, slot)),
-            });
-            self.val_map.insert(output_key, val_index);
-            self.operations[op_index].outputs.push(val_index);
-        }
-
-        self.operations[op_index].outputs[output_slot]
-    }
-}
-
-fn materialize_merge_with_input_aliases(
-    view: &ResolvedView<StdTensorOp>,
-    outputs: &[ValueKey<StdTensorOp>],
-    aliases: &HashMap<TensorInputKey, ValueKey<StdTensorOp>>,
-    alias_shapes: &HashMap<TensorInputKey, Vec<usize>>,
-) -> MaterializedGraph<StdTensorOp> {
-    let mut materializer = AliasAwareMaterializer::new(view, aliases, alias_shapes);
-    let mut materialized_outputs = Vec::with_capacity(outputs.len());
-
-    for output in outputs {
-        let output_slot = materializer.visit(output);
-        materialized_outputs.push(materializer.values[output_slot].key.clone());
-    }
-
-    MaterializedGraph {
-        values: materializer.values,
-        operations: materializer.operations,
-        inputs: materializer.input_keys,
-        outputs: materialized_outputs,
-    }
+fn graph_error_with_context(
+    op: &'static str,
+) -> impl FnOnce(crate::program::ProgramFinishError) -> Error {
+    move |source| Error::runtime_state_source(op, ErrorPhase::Compile, source)
 }
 
 fn validate_placeholder_spec(
@@ -1442,207 +676,10 @@ fn validate_placeholder_shape(placeholder: &TracedTensor, shape: &[usize]) -> Re
     Ok(())
 }
 
-fn descriptor_for_input(
-    key: &TensorInputKey,
-    binding_specs: &HashMap<TensorInputKey, InputDescriptor>,
-    default_inputs: &HashMap<TensorInputKey, Arc<RetainedValue>>,
-    allow_unbound_placeholders: bool,
-) -> Result<InputDescriptor> {
-    if let Some(tensor) = default_inputs.get(key) {
-        return Ok(InputDescriptor {
-            dtype: tensor.dtype(),
-            shape: tensor.shape().to_vec(),
-            extent_identity: default_input_extent_identity(key, tensor)?,
-            default_tensor: Some(tensor.clone()),
-            // A bound tensor carries no canonical name itself, so the declared
-            // identity comes from the traced value's registered metadata.
-            scalar_identity: registered_meta(&ValueKey::Input(key.clone()))
-                .ok()
-                .and_then(|metadata| metadata.scalar_identity()),
-        });
-    }
-    if let Some(spec) = binding_specs.get(key) {
-        return Ok(spec.clone());
-    }
-    if allow_unbound_placeholders {
-        return descriptor_for_unbound_input(key);
-    }
-    Err(Error::UnboundPlaceholder {
-        input_key: format!("{:?}", key),
-    })
-}
-
-fn descriptor_for_unbound_input(key: &TensorInputKey) -> Result<InputDescriptor> {
-    let metadata = registered_meta(&ValueKey::Input(key.clone()))?;
-    if let Some(shape) = metadata
-        .exact_shape()
-        .as_deref()
-        .and_then(concrete_shape_from_sym_dims)
-    {
-        return Ok(InputDescriptor {
-            dtype: metadata.dtype,
-            shape,
-            extent_identity: InputExtentIdentity::Concrete,
-            default_tensor: None,
-            scalar_identity: metadata.scalar_identity(),
-        });
-    }
-    Ok(InputDescriptor {
-        dtype: metadata.dtype,
-        shape: vec![0; metadata.rank()],
-        extent_identity: InputExtentIdentity::Symbolic,
-        default_tensor: None,
-        scalar_identity: metadata.scalar_identity(),
-    })
-}
-
-fn concrete_shape_from_sym_dims(shape: &[SymDim]) -> Option<Vec<usize>> {
-    shape.iter().map(SymDim::constant_value).collect()
-}
-
-fn default_input_extent_identity(
-    key: &TensorInputKey,
-    tensor: &RetainedValue,
-) -> Result<InputExtentIdentity> {
-    let metadata = registered_meta(&ValueKey::Input(key.clone()))?;
-    let exact_shape = metadata.exact_shape();
-    if metadata.dtype == tensor.dtype()
-        && exact_shape_matches_tensor_shape(exact_shape.as_deref(), tensor.shape())
-    {
-        Ok(InputExtentIdentity::Concrete)
-    } else {
-        Ok(InputExtentIdentity::Symbolic)
-    }
-}
-
-fn exact_shape_matches_tensor_shape(
-    shape: Option<&[tenferro_ops::SymDim]>,
-    tensor_shape: &[usize],
-) -> bool {
-    let Some(shape) = shape else {
-        return false;
-    };
-    shape.len() == tensor_shape.len()
-        && shape
-            .iter()
-            .zip(tensor_shape)
-            .all(|(dim, &extent)| dim.constant_value() == Some(extent))
-}
-
-fn prune_compiled_extension_outputs(prog: &mut CompiledProgram<StdTensorOp>) -> Result<()> {
-    let mut live_slots = vec![false; prog.n_slots];
-    for &slot in &prog.output_slots {
-        let Some(live) = live_slots.get_mut(slot) else {
-            return Err(invalid_compiled_graph(format!(
-                "program output slot {slot} is outside slot table of length {}",
-                prog.n_slots
-            )));
-        };
-        *live = true;
-    }
-
-    for instr in prog.instructions.iter_mut().rev() {
-        let live_outputs = instr
-            .outputs
-            .iter()
-            .map(|&slot| {
-                live_slots.get(slot).copied().ok_or_else(|| {
-                    invalid_compiled_graph(format!(
-                        "instruction output slot {slot} is outside slot table of length {}",
-                        prog.n_slots
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        if let StdTensorOp::Extension(ext) = &instr.operation
-            && let Some(pruned) = ext.prune_outputs(&live_outputs)
-        {
-            let kept_outputs = instr
-                .outputs
-                .iter()
-                .zip(live_outputs.iter())
-                .filter_map(|(&slot, &live)| live.then_some(slot))
-                .collect::<Vec<_>>();
-            if pruned.output_count() != kept_outputs.len() {
-                return Err(invalid_compiled_graph(format!(
-                    "extension family_id={:?} pruned to {} outputs for {} live slots",
-                    ext.family_id(),
-                    pruned.output_count(),
-                    kept_outputs.len()
-                )));
-            }
-            instr.operation = StdTensorOp::Extension(pruned);
-            instr.outputs = kept_outputs;
-        }
-
-        if live_outputs.iter().any(|&live| live) {
-            for &slot in &instr.inputs {
-                let Some(live) = live_slots.get_mut(slot) else {
-                    return Err(invalid_compiled_graph(format!(
-                        "instruction input slot {slot} is outside slot table of length {}",
-                        prog.n_slots
-                    )));
-                };
-                *live = true;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn invalid_compiled_graph(message: impl Into<String>) -> Error {
-    Error::Internal(message.into())
-}
-
-fn default_tensors_equivalent(lhs: &Arc<RetainedValue>, rhs: &Arc<RetainedValue>) -> bool {
-    if Arc::ptr_eq(lhs, rhs) {
-        return true;
-    }
-    if lhs.dtype() != rhs.dtype() || lhs.shape() != rhs.shape() {
-        return false;
-    }
-    match lhs.dtype() {
-        DType::F32 => default_slices_equivalent::<f32>(lhs, rhs),
-        DType::F64 => default_slices_equivalent::<f64>(lhs, rhs),
-        DType::I32 => default_slices_equivalent::<i32>(lhs, rhs),
-        DType::I64 => default_slices_equivalent::<i64>(lhs, rhs),
-        DType::Bool => default_slices_equivalent::<bool>(lhs, rhs),
-        DType::C32 => default_slices_equivalent::<Complex32>(lhs, rhs),
-        DType::C64 => default_slices_equivalent::<Complex64>(lhs, rhs),
-        // An externally defined payload is opaque here, so two distinct values of
-        // that kind are reported as not equivalent rather than compared by bytes.
-        DType::External(_) => false,
-    }
-}
-
-fn default_slices_equivalent<T: TensorScalar + PartialEq>(
-    lhs: &RetainedValue,
-    rhs: &RetainedValue,
-) -> bool {
-    let (Ok(lhs), Ok(rhs)) = (lhs.tensor_read(), rhs.tensor_read()) else {
-        return false;
-    };
-    let lhs = lhs.tensor_view();
-    let rhs = rhs.tensor_view();
-    match (lhs.as_slice::<T>(), rhs.as_slice::<T>()) {
-        (Ok(lhs), Ok(rhs)) => lhs == rhs,
-        // Backend-resident defaults cannot be inspected here; only the same
-        // value handle is considered equivalent by `default_tensors_equivalent`.
-        _ => false,
-    }
-}
-
-#[cfg(test)]
-mod constraint_scope_tests;
-
-#[cfg(test)]
-mod test_support;
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program::{CoreSemanticOp, ProgramInputSpec, SemanticProgramBuilder};
     use std::any::Any;
     use std::hash::Hasher;
     use std::sync::Arc;
@@ -1650,14 +687,13 @@ mod tests {
         ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp},
         SymDim,
     };
-    use tenferro_tensor::{
-        BackendStorageHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
-        StorageBuffer, TypedTensor,
-    };
 
     #[test]
     fn compile_publishes_semantic_program_and_separate_default_bindings() {
-        let input = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+        let trace = crate::TraceContext::new();
+        let input = trace
+            .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap();
         let output = input.neg().unwrap();
 
         let program = GraphCompiler::new().compile(&output).unwrap();
@@ -1685,9 +721,44 @@ mod tests {
     }
 
     #[test]
+    fn compiler_options_constructor_keeps_the_given_options() {
+        let options = CompilerOptions {
+            optimizer: crate::OptimizerConfig {
+                dot_decomposer: true,
+                ..crate::OptimizerConfig::default()
+            },
+        };
+        let compiler = GraphCompiler::with_compiler_options(options);
+        assert!(compiler.compiler_options().optimizer.dot_decomposer);
+        assert!(compiler.extension_caches().is_empty());
+    }
+
+    #[test]
+    fn compile_many_refuses_outputs_from_two_contexts() {
+        let first = crate::TraceContext::new();
+        let second = crate::TraceContext::new();
+        let left = first
+            .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap()
+            .neg()
+            .unwrap();
+        let right = second
+            .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap()
+            .neg()
+            .unwrap();
+
+        let error = GraphCompiler::new()
+            .compile_many(&[&left, &right])
+            .unwrap_err();
+        assert!(error.to_string().contains("different contexts"), "{error}");
+    }
+
+    #[test]
     fn compile_preserves_symbolic_default_input_extent_identity() {
+        let trace = crate::TraceContext::new();
         let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-        let input = TracedTensor::from_tensor_symbolic_shape(tensor).unwrap();
+        let input = trace.from_tensor_symbolic_shape(tensor).unwrap();
         let output = input.neg().unwrap();
 
         let program = GraphCompiler::new().compile(&output).unwrap();
@@ -1703,61 +774,6 @@ mod tests {
                 axis: 0
             })]
         ));
-    }
-
-    #[test]
-    fn compile_many_rejects_conflicting_default_inputs_for_same_key() {
-        let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
-        let y1 = x.neg().unwrap();
-        let mut y2 = x.neg().unwrap();
-        let key = x.input_key().expect("concrete traced tensor has input key");
-        let replacement = Arc::new(RetainedValue::from_tensor(
-            Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
-        ));
-        let mut inputs = (*y2.inputs_map).clone();
-        inputs.insert(key.clone(), replacement);
-        y2.inputs_map = Arc::new(inputs);
-
-        let err = GraphCompiler::new().compile_many(&[&y1, &y2]).unwrap_err();
-
-        assert!(matches!(
-            err,
-            Error::DuplicateBinding { ref input_key } if input_key.contains(&format!("{key:?}"))
-        ));
-    }
-
-    #[test]
-    fn default_tensors_equivalent_rejects_distinct_backend_buffers() {
-        let placement = Placement {
-            memory_kind: MemoryKind::Device,
-            device: Some(DeviceId {
-                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
-                ordinal: 0,
-            }),
-            cpu_affinity: None,
-        };
-        let lhs = Arc::new(RetainedValue::from_tensor(Tensor::from_typed::<f64>(
-            TypedTensor::from_buffer_col_major(
-                vec![2],
-                StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(1, 2))),
-                placement.clone(),
-            )
-            .unwrap(),
-        )));
-        let rhs = Arc::new(RetainedValue::from_tensor(Tensor::from_typed::<f64>(
-            TypedTensor::from_buffer_col_major(
-                vec![2],
-                StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(2, 2))),
-                placement,
-            )
-            .unwrap(),
-        )));
-
-        assert!(
-            !default_tensors_equivalent(&lhs, &rhs),
-            "distinct backend-resident default tensors must not compare equal just because both are unreadable on host"
-        );
-        assert!(default_tensors_equivalent(&lhs, &lhs));
     }
 
     #[test]
@@ -1907,7 +923,10 @@ mod tests {
 
     #[test]
     fn compile_prunes_extension_outputs_with_replacement_op() {
-        let input = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+        let trace = crate::TraceContext::new();
+        let input = trace
+            .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap();
         let outputs =
             crate::extension::apply(Arc::new(PrunableTestOp { pruned: false }), &[&input]).unwrap();
 
@@ -1938,8 +957,13 @@ mod tests {
 
     #[test]
     fn compiled_graph_input_keys_preserve_order_for_binary_graph() {
-        let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-        let b = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+        let trace = crate::TraceContext::new();
+        let a = trace
+            .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap();
+        let b = trace
+            .from_vec_col_major(vec![2], vec![3.0_f64, 4.0])
+            .unwrap();
         let a_key = a.input_key().expect("concrete traced tensor has input key");
         let b_key = b.input_key().expect("concrete traced tensor has input key");
         let c = a.mul(&b).unwrap();
@@ -1959,34 +983,6 @@ mod tests {
         assert_eq!(
             program.input_key_index(&b_key),
             keys.iter().position(|k| k == &b_key)
-        );
-    }
-
-    #[test]
-    fn compile_with_input_specs_reorders_inputs_by_explicit_order() {
-        let a = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-        let b = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-        let a_key = a.input_key().expect("symbolic traced tensor has input key");
-        let b_key = b.input_key().expect("symbolic traced tensor has input key");
-        let c = a.mul(&b).unwrap();
-
-        // Request b first, then a
-        let program = GraphCompiler::new()
-            .compile_with_input_specs(&c, &[(&b, DType::F64, &[2]), (&a, DType::F64, &[2])])
-            .unwrap();
-
-        assert_eq!(program.input_count(), 2);
-        assert_eq!(program.input_keys().len(), 2);
-        // b must be at position 0 per the explicit order
-        assert_eq!(
-            program.input_key_index(&b_key),
-            Some(0),
-            "b must be first in explicit order"
-        );
-        assert_eq!(
-            program.input_key_index(&a_key),
-            Some(1),
-            "a must be second in explicit order"
         );
     }
 }

@@ -425,10 +425,16 @@ fn import_source(
             .operations()
             .flat_map(|operation| operation.outputs().iter().copied()),
     );
+    // The import keeps the source's symbolic extents and only re-attaches the
+    // bindings, so a rule that emits a literal length (pad, slice, concatenate)
+    // reads it from the binding rather than making the whole derivative program
+    // concrete. `Reshape`/`BroadcastInDim` payloads therefore stay symbolic, and the
+    // final import maps these inputs back onto the live traced values.
     let imported = builder.import(ProgramImport {
         program: input.program.as_ref(),
-        bindings: &input.bindings,
+        bindings: Some(&input.bindings),
         roots: &source_values,
+        input_map: &[],
     })?;
     Ok(source_values
         .into_iter()
@@ -850,16 +856,11 @@ fn vjp_core(
                 SemanticTransformRole::Vjp,
                 "reduce-sum input",
             )?;
-            let dims = (0..input_shape.shape.len())
+            let dims: Vec<usize> = (0..input_shape.shape.len())
                 .filter(|axis| !axes.contains(axis))
                 .collect();
-            let broadcast = broadcast_ad_value_in_dim_to_shape(
-                builder,
-                cotangent,
-                primal_inputs[0],
-                &input_shape,
-                dims,
-            )?;
+            let broadcast =
+                broadcast_ad_value_in_dim_to_shape(builder, cotangent, &input_shape, dims)?;
             let broadcast = truncate_ad_value_to_dynamic_axes(
                 builder,
                 broadcast,
@@ -1279,8 +1280,27 @@ fn reshape_ad_value_to_input(
         SemanticTransformRole::Vjp,
         "reshape input",
     )?;
-    let reshaped = reshape_ad_value_to_shape(builder, value, primal_input, &shape)?;
+    let reshaped = reshape_ad_value_to_shape(builder, value, &shape)?;
     truncate_ad_value_to_dynamic_axes(builder, reshaped, primal_input, &shape.dynamic_axes)
+}
+
+/// Whether `value`'s `axis` is known to have extent 1.
+///
+/// The rule has to decide whether a broadcast expanded a singleton axis, so it
+/// needs the length itself. A program imported for the transform keeps its symbolic
+/// extents, so the answer comes from the binding when the declaration is symbolic;
+/// the emitted payload still uses the symbolic expression.
+fn axis_is_known_singleton(
+    builder: &SemanticProgramBuilder,
+    value: ProgramValue,
+    axis: usize,
+) -> bool {
+    builder.resolved_extent(value, axis).is_ok_and(|extent| {
+        matches!(
+            extent,
+            ShapeExtent::Exact(DimExpr::Const(1)) | ShapeExtent::UpperBound(DimExpr::Const(1))
+        )
+    })
 }
 
 fn transpose_broadcast(
@@ -1339,11 +1359,9 @@ fn transpose_broadcast(
             .copied()
             .enumerate()
             .filter_map(|(input_axis, output_axis)| {
-                (matches!(
-                    input_shape.shape[input_axis],
-                    tenferro_ops::dim_expr::DimExpr::Const(1)
-                ) && input_shape.shape[input_axis] != output_shape.shape[output_axis])
-                    .then_some(output_axis)
+                (input_shape.shape[input_axis] != output_shape.shape[output_axis]
+                    && axis_is_known_singleton(builder, primal_input, input_axis))
+                .then_some(output_axis)
             }),
     );
     reduce_axes.sort_unstable();
@@ -1379,7 +1397,7 @@ fn transpose_broadcast(
         value = builder.add_op(CoreSemanticOp::Transpose { perm }, &[value])?[0];
     }
     if builder.value_metadata(value)?.shape() != builder.value_metadata(primal_input)?.shape() {
-        value = reshape_value_to_shape(builder, value, primal_input, &input_shape)?;
+        value = reshape_value_to_shape(builder, value, &input_shape)?;
     }
     value =
         truncate_value_to_dynamic_axes(builder, value, primal_input, &input_shape.dynamic_axes)?;
@@ -1899,7 +1917,7 @@ fn broadcast_scalar_like(
         Ok(scalar)
     } else {
         let shape = shape_plan(metadata.shape(), role, what)?;
-        let value = broadcast_value_in_dim_to_shape(builder, scalar, anchor, &shape, Vec::new())?;
+        let value = broadcast_value_in_dim_to_shape(builder, scalar, &shape, Vec::new())?;
         Ok(truncate_value_to_dynamic_axes(
             builder,
             value,
@@ -1977,7 +1995,7 @@ fn zero_constant_like(
         return Ok(scalar);
     }
     let shape = shape_plan(metadata.shape(), role, "zero-like anchor")?;
-    let zero = broadcast_value_in_dim_to_shape(builder, scalar, anchor, &shape, Vec::new())?;
+    let zero = broadcast_value_in_dim_to_shape(builder, scalar, &shape, Vec::new())?;
     Ok(truncate_value_to_dynamic_axes(
         builder,
         zero,
@@ -2034,7 +2052,9 @@ fn normalize_ad_value(
             .zip(value_shape.shape.iter().skip(leading))
             .enumerate()
             .filter_map(|(axis, (target, actual))| {
-                (matches!(target, tenferro_ops::dim_expr::DimExpr::Const(1)) && target != actual)
+                // `axis` indexes the primal input; `axis + leading` is the cotangent
+                // axis it was broadcast into.
+                (target != actual && axis_is_known_singleton(builder, primal_input, axis))
                     .then_some(axis + leading)
             }),
     );
@@ -2042,7 +2062,7 @@ fn normalize_ad_value(
         value = builder.add_op(CoreSemanticOp::ReduceSum { axes }, &[value])?[0];
     }
     if builder.value_metadata(value)?.shape() != target_metadata.shape() {
-        value = reshape_value_to_shape(builder, value, primal_input, &target_shape)?;
+        value = reshape_value_to_shape(builder, value, &target_shape)?;
     }
     value =
         truncate_value_to_dynamic_axes(builder, value, primal_input, &target_shape.dynamic_axes)?;
@@ -2114,19 +2134,49 @@ fn shape_plan(
     })
 }
 
+/// Literal axis lengths of `value`, for the rules that must emit them.
+///
+/// Programs imported for the transform keep their symbolic extents, so a value
+/// that carries a binding reads its concrete shape from the binding instead of
+/// forcing the whole transformed program to become concrete.
+pub(super) fn bounded_usize_shape(
+    builder: &SemanticProgramBuilder,
+    value: ProgramValue,
+    field: &'static str,
+    accept_upper_bound: bool,
+) -> Result<Vec<usize>, SemanticAdTransformError> {
+    let extents = builder.resolved_extents(value)?;
+    let lengths = extents
+        .iter()
+        .map(|extent| match extent {
+            ShapeExtent::Exact(DimExpr::Const(value)) => Some(*value),
+            ShapeExtent::UpperBound(DimExpr::Const(value)) if accept_upper_bound => Some(*value),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    if let Some(lengths) = lengths {
+        return Ok(lengths);
+    }
+    let expected = if accept_upper_bound {
+        "constant exact or upper-bound extents"
+    } else {
+        "concrete extents"
+    };
+    Err(SemanticAdTransformError::UnsupportedMetadata {
+        role: SemanticTransformRole::Vjp,
+        message: format!("{field} requires {expected}"),
+    })
+}
+
 fn reshape_ad_value_to_shape(
     builder: &mut SemanticProgramBuilder,
     value: AdValue,
-    shape_source: ProgramValue,
     shape: &ValueShapePlan,
 ) -> Result<AdValue, ProgramBuildError> {
     match value {
         AdValue::Absent => Ok(AdValue::Absent),
         AdValue::Value(value) => Ok(AdValue::Value(reshape_value_to_shape(
-            builder,
-            value,
-            shape_source,
-            shape,
+            builder, value, shape,
         )?)),
     }
 }
@@ -2134,29 +2184,23 @@ fn reshape_ad_value_to_shape(
 fn reshape_value_to_shape(
     builder: &mut SemanticProgramBuilder,
     value: ProgramValue,
-    shape_source: ProgramValue,
     shape: &ValueShapePlan,
 ) -> Result<ProgramValue, ProgramBuildError> {
     let mut inputs = vec![value];
-    let to_shape = payload_shape_for_shape_source(shape, &mut inputs, shape_source);
+    let to_shape = builder.translate_input_shape_payload(&shape.shape, &mut inputs);
     Ok(builder.add_op(CoreSemanticOp::Reshape { to_shape }, &inputs)?[0])
 }
 
 fn broadcast_ad_value_in_dim_to_shape(
     builder: &mut SemanticProgramBuilder,
     value: AdValue,
-    shape_source: ProgramValue,
     shape: &ValueShapePlan,
     dims: Vec<usize>,
 ) -> Result<AdValue, ProgramBuildError> {
     match value {
         AdValue::Absent => Ok(AdValue::Absent),
         AdValue::Value(value) => Ok(AdValue::Value(broadcast_value_in_dim_to_shape(
-            builder,
-            value,
-            shape_source,
-            shape,
-            dims,
+            builder, value, shape, dims,
         )?)),
     }
 }
@@ -2164,32 +2208,12 @@ fn broadcast_ad_value_in_dim_to_shape(
 fn broadcast_value_in_dim_to_shape(
     builder: &mut SemanticProgramBuilder,
     value: ProgramValue,
-    shape_source: ProgramValue,
     shape: &ValueShapePlan,
     dims: Vec<usize>,
 ) -> Result<ProgramValue, ProgramBuildError> {
     let mut inputs = vec![value];
-    let shape = payload_shape_for_shape_source(shape, &mut inputs, shape_source);
+    let shape = builder.translate_input_shape_payload(&shape.shape, &mut inputs);
     Ok(builder.add_op(CoreSemanticOp::BroadcastInDim { shape, dims }, &inputs)?[0])
-}
-
-fn payload_shape_for_shape_source(
-    shape: &ValueShapePlan,
-    inputs: &mut Vec<ProgramValue>,
-    shape_source: ProgramValue,
-) -> Vec<DimExpr> {
-    if DimExpr::max_input_idx_all(&shape.shape).is_none() {
-        return shape.shape.clone();
-    }
-    let input_idx = inputs
-        .iter()
-        .position(|&input| input == shape_source)
-        .unwrap_or_else(|| {
-            let input_idx = inputs.len();
-            inputs.push(shape_source);
-            input_idx
-        });
-    DimExpr::input_shape(input_idx, shape.shape.len())
 }
 
 fn truncate_ad_value_to_dynamic_axes(
@@ -2273,7 +2297,8 @@ fn prune_dead_derivative_operations(
     let mut builder = SemanticProgramBuilder::new();
     let imported = builder.import(ProgramImport {
         program: frozen.program.as_ref(),
-        bindings: &frozen.bindings,
+        bindings: Some(&frozen.bindings),
+        input_map: &[],
         roots: &roots,
     })?;
     let outputs = imported.roots()[output_offset..].to_vec();
@@ -2295,7 +2320,8 @@ fn cancel_double_neg_derivative_operations(
     let mut builder = SemanticProgramBuilder::new();
     let imported = builder.import(ProgramImport {
         program: frozen.program.as_ref(),
-        bindings: &frozen.bindings,
+        bindings: Some(&frozen.bindings),
+        input_map: &[],
         roots: frozen.program.inputs(),
     })?;
     let mut values = frozen

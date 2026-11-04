@@ -19,7 +19,7 @@ use tenferro_df64_proof::extension::{module, Df64Qr, Df64QrVjp, DF64_SCALAR_IDEN
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{
-    ExecutionEngine, ExtensionCacheSelector, GraphCompiler, Runtime, TracedTensor,
+    ExecutionEngine, ExtensionCacheSelector, GraphCompiler, Runtime, TraceContext, TracedTensor,
 };
 use tenferro_tensor::Tensor;
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
@@ -91,29 +91,40 @@ fn runtime() -> (Runtime, CpuEngine, usize) {
     )
 }
 
-fn leaf(values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
-    TracedTensor::from_tensor_concrete_shape_declaring_scalar(
-        external(values, shape),
-        DF64_SCALAR_IDENTITY,
-    )
-    .expect("traced leaf")
+fn leaf(trace: &TraceContext, values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
+    trace
+        .from_tensor_concrete_shape_declaring_scalar(external(values, shape), DF64_SCALAR_IDENTITY)
+        .expect("traced leaf")
 }
 
 #[test]
 fn report_scratch_allocation_per_execution() {
+    let trace = TraceContext::new();
     // A 64 by 64 factorization, so the numerical bodies work on realistic buffers.
     let order = 64;
     let values: Vec<Df64> = (0..order * order)
         .map(|index| Df64::from_f64(((index % order) + 1) as f64))
         .collect();
 
-    let input = leaf(values.clone(), vec![order, order]);
+    let input = leaf(&trace, values.clone(), vec![order, order]);
     let outputs = apply(Arc::new(Df64Qr), &[&input]).expect("traced QR");
 
     // The adjoint is measured on its own, so its factors are leaves of their own.
-    let q_leaf = leaf(vec![Df64::from_f64(0.5); order * order], vec![order, order]);
-    let r_leaf = leaf(vec![Df64::from_f64(2.0); order * order], vec![order, order]);
-    let cotangent_leaf = leaf(vec![Df64::from_f64(1.0); order * order], vec![order, order]);
+    let q_leaf = leaf(
+        &trace,
+        vec![Df64::from_f64(0.5); order * order],
+        vec![order, order],
+    );
+    let r_leaf = leaf(
+        &trace,
+        vec![Df64::from_f64(2.0); order * order],
+        vec![order, order],
+    );
+    let cotangent_leaf = leaf(
+        &trace,
+        vec![Df64::from_f64(1.0); order * order],
+        vec![order, order],
+    );
     let adjoint = apply(
         Arc::new(Df64QrVjp::of(false, true)),
         &[&q_leaf, &r_leaf, &cotangent_leaf],

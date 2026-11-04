@@ -1,8 +1,8 @@
 use num_complex::Complex64;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::Arc;
 
 use crate::compiler::semantic_staging::stage_semantic_program;
+use crate::exec::ExecOp;
 use crate::{DType, DotGeneralConfig, Error, ErrorPhase, GraphCompiler, Tensor, TracedTensor};
 use tenferro_cpu::CpuEngine;
 use tenferro_tensor::{
@@ -22,52 +22,32 @@ fn run_compiled_one(program: &crate::CompiledGraph, inputs: Vec<Tensor>) -> Tens
 }
 
 #[test]
-fn traced_binary_reuses_input_map_when_rhs_is_already_present() {
-    let lhs = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
-    let rhs = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+fn traced_binary_rejects_values_from_another_context() {
+    let trace = crate::TraceContext::new();
+    let other = crate::TraceContext::new();
+    let lhs = trace.from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let rhs = other.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 
-    let sum = lhs.add(&rhs).unwrap();
-    let reused = sum.add(&rhs).unwrap();
-
-    assert!(Arc::ptr_eq(&sum.inputs_map, &reused.inputs_map));
-}
-
-#[test]
-fn traced_graph_construction_uses_shared_input_map_merge_helpers() {
-    let traced_source = include_str!("../traced.rs");
-    let metadata_source = include_str!("../metadata.rs");
-    assert!(metadata_source.contains("pub(crate) struct MetadataScopeChain"));
-    assert!(traced_source.contains("MetadataScopeChain::with_new"));
-    assert!(!traced_source.contains("metadata_scopes_with_new("));
-    assert!(!traced_source.contains("metadata_scopes_for_scope("));
-    assert!(traced_source.contains("fn merge_traced_inputs_map"));
-    assert!(traced_source.contains("input_map_matches_ordered_merge"));
-    assert!(!traced_source.contains("let mut merged = (*lhs.inputs_map).clone()"));
-    assert!(!traced_source.contains("let mut merged = (*first.inputs_map).clone()"));
-    assert!(!traced_source.contains("let mut merged = (*input.inputs_map).clone()"));
-    assert!(!traced_source.contains("merged.extend(rhs.inputs_map"));
-    assert!(!traced_source.contains("merged.extend(third.inputs_map"));
-
-    let extension_source = include_str!("../extension.rs");
-    assert!(extension_source.contains("merge_traced_inputs_map(inputs.iter().copied())"));
-    assert!(extension_source.contains("MetadataScopeChain::with_scope"));
-    assert!(!extension_source.contains("merged_map.extend(input.inputs_map"));
-    assert!(!extension_source.contains("for scope in &input.metadata_scopes"));
-
-    let shape_packing_source = include_str!("../shape_packing.rs");
-    assert!(shape_packing_source.contains("merge_traced_inputs_map(tensors.iter())"));
-    assert!(shape_packing_source.contains("MetadataScopeChain::with_new"));
-    assert!(!shape_packing_source.contains("metadata_scopes.as_slice()"));
-
-    let checkpoint_source = include_str!("../checkpoint.rs");
-    assert!(checkpoint_source.contains("pub old_inputs: Arc<RetainedInputMap>"));
-    assert!(!checkpoint_source.contains("old_inputs: node.old_inputs.clone()"));
+    let error = lhs
+        .add(&rhs)
+        .expect_err("different contexts cannot be combined");
+    assert!(
+        matches!(error, Error::Validation { .. }),
+        "expected a typed validation error, got {error:?}"
+    );
+    let same_context = trace.from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
+    assert!(lhs.add(&same_context).is_ok());
 }
 
 #[test]
 fn dot_general_returns_error_for_invalid_config() {
-    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
+    let trace = crate::TraceContext::new();
+    let lhs = trace
+        .from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])
+        .unwrap();
+    let rhs = trace
+        .from_vec_col_major(vec![3, 2], vec![1.0_f64; 6])
+        .unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: [2].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),
@@ -91,7 +71,8 @@ fn dot_general_returns_error_for_invalid_config() {
 
 #[test]
 fn integer_scale_real_rejects_non_finite_factors() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
+    let trace = crate::TraceContext::new();
+    let x = trace.from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
 
     for factor in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         let err = x.scale_real(factor).unwrap_err();
@@ -104,10 +85,11 @@ fn integer_scale_real_rejects_non_finite_factors() {
 
 #[test]
 fn i64_scale_real_rejects_exactly_two_power_63_instead_of_saturating() {
+    let trace = crate::TraceContext::new();
     // `i64::MAX as f64` is 2^63, so the old `rounded > i64::MAX as f64`
     // guard let exactly 2^63 through and `as i64` silently saturated to
     // i64::MAX. The inclusive-upper fix must reject it (issue #1685).
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
+    let x = trace.from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
 
     let err = x.scale_real(9_223_372_036_854_775_808.0).unwrap_err();
     assert!(
@@ -136,8 +118,13 @@ fn i64_scale_real_rejects_exactly_two_power_63_instead_of_saturating() {
 
 #[test]
 fn dot_general_keeps_existing_success_metadata() {
-    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    let rhs = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
+    let trace = crate::TraceContext::new();
+    let lhs = trace
+        .from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])
+        .unwrap();
+    let rhs = trace
+        .from_vec_col_major(vec![3, 4], vec![1.0_f64; 12])
+        .unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),
@@ -155,7 +142,10 @@ fn dot_general_keeps_existing_success_metadata() {
 
 #[test]
 fn reductions_reject_invalid_axes_instead_of_saturating_rank() {
-    let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let trace = crate::TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])
+        .unwrap();
 
     let out_of_bounds = x.reduce_max(Some(&[2])).unwrap_err();
     assert!(
@@ -178,20 +168,26 @@ fn reductions_reject_invalid_axes_instead_of_saturating_rank() {
 
 #[test]
 fn reductions_distinguish_all_axes_from_empty_axes() {
-    let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let trace = crate::TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])
+        .unwrap();
 
     assert_eq!(x.reduce_sum(None).unwrap().rank, 0);
     assert_eq!(x.reduce_prod(Some(&[])).unwrap().rank, 2);
     assert_eq!(x.reduce_max(Some(&[0])).unwrap().rank, 1);
     assert_eq!(x.reduce_min(None).unwrap().rank, 0);
 
-    let scalar = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    let scalar = trace.from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
     assert_eq!(scalar.reduce_sum(None).unwrap().rank, 0);
 }
 
 #[test]
 fn symbolic_axis_accessors_reject_invalid_axes() {
-    let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let trace = crate::TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])
+        .unwrap();
 
     let sym_size_err = x.sym_size(2).unwrap_err();
     assert!(
@@ -214,8 +210,9 @@ fn symbolic_axis_accessors_reject_invalid_axes() {
 
 #[test]
 fn broadcast_in_dim_sym_rejects_missing_shape_reference() {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let trace = crate::TraceContext::new();
+    let lhs = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let rhs = trace.input_symbolic_shape(DType::F64, 1).unwrap();
     let target_shape = [lhs.axis_sym_dim(0).unwrap(), rhs.axis_sym_dim(0).unwrap()];
 
     let err = lhs
@@ -242,7 +239,10 @@ fn broadcast_in_dim_sym_rejects_missing_shape_reference() {
 
 #[test]
 fn broadcast_in_dim_rejects_invalid_dimension_mappings() {
-    let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let trace = crate::TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])
+        .unwrap();
 
     let rank_mismatch = x.broadcast_in_dim(&[2, 3, 4], &[0]).unwrap_err();
     assert!(matches!(
@@ -287,7 +287,8 @@ fn broadcast_in_dim_rejects_invalid_dimension_mappings() {
 
 #[test]
 fn broadcast_in_dim_rejects_known_incompatible_extent_at_graph_build() {
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
+    let trace = crate::TraceContext::new();
+    let x = trace.from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
 
     let err = x.broadcast_in_dim(&[3], &[0]).unwrap_err();
 
@@ -307,8 +308,11 @@ fn broadcast_in_dim_rejects_known_incompatible_extent_at_graph_build() {
 
 #[test]
 fn broadcast_in_dim_sym_defers_cross_tensor_symbolic_extent_validation() {
-    let input = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let shape_ref = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let trace = crate::TraceContext::new();
+    let input = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap();
+    let shape_ref = trace.input_symbolic_shape(DType::F64, 1).unwrap();
     let target_shape = [shape_ref.axis_sym_dim(0).unwrap()];
 
     let output = input
@@ -322,6 +326,7 @@ fn broadcast_in_dim_sym_defers_cross_tensor_symbolic_extent_validation() {
         .unwrap();
     let input_value = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let matching_shape_ref = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
+    // The declared spec order is the compiled program's input order.
     let result = run_compiled_one(
         &program,
         vec![matching_shape_ref, input_value.duplicate().unwrap()],
@@ -349,7 +354,10 @@ fn broadcast_in_dim_sym_defers_cross_tensor_symbolic_extent_validation() {
 
 #[test]
 fn reshape_rejects_concrete_element_count_mismatch_at_graph_build() {
-    let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    let trace = crate::TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])
+        .unwrap();
 
     let err = x.reshape([3]).unwrap_err();
 
@@ -370,7 +378,8 @@ fn reshape_rejects_concrete_element_count_mismatch_at_graph_build() {
 
 #[test]
 fn reshape_allows_symbolic_input_when_element_count_cannot_be_proven() {
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let trace = crate::TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 2).unwrap();
 
     let y = x.reshape([3]).unwrap();
 
@@ -380,8 +389,13 @@ fn reshape_allows_symbolic_input_when_element_count_cannot_be_proven() {
 
 #[test]
 fn ordered_binary_ops_reject_complex_dtype_without_panicking() {
-    let lhs = TracedTensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]).unwrap();
-    let rhs = TracedTensor::from_vec_col_major(vec![1], vec![Complex64::new(3.0, 4.0)]).unwrap();
+    let trace = crate::TraceContext::new();
+    let lhs = trace
+        .from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)])
+        .unwrap();
+    let rhs = trace
+        .from_vec_col_major(vec![1], vec![Complex64::new(3.0, 4.0)])
+        .unwrap();
 
     let err = lhs.maximum(&rhs).unwrap_err();
 
@@ -394,8 +408,13 @@ fn ordered_binary_ops_reject_complex_dtype_without_panicking() {
 
 #[test]
 fn remainder_rejects_complex_dtype_at_graph_build_without_panicking() {
-    let lhs = TracedTensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]).unwrap();
-    let rhs = TracedTensor::from_vec_col_major(vec![1], vec![Complex64::new(3.0, 4.0)]).unwrap();
+    let trace = crate::TraceContext::new();
+    let lhs = trace
+        .from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)])
+        .unwrap();
+    let rhs = trace
+        .from_vec_col_major(vec![1], vec![Complex64::new(3.0, 4.0)])
+        .unwrap();
 
     let result = catch_unwind(AssertUnwindSafe(|| lhs.rem(&rhs)));
     let result = result.expect("complex remainder validation must not panic");
@@ -418,11 +437,13 @@ fn remainder_rejects_complex_dtype_at_graph_build_without_panicking() {
 
 #[test]
 fn ordered_reductions_reject_complex_dtype_without_panicking() {
-    let x = TracedTensor::from_vec_col_major(
-        vec![2],
-        vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
-    )
-    .unwrap();
+    let trace = crate::TraceContext::new();
+    let x = trace
+        .from_vec_col_major(
+            vec![2],
+            vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
+        )
+        .unwrap();
 
     let err = x.reduce_max(Some(&[0])).unwrap_err();
 
@@ -435,8 +456,13 @@ fn ordered_reductions_reject_complex_dtype_without_panicking() {
 
 #[test]
 fn concatenate_of_distinct_inputs_compiles_without_input_specs() {
-    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    let b = TracedTensor::from_vec_col_major(vec![2, 4], vec![2.0_f64; 8]).unwrap();
+    let trace = crate::TraceContext::new();
+    let a = trace
+        .from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])
+        .unwrap();
+    let b = trace
+        .from_vec_col_major(vec![2, 4], vec![2.0_f64; 8])
+        .unwrap();
 
     let joined = TracedTensor::concatenate(&[&a, &b], 1).unwrap();
     let program = GraphCompiler::new().compile(&joined).unwrap();
@@ -461,11 +487,12 @@ fn concatenate_of_distinct_inputs_compiles_without_input_specs() {
 
 #[test]
 fn dynamic_slice_rejects_an_invalid_window_when_the_graph_is_built() {
+    let trace = crate::TraceContext::new();
     // #2160: the traced surface documents a graph-build rejection for a window
     // that does not fit its operand. It rejected nothing, built a graph with the
     // wrong output metadata, and left the backend to fail at execution.
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
-    let starts = TracedTensor::input_concrete_shape(DType::I64, &[1]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[3]).unwrap();
+    let starts = trace.input_concrete_shape(DType::I64, &[1]).unwrap();
 
     let err = x.dynamic_slice(&starts, &[2, 2]).unwrap_err();
     assert!(
@@ -503,11 +530,12 @@ fn dynamic_slice_rejects_an_invalid_window_when_the_graph_is_built() {
 
 #[test]
 fn slice_rejects_a_limit_beyond_a_concrete_operand_extent_when_the_graph_is_built() {
+    let trace = crate::TraceContext::new();
     // #2042: the raw `TracedTensor::slice` config API was the only slice surface
     // that accepted a limit beyond its operand, registered a phantom output
     // shape, and failed only at execution. The `slice_axis` builder, CPU and CUDA
     // all reject it.
-    let x = TracedTensor::input_concrete_shape(DType::F64, &[4]).unwrap();
+    let x = trace.input_concrete_shape(DType::F64, &[4]).unwrap();
     let err = x
         .slice(tenferro_tensor::SliceConfig {
             starts: vec![0],
@@ -540,4 +568,180 @@ fn slice_rejects_a_limit_beyond_a_concrete_operand_extent_when_the_graph_is_buil
         })
         .unwrap();
     assert_eq!(sliced.rank, 1);
+}
+
+#[test]
+fn symbolic_reshape_of_a_computed_value_resolves_its_own_axes() {
+    let trace = crate::TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    let y = x.neg().unwrap();
+    let target = [y.sym_size(0).unwrap(), y.sym_size(1).unwrap()];
+    let reshaped = y
+        .reshape_sym(&target)
+        .expect("a computed value's own axes must convert to its reshape coordinates");
+
+    let mut compiler = GraphCompiler::new();
+    for shape in [vec![2usize, 3], vec![4, 5]] {
+        let program = compiler
+            .compile_with_input_specs(&reshaped, &[(&x, DType::F64, &shape)])
+            .unwrap();
+        let data: Vec<f64> = (0..shape[0] * shape[1]).map(|i| i as f64).collect();
+        let input = Tensor::from_vec_col_major(shape.clone(), data.clone()).unwrap();
+        let result = run_compiled_one(&program, vec![input]);
+        assert_eq!(result.shape(), shape.as_slice());
+        assert_eq!(
+            result.as_slice::<f64>().unwrap(),
+            data.iter()
+                .map(|value| -value)
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
+    }
+}
+
+#[test]
+fn broadcast_in_dim_sym_keeps_computed_shape_references_distinct() {
+    let trace = crate::TraceContext::new();
+    // Both operands are computed, so neither is identified by an input index.
+    let a = trace
+        .from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])
+        .unwrap()
+        .neg()
+        .unwrap();
+    let b = trace
+        .from_vec_col_major(vec![1, 3], vec![1.0_f64, 2.0, 3.0])
+        .unwrap()
+        .neg()
+        .unwrap();
+    let target = [
+        a.sym_size(0).unwrap(),
+        a.sym_size(1).unwrap(),
+        b.sym_size(1).unwrap(),
+    ];
+    let output = a.broadcast_in_dim_sym(&target, &[0, 1], &[&b]).unwrap();
+
+    let program = GraphCompiler::new().compile(&output).unwrap();
+    let result = run_compiled_one(
+        &program,
+        vec![
+            Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]).unwrap(),
+            Tensor::from_vec_col_major(vec![1, 3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
+        ],
+    );
+    assert_eq!(result.shape(), &[2, 1, 3]);
+    assert_eq!(
+        result.as_slice::<f64>().unwrap(),
+        &[-1.0, -2.0, -1.0, -2.0, -1.0, -2.0]
+    );
+}
+
+#[test]
+fn symbolic_axis_identity_is_unique_per_traced_value() {
+    let trace = crate::TraceContext::new();
+    let other = crate::TraceContext::new();
+    let first = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap()
+        .neg()
+        .unwrap();
+    let second = trace
+        .from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])
+        .unwrap()
+        .neg()
+        .unwrap();
+    let foreign = other
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap()
+        .neg()
+        .unwrap();
+
+    let ids: Vec<u64> = [&first, &second, &foreign]
+        .into_iter()
+        .map(|tensor| tensor.symbolic_id())
+        .collect();
+    // Distinct tensors must not share an axis identity, or a shape built from one
+    // silently resolves against another.
+    let mut unique = ids.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), ids.len(), "symbolic ids collided: {ids:?}");
+
+    // A shape naming a foreign context's axis must be rejected, not resolved.
+    let target = [foreign.sym_size(0).unwrap()];
+    let error = first.reshape_sym(&target).unwrap_err();
+    assert!(
+        matches!(error, Error::SymbolicShapeConversion { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn fixed_shape_outer_product_folds_its_broadcasts_into_views() {
+    let trace = crate::TraceContext::new();
+    let column = trace
+        .from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .unwrap();
+    let row = trace
+        .from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0])
+        .unwrap();
+    let outer = column
+        .dot_general(
+            &row,
+            DotGeneralConfig {
+                lhs_contracting_dims: Default::default(),
+                rhs_contracting_dims: Default::default(),
+                lhs_batch_dims: Default::default(),
+                rhs_batch_dims: Default::default(),
+            },
+        )
+        .unwrap();
+
+    let program = GraphCompiler::new().compile(&outer).unwrap();
+    let mut staged = stage_semantic_program(program.program(), program.compiler_options()).unwrap();
+
+    // A literal target must stay foldable. This calls the pass
+    // `PreparedProgramRoot::new` runs with the placement predicate always true, so it
+    // pins the program shape that decides buffering, not the placement check itself:
+    // a multi-input broadcast is refused by that pass and would keep its own buffer,
+    // and a single-input constant-target broadcast folds into a view.
+    for instruction in &staged.instructions {
+        if matches!(instruction.op, ExecOp::BroadcastInDim { .. }) {
+            assert_eq!(
+                instruction.input_slots.len(),
+                1,
+                "a fixed-shape outer product must not need a shape reference"
+            );
+        }
+    }
+    crate::compiler::fold_metadata_views(&mut staged, |_, _| true);
+    assert!(
+        !staged
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction.op, ExecOp::BroadcastInDim { .. })),
+        "a fixed-shape outer product must fold its broadcasts into metadata views"
+    );
+    let multiply = staged
+        .instructions
+        .iter()
+        .find(|instruction| matches!(instruction.op, ExecOp::Multiply))
+        .expect("the outer product becomes an elementwise multiply");
+    assert_eq!(
+        multiply.input_views.len(),
+        2,
+        "both operands arrive as views"
+    );
+
+    let result = run_compiled_one(
+        &program,
+        vec![
+            Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+            Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]).unwrap(),
+        ],
+    );
+    assert_eq!(result.shape(), &[2, 3, 5]);
+    assert_eq!(
+        result.as_slice::<f64>().unwrap()[..5],
+        [1.0, 2.0, 3.0, 4.0, 5.0]
+    );
 }

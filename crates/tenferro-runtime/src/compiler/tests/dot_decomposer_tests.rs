@@ -24,6 +24,7 @@ fn dot_general_exec_instr(
         output_shapes: vec![output_shape].into_iter().collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     }
 }
 
@@ -214,6 +215,7 @@ fn test_dot_decomposer_preserves_upper_bound_extents_in_merge_reshape() {
         .collect(),
         last_use: Vec::new(),
         input_views: Vec::new(),
+        effectful: false,
     };
     let dot = dot_general_exec_instr(
         vec![2],
@@ -561,4 +563,119 @@ fn test_dot_decomposer_scalar_operand_becomes_a_transpose_and_scale() {
     ));
     assert!(matches!(program.instructions[2].op, ExecOp::Multiply));
     assert_eq!(program.instructions[2].output_slots, vec![2]);
+}
+
+#[test]
+fn test_degenerate_dot_with_symbolic_output_shape_reads_its_shape_reference() {
+    // An outer product whose operand shapes are symbolic. The emitted broadcasts
+    // must build their payload from their own inputs, so no program-slot index can
+    // be mistaken for an operation-local one.
+    let instr = dot_general_exec_instr(
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![0, 1],
+        2,
+        vec![
+            DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            },
+            DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            },
+        ],
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    rewrite_degenerate_dots(
+        &mut program,
+        &[
+            vec![DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            }],
+            vec![DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+        ],
+    )
+    .unwrap();
+
+    let broadcasts: Vec<_> = program
+        .instructions
+        .iter()
+        .filter(|instruction| matches!(instruction.op, ExecOp::BroadcastInDim { .. }))
+        .collect();
+    assert_eq!(
+        broadcasts.len(),
+        2,
+        "an outer product broadcasts both sides"
+    );
+    for broadcast in broadcasts {
+        assert_eq!(
+            broadcast.input_slots.len(),
+            2,
+            "each broadcast reads its own operand and its partner's axes"
+        );
+        assert!(matches!(
+            &broadcast.op,
+            ExecOp::BroadcastInDim { shape, .. }
+                if shape.len() == 2 && shape.iter().all(DimExpr::is_const).eq(&false)
+        ));
+        // Both payload references stay inside this instruction's inputs.
+        let ExecOp::BroadcastInDim { shape, .. } = &broadcast.op else {
+            unreachable!()
+        };
+        for extent in shape {
+            assert!(
+                extent.max_input_idx().is_none_or(|axis| axis < 2),
+                "payload {extent:?} names a position outside the broadcast's inputs"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_degenerate_outer_product_with_literal_shapes_stays_a_single_input_broadcast() {
+    // A fixed-shape outer product must keep the zero-copy path: a one-input
+    // broadcast with a constant target folds into a metadata view, a multi-input one
+    // cannot and the backend materialises a full target buffer per operand.
+    let instr = dot_general_exec_instr(
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![0, 1],
+        2,
+        dim_shape(&[2, 3, 5]),
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    rewrite_degenerate_dots(&mut program, &[dim_shape(&[2, 3]), dim_shape(&[5])]).unwrap();
+
+    let broadcasts: Vec<_> = program
+        .instructions
+        .iter()
+        .filter(|instruction| matches!(instruction.op, ExecOp::BroadcastInDim { .. }))
+        .collect();
+    assert_eq!(broadcasts.len(), 2);
+    for broadcast in broadcasts {
+        assert_eq!(
+            broadcast.input_slots.len(),
+            1,
+            "a literal target needs no shape reference: {:?}",
+            broadcast.input_slots
+        );
+        let ExecOp::BroadcastInDim { shape, .. } = &broadcast.op else {
+            unreachable!()
+        };
+        assert!(
+            shape.iter().all(DimExpr::is_const),
+            "a fixed-shape outer product keeps a constant target: {shape:?}"
+        );
+    }
 }

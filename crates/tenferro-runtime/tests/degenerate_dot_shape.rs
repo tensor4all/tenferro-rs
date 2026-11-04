@@ -11,7 +11,7 @@
 //! rewrite does too, so this exercises the compiled path end to end and pins the
 //! Hadamard form as well, which must keep working.
 use tenferro_cpu::{runtime_engine_registration, CpuEngine};
-use tenferro_runtime::{CompiledGraph, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{CompiledGraph, ExecutionEngine, GraphCompiler, Runtime};
 use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorRead};
 
 fn cpu_engine() -> CpuEngine {
@@ -66,15 +66,20 @@ fn outer_product_reference(a: &[f64], b: &[f64]) -> Vec<f64> {
 
 #[test]
 fn equal_shaped_operands_without_batch_dims_form_an_outer_product() {
+    let trace = tenferro_runtime::TraceContext::new();
     const N: usize = 2;
     let a = Tensor::from_vec_col_major(vec![N, N], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![N, N], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
 
     let mut compiler = GraphCompiler::new();
-    let lhs = TracedTensor::input_concrete_shape(DType::F64, &[N, N]).unwrap();
-    let rhs = TracedTensor::input_concrete_shape(DType::F64, &[N, N]).unwrap();
+    let lhs = trace.input_concrete_shape(DType::F64, &[N, N]).unwrap();
+    let rhs = trace.input_concrete_shape(DType::F64, &[N, N]).unwrap();
     let product = lhs.dot_general(&rhs, config(&[], &[])).unwrap();
-    assert_eq!(product.rank, 4, "the graph declares the concatenated rank");
+    assert_eq!(
+        product.rank(),
+        4,
+        "the graph declares the concatenated rank"
+    );
     let program = compiler
         .compile_with_input_specs(
             &product,
@@ -98,15 +103,16 @@ fn equal_shaped_operands_without_batch_dims_form_an_outer_product() {
 /// shared shape and the compiled result is one elementwise product.
 #[test]
 fn fully_batched_equal_shaped_operands_form_a_hadamard() {
+    let trace = tenferro_runtime::TraceContext::new();
     const N: usize = 2;
     let a = Tensor::from_vec_col_major(vec![N, N], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![N, N], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
 
     let mut compiler = GraphCompiler::new();
-    let lhs = TracedTensor::input_concrete_shape(DType::F64, &[N, N]).unwrap();
-    let rhs = TracedTensor::input_concrete_shape(DType::F64, &[N, N]).unwrap();
+    let lhs = trace.input_concrete_shape(DType::F64, &[N, N]).unwrap();
+    let rhs = trace.input_concrete_shape(DType::F64, &[N, N]).unwrap();
     let product = lhs.dot_general(&rhs, config(&[0, 1], &[0, 1])).unwrap();
-    assert_eq!(product.rank, 2);
+    assert_eq!(product.rank(), 2);
     let program = compiler
         .compile_with_input_specs(
             &product,
@@ -131,13 +137,14 @@ fn fully_batched_equal_shaped_operands_form_a_hadamard() {
 /// and the compiled path then multiplied the operands elementwise.
 #[test]
 fn permuted_batch_dims_are_not_an_elementwise_product() {
+    let trace = tenferro_runtime::TraceContext::new();
     const N: usize = 2;
     let a = Tensor::from_vec_col_major(vec![N, N], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![N, N], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
 
     let mut compiler = GraphCompiler::new();
-    let lhs = TracedTensor::input_concrete_shape(DType::F64, &[N, N]).unwrap();
-    let rhs = TracedTensor::input_concrete_shape(DType::F64, &[N, N]).unwrap();
+    let lhs = trace.input_concrete_shape(DType::F64, &[N, N]).unwrap();
+    let rhs = trace.input_concrete_shape(DType::F64, &[N, N]).unwrap();
     let product = lhs.dot_general(&rhs, config(&[0, 1], &[1, 0])).unwrap();
     let program = compiler
         .compile_with_input_specs(
