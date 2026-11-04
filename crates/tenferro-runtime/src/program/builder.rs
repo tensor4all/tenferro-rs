@@ -342,15 +342,34 @@ impl SemanticProgramBuilder {
             }
         }
 
-        // Program dimension expressions name inputs by program input index; the
-        // kept inputs are renumbered, so their declarations are rewritten.
-        let mut input_index = std::collections::HashMap::new();
-        let mut next_index = 0usize;
-        for (index, input) in self.inputs.iter().enumerate() {
-            if live[input.slot as usize] && alias_of(*input).is_none() {
-                input_index.insert(index, next_index);
-                next_index += 1;
+        // Declared inputs are created first, in the declared order, so a caller's
+        // explicit input order becomes the compiled program's input order.
+        let mut creation_order: Vec<(usize, Option<ProgramInputSpec>)> =
+            Vec::with_capacity(self.inputs.len());
+        for (source_index, declared) in input_specs {
+            if self.input_specs.get(*source_index).is_some() {
+                creation_order.push((*source_index, Some(declared.clone())));
             }
+        }
+        for index in 0..self.inputs.len() {
+            if input_specs.iter().any(|(declared, _)| *declared == index) {
+                continue;
+            }
+            creation_order.push((index, None));
+        }
+
+        // Program dimension expressions name inputs by program input position; the
+        // kept inputs are renumbered into creation order, so their declarations are
+        // rewritten against that order.
+        let mut input_index = std::collections::HashMap::new();
+        for (source_index, _) in &creation_order {
+            let Some(input) = self.inputs.get(*source_index) else {
+                continue;
+            };
+            if !live[input.slot as usize] || alias_of(*input).is_some() {
+                continue;
+            }
+            input_index.insert(*source_index, input_index.len());
         }
         fn remap_expr(
             expr: &DimExpr,
@@ -387,22 +406,6 @@ impl SemanticProgramBuilder {
                     Box::new(remap_expr(rhs, input_index)?),
                 ),
             })
-        }
-
-        // Declared inputs are created first, in the declared order, so a caller's
-        // explicit input order becomes the compiled program's input order.
-        let mut creation_order: Vec<(usize, Option<ProgramInputSpec>)> =
-            Vec::with_capacity(self.inputs.len());
-        for (source_index, declared) in input_specs {
-            if self.input_specs.get(*source_index).is_some() {
-                creation_order.push((*source_index, Some(declared.clone())));
-            }
-        }
-        for index in 0..self.inputs.len() {
-            if input_specs.iter().any(|(declared, _)| *declared == index) {
-                continue;
-            }
-            creation_order.push((index, None));
         }
 
         let mut rebuild = Self::new();
@@ -1288,9 +1291,16 @@ impl ImportTransaction {
         };
 
         let mut remap = vec![None; source.values.len()];
-        let mut source_input_index = vec![None; source.values.len()];
+        // Program dimension expressions name inputs by program input *position*,
+        // and the destination already owns `destination.inputs.len()` inputs, so
+        // the map is keyed by source position and holds destination positions.
+        let mut source_input_index = vec![None; source.inputs.len()];
 
-        for &input in &source.inputs {
+        // Reserve one destination input per needed source input first: an imported
+        // declaration can name any imported input, so every position must be known
+        // before any declaration is written in destination coordinates.
+        let mut reserved = Vec::new();
+        for (position, &input) in source.inputs.iter().enumerate() {
             if !needed_values[input.slot as usize] {
                 continue;
             }
@@ -1298,29 +1308,48 @@ impl ImportTransaction {
                 remap[input.slot as usize] = Some(existing);
                 continue;
             }
-            let metadata = source.values[input.slot as usize].clone();
-            let identity = metadata.scalar_identity();
+            let slot = destination
+                .values
+                .len()
+                .checked_add(transaction.values.len())
+                .and_then(|slot| slot.checked_add(reserved.len()))
+                .ok_or(ProgramBuildError::TooManyValues)?;
+            let slot = u32::try_from(slot).map_err(|_| ProgramBuildError::TooManyValues)?;
+            let imported = ProgramValue::new(slot, destination.owner);
+            source_input_index[position] = Some(destination.inputs.len() + reserved.len());
+            let tensor = request
+                .bindings
+                .and_then(|bindings| bindings.tensor_for_input(input));
+            reserved.push((imported, &source.values[input.slot as usize], tensor));
+            remap[input.slot as usize] = Some(imported);
+        }
+
+        for (imported, source_metadata, tensor) in reserved {
+            let identity = source_metadata.scalar_identity();
             let metadata = ProgramValueMetadata::from_extents(
-                metadata.dtype(),
-                metadata
+                source_metadata.dtype(),
+                source_metadata
                     .shape()
                     .iter()
                     .map(&resolve_extent)
+                    .map(|extent| {
+                        remap_imported_extent(
+                            extent,
+                            source,
+                            &source_input_index,
+                            &mapped_input,
+                            destination,
+                        )
+                    })
                     .collect::<Vec<_>>(),
             );
             let metadata = keep_scalar_identity(&identity, metadata);
-            let imported = transaction.next_value(destination.values.len(), destination.owner)?;
-            source_input_index[input.slot as usize] = Some(transaction.inputs.len());
             transaction.inputs.push(imported);
             transaction
                 .input_specs
                 .push(ProgramInputSpec::from_metadata(metadata.clone()));
             transaction.values.push(metadata);
-            remap[input.slot as usize] = Some(imported);
-            if let Some(tensor) = request
-                .bindings
-                .and_then(|bindings| bindings.tensor_for_input(input))
-            {
+            if let Some(tensor) = tensor {
                 transaction.bindings.push(PendingBinding {
                     key: BindingKey::new(imported.slot, destination.owner),
                     input: imported,
@@ -1353,26 +1382,14 @@ impl ImportTransaction {
                     meta.shape()
                         .iter()
                         .map(&resolve_extent)
-                        .map(|extent| match extent {
-                            ShapeExtent::Exact(expr) => remap_imported_dim_expr(
-                                &expr,
+                        .map(|extent| {
+                            remap_imported_extent(
+                                extent,
                                 source,
                                 &source_input_index,
                                 &mapped_input,
                                 destination,
                             )
-                            .map(ShapeExtent::Exact)
-                            .unwrap_or(ShapeExtent::Unknown),
-                            ShapeExtent::UpperBound(expr) => remap_imported_dim_expr(
-                                &expr,
-                                source,
-                                &source_input_index,
-                                &mapped_input,
-                                destination,
-                            )
-                            .map(ShapeExtent::UpperBound)
-                            .unwrap_or(ShapeExtent::Unknown),
-                            ShapeExtent::Unknown => ShapeExtent::Unknown,
                         })
                         .collect::<Vec<_>>(),
                 );
@@ -1450,6 +1467,32 @@ enum InputExtentPrecision {
     Unknown,
 }
 
+/// Translate one imported extent into the destination input space.
+///
+/// An extent the destination cannot express becomes `Unknown` rather than keeping
+/// source coordinates that would name a different destination input.
+fn remap_imported_extent(
+    extent: ShapeExtent<DimExpr>,
+    source: &SemanticProgram,
+    source_input_index: &[Option<usize>],
+    mapped_input: &std::collections::HashMap<ProgramValue, ProgramValue>,
+    destination: &SemanticProgramBuilder,
+) -> ShapeExtent<DimExpr> {
+    match extent {
+        ShapeExtent::Exact(expr) => {
+            remap_imported_dim_expr(&expr, source, source_input_index, mapped_input, destination)
+                .map(ShapeExtent::Exact)
+                .unwrap_or(ShapeExtent::Unknown)
+        }
+        ShapeExtent::UpperBound(expr) => {
+            remap_imported_dim_expr(&expr, source, source_input_index, mapped_input, destination)
+                .map(ShapeExtent::UpperBound)
+                .unwrap_or(ShapeExtent::Unknown)
+        }
+        ShapeExtent::Unknown => ShapeExtent::Unknown,
+    }
+}
+
 /// Rewrite one imported guard expression into the destination input space.
 ///
 /// A kept source input keeps its own extent with the destination index; an input
@@ -1472,10 +1515,7 @@ fn remap_imported_dim_expr(
                     axis: *axis,
                 });
             }
-            let source_input = source
-                .inputs
-                .iter()
-                .find(|value| value.slot as usize == *input_idx)?;
+            let source_input = source.inputs.get(*input_idx)?;
             let destination_value = mapped_input.get(source_input)?;
             match destination
                 .values

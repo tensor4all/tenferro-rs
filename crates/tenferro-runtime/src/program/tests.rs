@@ -706,6 +706,149 @@ fn import_uses_value_dependency_closure_and_keeps_observable_effects() {
     );
 }
 
+/// One declared symbolic axis: `SymDim` extents name program input positions.
+fn symbolic_axis_spec(input_idx: usize) -> ProgramInputSpec {
+    ProgramInputSpec::from_metadata(ProgramValueMetadata::from_extents(
+        DType::F64,
+        [ShapeExtent::Exact(DimExpr::InputDim { input_idx, axis: 0 })],
+    ))
+}
+
+fn guarded_identity() -> Arc<dyn ExtensionOp> {
+    Arc::new(IdentityExtension {
+        declares_semantics: true,
+        effectful: false,
+        guarded: true,
+        view_alias: false,
+    })
+}
+
+#[test]
+fn import_maps_source_input_positions_not_value_slots() {
+    // `second` is the second *input* but the third *value*: its extent and its
+    // guard name input position 1, while its value slot is 2.
+    let mut source = SemanticProgramBuilder::new();
+    let first = source.input(symbolic_axis_spec(0)).unwrap();
+    let neg_output = source.add_op(CoreSemanticOp::Neg, &[first]).unwrap()[0];
+    let second = source.input(symbolic_axis_spec(1)).unwrap();
+    let effect_output = source.add_extension(guarded_identity(), &[second]).unwrap()[0];
+    let source = source.finish(&[neg_output, effect_output]).unwrap();
+
+    let mut destination = SemanticProgramBuilder::new();
+    let imported = destination
+        .import(ProgramImport {
+            program: source.program.as_ref(),
+            bindings: None,
+            input_map: &[],
+            roots: &[neg_output, effect_output],
+        })
+        .unwrap();
+    let frozen = destination.finish(imported.roots()).unwrap();
+    let program = frozen.program.as_ref();
+
+    assert_eq!(program.inputs().len(), 2);
+    let expected = [ShapeExtent::Exact(DimExpr::InputDim {
+        input_idx: 1,
+        axis: 0,
+    })];
+    assert_eq!(
+        program.value_metadata(program.outputs()[1]).unwrap().shape(),
+        &expected,
+        "an imported extent must keep naming the source input it came from"
+    );
+    assert_eq!(program.shape_guards().len(), 1, "the source guard must survive");
+    assert_eq!(
+        program.shape_guards()[0].lhs(),
+        &DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0
+        }
+    );
+}
+
+#[test]
+fn import_numbers_new_inputs_after_the_destination_inputs() {
+    let mut source = SemanticProgramBuilder::new();
+    let input = source.input(symbolic_axis_spec(0)).unwrap();
+    let effect_output = source.add_extension(guarded_identity(), &[input]).unwrap()[0];
+    let source = source.finish(&[effect_output]).unwrap();
+
+    let mut destination = SemanticProgramBuilder::new();
+    let _local = destination
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(99)]))
+        .unwrap();
+    let imported = destination
+        .import(ProgramImport {
+            program: source.program.as_ref(),
+            bindings: None,
+            input_map: &[],
+            roots: &[effect_output],
+        })
+        .unwrap();
+    let frozen = destination.finish(imported.roots()).unwrap();
+    let program = frozen.program.as_ref();
+
+    assert_eq!(program.inputs().len(), 2);
+    let expected = [ShapeExtent::Exact(DimExpr::InputDim {
+        input_idx: 1,
+        axis: 0,
+    })];
+    assert_eq!(
+        program.value_metadata(program.outputs()[0]).unwrap().shape(),
+        &expected,
+        "an imported extent must point at the imported input, not a destination input"
+    );
+    assert_eq!(program.shape_guards().len(), 1);
+    assert_eq!(
+        program.shape_guards()[0].lhs(),
+        &DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0
+        }
+    );
+}
+
+#[test]
+fn snapshot_remaps_declared_extents_to_the_creation_order() {
+    let mut builder = SemanticProgramBuilder::new();
+    let first = builder.input(symbolic_axis_spec(0)).unwrap();
+    let second = builder.input(symbolic_axis_spec(1)).unwrap();
+    let first_sum = builder
+        .add_op(CoreSemanticOp::ReduceSum { axes: vec![0] }, &[first])
+        .unwrap()[0];
+    let second_sum = builder
+        .add_op(CoreSemanticOp::ReduceSum { axes: vec![0] }, &[second])
+        .unwrap()[0];
+    let total = builder
+        .add_op(CoreSemanticOp::Add, &[first_sum, second_sum])
+        .unwrap()[0];
+
+    // Only the second placeholder is specialized, so it is created first.
+    let (frozen, _) = builder
+        .snapshot_pruned_with_input_specs(
+            &[total],
+            &[(1, ProgramInputSpec::new(DType::F64, [DimExpr::Const(3)]))],
+        )
+        .unwrap();
+    let program = frozen.program.as_ref();
+    assert_eq!(program.inputs().len(), 2);
+
+    let declared = program.value_metadata(program.inputs()[0]).unwrap().shape();
+    let undeclared = program.value_metadata(program.inputs()[1]).unwrap().shape();
+    assert_eq!(
+        undeclared,
+        &[ShapeExtent::Exact(DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0
+        })],
+        "the unspecialized placeholder must keep naming itself after reordering"
+    );
+    assert_ne!(
+        declared, undeclared,
+        "reordering must not tie the unspecialized placeholder to the declared one"
+    );
+}
+
 #[test]
 fn snapshot_keeps_effectful_operations_whose_outputs_are_not_requested() {
     let mut builder = SemanticProgramBuilder::new();
