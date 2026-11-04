@@ -83,9 +83,16 @@ impl Clone for TraceContext {
 
 impl fmt::Debug for TraceContext {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Debugging must not fail or panic while the context is borrowed, which a
+        // callback inside `with_extension_caches` or an extension's inference does.
+        let operations = self
+            .inner
+            .try_borrow()
+            .ok()
+            .map(|inner| inner.builder.operation_count());
         formatter
             .debug_struct("TraceContext")
-            .field("values", &self.inner.borrow().builder.operation_count())
+            .field("operations", &operations)
             .finish_non_exhaustive()
     }
 }
@@ -705,6 +712,15 @@ mod tests {
             first.add_op(CoreSemanticOp::Neg, &[foreign]),
             Err(ProgramBuildError::ForeignValue)
         ));
+    }
+
+    #[test]
+    fn formatting_a_context_inside_the_cache_callback_does_not_panic() {
+        let context = TraceContext::new();
+        let rendered = context
+            .with_extension_caches(|_| format!("{context:?}"))
+            .unwrap();
+        assert!(rendered.contains("TraceContext"));
     }
 
     #[test]
