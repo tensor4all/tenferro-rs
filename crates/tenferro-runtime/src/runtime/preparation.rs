@@ -7,10 +7,15 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use tenferro_ops::dim_expr::{DimExpr, DimExprEvalError};
+use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::shape_extent::ShapeExtent;
-use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig};
+use tenferro_ops::sym_dim::SymDim;
+use tenferro_tensor::{
+    DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, ValidationError,
+};
 
 use crate::compiler::{semantic_staging::stage_semantic_program, CompilerOptions};
+use crate::error::{Error, ErrorPhase};
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 use crate::graph::CompiledGraph;
 use crate::program::{
@@ -1998,6 +2003,125 @@ fn validate_signature_arity(
         Err(Arc::new(PrepareError::Specialization {
             source: super::SpecializationError::WrongInputCount { expected, actual },
         }))
+    }
+}
+
+/// Refuse an extension output extent that the preparation signature resolves to zero.
+///
+/// A program compiled from a symbolic trace keeps its `InputDim` metadata, so an
+/// extension can only publish a symbolic output extent at compile time even when
+/// the op has a rule that rejects the same extent concretely (`irfft` with a
+/// length-1 spectrum and `n = None`, #2427/#2434). Preparation knows the concrete
+/// input signature, so it resolves those extents here and asks the extension
+/// itself about the resolved input: the extension stays the single owner of the
+/// rule, and the caller sees the concrete path's typed validation at preparation
+/// (`ErrorPhase::Compile`) instead of a deferred execution failure.
+///
+/// Extents that stay symbolic at preparation are left alone.
+pub(super) fn validate_resolved_extension_extents(
+    frozen: &FrozenProgram,
+    signature: &InputSignature,
+) -> crate::Result<()> {
+    let program = &frozen.program;
+    let input_shapes: Vec<&[usize]> = signature
+        .entries()
+        .iter()
+        .map(|entry| entry.shape())
+        .collect();
+    if program.inputs().len() != input_shapes.len() {
+        // Arity is validated by the caller's signature order; nothing to resolve.
+        return Ok(());
+    }
+    for operation in program.operations() {
+        let SemanticOpRef::Extension(extension) = operation.op() else {
+            continue;
+        };
+        let Some(inputs) = resolved_extension_inputs(program, operation, &input_shapes) else {
+            continue;
+        };
+        let dtypes: Vec<_> = inputs.iter().map(|input| input.dtype).collect();
+        let symbolic: Vec<Vec<SymDim>> = inputs
+            .iter()
+            .map(|input| input.shape.iter().copied().map(SymDim::from).collect())
+            .collect();
+        let shape_refs: Vec<&[SymDim]> = symbolic.iter().map(Vec::as_slice).collect();
+        let inferred =
+            tenferro_ops::ext_op::invoke_extension_shape_inference(extension, &dtypes, &shape_refs)
+                .map_err(extension_prepare_error)?;
+        for (dtype, shape) in &inferred.output_metas {
+            for dim in shape {
+                if dim.constant_value() == Some(0) {
+                    return Err(extension_zero_extent(extension, dtype));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One extension input, resolved against the preparation signature.
+struct ResolvedExtensionInput {
+    dtype: DType,
+    shape: Vec<usize>,
+}
+
+/// Resolve every input of one extension operation, or report that the signature
+/// leaves at least one of them symbolic.
+///
+/// Only a fully resolved operation is re-inferred: a partially symbolic input
+/// cannot be checked here and is left to execution, which is the documented
+/// behaviour for genuinely symbolic extents.
+fn resolved_extension_inputs(
+    program: &SemanticProgram,
+    operation: SemanticOperationView<'_>,
+    input_shapes: &[&[usize]],
+) -> Option<Vec<ResolvedExtensionInput>> {
+    let mut resolved = Vec::with_capacity(operation.inputs().len());
+    let mut any_symbolic = false;
+    for &input in operation.inputs() {
+        let metadata = program.value_metadata(input).ok()?;
+        let mut shape = Vec::with_capacity(metadata.shape().len());
+        for extent in metadata.shape() {
+            let ShapeExtent::Exact(expression) = extent else {
+                return None;
+            };
+            any_symbolic |= !expression.is_const();
+            shape.push(expression.eval(input_shapes).ok()?);
+        }
+        resolved.push(ResolvedExtensionInput {
+            dtype: metadata.dtype(),
+            shape,
+        });
+    }
+    any_symbolic.then_some(resolved)
+}
+
+/// Keep an extension's own typed validation, at the preparation phase.
+fn extension_prepare_error(source: tenferro_tensor::Error) -> Error {
+    match source {
+        tenferro_tensor::Error::Validation { op, source } => Error::Validation {
+            op,
+            phase: ErrorPhase::Compile,
+            source,
+        },
+        other => Error::TensorRuntime(other),
+    }
+}
+
+/// Fallback for an extension that accepts the resolved input yet still predicts a
+/// zero extent: the extent itself is the invalid argument.
+fn extension_zero_extent(extension: &dyn ExtensionOp, dtype: &DType) -> Error {
+    Error::Validation {
+        op: extension.family_id(),
+        phase: ErrorPhase::Compile,
+        source: ValidationError::InvalidArgument {
+            argument: "output extent",
+            message: format!(
+                "a {:?} output extent resolves to zero for this input signature; \
+                 the concrete path requires a positive extent",
+                dtype
+            ),
+        },
     }
 }
 

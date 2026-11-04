@@ -691,8 +691,11 @@ pub trait TracedTensorFftExt {
     ///
     /// # Deferred errors
     ///
-    /// Symbolic spectrum lengths and extension execution failures may be
-    /// deferred to compile or execution.
+    /// A symbolic spectrum length is resolved when the program is prepared:
+    /// [`Runtime::prepare`] refuses a signature whose output extent would be zero
+    /// with the concrete path's `Validation::InvalidArgument` (argument
+    /// `"output length"`, `ErrorPhase::Compile`). Extension execution failures
+    /// stay deferred to execution.
     fn irfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor>;
 
     /// Build a traced n-dimensional forward FFT over `axes`.
@@ -847,8 +850,11 @@ pub trait TracedTensorFftExt {
     ///
     /// # Deferred errors
     ///
-    /// Symbolic spectrum lengths and extension execution failures may be
-    /// deferred to compile or execution.
+    /// A symbolic spectrum length is resolved when the program is prepared:
+    /// [`Runtime::prepare`] refuses a signature whose output extent would be zero
+    /// with the concrete path's `Validation::InvalidArgument` (argument
+    /// `"output length"`, `ErrorPhase::Compile`). Extension execution failures
+    /// stay deferred to execution.
     ///
     /// # Examples
     ///

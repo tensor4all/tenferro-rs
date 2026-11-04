@@ -934,12 +934,14 @@ host	tenferro-fft::fft_ops	graph_runs_keep_fft_plans_in_the_engine
 host	tenferro-fft::fft_ops	ifft_c64_applies_backward_normalization
 host	tenferro-fft::fft_ops	irfft_c32_reconstructs_real_signal
 host	tenferro-fft::fft_ops	irfft_c64_reconstructs_real_signal
+host	tenferro-fft::fft_ops	irfft_length_one_spectrum_is_rejected_at_preparation
 host	tenferro-fft::fft_ops	irfft_rejects_spectrum_longer_than_expected_one_sided_length
 host	tenferro-fft::fft_ops	irfft_rejects_spectrum_shorter_than_expected_one_sided_length
 host	tenferro-fft::fft_ops	publishes_extension_family_id
 host	tenferro-fft::fft_ops	registered_runtime_rejects_gpu_input_without_ingress
 host	tenferro-fft::fft_ops	rfft_f32_returns_onesided_spectrum
 host	tenferro-fft::fft_ops	rfft_f64_returns_onesided_spectrum
+host	tenferro-fft::fft_ops	symbolic_irfft_with_a_positive_resolved_extent_still_prepares
 host	tenferro-fft::fft_ops	traced_fft_rejects_invalid_dtype_axis_and_length
 host	tenferro-fft::fft_ops	traced_tensor_fft_ext_exposes_fft
 host	tenferro-fft::prelude	prelude_calls_concrete_fft_operation
