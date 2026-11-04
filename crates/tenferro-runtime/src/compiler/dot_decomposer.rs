@@ -61,9 +61,13 @@ pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) 
 }
 
 /// Rewrite degenerate `DotGeneral` forms (no contraction semantics) into the
-/// elementary operation they are, unconditionally: unlike the canonicalization
-/// below, this materializes no layout, it only keeps a degenerate contraction
-/// from reaching a backend (invariant I4).
+/// elementary operation they are, unconditionally, so a degenerate contraction
+/// never reaches a backend (invariant I4).
+///
+/// A literal operand shape yields a constant broadcast target, which stays a
+/// metadata view: nothing is materialised. A symbolic target needs the partner
+/// operand as a shape reference, so that broadcast is an ordinary instruction and
+/// the backend allocates its result.
 ///
 /// # Errors
 ///
@@ -393,27 +397,41 @@ fn rewrite_degenerate_dot(
         }
         let lhs_operand = emit_conj_if_needed(lhs, input.lhs_conj, instr, builder);
         let rhs_operand = emit_conj_if_needed(rhs, input.rhs_conj, instr, builder);
-        // Both sides expand to the dot's output shape, [lhs axes..., rhs axes...],
-        // built from each broadcast's own inputs: the operand is input 0 and the
-        // other operand is input 1, read only for its axes. No payload names a
-        // program slot, so no coordinate convention has to be inferred.
-        let lhs_target: Vec<DimExpr> = shape_of_operand(0, lhs_operand.shape.len())
-            .into_iter()
-            .chain(shape_of_operand(1, rhs.shape.len()))
-            .collect();
+        // Both sides expand to the dot's output shape, [lhs axes..., rhs axes...].
+        // When every extent is literal the target is a constant and the broadcast
+        // stays a one-input view; otherwise the payload names its own inputs, the
+        // operand at 0 and the partner at 1, read only for its axes. Either way no
+        // payload depends on whether the metadata names program slots.
+        let literal = literal_target(&[(0, &lhs_operand), (1, &rhs_operand)]);
+        let (lhs_inputs, lhs_target) = match &literal {
+            Some(target) => (vec![lhs_operand.slot], DimExpr::from_concrete(target)),
+            None => (
+                vec![lhs_operand.slot, rhs_operand.slot],
+                shape_of_operand(0, lhs_operand.shape.len())
+                    .into_iter()
+                    .chain(shape_of_operand(1, rhs.shape.len()))
+                    .collect(),
+            ),
+        };
         let lhs_broadcast = emit_broadcast(
-            vec![lhs_operand.slot, rhs_operand.slot],
+            lhs_inputs,
             (0..lhs.shape.len()).collect(),
             lhs_target,
             instr,
             builder,
         );
-        let rhs_target: Vec<DimExpr> = shape_of_operand(1, lhs.shape.len())
-            .into_iter()
-            .chain(shape_of_operand(0, rhs_operand.shape.len()))
-            .collect();
+        let (rhs_inputs, rhs_target) = match &literal {
+            Some(target) => (vec![rhs_operand.slot], DimExpr::from_concrete(target)),
+            None => (
+                vec![rhs_operand.slot, lhs_operand.slot],
+                shape_of_operand(1, lhs.shape.len())
+                    .into_iter()
+                    .chain(shape_of_operand(0, rhs_operand.shape.len()))
+                    .collect(),
+            ),
+        };
         let rhs_broadcast = emit_broadcast(
-            vec![rhs_operand.slot, lhs_operand.slot],
+            rhs_inputs,
             (lhs.shape.len()..lhs.shape.len() + rhs.shape.len()).collect(),
             rhs_target,
             instr,
@@ -472,16 +490,16 @@ fn rewrite_degenerate_dot(
         extents: transposed_extents,
     };
     let scalar = emit_conj_if_needed(scalar, scalar_conj, instr, builder);
-    // The transposed value is this broadcast's second input, so the scalar reaches
-    // the output shape without naming any program-slot index.
-    let scalar_target = shape_of_operand(1, transposed.shape.len());
-    let scalar = emit_broadcast(
-        vec![scalar.slot, transposed.slot],
-        Vec::new(),
-        scalar_target,
-        instr,
-        builder,
-    );
+    // A literal target keeps the scalar broadcast a one-input view; a symbolic one
+    // reads the transposed value as input 1, so nothing names a program slot.
+    let (scalar_inputs, scalar_target) = match literal_extents(&transposed) {
+        Some(target) => (vec![scalar.slot], DimExpr::from_concrete(&target)),
+        None => (
+            vec![scalar.slot, transposed.slot],
+            shape_of_operand(1, transposed.shape.len()),
+        ),
+    };
+    let scalar = emit_broadcast(scalar_inputs, Vec::new(), scalar_target, instr, builder);
     builder.push(ExecInstruction {
         op: ExecOp::Multiply,
         semantic_operation_index: instr.semantic_operation_index,
@@ -551,6 +569,29 @@ fn emit_broadcast(
         extents: exact_extents_from_shape(&shape),
         shape,
     }
+}
+
+/// The literal extents of every operand, when they are all known constants.
+///
+/// A fully literal target lets the broadcast stay a metadata view that the backend
+/// never materialises, so the decomposition keeps that path wherever it can.
+fn literal_target(operands: &[(usize, &EmittedOperand)]) -> Option<Vec<usize>> {
+    let mut target = Vec::new();
+    for (_, operand) in operands {
+        target.extend(literal_extents(operand)?);
+    }
+    Some(target)
+}
+
+fn literal_extents(operand: &EmittedOperand) -> Option<Vec<usize>> {
+    operand
+        .shape
+        .iter()
+        .map(|extent| match extent {
+            DimExpr::Const(size) => Some(*size),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The axes of the instruction input at `position`, as a broadcast payload.

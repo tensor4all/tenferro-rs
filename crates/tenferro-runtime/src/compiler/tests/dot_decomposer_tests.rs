@@ -638,3 +638,93 @@ fn test_degenerate_dot_with_symbolic_output_shape_reads_its_shape_reference() {
         }
     }
 }
+
+#[test]
+fn test_degenerate_outer_product_with_literal_shapes_stays_a_single_input_broadcast() {
+    // A fixed-shape outer product must keep the zero-copy path: a one-input
+    // broadcast with a constant target folds into a metadata view, a multi-input one
+    // cannot and the backend materialises a full target buffer per operand.
+    let instr = dot_general_exec_instr(
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![0, 1],
+        2,
+        dim_shape(&[2, 3, 5]),
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+
+    rewrite_degenerate_dots(&mut program, &[dim_shape(&[2, 3]), dim_shape(&[5])]).unwrap();
+
+    let broadcasts: Vec<_> = program
+        .instructions
+        .iter()
+        .filter(|instruction| matches!(instruction.op, ExecOp::BroadcastInDim { .. }))
+        .collect();
+    assert_eq!(broadcasts.len(), 2);
+    for broadcast in broadcasts {
+        assert_eq!(
+            broadcast.input_slots.len(),
+            1,
+            "a literal target needs no shape reference: {:?}",
+            broadcast.input_slots
+        );
+        let ExecOp::BroadcastInDim { shape, .. } = &broadcast.op else {
+            unreachable!()
+        };
+        assert!(
+            shape.iter().all(DimExpr::is_const),
+            "a fixed-shape outer product keeps a constant target: {shape:?}"
+        );
+    }
+}
+
+#[test]
+fn test_degenerate_outer_product_with_symbolic_shapes_reads_a_shape_reference() {
+    let instr = dot_general_exec_instr(
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![0, 1],
+        2,
+        vec![
+            DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            },
+            DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            },
+        ],
+    );
+    let mut program = make_exec_program(vec![instr], vec![0, 1], vec![2], 3);
+    rewrite_degenerate_dots(
+        &mut program,
+        &[
+            vec![DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            }],
+            vec![DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+        ],
+    )
+    .unwrap();
+
+    for broadcast in program
+        .instructions
+        .iter()
+        .filter(|instruction| matches!(instruction.op, ExecOp::BroadcastInDim { .. }))
+    {
+        assert_eq!(
+            broadcast.input_slots.len(),
+            2,
+            "a symbolic target reads its partner as a shape reference"
+        );
+    }
+}

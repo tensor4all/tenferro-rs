@@ -2,6 +2,7 @@ use num_complex::Complex64;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::compiler::semantic_staging::stage_semantic_program;
+use crate::exec::ExecOp;
 use crate::{DType, DotGeneralConfig, Error, ErrorPhase, GraphCompiler, Tensor, TracedTensor};
 use tenferro_cpu::CpuEngine;
 use tenferro_tensor::{
@@ -713,4 +714,72 @@ fn outer_product_of_a_reshaped_operand_reads_only_its_own_shape() {
     );
     assert_eq!(result.shape(), &[2, 1, 2, 1]);
     assert_eq!(result.as_slice::<f64>().unwrap(), &[8.0, 9.0, 9.0, 11.0]);
+}
+
+#[test]
+fn fixed_shape_outer_product_folds_its_broadcasts_into_views() {
+    let trace = crate::TraceContext::new();
+    let column = trace
+        .from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .unwrap();
+    let row = trace
+        .from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0])
+        .unwrap();
+    let outer = column
+        .dot_general(
+            &row,
+            DotGeneralConfig {
+                lhs_contracting_dims: Default::default(),
+                rhs_contracting_dims: Default::default(),
+                lhs_batch_dims: Default::default(),
+                rhs_batch_dims: Default::default(),
+            },
+        )
+        .unwrap();
+
+    let program = GraphCompiler::new().compile(&outer).unwrap();
+    let mut staged = stage_semantic_program(program.program(), program.compiler_options()).unwrap();
+
+    // A literal target must stay a metadata view: `PreparedProgramRoot::new` folds
+    // exactly this way, and a multi-input broadcast would be refused there.
+    for instruction in &staged.instructions {
+        if matches!(instruction.op, ExecOp::BroadcastInDim { .. }) {
+            assert_eq!(
+                instruction.input_slots.len(),
+                1,
+                "a fixed-shape outer product must not need a shape reference"
+            );
+        }
+    }
+    crate::compiler::fold_metadata_views(&mut staged, |_, _| true);
+    assert!(
+        !staged
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction.op, ExecOp::BroadcastInDim { .. })),
+        "a fixed-shape outer product must fold its broadcasts into metadata views"
+    );
+    let multiply = staged
+        .instructions
+        .iter()
+        .find(|instruction| matches!(instruction.op, ExecOp::Multiply))
+        .expect("the outer product becomes an elementwise multiply");
+    assert_eq!(
+        multiply.input_views.len(),
+        2,
+        "both operands arrive as views"
+    );
+
+    let result = run_compiled_one(
+        &program,
+        vec![
+            Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+            Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]).unwrap(),
+        ],
+    );
+    assert_eq!(result.shape(), &[2, 3, 5]);
+    assert_eq!(
+        result.as_slice::<f64>().unwrap()[..5],
+        [1.0, 2.0, 3.0, 4.0, 5.0]
+    );
 }
