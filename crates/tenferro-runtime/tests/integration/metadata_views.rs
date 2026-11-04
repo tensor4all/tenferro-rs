@@ -5,7 +5,7 @@
 
 use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{
-    DType, ExecutionEngine, GraphCompiler, Output, Prepared, Runtime, TraceContext, TracedTensor,
+    DType, ExecutionEngine, GraphCompiler, Output, Prepared, Runtime, TracedTensor,
 };
 use tenferro_tensor::{SliceConfig, Tensor, TensorRead};
 
@@ -13,10 +13,8 @@ fn f64_tensor(shape: &[usize], data: Vec<f64>) -> Tensor {
     Tensor::from_vec_col_major(shape.to_vec(), data).expect("test tensor")
 }
 
-fn constant(trace: &TraceContext, shape: &[usize], data: Vec<f64>) -> TracedTensor {
-    trace
-        .from_tensor_concrete_shape(f64_tensor(shape, data))
-        .expect("traced constant")
+fn constant(shape: &[usize], data: Vec<f64>) -> TracedTensor {
+    TracedTensor::from_tensor_concrete_shape(f64_tensor(shape, data)).expect("traced constant")
 }
 
 fn runtime_for(engine: &CpuEngine) -> Runtime {
@@ -63,9 +61,8 @@ fn transpose_of_an_intermediate_folds_into_add() {
     let mut engine = CpuEngine::serial();
     let runtime = runtime_for(&engine);
     // a = [[1, 3, 5], [2, 4, 6]] (column-major 2x3); -a^T + b.
-    let trace = TraceContext::new();
-    let a = constant(&trace, &[2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    let b = constant(&trace, &[3, 2], vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]);
+    let a = constant(&[2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let b = constant(&[3, 2], vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]);
     let out = (&a.neg().unwrap().transpose(&[1, 0]).unwrap() + &b).unwrap();
 
     let prepared = prepare(&runtime, &engine, &[&out], &[]);
@@ -80,8 +77,7 @@ fn transpose_of_an_intermediate_folds_into_add() {
 fn transpose_folds_into_a_reduction() {
     let mut engine = CpuEngine::serial();
     let runtime = runtime_for(&engine);
-    let trace = TraceContext::new();
-    let a = constant(&trace, &[2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let a = constant(&[2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let negated = a.neg().unwrap();
     let transposed = negated.transpose(&[1, 0]).unwrap();
     let column_sums = transposed.reduce_sum(Some(&[0])).unwrap();
@@ -97,9 +93,8 @@ fn transpose_folds_into_a_reduction() {
 fn broadcast_of_an_intermediate_folds_into_multiply() {
     let mut engine = CpuEngine::serial();
     let runtime = runtime_for(&engine);
-    let trace = TraceContext::new();
-    let v = constant(&trace, &[3], vec![1.0, 2.0, 3.0]);
-    let w = constant(&trace, &[3, 2], vec![1.0, 1.0, 1.0, 10.0, 10.0, 10.0]);
+    let v = constant(&[3], vec![1.0, 2.0, 3.0]);
+    let w = constant(&[3, 2], vec![1.0, 1.0, 1.0, 10.0, 10.0, 10.0]);
     let out = (&v.neg().unwrap().broadcast_in_dim(&[3, 2], &[0]).unwrap() * &w).unwrap();
 
     let prepared = prepare(&runtime, &engine, &[&out], &[]);
@@ -115,8 +110,7 @@ fn broadcast_of_an_intermediate_folds_into_multiply() {
 fn slice_and_reshape_of_intermediates_fold() {
     let mut engine = CpuEngine::serial();
     let runtime = runtime_for(&engine);
-    let trace = TraceContext::new();
-    let a = constant(&trace, &[2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let a = constant(&[2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let negated = a.neg().unwrap();
     let sliced = negated
         .slice(SliceConfig {
@@ -147,8 +141,7 @@ fn slice_and_reshape_of_intermediates_fold() {
 fn a_transposed_program_output_keeps_its_command() {
     let mut engine = CpuEngine::serial();
     let runtime = runtime_for(&engine);
-    let trace = TraceContext::new();
-    let a = constant(&trace, &[2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let a = constant(&[2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let out = a.neg().unwrap().transpose(&[1, 0]).unwrap();
 
     let prepared = prepare(&runtime, &engine, &[&out], &[]);
@@ -163,11 +156,10 @@ fn a_transposed_program_output_keeps_its_command() {
 
 #[test]
 fn a_view_of_a_run_input_folds_into_its_consumer() {
-    let trace = TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = runtime_for(&engine);
-    let x = trace.input_concrete_shape(DType::F64, &[2, 3]).unwrap();
-    let c = constant(&trace, &[3, 2], vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]);
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 3]).unwrap();
+    let c = constant(&[3, 2], vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]);
     let sum = (&x.transpose(&[1, 0]).unwrap() + &c).unwrap();
     let input = f64_tensor(&[2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let reads = [TensorRead::from_tensor(&input)];
@@ -188,12 +180,11 @@ fn a_view_of_a_run_input_folds_into_its_consumer() {
 
 #[test]
 fn an_input_output_stays_borrowed_and_a_repeated_output_is_duplicated() {
-    let trace = TraceContext::new();
     let mut engine = CpuEngine::serial();
     let runtime = runtime_for(&engine);
 
     // The identity program returns the run's input without a copy.
-    let x = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[2]).unwrap();
     let input = f64_tensor(&[2], vec![1.0, 2.0]);
     let reads = [TensorRead::from_tensor(&input)];
     let program = GraphCompiler::new()
@@ -216,7 +207,7 @@ fn an_input_output_stays_borrowed_and_a_repeated_output_is_duplicated() {
 
     // One owned result named three times: the first position takes it, the
     // others are engine copies with the same values.
-    let negated = constant(&trace, &[2], vec![1.0, 2.0]).neg().unwrap();
+    let negated = constant(&[2], vec![1.0, 2.0]).neg().unwrap();
     let prepared = prepare(&runtime, &engine, &[&negated, &negated, &negated], &[]);
     let outputs = runtime
         .run(&mut [&mut engine], &prepared, &[])

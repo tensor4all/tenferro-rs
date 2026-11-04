@@ -86,7 +86,6 @@ const RECTANGULAR_DETERMINANT_SHAPES: [&[usize]; 5] =
 
 #[test]
 fn determinant_rejects_rectangular_matrices_on_every_surface() {
-    let trace = tenferro_runtime::TraceContext::new();
     let mut host = CpuEngine::serial();
     for shape in RECTANGULAR_DETERMINANT_SHAPES {
         let data = data_for(shape);
@@ -124,9 +123,7 @@ fn determinant_rejects_rectangular_matrices_on_every_surface() {
             assert_runtime_shape_mismatch("eager det", &det);
         }
 
-        let traced = trace
-            .from_vec_col_major(shape.to_vec(), data_for(shape))
-            .unwrap();
+        let traced = TracedTensor::from_vec_col_major(shape.to_vec(), data_for(shape)).unwrap();
         let slogdet = traced.slogdet().unwrap_err();
         assert_runtime_shape_mismatch("traced slogdet", &slogdet);
         let det = traced.det().unwrap_err();
@@ -161,7 +158,6 @@ fn empty_square_eager_determinant_rejects_unsupported_dtypes_like_the_concrete_s
 
 #[test]
 fn empty_square_determinant_remains_one_and_zero() {
-    let trace = tenferro_runtime::TraceContext::new();
     let mut host = CpuEngine::serial();
     let tensor = Tensor::from_vec_col_major(vec![0, 0], Vec::<f64>::new()).unwrap();
     let typed = TypedTensor::<f64>::from_vec_col_major(vec![0, 0], Vec::<f64>::new()).unwrap();
@@ -203,9 +199,7 @@ fn empty_square_determinant_remains_one_and_zero() {
         assert_eq!(det.as_slice::<f64>().unwrap(), &[1.0]);
     }
 
-    let traced = trace
-        .from_vec_col_major(vec![0, 0], Vec::<f64>::new())
-        .unwrap();
+    let traced = TracedTensor::from_vec_col_major(vec![0, 0], Vec::<f64>::new()).unwrap();
     let (sign, logabsdet) = traced.slogdet().unwrap();
     let det = traced.det().unwrap();
     let program = GraphCompiler::new()
@@ -219,8 +213,7 @@ fn empty_square_determinant_remains_one_and_zero() {
 
 #[test]
 fn symbolic_determinant_records_square_constraint_for_every_output() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let input = trace.input_symbolic_shape(DType::F64, 2).unwrap();
+    let input = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let (sign, logabsdet) = input.slogdet().unwrap();
     let det = input.det().unwrap();
 
@@ -248,7 +241,6 @@ fn symbolic_determinant_records_square_constraint_for_every_output() {
 
 #[test]
 fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
-    let trace = tenferro_runtime::TraceContext::new();
     let mut host = CpuEngine::serial();
     const OPS: [&str; 10] = [
         "inv",
@@ -274,12 +266,10 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
             let typed_b =
                 TypedTensor::<f64>::from_vec_col_major(rhs_shape.clone(), data_for(&rhs_shape))
                     .unwrap();
-            let traced_a = trace
-                .from_vec_col_major(shape.to_vec(), data_for(shape))
-                .unwrap();
-            let traced_b = trace
-                .from_vec_col_major(rhs_shape.clone(), data_for(&rhs_shape))
-                .unwrap();
+            let traced_a =
+                TracedTensor::from_vec_col_major(shape.to_vec(), data_for(shape)).unwrap();
+            let traced_b =
+                TracedTensor::from_vec_col_major(rhs_shape.clone(), data_for(&rhs_shape)).unwrap();
 
             let label = |surface: &str| format!("{op} {surface} {shape:?}");
 

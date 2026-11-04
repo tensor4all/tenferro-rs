@@ -1,18 +1,15 @@
 use std::num::NonZeroUsize;
 
 use tenferro_ad::{AdContext, AdTransformCacheLimits, EagerRuntime, EagerTensor, Tensor};
-use tenferro_runtime::{GraphCompiler, TraceContext};
+use tenferro_runtime::{GraphCompiler, TracedTensor};
 
 use crate::support::{cpu_runtime, run_compiled_one};
 
 #[test]
 fn compiler_clear_caches_clears_extension_entries() {
-    let trace = TraceContext::new();
     let mut compiler = GraphCompiler::new();
 
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
     let _ = compiler.compile(&y).expect("compile");
 
@@ -27,11 +24,8 @@ fn compiler_clear_caches_clears_extension_entries() {
 
 #[test]
 fn executor_clear_caches_leaves_no_extension_entries_without_extensions() {
-    let trace = TraceContext::new();
     let mut compiler = GraphCompiler::new();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
     let program = compiler.compile(&y).expect("compile");
     let executor = cpu_runtime();
@@ -49,10 +43,7 @@ fn executor_clear_caches_leaves_no_extension_entries_without_extensions() {
 
 #[test]
 fn executor_clear_caches_clears_executor_owned_runtime_caches() {
-    let trace = TraceContext::new();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).expect("compile");
@@ -155,15 +146,10 @@ fn ad_transform_cache_entry_limit_evicts_lru_entries() {
 
 #[test]
 fn ad_context_traced_vjp_reuses_transform_cache() {
-    let trace = TraceContext::new();
     let ad = AdContext::builder().build().unwrap();
-    let x = trace
-        .from_vec_col_major(vec![2], vec![2.0_f64, 3.0])
-        .unwrap();
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
     let y = (&x * &x).unwrap();
-    let seed = trace
-        .from_vec_col_major(vec![2], vec![1.0_f64, 1.0])
-        .unwrap();
+    let seed = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap();
 
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
     let _ = ad.vjp(&y, &x, &seed).unwrap();

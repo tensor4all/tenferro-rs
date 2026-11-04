@@ -4,7 +4,7 @@ use tenferro_einsum::{
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, TraceContext};
+use tenferro_runtime::{GraphCompiler, TraceContext, TracedTensor};
 use tenferro_tensor::{DType, Tensor};
 
 use super::support;
@@ -13,7 +13,7 @@ fn spec(tensor: &Tensor) -> ProgramInputSpec {
     ProgramInputSpec::new(tensor.dtype(), DimExpr::from_concrete(tensor.shape()))
 }
 
-fn trace_default(trace: &TraceContext, tensor: &Tensor) -> tenferro_runtime::TraceValue {
+fn trace_default(trace: &mut TraceContext, tensor: &Tensor) -> tenferro_runtime::TraceValue {
     trace
         .input_with_default(spec(tensor), tensor.duplicate().unwrap())
         .unwrap()
@@ -69,11 +69,11 @@ fn trace_context_reports_malformed_notation_without_mutation() {
 
 #[test]
 fn explicit_path_matmul_executes_numerically() {
-    let mut trace = TraceContext::new();
     let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
-    let lhs_value = trace_default(&trace, &lhs);
-    let rhs_value = trace_default(&trace, &rhs);
+    let mut trace = TraceContext::new();
+    let lhs_value = trace_default(&mut trace, &lhs);
+    let rhs_value = trace_default(&mut trace, &rhs);
     let output = trace
         .einsum_with(
             &[lhs_value, rhs_value],
@@ -89,7 +89,6 @@ fn explicit_path_matmul_executes_numerically() {
 
 #[test]
 fn concrete_precomputed_tree_executes_nary_chain() {
-    let mut trace = TraceContext::new();
     let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
     let c = Tensor::from_vec_col_major(vec![2, 2], vec![9.0_f64, 10.0, 11.0, 12.0]).unwrap();
@@ -97,9 +96,10 @@ fn concrete_precomputed_tree_executes_nary_chain() {
     let raw = Subscripts::from(&parsed);
     let shapes = [a.shape(), b.shape(), c.shape()];
     let tree = ContractionTree::from_pairs(&raw, &shapes, &[(0, 1), (3, 2)]).unwrap();
-    let a_value = trace_default(&trace, &a);
-    let b_value = trace_default(&trace, &b);
-    let c_value = trace_default(&trace, &c);
+    let mut trace = TraceContext::new();
+    let a_value = trace_default(&mut trace, &a);
+    let b_value = trace_default(&mut trace, &b);
+    let c_value = trace_default(&mut trace, &c);
     let output = trace
         .einsum_with(
             &[a_value, b_value, c_value],
@@ -138,13 +138,8 @@ fn constant_shape_constraint_mismatch_fails_compilation() {
 
 #[test]
 fn traced_tensor_tensordot_compatibility_still_executes() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let lhs = trace
-        .from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])
-        .unwrap();
-    let rhs = trace
-        .from_vec_col_major(vec![3, 2], vec![1.0_f64; 6])
-        .unwrap();
+    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
     let output = lhs.tensordot(&rhs, TensorDotAxes::Count(1)).unwrap();
     let compiled = GraphCompiler::new().compile(&output).unwrap();
     let result = support::run_one(&compiled, &[]).unwrap();

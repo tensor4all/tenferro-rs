@@ -12,26 +12,20 @@
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{GraphCompiler, TraceContext, TracedTensor};
+use tenferro_runtime::{GraphCompiler, TracedTensor};
 use tenferro_tensor::{Tensor, TypedTensor};
 
 use super::support;
 
 /// Scheduled commands of the 2x2 reproducer after the metadata view fold.
-///
-/// 21 rather than the pre-cut-over 20: the traced-over-context AD path emits one
-/// extra `Extension` and two extra `Transpose` nodes, of which the schedule folds
-/// all but one command (#2429).
-const REPRODUCER_COMMANDS: usize = 21;
+const REPRODUCER_COMMANDS: usize = 20;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
-fn traced(trace: &TraceContext, shape: &[usize], data: Vec<f64>) -> TracedTensor {
-    trace
-        .from_tensor_concrete_shape(f64_tensor(shape.to_vec(), data))
-        .unwrap()
+fn traced(shape: &[usize], data: Vec<f64>) -> TracedTensor {
+    TracedTensor::from_tensor_concrete_shape(f64_tensor(shape.to_vec(), data)).unwrap()
 }
 
 /// The benchmark's diagonal-dominant 2x2 matrix (`well_conditioned_matrix`).
@@ -56,11 +50,10 @@ fn well_conditioned_matrix(n: usize, seed: u64) -> Vec<f64> {
 
 /// sum(Q) + sum(R) of the QR factors of `a`, and its VJP with respect to `a`.
 fn loss_and_gradient(a: &TracedTensor, ad: &AdContext) -> (TracedTensor, TracedTensor) {
-    let trace = TraceContext::new();
     let (q, r) = a.qr().unwrap();
     let loss =
         (&q.reduce_sum(Some(&[0, 1])).unwrap() + &r.reduce_sum(Some(&[0, 1])).unwrap()).unwrap();
-    let seed = traced(&trace, &[], vec![1.0]);
+    let seed = traced(&[], vec![1.0]);
     let gradient = ad.vjp(&loss, a, &seed).unwrap();
     (loss, gradient)
 }
@@ -78,8 +71,7 @@ fn evaluate(
     runtime: &tenferro_runtime::Runtime,
     data: Vec<f64>,
 ) -> (f64, Vec<f64>, usize) {
-    let trace = TraceContext::new();
-    let a = traced(&trace, &[2, 2], data);
+    let a = traced(&[2, 2], data);
     let (loss, gradient) = loss_and_gradient(&a, &ad_context());
     let program = GraphCompiler::new()
         .compile_many(&[&loss, &gradient])

@@ -95,12 +95,10 @@ fn run<S: ScalarSupport>(
     ad: &AdContext,
     input: TracedTensor,
 ) -> Tensor {
-    let seed = input
-        .context()
-        .from_tensor_concrete_shape(
-            Tensor::from_vec_col_major(vec![], vec![1.0_f64]).expect("shape matches data"),
-        )
-        .expect("traced seed");
+    let seed = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![], vec![1.0_f64]).expect("shape matches data"),
+    )
+    .expect("traced seed");
     let gradient = factor_norm_gradient(ad, &input, &seed, support).expect("the program runs");
 
     let (runtime, mut engine) = runtime_with_support(contribution);
@@ -114,17 +112,15 @@ fn run<S: ScalarSupport>(
 
 #[test]
 fn the_same_algorithm_runs_with_standard_support() {
-    let trace = tenferro_runtime::TraceContext::new();
     let ad = AdContext::builder()
         .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().expect("rules"))
         .expect("extension rules")
         .build()
         .expect("ad context");
-    let input = trace
-        .from_tensor_concrete_shape(
-            Tensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).expect("shape matches data"),
-        )
-        .expect("traced input");
+    let input = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).expect("shape matches data"),
+    )
+    .expect("traced input");
 
     let gradient = run(&Standard, false, &ad, input);
     assert_eq!(gradient.dtype(), DType::F64);
@@ -135,7 +131,6 @@ fn the_same_algorithm_runs_with_standard_support() {
 
 #[test]
 fn the_same_algorithm_runs_with_the_contribution() {
-    let trace = tenferro_runtime::TraceContext::new();
     let rules = SemanticExtensionRuleSet::new()
         .with_primal_vjp(Arc::new(Df64VjpRule))
         .expect("one rule per family");
@@ -146,18 +141,17 @@ fn the_same_algorithm_runs_with_the_contribution() {
         .expect("ad context");
 
     // The application names the scalar and its canonical identity; the algorithm does not.
-    let input = trace
-        .from_tensor_concrete_shape_declaring_scalar(
-            Tensor::external(ErasedHostTensor::new(
-                TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
-                    vec![2, 1],
-                    vec![Df64::from_f64(3.0), Df64::from_f64(4.0)],
-                )
-                .expect("shape matches data"),
-            )),
-            DF64_SCALAR_IDENTITY,
-        )
-        .expect("traced input");
+    let input = TracedTensor::from_tensor_concrete_shape_declaring_scalar(
+        Tensor::external(ErasedHostTensor::new(
+            TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+                vec![2, 1],
+                vec![Df64::from_f64(3.0), Df64::from_f64(4.0)],
+            )
+            .expect("shape matches data"),
+        )),
+        DF64_SCALAR_IDENTITY,
+    )
+    .expect("traced input");
 
     let gradient = run(&Extended, true, &ad, input);
     assert_eq!(

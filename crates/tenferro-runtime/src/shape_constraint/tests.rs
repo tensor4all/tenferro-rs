@@ -9,6 +9,8 @@ use super::solver::union_representatives_are_flat;
 use super::{discharge, ConstraintSource, LocalShapeConstraint, ShapeGuard};
 use crate::error::{ContextId, Error, ShapeConstraintEvalError};
 
+mod scope;
+
 fn source(family_id: &'static str, instruction_index: Option<usize>) -> ConstraintSource {
     ConstraintSource {
         family_id,

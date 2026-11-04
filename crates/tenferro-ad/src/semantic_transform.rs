@@ -425,14 +425,10 @@ fn import_source(
             .operations()
             .flat_map(|operation| operation.outputs().iter().copied()),
     );
-    // AD rules that need extents (slice, pad, reductions) resolve them from the
-    // bound shapes; the final import back into the trace maps these inputs onto
-    // the live values, so no concretized extent reaches the traced program.
     let imported = builder.import(ProgramImport {
         program: input.program.as_ref(),
-        bindings: Some(&input.bindings),
+        bindings: &input.bindings,
         roots: &source_values,
-        input_map: &[],
     })?;
     Ok(source_values
         .into_iter()
@@ -2277,8 +2273,7 @@ fn prune_dead_derivative_operations(
     let mut builder = SemanticProgramBuilder::new();
     let imported = builder.import(ProgramImport {
         program: frozen.program.as_ref(),
-        bindings: Some(&frozen.bindings),
-        input_map: &[],
+        bindings: &frozen.bindings,
         roots: &roots,
     })?;
     let outputs = imported.roots()[output_offset..].to_vec();
@@ -2300,8 +2295,7 @@ fn cancel_double_neg_derivative_operations(
     let mut builder = SemanticProgramBuilder::new();
     let imported = builder.import(ProgramImport {
         program: frozen.program.as_ref(),
-        bindings: Some(&frozen.bindings),
-        input_map: &[],
+        bindings: &frozen.bindings,
         roots: frozen.program.inputs(),
     })?;
     let mut values = frozen

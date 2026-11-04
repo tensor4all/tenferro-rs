@@ -153,7 +153,7 @@ fn real_sum_of_squares_norm_skips_abs_materialization_before_square() {
     let traced_source = crate_source("src/traced.rs");
     let traced_norm = source_section(&traced_source, "pub fn norm", "fn unexpected_output_count");
     assert!(
-        traced_norm.contains("can_square_without_abs(a.dtype(), axes.len(), ord)")
+        traced_norm.contains("can_square_without_abs(a.dtype, axes.len(), ord)")
             && traced_norm.contains("frobenius_norm(a, &axes)"),
         "traced real Frobenius and p=2 norms should dispatch to the square path before abs"
     );

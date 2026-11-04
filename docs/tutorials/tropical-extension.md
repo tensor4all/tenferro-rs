@@ -58,11 +58,10 @@ tropical extension modules:
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_ext_tropical::{extension_modules, traced::tropical_dot_general_fused};
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
-let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 4.0, 0.0])?;
-let b = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, -1.0, 5.0])?;
+let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 4.0, 0.0])?;
+let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, -1.0, 5.0])?;
 let out = tropical_dot_general_fused(&a, &b)?;
 
 let mut compiler = GraphCompiler::new();

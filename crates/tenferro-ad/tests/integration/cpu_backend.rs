@@ -4,7 +4,7 @@
 
 use crate::support;
 use support::{cpu_runtime, RunTraced};
-use tenferro_runtime::TraceContext;
+use tenferro_runtime::traced::TracedTensor;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -35,15 +35,14 @@ fn get_f32_data(t: &Tensor) -> &[f32] {
 
 #[test]
 fn test_faer_gemm_basic_f64() {
-    let trace = TraceContext::new();
     // A[2,3] x B[3,2] -> C[2,2]
     // A = [[1,3,5],[2,4,6]] col-major: [1,2,3,4,5,6]
     // B = [[1,4],[2,5],[3,6]] col-major: [1,2,3,4,5,6]
     let a = f64_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let ta = trace.from_tensor_concrete_shape(a).unwrap();
-    let tb = trace.from_tensor_concrete_shape(b).unwrap();
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),
@@ -61,12 +60,11 @@ fn test_faer_gemm_basic_f64() {
 
 #[test]
 fn test_faer_gemm_basic_f32() {
-    let trace = TraceContext::new();
     let a = f32_tensor(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f32_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let ta = trace.from_tensor_concrete_shape(a).unwrap();
-    let tb = trace.from_tensor_concrete_shape(b).unwrap();
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),
@@ -83,7 +81,6 @@ fn test_faer_gemm_basic_f32() {
 
 #[test]
 fn test_faer_gemm_identity() {
-    let trace = TraceContext::new();
     // Multiply by identity: A[3,3] * I[3,3] = A[3,3]
     // A = [[1,4,7],[2,5,8],[3,6,9]] col-major: [1,2,3,4,5,6,7,8,9]
     let a = f64_tensor(
@@ -96,10 +93,8 @@ fn test_faer_gemm_identity() {
         vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
     );
 
-    let ta = trace
-        .from_tensor_concrete_shape(a.duplicate().unwrap())
-        .unwrap();
-    let ti = trace.from_tensor_concrete_shape(i).unwrap();
+    let ta = TracedTensor::from_tensor_concrete_shape(a.duplicate().unwrap()).unwrap();
+    let ti = TracedTensor::from_tensor_concrete_shape(i).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),
@@ -121,7 +116,6 @@ fn test_faer_gemm_identity() {
 
 #[test]
 fn test_batched_gemm() {
-    let trace = TraceContext::new();
     // Batch of 2 matrix multiplications: A[2,2,2] x B[2,2,2] -> C[2,2,2]
     // where batch dim is the last (dim 2).
     //
@@ -140,8 +134,8 @@ fn test_batched_gemm() {
         vec![5.0, 6.0, 7.0, 8.0, 13.0, 14.0, 15.0, 16.0],
     );
 
-    let ta = trace.from_tensor_concrete_shape(a).unwrap();
-    let tb = trace.from_tensor_concrete_shape(b).unwrap();
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(), // contract over dim 1 (K)
         rhs_contracting_dims: [0].as_slice().into(), // contract over dim 0 (K)
@@ -174,7 +168,6 @@ fn test_batched_gemm() {
 
 #[test]
 fn test_strided_input_via_transpose_and_dot_general() {
-    let trace = TraceContext::new();
     // Multiply A^T * B where A is transposed by the graph.
     // A[3,2] with data = [[1,4],[2,5],[3,6]] col-major: [1,2,3,4,5,6]
     // The transpose "ji->ij" makes A^T[2,3].
@@ -183,8 +176,8 @@ fn test_strided_input_via_transpose_and_dot_general() {
     let b = f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
     let engine = cpu_runtime();
-    let ta = trace.from_tensor_concrete_shape(a).unwrap();
-    let tb = trace.from_tensor_concrete_shape(b).unwrap();
+    let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
+    let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let ta_t = ta.transpose(&[1, 0]).unwrap();
     let tc = ta_t
         .dot_general(
@@ -210,13 +203,12 @@ fn test_strided_input_via_transpose_and_dot_general() {
 
 #[test]
 fn test_vector_dot_product() {
-    let trace = TraceContext::new();
     // Inner product via dot_general: v[3] . w[3] -> scalar[]
     let v = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let w = f64_tensor(vec![3], vec![4.0, 5.0, 6.0]);
 
-    let tv = trace.from_tensor_concrete_shape(v).unwrap();
-    let tw = trace.from_tensor_concrete_shape(w).unwrap();
+    let tv = TracedTensor::from_tensor_concrete_shape(v).unwrap();
+    let tw = TracedTensor::from_tensor_concrete_shape(w).unwrap();
     let config = DotGeneralConfig {
         lhs_contracting_dims: [0].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),

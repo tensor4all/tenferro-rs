@@ -20,12 +20,12 @@ fn trace_context_parse_cache_reuses_exact_notation() {
 
     trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
     let first = trace
-        .with_extension_caches(|caches| caches.stats(ExtensionCacheSelector::All))
-        .unwrap();
+        .extension_caches_mut()
+        .stats(ExtensionCacheSelector::All);
     trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
     let second = trace
-        .with_extension_caches(|caches| caches.stats(ExtensionCacheSelector::All))
-        .unwrap();
+        .extension_caches_mut()
+        .stats(ExtensionCacheSelector::All);
 
     assert_eq!(first.entries, second.entries);
     assert!(first.entries >= 1);

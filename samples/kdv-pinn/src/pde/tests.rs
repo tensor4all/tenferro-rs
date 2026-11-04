@@ -24,10 +24,9 @@ fn eval(tensor: &TracedTensor, bindings: &[(&TracedTensor, &Tensor)]) -> Tensor 
 
 #[test]
 fn kdv_residual_of_zero_solution_is_zero() -> TestResult {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_concrete_shape(DType::F64, &[2, 1])?;
-    let t = trace.input_concrete_shape(DType::F64, &[2, 1])?;
-    let zero = trace.from_vec_col_major(vec![2, 1], vec![0.0_f64; 2])?;
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[2, 1])?;
+    let t = TracedTensor::input_concrete_shape(DType::F64, &[2, 1])?;
+    let zero = TracedTensor::from_vec_col_major(vec![2, 1], vec![0.0_f64; 2])?;
     let u = x.mul(&x)?.mul(&x)?.mul(&t)?.mul(&zero)?;
     let r = kdv_residual(&u, &x, &t)?;
 
@@ -40,10 +39,9 @@ fn kdv_residual_of_zero_solution_is_zero() -> TestResult {
 
 #[test]
 fn jvp_higher_order_derivatives_of_cube() -> TestResult {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_concrete_shape(DType::F64, &[3, 1])?;
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
     let y = x.mul(&x)?.mul(&x)?;
-    let ones = trace.from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
+    let ones = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
     let y_x = y.jvp(&x, &ones)?;
     let y_xx = y_x.jvp(&x, &ones)?;
     let y_xxx = y_xx.jvp(&x, &ones)?;
@@ -66,10 +64,9 @@ fn jvp_higher_order_derivatives_of_cube() -> TestResult {
 
 #[test]
 fn jvp_gives_elementwise_derivative() -> TestResult {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_concrete_shape(DType::F64, &[3, 1])?;
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
     let y = x.mul(&x)?;
-    let ones = trace.from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
+    let ones = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
     let dy_dx = y.jvp(&x, &ones)?;
 
     let x_tensor = Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0])?;
@@ -83,12 +80,11 @@ fn jvp_gives_elementwise_derivative() -> TestResult {
 
 #[test]
 fn jvp_mixed_variable_second_derivative() -> TestResult {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_concrete_shape(DType::F64, &[3, 1])?;
-    let t = trace.input_concrete_shape(DType::F64, &[3, 1])?;
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
+    let t = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
     let z = x.add(&t.scale_real(-4.0)?)?;
     let u = z.exp()?;
-    let ones = trace.from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
+    let ones = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
     let u_x = u.jvp(&x, &ones)?;
     let u_xx = u_x.jvp(&x, &ones)?;
 
@@ -108,13 +104,12 @@ fn jvp_mixed_variable_second_derivative() -> TestResult {
 
 #[test]
 fn jvp_pow_second_derivative() -> TestResult {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_concrete_shape(DType::F64, &[3, 1])?;
-    let t = trace.input_concrete_shape(DType::F64, &[3, 1])?;
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
+    let t = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
     let z = x.add(&t.scale_real(-4.0)?)?;
-    let two = trace.from_vec_col_major(vec![3, 1], vec![2.0_f64; 3])?;
+    let two = TracedTensor::from_vec_col_major(vec![3, 1], vec![2.0_f64; 3])?;
     let u = z.pow(&two)?;
-    let ones = trace.from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
+    let ones = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
     let u_x = u.jvp(&x, &ones)?;
     let u_xx = u_x.jvp(&x, &ones)?;
 
@@ -129,13 +124,12 @@ fn jvp_pow_second_derivative() -> TestResult {
 
 #[test]
 fn jvp_division_third_derivative() -> TestResult {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_concrete_shape(DType::F64, &[3, 1])?;
-    let t = trace.input_concrete_shape(DType::F64, &[3, 1])?;
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
+    let t = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
     let z = x.add(&t.scale_real(-4.0)?)?;
-    let one = trace.from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
+    let one = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
     let u = one.div(&z.add(&one)?)?;
-    let ones = trace.from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
+    let ones = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
     let u_x = u.jvp(&x, &ones)?;
     let u_xx = u_x.jvp(&x, &ones)?;
     let u_xxx = u_xx.jvp(&x, &ones)?;
@@ -154,14 +148,13 @@ fn jvp_division_third_derivative() -> TestResult {
 
 #[test]
 fn jvp_pow_division_third_derivative() -> TestResult {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_concrete_shape(DType::F64, &[3, 1])?;
-    let t = trace.input_concrete_shape(DType::F64, &[3, 1])?;
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
+    let t = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
     let z = x.add(&t.scale_real(-4.0)?)?;
-    let one = trace.from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
-    let two = trace.from_vec_col_major(vec![3, 1], vec![2.0_f64; 3])?;
+    let one = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
+    let two = TracedTensor::from_vec_col_major(vec![3, 1], vec![2.0_f64; 3])?;
     let u = one.div(&z.add(&one)?.pow(&two)?)?;
-    let ones = trace.from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
+    let ones = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
     let u_x = u.jvp(&x, &ones)?;
     let u_xx = u_x.jvp(&x, &ones)?;
     let u_xxx = u_xx.jvp(&x, &ones)?;
@@ -180,13 +173,12 @@ fn jvp_pow_division_third_derivative() -> TestResult {
 
 #[test]
 fn jvp_scale_real_third_derivative() -> TestResult {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_concrete_shape(DType::F64, &[3, 1])?;
-    let t = trace.input_concrete_shape(DType::F64, &[3, 1])?;
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
+    let t = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
     let z = x.add(&t.scale_real(-4.0)?)?;
-    let three = trace.from_vec_col_major(vec![3, 1], vec![3.0_f64; 3])?;
+    let three = TracedTensor::from_vec_col_major(vec![3, 1], vec![3.0_f64; 3])?;
     let u = z.scale_real(2.0)?.pow(&three)?;
-    let ones = trace.from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
+    let ones = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
     let u_x = u.jvp(&x, &ones)?;
     let u_xx = u_x.jvp(&x, &ones)?;
     let u_xxx = u_xx.jvp(&x, &ones)?;
@@ -202,12 +194,11 @@ fn jvp_scale_real_third_derivative() -> TestResult {
 
 #[test]
 fn kdv_residual_of_exact_solution_is_small() -> TestResult {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_concrete_shape(DType::F64, &[3, 1])?;
-    let t = trace.input_concrete_shape(DType::F64, &[3, 1])?;
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
+    let t = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
     let z = x.add(&t.scale_real(-4.0)?)?;
-    let one = trace.from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
-    let two = trace.from_vec_col_major(vec![3, 1], vec![2.0_f64; 3])?;
+    let one = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64; 3])?;
+    let two = TracedTensor::from_vec_col_major(vec![3, 1], vec![2.0_f64; 3])?;
     let exp_z = z.exp()?;
     let neg_z = z.neg()?;
     let exp_neg_z = neg_z.exp()?;
@@ -227,8 +218,7 @@ fn kdv_residual_of_exact_solution_is_small() -> TestResult {
 
 #[test]
 fn third_derivative_of_cube() -> TestResult {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_concrete_shape(DType::F64, &[3, 1])?;
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
     let y = x.mul(&x)?.mul(&x)?.reduce_sum(Some(&[0, 1]))?;
     let y_x = grad(&y, &x)?;
     let y_xx = grad(&y_x.reduce_sum(Some(&[0, 1]))?, &x)?;

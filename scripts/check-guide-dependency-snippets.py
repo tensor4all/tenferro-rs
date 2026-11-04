@@ -165,12 +165,11 @@ use num_complex::Complex64;
 use tenferro_ad::AdContext;
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ad = AdContext::builder().build()?;
-    let trace = TraceContext::new();
-    let x = trace.from_vec_col_major(
+    let x = TracedTensor::from_vec_col_major(
         vec![4],
         vec![
             Complex64::new(1.0, 0.0),

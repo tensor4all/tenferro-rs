@@ -1,11 +1,11 @@
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_runtime::{GraphCompiler, TraceContext, TracedTensor};
+use tenferro_runtime::{GraphCompiler, TracedTensor};
 
 use crate::support::{cpu_runtime, run_compiled_one};
 
-fn f64_vec(trace: &TraceContext, data: Vec<f64>) -> TracedTensor {
-    trace.from_vec_col_major(vec![data.len()], data).unwrap()
+fn f64_vec(data: Vec<f64>) -> TracedTensor {
+    TracedTensor::from_vec_col_major(vec![data.len()], data).unwrap()
 }
 
 fn eval_f64(tensor: &TracedTensor) -> Vec<f64> {
@@ -22,35 +22,19 @@ fn eval_f64(tensor: &TracedTensor) -> Vec<f64> {
 }
 
 fn op_count(tensor: &TracedTensor, op: StdTensorOp) -> usize {
-    frozen_operations(tensor)
-        .iter()
-        .filter(|operation| operation == &&op)
-        .count()
-}
-
-fn frozen_operations(tensor: &TracedTensor) -> Vec<StdTensorOp> {
     tensor
-        .context()
-        .frozen_snapshot(&[tensor.trace_value()])
-        .unwrap()
-        .program
+        .graph()
         .operations()
-        .map(|operation| match operation.op() {
-            tenferro_runtime::program::SemanticOpRef::Core(op) => StdTensorOp::from(op),
-            tenferro_runtime::program::SemanticOpRef::Extension(op) => {
-                StdTensorOp::Extension(op.clone_arc())
-            }
-            _ => StdTensorOp::Neg,
-        })
-        .collect()
+        .iter()
+        .filter(|node| node.operation == op)
+        .count()
 }
 
 #[test]
 fn traced_jvp_zero_propagation_returns_none_without_dead_graph() {
-    let trace = TraceContext::new();
-    let x = f64_vec(&trace, vec![1.0, 2.0]);
-    let y = f64_vec(&trace, vec![3.0, 4.0]);
-    let tangent = f64_vec(&trace, vec![1.0, 1.0]);
+    let x = f64_vec(vec![1.0, 2.0]);
+    let y = f64_vec(vec![3.0, 4.0]);
+    let tangent = f64_vec(vec![1.0, 1.0]);
     let output = y.neg().unwrap();
 
     assert!(output.jvp_optional(&x, &tangent).unwrap().is_none());
@@ -58,14 +42,13 @@ fn traced_jvp_zero_propagation_returns_none_without_dead_graph() {
 
 #[test]
 fn traced_jvp_optimizer_removes_identity_chain_before_compile() {
-    let trace = TraceContext::new();
-    let x = f64_vec(&trace, vec![2.0, -3.0]);
-    let tangent = f64_vec(&trace, vec![0.25, -0.5]);
+    let x = f64_vec(vec![2.0, -3.0]);
+    let tangent = f64_vec(vec![0.25, -0.5]);
     let y = x.neg().unwrap().neg().unwrap();
 
     let dy = y.jvp(&x, &tangent).unwrap();
     assert_eq!(
-        frozen_operations(&dy).len(),
+        dy.graph().operations().len(),
         0,
         "double-neg JVP should alias the tangent input before compile"
     );
@@ -78,9 +61,8 @@ fn traced_jvp_optimizer_removes_identity_chain_before_compile() {
 
 #[test]
 fn traced_vjp_cotangent_accumulation_stays_bounded_before_compile() {
-    let trace = TraceContext::new();
-    let x = f64_vec(&trace, vec![2.0, -3.0]);
-    let cotangent = f64_vec(&trace, vec![1.0, 1.0]);
+    let x = f64_vec(vec![2.0, -3.0]);
+    let cotangent = f64_vec(vec![1.0, 1.0]);
     let pair = (&x + &x).unwrap();
     let y = (&pair + &pair).unwrap();
 

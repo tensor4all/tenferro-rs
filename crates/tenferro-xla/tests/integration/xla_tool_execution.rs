@@ -5,7 +5,7 @@ use tenferro_einsum::TraceContextEinsumExt;
 
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, TraceContext};
+use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, TraceContext, TracedTensor};
 use tenferro_xla::lower_to_stablehlo;
 
 const RUN_HLO_MODULE_ENV: &str = "TENFERRO_XLA_RUN_HLO_MODULE";
@@ -108,9 +108,8 @@ fn run_hlo_module(config: &XlaToolConfig, prefix: &str, module: &tenferro_xla::S
 }
 
 fn stablehlo_dot_add_reduce_module() -> tenferro_xla::StableHloModule {
-    let trace = tenferro_runtime::TraceContext::new();
-    let lhs = trace.input_symbolic_shape(DType::F32, 2).unwrap();
-    let rhs = trace.input_symbolic_shape(DType::F32, 2).unwrap();
+    let lhs = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
     let dot = lhs
         .dot_general(
             &rhs,
@@ -160,8 +159,7 @@ fn stablehlo_nary_einsum_module() -> tenferro_xla::StableHloModule {
 }
 
 fn stablehlo_phase_one_elementwise_module() -> tenferro_xla::StableHloModule {
-    let trace = tenferro_runtime::TraceContext::new();
-    let x = trace.input_symbolic_shape(DType::F32, 1).unwrap();
+    let x = TracedTensor::input_symbolic_shape(DType::F32, 1).unwrap();
     let positive = x.abs().unwrap().exp().unwrap();
     let analytic = positive
         .log()

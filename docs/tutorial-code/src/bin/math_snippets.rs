@@ -122,10 +122,9 @@ assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
     fn snippet_linear_algebra_5() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_5
 use tenferro_linalg::{SvdGauge, SvdOptions, TracedTensorLinalgExt};
-use tenferro_runtime::{TraceContext, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::TracedTensor;
 
-let a = trace.from_vec_col_major(
+let a = TracedTensor::from_vec_col_major(
     vec![3, 3],
     vec![
         3.0_f64, 0.0, 0.0,
@@ -158,10 +157,9 @@ assert_eq!(vt_rank2.concrete_shape()?, vec![2, 3]);
     fn snippet_linear_algebra_svd_driver() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_svd_driver
 use tenferro_linalg::{SvdDriver, SvdOptions, TracedTensorLinalgExt};
-use tenferro_runtime::{TraceContext, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::TracedTensor;
 
-let a = trace.from_vec_col_major(
+let a = TracedTensor::from_vec_col_major(
     vec![3, 2],
     vec![
         3.0_f64, 1.0, 0.5,
@@ -184,11 +182,10 @@ assert_eq!(vt.concrete_shape()?, vec![2, 2]);
     fn snippet_linear_algebra_eigh_driver() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_eigh_driver
 use tenferro_linalg::{EighDriver, EighOptions, TracedTensorLinalgExt};
-use tenferro_runtime::{TraceContext, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::TracedTensor;
 
 // A batch of two 2x2 symmetric matrices, batch on the trailing axis.
-let a = trace.from_vec_col_major(
+let a = TracedTensor::from_vec_col_major(
     vec![2, 2, 2],
     vec![
         2.0_f64, 0.5, 0.5, 3.0,
@@ -212,10 +209,9 @@ assert_eq!(vectors.concrete_shape()?, vec![2, 2, 2]);
     fn snippet_linear_algebra_6() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_6
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{TraceContext, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::TracedTensor;
 
-let a = trace.from_vec_col_major(
+let a = TracedTensor::from_vec_col_major(
     vec![3, 3],
     vec![
         3.0_f64, 0.0, 0.0,
@@ -365,11 +361,10 @@ assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
     fn snippet_linear_algebra_9() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_9
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
-let trace = TraceContext::new();
 
-let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
+let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
 let factor = a.cholesky()?;
 
 let mut compiler = GraphCompiler::new();
@@ -399,12 +394,11 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 0.0, 0.0, 3.0]);
     fn snippet_linear_algebra_10() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_10
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
-let trace = TraceContext::new();
 
-let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
-let b = trace.from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0])?;
+let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
+let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0])?;
 let x = a.solve(&b)?;
 
 let mut compiler = GraphCompiler::new();
@@ -630,8 +624,7 @@ assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, Tensor};
-let trace = TraceContext::new();
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext};
 
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
@@ -719,14 +712,13 @@ assert_eq!(
         // snippet-start:einsum_16
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_einsum::{TensorDotAxes, TracedTensorEinsumExt};
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
-let lhs = trace.from_vec_col_major(
+let lhs = TracedTensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let rhs = trace.from_vec_col_major(
+let rhs = TracedTensor::from_vec_col_major(
     vec![3, 4],
     vec![
         1.0_f64, 2.0, 3.0,
@@ -768,8 +760,7 @@ assert_eq!(
 use tenferro_einsum::{EinsumOptimize, TraceContextEinsumExt};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{TraceContext, DType};
-let trace = TraceContext::new();
+use tenferro_runtime::{DType, TraceContext};
 
 let mut trace = TraceContext::new();
 let a = trace.input(ProgramInputSpec::new(
@@ -803,10 +794,9 @@ assert_eq!(metadata.shape().len(), 2);
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
-let x = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
 let loss = (&x * &x)?.reduce_sum(Some(&[0]))?;
 let ad = AdContext::builder().build()?;
 let grad = ad.grad(&loss, &x)?;
@@ -834,12 +824,11 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 4.0, 6.0]);
         // snippet-start:autodiff_19
 use tenferro_ad::AdContext;
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
-let trace = TraceContext::new();
 
 let mut compiler = GraphCompiler::new();
-let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
+let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
 let factor = a.cholesky()?;
 let ad = AdContext::builder()
     .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules()?)?
@@ -870,18 +859,17 @@ assert_eq!(result.shape(), &[2, 2]);
         // snippet-start:autodiff_20
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
-let a = trace.from_vec_col_major(
+let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let b = trace.from_vec_col_major(
+let b = TracedTensor::from_vec_col_major(
     vec![3, 2],
     vec![0.5_f64, -1.0, 2.0, 1.5, -0.25, 3.0],
 )?;
-let cotangent = trace.from_vec_col_major(
+let cotangent = TracedTensor::from_vec_col_major(
     vec![2, 2],
     vec![1.0_f64, -0.5, 0.25, 2.0],
 )?;
@@ -916,18 +904,17 @@ assert_eq!(
         // snippet-start:autodiff_21
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-let trace = TraceContext::new();
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
-let a = trace.from_vec_col_major(
+let a = TracedTensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let b = trace.from_vec_col_major(
+let b = TracedTensor::from_vec_col_major(
     vec![3, 2],
     vec![0.5_f64, -1.0, 2.0, 1.5, -0.25, 3.0],
 )?;
-let tangent = trace.from_vec_col_major(
+let tangent = TracedTensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, -0.5, 0.25, 0.0, 2.0, -1.0],
 )?;
@@ -963,7 +950,7 @@ assert_eq!(
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 fn cpu_runtime_with_fft(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>> {
     let mut builder = Runtime::builder();
@@ -975,8 +962,7 @@ fn cpu_runtime_with_fft(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::erro
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let trace = TraceContext::new();
-    let x = trace.from_vec_col_major(
+    let x = TracedTensor::from_vec_col_major(
         vec![4],
         vec![
             Complex64::new(1.0, 0.0),

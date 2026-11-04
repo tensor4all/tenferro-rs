@@ -123,12 +123,11 @@ impl SparseCooTensor {
 ///
 /// ```
 /// use tenferro_ext_sparse::SparseCooTracedTensor;
-/// use tenferro_runtime::TraceContext;
+/// use tenferro_runtime::TracedTensor;
 /// use tenferro_tensor::Tensor;
 ///
 /// let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0]).unwrap();
-/// let trace = TraceContext::new();
-/// let values = trace.from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+/// let values = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 /// let sparse = SparseCooTracedTensor::from_parts(vec![1, 1], coords, values).unwrap();
 /// assert_eq!(sparse.shape(), &[1, 1]);
 /// ```
@@ -154,14 +153,13 @@ impl SparseCooTracedTensor {
     ///
     /// ```
     /// use tenferro_ext_sparse::SparseCooTracedTensor;
-    /// use tenferro_runtime::TraceContext;
+    /// use tenferro_runtime::TracedTensor;
     /// use tenferro_tensor::Tensor;
     ///
-    /// let trace = TraceContext::new();
     /// let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?;
-    /// let values = trace.input_symbolic_shape(tenferro_tensor::DType::F64, 1)?;
+    /// let values = TracedTensor::input_symbolic_shape(tenferro_tensor::DType::F64, 1)?;
     /// let sparse = SparseCooTracedTensor::from_parts(vec![1, 1], coords, values)?;
-    /// assert_eq!(sparse.values().rank(), 1);
+    /// assert_eq!(sparse.values().rank, 1);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn from_parts(
@@ -185,11 +183,10 @@ impl SparseCooTracedTensor {
     ///
     /// ```
     /// # use tenferro_ext_sparse::SparseCooTracedTensor;
-    /// # use tenferro_runtime::TraceContext;
+    /// # use tenferro_runtime::TracedTensor;
     /// # use tenferro_tensor::Tensor;
-    /// # let trace = TraceContext::new();
     /// # let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0]).unwrap();
-    /// # let values = trace.from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    /// # let values = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     /// # let sparse = SparseCooTracedTensor::from_parts(vec![1, 1], coords, values).unwrap();
     /// assert_eq!(sparse.shape(), &[1, 1]);
     /// ```
@@ -203,11 +200,10 @@ impl SparseCooTracedTensor {
     ///
     /// ```
     /// # use tenferro_ext_sparse::SparseCooTracedTensor;
-    /// # use tenferro_runtime::TraceContext;
+    /// # use tenferro_runtime::TracedTensor;
     /// # use tenferro_tensor::Tensor;
-    /// # let trace = TraceContext::new();
     /// # let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0]).unwrap();
-    /// # let values = trace.from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    /// # let values = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     /// # let sparse = SparseCooTracedTensor::from_parts(vec![1, 1], coords, values).unwrap();
     /// assert_eq!(sparse.coordinates().shape(), &[2, 1]);
     /// ```
@@ -221,13 +217,12 @@ impl SparseCooTracedTensor {
     ///
     /// ```
     /// # use tenferro_ext_sparse::SparseCooTracedTensor;
-    /// # use tenferro_runtime::TraceContext;
+    /// # use tenferro_runtime::TracedTensor;
     /// # use tenferro_tensor::Tensor;
-    /// # let trace = TraceContext::new();
     /// # let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0]).unwrap();
-    /// # let values = trace.from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    /// # let values = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     /// # let sparse = SparseCooTracedTensor::from_parts(vec![1, 1], coords, values).unwrap();
-    /// assert_eq!(sparse.values().rank(), 1);
+    /// assert_eq!(sparse.values().rank, 1);
     /// ```
     pub fn values(&self) -> &TracedTensor {
         &self.values
@@ -333,18 +328,18 @@ pub(crate) fn validate_value_tensor(values: &Tensor, nnz: usize) -> Result<()> {
 }
 
 pub(crate) fn validate_traced_values(values: &TracedTensor, nnz: usize) -> RuntimeResult<()> {
-    if values.dtype() != DType::F64 {
+    if values.dtype != DType::F64 {
         return Err(RuntimeError::TensorRuntime(Error::dtype_mismatch(
             OP,
             DType::F64,
-            values.dtype(),
+            values.dtype,
         )));
     }
-    if values.rank() != 1 {
+    if values.rank != 1 {
         return Err(RuntimeError::TensorRuntime(Error::rank_mismatch(
             OP,
             1,
-            values.rank(),
+            values.rank,
         )));
     }
     if let Some(shape) = values.try_concrete_shape() {

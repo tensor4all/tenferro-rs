@@ -67,20 +67,19 @@ extension modules before executing the compiled graph:
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_ext_sparse::{extension_modules, sparse_matmul, SparseCooTracedTensor};
-use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
-let trace = TraceContext::new();
 
 let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?;
 let left = SparseCooTracedTensor::from_parts(
     vec![1, 1],
     Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?,
-    trace.from_vec_col_major(vec![1], vec![2.0_f64])?,
+    TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64])?,
 )?;
 let right = SparseCooTracedTensor::from_parts(
     vec![1, 1],
     coords,
-    trace.from_vec_col_major(vec![1], vec![3.0_f64])?,
+    TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64])?,
 )?;
 let out = sparse_matmul(&left, &right)?;
 

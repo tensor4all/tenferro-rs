@@ -43,9 +43,7 @@ The example below demonstrates:
 use num_complex::{Complex64, ComplexFloat};
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{
-    ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext, TracedTensor,
-};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TracedTensor};
 
 const TOL: f64 = 1.0e-12;
 
@@ -100,12 +98,11 @@ fn run(tensor: &TracedTensor) -> Result<Tensor, tenferro_runtime::Error> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let trace = TraceContext::new();
     let z_data = vec![
         Complex64::new(0.0, std::f64::consts::FRAC_PI_2),
         Complex64::new(std::f64::consts::LN_2, 0.0),
     ];
-    let z = trace.from_vec_col_major(vec![2], z_data.clone())?;
+    let z = TracedTensor::from_vec_col_major(vec![2], z_data.clone())?;
 
     let holomorphic_loss = z.exp()?.reduce_sum(Some(&[0]))?;
     let tenferro_grad = holomorphic_loss.grad(&z)?;
@@ -126,13 +123,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &expected_real_loss_grad,
     );
 
-    let scalar_z = trace.from_vec_col_major(
+    let scalar_z = TracedTensor::from_vec_col_major(
         vec![1],
         vec![Complex64::new(0.0, std::f64::consts::FRAC_PI_2)],
     )?;
     let y = scalar_z.exp()?;
     let seed = Complex64::new(2.0, -3.0);
-    let cotangent = trace.from_vec_col_major(vec![1], vec![seed])?;
+    let cotangent = TracedTensor::from_vec_col_major(vec![1], vec![seed])?;
     let vjp = y.vjp(&scalar_z, &cotangent)?;
     let vjp_value = run(&vjp)?;
     let expected_vjp = seed

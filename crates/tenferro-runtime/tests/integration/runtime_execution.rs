@@ -24,8 +24,8 @@ use tenferro_runtime::{
     PreparedOperationExecutor, PreparedOperationPlan, ProviderDeviceIdentity, ProviderId,
     ReductionRuntime, RegistrationKey, ResidentOutputContract, Runtime, RuntimeConfigError,
     RuntimeFailureReasonRef, RuntimeInputContract, RuntimeReconfigureError,
-    SpecializationProjection, StorageClass, TraceContext, TracedTensor, TransferEndpoint,
-    TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
+    SpecializationProjection, StorageClass, TracedTensor, TransferEndpoint, TransferError,
+    TransferProvider, TransferProviderContractError, TransferRequest,
 };
 use tenferro_tensor::{
     AllocationDomainId, AllocationId, BackendStorage, HostAccessError, HostReadGuard,
@@ -1312,7 +1312,7 @@ fn execute_published_route_with_targets(
     expected_source_identity: &ProviderDeviceIdentity,
     expected_destination_identity: &ProviderDeviceIdentity,
 ) -> Result<(), Box<dyn StdError>> {
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -1638,7 +1638,7 @@ fn endpoint_pair_routes_distinguish_two_engines_sharing_a_storage_class(
     for (source_endpoint, destination_endpoint, family_id, source_domain, provider, counters) in
         execution_routes
     {
-        let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+        let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
         let y =
             tenferro_runtime::extension::apply(Arc::new(CountingExtensionOp { family_id }), &[&x])?
                 .pop()
@@ -1977,7 +1977,7 @@ fn runtime_run_compiled_executes_extension_prepared_operation() -> Result<(), Bo
         .with_runtime_engine_id(EngineId::new(CPU_ENGINE_ID).expect("test engine id"));
     let counters = Arc::new(ExtensionCounters::default());
     let runtime = runtime_with_counting_extension(&backend, Arc::clone(&counters))?;
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -2020,7 +2020,7 @@ fn runtime_rejects_operation_output_outside_scheduled_residency() -> Result<(), 
         .lock()
         .expect("foreign output domain lock") = Some(foreign_domain);
     let runtime = runtime_with_counting_extension(&backend, Arc::clone(&counters))?;
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -2057,7 +2057,7 @@ fn runtime_run_prepared_reports_rejected_physical_input_residency() -> Result<()
     let mut backend = CpuEngine::serial()
         .with_runtime_engine_id(EngineId::new(CPU_ENGINE_ID).expect("test engine id"));
     let runtime = runtime_with_cpu(&backend)?;
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = (&x + &x)?;
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
@@ -2135,7 +2135,7 @@ fn runtime_input_ingress_tracks_allocation_domain_across_prepared_cache_reuse(
     }))?;
     let runtime = builder.build()?;
 
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -2227,7 +2227,7 @@ fn runtime_input_ingress_prefers_candidate_with_route_to_first_consumer(
     }))?;
     let runtime = builder.build()?;
 
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -2305,7 +2305,7 @@ fn runtime_operation_placement_retries_after_route_specific_ingress_failure(
     }))?;
     let runtime = builder.build()?;
 
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -2381,7 +2381,7 @@ fn runtime_operation_placement_retries_reachable_later_storage() -> Result<(), B
     }))?;
     let runtime = builder.build()?;
 
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -2501,7 +2501,7 @@ fn runtime_operation_placement_explores_complete_multi_op_combinations(
     }
     let runtime = builder.build()?;
 
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let first = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -2574,7 +2574,7 @@ fn runtime_operation_placement_enumerates_non_default_registered_storage(
     }))?;
     let runtime = builder.build()?;
 
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -2640,7 +2640,7 @@ fn runtime_operation_placement_reports_typed_error_after_all_ingress_routes_fail
     }))?;
     let runtime = builder.build()?;
 
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -2761,7 +2761,7 @@ fn runtime_input_ingress_covers_all_split_consumers() -> Result<(), Box<dyn StdE
     }))?;
     let runtime = builder.build()?;
 
-    let x = TraceContext::new().from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 5.0])?;
     let first = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -2911,8 +2911,7 @@ fn runtime_input_ingress_covers_synthesized_root_instructions() -> Result<(), Bo
     }))?;
     let runtime = builder.build()?;
 
-    let trace = TraceContext::new();
-    let root_input = trace.from_tensor_concrete_shape(
+    let root_input = TracedTensor::from_tensor_concrete_shape(
         TestAllocationDomain(root_domain).allocate(DType::F64, &[2])?,
     )?;
     let root_output = tenferro_runtime::extension::apply(
@@ -2923,7 +2922,7 @@ fn runtime_input_ingress_covers_synthesized_root_instructions() -> Result<(), Bo
     )?
     .pop()
     .expect("root extension has one output");
-    let source_input = trace.from_tensor_concrete_shape(
+    let source_input = TracedTensor::from_tensor_concrete_shape(
         TestAllocationDomain(source_domain).allocate(DType::F64, &[2, 2])?,
     )?;
     let synthesized_output = source_input.transpose(&[1, 0])?.conj()?;
@@ -3004,7 +3003,7 @@ fn runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine(
         .expect("destination engine")
         .event_domain_id();
 
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let sum = (&x + &x)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
@@ -3134,7 +3133,7 @@ fn runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path(
         .event_domain_id();
     assert_ne!(source_event_domain, destination_event_domain);
 
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let sum = (&x + &x)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
@@ -3251,7 +3250,7 @@ fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer
         .expect("consumer engine")
         .event_domain_id();
 
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -3304,7 +3303,7 @@ fn runtime_run_compiled_transfers_input_from_validated_ingress_to_first_consumer
 #[test]
 fn runtime_rejects_faulty_transfer_provider_outputs_with_typed_contract_errors(
 ) -> Result<(), Box<dyn StdError>> {
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
             family_id: COUNTING_EXTENSION_FAMILY,
@@ -3477,7 +3476,7 @@ fn runtime_run_compiled_split_use_retains_source_and_destination_values(
     }))?;
     let runtime = builder.build()?;
 
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let sum = (&x + &x)?;
     let extension = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
@@ -3559,7 +3558,7 @@ fn runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage(
     }))?;
     let runtime = builder.build()?;
 
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let sum = (&x + &x)?;
     let y = tenferro_runtime::extension::apply(
         Arc::new(CountingExtensionOp {
@@ -3614,7 +3613,7 @@ fn runtime_run_compiled_uses_prepared_cache_on_second_call() -> Result<(), Box<d
     let mut backend = CpuEngine::serial()
         .with_runtime_engine_id(EngineId::new(CPU_ENGINE_ID).expect("test engine id"));
     let runtime = runtime_with_cpu(&backend)?;
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = (&x + &x)?;
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
@@ -3648,7 +3647,7 @@ fn runtime_run_compiled_rejects_preparation_only_registration() -> Result<(), Bo
         CpuRegistrationState::PreparationOnly,
     )?)?;
     let runtime = builder.build()?;
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = x.neg()?;
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
@@ -3666,7 +3665,7 @@ fn runtime_run_compiled_reprepares_after_engine_reconfiguration() -> Result<(), 
     let mut backend = CpuEngine::serial()
         .with_runtime_engine_id(EngineId::new(CPU_ENGINE_ID).expect("test engine id"));
     let runtime = runtime_with_cpu(&backend)?;
-    let x = TraceContext::new().input_symbolic_shape(DType::F64, 1)?;
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1)?;
     let y = x.neg()?;
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])?;
@@ -3699,12 +3698,8 @@ fn runtime_run_compiled_reprepares_after_engine_reconfiguration() -> Result<(), 
 /// compile time instead of being silently dropped from the program inputs.
 #[test]
 fn compile_with_input_specs_rejects_unused_placeholder() {
-    let x = TraceContext::new()
-        .input_concrete_shape(DType::F64, &[3])
-        .unwrap();
-    let y = TraceContext::new()
-        .input_concrete_shape(DType::F64, &[3])
-        .unwrap();
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
+    let y = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
     let out = y.neg().unwrap();
     let err = GraphCompiler::new()
         .compile_with_input_specs(&out, &[(&y, DType::F64, &[3]), (&x, DType::F64, &[3])])
@@ -3717,20 +3712,6 @@ fn compile_with_input_specs_rejects_unused_placeholder() {
 }
 
 #[test]
-fn compile_many_rejects_an_empty_output_list() {
-    // The compiler takes the trace from the first output, so an empty list has no
-    // context to snapshot and is refused instead of building a unit program.
-    let outputs: [&TracedTensor; 0] = [];
-    let error = GraphCompiler::new().compile_many(&outputs).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("at least one output is required"),
-        "{error}"
-    );
-}
-
-#[test]
 fn an_engine_without_in_place_view_reads_keeps_metadata_commands() -> Result<(), Box<dyn StdError>>
 {
     // The test registration's `LayoutRuntime` keeps the default
@@ -3738,12 +3719,11 @@ fn an_engine_without_in_place_view_reads_keeps_metadata_commands() -> Result<(),
     // command (#2226) and the program still computes the same values.
     let mut backend = CpuEngine::serial();
     let runtime = runtime_with_cpu(&backend)?;
-    let trace = TraceContext::new();
-    let a = trace.from_tensor_concrete_shape(Tensor::from_vec_col_major(
+    let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     )?)?;
-    let b = trace.from_tensor_concrete_shape(Tensor::from_vec_col_major(
+    let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(
         vec![3, 2],
         vec![10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0],
     )?)?;

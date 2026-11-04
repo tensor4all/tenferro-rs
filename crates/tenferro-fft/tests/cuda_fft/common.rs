@@ -424,8 +424,7 @@ pub(crate) fn compiled_cuda_fft(
     axis: isize,
     norm: FftNorm,
 ) -> (tenferro_runtime::CompiledGraph, TracedTensor) {
-    let trace = tenferro_runtime::TraceContext::new();
-    let input = trace.input_concrete_shape(dtype, shape).unwrap();
+    let input = TracedTensor::input_concrete_shape(dtype, shape).unwrap();
     let output = match operation {
         Operation::Fft => input.fft(n, axis, norm).unwrap(),
         Operation::Ifft => input.ifft(n, axis, norm).unwrap(),

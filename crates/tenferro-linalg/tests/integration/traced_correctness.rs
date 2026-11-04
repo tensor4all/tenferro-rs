@@ -24,21 +24,17 @@ fn run_many(outputs: &[&TracedTensor]) -> Vec<Tensor> {
 
 #[test]
 fn traced_tensor_linalg_ext_exposes_svd() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])
-        .unwrap();
+    let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
     let (_u, s, _vt) = a.svd().unwrap();
 
-    assert_eq!(s.rank(), 1);
+    assert_eq!(s.rank, 1);
 }
 
 #[test]
 fn svd_traced_tensor_returns_three_outputs() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]))
-        .unwrap();
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]))
+            .unwrap();
     let (u, s, vt) = a.svd().unwrap();
     let results = run_many(&[&u, &s, &vt]);
 
@@ -53,10 +49,9 @@ fn svd_traced_tensor_returns_three_outputs() {
 
 #[test]
 fn qr_traced_tensor_returns_q_and_r() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]))
-        .unwrap();
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]))
+            .unwrap();
     let (q, r) = a.qr().unwrap();
     let results = run_many(&[&q, &r]);
 
@@ -68,10 +63,9 @@ fn qr_traced_tensor_returns_q_and_r() {
 
 #[test]
 fn eigh_traced_tensor_returns_values_and_vectors() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]))
-        .unwrap();
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]))
+            .unwrap();
     let (values, vectors) = a.eigh().unwrap();
     let results = run_many(&[&values, &vectors]);
 
@@ -85,13 +79,11 @@ fn eigh_traced_tensor_returns_values_and_vectors() {
 
 #[test]
 fn linalg_single_output_traced_tensor_functions_eval() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![4.0, 0.0, 0.0, 9.0]))
-        .unwrap();
-    let b = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![8.0, 27.0]))
-        .unwrap();
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![4.0, 0.0, 0.0, 9.0]))
+            .unwrap();
+    let b =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![8.0, 27.0])).unwrap();
 
     let chol = a.cholesky().unwrap();
     let solved = a.solve(&b).unwrap();
@@ -105,16 +97,15 @@ fn linalg_single_output_traced_tensor_functions_eval() {
 
 #[test]
 fn traced_solve_accepts_a_tiny_nonzero_complex_pivot() {
-    let trace = tenferro_runtime::TraceContext::new();
     // What: traced solve's LU-prepared lowering preserves a representable nonzero complex pivot.
     let scale = 2.0_f64.powi(-600);
-    let a = trace
-        .from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
+    let a =
+        TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(scale, 0.0)]).unwrap(),
         ))
         .unwrap();
-    let b = trace
-        .from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
+    let b =
+        TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(3.0 * scale, 0.0)])
                 .unwrap(),
         ))
@@ -128,10 +119,9 @@ fn traced_solve_accepts_a_tiny_nonzero_complex_pivot() {
 
 #[test]
 fn lu_traced_tensor_returns_four_outputs() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]))
-        .unwrap();
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]))
+            .unwrap();
     let (p, l, u, parity) = a.lu().unwrap();
     let results = run_many(&[&p, &l, &u, &parity]);
 
@@ -144,13 +134,11 @@ fn lu_traced_tensor_returns_four_outputs() {
 
 #[test]
 fn full_piv_lu_solve_traced_tensor_eval() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]))
-        .unwrap();
-    let b = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![-1.0, 5.0]))
-        .unwrap();
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 2.0, 1.0, 3.0]))
+            .unwrap();
+    let b =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![-1.0, 5.0])).unwrap();
     let x = a.full_piv_lu_solve(&b).unwrap();
     let results = run_many(&[&x]);
 
@@ -160,10 +148,9 @@ fn full_piv_lu_solve_traced_tensor_eval() {
 
 #[test]
 fn eig_traced_tensor_returns_complex_outputs() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]))
-        .unwrap();
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]))
+            .unwrap();
     let (values, vectors) = a.eig().unwrap();
     let results = run_many(&[&values, &vectors]);
 
@@ -182,10 +169,9 @@ fn eig_traced_tensor_returns_complex_outputs() {
 
 #[test]
 fn determinant_inverse_and_eigenvalue_helpers_eval() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]))
-        .unwrap();
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]))
+            .unwrap();
 
     let (sign, logabsdet) = a.slogdet().unwrap();
     let determinant = a.det().unwrap();
@@ -222,10 +208,9 @@ fn determinant_inverse_and_eigenvalue_helpers_eval() {
 
 #[test]
 fn pseudoinverse_and_norm_eval() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]))
-        .unwrap();
+    let a =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]))
+            .unwrap();
 
     let pseudo_inverse = a.pinv().unwrap();
     let frob = a.norm(None, Some(&[0, 1]), false).unwrap();
@@ -237,12 +222,11 @@ fn pseudoinverse_and_norm_eval() {
 
 #[test]
 fn traced_spectral_norm_preserves_signed_and_complex_input() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let signed = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 1.0, 1.0, -1.0]))
-        .unwrap();
-    let complex = trace
-        .from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
+    let signed =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 1.0, 1.0, -1.0]))
+            .unwrap();
+    let complex =
+        TracedTensor::from_tensor_concrete_shape(Tensor::from_typed::<tenferro_tensor::Complex64>(
             TypedTensor::from_vec_col_major(
                 vec![2, 2],
                 vec![
@@ -275,13 +259,12 @@ fn traced_spectral_norm_preserves_signed_and_complex_input() {
 
 #[test]
 fn norm_supports_vector_zero_and_matrix_induced_orders() {
-    let trace = tenferro_runtime::TraceContext::new();
-    let vector = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 0.0, 2.0, -3.0]))
-        .unwrap();
-    let matrix = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]))
-        .unwrap();
+    let vector =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 0.0, 2.0, -3.0]))
+            .unwrap();
+    let matrix =
+        TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]))
+            .unwrap();
 
     let zero_norm = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
     let matrix_one = matrix.norm(Some(1.0), Some(&[0, 1]), false).unwrap();
@@ -323,7 +306,6 @@ fn assert_tensor_f64_eq(actual: &[f64], expected: &[f64]) {
 
 #[test]
 fn zero_order_norm_counts_nan_entries_as_nonzero() {
-    let trace = tenferro_runtime::TraceContext::new();
     // #2359: ord = 0 counts x != 0. abs(NaN) > 0 is false in IEEE 754, so the
     // former greater-than mask dropped NaN entries from the count. The traced
     // surface is the one where the complex case was untested, so the whole
@@ -340,9 +322,8 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
         ("inf_and_zero", vec![f64::INFINITY, 0.0], 1.0),
     ];
     for (_label, data, expected) in real_cases {
-        let vector = trace
-            .from_tensor_concrete_shape(f64_tensor(vec![data.len()], data))
-            .unwrap();
+        let vector =
+            TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![data.len()], data)).unwrap();
         let count = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
         assert_f64_eq(get_f64_data(&run_many(&[&count])[0])[0], expected);
     }
@@ -378,27 +359,27 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
         ),
     ];
     for (_label, data, expected) in complex_cases {
-        let vector = trace
-            .from_tensor_concrete_shape(c64_tensor(vec![data.len()], data))
-            .unwrap();
+        let vector =
+            TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![data.len()], data)).unwrap();
         let count = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
         assert_f64_eq(get_f64_data(&run_many(&[&count])[0])[0], expected);
     }
 
-    let matrix = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![f64::NAN, 0.0, 3.0, 0.0]))
-        .unwrap();
-    let complex_matrix = trace
-        .from_tensor_concrete_shape(c64_tensor(
-            vec![2, 2],
-            vec![
-                Complex64::new(f64::NAN, 0.0),
-                Complex64::new(0.0, 0.0),
-                Complex64::new(0.0, 0.0),
-                Complex64::new(0.0, 1.0),
-            ],
-        ))
-        .unwrap();
+    let matrix = TracedTensor::from_tensor_concrete_shape(f64_tensor(
+        vec![2, 2],
+        vec![f64::NAN, 0.0, 3.0, 0.0],
+    ))
+    .unwrap();
+    let complex_matrix = TracedTensor::from_tensor_concrete_shape(c64_tensor(
+        vec![2, 2],
+        vec![
+            Complex64::new(f64::NAN, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 1.0),
+        ],
+    ))
+    .unwrap();
 
     let matrix_count = matrix.norm(Some(0.0), Some(&[0, 1]), false).unwrap();
     let complex_matrix_count = complex_matrix

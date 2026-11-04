@@ -6,7 +6,6 @@ use crate::checkpoint::RetainedValue;
 use super::value::ProgramBuilderNonce;
 use super::{BindingKey, ProgramValue};
 
-#[derive(Clone)]
 pub(crate) struct PendingBinding {
     pub(crate) key: BindingKey,
     pub(crate) input: ProgramValue,

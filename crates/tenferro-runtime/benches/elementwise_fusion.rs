@@ -1,7 +1,9 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_cpu::CpuEngine;
 use tenferro_runtime::Runtime;
-use tenferro_runtime::{CompiledGraph, DType, ExecutionEngine, GraphCompiler, Tensor, TensorRead};
+use tenferro_runtime::{
+    CompiledGraph, DType, ExecutionEngine, GraphCompiler, Tensor, TensorRead, TracedTensor,
+};
 
 fn cpu_engine_and_runtime() -> (CpuEngine, Runtime) {
     let engine = CpuEngine::serial();
@@ -20,13 +22,8 @@ fn input_tensor(n: usize, scale: f64) -> Tensor {
 }
 
 fn compile_add_mul(n: usize) -> CompiledGraph {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .input_concrete_shape(DType::F64, &[n])
-        .expect("a placeholder");
-    let b = trace
-        .input_concrete_shape(DType::F64, &[n])
-        .expect("b placeholder");
+    let a = TracedTensor::input_concrete_shape(DType::F64, &[n]).expect("a placeholder");
+    let b = TracedTensor::input_concrete_shape(DType::F64, &[n]).expect("b placeholder");
     let sum = (&a + &b).expect("sum graph");
     let out = (&sum * &a).expect("multiply graph");
     let mut compiler = GraphCompiler::new();
@@ -36,13 +33,8 @@ fn compile_add_mul(n: usize) -> CompiledGraph {
 }
 
 fn compile_broadcast_mul(rows: usize, cols: usize) -> CompiledGraph {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .input_concrete_shape(DType::F64, &[rows])
-        .expect("a placeholder");
-    let b = trace
-        .input_concrete_shape(DType::F64, &[cols])
-        .expect("b placeholder");
+    let a = TracedTensor::input_concrete_shape(DType::F64, &[rows]).expect("a placeholder");
+    let b = TracedTensor::input_concrete_shape(DType::F64, &[cols]).expect("b placeholder");
     let a_bc = a
         .broadcast_in_dim(&[rows, cols], &[0])
         .expect("lhs broadcast graph");
@@ -60,13 +52,8 @@ fn compile_broadcast_mul(rows: usize, cols: usize) -> CompiledGraph {
 }
 
 fn compile_broadcast_mul_add(rows: usize, cols: usize) -> CompiledGraph {
-    let trace = tenferro_runtime::TraceContext::new();
-    let a = trace
-        .input_concrete_shape(DType::F64, &[rows])
-        .expect("a placeholder");
-    let b = trace
-        .input_concrete_shape(DType::F64, &[cols])
-        .expect("b placeholder");
+    let a = TracedTensor::input_concrete_shape(DType::F64, &[rows]).expect("a placeholder");
+    let b = TracedTensor::input_concrete_shape(DType::F64, &[cols]).expect("b placeholder");
     let a_bc = a
         .broadcast_in_dim(&[rows, cols], &[0])
         .expect("lhs broadcast graph");

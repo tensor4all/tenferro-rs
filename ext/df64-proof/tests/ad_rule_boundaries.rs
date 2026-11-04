@@ -15,7 +15,6 @@ use tenferro_df64_proof::extension::{
 };
 use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::TraceContext;
 use tenferro_runtime::TracedTensor;
 use tenferro_tensor::{DType, Tensor};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
@@ -27,10 +26,12 @@ fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     ))
 }
 
-fn leaf(trace: &TraceContext, values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
-    trace
-        .from_tensor_concrete_shape_declaring_scalar(external(values, shape), DF64_SCALAR_IDENTITY)
-        .expect("traced leaf")
+fn leaf(values: Vec<Df64>, shape: Vec<usize>) -> TracedTensor {
+    TracedTensor::from_tensor_concrete_shape_declaring_scalar(
+        external(values, shape),
+        DF64_SCALAR_IDENTITY,
+    )
+    .expect("traced leaf")
 }
 
 fn external_dtype() -> DType {
@@ -59,9 +60,8 @@ fn jvp_context() -> AdContext {
         .expect("ad context")
 }
 
-fn matrix(trace: &TraceContext, order: usize, value: f64) -> TracedTensor {
+fn matrix(order: usize, value: f64) -> TracedTensor {
     leaf(
-        trace,
         vec![Df64::from_f64(value); order * order],
         vec![order, order],
     )
@@ -70,10 +70,9 @@ fn matrix(trace: &TraceContext, order: usize, value: f64) -> TracedTensor {
 /// A rule asked about an operation it does not differentiate refuses instead of guessing.
 #[test]
 fn the_vjp_rule_refuses_an_operation_outside_its_domain() {
-    let trace = TraceContext::new();
     let ad = vjp_context();
-    let identity = matrix(&trace, 1, 0.0);
-    let seed = leaf(&trace, vec![Df64::from_f64(1.0)], vec![1, 1]);
+    let identity = matrix(1, 0.0);
+    let seed = leaf(vec![Df64::from_f64(1.0)], vec![1, 1]);
 
     // The broadcast is the total sum's adjoint, and the two derivative operations are
     // the factorization's own bodies: none of them is a primal operation to differentiate.
@@ -85,8 +84,8 @@ fn the_vjp_rule_refuses_an_operation_outside_its_domain() {
         "the broadcast has no adjoint"
     );
 
-    let factor = matrix(&trace, 1, 1.0);
-    let triangular = matrix(&trace, 1, 2.0);
+    let factor = matrix(1, 1.0);
+    let triangular = matrix(1, 2.0);
     let adjoint = apply(
         Arc::new(Df64QrVjp::of(false, true)),
         &[&factor, &triangular, &seed],
@@ -113,14 +112,9 @@ fn the_vjp_rule_refuses_an_operation_outside_its_domain() {
 /// to work with one cotangent present and the other absent.
 #[test]
 fn the_factorization_adjoint_accepts_the_factor_cotangent_alone() {
-    let trace = tenferro_runtime::TraceContext::new();
     let ad = vjp_context();
 
-    let source = leaf(
-        &trace,
-        vec![Df64::from_f64(3.0), Df64::from_f64(4.0)],
-        vec![2, 1],
-    );
+    let source = leaf(vec![Df64::from_f64(3.0), Df64::from_f64(4.0)], vec![2, 1]);
     let factors = apply(Arc::new(Df64Qr), &[&source]).expect("traced QR");
     // A loss over `Q` alone: the triangular factor's cotangent is the absent one.
     let narrowed = apply(
@@ -131,11 +125,10 @@ fn the_factorization_adjoint_accepts_the_factor_cotangent_alone() {
     .remove(0);
     let loss = narrowed.mul(&narrowed).expect("ordinary f64 loss");
 
-    let seed = trace
-        .from_tensor_concrete_shape(
-            Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 0.0]).expect("shape matches data"),
-        )
-        .expect("traced seed");
+    let seed = TracedTensor::from_tensor_concrete_shape(
+        Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 0.0]).expect("shape matches data"),
+    )
+    .expect("traced seed");
     let gradients = ad
         .vjp_many(&loss, &[&source], &seed)
         .expect("the factor's cotangent alone is accepted");
@@ -147,9 +140,8 @@ fn the_factorization_adjoint_accepts_the_factor_cotangent_alone() {
 #[test]
 fn the_linearize_rule_refuses_an_operation_outside_its_domain() {
     let ad = jvp_context();
-    let trace = TraceContext::new();
-    let factor = matrix(&trace, 1, 1.0);
-    let tangent = matrix(&trace, 1, 1.0);
+    let factor = matrix(1, 1.0);
+    let tangent = matrix(1, 1.0);
 
     let expanded = apply(Arc::new(Df64Expand::new(vec![1, 1])), &[&factor])
         .expect("traced broadcast")
@@ -163,35 +155,26 @@ fn the_linearize_rule_refuses_an_operation_outside_its_domain() {
 /// The conversions and the factorization linearize through their own operations.
 #[test]
 fn the_conversions_and_the_factorization_linearize() {
-    let trace = TraceContext::new();
     let ad = jvp_context();
 
     // The widening conversion: the tangent passes through the same conversion.
-    let source = leaf(
-        &trace,
-        vec![Df64::from_f64(3.0), Df64::from_f64(4.0)],
-        vec![2, 1],
-    );
+    let source = leaf(vec![Df64::from_f64(3.0), Df64::from_f64(4.0)], vec![2, 1]);
     let narrowed = apply(
         Arc::new(tenferro_df64_proof::extension::Df64ToF64),
         &[&source],
     )
     .expect("traced narrowing")
     .remove(0);
-    let tangent = leaf(
-        &trace,
-        vec![Df64::from_f64(1.0), Df64::from_f64(0.0)],
-        vec![2, 1],
-    );
+    let tangent = leaf(vec![Df64::from_f64(1.0), Df64::from_f64(0.0)], vec![2, 1]);
     let forward = ad
         .jvp(&narrowed, &source, &tangent)
         .expect("the narrowing linearizes");
     assert_eq!(forward.dtype(), DType::F64);
 
     // The factorization: the tangent of the two factors comes from their own operation.
-    let matrix_input = matrix(&trace, 2, 2.0);
+    let matrix_input = matrix(2, 2.0);
     let factors = apply(Arc::new(Df64Qr), &[&matrix_input]).expect("traced QR");
-    let factor_tangent = matrix(&trace, 2, 1.0);
+    let factor_tangent = matrix(2, 1.0);
     let factor_forward = ad
         .jvp(&factors[1], &matrix_input, &factor_tangent)
         .expect("the factorization linearizes");

@@ -18,7 +18,7 @@ fn get_f64_data(tensor: &Tensor) -> &[f64] {
         .unwrap()
 }
 
-fn traced_input(trace: &TraceContext, tensor: &Tensor) -> tenferro_runtime::TraceValue {
+fn traced_input(trace: &mut TraceContext, tensor: &Tensor) -> tenferro_runtime::TraceValue {
     trace
         .input_with_default(
             ProgramInputSpec::new(tensor.dtype(), DimExpr::from_concrete(tensor.shape())),
@@ -34,9 +34,9 @@ fn compile_nary(
     c: &Tensor,
 ) -> tenferro_runtime::CompiledGraph {
     let mut trace = TraceContext::new();
-    let a = traced_input(&trace, a);
-    let b = traced_input(&trace, b);
-    let c = traced_input(&trace, c);
+    let a = traced_input(&mut trace, a);
+    let b = traced_input(&mut trace, b);
+    let c = traced_input(&mut trace, c);
     let output = trace.einsum(&[a, b, c], "ij,jk,kl->il").unwrap();
     let graph = trace.finish(&[output]).unwrap();
     compiler.compile_traced_graph(&graph).unwrap()

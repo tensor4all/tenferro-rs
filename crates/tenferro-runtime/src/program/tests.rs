@@ -558,8 +558,7 @@ fn import_preserves_ordered_duplicate_roots_structure_binding_and_provenance() {
     let imported = destination
         .import(ProgramImport {
             program: source.program.as_ref(),
-            bindings: Some(&source.bindings),
-            input_map: &[],
+            bindings: &source.bindings,
             roots: &[y, x, y],
         })
         .unwrap();
@@ -614,8 +613,7 @@ fn import_empty_roots_is_a_noop_and_foreign_roots_roll_back() {
     let empty = destination
         .import(ProgramImport {
             program: source.program.as_ref(),
-            bindings: Some(&source.bindings),
-            input_map: &[],
+            bindings: &source.bindings,
             roots: &[],
         })
         .unwrap();
@@ -623,8 +621,7 @@ fn import_empty_roots_is_a_noop_and_foreign_roots_roll_back() {
     assert!(matches!(
         destination.import(ProgramImport {
             program: source.program.as_ref(),
-            bindings: Some(&source.bindings),
-            input_map: &[],
+            bindings: &source.bindings,
             roots: &[source_input, foreign],
         }),
         Err(ProgramBuildError::ForeignImportRoot)
@@ -654,8 +651,7 @@ fn import_rejects_bindings_from_another_frozen_program() {
     assert!(matches!(
         destination.import(ProgramImport {
             program: left.program.as_ref(),
-            bindings: Some(&right.bindings),
-            input_map: &[],
+            bindings: &right.bindings,
             roots: &[left_input],
         }),
         Err(ProgramBuildError::ForeignBindings)
@@ -686,8 +682,7 @@ fn import_uses_value_dependency_closure_and_keeps_observable_effects() {
     let imported = destination
         .import(ProgramImport {
             program: source.program.as_ref(),
-            bindings: Some(&source.bindings),
-            input_map: &[],
+            bindings: &source.bindings,
             roots: &[selected_output],
         })
         .unwrap();
@@ -784,8 +779,7 @@ fn semantic_identity_is_normalized_cached_and_excludes_bindings() {
     let roots = imported
         .import(ProgramImport {
             program: bound.program.as_ref(),
-            bindings: Some(&bound.bindings),
-            input_map: &[],
+            bindings: &bound.bindings,
             roots: bound.program.outputs(),
         })
         .unwrap();
@@ -1215,31 +1209,4 @@ fn a_core_operation_may_not_name_an_external_scalar() {
         .is_ok()
     );
     assert!(super::builder::reject_core_external_dtype(&CoreSemanticOp::Neg).is_ok());
-}
-
-#[test]
-fn import_request_and_result_debug_report_structure_only() {
-    let mut builder = SemanticProgramBuilder::new();
-    let input = builder
-        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
-        .unwrap();
-    let output = builder.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
-    let frozen = builder.finish(&[output]).unwrap();
-
-    let request = ProgramImport {
-        program: &frozen.program,
-        bindings: Some(&frozen.bindings),
-        roots: &[output],
-        input_map: &[],
-    };
-    let text = format!("{request:?}");
-    assert!(text.contains("program_inputs: 1"), "{text}");
-    assert!(text.contains("program_outputs: 1"), "{text}");
-    assert!(text.contains("bindings: Some("), "{text}");
-    assert!(text.contains("roots: 1"), "{text}");
-    assert!(text.contains("input_map: 0"), "{text}");
-
-    let imported = super::ImportedProgramValues::new(vec![output, output].into_boxed_slice());
-    assert_eq!(imported.roots().len(), 2);
-    assert!(format!("{imported:?}").contains("roots: 2"));
 }

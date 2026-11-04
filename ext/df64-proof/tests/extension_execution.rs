@@ -135,7 +135,7 @@ fn the_module_installs_and_plans_the_declared_scalar() {
 
     // Without a declared identity the program cannot be given a canonical one, so
     // planning rejects the tag instead of encoding a process-local code.
-    let undeclared = TraceContext::new();
+    let mut undeclared = TraceContext::new();
     assert!(matches!(
         undeclared
             .input(ProgramInputSpec::new(external_dtype, [DimExpr::Const(2)]))
@@ -145,7 +145,7 @@ fn the_module_installs_and_plans_the_declared_scalar() {
 
     // With the contribution's declared identity the same program plans, and the
     // registered engine executes it through the prepared path.
-    let context = TraceContext::new();
+    let mut context = TraceContext::new();
     let input = context
         .input(
             ProgramInputSpec::new(external_dtype, [DimExpr::Const(2)])
