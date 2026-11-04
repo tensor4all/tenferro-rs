@@ -258,19 +258,30 @@ pub struct TracedTensor { ctx: TraceContext, value: TraceValue }  // !Send, chea
 * Two accessors change shape because a borrow cannot escape the cell:
   `value_metadata` (`trace.rs:121`) returns an owned `ProgramValueMetadata`
   (already `Clone`, `program/metadata.rs:72`), and `extension_caches_mut`
-  (`trace.rs:129`) becomes a closure-scoped `with_extension_caches(|c| ..)` or
-  moves the store to a separate owner. Both are public breaks (§3.9).
+  (`trace.rs:129`) becomes the closure-scoped `with_extension_caches(|c| ..)`; the
+  store is not moved to a separate owner. Both are public breaks (§3.9).
 * `finish(&self, outputs)` freezes a snapshot of the ordered closure of
   `outputs`, preserving effects (an effectful op stays in the program even when
   none of its outputs is a root, as `ImportTransaction` already enforces at
   `program/builder.rs:759-765`) and the declared input order. It leaves the
-  context usable and exposes the source→snapshot value map so that callers can
-  keep referring to the same values.
+  context usable, so later appends do not change the returned graph.
+
+  It does **not** expose the source→snapshot value map. A snapshot renumbers
+  values, but `TraceValue` is `Copy` and every accessor keeps taking the caller's
+  own handle, so a caller never needs the mapping to keep referring to the same
+  values; adding a public map would create a second surface with no named use
+  while §3.9 removes the others. Open for P3: add the map only when a caller needs
+  to relate a frozen program value to a live handle, which is what would justify
+  its contract.
 
 `TraceValue` is `Copy` (`trace.rs:155`), so `TracedTensor` is a handle clone plus
-a two-word value. `rank`, `dtype` and symbolic shape come from
-`TraceContext::value_metadata`; `id`, `rank`, `dtype`, `val` and `graph()` stop
-being public (#1422).
+a two-word value. `rank`, `dtype` and the symbolic shape are read once from
+`TraceContext::value_metadata` when the handle is built and cached on it, so a
+later `value_metadata` call is not in the accessor path. The public field `id`
+and the `val` and `graph()` accessors stop being public (#1422); `rank` and
+`dtype` stay public as accessors (`TracedTensor::rank`, `TracedTensor::dtype`),
+and the context is reached through `TracedTensor::context` /
+`TracedTensor::trace_value`.
 
 Lifetime contract (changed, and to be documented): a `TracedTensor` keeps its
 whole context alive, so one surviving tensor retains every branch and bound
@@ -542,7 +553,8 @@ Removed or changed (breaking):
   `from_tensor_symbolic_shape` 12, `from_shared_tensor_value_symbolic_shape` 5.
 * `TracedTensor::graph()`, and the public fields `id`, `rank`, `dtype`, `val`.
   `crates/tenferro-runtime/tests/integration/public_surface_contract.rs:131-150`
-  asserts the `graph()` accessor, so it is updated in the same change.
+  asserts the `graph()` accessor, so it is updated in the same change. The
+  *fields* are gone; `rank` and `dtype` remain readable through accessors (§3.1).
 * `TraceContext::finish` no longer consumes the context;
   `value_metadata` returns an owned metadata value; `extension_caches_mut`
   becomes closure-scoped (§3.1).
@@ -562,7 +574,7 @@ Migration size inside tenferro: 258 files mention `TracedTensor` (112 under
 
 | requirement | where it is met | how it is checked |
 |---|---|---|
-| `TracedTensor` holds a context handle and a `TraceValue` | §3.1 | type definition; `graph()`/`val` gone from the public surface |
+| `TracedTensor` holds a context handle and a `TraceValue` | §3.1 | type definition; the `id` field and the `val`/`graph()` accessors are gone from the public surface |
 | `GraphCompiler` has no graph merge path | §3.2, §3.7 | merge regions of §2.2 deleted; only `compile_frozen_program` lowers |
 | `TracedTensorAdExt`, linalg, fft, einsum run through program-level AD and one wrapper layer per family | §3.3, §3.6 | one implementation per family; AD is snapshot+transform+import; §5 deviation on trait count |
 | context-free constructors removed, docs/samples/ext migrated | §3.9 | no `TracedTensor::` constructor remains; `docs/`, `samples/`, `ext/` build |
