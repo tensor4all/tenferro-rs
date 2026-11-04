@@ -2311,9 +2311,9 @@ dependencies = [
 
 [[package]]
 name = "t4a-gemm-common"
-version = "0.20.2"
+version = "0.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58952dd8817cab6b379d2f546bff5c4c1a39937147627cc4af17cabe7df85331"
+checksum = "da43cdd025c6720358b56a9accfab1db57cd38e552b721e179b4fb4c77386fd0"
 dependencies = [
  "bytemuck",
  "dyn-stack",
