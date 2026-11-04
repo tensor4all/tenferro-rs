@@ -2187,7 +2187,7 @@ fn reshape_value_to_shape(
     shape: &ValueShapePlan,
 ) -> Result<ProgramValue, ProgramBuildError> {
     let mut inputs = vec![value];
-    let to_shape = payload_shape_in_op_coordinates(builder, &shape.shape, &mut inputs);
+    let to_shape = builder.translate_input_shape_payload(&shape.shape, &mut inputs);
     Ok(builder.add_op(CoreSemanticOp::Reshape { to_shape }, &inputs)?[0])
 }
 
@@ -2212,51 +2212,8 @@ fn broadcast_value_in_dim_to_shape(
     dims: Vec<usize>,
 ) -> Result<ProgramValue, ProgramBuildError> {
     let mut inputs = vec![value];
-    let shape = payload_shape_in_op_coordinates(builder, &shape.shape, &mut inputs);
+    let shape = builder.translate_input_shape_payload(&shape.shape, &mut inputs);
     Ok(builder.add_op(CoreSemanticOp::BroadcastInDim { shape, dims }, &inputs)?[0])
-}
-
-/// Translate a symbolic target shape from program coordinates into the
-/// coordinates of the operation that will carry it.
-///
-/// Program extents name program inputs, while a `Reshape`/`BroadcastInDim` payload
-/// names its own inputs, so every referenced program input becomes one auxiliary
-/// shape-reference input. The shape stays symbolic, which keeps the derivative
-/// program polymorphic instead of baking the bound extents into it.
-fn payload_shape_in_op_coordinates(
-    builder: &SemanticProgramBuilder,
-    shape: &[DimExpr],
-    inputs: &mut Vec<ProgramValue>,
-) -> Vec<DimExpr> {
-    if DimExpr::max_input_idx_all(shape).is_none() {
-        return shape.to_vec();
-    }
-    let program_inputs = builder.inputs();
-    shape
-        .iter()
-        .map(|extent| {
-            let Some(sym) = tenferro_runtime::dim_expr_to_sym_dim_public(extent) else {
-                return extent.clone();
-            };
-            let mut tensor_map = Vec::new();
-            for id in sym.referenced_tensor_ids() {
-                let Some(&program_input) = program_inputs.get(id as usize) else {
-                    return extent.clone();
-                };
-                let op_input = match inputs.iter().position(|input| *input == program_input) {
-                    Some(index) => index,
-                    None => {
-                        let index = inputs.len();
-                        inputs.push(program_input);
-                        index
-                    }
-                };
-                tensor_map.push((id, op_input));
-            }
-            sym.to_dim_expr(&tensor_map)
-                .unwrap_or_else(|_| extent.clone())
-        })
-        .collect()
 }
 
 fn truncate_ad_value_to_dynamic_axes(

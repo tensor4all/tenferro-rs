@@ -2029,8 +2029,8 @@ fn semantic_core_gather_dynamic_slice_sizes_jvp_vjp_execute_numerically() {
 fn unequal_rank_add_vjp_reduces_every_broadcast_axis() {
     let ad = ad_context();
     let mut builder = SemanticProgramBuilder::new();
-    // `[1]` joins `[2, 3]`: the cotangent has two more axes to reduce than the
-    // smaller operand has.
+    // `[1]` joins `[2, 3]`: the cotangent carries one more axis than the smaller
+    // operand, so that leading axis and the singleton axis both have to be reduced.
     let small = builder
         .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(1)]))
         .unwrap();
