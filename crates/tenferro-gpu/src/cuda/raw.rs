@@ -251,10 +251,22 @@ impl<'s> Session<'s> {
         op: &'static str,
     ) -> crate::Result<TypedTensor<T>> {
         let (pointer, bytes) = self.address(tensor, op)?;
-        let staging = PinnedStaging::new(bytes, op)?;
+        // One pinned staging buffer per runtime, reused by every later download. A nested
+        // download (the caller still holds a session resource, so the lock is taken) keeps its
+        // own buffer instead of blocking on the cache.
+        let allocations = &self.runtime.inner.pinned_staging_allocations;
+        let mut cached = self.runtime.inner.pinned_staging.try_lock().ok();
+        let mut fallback = PinnedStaging::empty();
+        let destination = match cached.as_mut() {
+            Some(slot) => {
+                slot.get_or_insert_with(PinnedStaging::empty)
+                    .ensure(bytes, op, allocations)?
+            }
+            None => fallback.ensure(bytes, op, allocations)?,
+        };
         let status = unsafe {
             cudarc::driver::sys::cuMemcpyDtoHAsync_v2(
-                staging.pointer,
+                destination,
                 pointer as cudarc::driver::sys::CUdeviceptr,
                 bytes,
                 self.scope.stream() as usize as *mut cudarc::driver::sys::CUstream_st,
@@ -267,7 +279,12 @@ impl<'s> Session<'s> {
             ));
         }
         self.synchronize()?;
-        let source = staging.as_slice::<T>(bytes / std::mem::size_of::<T>().max(1));
+        let source = unsafe {
+            std::slice::from_raw_parts(
+                destination as *const T,
+                bytes / std::mem::size_of::<T>().max(1),
+            )
+        };
         let mut values: Vec<T> = Vec::new();
         values
             .try_reserve_exact(source.len())
@@ -539,35 +556,67 @@ impl CudaEngine {
     }
 }
 
-/// A pinned host buffer used as the staging area of one download.
-struct PinnedStaging {
+/// A pinned host buffer used as the staging area of downloads.
+///
+/// The runtime keeps one of these and reuses it, growing on demand: pinning and unpinning a fresh
+/// buffer per download cost more than the copy it staged (a 4-byte `cuMemHostAlloc` measured
+/// 1.9 ms beside a 19 us device-to-host copy in the daily GPU linalg profile).
+pub(crate) struct PinnedStaging {
     pointer: *mut std::ffi::c_void,
     bytes: usize,
 }
 
+// SAFETY: the buffer is a plain page-locked host allocation with no interior aliasing. It lives
+// behind the runtime state's mutex, so one download borrows it at a time.
+unsafe impl Send for PinnedStaging {}
+unsafe impl Sync for PinnedStaging {}
+
 impl PinnedStaging {
-    fn new(bytes: usize, op: &'static str) -> crate::Result<PinnedStaging> {
-        let mut pointer: *mut std::ffi::c_void = std::ptr::null_mut();
-        let status = unsafe {
-            cudarc::driver::sys::cuMemHostAlloc(
-                &mut pointer,
-                bytes.max(1),
-                cudarc::driver::sys::CU_MEMHOSTALLOC_PORTABLE,
-            )
-        };
-        if status != cudarc::driver::sys::CUresult::CUDA_SUCCESS {
-            return Err(crate::Error::runtime_state(
-                op,
-                format!("cuMemHostAlloc failed with {status:?}"),
-            ));
+    /// The empty staging entry the runtime fills on its first download.
+    pub(crate) fn empty() -> Self {
+        Self {
+            pointer: std::ptr::null_mut(),
+            bytes: 0,
         }
-        Ok(PinnedStaging { pointer, bytes })
     }
 
-    fn as_slice<T>(&self, count: usize) -> &[T] {
-        // SAFETY: the allocation holds `bytes` pinned bytes, the copy above filled them after a
-        // stream barrier, and `T` is plain data whose count fits the allocation.
-        unsafe { std::slice::from_raw_parts(self.pointer as *const T, count) }
+    /// A writable staging area of at least `bytes` bytes, growing once if needed.
+    fn ensure(
+        &mut self,
+        bytes: usize,
+        op: &'static str,
+        allocations: &std::sync::atomic::AtomicU64,
+    ) -> crate::Result<*mut std::ffi::c_void> {
+        let bytes = bytes.max(1);
+        if self.pointer.is_null() || self.bytes < bytes {
+            // SAFETY: `pointer` is null or this entry's own live pinned allocation, released once
+            // here before the field is overwritten.
+            unsafe {
+                if !self.pointer.is_null() {
+                    let _ = cudarc::driver::sys::cuMemFreeHost(self.pointer);
+                }
+            }
+            self.pointer = std::ptr::null_mut();
+            self.bytes = 0;
+            let mut pointer: *mut std::ffi::c_void = std::ptr::null_mut();
+            let status = unsafe {
+                cudarc::driver::sys::cuMemHostAlloc(
+                    &mut pointer,
+                    bytes,
+                    cudarc::driver::sys::CU_MEMHOSTALLOC_PORTABLE,
+                )
+            };
+            if status != cudarc::driver::sys::CUresult::CUDA_SUCCESS {
+                return Err(crate::Error::runtime_state(
+                    op,
+                    format!("cuMemHostAlloc failed with {status:?}"),
+                ));
+            }
+            self.pointer = pointer;
+            self.bytes = bytes;
+            allocations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(self.pointer)
     }
 }
 
