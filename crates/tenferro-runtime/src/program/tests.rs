@@ -774,6 +774,45 @@ fn import_maps_source_input_positions_not_value_slots() {
 }
 
 #[test]
+fn import_keeps_an_input_that_only_a_shape_declaration_names() {
+    let mut source = SemanticProgramBuilder::new();
+    // `first`'s declared extent names input position 1, so `second` is a
+    // dependency of the declaration alone.
+    let first = source.input(symbolic_axis_spec(1)).unwrap();
+    let _second = source
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(3)]))
+        .unwrap();
+    let root = source.add_op(CoreSemanticOp::Neg, &[first]).unwrap()[0];
+    let source = source.finish(&[root]).unwrap();
+
+    let mut destination = SemanticProgramBuilder::new();
+    let imported = destination
+        .import(ProgramImport {
+            program: source.program.as_ref(),
+            bindings: None,
+            input_map: &[],
+            roots: &[root],
+        })
+        .unwrap();
+    let frozen = destination.finish(imported.roots()).unwrap();
+    let program = frozen.program.as_ref();
+
+    assert_eq!(
+        program.inputs().len(),
+        2,
+        "an input named only by a shape declaration is still a dependency"
+    );
+    assert_eq!(
+        program.value_metadata(program.inputs()[0]).unwrap().shape(),
+        &[ShapeExtent::Exact(DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0
+        })],
+        "the declaration must survive the import instead of degrading to `Unknown`"
+    );
+}
+
+#[test]
 fn import_numbers_new_inputs_after_the_destination_inputs() {
     let mut source = SemanticProgramBuilder::new();
     let input = source.input(symbolic_axis_spec(0)).unwrap();
@@ -900,6 +939,81 @@ fn snapshot_keeps_effectful_operations_whose_outputs_are_not_requested() {
             outputs.len() + 1
         );
     }
+}
+
+/// An extension with no outputs at all: only its declaration of an effect can
+/// keep it in the program.
+#[derive(Debug)]
+struct EffectOnlyExtension;
+
+impl ExtensionOp for EffectOnlyExtension {
+    fn family_id(&self) -> &'static str {
+        "tenferro-tests.write-only.v1"
+    }
+
+    fn payload_hash(&self, hasher: &mut dyn Hasher) {
+        hasher.write_u8(7);
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().is::<Self>()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(Self)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        0
+    }
+
+    fn infer_output_meta(
+        &self,
+        _context: &mut ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(Vec::new())
+    }
+
+    fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
+        static EFFECTS: [ExtensionEffect; 1] = [ExtensionEffect {
+            family: "tenferro-tests.state.v1",
+            key: 0,
+            access: ExtensionEffectAccess::Write,
+        }];
+        ExtensionEffectDeclaration::Declared(&EFFECTS)
+    }
+
+    fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
+        ExtensionAliasDeclaration::AllFresh
+    }
+}
+
+#[test]
+fn snapshot_keeps_an_effectful_operation_with_no_outputs() {
+    let mut builder = SemanticProgramBuilder::new();
+    let state = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    builder
+        .add_extension(Arc::new(EffectOnlyExtension), &[state])
+        .unwrap();
+
+    let (frozen, _) = builder.snapshot_pruned(&[]).unwrap();
+
+    assert_eq!(
+        frozen.program.operations().count(),
+        1,
+        "an operation whose only observable result is its effect must survive a snapshot"
+    );
+    assert_eq!(frozen.program.inputs().len(), 1);
 }
 
 #[test]

@@ -266,11 +266,14 @@ impl SemanticProgramBuilder {
             live[output.slot as usize] = true;
         }
         // An effectful operation is observable even when no caller asks for its
-        // outputs, so its outputs seed liveness exactly like a requested output.
-        for operation in &self.operations {
+        // outputs, so the operation itself seeds liveness like a requested output,
+        // and its outputs stay live so the rebuilt operation keeps its arity.
+        let mut live_operation = vec![false; self.operations.len()];
+        for (index, operation) in self.operations.iter().enumerate() {
             if operation.effects.is_empty() {
                 continue;
             }
+            live_operation[index] = true;
             for output in &operation.outputs {
                 live[output.slot as usize] = true;
             }
@@ -289,17 +292,20 @@ impl SemanticProgramBuilder {
         };
         for _ in 0..=aliases.len() {
             let mut changed = false;
-            for operation in self.operations.iter().rev() {
-                if operation
-                    .outputs
-                    .iter()
-                    .any(|output| live[output.slot as usize])
+            for (index, operation) in self.operations.iter().enumerate().rev() {
+                if !live_operation[index]
+                    && !operation
+                        .outputs
+                        .iter()
+                        .any(|output| live[output.slot as usize])
                 {
-                    for input in &operation.inputs {
-                        if !live[input.slot as usize] {
-                            live[input.slot as usize] = true;
-                            changed = true;
-                        }
+                    continue;
+                }
+                live_operation[index] = true;
+                for input in &operation.inputs {
+                    if !live[input.slot as usize] {
+                        live[input.slot as usize] = true;
+                        changed = true;
                     }
                 }
             }
@@ -321,6 +327,9 @@ impl SemanticProgramBuilder {
                 let SemanticOp::Extension(extension) = &operation.op else {
                     continue;
                 };
+                if !operation.effects.is_empty() {
+                    continue;
+                }
                 let live_outputs: Vec<bool> = operation
                     .outputs
                     .iter()
@@ -500,15 +509,15 @@ impl SemanticProgramBuilder {
             Ok(())
         };
 
-        for operation in &self.operations {
+        for (index, operation) in self.operations.iter().enumerate() {
+            if !live_operation[index] {
+                continue;
+            }
             let live_outputs: Vec<bool> = operation
                 .outputs
                 .iter()
                 .map(|output| live[output.slot as usize])
                 .collect();
-            if !live_outputs.iter().any(|live| *live) {
-                continue;
-            }
             for input in &operation.inputs {
                 if alias_of(*input).is_some() {
                     materialize_alias(&mut rebuild, &mut mapped, *input)?;
@@ -1273,6 +1282,45 @@ impl ImportTransaction {
             }
         }
 
+        // A kept value's declared extent and a kept operation's guard name source
+        // inputs by position, which is a dependency the value graph does not carry.
+        // Pull those inputs in, or the declaration would have to be dropped.
+        loop {
+            let mut positions = Vec::new();
+            for input in &source.inputs {
+                if !needed_values[input.slot as usize] {
+                    continue;
+                }
+                for extent in source.values[input.slot as usize].shape() {
+                    if let ShapeExtent::Exact(expr) | ShapeExtent::UpperBound(expr) = extent {
+                        collect_input_positions(expr, &mut positions);
+                    }
+                }
+            }
+            for (operation, needed) in source.operations.iter().zip(&needed_operations) {
+                if !needed {
+                    continue;
+                }
+                for guard in operation.shape_guards.iter() {
+                    collect_input_positions(guard.lhs(), &mut positions);
+                    collect_input_positions(guard.rhs(), &mut positions);
+                }
+            }
+            let mut changed = false;
+            for position in positions {
+                let Some(input) = source.inputs.get(position) else {
+                    continue;
+                };
+                if !needed_values[input.slot as usize] {
+                    needed_values[input.slot as usize] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
         let imported_input_count = source
             .inputs
             .iter()
@@ -1489,6 +1537,23 @@ enum InputExtentPrecision {
     Exact,
     Bounded,
     Unknown,
+}
+
+/// Collect every program input position `expr` names.
+fn collect_input_positions(expr: &DimExpr, positions: &mut Vec<usize>) {
+    match expr {
+        DimExpr::Const(_) => {}
+        DimExpr::InputDim { input_idx, .. } => positions.push(*input_idx),
+        DimExpr::Add(lhs, rhs)
+        | DimExpr::Sub(lhs, rhs)
+        | DimExpr::Mul(lhs, rhs)
+        | DimExpr::FloorDiv(lhs, rhs)
+        | DimExpr::Min(lhs, rhs)
+        | DimExpr::Max(lhs, rhs) => {
+            collect_input_positions(lhs, positions);
+            collect_input_positions(rhs, positions);
+        }
+    }
 }
 
 /// Translate one imported extent into the destination input space.
