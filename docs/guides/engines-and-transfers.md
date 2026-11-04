@@ -41,6 +41,20 @@ adds an explicit host barrier. Neither is implicit: entering a raw scope is not
 a host barrier either, so raw kernels and vendor calls can be interleaved with
 eager operations without stalling the pipeline.
 
+## Download staging and its bound
+
+A raw-session download stages device bytes through page-locked host memory, because pinning a
+buffer costs about 1.9 ms beside a 19 us copy. One buffer per runtime serves every download, so
+solver readbacks and small exports do not pay that cost per call.
+
+That buffer is memory the OS cannot reclaim, so it is bounded. A download at or below
+`DEFAULT_PINNED_STAGING_LIMIT_BYTES` (8 MiB) is staged through the retained buffer; a larger one
+stages through a temporary buffer released when the download returns, so a single large readback
+cannot pin gigabytes for the runtime's lifetime. `CudaRuntime::pinned_staging_stats()` reports the
+retained bytes, the allocations made and the current bound,
+`CudaRuntime::set_pinned_staging_limit_bytes` moves the bound (releasing a larger buffer at once,
+`usize::MAX` retaining everything), and `CudaRuntime::clear_pinned_staging` releases it now.
+
 ## Prepared graphs on the same engine
 
 A compiled graph prepared for this engine runs on it, so steady-state replay
