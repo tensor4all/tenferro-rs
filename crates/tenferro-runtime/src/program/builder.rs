@@ -750,8 +750,9 @@ impl SemanticProgramBuilder {
     /// Resolve one of `value`'s declared extents against the shapes bound to the
     /// inputs it names.
     ///
-    /// A caller asking about a single axis pays only for the inputs that axis
-    /// references; an expression that is already constant needs no binding at all.
+    /// A caller asking about a single axis pays one binding scan and one expression
+    /// walk per input that axis references — never a pass over every input. An
+    /// expression that is already constant needs no binding at all.
     ///
     /// # Examples
     ///
@@ -814,11 +815,11 @@ impl SemanticProgramBuilder {
                     .bindings
                     .iter()
                     .find(|binding| binding.input == *input)
-                    .map(|binding| binding.tensor.shape().to_vec())
+                    .map(|binding| binding.tensor.shape())
                 else {
                     continue;
                 };
-                resolved = substitute_input_extents(&resolved, position, &bound);
+                resolved = substitute_input_extents(&resolved, position, bound);
             }
             resolved
         };
