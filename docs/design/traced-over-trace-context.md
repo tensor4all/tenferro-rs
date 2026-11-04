@@ -402,12 +402,26 @@ operation's own input coordinates. A derivative built from symbolic extents is
 therefore shape-polymorphic, including for a symbolically declared input that
 carries data.
 
-One limit stays: a rule whose *op payload* is a literal cannot be polymorphic.
-`Slice`, `Pad`, `DynamicSlice` and the concatenate transpose take `usize` offsets
-and sizes, so those rules read the lengths from the bindings through
-`SemanticProgramBuilder::resolved_extents` and the resulting derivative is
-specialised to the binding present at differentiation time. Everything derived
-from extents (`Reshape`, `BroadcastInDim`, `DynamicTruncate`) stays symbolic.
+Polymorphism holds for the *structure*, not for every decision a rule makes while
+it builds that structure. Two exceptions are as-built and accepted:
+
+1. **A literal payload cannot be polymorphic.** `Slice`, `Pad`, `DynamicSlice` and
+   the concatenate transpose take `usize` offsets and sizes, so those rules read
+   the lengths from the bindings through
+   `SemanticProgramBuilder::resolved_extents` (one axis at a time through
+   `resolved_extent`) and the resulting derivative is specialised to the binding
+   present at differentiation time.
+2. **A broadcast's reduction axes depend on the construction-time binding.** A
+   broadcast VJP has to know whether the primal axis was a singleton, which is a
+   fact about the binding, not about the expression: no operation reduces "only if
+   the axis is 1". The reduce axes are therefore fixed when the derivative is
+   built. The payload of every `Reshape`/`BroadcastInDim` it emits stays symbolic,
+   and re-running the same derivative against a binding whose singleton structure
+   differs is out of contract.
+
+Everything derived from extents (`Reshape`, `BroadcastInDim`, `DynamicTruncate`)
+stays symbolic, so a derivative is reusable across bindings that share the
+singleton pattern of the one it was built from.
 
 As built, dead extension outputs are pruned at **snapshot** time, so the graph a
 snapshot exposes (and therefore the primal program a caller compiles) already
