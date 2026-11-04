@@ -288,16 +288,7 @@ fn exact_usize_shape(
     value: ProgramValue,
     field: &'static str,
 ) -> Result<Vec<usize>, SemanticAdTransformError> {
-    exact_value_shape(builder, value, SemanticTransformRole::Vjp, field)?
-        .into_iter()
-        .map(|extent| match extent {
-            tenferro_ops::dim_expr::DimExpr::Const(value) => Ok(value),
-            _ => Err(metadata_error(
-                SemanticTransformRole::Vjp,
-                format!("{field} requires concrete extents"),
-            )),
-        })
-        .collect()
+    bounded_usize_shape(builder, value, field, false)
 }
 
 fn const_usize_shape_for_inverse_slice_padding(
@@ -305,21 +296,41 @@ fn const_usize_shape_for_inverse_slice_padding(
     value: ProgramValue,
     field: &'static str,
 ) -> Result<Vec<usize>, SemanticAdTransformError> {
-    builder
-        .value_metadata(value)?
-        .shape()
+    bounded_usize_shape(builder, value, field, true)
+}
+
+/// Literal axis lengths of `value`, for the rules that must emit them.
+///
+/// Programs imported for the transform keep their symbolic extents, so a value
+/// that carries a binding reads its concrete shape from the binding instead of
+/// forcing the whole transformed program to become concrete.
+fn bounded_usize_shape(
+    builder: &SemanticProgramBuilder,
+    value: ProgramValue,
+    field: &'static str,
+    accept_upper_bound: bool,
+) -> Result<Vec<usize>, SemanticAdTransformError> {
+    let extents = builder.resolved_extents(value)?;
+    let lengths = extents
         .iter()
         .map(|extent| match extent {
-            ShapeExtent::Exact(DimExpr::Const(value))
-            | ShapeExtent::UpperBound(DimExpr::Const(value)) => Ok(*value),
-            ShapeExtent::Exact(_) | ShapeExtent::UpperBound(_) | ShapeExtent::Unknown => {
-                Err(metadata_error(
-                    SemanticTransformRole::Vjp,
-                    format!("{field} requires constant exact or upper-bound extents"),
-                ))
-            }
+            ShapeExtent::Exact(DimExpr::Const(value)) => Some(*value),
+            ShapeExtent::UpperBound(DimExpr::Const(value)) if accept_upper_bound => Some(*value),
+            _ => None,
         })
-        .collect()
+        .collect::<Option<Vec<_>>>();
+    if let Some(lengths) = lengths {
+        return Ok(lengths);
+    }
+    let expected = if accept_upper_bound {
+        "constant exact or upper-bound extents"
+    } else {
+        "concrete extents"
+    };
+    Err(metadata_error(
+        SemanticTransformRole::Vjp,
+        format!("{field} requires {expected}"),
+    ))
 }
 
 fn ceil_div(numerator: i128, denominator: i128) -> Result<i128, SemanticAdTransformError> {

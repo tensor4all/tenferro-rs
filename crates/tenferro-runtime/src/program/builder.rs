@@ -624,6 +624,56 @@ impl SemanticProgramBuilder {
         })
     }
 
+    /// Borrow the program inputs in program input order.
+    #[doc(hidden)]
+    pub fn inputs(&self) -> &[ProgramValue] {
+        &self.inputs
+    }
+
+    /// Resolve `value`'s declared extents against the shapes bound to the inputs.
+    ///
+    /// A program keeps symbolic extents so it stays shape-polymorphic; a caller
+    /// that needs a literal length reads it here instead of asking the program to
+    /// become concrete.
+    #[doc(hidden)]
+    pub fn resolved_extents(
+        &self,
+        value: ProgramValue,
+    ) -> Result<Vec<ShapeExtent<DimExpr>>, ProgramBuildError> {
+        let bound_input_shapes: Vec<Option<Vec<DimExpr>>> = self
+            .inputs
+            .iter()
+            .map(|input| {
+                self.bindings
+                    .iter()
+                    .find(|binding| binding.input == *input)
+                    .map(|binding| {
+                        binding
+                            .tensor
+                            .shape()
+                            .iter()
+                            .map(|&size| DimExpr::Const(size))
+                            .collect()
+                    })
+            })
+            .collect();
+        Ok(self
+            .value_metadata(value)?
+            .shape()
+            .iter()
+            .map(|extent| match extent {
+                ShapeExtent::Exact(expr) => ShapeExtent::Exact(resolve_dim_expr_from_input_shapes(
+                    expr,
+                    &bound_input_shapes,
+                )),
+                ShapeExtent::UpperBound(expr) => ShapeExtent::UpperBound(
+                    resolve_dim_expr_from_input_shapes(expr, &bound_input_shapes),
+                ),
+                ShapeExtent::Unknown => ShapeExtent::Unknown,
+            })
+            .collect())
+    }
+
     #[cfg(test)]
     pub(crate) fn operation_views_for_test(
         &self,
@@ -1257,38 +1307,12 @@ impl ImportTransaction {
             bindings: Vec::new(),
             roots: Box::new([]),
         };
-        // Pre-resolve concrete input shapes from tensor bindings for InputDim
-        // resolution in imported metadata.
-        let bound_input_shapes: Vec<Option<Vec<DimExpr>>> = source
-            .inputs
-            .iter()
-            .map(|input| {
-                request.bindings.and_then(|bindings| {
-                    bindings.tensor_for_input(*input).map(|tensor| {
-                        tensor
-                            .shape()
-                            .iter()
-                            .map(|&size| DimExpr::Const(size))
-                            .collect()
-                    })
-                })
-            })
-            .collect();
+        // Imported metadata keeps the source's expressions: resolving `InputDim`
+        // against the bound shapes would turn a symbolic program into a concrete one,
+        // and an operation payload built from that metadata cannot be made symbolic
+        // again. A rule that needs a concrete length reads it from the binding.
         let mapped_input: std::collections::HashMap<ProgramValue, ProgramValue> =
             request.input_map.iter().copied().collect();
-
-        let resolve_extent = |extent: &ShapeExtent<DimExpr>| -> ShapeExtent<DimExpr> {
-            match extent {
-                ShapeExtent::Exact(expr) => ShapeExtent::Exact(resolve_dim_expr_from_input_shapes(
-                    expr,
-                    &bound_input_shapes,
-                )),
-                ShapeExtent::UpperBound(expr) => ShapeExtent::UpperBound(
-                    resolve_dim_expr_from_input_shapes(expr, &bound_input_shapes),
-                ),
-                ShapeExtent::Unknown => ShapeExtent::Unknown,
-            }
-        };
 
         let mut remap = vec![None; source.values.len()];
         // Program dimension expressions name inputs by program input *position*,
@@ -1331,7 +1355,7 @@ impl ImportTransaction {
                 source_metadata
                     .shape()
                     .iter()
-                    .map(&resolve_extent)
+                    .cloned()
                     .map(|extent| {
                         remap_imported_extent(
                             extent,
@@ -1381,7 +1405,7 @@ impl ImportTransaction {
                     meta.dtype(),
                     meta.shape()
                         .iter()
-                        .map(&resolve_extent)
+                        .cloned()
                         .map(|extent| {
                             remap_imported_extent(
                                 extent,

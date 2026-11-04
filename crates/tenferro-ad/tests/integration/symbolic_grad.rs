@@ -190,3 +190,50 @@ fn grad_embed_diag_shifted_axis_restores_input_layout() {
         assert_eq!(grad.try_concrete_shape(), Some(vec![2, 3]));
     }
 }
+
+#[test]
+fn derivative_of_a_bound_symbolic_input_keeps_symbolic_extents() {
+    use tenferro_ops::dim_expr::DimExpr;
+    use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef};
+
+    let trace = TraceContext::new();
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    trace
+        .bind_input(x.trace_value(), bound)
+        .expect("bind the symbolic leaf");
+
+    let loss = x.reduce_sum(Some(&[0])).unwrap();
+    let grad = loss.grad(&x).expect("grad build");
+
+    // The transformed program keeps the symbolic extents: a payload that carries
+    // `x`'s extent references the program input instead of `x`'s bound size.
+    let graph = trace.finish(&[grad.trace_value()]).expect("snapshot");
+    let mut symbolic_payloads = 0usize;
+    for operation in graph.program().operations() {
+        let SemanticOpRef::Core(core) = operation.op() else {
+            continue;
+        };
+        let payload = match core {
+            CoreSemanticOp::BroadcastInDim { shape, .. } => shape,
+            CoreSemanticOp::Reshape { to_shape } => to_shape,
+            _ => continue,
+        };
+        for extent in payload {
+            assert!(
+                !matches!(extent, DimExpr::Const(_)),
+                "derivative payload was specialized to the bound shape: {payload:?}"
+            );
+            symbolic_payloads += 1;
+        }
+    }
+    assert!(
+        symbolic_payloads > 0,
+        "the derivative must carry the broadcast of the cotangent"
+    );
+
+    // The derivative still evaluates for the binding it was built against.
+    let engine = cpu_runtime();
+    let out = grad.run_with(&engine).expect("grad eval");
+    assert_eq!(f64_data(&out), &[1.0, 1.0]);
+}

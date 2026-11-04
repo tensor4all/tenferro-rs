@@ -425,9 +425,11 @@ fn import_source(
             .operations()
             .flat_map(|operation| operation.outputs().iter().copied()),
     );
-    // AD rules that need extents (slice, pad, reductions) resolve them from the
-    // bound shapes; the final import back into the trace maps these inputs onto
-    // the live values, so no concretized extent reaches the traced program.
+    // The import keeps the source's symbolic extents and only re-attaches the
+    // bindings, so a rule that emits a literal length (pad, slice, concatenate)
+    // reads it from the binding rather than making the whole derivative program
+    // concrete. `Reshape`/`BroadcastInDim` payloads therefore stay symbolic, and the
+    // final import maps these inputs back onto the live traced values.
     let imported = builder.import(ProgramImport {
         program: input.program.as_ref(),
         bindings: Some(&input.bindings),
@@ -854,16 +856,11 @@ fn vjp_core(
                 SemanticTransformRole::Vjp,
                 "reduce-sum input",
             )?;
-            let dims = (0..input_shape.shape.len())
+            let dims: Vec<usize> = (0..input_shape.shape.len())
                 .filter(|axis| !axes.contains(axis))
                 .collect();
-            let broadcast = broadcast_ad_value_in_dim_to_shape(
-                builder,
-                cotangent,
-                primal_inputs[0],
-                &input_shape,
-                dims,
-            )?;
+            let broadcast =
+                broadcast_ad_value_in_dim_to_shape(builder, cotangent, &input_shape, dims)?;
             let broadcast = truncate_ad_value_to_dynamic_axes(
                 builder,
                 broadcast,
@@ -1283,7 +1280,7 @@ fn reshape_ad_value_to_input(
         SemanticTransformRole::Vjp,
         "reshape input",
     )?;
-    let reshaped = reshape_ad_value_to_shape(builder, value, primal_input, &shape)?;
+    let reshaped = reshape_ad_value_to_shape(builder, value, &shape)?;
     truncate_ad_value_to_dynamic_axes(builder, reshaped, primal_input, &shape.dynamic_axes)
 }
 
@@ -1383,7 +1380,7 @@ fn transpose_broadcast(
         value = builder.add_op(CoreSemanticOp::Transpose { perm }, &[value])?[0];
     }
     if builder.value_metadata(value)?.shape() != builder.value_metadata(primal_input)?.shape() {
-        value = reshape_value_to_shape(builder, value, primal_input, &input_shape)?;
+        value = reshape_value_to_shape(builder, value, &input_shape)?;
     }
     value =
         truncate_value_to_dynamic_axes(builder, value, primal_input, &input_shape.dynamic_axes)?;
@@ -1903,7 +1900,7 @@ fn broadcast_scalar_like(
         Ok(scalar)
     } else {
         let shape = shape_plan(metadata.shape(), role, what)?;
-        let value = broadcast_value_in_dim_to_shape(builder, scalar, anchor, &shape, Vec::new())?;
+        let value = broadcast_value_in_dim_to_shape(builder, scalar, &shape, Vec::new())?;
         Ok(truncate_value_to_dynamic_axes(
             builder,
             value,
@@ -1981,7 +1978,7 @@ fn zero_constant_like(
         return Ok(scalar);
     }
     let shape = shape_plan(metadata.shape(), role, "zero-like anchor")?;
-    let zero = broadcast_value_in_dim_to_shape(builder, scalar, anchor, &shape, Vec::new())?;
+    let zero = broadcast_value_in_dim_to_shape(builder, scalar, &shape, Vec::new())?;
     Ok(truncate_value_to_dynamic_axes(
         builder,
         zero,
@@ -2046,7 +2043,7 @@ fn normalize_ad_value(
         value = builder.add_op(CoreSemanticOp::ReduceSum { axes }, &[value])?[0];
     }
     if builder.value_metadata(value)?.shape() != target_metadata.shape() {
-        value = reshape_value_to_shape(builder, value, primal_input, &target_shape)?;
+        value = reshape_value_to_shape(builder, value, &target_shape)?;
     }
     value =
         truncate_value_to_dynamic_axes(builder, value, primal_input, &target_shape.dynamic_axes)?;
@@ -2121,16 +2118,12 @@ fn shape_plan(
 fn reshape_ad_value_to_shape(
     builder: &mut SemanticProgramBuilder,
     value: AdValue,
-    shape_source: ProgramValue,
     shape: &ValueShapePlan,
 ) -> Result<AdValue, ProgramBuildError> {
     match value {
         AdValue::Absent => Ok(AdValue::Absent),
         AdValue::Value(value) => Ok(AdValue::Value(reshape_value_to_shape(
-            builder,
-            value,
-            shape_source,
-            shape,
+            builder, value, shape,
         )?)),
     }
 }
@@ -2138,29 +2131,23 @@ fn reshape_ad_value_to_shape(
 fn reshape_value_to_shape(
     builder: &mut SemanticProgramBuilder,
     value: ProgramValue,
-    shape_source: ProgramValue,
     shape: &ValueShapePlan,
 ) -> Result<ProgramValue, ProgramBuildError> {
     let mut inputs = vec![value];
-    let to_shape = payload_shape_for_shape_source(shape, &mut inputs, shape_source);
+    let to_shape = payload_shape_in_op_coordinates(builder, &shape.shape, &mut inputs);
     Ok(builder.add_op(CoreSemanticOp::Reshape { to_shape }, &inputs)?[0])
 }
 
 fn broadcast_ad_value_in_dim_to_shape(
     builder: &mut SemanticProgramBuilder,
     value: AdValue,
-    shape_source: ProgramValue,
     shape: &ValueShapePlan,
     dims: Vec<usize>,
 ) -> Result<AdValue, ProgramBuildError> {
     match value {
         AdValue::Absent => Ok(AdValue::Absent),
         AdValue::Value(value) => Ok(AdValue::Value(broadcast_value_in_dim_to_shape(
-            builder,
-            value,
-            shape_source,
-            shape,
-            dims,
+            builder, value, shape, dims,
         )?)),
     }
 }
@@ -2168,32 +2155,55 @@ fn broadcast_ad_value_in_dim_to_shape(
 fn broadcast_value_in_dim_to_shape(
     builder: &mut SemanticProgramBuilder,
     value: ProgramValue,
-    shape_source: ProgramValue,
     shape: &ValueShapePlan,
     dims: Vec<usize>,
 ) -> Result<ProgramValue, ProgramBuildError> {
     let mut inputs = vec![value];
-    let shape = payload_shape_for_shape_source(shape, &mut inputs, shape_source);
+    let shape = payload_shape_in_op_coordinates(builder, &shape.shape, &mut inputs);
     Ok(builder.add_op(CoreSemanticOp::BroadcastInDim { shape, dims }, &inputs)?[0])
 }
 
-fn payload_shape_for_shape_source(
-    shape: &ValueShapePlan,
+/// Translate a symbolic target shape from program coordinates into the
+/// coordinates of the operation that will carry it.
+///
+/// Program extents name program inputs, while a `Reshape`/`BroadcastInDim` payload
+/// names its own inputs, so every referenced program input becomes one auxiliary
+/// shape-reference input. The shape stays symbolic, which keeps the derivative
+/// program polymorphic instead of baking the bound extents into it.
+fn payload_shape_in_op_coordinates(
+    builder: &SemanticProgramBuilder,
+    shape: &[DimExpr],
     inputs: &mut Vec<ProgramValue>,
-    shape_source: ProgramValue,
 ) -> Vec<DimExpr> {
-    if DimExpr::max_input_idx_all(&shape.shape).is_none() {
-        return shape.shape.clone();
+    if DimExpr::max_input_idx_all(shape).is_none() {
+        return shape.to_vec();
     }
-    let input_idx = inputs
+    let program_inputs = builder.inputs();
+    shape
         .iter()
-        .position(|&input| input == shape_source)
-        .unwrap_or_else(|| {
-            let input_idx = inputs.len();
-            inputs.push(shape_source);
-            input_idx
-        });
-    DimExpr::input_shape(input_idx, shape.shape.len())
+        .map(|extent| {
+            let Some(sym) = tenferro_runtime::dim_expr_to_sym_dim_public(extent) else {
+                return extent.clone();
+            };
+            let mut tensor_map = Vec::new();
+            for id in sym.referenced_tensor_ids() {
+                let Some(&program_input) = program_inputs.get(id as usize) else {
+                    return extent.clone();
+                };
+                let op_input = match inputs.iter().position(|input| *input == program_input) {
+                    Some(index) => index,
+                    None => {
+                        let index = inputs.len();
+                        inputs.push(program_input);
+                        index
+                    }
+                };
+                tensor_map.push((id, op_input));
+            }
+            sym.to_dim_expr(&tensor_map)
+                .unwrap_or_else(|_| extent.clone())
+        })
+        .collect()
 }
 
 fn truncate_ad_value_to_dynamic_axes(

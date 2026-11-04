@@ -146,13 +146,9 @@ fn broadcast_reduction_output(
     let kept_dims = (0..input_shape.len())
         .filter(|axis| !axes.contains(axis))
         .collect();
-    Ok(builder.add_op(
-        CoreSemanticOp::BroadcastInDim {
-            shape: input_shape,
-            dims: kept_dims,
-        },
-        &[output],
-    )?[0])
+    let mut inputs = vec![output];
+    let shape = payload_shape_in_op_coordinates(builder, &input_shape, &mut inputs);
+    Ok(builder.add_op(CoreSemanticOp::BroadcastInDim { shape, dims: kept_dims }, &inputs)?[0])
 }
 
 fn reduce_prod_derivative_coefficient(
