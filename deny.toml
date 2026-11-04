@@ -18,6 +18,8 @@ deny = [
         "t4a-faer",
         "spindle",
         "gemm-common",
+        # The fork of gemm-common that t4a-faer 0.28.2 pulls in (tensor4all/t4a-gemm).
+        "t4a-gemm-common",
         "t4a-private-gemm-x86",
         # Third-party crates that bring rayon in themselves.
         "omeco",

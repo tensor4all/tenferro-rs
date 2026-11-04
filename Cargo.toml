@@ -101,7 +101,7 @@ libloading = "0.8"
 # (tensor4all/faer#28). Later patch fixes need only a targeted lock update, not
 # another manifest-bump cascade. Keep the `faer` key
 # and library name: tenferro-cpu re-exports this build as `tenferro_cpu::faer`.
-faer = { package = "t4a-faer", version = "0.28.0", default-features = false, features = ["std", "rayon", "threadteam"] }
+faer = { package = "t4a-faer", version = "0.28.2", default-features = false, features = ["std", "rayon", "threadteam"] }
 cblas-sys = "0.1"
 cblas-inject = "0.1.1"
 blas-src = { version = "0.14", default-features = false }
