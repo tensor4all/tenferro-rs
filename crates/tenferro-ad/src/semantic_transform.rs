@@ -1295,19 +1295,12 @@ fn axis_is_known_singleton(
     value: ProgramValue,
     axis: usize,
 ) -> bool {
-    builder
-        .resolved_extents(value)
-        .ok()
-        .and_then(|extents| {
-            extents.get(axis).map(|extent| {
-                matches!(
-                    extent,
-                    ShapeExtent::Exact(DimExpr::Const(1))
-                        | ShapeExtent::UpperBound(DimExpr::Const(1))
-                )
-            })
-        })
-        .unwrap_or(false)
+    builder.resolved_extent(value, axis).is_ok_and(|extent| {
+        matches!(
+            extent,
+            ShapeExtent::Exact(DimExpr::Const(1)) | ShapeExtent::UpperBound(DimExpr::Const(1))
+        )
+    })
 }
 
 fn transpose_broadcast(
@@ -1366,9 +1359,9 @@ fn transpose_broadcast(
             .copied()
             .enumerate()
             .filter_map(|(input_axis, output_axis)| {
-                (axis_is_known_singleton(builder, primal_input, input_axis)
-                    && input_shape.shape[input_axis] != output_shape.shape[output_axis])
-                    .then_some(output_axis)
+                (input_shape.shape[input_axis] != output_shape.shape[output_axis]
+                    && axis_is_known_singleton(builder, primal_input, input_axis))
+                .then_some(output_axis)
             }),
     );
     reduce_axes.sort_unstable();
@@ -2059,7 +2052,9 @@ fn normalize_ad_value(
             .zip(value_shape.shape.iter().skip(leading))
             .enumerate()
             .filter_map(|(axis, (target, actual))| {
-                (axis_is_known_singleton(builder, primal_input, axis + leading) && target != actual)
+                // `axis` indexes the primal input; `axis + leading` is the cotangent
+                // axis it was broadcast into.
+                (target != actual && axis_is_known_singleton(builder, primal_input, axis))
                     .then_some(axis + leading)
             }),
     );
