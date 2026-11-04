@@ -795,36 +795,32 @@ impl SemanticProgramBuilder {
         // Resolve only the inputs this one expression names: a constant extent, or
         // one whose inputs carry no binding, needs no lookup at all.
         let resolve = |expr: &DimExpr| -> DimExpr {
-            let mut positions = Vec::new();
-            collect_input_positions(expr, &mut positions);
-            if positions.is_empty() || self.bindings.is_empty() {
-                // Nothing to resolve: a constant expression, or no binding at all.
+            // A constant extent, or a builder with no bindings at all, needs no work.
+            if expr.max_input_idx().is_none() || self.bindings.is_empty() {
                 return expr.clone();
             }
+            // Substitute one referenced input at a time, so nothing proportional to
+            // the input count is allocated per axis query.
+            let mut resolved = expr.clone();
+            let mut positions = Vec::new();
+            collect_input_positions(expr, &mut positions);
             positions.sort_unstable();
             positions.dedup();
-            // Only the referenced positions are needed, so the table stops at the
-            // highest of them instead of spanning every input.
-            let mut shapes: Vec<Option<Vec<DimExpr>>> =
-                vec![None; positions.last().map_or(0, |position| position + 1)];
             for position in positions {
                 let Some(input) = self.inputs.get(position) else {
                     continue;
                 };
-                shapes[position] = self
+                let Some(bound) = self
                     .bindings
                     .iter()
                     .find(|binding| binding.input == *input)
-                    .map(|binding| {
-                        binding
-                            .tensor
-                            .shape()
-                            .iter()
-                            .map(|&size| DimExpr::Const(size))
-                            .collect()
-                    });
+                    .map(|binding| binding.tensor.shape().to_vec())
+                else {
+                    continue;
+                };
+                resolved = substitute_input_extents(&resolved, position, &bound);
             }
-            resolve_dim_expr_from_input_shapes(expr, &shapes)
+            resolved
         };
         Ok(match extent {
             ShapeExtent::Exact(expr) => ShapeExtent::Exact(resolve(expr)),
@@ -1687,6 +1683,45 @@ enum InputExtentPrecision {
     Exact,
     Bounded,
     Unknown,
+}
+
+/// Replace every `InputDim { input_idx: position, .. }` in `expr` with the
+/// corresponding axis of `bound`.
+///
+/// Substitution is per input, so resolving an extent costs one pass over the
+/// expression per referenced input and nothing proportional to the input count.
+fn substitute_input_extents(expr: &DimExpr, position: usize, bound: &[usize]) -> DimExpr {
+    match expr {
+        DimExpr::Const(value) => DimExpr::Const(*value),
+        DimExpr::InputDim { input_idx, axis } if *input_idx == position => bound
+            .get(*axis)
+            .map_or_else(|| expr.clone(), |size| DimExpr::Const(*size)),
+        DimExpr::InputDim { .. } => expr.clone(),
+        DimExpr::Add(lhs, rhs) => DimExpr::Add(
+            Box::new(substitute_input_extents(lhs, position, bound)),
+            Box::new(substitute_input_extents(rhs, position, bound)),
+        ),
+        DimExpr::Sub(lhs, rhs) => DimExpr::Sub(
+            Box::new(substitute_input_extents(lhs, position, bound)),
+            Box::new(substitute_input_extents(rhs, position, bound)),
+        ),
+        DimExpr::Mul(lhs, rhs) => DimExpr::Mul(
+            Box::new(substitute_input_extents(lhs, position, bound)),
+            Box::new(substitute_input_extents(rhs, position, bound)),
+        ),
+        DimExpr::FloorDiv(lhs, rhs) => DimExpr::FloorDiv(
+            Box::new(substitute_input_extents(lhs, position, bound)),
+            Box::new(substitute_input_extents(rhs, position, bound)),
+        ),
+        DimExpr::Min(lhs, rhs) => DimExpr::Min(
+            Box::new(substitute_input_extents(lhs, position, bound)),
+            Box::new(substitute_input_extents(rhs, position, bound)),
+        ),
+        DimExpr::Max(lhs, rhs) => DimExpr::Max(
+            Box::new(substitute_input_extents(lhs, position, bound)),
+            Box::new(substitute_input_extents(rhs, position, bound)),
+        ),
+    }
 }
 
 /// Collect every program input position `expr` names.
