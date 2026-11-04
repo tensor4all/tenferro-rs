@@ -258,9 +258,10 @@ impl<'s> Session<'s> {
         let mut cached = self.runtime.inner.pinned_staging.try_lock().ok();
         let mut fallback = PinnedStaging::empty();
         let destination = match cached.as_mut() {
-            Some(slot) => slot
-                .get_or_insert_with(PinnedStaging::empty)
-                .ensure(bytes, op, allocations)?,
+            Some(slot) => {
+                slot.get_or_insert_with(PinnedStaging::empty)
+                    .ensure(bytes, op, allocations)?
+            }
             None => fallback.ensure(bytes, op, allocations)?,
         };
         let status = unsafe {
@@ -617,7 +618,6 @@ impl PinnedStaging {
         }
         Ok(self.pointer)
     }
-
 }
 
 impl Drop for PinnedStaging {

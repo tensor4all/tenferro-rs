@@ -35,7 +35,7 @@ fn download(engine: &mut CudaEngine, tensor: &Tensor) -> Vec<f64> {
 }
 
 /// The session reads device tensors, so the upload has to happen first.
-fn raw_tensor<'a>(tensor: &'a Tensor) -> &'a tenferro_tensor::TypedTensor<f64> {
+fn raw_tensor(tensor: &Tensor) -> &tenferro_tensor::TypedTensor<f64> {
     tensor.as_typed::<f64>().expect("f64 tensor")
 }
 
