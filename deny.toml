@@ -17,8 +17,8 @@ deny = [
         # t4a-faer and the gemm crates it uses (faer's scheduling is tensor4all/faer#59).
         "t4a-faer",
         "spindle",
-        "gemm-common",
-        # The fork of gemm-common that t4a-faer 0.28.2 pulls in (tensor4all/t4a-gemm).
+        # gemm 0.19 became t4a-gemm 0.20 with t4a-faer 0.30 (tensor4all/faer#273):
+        # the rayon wrapper is t4a-gemm-common now, and `gemm-common` is gone.
         "t4a-gemm-common",
         "t4a-private-gemm-x86",
         # Third-party crates that bring rayon in themselves.
