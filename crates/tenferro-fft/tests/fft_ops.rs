@@ -10,7 +10,7 @@ use tenferro_fft::EagerSessionFftExt;
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
 use tenferro_runtime::{
     DType, Error as RuntimeError, ErrorPhase, ExecutionEngine, ExtensionCacheSelector,
-    GraphCompiler, PrepareError, Tensor, TracedTensor,
+    GraphCompiler, PrepareError, SymDim, Tensor, TracedTensor,
 };
 use tenferro_tensor::{
     BackendStorageHandle, DeviceId, DeviceKind, ErrorKind, GpuBackendKind, MemoryKind, Placement,
@@ -1336,4 +1336,74 @@ fn concrete_irfft_over_an_empty_batch_prepares_and_runs() {
         .into_tensor(&mut engine)
         .unwrap();
     assert_eq!(tensor.shape(), &[0, 4]);
+}
+
+/// Compile, prepare and run one traced `irfft` over `spectrum`, returning the shape.
+fn irfft_prepared_shape(
+    engine: &mut CpuEngine,
+    output: &TracedTensor,
+    spectrum: &Tensor,
+) -> Vec<usize> {
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(output).unwrap();
+    let runtime = support::cpu_runtime_with_fft(engine).unwrap();
+    let reads = [tenferro_tensor::TensorRead::from_tensor(spectrum)];
+    let prepared = runtime
+        .prepare(&program, &reads, &[engine.target()])
+        .expect("an empty batch is a legitimate input");
+    let outputs = runtime
+        .run(&mut [engine as &mut dyn ExecutionEngine], &prepared, &reads)
+        .unwrap();
+    outputs
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_tensor(engine)
+        .unwrap()
+        .shape()
+        .to_vec()
+}
+
+/// The symbolic and concrete routes must take the same decision for the same numbers.
+///
+/// `irfft(None, -1)` over a `[0, 3]` spectrum is a legitimate empty batch: the last
+/// axis is transformed to length 4 and the leading zero is carried through, so the
+/// op infers `[0, 4]`. The traced program only learns the extents at preparation,
+/// while the concrete route knows them when the op is appended; preparation must not
+/// apply an extent rule the extension does not have, or the two disagree on the same
+/// numbers (#2449 rejected this input before the extension could accept it).
+///
+/// This pins a zero the op *carries* from an empty input axis. A zero the op derives
+/// is rejected by the op's own inference before any runtime rule could fire, which
+/// `irfft_length_one_spectrum_is_rejected_at_preparation` covers.
+#[test]
+fn symbolic_and_concrete_irfft_agree_on_an_empty_batch() {
+    let spectrum = Tensor::from_vec_col_major(vec![0, 3], Vec::<Complex64>::new()).unwrap();
+    let mut engine = CpuEngine::serial();
+
+    let symbolic_trace = tenferro_runtime::TraceContext::new();
+    let symbolic_input = symbolic_trace.input_symbolic_shape(DType::C64, 2).unwrap();
+    let symbolic_output = symbolic_input.irfft(None, -1, FftNorm::Backward).unwrap();
+
+    let concrete_trace = tenferro_runtime::TraceContext::new();
+    let concrete_input = concrete_trace
+        .input_concrete_shape(DType::C64, &[0, 3])
+        .unwrap();
+    let concrete_output = concrete_input.irfft(None, -1, FftNorm::Backward).unwrap();
+
+    // The inference rule, read off the route that knows the extents at build time.
+    assert_eq!(
+        concrete_output.sym_shape(),
+        Some([SymDim::from(0usize), SymDim::from(4usize)].as_slice()),
+        "irfft over [0, 3] infers [0, 4]"
+    );
+
+    let symbolic_shape = irfft_prepared_shape(&mut engine, &symbolic_output, &spectrum);
+    let concrete_shape = irfft_prepared_shape(&mut engine, &concrete_output, &spectrum);
+
+    assert_eq!(
+        symbolic_shape, concrete_shape,
+        "the traced program and the concrete route must agree on [0, 3]"
+    );
+    assert_eq!(symbolic_shape, vec![0, 4]);
 }

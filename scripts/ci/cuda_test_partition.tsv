@@ -942,6 +942,7 @@ host	tenferro-fft::fft_ops	publishes_extension_family_id
 host	tenferro-fft::fft_ops	registered_runtime_rejects_gpu_input_without_ingress
 host	tenferro-fft::fft_ops	rfft_f32_returns_onesided_spectrum
 host	tenferro-fft::fft_ops	rfft_f64_returns_onesided_spectrum
+host	tenferro-fft::fft_ops	symbolic_and_concrete_irfft_agree_on_an_empty_batch
 host	tenferro-fft::fft_ops	symbolic_irfft_over_an_empty_batch_prepares_and_runs
 host	tenferro-fft::fft_ops	symbolic_irfft_with_a_positive_resolved_extent_still_prepares
 host	tenferro-fft::fft_ops	traced_fft_rejects_invalid_dtype_axis_and_length
