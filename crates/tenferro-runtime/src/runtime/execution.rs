@@ -377,9 +377,9 @@ pub(super) fn prepare(
     let defaults_validated = retained_inputs_validated(program, inputs.len());
     let inputs = resolve_input_reads(program, inputs, BoundInputCheck::Validate)?;
     let signature = input_signature_reads(&inputs)?;
-    // An extension whose output extent was symbolic at compile time is checked
-    // against the concrete signature here, so a zero extent is refused at
-    // preparation with the extension's own typed validation (#2434).
+    // An extension whose output extent was symbolic at compile time is re-inferred
+    // against the concrete signature here, so its own typed validation surfaces at
+    // preparation instead of at execution (#2434).
     super::preparation::validate_resolved_extension_extents(program.frozen(), &signature)?;
     let placement = ProgramPlacementConstraint::new(engine_ids, None)
         .map_err(|source| Error::runtime_state_source(CALLER, ErrorPhase::Execution, source))?;
