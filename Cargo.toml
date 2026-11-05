@@ -79,7 +79,7 @@ syn = "2"
 # tenferro starts no task itself.
 strided-view = "0.7.0"
 strided-traits = "0.7.0"
-threadteam = "0.3.0"
+threadteam = "0.4.0"
 strided-perm = { version = "0.10.0", features = ["parallel"] }
 # The CPU provider stack is on the strided 0.10 / tcontract 0.9 release train; one
 # `tcontract-exec` (check `cargo tree -i tcontract-exec`) keeps `Exec` one type.

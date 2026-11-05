@@ -547,13 +547,19 @@ Audit hints:
   worker of the engine's own pool (the entry runs in place) and from a worker of
   a different pool. A kernel that needs every worker at once (a barrier team)
   asks `Exec::can_broadcast` and takes a barrier-free path when it is refused.
-- Pinning is the caller's job. Pin the calling thread or the pool's workers
-  (`PoolBuilder::on_start`) when measuring or placing work; tenferro does not
-  narrow and restore CPU masks per operation. Do not assign one CPU per worker:
-  vendor teams inherit the creating worker's mask, so a one-CPU worker mask
-  silently confines the whole provider team to one CPU (measured: 3-20x slower
-  dgemm/LU paths at four threads). Provider thread counts remain controlled by
-  the provider variables below, not by worker affinity.
+- threadteam places the team; tenferro does not narrow or restore masks and
+  has no affinity setting of its own. Placement of a root team scope is on by
+  default (threadteam 0.4): member `k` gets one CPU of the calling thread's
+  affinity set `S`, the CPU `S[k]`, while the leader keeps all of `S` between
+  sections and is moved back to `S[0]` immediately before each one, so a vendor
+  team created from the leader inherits the full mask and not one CPU. Nothing
+  wraps: when `S` has fewer CPUs than participants nobody is placed and
+  `Pool::pin_skips()` counts those scopes. A caller that does not want this
+  builds its own pool with `Pool::builder().pin_participants(false)`. A member
+  that calls a vendor library directly is the one case confined to its single
+  CPU, so such a call goes through `Exec::external`, which restores the
+  member's mask first. Provider thread counts remain controlled by the
+  provider variables below, not by worker affinity.
 - `PoolBuilder` reserves 16 MiB per worker by default rather than the
   `std::thread` default of 2 MiB, because provider kernels recurse with large
   private frames: a `NUM_THREADS=64` OpenBLAS build keeps about 541 KiB per
