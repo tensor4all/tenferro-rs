@@ -173,29 +173,32 @@ pub(crate) struct Detached {
     pub(crate) completion: Option<t4a_cuda_runtime::Completion>,
 }
 
-/// A cheap, cloneable handle to one opened CUDA runtime.
-///
-/// The handle carries no submission authority of its own: explicit host transfers
-/// take the runtime's submission lock for the duration of one admission, and
-/// numerical submission belongs to the [`CudaEngine`](super::CudaEngine) that owns
 /// The runtime configuration this build opens with.
 ///
-/// `TENFERRO_CUDA_ARTIFACT_CACHE` names a directory that persists compiled kernel images, so a
+/// The artifact directory and the allocation pool's retention budget are read from the
+/// environment on every open: `TENFERRO_CUDA_ARTIFACT_CACHE` and
+/// `TENFERRO_CUDA_POOL_RELEASE_MIB`.
+///
+/// `TENFERRO_CUDA_ARTIFACT_CACHE` names the directory that persists compiled kernel images, so a
 /// later process reads them back instead of paying NVRTC again: a whole module is about 8 s per
-/// process on an A100, and a warm read is a few milliseconds. Unset keeps the in-memory cache
-/// only; `none`, `off` and `memory` say so explicitly; any other value is the directory, created
-/// on the first write.
+/// process on an A100, and a warm read is a few milliseconds. The value wins over the default;
+/// `none`, `off` and `memory` select the in-memory cache only; unset selects
+/// `$XDG_CACHE_HOME/tenferro/t4a-cuda-artifacts`, else `$HOME/.cache/tenferro/t4a-cuda-artifacts`
+/// (`%LOCALAPPDATA%\tenferro\t4a-cuda-artifacts` on Windows), and falls back to the in-memory
+/// cache when no absolute per-user root is set or the directory cannot be created. A newly created
+/// directory is mode 0700 on Unix.
 ///
 /// `TENFERRO_CUDA_POOL_RELEASE_MIB` overrides the allocation pool's retention budget, the idle
 /// device memory the pool keeps mapped instead of handing back to the driver. See
 /// [`pool_release_threshold_bytes`].
 fn default_config(total_memory_bytes: u64) -> t4a_cuda_runtime::Config {
+    let artifact_cache_dir = artifact_cache_dir(
+        std::env::var_os("TENFERRO_CUDA_ARTIFACT_CACHE").as_deref(),
+        |name| std::env::var_os(name),
+    )
+    .and_then(usable_artifact_cache_dir);
     t4a_cuda_runtime::Config {
-        artifact_cache_dir: artifact_cache_dir(
-            std::env::var_os("TENFERRO_CUDA_ARTIFACT_CACHE")
-                .as_deref()
-                .and_then(std::ffi::OsStr::to_str),
-        ),
+        artifact_cache_dir,
         pool_release_threshold: pool_release_threshold_bytes(total_memory_bytes),
         ..t4a_cuda_runtime::Config::default()
     }
@@ -236,15 +239,92 @@ fn pool_release_threshold_from(override_mib: Option<u64>, total_memory_bytes: u6
     share.clamp(MIN_POOL_RELEASE_BYTES, MAX_POOL_RELEASE_BYTES)
 }
 
-/// The persistent artifact directory named by `value`, or `None` for memory only.
-fn artifact_cache_dir(value: Option<&str>) -> Option<std::path::PathBuf> {
-    let value = value?.trim();
-    if value.is_empty() || matches!(value, "none" | "off" | "memory") {
-        return None;
+/// `tenferro`'s directory under the user's cache root, which holds compiled kernel images.
+const ARTIFACT_CACHE_PATH: &str = "tenferro/t4a-cuda-artifacts";
+
+/// The persistent artifact directory the environment selects, or `None` for memory only.
+///
+/// `read` supplies the environment so the fallback chain is testable without one.
+fn artifact_cache_dir(
+    value: Option<&std::ffi::OsStr>,
+    read: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
+    if let Some(value) = value {
+        return match value.to_str() {
+            Some(value) => {
+                let value = value.trim();
+                if value.is_empty() || matches!(value, "none" | "off" | "memory") {
+                    None
+                } else {
+                    Some(std::path::PathBuf::from(value))
+                }
+            }
+            // Not UTF-8, so it cannot be one of the tokens: it names a directory as it is.
+            None => Some(std::path::PathBuf::from(value)),
+        };
     }
-    Some(std::path::PathBuf::from(value))
+    cache_root(read).map(|root| root.join(ARTIFACT_CACHE_PATH))
 }
 
+/// This user's cache root.
+///
+/// `$XDG_CACHE_HOME` when it is absolute, else `$HOME/.cache`; a relative `XDG_CACHE_HOME` is
+/// ignored, as the specification requires, so the cache location never depends on the working
+/// directory. Windows has no XDG and uses `%LOCALAPPDATA%`, which is already a per-user root.
+fn cache_root(read: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    let root = |name: &str| {
+        read(name)
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from)
+            .filter(|dir| dir.is_absolute())
+    };
+    if cfg!(windows) {
+        return root("LOCALAPPDATA");
+    }
+    root("XDG_CACHE_HOME").or_else(|| root("HOME").map(|home| home.join(".cache")))
+}
+
+/// The same directory, once this process has created it or found it present.
+///
+/// A home it cannot create the directory under degrades to the in-memory cache with one warning,
+/// never to a failed operation, so nothing here returns an error into the launch path.
+fn usable_artifact_cache_dir(dir: std::path::PathBuf) -> Option<std::path::PathBuf> {
+    match create_private_dir(&dir) {
+        Ok(()) => Some(dir),
+        Err(error) => {
+            ARTIFACT_CACHE_WARNING.call_once(|| {
+                eprintln!(
+                    "tenferro-gpu: cannot create the artifact cache directory {}: {error}; \
+                     compiled kernels stay in memory for this process",
+                    dir.display()
+                );
+            });
+            None
+        }
+    }
+}
+
+/// One warning per process, however many runtimes open against an unusable directory.
+static ARTIFACT_CACHE_WARNING: std::sync::Once = std::sync::Once::new();
+
+/// Create `dir` and any missing parent. A directory this creates is mode 0700 on Unix; an existing
+/// one keeps its own mode, so a shared read-only cache stays readable and its writes stay dropped.
+fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+/// A cheap, cloneable handle to one opened CUDA runtime.
+///
+/// The handle carries no submission authority of its own: explicit host transfers
+/// take the runtime's submission lock for the duration of one admission, and
+/// numerical submission belongs to the [`CudaEngine`](super::CudaEngine) that owns
 /// the same state.
 #[derive(Clone)]
 #[doc(hidden)]
