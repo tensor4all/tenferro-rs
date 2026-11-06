@@ -982,6 +982,9 @@ host	tenferro-gpu	cuda::device::tests::discovery_reports_an_unloadable_driver_as
 host	tenferro-gpu	cuda::runtime::tests::the_budget_grows_with_the_device_and_stays_bounded
 host	tenferro-gpu	cuda::runtime::tests::the_environment_overrides_the_budget_in_mib
 host	tenferro-gpu	cuda::runtime::tests::the_environment_names_the_persistent_artifact_directory
+host	tenferro-gpu	cuda::runtime::tests::a_directory_that_cannot_be_created_falls_back_to_memory
+host	tenferro-gpu	cuda::runtime::tests::a_non_utf8_override_names_a_directory_rather_than_the_default
+host	tenferro-gpu	cuda::runtime::tests::unset_selects_the_per_user_cache_directory
 host	tenferro-gpu	event_retirement::tests::explicit_retirement_then_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_retirement_contains_provider_panic

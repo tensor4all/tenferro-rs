@@ -267,6 +267,16 @@ CUDA operations implemented through NVIDIA libraries return typed load or
 provider errors when the required library is missing. They do not silently use
 a slower native kernel as a CUDA fallback.
 
+Compiled kernel images are kept for reuse across processes, because NVRTC costs
+seconds per module where a warm read costs milliseconds. The default directory is
+`$XDG_CACHE_HOME/tenferro/t4a-cuda-artifacts`, falling back to
+`~/.cache/tenferro/t4a-cuda-artifacts` (`%LOCALAPPDATA%\tenferro\t4a-cuda-artifacts`
+on Windows), created with mode 0700 on Unix when the runtime opens. `TENFERRO_CUDA_ARTIFACT_CACHE`
+wins over that default, and `none`, `off` or `memory` keep the images in memory
+only, which is what a lane that wants a cold compile sets. A directory that cannot
+be created falls back to the in-memory behaviour with one warning, so a read-only
+home degrades rather than failing an operation.
+
 On compute capability 7.0, select cuTENSOR 2.1.x with
 `TENFERRO_CUTENSOR_PATH`. tenferro rejects cuTENSOR 2.2 and newer because that
 combination has returned success with incorrect results.

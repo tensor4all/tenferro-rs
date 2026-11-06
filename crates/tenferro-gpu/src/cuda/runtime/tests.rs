@@ -1,25 +1,122 @@
 //! The `TENFERRO_CUDA_ARTIFACT_CACHE` contract.
 
-use super::artifact_cache_dir;
+use std::ffi::{OsStr, OsString};
+use std::path::PathBuf;
+
+use super::{artifact_cache_dir, cache_root, usable_artifact_cache_dir};
+
+fn no_variables(_: &str) -> Option<OsString> {
+    None
+}
+
+/// The environment a test supplies, so no test reads or writes the real one.
+fn environment(
+    pairs: &'static [(&'static str, &'static str)],
+) -> impl Fn(&str) -> Option<OsString> + Copy {
+    move |asked| {
+        pairs
+            .iter()
+            .find(|(name, _)| *name == asked)
+            .map(|(_, value)| OsString::from(*value))
+    }
+}
 
 #[test]
 fn the_environment_names_the_persistent_artifact_directory() {
-    assert_eq!(artifact_cache_dir(None), None);
-    assert_eq!(artifact_cache_dir(Some("")), None);
-    assert_eq!(artifact_cache_dir(Some("  ")), None);
-    // An explicit memory-only request reads the same as unset.
-    for disabled in ["none", "off", "memory"] {
-        assert_eq!(artifact_cache_dir(Some(disabled)), None, "{disabled}");
+    let home = environment(&[("HOME", "/home/tester")]);
+    // An explicit memory-only request, and an empty one, select the in-memory cache.
+    for disabled in ["", "  ", "none", "off", "memory"] {
+        assert_eq!(
+            artifact_cache_dir(Some(OsStr::new(disabled)), home),
+            None,
+            "{disabled}"
+        );
     }
+    // Any other value is the directory, and it wins over the per-user default.
     assert_eq!(
-        artifact_cache_dir(Some("/var/tmp/t4a-artifacts")),
-        Some(std::path::PathBuf::from("/var/tmp/t4a-artifacts"))
+        artifact_cache_dir(Some(OsStr::new("/var/tmp/t4a-artifacts")), home),
+        Some(PathBuf::from("/var/tmp/t4a-artifacts"))
     );
     // Surrounding whitespace is not a directory name.
     assert_eq!(
-        artifact_cache_dir(Some(" /var/tmp/t4a-artifacts\n")),
-        Some(std::path::PathBuf::from("/var/tmp/t4a-artifacts"))
+        artifact_cache_dir(Some(OsStr::new(" /var/tmp/t4a-artifacts\n")), home),
+        Some(PathBuf::from("/var/tmp/t4a-artifacts"))
     );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_non_utf8_override_names_a_directory_rather_than_the_default() {
+    use std::os::unix::ffi::OsStrExt;
+    // Paths need not be UTF-8 on Unix, so such a value is not one of the tokens: the caller asked
+    // for that directory, not for the per-user default.
+    let value = OsStr::from_bytes(b"/var/tmp/\xff-artifacts");
+    assert_eq!(
+        artifact_cache_dir(Some(value), environment(&[("HOME", "/home/tester")])),
+        Some(PathBuf::from(value))
+    );
+}
+
+#[test]
+#[cfg(not(windows))]
+fn unset_selects_the_per_user_cache_directory() {
+    let both = environment(&[("XDG_CACHE_HOME", "/xdg/cache"), ("HOME", "/home/tester")]);
+    assert_eq!(
+        artifact_cache_dir(None, both),
+        Some(PathBuf::from("/xdg/cache/tenferro/t4a-cuda-artifacts"))
+    );
+    assert_eq!(
+        artifact_cache_dir(None, environment(&[("HOME", "/home/tester")])),
+        Some(PathBuf::from(
+            "/home/tester/.cache/tenferro/t4a-cuda-artifacts"
+        ))
+    );
+    // A relative XDG_CACHE_HOME is not a cache root: it would make the location depend on the
+    // working directory.
+    let relative = environment(&[("XDG_CACHE_HOME", "cache"), ("HOME", "/home/tester")]);
+    assert_eq!(
+        cache_root(relative),
+        Some(PathBuf::from("/home/tester/.cache"))
+    );
+    // Neither is a relative fallback root.
+    let relative_home = environment(&[("XDG_CACHE_HOME", ""), ("HOME", "home/tester")]);
+    assert_eq!(artifact_cache_dir(None, relative_home), None);
+    // No per-user root, as on a host that reads only $HOME or in a container without one.
+    assert_eq!(artifact_cache_dir(None, no_variables), None);
+    let empty = environment(&[("XDG_CACHE_HOME", ""), ("HOME", "")]);
+    assert_eq!(artifact_cache_dir(None, empty), None);
+}
+
+#[test]
+fn a_directory_that_cannot_be_created_falls_back_to_memory() {
+    let base = std::env::temp_dir().join(format!("t4a-artifact-cache-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).expect("scratch directory");
+    // A regular file where a parent directory has to be fails on every platform, root included.
+    let blocker = base.join("blocker");
+    std::fs::write(&blocker, b"").expect("blocking file");
+    assert_eq!(usable_artifact_cache_dir(blocker.join("deeper")), None);
+
+    let created = base.join("made");
+    assert_eq!(
+        usable_artifact_cache_dir(created.clone()),
+        Some(created.clone())
+    );
+    assert!(created.is_dir(), "the directory exists after the call");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&created)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o700,
+            "owner-only, never shared between users"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 // The allocation pool's retention budget (#2381).
