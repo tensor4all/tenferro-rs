@@ -32,8 +32,14 @@ fn gpu_backend_features_are_explicit_and_additive() {
 
     let default_feature = feature_block(&manifest, "default");
     assert!(
-        !default_feature.contains("cuda") && !default_feature.contains("rocm"),
+        !default_feature.contains("cuda"),
         "GPU backend providers must not be enabled by default"
+    );
+    assert!(
+        !manifest
+            .lines()
+            .any(|line| line.trim_start().starts_with("rocm")),
+        "tenferro-gpu must not declare a rocm feature while HIP/ROCm has no implementation"
     );
     assert!(
         !manifest.contains("\ngpu = ["),
@@ -56,7 +62,7 @@ fn downstream_gpu_features_are_explicit_and_additive() {
         let manifest = repo_file(manifest_path);
         let default_feature = feature_block(&manifest, "default");
         assert!(
-            !default_feature.contains("cuda") && !default_feature.contains("rocm"),
+            !default_feature.contains("cuda"),
             "{manifest_path} must not enable GPU providers by default"
         );
         assert!(

@@ -119,7 +119,7 @@ Important design points:
   hint.
 - Result-returning CPU operations receiving GPU tensors return `BackendFailure`
   with a download hint where the buffer is detected at the CPU boundary.
-- ROCm is only a feature stub today.
+- HIP/ROCm has no implementation.
 
 See [gpu-backend-design.md](./gpu-backend-design.md) for the CubeCL-specific
 module layout and test command.

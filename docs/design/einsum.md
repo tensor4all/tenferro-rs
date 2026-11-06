@@ -316,7 +316,7 @@ Current GPU status:
 
 - CUDA uses CubeCL/CubeCL-CUDA under the public `cuda` feature.
 - cuTENSOR/cuBLAS paths cover selected contractions and GEMM-like operations.
-- ROCm is a stub and not a supported execution path.
+- ROCm has no implementation and is not a supported execution path.
 - Complex CubeCL expansion is blocked on upstream CubeCL support and is not part
   of this batch.
 - GPU benchmarking is outside this batch.

@@ -143,8 +143,7 @@ Release APIs should follow these naming and shape rules.
   own session, were removed by #1946 F5.)
 - Traced tensor methods do not use a `traced_` prefix.
 - User-facing backend features are named for concrete backend families, such as
-  `cuda` and `rocm`. Public extension crates should not expose a vague `gpu`
-  feature.
+  `cuda`. Public extension crates should not expose a vague `gpu` feature.
 - Optional operation-specific AD support belongs behind `autodiff` in the
   owning operation crate.
 - Result-returning public backend boundaries must return explicit errors for

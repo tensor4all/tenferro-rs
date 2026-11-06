@@ -9,8 +9,8 @@ are explicitly uploaded and execution uses the owning CUDA engine.
 
 CUDA support targets NVIDIA CUDA. WebGPU, Metal execution, and the Apple shared
 CPU/Metal path are not provided today. `tenferro-gpu` has no `webgpu` feature or
-WebGPU upload API. AMD/ROCm is not a supported execution path either; `rocm` is
-an empty reserved feature.
+WebGPU upload API. AMD/ROCm is not a supported execution path either: there is
+no `rocm` feature and no HIP runtime.
 
 Probe before constructing an engine. `tenferro_gpu::cuda::gpu_available()`
 answers whether a CUDA device is usable without reaching the driver's entry
@@ -35,7 +35,7 @@ see [CUDA engines and pinned transfers](engines-and-transfers.md).
 | CPU | Supported | default CPU provider features | Host execution |
 | CUDA | Supported | `cuda` | Native NVIDIA CUDA through the `t4a-cuda-kernels` catalogue plus CUDA libraries |
 | WebGPU / Metal / Apple shared CPU/Metal | Not provided | None | No backend or transfer quickstart |
-| ROCm | Not supported for execution | `rocm` reserved | Empty feature; no runtime quickstart |
+| ROCm | Not supported for execution | None | No feature and no runtime quickstart |
 
 ## Transfer Model
 
@@ -379,7 +379,7 @@ descriptor.
 | `cholesky`, `triangular_solve`, `lu`, `svd`, `qr`, `eigh`, `solve` | `F32`, `F64`, `C32`, `C64` | cuSOLVER/cuBLAS-backed; integer and `Bool` dtypes are not implemented |
 | `full_piv_lu`, `full_piv_lu_solve` | No CUDA implementation | Returns an error |
 | General `eig` | No CUDA implementation | cuSOLVER does not provide LAPACK `dgeev`-style general eigendecomposition; download to CPU explicitly |
-| AMD/ROCm | No supported execution backend | ROCm remains reserved for future loader-backed work |
+| AMD/ROCm | No supported execution backend | Not implemented; a HIP backend would bring its own feature |
 
 If cuTENSOR, cuSOLVER, or cuBLAS are installed outside normal dynamic-linker
 paths, set `TENFERRO_CUTENSOR_PATH`, `TENFERRO_CUSOLVER_PATH`, or

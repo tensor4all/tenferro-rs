@@ -55,7 +55,7 @@ The default stratum is internal.
    crates use crate-root extension traits because they cannot add inherent
    methods to external tensor types.
 8. User-facing backend features use concrete backend family names such as
-   `cuda` and `rocm`. Public crates must not expose a vague `gpu` feature.
+   `cuda`. Public crates must not expose a vague `gpu` feature.
 9. Optional operation-specific AD support belongs behind an `autodiff` feature
    in the owning operation crate.
 

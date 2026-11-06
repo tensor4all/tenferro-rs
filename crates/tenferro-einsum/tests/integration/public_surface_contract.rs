@@ -99,16 +99,12 @@ fn gpu_dependency_is_owned_by_opt_in_backend_features() {
         "tenferro-gpu must not be an unconditional dev-dependency"
     );
 
-    for feature in ["cuda", "rocm"] {
-        let feature_start = format!("{feature} = ");
-        let feature_body = manifest
-            .split_once(&feature_start)
-            .and_then(|(_, rest)| rest.split_once(']').map(|(body, _)| body))
-            .unwrap_or_else(|| panic!("missing or malformed {feature} feature"));
-        assert!(
-            feature_body.contains("dep:tenferro-gpu")
-                && feature_body.contains(&format!("tenferro-gpu/{feature}")),
-            "{feature} must explicitly activate tenferro-gpu and its matching backend feature"
-        );
-    }
+    let feature_body = manifest
+        .split_once("cuda = ")
+        .and_then(|(_, rest)| rest.split_once(']').map(|(body, _)| body))
+        .unwrap_or_else(|| panic!("missing or malformed cuda feature"));
+    assert!(
+        feature_body.contains("dep:tenferro-gpu") && feature_body.contains("tenferro-gpu/cuda"),
+        "cuda must explicitly activate tenferro-gpu and its matching backend feature"
+    );
 }

@@ -48,7 +48,6 @@
 //! | `native` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
 //! | `autodiff` | The eager surface (`EagerSessionLinalgExt`, `EagerTensorLinalgExt`) and AD rules. Adds the `tenferro-ad` dependency. |
 //! | `cuda` | CUDA execution through `tenferro-gpu`. |
-//! | `rocm` | Placeholder; HIP/ROCm is not implemented. |
 //!
 //! `autodiff` is not a heavy dependency switch: `tenferro-ad` is the crate that
 //! owns `EagerSession`/`EagerTensor`, so an eager linalg surface without it

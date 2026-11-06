@@ -6,7 +6,7 @@ Execution uses a caller-held `tenferro_gpu::cuda::CudaEngine`, opened with
 `CudaEngine::open(device_id)` and borrowed mutably for operations. The `cuda`
 feature is opt-in. WebGPU, Metal execution, and the Apple shared CPU/Metal path
 are not provided today; there is no `webgpu` feature or provider module.
-`rocm` is an empty reserved feature, not an execution backend.
+HIP/ROCm is not implemented and has no feature.
 
 The implementation is in `crates/tenferro-gpu/src/cuda/`. It builds on
 `t4a-cuda-runtime` and the `t4a-cuda-kernels` catalogue, not CubeCL or CubeK.

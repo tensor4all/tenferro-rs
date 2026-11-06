@@ -78,9 +78,8 @@ def main() -> int:
             findings.append(f"{manifest.relative_to(repo)} is missing the public autodiff feature")
         if "\nad =" in text:
             findings.append(f"{manifest.relative_to(repo)} must not expose an ad feature alias")
-        for feature in ["cuda = [", "rocm = ["]:
-            if feature not in text:
-                findings.append(f"{manifest.relative_to(repo)} is missing the {feature[:-4]} feature")
+        if "cuda = [" not in text:
+            findings.append(f"{manifest.relative_to(repo)} is missing the cuda feature")
 
     public_manifests = [repo / "crates" / "tenferro-ad" / "Cargo.toml", *operation_manifests]
     for manifest in public_manifests:
@@ -91,7 +90,7 @@ def main() -> int:
                 )
             if "tenferro-ad/gpu" in line:
                 findings.append(
-                    f"{manifest.relative_to(repo)}:{line_no}: use cuda/rocm, not tenferro-ad/gpu"
+                    f"{manifest.relative_to(repo)}:{line_no}: use cuda, not tenferro-ad/gpu"
                 )
 
     forbidden_refs = ["tenferro-linalg" + "-ad", "tenferro_linalg" + "_ad"]
