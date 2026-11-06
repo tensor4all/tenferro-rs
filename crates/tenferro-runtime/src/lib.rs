@@ -135,8 +135,6 @@ pub use tenferro_tensor::{
     TypedTensor, TypedTensorView,
 };
 pub use trace::{TraceContext, TraceValue, TracedGraph};
-#[doc(hidden)]
-pub use trace_ops::dim_expr_to_sym_dim_public;
 pub use typed_session_ext::{TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt};
 
 pub use traced::TracedTensor;
