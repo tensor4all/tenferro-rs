@@ -153,7 +153,7 @@ storage independent from the graph-level AD rules owned by
 
 - API should be backend-neutral from day one.
 - CubeCL/CUDA kernels for advanced indexing can be added incrementally behind
-  the existing backend traits. ROCm remains a stub until explicitly implemented.
+  the existing backend traits. HIP/ROCm has no implementation.
 - Deterministic behavior with duplicate indices should be explicitly specified
   (especially for `accumulate=true`).
 

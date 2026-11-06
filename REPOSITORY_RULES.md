@@ -422,10 +422,11 @@ constraints.
 - Optional capabilities are feature boundaries, not new crates: put
   operation-specific AD support behind an `autodiff` feature in the owning
   crate, not in `*-ad` companion crates.
-- User-facing operation crates expose backend features as `cuda`, `rocm`, and
-  `webgpu`. Do not document or require a public `gpu` feature; use internal
-  `cfg(any(feature = "cuda", feature = "rocm", feature = "webgpu"))` checks or
-  internal helper features.
+- User-facing operation crates expose backend features as `cuda` and `webgpu`.
+  A backend with no implementation keeps no placeholder feature. Do not document
+  or require a public `gpu` feature; use internal
+  `cfg(any(feature = "cuda", feature = "webgpu"))` checks or internal helper
+  features.
 - Extension crates depend on the runtime, tensor, AD, or GPU crate they need;
   dependency flow must not require a facade crate to depend back on them.
 - Extension AD rules are owned by an explicit `tenferro_ad::AdContext` or rule

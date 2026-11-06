@@ -295,7 +295,7 @@ def check_features(root: pathlib.Path, crates: list[CrateInfo]) -> list[Finding]
                     "public_gpu_feature",
                     f"{crate.path.relative_to(root)}/Cargo.toml",
                     f"`{crate.name}` exposes a `gpu` feature",
-                    "User-facing backend features should be concrete backend names such as `cuda` or `rocm`.",
+                    "User-facing backend features should be concrete backend names such as `cuda`.",
                 )
             )
     return findings

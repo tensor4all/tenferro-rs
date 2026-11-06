@@ -268,7 +268,8 @@ identity checks, or automatic host fallback.
 ### Phase 4 — ROCm + stability closeout
 `rocm::cubecl` on a real CubeCL-HIP substrate, or capability-only `Unsupported`
 with the ROCm implementation split into an accepted follow-up issue.
-**DoD:** feature combos `default`/`cuda`/`webgpu`/`cuda+webgpu`/`rocm` pass,
+**DoD:** feature combos `default`/`cuda`/`webgpu`/`cuda+webgpu` pass, and
+`rocm` joins that list with the substrate this phase introduces,
 non-CUDA combos do not load CUDA libraries; real ROCm delivery needs hardware
 run evidence; public items have runnable doctests; old bridge/aliases removed;
 independent API/unsafe/lifetime/retirement/multi-GPU audit complete.

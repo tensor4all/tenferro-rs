@@ -31,7 +31,6 @@ blas-accelerate = ["tenferro-cpu/blas-accelerate"]
 blas-mkl = ["tenferro-cpu/blas-mkl"]
 # The CUDA engine: the operation surface over the kernel catalogue, plus the vendor bindings.
 cuda = ["dep:t4a-cuda-runtime", "dep:t4a-cuda-kernels", "dep:cudarc"]
-rocm = []
 
 [dependencies]
 tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.10.0" }

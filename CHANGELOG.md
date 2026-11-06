@@ -23,3 +23,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     program is built with `SemanticProgramBuilder::finish(&[])`.
   - AD seeds of an externally defined scalar must carry that scalar's canonical
     identity, which the context constructors now supply.
+
+### Removed
+
+- The unused `rocm` placeholder feature is gone from `tenferro-gpu` and from the
+  five crates that forwarded it (`tenferro-ad`, `tenferro-einsum`,
+  `tenferro-fft`, `tenferro-linalg`, `tenferro-internal-ops`): no code was gated
+  on it and HIP/ROCm has no implementation. A consumer that enabled or forwarded
+  `rocm` drops it from its feature list (#2310).

@@ -113,7 +113,7 @@ Known CUDA backend limitations are operation-specific: `eig`,
 numeric/linalg gaps, `Bool` arithmetic/reduction/linalg and additive scatter,
 and selected complex analytic or ordering operations.
 `eig` is not provided by cuSOLVER and permanently returns `BackendFailure` on
-CubeCL. ROCm is only a feature stub.
+CubeCL. HIP/ROCm has no implementation.
 
 ## `tenferro-internal-ops`
 

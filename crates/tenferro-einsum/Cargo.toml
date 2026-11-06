@@ -57,12 +57,6 @@ cuda = [
     "dep:tenferro-gpu",
     "tenferro-gpu/cuda",
 ]
-rocm = [
-    "tenferro-ad?/rocm",
-    "tenferro-internal-ops/rocm",
-    "dep:tenferro-gpu",
-    "tenferro-gpu/rocm",
-]
 
 [dependencies]
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.10.0", default-features = false }

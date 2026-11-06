@@ -271,9 +271,6 @@ jobs:
       matrix:
         include:
           - gpu_vendor: cuda
-          # Future ROCm lane example:
-          # - gpu_vendor: rocm
-          #   if: false
     steps:
       # This label's image is configured by organization administrators, not
       # by runs-on. Reject an older image before using Ubuntu 24.04 binaries.

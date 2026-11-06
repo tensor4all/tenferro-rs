@@ -246,7 +246,7 @@ solves your problem.
 | --- | --- |
 | `tenferro-tensor` | Tensor values, typed tensors, views, dtype/runtime tensor contracts, and backend traits |
 | `tenferro-cpu` | CPU backend execution |
-| `tenferro-gpu` | CUDA backend support and explicit device transfers; `rocm` is reserved, not an execution backend |
+| `tenferro-gpu` | CUDA backend support and explicit device transfers |
 | `tenferro-runtime` | Eager/traced execution, graph compilation, and extension runtime support |
 | `tenferro-ad` | Automatic differentiation |
 | `tenferro-xla` | Experimental StableHLO lowering and runtime-loaded PJRT plugin support for static-shaped traced graphs |

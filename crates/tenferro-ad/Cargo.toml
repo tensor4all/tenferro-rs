@@ -40,7 +40,6 @@ blas-mkl = [
     "tenferro-cpu/blas-mkl",
 ]
 cuda = ["dep:tenferro-gpu", "tenferro-gpu/cuda"]
-rocm = ["dep:tenferro-gpu", "tenferro-gpu/rocm"]
 
 [dependencies]
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.10.0", default-features = false }

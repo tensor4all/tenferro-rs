@@ -21,7 +21,6 @@
 //! | `native` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
 //! | `autodiff` | The eager surface (`EagerSessionFftExt`, `EagerTensorFftExt`) and AD rules. Adds the `tenferro-ad` dependency. |
 //! | `cuda` | CUDA execution through `tenferro-gpu`. |
-//! | `rocm` | Placeholder; HIP/ROCm is not implemented. |
 //!
 //! For transforms without AD, use [`TensorFftExt`] / [`TensorReadFftExt`] on
 //! concrete tensors inside a backend session; they need no `autodiff`.

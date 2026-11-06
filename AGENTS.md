@@ -104,7 +104,7 @@ integer numeric/linalg gaps outside the supported add/sub/mul/div/rem,
 neg/abs/sign/pow, comparison/selection/minimum/maximum, and
 sum/product/minimum/maximum reductions, `Bool` arithmetic/reduction/linalg and
 additive-scatter gaps, and selected complex analytic or ordering operations.
-HIP/ROCm is stubbed. Outside explicit GPU tasks, check
+HIP/ROCm is not implemented. Outside explicit GPU tasks, check
 `docs/guides/devices-and-gpu.md` and the CUDA backend tests before
 assuming an op/dtype/backend combination is supported.
 
