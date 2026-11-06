@@ -296,18 +296,26 @@ const REMAINING_FAMILY_CEILINGS: &[(&str, usize)] = &[
     ("blas/eig/complex32", 8),
 ];
 
-/// Steady-state ceilings measured on `aarch64` (macOS, `libmalloc`), rustc 1.96.0.
+/// Steady-state ceilings measured on `aarch64` (Apple M5 Max, macOS), rustc 1.96.0,
+/// `t4a-faer 0.30.0` / `t4a-gemm-common 0.20.3`. Every value equals the measured count.
 ///
-/// Only the `faer` cases move, and every one that moves is a case that returns factor
-/// matrices; the byte totals stay far below one problem-sized buffer (`48 x 48` f64 is
-/// 18 KiB, and `faer/svd/48` peaks at 11 KiB across 33 allocations), so this is not a
-/// missed workspace or a scratch buffer taken per call. What grows with the arch is the
-/// *number* of small allocations the factor paths make: faer's blocking and its `Vec`
-/// growth both differ between a NEON and an AVX2 build, and macOS `libmalloc` rounds a
-/// growing `Vec` differently from glibc. Those mechanisms are inferred from the byte
-/// profile, not established by a controlled experiment, and this budget is keyed on the
-/// arch as agreed while the two CI baselines (Linux x86_64) stay untouched. A Linux
-/// `aarch64` host has not been measured, so it would need its own row.
+/// The surplus over the x86_64 rows is two allocations per GEMM call made inside faer,
+/// both in `t4a-gemm-common`'s `gemm_basic_generic` (attributed by backtrace, #2448):
+///
+/// - `src/gemm.rs:437`, a fresh `dyn_stack::MemBuffer` for the packed RHS/LHS whenever the
+///   call packs (1-6 KiB at these shapes);
+/// - `src/gemm.rs:498`, the `did_pack_lhs` flag vector (1-6 bytes since 0.20.2).
+///
+/// faer reaches that routine only off x86_64: `t4a-faer`'s `matmul_imp` sends x86_64 to
+/// `t4a-private-gemm-x86` (`src/linalg/matmul/mod.rs:1415`), and every other arch to
+/// `gemm::gemm` (`:1473`). The x86_64 rows above leave no room for a per-GEMM
+/// allocation (`faer/svd/48` makes 16 GEMM calls under a ceiling of 3). So a factor
+/// route's ceiling here is its host-side residual plus about two per GEMM call:
+/// `faer/svd/48` is 2 host-side, 15 `MemBuffer` and 16 flag-vector allocations, 33 in
+/// all. It is not `libmalloc` rounding or `Vec` growth, and not a reacquired workspace.
+/// Removing it is a `t4a-gemm-common` change (reuse a thread-local buffer, as `L2_SLAB`
+/// already does); these rows come down after that release reaches the lockfile. A Linux
+/// `aarch64` host takes the same path but has not been measured.
 #[cfg(target_arch = "aarch64")]
 const ARCH_CEILING_OVERRIDES: &[(&str, usize)] = &[
     ("faer/lu_factor/48", 4),
