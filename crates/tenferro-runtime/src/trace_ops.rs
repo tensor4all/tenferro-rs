@@ -79,8 +79,8 @@ pub(crate) fn finish_value(
         metadata.dtype(),
         "cached dtype must match the appended value"
     );
-    let derived = metadata_sym_shape(&metadata);
     let symbolic_id = next_symbolic_id();
+    let derived = metadata_sym_shape(&metadata, symbolic_id);
     // An extent the program only bounds must not resurface as a concrete shape, and a
     // caller-supplied hint describes the shape the caller asked for, not the precision
     // the program proved: drop it unless every extent is exact.
@@ -96,7 +96,7 @@ pub(crate) fn finish_value(
         value,
         rank: metadata.shape().len(),
         dtype: metadata.dtype(),
-        shape_hint: restamp_hint(derived.or(hint), symbolic_id),
+        shape_hint: derived.or_else(|| restamp_hint(hint, symbolic_id)),
         data: None,
         symbolic_id,
     })
@@ -121,10 +121,7 @@ pub(crate) fn finish_derived(ctx: &TraceContext, value: TraceValue) -> Result<Tr
     let metadata = ctx
         .value_metadata(value)
         .map_err(|source| build_error("semantic value metadata", source))?;
-    let rank = metadata.shape().len();
-    let dtype = metadata.dtype();
-    let hint = metadata_sym_shape(&metadata);
-    finish_value(ctx, value, rank, dtype, hint)
+    finish_value(ctx, value, metadata.shape().len(), metadata.dtype(), None)
 }
 
 /// Build a tensor for a value the context just bound to concrete data.
@@ -136,38 +133,9 @@ pub(crate) fn finish_bound_value(
     let metadata = ctx
         .value_metadata(value)
         .map_err(|source| build_error("semantic value metadata", source))?;
-    let rank = metadata.shape().len();
-    let dtype = metadata.dtype();
-    let hint = metadata_sym_shape(&metadata);
-    let mut tensor = finish_value(ctx, value, rank, dtype, hint)?;
+    let mut tensor = finish_value(ctx, value, metadata.shape().len(), metadata.dtype(), None)?;
     tensor.data = Some(data);
     Ok(tensor)
-}
-
-/// Rebuild a symbolic extent from a program dimension expression.
-///
-/// Program extents name program inputs by position, so the result names those
-/// positions as tensor ids; a consumer translates them into its own coordinates
-/// with an explicit tensor map.
-///
-/// Owner-scoped hook for the traced AD layer, which validates seed metadata
-/// against program extents.
-#[doc(hidden)]
-pub fn dim_expr_to_sym_dim_public(expr: &DimExpr) -> Option<SymDim> {
-    dim_expr_to_sym_dim(expr)
-}
-
-pub(crate) fn dim_expr_to_sym_dim(expr: &DimExpr) -> Option<SymDim> {
-    Some(match expr {
-        DimExpr::Const(value) => SymDim::from(*value),
-        DimExpr::InputDim { input_idx, axis } => SymDim::tensor_axis(*input_idx as u64, *axis),
-        DimExpr::Add(lhs, rhs) => dim_expr_to_sym_dim(lhs)? + dim_expr_to_sym_dim(rhs)?,
-        DimExpr::Sub(lhs, rhs) => dim_expr_to_sym_dim(lhs)? - dim_expr_to_sym_dim(rhs)?,
-        DimExpr::Mul(lhs, rhs) => dim_expr_to_sym_dim(lhs)? * dim_expr_to_sym_dim(rhs)?,
-        DimExpr::FloorDiv(lhs, rhs) => dim_expr_to_sym_dim(lhs)? / dim_expr_to_sym_dim(rhs)?,
-        DimExpr::Min(lhs, rhs) => dim_expr_to_sym_dim(lhs)?.min(dim_expr_to_sym_dim(rhs)?),
-        DimExpr::Max(lhs, rhs) => dim_expr_to_sym_dim(lhs)?.max(dim_expr_to_sym_dim(rhs)?),
-    })
 }
 
 /// Allocate the symbolic identity of one traced value.
@@ -201,13 +169,23 @@ fn restamp_hint(hint: Option<Vec<SymDim>>, own_id: u64) -> Option<Vec<SymDim>> {
     })
 }
 
-/// Derive the symbolic shape cache from value metadata.
-fn metadata_sym_shape(metadata: &ProgramValueMetadata) -> Option<Vec<SymDim>> {
+/// Derive the symbolic shape cache of the handle `own_id` from value metadata.
+///
+/// Program metadata names program inputs by position (`DimExpr::InputDim`), and
+/// those positions are not handle ids: program input #1 and the handle whose id
+/// is 1 are unrelated. The cache therefore never carries a program coordinate.
+/// An extent that evaluates without inputs becomes a constant; every other axis
+/// names this handle's own axis. Returns `None` when an extent is not exact.
+fn metadata_sym_shape(metadata: &ProgramValueMetadata, own_id: u64) -> Option<Vec<SymDim>> {
     metadata
         .shape()
         .iter()
-        .map(|extent| match extent {
-            ShapeExtent::Exact(expr) => dim_expr_to_sym_dim(expr),
+        .enumerate()
+        .map(|(axis, extent)| match extent {
+            ShapeExtent::Exact(expr) => Some(match expr.eval(&[]) {
+                Ok(size) => SymDim::from(size),
+                Err(_) => SymDim::tensor_axis(own_id, axis),
+            }),
             _ => None,
         })
         .collect()
@@ -323,7 +301,7 @@ impl TraceContext {
         let value = self
             .input(spec)
             .map_err(|source| build_error("trace input", source))?;
-        finish_leaf(self, value, rank, dtype, metadata_hint(self, value)?, None)
+        finish_leaf(self, value, rank, dtype, None, None)
     }
 
     /// Add a constant leaf holding `tensor` with its concrete shape.
@@ -427,14 +405,7 @@ impl TraceContext {
         let value = self
             .input_bound(spec, Arc::clone(&data))
             .map_err(|source| build_error("trace constant", source))?;
-        finish_leaf(
-            self,
-            value,
-            rank,
-            dtype,
-            metadata_hint(self, value)?,
-            Some(data),
-        )
+        finish_leaf(self, value, rank, dtype, None, Some(data))
     }
 
     /// Add a constant leaf from compact column-major data.
@@ -451,11 +422,4 @@ impl TraceContext {
         let tensor = Tensor::from_vec_col_major(shape, data)?;
         self.from_tensor_concrete_shape(tensor)
     }
-}
-
-fn metadata_hint(ctx: &TraceContext, value: TraceValue) -> Result<Option<Vec<SymDim>>> {
-    let metadata = ctx
-        .value_metadata(value)
-        .map_err(|source| build_error("semantic value metadata", source))?;
-    Ok(metadata_sym_shape(&metadata))
 }

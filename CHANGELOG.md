@@ -26,6 +26,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- `tenferro_runtime::dim_expr_to_sym_dim_public` (`#[doc(hidden)]`) is gone
+  (#2443). It turned a program's `DimExpr::InputDim { input_idx, axis }` into
+  `SymDim::tensor_axis(input_idx as u64, axis)`, a value indistinguishable from
+  the axis of the traced handle whose id happens to be `input_idx`, so a
+  conversion given one read the other's axis. A program position has no meaning
+  as a `SymDim`, and no public path produces one any more. Callers migrate per
+  extent: an extent that does not depend on inputs is
+  `SymDim::from(expr.eval(&[])?)` (`DimExpr::eval`); a symbolic extent of a
+  traced value is `TracedTensor::axis_sym_dim(axis)` (or `sym_shape()` /
+  `sym_size(axis)`) on the handle that owns it, for example the program output
+  or the leaf returned by the `TraceContext::input_*` constructor of that input.
 - The unused `rocm` placeholder feature is gone from `tenferro-gpu` and from the
   five crates that forwarded it (`tenferro-ad`, `tenferro-einsum`,
   `tenferro-fft`, `tenferro-linalg`, `tenferro-internal-ops`): no code was gated

@@ -193,15 +193,16 @@ fn import_derivative(
 }
 
 /// Declared dtype and symbolic extents of a traced value.
+///
+/// Every non-constant extent names one of `tensor`'s own axes; an axis index is
+/// never reused as a tensor id.
 fn tensor_meta_of(tensor: &TracedTensor) -> Result<TensorMeta> {
-    let extents = tensor
-        .sym_shape()
-        .map(|shape| shape.to_vec())
-        .unwrap_or_else(|| {
-            (0..tensor.rank())
-                .map(|axis| tenferro_ops::SymDim::tensor_axis(axis as u64, axis))
-                .collect()
-        });
+    let extents = match tensor.sym_shape() {
+        Some(shape) => shape.to_vec(),
+        None => (0..tensor.rank())
+            .map(|axis| tensor.axis_sym_dim(axis))
+            .collect::<std::result::Result<_, _>>()?,
+    };
     Ok(TensorMeta::exact(tensor.dtype(), extents))
 }
 
@@ -222,13 +223,17 @@ fn cotangent_meta_of(
                 .map(|&size| tenferro_ops::SymDim::from(size))
                 .collect(),
         )),
-        None => source_output_metadata(source, transform),
+        None => source_output_metadata(output, source, transform),
     }
 }
 
 /// Metadata of the differentiated output, used to validate a cotangent seed.
-fn source_output_metadata(source: &AdSource, transform: &'static str) -> Result<TensorMeta> {
-    let Some(&output) = source.frozen.program.outputs().first() else {
+fn source_output_metadata(
+    output: &TracedTensor,
+    source: &AdSource,
+    transform: &'static str,
+) -> Result<TensorMeta> {
+    let Some(&program_output) = source.frozen.program.outputs().first() else {
         return Err(Error::runtime_state(
             transform,
             ErrorPhase::GraphBuild,
@@ -238,9 +243,9 @@ fn source_output_metadata(source: &AdSource, transform: &'static str) -> Result<
     let metadata = source
         .frozen
         .program
-        .value_metadata(output)
+        .value_metadata(program_output)
         .map_err(|source| Error::runtime_state_source(transform, ErrorPhase::GraphBuild, source))?;
-    program_metadata_to_tensor_meta(metadata, transform)
+    program_metadata_to_tensor_meta(metadata, output, transform)
 }
 
 fn validate_seed_against_program(
@@ -270,28 +275,31 @@ fn seed_meta_of(tensor: &TracedTensor) -> Result<TensorMeta> {
     }
 }
 
+/// Seed metadata from the program metadata of `output`.
+///
+/// Program extents name program inputs by position, which is not a tensor id, so
+/// they are never turned into a `SymDim`: an extent that evaluates without inputs
+/// becomes a constant and every other axis names `output`'s own axis.
 fn program_metadata_to_tensor_meta(
     metadata: &tenferro_runtime::program::ProgramValueMetadata,
+    output: &TracedTensor,
     transform: &'static str,
 ) -> Result<TensorMeta> {
-    let extents = metadata
-        .shape()
-        .iter()
-        .map(|extent| match extent {
-            tenferro_ops::shape_extent::ShapeExtent::Exact(expr) => {
-                tenferro_runtime::dim_expr_to_sym_dim_public(expr)
-            }
-            _ => None,
-        })
-        .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| {
-            Error::invalid_argument(
+    let mut extents = Vec::with_capacity(metadata.shape().len());
+    for (axis, extent) in metadata.shape().iter().enumerate() {
+        let tenferro_ops::shape_extent::ShapeExtent::Exact(expr) = extent else {
+            return Err(Error::invalid_argument(
                 transform,
                 ErrorPhase::GraphBuild,
                 "seed",
                 "the differentiated value has no concrete dtype and rank metadata",
-            )
-        })?;
+            ));
+        };
+        extents.push(match expr.eval(&[]) {
+            Ok(size) => tenferro_ops::SymDim::from(size),
+            Err(_) => output.axis_sym_dim(axis)?,
+        });
+    }
     Ok(TensorMeta::exact(metadata.dtype(), extents))
 }
 

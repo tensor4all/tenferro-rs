@@ -788,3 +788,58 @@ fn a_bound_only_extent_is_never_reported_as_a_concrete_shape() {
     // build one axis at a time with `axis_sym_dim`.
     assert!(reshaped.sym_shape().is_none());
 }
+
+/// Program metadata names inputs by position; a handle's cached extents must
+/// name the handle itself, never that position read as a tensor id (#2443).
+#[test]
+fn program_input_positions_never_surface_as_handle_axes() {
+    let trace = crate::TraceContext::new();
+    let a = trace.input_symbolic_shape(DType::F64, 1).unwrap(); // program input #0
+    let b = trace.input_symbolic_shape(DType::F64, 1).unwrap(); // program input #1
+    let sum = a.add(&b).unwrap();
+    let derived = trace.derive_tensor(sum.trace_value()).unwrap();
+    let bound = trace
+        .from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])
+        .unwrap();
+
+    for handle in [&a, &b, &sum, &derived] {
+        let shape = handle.sym_shape().expect("exact symbolic extents");
+        assert_eq!(shape.len(), 1);
+        assert_eq!(
+            shape[0].referenced_tensor_ids(),
+            vec![handle.symbolic_id()],
+            "a handle's extent must name that handle"
+        );
+    }
+    assert_ne!(derived.symbolic_id(), sum.symbolic_id());
+    let constant: Vec<_> = bound
+        .sym_shape()
+        .unwrap()
+        .iter()
+        .map(crate::SymDim::constant_value)
+        .collect();
+    assert_eq!(constant, vec![Some(2), Some(3)]);
+}
+
+/// A conversion given another handle's axis rejects it instead of reading the
+/// axis of the handle whose id happens to match (#2443).
+#[test]
+fn reshape_sym_rejects_an_axis_of_another_handle() {
+    let trace = crate::TraceContext::new();
+    let a = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let b = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+
+    assert!(a.reshape_sym(&[a.sym_size(0).unwrap()]).is_ok());
+    let err = a.reshape_sym(&[b.sym_size(0).unwrap()]).unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            Error::SymbolicShapeConversion {
+                op: "TracedTensor::reshape_sym",
+                source: tenferro_ops::SymDimConversionError { tensor_id },
+                ..
+            } if *tensor_id == b.symbolic_id()
+        ),
+        "{err}"
+    );
+}
