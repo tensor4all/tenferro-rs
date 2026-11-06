@@ -252,12 +252,17 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
 /// with either operand layout.
 ///
 /// The pinned count is relative to the plain route rather than zero, because the counter
-/// is process-wide and also sees the GEMM kernel's own scratch. faer's `x86_64` kernels
-/// take that scratch from the stack, so on Linux CI both routes count zero; its aarch64
-/// SME kernel instead allocates a per-call `dyn_stack::MemBuffer` from the global
-/// allocator (1629440 bytes for this fixture, one allocation per call). Both routes pay
-/// it, so comparing the permuted route against the plain one cancels it, and an operand
-/// copy still shows up as one payload-sized allocation on top of it.
+/// is process-wide and also sees the GEMM kernel's own scratch. Both routes pay that, so
+/// comparing the permuted route against the plain one cancels it, and an operand copy still
+/// shows up as one payload-sized allocation on top of it.
+///
+/// Which scratch that is differs by host, and so does what stays visible here (measured on
+/// an aarch64 macOS host, recorded from Linux CI for x86_64, #2442): faer's `matmul_imp`
+/// dispatches to its own `private_gemm_x86` kernel on x86_64 when AVX2 or AVX-512 is
+/// present, and that kernel packs nothing, so both routes count zero there. On aarch64 it
+/// falls through to the `gemm` crate (`gemm-common`), whose `gemm()` packs the right operand
+/// into a `dyn_stack::MemBuffer` it allocates per call - 1629440 B for this fixture, plus a
+/// 6-byte flag `Vec` - so both routes count one payload-sized allocation.
 #[test]
 fn canonical_fallback_contraction_does_not_copy_operands() {
     let _serial = SERIAL
