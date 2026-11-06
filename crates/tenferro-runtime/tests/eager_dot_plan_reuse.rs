@@ -76,19 +76,41 @@ fn repeated_eager_matmul_does_not_rebuild_its_plan() {
     assert_eq!(engine.num_threads(), 1);
     let (out, first) = allocations(|| lhs.matmul(&rhs, &mut engine).unwrap());
     drop(out);
-    // Warm the pooled output so only the plan build itself is measured.
-    let (warm, _) = allocations(|| lhs.matmul(&rhs, &mut engine).unwrap());
+    let before = engine.plan_cache().contraction_stats();
+    // Warm the pooled output so only a plan build or a kernel scratch can be measured.
+    let (warm, warm_allocations) = allocations(|| lhs.matmul(&rhs, &mut engine).unwrap());
     drop(warm);
     let (again, repeat) = allocations(|| lhs.matmul(&rhs, &mut engine).unwrap());
     drop(again);
-    eprintln!("eager 64x64 matmul: first {first}, repeat {repeat} allocations");
+    let after = engine.plan_cache().contraction_stats();
+    eprintln!(
+        "eager 64x64 matmul: first {first}, warm {warm_allocations}, repeat {repeat} allocations"
+    );
+    // The plan-cache counters are the host-independent half: #2139 was the eager
+    // entry reaching no cache slot at all, so no lookup happened and no hit was
+    // recorded, and a rebuilt plan registers a miss instead of a hit.
+    assert_eq!(
+        after.hits - before.hits,
+        2,
+        "the warm and the repeated matmul must hit the cached plan"
+    );
+    assert_eq!(
+        after.misses, before.misses,
+        "the repeated eager matmul rebuilt its plan"
+    );
     // Without a cache slot the eager path rebuilt the whole numerical plan on
-    // every call: 84 allocations on this fixture, against 415 for the cold call
-    // that also warms the provider. The repeat allocates nothing: the plan is
-    // not rebuilt and the buffer pool keeps no per-operation bookkeeping.
+    // every call: 84 allocations on this fixture (82 on aarch64), against 415 for
+    // the cold call that also warms the provider. What the allocator still sees on
+    // a cached call is the kernel's own scratch: faer's `x86_64` kernels take it
+    // from the stack, its aarch64 SME kernel allocates a per-call
+    // `dyn_stack::MemBuffer` (two allocations here). So the repeat is bounded by
+    // the equally warm call instead of by zero: anything the repeat adds on top of
+    // a cached call - a copied operand, or a pooled buffer it failed to reuse -
+    // still shows up.
     assert!(
-        repeat == 0,
-        "the repeated eager matmul still allocates: {first} then {repeat}"
+        repeat <= warm_allocations,
+        "the repeated eager matmul allocates more than the warm one: {first} cold, \
+         {warm_allocations} warm, {repeat} repeated"
     );
 }
 
