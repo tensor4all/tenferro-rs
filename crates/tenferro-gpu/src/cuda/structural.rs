@@ -80,23 +80,55 @@ macro_rules! with_scalar {
     };
 }
 
+/// Bytes a compact `dtype` tensor of `shape` occupies.
+fn tensor_bytes(dtype: DType, shape: &[usize]) -> crate::Result<usize> {
+    let count = element_count(shape)?;
+    with_scalar!(
+        dtype,
+        |T| Ok(count.saturating_mul(std::mem::size_of::<T>()))
+    )
+}
+
 /// Allocate a zeroed device tensor of `shape` in the runtime's placement.
 pub(crate) fn alloc_tensor(
     runtime: &CudaRuntime,
     dtype: DType,
     shape: &[usize],
 ) -> crate::Result<Tensor> {
-    let count = element_count(shape)?;
-    let bytes = with_scalar!(
-        dtype,
-        |T| Ok(count.saturating_mul(std::mem::size_of::<T>()))
-    )?;
+    let bytes = tensor_bytes(dtype, shape)?;
     let buffer = {
         let mut guard = runtime.submit();
         guard
             .alloc_zeroed(bytes, 256)
             .map_err(|error| crate::Error::runtime_state_source("cuda allocate", error))?
     };
+    tensor_from_buffer(runtime, dtype, shape, buffer)
+}
+
+/// Allocate device memory for a compact `dtype` tensor of `shape` without zeroing it.
+///
+/// For a destination a launch overwrites completely: skipping the fill removes one
+/// `cuMemsetD8Async` from the call (#2406). Wrap it with [`tensor_from_buffer`] only after
+/// that launch is admitted.
+fn alloc_uninit_tensor_bytes(
+    runtime: &CudaRuntime,
+    dtype: DType,
+    shape: &[usize],
+) -> crate::Result<t4a_cuda_runtime::UninitBuffer> {
+    let bytes = tensor_bytes(dtype, shape)?;
+    let mut guard = runtime.submit();
+    guard
+        .alloc_uninit(bytes, 256)
+        .map_err(|error| crate::Error::runtime_state_source("cuda allocate", error))
+}
+
+/// A device tensor of `shape` over `buffer`, an allocation of `runtime`.
+fn tensor_from_buffer(
+    runtime: &CudaRuntime,
+    dtype: DType,
+    shape: &[usize],
+    buffer: t4a_cuda_runtime::Buffer,
+) -> crate::Result<Tensor> {
     let storage = super::storage::fresh_storage(runtime, buffer);
     with_scalar!(dtype, |T| Ok(Tensor::from_typed(
         TypedTensor::<T>::from_buffer_col_major(
@@ -3222,7 +3254,17 @@ impl CudaEngine {
         let mut owned: Option<Tensor> = None;
         let width = 32u32;
         // The reduction kernel is keepdims: the destination has the input's rank with an
-        // extent of one on the reduced axis, so the unit axes are squeezed off at the end.
+        // extent of one on the reduced axis. A compact column-major buffer is the same bytes
+        // with or without those unit axes, so the last pass allocates the squeezed result and
+        // the kernel writes it through the keepdims layout: no squeeze copy, no second
+        // allocation and no second wait (#2406).
+        let squeezed: Vec<usize> = shape
+            .iter()
+            .enumerate()
+            .filter(|(axis, _)| !ordered.contains(axis))
+            .map(|(_, &extent)| extent)
+            .collect();
+        let passes = ordered.len();
         for (pass, &axis) in ordered.iter().rev().enumerate() {
             // Only a sum of squares changes between passes: it folds the squares once and adds
             // them afterwards. Every other fold composes with itself.
@@ -3240,7 +3282,15 @@ impl CudaEngine {
             let in_layout = compact_layout(&shape, &compact_strides(&shape, name)?, name)?;
             let out_len = count_i64(&out_shape, name)?;
             let in_len = count_i64(&shape, name)?;
-            let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
+            let result_shape: &[usize] = if pass + 1 == passes {
+                &squeezed
+            } else {
+                &out_shape
+            };
+            // INVARIANT: uninitialised on purpose, not a missing zero fill. The direct or combine
+            // launch writes each of the `out_len` outputs once, and `reduce_planned` refuses a
+            // buffer that is not exactly the output layout before it launches (#2406).
+            let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, result_shape)?;
             // Only a split reduction needs scratch, and only as much as its partials layout;
             // planning first keeps a direct reduction from allocating an input-sized buffer.
             let planned = plan_reduction(
@@ -3266,12 +3316,18 @@ impl CudaEngine {
                 .product::<i64>() as usize,
                 ReductionPlan::Direct { .. } => 0,
             };
-            // A direct reduction never reads the scratch buffer, and a zero-length allocation
-            // costs a runtime round trip; the output allocation stands in for it.
+            // A direct reduction never reads a scratch buffer, so it allocates none.
+            // INVARIANT: the scratch is uninitialised on purpose. Pass 1 writes one partial per
+            // `(output, split)` block, `reduce_planned` refuses a buffer that is not exactly the
+            // partials layout, and it frees the scratch in stream order after the combine pass.
             let partials = if scratch == 0 {
                 None
             } else {
-                Some(alloc_tensor(self.runtime(), dtype, &[scratch])?)
+                Some(alloc_uninit_tensor_bytes(
+                    self.runtime(),
+                    dtype,
+                    &[scratch],
+                )?)
             };
             let source_tensor: &Tensor = owned.as_ref().map_or(source.tensor(), |tensor| tensor);
             // Preparing an entry binds its translation unit, so ask only for the one the plan uses.
@@ -3281,34 +3337,30 @@ impl CudaEngine {
             };
             let mut dispatcher = self.dispatcher(entries)?;
             with_scalar!(dtype, |T| {
-                dispatcher.reduce_auto(
+                dispatcher.reduce_planned(
+                    &planned,
                     kernel,
                     pass_op,
                     &out_layout,
-                    out_len,
                     &in_layout,
-                    in_len,
                     axis as u32,
-                    width,
-                    self.allocation_of::<T>(&output, name)?,
+                    &output,
                     self.allocation_of::<T>(source_tensor, name)?,
-                    self.allocation_of::<T>(partials.as_ref().unwrap_or(&output), name)?,
+                    partials,
                 )
             })?;
-            self.prove_launch(name)?;
-            drop(partials);
+            drop(dispatcher);
+            // SAFETY: `reduce_planned` checked that `output` holds exactly the output layout and
+            // admitted the launch that writes each of its elements on this buffer's stream, so
+            // every later read (the next pass, or the caller's) is ordered after that write.
+            let output = unsafe { output.assume_init() };
+            let result = tensor_from_buffer(self.runtime(), dtype, result_shape, output)?;
             shape = out_shape;
-            owned = Some(output);
+            owned = Some(result);
         }
-        let intermediate = owned.expect("at least one axis was reduced");
-        let squeezed: Vec<usize> = (0..intermediate.shape().len())
-            .filter(|axis| !ordered.contains(axis))
-            .map(|axis| intermediate.shape()[axis])
-            .collect();
-        if squeezed == intermediate.shape() {
-            return Ok(intermediate);
-        }
-        self.copy_to_fresh(&intermediate, squeezed, name)
+        // Each pass reads the previous one in stream order, so one wait proves them all.
+        self.prove_launch(name)?;
+        Ok(owned.expect("at least one axis was reduced"))
     }
 }
 
