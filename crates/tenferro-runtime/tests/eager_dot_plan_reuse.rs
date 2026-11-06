@@ -101,12 +101,16 @@ fn repeated_eager_matmul_does_not_rebuild_its_plan() {
     // Without a cache slot the eager path rebuilt the whole numerical plan on
     // every call: 84 allocations on this fixture (82 on aarch64), against 415 for
     // the cold call that also warms the provider. What the allocator still sees on
-    // a cached call is the kernel's own scratch: faer's `x86_64` kernels take it
-    // from the stack, its aarch64 SME kernel allocates a per-call
-    // `dyn_stack::MemBuffer` (two allocations here). So the repeat is bounded by
-    // the equally warm call instead of by zero: anything the repeat adds on top of
-    // a cached call - a copied operand, or a pooled buffer it failed to reuse -
-    // still shows up.
+    // a cached call is the kernel's own scratch, and which scratch that is differs
+    // by host (measured on aarch64 macOS, recorded from Linux CI for x86_64,
+    // #2442): faer's `matmul_imp` dispatches to its own `private_gemm_x86` kernel on
+    // x86_64 when AVX2 or AVX-512 is present, which packs nothing and allocates
+    // nothing, while on aarch64 it falls through to the `gemm` crate
+    // (`gemm-common`), whose `gemm()` packs the right operand into a
+    // `dyn_stack::MemBuffer` it allocates per call (32 KiB here) plus a 4-byte flag
+    // `Vec` - two allocations. So the repeat is bounded by the equally warm call
+    // instead of by zero: anything the repeat adds on top of a cached call - a
+    // copied operand, or a pooled buffer it failed to reuse - still shows up.
     assert!(
         repeat <= warm_allocations,
         "the repeated eager matmul allocates more than the warm one: {first} cold, \
