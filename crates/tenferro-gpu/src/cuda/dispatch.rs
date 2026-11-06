@@ -1164,7 +1164,8 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    // Only the dispatch tests exercise the explicit-strategy form; the engine uses `reduce_auto`.
+    // Only the dispatch tests exercise the explicit-strategy form; the engine plans with
+    // `plan_reduction` and runs `reduce_planned`.
     #[allow(dead_code)]
     pub(crate) fn reduce(
         &mut self,
