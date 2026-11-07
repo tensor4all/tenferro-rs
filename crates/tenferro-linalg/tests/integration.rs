@@ -2,6 +2,8 @@
 mod ad_support_manifest;
 #[path = "integration/backend_errors.rs"]
 mod backend_errors;
+#[path = "integration/borrowed_exec_entries.rs"]
+mod borrowed_exec_entries;
 #[path = "integration/borrowed_linalg_parity.rs"]
 mod borrowed_linalg_parity;
 #[path = "integration/concrete_surface.rs"]

@@ -38,8 +38,6 @@ pub(crate) trait LapackLinalg:
     fn rank_magnitude(self) -> f64;
     /// Whether every component is finite (the rank-revealing QR input screen).
     fn is_finite_value(self) -> bool;
-    /// Real values in this scalar type, reusing the buffer when the scalar is real.
-    fn values_as_scalar(buffers: &mut BufferPool, values: Vec<Self::RealScalar>) -> Vec<Self>;
     /// Wrap a general-eigendecomposition output as an erased tensor.
     fn wrap_complex(tensor: TypedTensor<Self::ComplexScalar>) -> Tensor;
     /// `C = A B` for the compact Householder fold of `from_factors_2d` (host composition).
@@ -353,10 +351,6 @@ macro_rules! impl_real_lapack {
                 self.is_finite()
             }
 
-            fn values_as_scalar(_buffers: &mut BufferPool, values: Vec<Self>) -> Vec<Self> {
-                values
-            }
-
             fn wrap_complex(tensor: TypedTensor<$complex>) -> Tensor {
                 Tensor::from_typed::<$complex>(tensor)
             }
@@ -433,13 +427,6 @@ macro_rules! impl_complex_lapack {
 
             fn is_finite_value(self) -> bool {
                 self.re.is_finite() && self.im.is_finite()
-            }
-
-            fn values_as_scalar(buffers: &mut BufferPool, values: Vec<$real>) -> Vec<Self> {
-                let mut converted = buffers.acquire_with_capacity::<$complex>(values.len());
-                converted.extend(values.iter().map(|&value| <$complex>::new(value, 0.0)));
-                <$real as PoolScalar>::pool_release(buffers, values);
-                converted
             }
 
             fn wrap_complex(tensor: TypedTensor<$complex>) -> Tensor {

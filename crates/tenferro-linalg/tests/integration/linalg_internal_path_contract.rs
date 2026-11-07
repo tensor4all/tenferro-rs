@@ -440,8 +440,8 @@ fn cpu_general_eig_values_only_paths_do_not_request_vectors() {
     let faer_source = crate_source("src/cpu/linalg/faer_linalg.rs");
     let faer_dispatch = source_section(
         &faer_source,
-        "macro_rules! impl_faer_eig",
-        "impl_faer_eig!(",
+        "            fn eig_batch(",
+        "            fn normalize_eig_vectors(",
     );
     assert!(
         faer_dispatch.contains("tlinalg::eig::eig_values_into("),
@@ -451,7 +451,8 @@ fn cpu_general_eig_values_only_paths_do_not_request_vectors() {
         faer_dispatch.contains("tlinalg::eig::eig_into("),
         "Faer eig should call the provider's vectors entry point"
     );
-    let faer_values = source_section(&faer_source, "pub(crate) fn eig_values(", "\n}\n");
+    let typed_source = crate_source("src/cpu/linalg/faer_linalg/with_exec.rs");
+    let faer_values = source_section(&typed_source, "pub(crate) fn eig_values_typed", "\n}\n");
     assert!(
         faer_values.contains("false") && !faer_values.contains("true"),
         "Faer eig_values should not request eigenvectors"

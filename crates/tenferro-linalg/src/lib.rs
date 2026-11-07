@@ -72,6 +72,60 @@
 //! assert_eq!(x.host_data()?, &[2.0, 3.0]);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! # Borrowed-`Exec` factorization entries
+//!
+//! A caller that runs its own lanes calls these on each lane's bundle and pool instead of going
+//! through an engine. The engine's own entries run the same typed bodies and only erase the
+//! results, so the same operand gives the same outputs, value bits and placement included, on
+//! both paths.
+//!
+//! The entries exist on the `native` provider only; the BLAS provider has no per-context entry
+//! (see the "Lanes and the vendor provider" section of `docs/guides/cpu-execution.md`).
+//!
+//! ## Contract
+//!
+//! - **Execution.** A call runs on the `exec` it is handed: the bundle's token, its width and its
+//!   batch policy. It enters no other pool and does not re-enter an engine.
+//! - **Storage.** Every output, the provider workspace and the transient spectrum of a complex
+//!   input are leased from `buffers`; tenferro allocates nothing outside it. (faer's own GEMM
+//!   still allocates packing scratch per call off x86_64; that is inside the provider, and
+//!   `tests/cpu_linalg_allocation.rs` records it.) An output returns its storage to the pool when
+//!   it drops, so a lane that keeps one pool reaches a steady state. Results may outlive the
+//!   pool; their storage is then freed instead of recycled.
+//! - **View rule.** The operand is a matrix `[m, n]` or a batch `[m, n, b..]`; the eigensolvers
+//!   require `m == n`. Its dims, strides and offset are read in place as given. A negative stride
+//!   is refused with an `Unsupported` error before anything is computed. This is **not** the
+//!   rule of the `*_read` engine entries, which read rank 2 in place, gather negative strides and
+//!   materialize everything else; that stays on the owned path.
+//! - **Empty input.** An operand with a zero dimension returns correctly shaped outputs without
+//!   reading it; the square factors of a full SVD are then identities.
+//! - **Placement.** Every output carries the operand's placement.
+//! - **Errors.** Rank and shape failures use the shared validation kinds; a provider failure is
+//!   [`map_error`](crate::error::map_error) of the `tlinalg` error.
+//!
+//! ## Example
+//!
+//! One pool per lane, each lane on its own share of the engine's bundle:
+//!
+//! ```rust
+//! # #[cfg(feature = "native")]
+//! # fn main() -> Result<(), tenferro_tensor::Error> {
+//! use tenferro_cpu::{linalg_interop::BufferPool, CpuEngine};
+//! use tenferro_tensor::TypedTensor;
+//!
+//! let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![4.0, 0.0, 0.0, 9.0])?;
+//! let mut engine = CpuEngine::serial();
+//! let mut lane_pool = BufferPool::new();
+//! let values = engine.with_exec(|exec| {
+//!     tenferro_linalg::eigh_values_with_exec(exec, &mut lane_pool, &a.as_view())
+//! })??;
+//! assert_eq!(values.host_data()?, &[4.0, 9.0]);
+//! # Ok(())
+//! # }
+//! # #[cfg(not(feature = "native"))]
+//! # fn main() {}
+//! ```
 // A misaligned pointer handed to a CUDA library is undefined behaviour and
 // fails only on some library versions: `cuDoubleComplex` is `double2`, which
 // CUDA declares `__align__(16)`, while `num_complex::Complex64` is 8-aligned,
@@ -100,6 +154,8 @@ mod rank_revealing_qr;
 mod tensor_ext;
 mod traced;
 mod validation;
+#[cfg(feature = "native")]
+mod with_exec;
 
 #[cfg(feature = "autodiff")]
 pub use ad::semantic_ad_rules;
@@ -133,3 +189,9 @@ pub use tensor_ext::{
     TypedRankRevealingQrResult, TypedSvd, TypedTensorLinalgExt,
 };
 pub use traced::TracedTensorLinalgExt;
+#[cfg(feature = "native")]
+#[cfg_attr(docsrs, doc(cfg(feature = "native")))]
+pub use with_exec::{
+    eig_values_with_exec, eigh_values_with_exec, eigh_with_exec, qr_with_exec,
+    svd_values_with_exec, svd_with_exec,
+};

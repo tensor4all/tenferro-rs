@@ -23,9 +23,25 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   provider concurrently unless the library tolerates it. Only the native
   provider has a per-context entry, and tenferro offers no wrapper that
   simulates per-lane widths.
+- **Borrowed-`Exec` factorization entries with typed outputs** (#2462):
+  `svd_with_exec`, `svd_values_with_exec`, `qr_with_exec`, `eigh_with_exec`,
+  `eigh_values_with_exec` and `eig_values_with_exec` in `tenferro-linalg`
+  (`native` only). They run on a caller's `Exec` bundle and `BufferPool`, read a
+  `[m, n]` or batched `[m, n, b..]` view in place (a negative stride is
+  `Unsupported`), take every output and workspace from that pool, and return
+  typed tensors: singular values and Hermitian eigenvalues in
+  `LinalgScalar::RealScalar`, general eigenvalues in `LinalgScalar::Complex`.
+  The engine entries now run the same functions and only erase the results, so
+  both give bit-identical outputs. `LinalgScalar` gains `RealScalar`, and its
+  `Complex` now also implements `PoolScalar + Default`.
 
 ### Changed
 
+- **The CPU complex SVD and `eigh` no longer allocate outside the session
+  pool** (#2462). The real spectrum is gathered into a pooled lease instead of
+  a fresh `Vec`; the recorded steady-state ceiling of a complex SVD or `eigh`
+  drops from 5 to the 1 allocation now measured. The `blas` route keeps the spectrum real instead of widening it to the
+  complex scalar and narrowing it again.
 - **Breaking (minor): traced values are owned by a `TraceContext`.** This is a
   minor release, not a patch: `TracedTensor` no longer carries its own graph, so
   context-free constructors, `TracedTensor::graph()` and the public

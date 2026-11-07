@@ -701,36 +701,30 @@ fn canonical_svd_gauge_uses_checked_layout_without_raw_batch_offsets() {
 }
 
 #[test]
-fn cpu_eigh_complex_output_adapters_are_fallible() {
+fn cpu_eigh_outputs_are_typed_without_count_adapters() {
+    // The typed bodies return `(values, vectors)` with the values already in the real scalar, so
+    // the engine only erases them: no output-count check, no complex-to-real adapter, no panic.
     let source = cpu_backend_source();
     let eigh_impl = rust_function_section(&source, "eigh_entered");
-    let c32_adapter = source_section(
-        &source,
-        "fn eigh_c32_outputs_to_public_tensors",
-        "fn eigh_c64_outputs_to_public_tensors",
-    );
-    let c64_adapter = source_section(
-        &source,
-        "fn eigh_c64_outputs_to_public_tensors",
-        "fn apply_lu_pivots_cpu",
-    );
-
     assert!(
-        eigh_impl.contains(".and_then(eigh_c32_outputs_to_public_tensors)")
-            && eigh_impl.contains(".and_then(eigh_c64_outputs_to_public_tensors)"),
-        "CPU complex eigh output adapters should propagate malformed output errors"
+        eigh_impl.contains(".map(pair_erased)"),
+        "CPU eigh should erase the typed pair directly"
     );
-    for (name, adapter) in [
-        ("eigh_c32_outputs_to_public_tensors", c32_adapter),
-        ("eigh_c64_outputs_to_public_tensors", c64_adapter),
+    for removed in [
+        "eigh_c32_outputs_to_public_tensors",
+        "eigh_c64_outputs_to_public_tensors",
+        "eigh_output_count_error",
+        "svd_c32_outputs_to_public_tensors",
+        "svd_c64_outputs_to_public_tensors",
+        "svd_output_count_error",
     ] {
         assert!(
-            adapter.contains("tenferro_tensor::Result<Vec<Tensor>>"),
-            "{name} should return a typed Result"
-        );
-        assert!(
-            !adapter.contains(".expect("),
-            "{name} should not panic on malformed backend output"
+            !source.contains(removed),
+            "{removed} should be gone now the typed bodies return tuples"
         );
     }
+    assert!(
+        !eigh_impl.contains(".expect("),
+        "eigh_entered should not panic"
+    );
 }

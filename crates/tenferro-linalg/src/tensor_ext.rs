@@ -9,6 +9,7 @@
 //! built-in-session only.
 
 use num_complex::{Complex32, Complex64};
+use tenferro_cpu::linalg_interop::PoolScalar;
 use tenferro_cpu::with_cpu_engine;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::raw::with_cuda_engine;
@@ -22,40 +23,194 @@ use crate::traced::real_values_dtype;
 use crate::validation::validate_square_matrix;
 use crate::{LinalgBackend, RankRevealingQrOptions, RankRevealingQrResult};
 
-/// Scalar types supported by statically typed linear algebra methods.
+/// Scalar types supported by statically typed linear algebra methods: `f32`, `f64`,
+/// `Complex32` and `Complex64`.
+///
+/// The trait is sealed: its supertrait lives in a private module, so no other type can implement
+/// it. It names the two output scalars a factorization of `Self` can return.
+///
+/// | `Self` | [`RealScalar`](LinalgScalar::RealScalar) | [`Complex`](LinalgScalar::Complex) |
+/// | --- | --- | --- |
+/// | `f32` | `f32` | `Complex32` |
+/// | `f64` | `f64` | `Complex64` |
+/// | `Complex32` | `f32` | `Complex32` |
+/// | `Complex64` | `f64` | `Complex64` |
 ///
 /// # Examples
 ///
 /// ```rust
+/// use num_complex::Complex64;
 /// use tenferro_linalg::LinalgScalar;
 ///
 /// fn accepts_linalg_scalar<T: LinalgScalar>() {}
 /// accepts_linalg_scalar::<f64>();
+///
+/// fn spectrum_scalar<T: LinalgScalar>() -> &'static str {
+///     std::any::type_name::<T::RealScalar>()
+/// }
+/// assert_eq!(spectrum_scalar::<Complex64>(), "f64");
 /// ```
 pub trait LinalgScalar: TensorScalar + private::Sealed {
     /// Complex counterpart used by general eigendecomposition.
-    type Complex: TensorScalar;
+    type Complex: TensorScalar + PoolScalar + Default;
+    /// Real scalar of singular values and Hermitian eigenvalues.
+    type RealScalar: TensorScalar + PoolScalar + Default;
 }
 
 mod private {
-    pub trait Sealed {}
-    impl Sealed for f32 {}
-    impl Sealed for f64 {}
-    impl Sealed for num_complex::Complex32 {}
-    impl Sealed for num_complex::Complex64 {}
+    #[cfg(feature = "native")]
+    use tcontract_exec::Exec;
+    #[cfg(feature = "native")]
+    use tenferro_cpu::linalg_interop::BufferPool;
+    #[cfg(feature = "native")]
+    use tenferro_tensor::{TypedTensor, TypedTensorView};
+
+    /// `(U, S, Vᴴ)` of the borrowed SVD entry.
+    #[cfg(feature = "native")]
+    pub type Svd<T> = (
+        TypedTensor<T>,
+        TypedTensor<<T as super::LinalgScalar>::RealScalar>,
+        TypedTensor<T>,
+    );
+
+    /// The sealing supertrait of [`LinalgScalar`](super::LinalgScalar).
+    ///
+    /// `pub` inside a private module: nameable as a supertrait, unreachable outside the crate.
+    /// Its methods route the public borrowed-`Exec` entries to the faer route's typed bodies per
+    /// concrete type, which is what lets the public bound stay free of the provider's own scalar
+    /// traits (whose `Real`/`Complex` names would otherwise collide with `LinalgScalar::Complex`).
+    pub trait Sealed {
+        #[cfg(feature = "native")]
+        fn svd_with_exec(
+            exec: &mut Exec<'_>,
+            buffers: &mut BufferPool,
+            view: &TypedTensorView<'_, Self>,
+            full: bool,
+        ) -> tenferro_tensor::Result<Svd<Self>>
+        where
+            Self: super::LinalgScalar + Sized;
+        #[cfg(feature = "native")]
+        fn svd_values_with_exec(
+            exec: &mut Exec<'_>,
+            buffers: &mut BufferPool,
+            view: &TypedTensorView<'_, Self>,
+        ) -> tenferro_tensor::Result<TypedTensor<<Self as super::LinalgScalar>::RealScalar>>
+        where
+            Self: super::LinalgScalar + Sized;
+        #[cfg(feature = "native")]
+        fn qr_with_exec(
+            exec: &mut Exec<'_>,
+            buffers: &mut BufferPool,
+            view: &TypedTensorView<'_, Self>,
+        ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<Self>)>
+        where
+            Self: super::LinalgScalar + Sized;
+        #[cfg(feature = "native")]
+        #[allow(clippy::type_complexity)]
+        fn eigh_with_exec(
+            exec: &mut Exec<'_>,
+            buffers: &mut BufferPool,
+            view: &TypedTensorView<'_, Self>,
+        ) -> tenferro_tensor::Result<(
+            TypedTensor<<Self as super::LinalgScalar>::RealScalar>,
+            TypedTensor<Self>,
+        )>
+        where
+            Self: super::LinalgScalar + Sized;
+        #[cfg(feature = "native")]
+        fn eigh_values_with_exec(
+            exec: &mut Exec<'_>,
+            buffers: &mut BufferPool,
+            view: &TypedTensorView<'_, Self>,
+        ) -> tenferro_tensor::Result<TypedTensor<<Self as super::LinalgScalar>::RealScalar>>
+        where
+            Self: super::LinalgScalar + Sized;
+        #[cfg(feature = "native")]
+        fn eig_values_with_exec(
+            exec: &mut Exec<'_>,
+            buffers: &mut BufferPool,
+            view: &TypedTensorView<'_, Self>,
+        ) -> tenferro_tensor::Result<TypedTensor<<Self as super::LinalgScalar>::Complex>>
+        where
+            Self: super::LinalgScalar + Sized;
+    }
+
+    macro_rules! impl_sealed {
+        ($($scalar:ty),*) => {$(
+            impl Sealed for $scalar {
+                #[cfg(feature = "native")]
+                fn svd_with_exec(
+                    exec: &mut Exec<'_>,
+                    buffers: &mut BufferPool,
+                    view: &TypedTensorView<'_, Self>,
+                    full: bool,
+                ) -> tenferro_tensor::Result<Svd<Self>> {
+                    crate::cpu::linalg::faer::svd_typed(exec, buffers, view, full)
+                }
+                #[cfg(feature = "native")]
+                fn svd_values_with_exec(
+                    exec: &mut Exec<'_>,
+                    buffers: &mut BufferPool,
+                    view: &TypedTensorView<'_, Self>,
+                ) -> tenferro_tensor::Result<TypedTensor<<Self as super::LinalgScalar>::RealScalar>> {
+                    crate::cpu::linalg::faer::svd_values_typed(exec, buffers, view)
+                }
+                #[cfg(feature = "native")]
+                fn qr_with_exec(
+                    exec: &mut Exec<'_>,
+                    buffers: &mut BufferPool,
+                    view: &TypedTensorView<'_, Self>,
+                ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<Self>)> {
+                    crate::cpu::linalg::faer::qr_typed(exec, buffers, view)
+                }
+                #[cfg(feature = "native")]
+                fn eigh_with_exec(
+                    exec: &mut Exec<'_>,
+                    buffers: &mut BufferPool,
+                    view: &TypedTensorView<'_, Self>,
+                ) -> tenferro_tensor::Result<(
+                    TypedTensor<<Self as super::LinalgScalar>::RealScalar>,
+                    TypedTensor<Self>,
+                )> {
+                    crate::cpu::linalg::faer::eigh_typed(exec, buffers, view)
+                }
+                #[cfg(feature = "native")]
+                fn eigh_values_with_exec(
+                    exec: &mut Exec<'_>,
+                    buffers: &mut BufferPool,
+                    view: &TypedTensorView<'_, Self>,
+                ) -> tenferro_tensor::Result<TypedTensor<<Self as super::LinalgScalar>::RealScalar>> {
+                    crate::cpu::linalg::faer::eigh_values_typed(exec, buffers, view)
+                }
+                #[cfg(feature = "native")]
+                fn eig_values_with_exec(
+                    exec: &mut Exec<'_>,
+                    buffers: &mut BufferPool,
+                    view: &TypedTensorView<'_, Self>,
+                ) -> tenferro_tensor::Result<TypedTensor<<Self as super::LinalgScalar>::Complex>> {
+                    crate::cpu::linalg::faer::eig_values_typed(exec, buffers, view)
+                }
+            }
+        )*};
+    }
+    impl_sealed!(f32, f64, num_complex::Complex32, num_complex::Complex64);
 }
 
 impl LinalgScalar for f32 {
     type Complex = Complex32;
+    type RealScalar = f32;
 }
 impl LinalgScalar for f64 {
     type Complex = Complex64;
+    type RealScalar = f64;
 }
 impl LinalgScalar for Complex32 {
     type Complex = Complex32;
+    type RealScalar = f32;
 }
 impl LinalgScalar for Complex64 {
     type Complex = Complex64;
+    type RealScalar = f64;
 }
 
 /// Fixed typed output tuple for singular value decomposition.

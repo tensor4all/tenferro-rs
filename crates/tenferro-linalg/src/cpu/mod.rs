@@ -1,5 +1,5 @@
 pub(crate) mod backend;
-mod linalg;
+pub(crate) mod linalg;
 
 // Both CPU builds: the `blas` build also takes complete-pivoting LU from tlinalg.
 #[cfg_attr(not(feature = "native"), allow(dead_code, unused_imports))]

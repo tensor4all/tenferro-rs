@@ -18,20 +18,38 @@ use tenferro_tensor::{
 use tlinalg::Op;
 
 use super::{finish_lease, pooled_copy, pooled_output, pooled_zeroed, raw_view};
+
+mod with_exec;
 use crate::cpu::tlinalg::PooledWorkspace;
 use crate::cpu::tlinalg_error::map_error;
+pub(crate) use with_exec::{
+    eig_values_typed, eigh_typed, eigh_values_typed, qr_typed, svd_typed, svd_values_typed,
+};
 
-/// The host-side scalar vocabulary of the faer route.
+/// `(U, S, Vᴴ)` as the public SVD entry returns it.
+#[cfg(feature = "native")]
+type PublicSvd<T> = (
+    TypedTensor<T>,
+    TypedTensor<<T as crate::LinalgScalar>::RealScalar>,
+    TypedTensor<T>,
+);
+
+/// The host-side scalar vocabulary of the faer route: the former `FaerLinalg` and `FaerEig`
+/// merged.
 ///
 /// The numerical work is `tlinalg`'s; this trait keeps only the scalar facts the host's own
-/// compositions use (gauges, the rank screen, the compact QR fold) plus the two families whose
-/// output scalar differs from the input scalar, which are dispatched per concrete type because the
-/// provider's real-scalar projection is not nameable from here.
+/// compositions use (gauges, the rank screen, the compact QR fold) plus the families whose output
+/// scalar differs from the input scalar, which are dispatched per concrete type because the
+/// provider's real and complex projections are not nameable from here. It stays crate-private:
+/// the public face of the same four scalars is [`crate::LinalgScalar`], whose sealed supertrait
+/// routes the borrowed entries here.
 pub(crate) trait FaerLinalg:
     tlinalg::FaerScalar + PoolScalar + Default + PartialEq + std::ops::Mul<Output = Self>
 {
     /// The real scalar of singular values and Hermitian eigenvalues.
     type RealScalar: PoolScalar + Default;
+    /// The complex scalar of general eigenvalues and eigenvectors.
+    type ComplexScalar: PoolScalar + Default;
 
     fn parity_one() -> Self;
     fn is_finite(self) -> bool;
@@ -62,6 +80,58 @@ pub(crate) trait FaerLinalg:
         workspace: &mut [core::mem::MaybeUninit<u8>],
         exec: &mut Exec<'_>,
     ) -> tlinalg::Result<()>;
+    /// A spectrum the provider wrote in `Self`, as a tensor of the real scalar.
+    ///
+    /// The identity for a real scalar. For a complex scalar it is one pooled pass that copies the
+    /// real parts into a lease of `buffers`; the `Self` tensor returns to the pool when it drops.
+    fn real_spectrum(
+        buffers: &BufferPool,
+        op: &'static str,
+        role: &'static str,
+        spectrum: TypedTensor<Self>,
+    ) -> tenferro_tensor::Result<TypedTensor<Self::RealScalar>>;
+    /// The general eigendecomposition, whose outputs are in the complex counterpart.
+    fn eig_batch(
+        input: RawStridedRef<'_, Self>,
+        values: &mut [core::mem::MaybeUninit<Self::ComplexScalar>],
+        vectors: Option<&mut [core::mem::MaybeUninit<Self::ComplexScalar>]>,
+        workspace: &mut [core::mem::MaybeUninit<u8>],
+        exec: &mut Exec<'_>,
+    ) -> tlinalg::Result<()>;
+    /// Put the provider's eigenvectors into the public contract's gauge.
+    ///
+    /// `eig` documents **unit 2-norm columns** - the vendored oracle records the same for PyTorch
+    /// and tenferro - which the providers do not all guarantee, so the seam normalizes them here.
+    /// A column the provider left non-finite (a defective, Jordan-like input can overflow inside
+    /// its back-substitution) is reported as a numerical failure rather than returned as NaN
+    /// (#2148).
+    fn normalize_eig_vectors(
+        vectors: &mut [Self::ComplexScalar],
+        n: usize,
+        batch_count: usize,
+    ) -> tenferro_tensor::Result<()>;
+}
+
+/// Copy the real parts of a complex spectrum into a pooled real lease, keeping its placement.
+// TODO(tlinalg): `svd_into` and `eigh_into` (tlinalg 0.9) write the spectrum in the input scalar.
+// When tlinalg takes a real-spectrum slot, lease the real tensor directly and delete this pass.
+fn gather_real_parts<C: PoolScalar, R: PoolScalar>(
+    buffers: &BufferPool,
+    op: &'static str,
+    role: &'static str,
+    spectrum: TypedTensor<C>,
+    real_part: impl Fn(C) -> R,
+) -> tenferro_tensor::Result<TypedTensor<R>> {
+    let mut real = pooled_output::<R>(buffers, op, role, spectrum.shape())?;
+    // INVARIANT: both tensors are compact with the same shape, so the zip writes every slot.
+    for (slot, &value) in real
+        .as_uninit_slice_mut()
+        .iter_mut()
+        .zip(spectrum.host_data()?)
+    {
+        slot.write(real_part(value));
+    }
+    tensor_from_lease(real, spectrum.placement())
 }
 
 macro_rules! impl_faer_linalg {
@@ -74,10 +144,13 @@ macro_rules! impl_faer_linalg {
         |$q:ident| $q_phase:expr,
         |$f:ident| $is_finite:expr,
         $to_faer:ident,
-        $to_faer_mut:ident
+        $to_faer_mut:ident,
+        $complex:ty,
+        |$buffers:ident, $op:ident, $role:ident, $spectrum:ident| $real_spectrum:expr
     ) => {
         impl FaerLinalg for $scalar {
             type RealScalar = $real;
+            type ComplexScalar = $complex;
 
             fn parity_one() -> Self {
                 $one
@@ -166,6 +239,42 @@ macro_rules! impl_faer_linalg {
             ) -> tlinalg::Result<()> {
                 tlinalg::eigh::eigh_values_into(Op::EighValues, input, values, workspace, exec)
             }
+
+            fn real_spectrum(
+                $buffers: &BufferPool,
+                $op: &'static str,
+                $role: &'static str,
+                $spectrum: TypedTensor<Self>,
+            ) -> tenferro_tensor::Result<TypedTensor<$real>> {
+                $real_spectrum
+            }
+
+            fn eig_batch(
+                input: RawStridedRef<'_, Self>,
+                values: &mut [core::mem::MaybeUninit<$complex>],
+                vectors: Option<&mut [core::mem::MaybeUninit<$complex>]>,
+                workspace: &mut [core::mem::MaybeUninit<u8>],
+                exec: &mut Exec<'_>,
+            ) -> tlinalg::Result<()> {
+                match vectors {
+                    Some(vectors) => {
+                        tlinalg::eig::eig_into(Op::Eig, input, values, vectors, workspace, exec)
+                    }
+                    None => {
+                        tlinalg::eig::eig_values_into(Op::EigValues, input, values, workspace, exec)
+                    }
+                }
+            }
+
+            fn normalize_eig_vectors(
+                vectors: &mut [$complex],
+                n: usize,
+                batch_count: usize,
+            ) -> tenferro_tensor::Result<()> {
+                // One implementation, published for lane callers that drive `tlinalg`
+                // themselves (#2387).
+                crate::normalize_eig_vectors(vectors, n, batch_count)
+            }
         }
     };
 }
@@ -227,7 +336,9 @@ impl_faer_linalg!(
     |d| if d < 0.0 { -1.0 } else { 1.0 },
     |value| value.is_finite(),
     same_slice,
-    same_slice_mut
+    same_slice_mut,
+    Complex32,
+    |_buffers, _op, _role, spectrum| Ok(spectrum)
 );
 impl_faer_linalg!(
     f64,
@@ -238,7 +349,9 @@ impl_faer_linalg!(
     |d| if d < 0.0 { -1.0 } else { 1.0 },
     |value| value.is_finite(),
     same_slice,
-    same_slice_mut
+    same_slice_mut,
+    Complex64,
+    |_buffers, _op, _role, spectrum| Ok(spectrum)
 );
 impl_faer_linalg!(
     Complex32,
@@ -263,7 +376,15 @@ impl_faer_linalg!(
     },
     |value| value.re.is_finite() && value.im.is_finite(),
     complex32_to_faer_slice,
-    complex32_to_faer_slice_mut
+    complex32_to_faer_slice_mut,
+    Complex32,
+    |buffers, op, role, spectrum| gather_real_parts(
+        buffers,
+        op,
+        role,
+        spectrum,
+        |value: Complex32| value.re
+    )
 );
 impl_faer_linalg!(
     Complex64,
@@ -288,80 +409,16 @@ impl_faer_linalg!(
     },
     |value| value.re.is_finite() && value.im.is_finite(),
     complex64_to_faer_slice,
-    complex64_to_faer_slice_mut
+    complex64_to_faer_slice_mut,
+    Complex64,
+    |buffers, op, role, spectrum| gather_real_parts(
+        buffers,
+        op,
+        role,
+        spectrum,
+        |value: Complex64| value.re
+    )
 );
-
-/// The general eigendecomposition, whose outputs are in the complex counterpart of the input.
-pub(crate) trait FaerEig: FaerLinalg {
-    type ComplexScalar: PoolScalar;
-
-    fn eig_batch(
-        input: RawStridedRef<'_, Self>,
-        values: &mut [core::mem::MaybeUninit<Self::ComplexScalar>],
-        vectors: Option<&mut [core::mem::MaybeUninit<Self::ComplexScalar>]>,
-        workspace: &mut [core::mem::MaybeUninit<u8>],
-        exec: &mut Exec<'_>,
-    ) -> tlinalg::Result<()>;
-
-    /// Put the provider's eigenvectors into the public contract's gauge.
-    ///
-    /// `eig` documents **unit 2-norm columns** - the vendored oracle records the
-    /// same for PyTorch and tenferro - which the providers do not all guarantee,
-    /// so the seam normalizes them here. A column the provider left non-finite (a
-    /// defective, Jordan-like input can overflow inside its back-substitution) is
-    /// reported as a numerical failure rather than returned as NaN (#2148).
-    fn normalize_eig_vectors(
-        vectors: &mut [Self::ComplexScalar],
-        n: usize,
-        batch_count: usize,
-    ) -> tenferro_tensor::Result<()>;
-
-    fn wrap(tensor: TypedTensor<Self::ComplexScalar>) -> Tensor;
-}
-
-macro_rules! impl_faer_eig {
-    ($scalar:ty, $complex:ty, $real:ty) => {
-        impl FaerEig for $scalar {
-            type ComplexScalar = $complex;
-
-            fn eig_batch(
-                input: RawStridedRef<'_, Self>,
-                values: &mut [core::mem::MaybeUninit<$complex>],
-                vectors: Option<&mut [core::mem::MaybeUninit<$complex>]>,
-                workspace: &mut [core::mem::MaybeUninit<u8>],
-                exec: &mut Exec<'_>,
-            ) -> tlinalg::Result<()> {
-                match vectors {
-                    Some(vectors) => {
-                        tlinalg::eig::eig_into(Op::Eig, input, values, vectors, workspace, exec)
-                    }
-                    None => {
-                        tlinalg::eig::eig_values_into(Op::EigValues, input, values, workspace, exec)
-                    }
-                }
-            }
-
-            fn wrap(tensor: TypedTensor<$complex>) -> Tensor {
-                Tensor::from_typed::<$complex>(tensor)
-            }
-
-            fn normalize_eig_vectors(
-                vectors: &mut [$complex],
-                n: usize,
-                batch_count: usize,
-            ) -> tenferro_tensor::Result<()> {
-                // One implementation, published for lane callers that drive `tlinalg`
-                // themselves (#2387).
-                crate::normalize_eig_vectors(vectors, n, batch_count)
-            }
-        }
-    };
-}
-
-impl_faer_eig!(f32, Complex32, f32);
-impl_faer_eig!(f64, Complex64, f64);
-impl_faer_eig!(Complex32, Complex32, f32);
-impl_faer_eig!(Complex64, Complex64, f64);
 
 // ---------------------------------------------------------------------------------------------
 // Shape and allocation helpers
@@ -1169,254 +1226,84 @@ pub(crate) fn triangular_solve_view<T: FaerLinalg>(
 // SVD
 // ---------------------------------------------------------------------------------------------
 
-fn svd_impl<T: FaerLinalg>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: &TypedTensorView<'_, T>,
-    full: bool,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    let op = if full { "svd_full" } else { "svd" };
-    let (m, n, batch_shape) = matrix_core_and_batch(view.shape(), op)?;
-    let k = m.min(n);
-    let placement = view.placement();
-    if has_zero_dim(view.shape()) {
-        if full {
-            return empty_svd_full_outputs(op, m, n, batch_shape, placement);
-        }
-        return Ok(vec![
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(m, k, batch_shape),
-                Vec::new(),
-                placement,
-            )?,
-            tensor_from_vec_with_template(
-                vector_with_batch_shape(k, batch_shape),
-                Vec::new(),
-                placement,
-            )?,
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(k, n, batch_shape),
-                Vec::new(),
-                placement,
-            )?,
-        ]);
-    }
-    let (u_cols, v_cols) = if full { (m, n) } else { (k, k) };
-    let u_shape = matrix_with_batch_shape(m, u_cols, batch_shape);
-    let s_shape = vector_with_batch_shape(k, batch_shape);
-    let vt_shape = matrix_with_batch_shape(v_cols, n, batch_shape);
-    let batch = checked_product(op, "batch shape", batch_shape)?;
-    let mut u = pooled_output::<T>(buffers, "svd", "left singular vectors", &u_shape)?;
-    let mut s = pooled_output::<T>(buffers, "svd", "singular values", &s_shape)?;
-    let mut vt = pooled_output::<T>(buffers, "svd", "right singular vectors", &vt_shape)?;
-    let mut workspace = pooled_workspace::<T>(
-        buffers,
-        tlinalg::svd::svd_workspace::<T>(m, n, full, batch, exec).map_err(provider(Op::Svd)),
-    )?;
-    tlinalg::svd::svd_into(
-        Op::Svd,
-        raw_view(op, view)?,
-        full,
-        u.as_uninit_slice_mut(),
-        s.as_uninit_slice_mut(),
-        vt.as_uninit_slice_mut(),
-        workspace.bytes_mut(),
-        exec,
-    )
-    .map_err(provider(Op::Svd))?;
-    Ok(vec![
-        tensor_from_lease(u, placement)?,
-        tensor_from_lease(s, placement)?,
-        tensor_from_lease(vt, placement)?,
-    ])
-}
-
-pub(crate) fn svd<T: FaerLinalg>(
+#[cfg(feature = "native")]
+pub(crate) fn svd<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    svd_impl(exec, buffers, &input.as_view(), false)
+) -> tenferro_tensor::Result<PublicSvd<T>> {
+    crate::svd_with_exec(exec, buffers, &input.as_view(), false)
 }
 
-pub(crate) fn svd_full<T: FaerLinalg>(
+#[cfg(feature = "native")]
+pub(crate) fn svd_full<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    svd_impl(exec, buffers, &input.as_view(), true)
+) -> tenferro_tensor::Result<PublicSvd<T>> {
+    crate::svd_with_exec(exec, buffers, &input.as_view(), true)
 }
 
-pub(crate) fn svd_view<T: FaerLinalg>(
+#[cfg(feature = "native")]
+pub(crate) fn svd_view<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+) -> tenferro_tensor::Result<PublicSvd<T>> {
     matrix_dims_view(&view, "svd")?;
-    svd_impl(exec, buffers, &view, false)
+    crate::svd_with_exec(exec, buffers, &view, false)
 }
 
-pub(crate) fn svd_full_view<T: FaerLinalg>(
+#[cfg(feature = "native")]
+pub(crate) fn svd_full_view<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+) -> tenferro_tensor::Result<PublicSvd<T>> {
     matrix_dims_view(&view, "svd_full")?;
-    svd_impl(exec, buffers, &view, true)
+    crate::svd_with_exec(exec, buffers, &view, true)
 }
 
-/// Full-SVD factors for an input with an empty dimension.
-///
-/// The full variant keeps its `m x m` and `n x n` output shapes even when the other core
-/// dimension is zero, so a degenerate factor is not empty: the canonical choice is the identity,
-/// which preserves `U Uᴴ = I` and `Vᴴ V = I` and reconstructs the (empty) input exactly.
-fn empty_svd_full_outputs<T: FaerLinalg>(
-    op: &'static str,
-    m: usize,
-    n: usize,
-    batch_shape: &[usize],
-    placement: &tenferro_tensor::Placement,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    let blocks = checked_product(op, "batch shape", batch_shape)?;
-    Ok(vec![
-        tensor_from_vec_with_template(
-            matrix_with_batch_shape(m, m, batch_shape),
-            identity_blocks(op, m, blocks)?,
-            placement,
-        )?,
-        tensor_from_vec_with_template(
-            vector_with_batch_shape(m.min(n), batch_shape),
-            Vec::new(),
-            placement,
-        )?,
-        tensor_from_vec_with_template(
-            matrix_with_batch_shape(n, n, batch_shape),
-            identity_blocks(op, n, blocks)?,
-            placement,
-        )?,
-    ])
-}
-
-/// `blocks` column-major `dim x dim` identity matrices laid out back to back.
-fn identity_blocks<T: FaerLinalg>(
-    op: &'static str,
-    dim: usize,
-    blocks: usize,
-) -> tenferro_tensor::Result<Vec<T>> {
-    let per_block = checked_product(op, "identity block", &[dim, dim])?;
-    let len = checked_product(op, "identity stack", &[per_block, blocks])?;
-    let mut data = vec![T::default(); len];
-    for block in 0..blocks {
-        let base = block * per_block;
-        for index in 0..dim {
-            data[base + index + index * dim] = T::parity_one();
-        }
-    }
-    Ok(data)
-}
-
-fn svd_values_impl<T: FaerLinalg>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: &TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
-    const OP: &str = "svd_values";
-    let (m, n, batch_shape) = matrix_core_and_batch(view.shape(), OP)?;
-    let shape = vector_with_batch_shape(m.min(n), batch_shape);
-    if has_zero_dim(view.shape()) {
-        return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
-    }
-    let mut s = pooled_output::<T::RealScalar>(buffers, OP, "singular values", &shape)?;
-    let batch = checked_product(OP, "batch shape", batch_shape)?;
-    let mut workspace = pooled_workspace::<T>(
-        buffers,
-        tlinalg::svd::svd_values_workspace::<T>(m, n, batch, exec).map_err(provider(Op::SvdValues)),
-    )?;
-    T::svd_values_into(
-        raw_view(OP, view)?,
-        s.as_uninit_slice_mut(),
-        workspace.bytes_mut(),
-        exec,
-    )
-    .map_err(provider(Op::SvdValues))?;
-    tensor_from_lease(s, view.placement())
-}
-
-pub(crate) fn svd_values<T: FaerLinalg>(
+#[cfg(feature = "native")]
+pub(crate) fn svd_values<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
-    svd_values_impl(exec, buffers, &input.as_view())
+    crate::svd_values_with_exec(exec, buffers, &input.as_view())
 }
 
-pub(crate) fn svd_values_view<T: FaerLinalg>(
+#[cfg(feature = "native")]
+pub(crate) fn svd_values_view<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
     matrix_dims_view(&view, "svd_values")?;
-    svd_values_impl(exec, buffers, &view)
+    crate::svd_values_with_exec(exec, buffers, &view)
 }
 
 // ---------------------------------------------------------------------------------------------
 // QR and rank-revealing QR
 // ---------------------------------------------------------------------------------------------
 
-fn qr_impl<T: FaerLinalg>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: &TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    const OP: &str = "qr";
-    let (m, n, batch_shape) = matrix_core_and_batch(view.shape(), OP)?;
-    let k = m.min(n);
-    let placement = view.placement();
-    let q_shape = matrix_with_batch_shape(m, k, batch_shape);
-    let r_shape = matrix_with_batch_shape(k, n, batch_shape);
-    if has_zero_dim(view.shape()) {
-        return Ok(vec![
-            tensor_from_vec_with_template(q_shape, Vec::new(), placement)?,
-            tensor_from_vec_with_template(r_shape, Vec::new(), placement)?,
-        ]);
-    }
-    let mut q = pooled_output::<T>(buffers, OP, "Q", &q_shape)?;
-    let mut r = pooled_output::<T>(buffers, OP, "R", &r_shape)?;
-    let batch = checked_product(OP, "batch shape", batch_shape)?;
-    let mut workspace = pooled_workspace::<T>(
-        buffers,
-        tlinalg::qr::qr_workspace::<T>(m, n, batch, exec).map_err(provider(Op::Qr)),
-    )?;
-    tlinalg::qr::qr_into(
-        Op::Qr,
-        raw_view(OP, view)?,
-        q.as_uninit_slice_mut(),
-        r.as_uninit_slice_mut(),
-        workspace.bytes_mut(),
-        exec,
-    )
-    .map_err(provider(Op::Qr))?;
-    Ok(vec![
-        tensor_from_lease(q, placement)?,
-        tensor_from_lease(r, placement)?,
-    ])
-}
-
-pub(crate) fn qr<T: FaerLinalg>(
+#[cfg(feature = "native")]
+pub(crate) fn qr<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    qr_impl(exec, buffers, &input.as_view())
+) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
+    crate::qr_with_exec(exec, buffers, &input.as_view())
 }
 
-pub(crate) fn qr_view<T: FaerLinalg>(
+#[cfg(feature = "native")]
+pub(crate) fn qr_view<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
     matrix_dims_view(&view, "qr")?;
-    qr_impl(exec, buffers, &view)
+    crate::qr_with_exec(exec, buffers, &view)
 }
 
 /// Column-pivoted QR with the host's rank decision.
@@ -1505,143 +1392,78 @@ pub(crate) fn rank_revealing_qr_view<T: FaerLinalg>(
 // Hermitian eigendecomposition
 // ---------------------------------------------------------------------------------------------
 
-fn eigh_impl<T: FaerLinalg>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: &TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    const OP: &str = "eigh";
-    let (n, batch_shape) = square_core_and_batch(view.shape(), OP)?;
-    let placement = view.placement();
-    let values_shape = vector_with_batch_shape(n, batch_shape);
-    let vectors_shape = matrix_with_batch_shape(n, n, batch_shape);
-    if has_zero_dim(view.shape()) {
-        return Ok(vec![
-            tensor_from_vec_with_template(values_shape, Vec::new(), placement)?,
-            tensor_from_vec_with_template(vectors_shape, Vec::new(), placement)?,
-        ]);
-    }
-    let mut values = pooled_output::<T>(buffers, OP, "eigenvalues", &values_shape)?;
-    let mut vectors = pooled_output::<T>(buffers, OP, "eigenvectors", &vectors_shape)?;
-    let batch = checked_product(OP, "batch shape", batch_shape)?;
-    let mut workspace = pooled_workspace::<T>(
-        buffers,
-        tlinalg::eigh::eigh_workspace::<T>(n, true, batch, exec).map_err(provider(Op::Eigh)),
-    )?;
-    tlinalg::eigh::eigh_into(
-        Op::Eigh,
-        raw_view(OP, view)?,
-        values.as_uninit_slice_mut(),
-        vectors.as_uninit_slice_mut(),
-        workspace.bytes_mut(),
-        exec,
-    )
-    .map_err(provider(Op::Eigh))?;
-    Ok(vec![
-        tensor_from_lease(values, placement)?,
-        tensor_from_lease(vectors, placement)?,
-    ])
-}
-
-pub(crate) fn eigh<T: FaerLinalg>(
+#[cfg(feature = "native")]
+pub(crate) fn eigh<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    eigh_impl(exec, buffers, &input.as_view())
+) -> tenferro_tensor::Result<(TypedTensor<T::RealScalar>, TypedTensor<T>)> {
+    crate::eigh_with_exec(exec, buffers, &input.as_view())
 }
 
-pub(crate) fn eigh_view<T: FaerLinalg>(
+#[cfg(feature = "native")]
+pub(crate) fn eigh_view<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+) -> tenferro_tensor::Result<(TypedTensor<T::RealScalar>, TypedTensor<T>)> {
     square_matrix_dim_view(&view, "eigh")?;
-    eigh_impl(exec, buffers, &view)
+    crate::eigh_with_exec(exec, buffers, &view)
 }
 
-fn eigh_values_impl<T: FaerLinalg>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: &TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
-    const OP: &str = "eigh_values";
-    let (n, batch_shape) = square_core_and_batch(view.shape(), OP)?;
-    let shape = vector_with_batch_shape(n, batch_shape);
-    if has_zero_dim(view.shape()) {
-        return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
-    }
-    let mut values = pooled_output::<T::RealScalar>(buffers, OP, "eigenvalues", &shape)?;
-    let batch = checked_product(OP, "batch shape", batch_shape)?;
-    let mut workspace = pooled_workspace::<T>(
-        buffers,
-        tlinalg::eigh::eigh_values_workspace::<T>(n, batch, exec).map_err(provider(Op::EighValues)),
-    )?;
-    T::eigh_values_into(
-        raw_view(OP, view)?,
-        values.as_uninit_slice_mut(),
-        workspace.bytes_mut(),
-        exec,
-    )
-    .map_err(provider(Op::EighValues))?;
-    tensor_from_lease(values, view.placement())
-}
-
-pub(crate) fn eigh_values<T: FaerLinalg>(
+#[cfg(feature = "native")]
+pub(crate) fn eigh_values<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
-    eigh_values_impl(exec, buffers, &input.as_view())
+    crate::eigh_values_with_exec(exec, buffers, &input.as_view())
 }
 
-pub(crate) fn eigh_values_view<T: FaerLinalg>(
+#[cfg(feature = "native")]
+pub(crate) fn eigh_values_view<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
     square_matrix_dim_view(&view, "eigh_values")?;
-    eigh_values_impl(exec, buffers, &view)
+    crate::eigh_values_with_exec(exec, buffers, &view)
 }
 
 // ---------------------------------------------------------------------------------------------
 // General eigendecomposition
 // ---------------------------------------------------------------------------------------------
 
-/// Eigenvalues (and with `vectors`, eigenvectors) of a batch, as erased complex tensors.
+/// `(values, Some(vectors))` or `(values, None)` of a general eigendecomposition.
+type EigParts<T> = (
+    TypedTensor<<T as FaerLinalg>::ComplexScalar>,
+    Option<TypedTensor<<T as FaerLinalg>::ComplexScalar>>,
+);
+
+/// Eigenvalues, and with `vectors` the unit-norm eigenvectors, of a batch in the complex scalar.
 ///
-/// General eigendecomposition always returns complex factors, so even empty outputs are tagged
-/// complex, exactly as the owned entry point tags them.
-fn eig_impl<T: FaerEig>(
+/// General eigendecomposition always returns complex factors, so even empty outputs are complex.
+fn eig_parts<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T>,
     vectors: bool,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
+) -> tenferro_tensor::Result<EigParts<T>> {
     let (op, provider_op) = if vectors {
         ("eig", Op::Eig)
     } else {
         ("eig_values", Op::EigValues)
     };
     let (n, batch_shape) = square_core_and_batch(view.shape(), op)?;
+    let placement = view.placement();
     let values_shape = vector_with_batch_shape(n, batch_shape);
-    let vectors_shape = if vectors {
-        matrix_with_batch_shape(n, n, batch_shape)
-    } else {
-        tenferro_tensor::ShapeVec::new()
-    };
+    let vectors_shape = matrix_with_batch_shape(n, n, batch_shape);
     if has_zero_dim(view.shape()) {
-        let mut outputs = vec![T::wrap(TypedTensor::from_vec_col_major(
-            values_shape,
-            Vec::new(),
-        )?)];
-        if vectors {
-            outputs.push(T::wrap(TypedTensor::from_vec_col_major(
-                vectors_shape,
-                Vec::new(),
-            )?));
-        }
-        return Ok(outputs);
+        let values = tensor_from_vec_with_template(values_shape, Vec::new(), placement)?;
+        let vectors = vectors
+            .then(|| tensor_from_vec_with_template(vectors_shape, Vec::new(), placement))
+            .transpose()?;
+        return Ok((values, vectors));
     }
     let mut values = pooled_output::<T::ComplexScalar>(buffers, op, "eigenvalues", &values_shape)?;
     let mut vector_lease = if vectors {
@@ -1674,17 +1496,39 @@ fn eig_impl<T: FaerEig>(
         exec,
     )
     .map_err(provider(provider_op))?;
-    let placement = view.placement();
-    let mut outputs = vec![T::wrap(tensor_from_lease(values, placement)?)];
-    if let Some(vectors) = vector_lease {
-        let mut filled = tensor_from_lease(vectors, placement)?;
-        // The public contract's gauge, applied at the seam so every provider
-        // agrees (#2148); see `FaerEig::normalize_eig_vectors`.
-        T::normalize_eig_vectors(filled.host_data_mut()?, n, batch_count)?;
-        outputs.push(T::wrap(filled));
-    }
-    Ok(outputs)
+    let values = tensor_from_lease(values, placement)?;
+    let vectors = match vector_lease {
+        Some(vectors) => {
+            let mut filled = tensor_from_lease(vectors, placement)?;
+            // The public contract's gauge, applied at the seam so every provider agrees (#2148);
+            // see `FaerLinalg::normalize_eig_vectors`.
+            T::normalize_eig_vectors(filled.host_data_mut()?, n, batch_count)?;
+            Some(filled)
+        }
+        None => None,
+    };
+    Ok((values, vectors))
 }
+
+/// Eigenvalues and unit-norm eigenvectors, erased.
+fn eig_erased<T: FaerLinalg>(
+    exec: &mut Exec<'_>,
+    buffers: &mut BufferPool,
+    view: &TypedTensorView<'_, T>,
+) -> tenferro_tensor::Result<Vec<Tensor>>
+where
+    T::ComplexScalar: tenferro_tensor::TensorScalar,
+{
+    let (values, vectors) = eig_parts(exec, buffers, view, true)?;
+    let vectors = vectors.ok_or_else(|| {
+        tenferro_tensor::Error::runtime_state("eig", "eigenvector output missing")
+    })?;
+    Ok(vec![
+        Tensor::from_typed(values),
+        Tensor::from_typed(vectors),
+    ])
+}
+
 /// Dispatch an erased eig over the four supported dtypes.
 macro_rules! eig_dispatch {
     ($tensor:expr, $op:literal, |$typed:ident| $body:expr) => {
@@ -1706,22 +1550,20 @@ pub(crate) fn eig_view(
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     eig_dispatch!(view, "eig", |typed| {
         square_matrix_dim_view(&typed, "eig")?;
-        eig_impl(exec, buffers, &typed, true)
+        eig_erased(exec, buffers, &typed)
     })
 }
 
 /// Eigenvalues of a borrowed 2-D host view, without the eigenvector solve.
+#[cfg(feature = "native")]
 pub(crate) fn eig_values_view(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: TensorView<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
-    let mut outputs = eig_dispatch!(view, "eig_values", |typed| {
+    eig_dispatch!(view, "eig_values", |typed| {
         square_matrix_dim_view(&typed, "eig_values")?;
-        eig_impl(exec, buffers, &typed, false)
-    })?;
-    outputs.pop().ok_or_else(|| {
-        tenferro_tensor::Error::runtime_state("eig_values", "eigenvalue output missing")
+        crate::eig_values_with_exec(exec, buffers, &typed).map(Tensor::from_typed)
     })
 }
 
@@ -1734,76 +1576,48 @@ fn typed_or_unsupported<'t, T: PoolScalar>(
         .ok_or_else(|| crate::error::unsupported_dtype(op, input.dtype()))
 }
 
+/// Dispatch an erased owned tensor over the four supported dtypes as a typed view.
+macro_rules! owned_dispatch {
+    ($input:expr, $op:expr, |$typed:ident| $body:expr) => {
+        match $input.dtype() {
+            DType::F32 => {
+                let $typed = typed_or_unsupported::<f32>($input, $op)?.as_view();
+                $body
+            }
+            DType::F64 => {
+                let $typed = typed_or_unsupported::<f64>($input, $op)?.as_view();
+                $body
+            }
+            DType::C32 => {
+                let $typed = typed_or_unsupported::<Complex32>($input, $op)?.as_view();
+                $body
+            }
+            DType::C64 => {
+                let $typed = typed_or_unsupported::<Complex64>($input, $op)?.as_view();
+                $body
+            }
+            _ => Err(crate::error::unsupported_dtype($op, $input.dtype())),
+        }
+    };
+}
+
 pub(crate) fn eig(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    match input.dtype() {
-        DType::F32 => eig_impl(
-            exec,
-            buffers,
-            &typed_or_unsupported::<f32>(input, "eig")?.as_view(),
-            true,
-        ),
-        DType::F64 => eig_impl(
-            exec,
-            buffers,
-            &typed_or_unsupported::<f64>(input, "eig")?.as_view(),
-            true,
-        ),
-        DType::C32 => eig_impl(
-            exec,
-            buffers,
-            &typed_or_unsupported::<Complex32>(input, "eig")?.as_view(),
-            true,
-        ),
-        DType::C64 => eig_impl(
-            exec,
-            buffers,
-            &typed_or_unsupported::<Complex64>(input, "eig")?.as_view(),
-            true,
-        ),
-        _ => Err(crate::error::unsupported_dtype("eig", input.dtype())),
-    }
+    owned_dispatch!(input, "eig", |typed| eig_erased(exec, buffers, &typed))
 }
 
+#[cfg(feature = "native")]
 pub(crate) fn eig_values(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Tensor> {
-    const OP: &str = "eig_values";
-    let mut outputs = match input.dtype() {
-        DType::F32 => eig_impl(
-            exec,
-            buffers,
-            &typed_or_unsupported::<f32>(input, OP)?.as_view(),
-            false,
-        ),
-        DType::F64 => eig_impl(
-            exec,
-            buffers,
-            &typed_or_unsupported::<f64>(input, OP)?.as_view(),
-            false,
-        ),
-        DType::C32 => eig_impl(
-            exec,
-            buffers,
-            &typed_or_unsupported::<Complex32>(input, OP)?.as_view(),
-            false,
-        ),
-        DType::C64 => eig_impl(
-            exec,
-            buffers,
-            &typed_or_unsupported::<Complex64>(input, OP)?.as_view(),
-            false,
-        ),
-        _ => Err(crate::error::unsupported_dtype(OP, input.dtype())),
-    }?;
-    outputs
-        .pop()
-        .ok_or_else(|| tenferro_tensor::Error::runtime_state(OP, "eigenvalue output missing"))
+    owned_dispatch!(input, "eig_values", |typed| {
+        crate::eig_values_with_exec(exec, buffers, &typed).map(Tensor::from_typed)
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
