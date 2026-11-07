@@ -159,9 +159,9 @@ checksum = "450efd17194c59515cc81b1eb553d98c59e407c095a918c84aefbd71bec1eecc"
 
 [[package]]
 name = "cpueinsum"
-version = "0.10.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4162731ca3851df6824ded46b9be9076209c1863ecd13a39a0254ff09cac428"
+checksum = "c7d68fd2a53a48217331c633318609b39a00f71858aeb84407acfd4ed633e2a9"
 dependencies = [
  "num-complex",
  "strided-view",
@@ -1074,9 +1074,9 @@ dependencies = [
 
 [[package]]
 name = "strided-basic"
-version = "0.11.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d1bc288afca49a3ca493c20dcd1095b477f39466124b841e652768d6f88b2fd"
+checksum = "4b5dbf2bd4f822b653ceba8752dc236c3063c65ec153fc143575c163d4188d5f"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1089,9 +1089,9 @@ dependencies = [
 
 [[package]]
 name = "strided-fused"
-version = "0.11.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "424aa6673128d5df2789abe9fe6a0cfd837ea2b155a3f6d88729ce48d2ae7589"
+checksum = "9a644a7cd2cc5eed46b8d6cab1f7f1d26dde1dcd08ed1527d2f8bab3374da7a6"
 dependencies = [
  "elem-simd-math",
  "num-complex",
@@ -1101,9 +1101,9 @@ dependencies = [
 
 [[package]]
 name = "strided-kernel"
-version = "0.11.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08fc43bde02c60d23b193c6f4f256f4608dd3f49268663acab12e7d8ca5ecc2c"
+checksum = "139ea2255b562d6aea0a53bc322fd04b4bd01c65013684e6616765af028f22ae"
 dependencies = [
  "num-complex",
  "strided-basic",
@@ -1112,9 +1112,9 @@ dependencies = [
 
 [[package]]
 name = "strided-nn"
-version = "0.11.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfaba3193ee90b26546a24f6c203ab95cc7cd1d6c2e49cd3176894451b6dd4e0"
+checksum = "4a2710aa0f7d41a3a899e00612c091c8643fdfd129611d80f0633341c737946c"
 dependencies = [
  "elem-simd-math",
  "pulp",
@@ -1124,9 +1124,9 @@ dependencies = [
 
 [[package]]
 name = "strided-perm"
-version = "0.11.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec41974959b9ce03542b31eefed2cf72f8e972843872f36c1979406d628d065e"
+checksum = "29d57af4cfbea685bcadf2f8877891a7f7af005946afab20157f5d23495c67c4"
 dependencies = [
  "strided-view",
  "thiserror 1.0.69",
@@ -1206,9 +1206,9 @@ dependencies = [
 
 [[package]]
 name = "t4a-faer"
-version = "0.30.0"
+version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cab95e048a72ca19b37446bacf360ac14120a3aa8d03605726314dec2e6b0190"
+checksum = "e3e9fae9f2bf9071fe13f095c903e05e004200e8d243c1f393d2e8964b532af1"
 dependencies = [
  "bytemuck",
  "dyn-stack",
@@ -1365,9 +1365,9 @@ dependencies = [
 
 [[package]]
 name = "t4a-private-gemm-x86"
-version = "0.1.28"
+version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90295f48b59ab213a5fa840a0342d7a16cfc71bb5905070414fd105fcc0fcba7"
+checksum = "1cf8bd6ed6e33736dc1b242a6521e234a5d968a14faa634b15ee086ea39ef995"
 dependencies = [
  "crossbeam",
  "defer",
@@ -1381,9 +1381,9 @@ dependencies = [
 
 [[package]]
 name = "tcontract"
-version = "0.10.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b65fee0b8f0b0da65c4f119716dd2fdbe07f41e1ec6ae6d425ed3a1b0dfe7e5"
+checksum = "f4bfc0cace3acfb58c540d9e97725887e4188853b722efa4c2bca21eda64f9d8"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1399,9 +1399,9 @@ dependencies = [
 
 [[package]]
 name = "tcontract-exec"
-version = "0.10.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5443868f3ac8b3ee3733ef7434c329343aac287b852a613d8b499411c8497e78"
+checksum = "e9582710f3bd710d535d673014054f6b9057bf0e8f5bf5fddcab6ad423911ccb"
 dependencies = [
  "t4a-faer",
  "thiserror 1.0.69",
@@ -1419,7 +1419,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-ad"
-version = "0.10.0"
+version = "0.9.0"
 dependencies = [
  "computegraph",
  "lru",
@@ -1434,11 +1434,11 @@ dependencies = [
 
 [[package]]
 name = "tenferro-core-ops"
-version = "0.10.0"
+version = "0.9.0"
 
 [[package]]
 name = "tenferro-cpu"
-version = "0.10.0"
+version = "0.9.0"
 dependencies = [
  "cpueinsum",
  "elem-simd-math",
@@ -1464,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-cpu-basic"
-version = "0.10.0"
+version = "0.9.0"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1475,7 +1475,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-cpu-fused"
-version = "0.10.0"
+version = "0.9.0"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-einsum"
-version = "0.10.0"
+version = "0.9.0"
 dependencies = [
  "computegraph",
  "cpueinsum",
@@ -1524,7 +1524,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-internal-cpu-kernels"
-version = "0.10.0"
+version = "0.9.0"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1538,7 +1538,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-internal-extension-macros"
-version = "0.10.0"
+version = "0.9.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1547,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-internal-ops"
-version = "0.10.0"
+version = "0.9.0"
 dependencies = [
  "computegraph",
  "num-complex",
@@ -1559,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-runtime"
-version = "0.10.0"
+version = "0.9.0"
 dependencies = [
  "computegraph",
  "lru",
@@ -1576,7 +1576,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-tensor"
-version = "0.10.0"
+version = "0.9.0"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-tensor-core"
-version = "0.10.0"
+version = "0.9.0"
 dependencies = [
  "num-complex",
  "thiserror 2.0.21",
@@ -1646,9 +1646,9 @@ dependencies = [
 
 [[package]]
 name = "threadteam"
-version = "0.4.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7a5218209ff687a851e064af466d0a3daeca458dcba50c41ff935162201a9b7"
+checksum = "d5dd6b40e18f897d036c79963512a194e6f8dbe76e29386ca4ccf6c9d1663f5c"
 dependencies = [
  "libc",
  "loom",
