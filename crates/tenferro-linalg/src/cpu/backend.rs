@@ -834,10 +834,7 @@ impl LinalgBackend for CpuEngine {
         crate::backend::validate_solve_read_into(&a, &b, &out)?;
         let a = a.try_host("solve_read_into")?;
         let b = b.try_host("solve_read_into")?;
-        // The output is a write target rather than an operand, and there is no host-marked mutable
-        // view to narrow it into: its refusal is taken here and the host view is dropped. The
-        // direct route below writes it through its own mutable view.
-        out.as_read().try_host("solve_read_into").map(drop)?;
+        let out = out.try_mut_host("solve_read_into")?;
         ensure_supported_linalg_dtypes("solve_read_into", a.dtype(), b.dtype())?;
 
         if has_zero_dim(a.shape())
@@ -849,7 +846,7 @@ impl LinalgBackend for CpuEngine {
                 self,
                 TensorRead::from_view(a.into_dynamic()),
                 TensorRead::from_view(b.into_dynamic()),
-                out,
+                TensorWrite::from_view(out.into_dynamic()),
             );
         }
 
@@ -862,18 +859,12 @@ impl LinalgBackend for CpuEngine {
 fn solve_read_into_direct_eligible(
     a: &HostOperand<'_>,
     b: &HostOperand<'_>,
-    out: &TensorWrite<'_>,
+    out: &TensorViewMut<'_, Host>,
 ) -> bool {
-    if !solve_shape_direct_eligible(a.shape(), b.shape()) {
+    if !solve_shape_direct_eligible(a.shape(), b.shape()) || out.shape() != b.shape() {
         return false;
     }
-    let out = out.as_read();
-    if out.backend_family().is_some() || out.shape() != b.shape() {
-        return false;
-    }
-    let Ok(strides) = out.strides() else {
-        return false;
-    };
+    let strides = out.strides();
     match out.shape() {
         [_] => strides == [1],
         [rows, cols] => {
@@ -1357,12 +1348,12 @@ fn solve_read_into_entered(
     buffers: &mut BufferPool,
     a: HostOperand<'_>,
     b: HostOperand<'_>,
-    out: TensorWrite<'_>,
+    out: TensorViewMut<'_, Host>,
 ) -> tenferro_tensor::Result<()> {
     // The provider's view kernels are shared with the dynamic `with_exec` entries.
     let a = a.into_dynamic();
     let b = b.into_dynamic();
-    let out = tensor_write_view(out);
+    let out = out.into_dynamic();
     {
         #[cfg(feature = "native")]
         {
@@ -1416,34 +1407,6 @@ fn solve_read_into_entered(
             }
         }
     }
-}
-
-fn tensor_write_view(out: TensorWrite<'_>) -> TensorViewMut<'_> {
-    match out {
-        TensorWrite::Tensor(tensor) => match tensor.dtype() {
-            DType::F32 => TensorViewMut::F32(write_view_operand::<f32>(tensor).as_view_mut()),
-            DType::F64 => TensorViewMut::F64(write_view_operand::<f64>(tensor).as_view_mut()),
-            DType::I32 => TensorViewMut::I32(write_view_operand::<i32>(tensor).as_view_mut()),
-            DType::I64 => TensorViewMut::I64(write_view_operand::<i64>(tensor).as_view_mut()),
-            DType::Bool => TensorViewMut::Bool(write_view_operand::<bool>(tensor).as_view_mut()),
-            DType::C32 => TensorViewMut::C32(write_view_operand::<Complex32>(tensor).as_view_mut()),
-            DType::C64 => TensorViewMut::C64(write_view_operand::<Complex64>(tensor).as_view_mut()),
-            // INVARIANT: linalg rejects an externally defined dtype before adapting a
-            // write target, and `TensorViewMut` has no externally defined variant.
-            DType::External(_) => unreachable!("linalg validates its input dtypes first"),
-        },
-        TensorWrite::View(view) => view,
-    }
-}
-
-/// The typed write target behind a tensor, or the unwind site this module documents.
-///
-/// INVARIANT: linalg rejects a dtype it cannot adapt before it borrows a write target, and
-/// `TensorViewMut` has no externally defined variant, so this cannot be reached.
-fn write_view_operand<T: TensorScalar>(tensor: &mut Tensor) -> &mut TypedTensor<T> {
-    tensor
-        .as_typed_mut::<T>()
-        .unwrap_or_else(|| unreachable!("linalg validates its input dtypes first"))
 }
 
 fn cholesky_entered(

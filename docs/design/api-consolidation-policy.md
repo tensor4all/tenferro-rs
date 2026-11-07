@@ -47,7 +47,10 @@ express managed memory. So: the axis where it helps (the linalg layer), one narr
 the CPU entries work: `TensorRead::try_host(op)` / `TensorView::try_host(op)` is the one fallible `Dynamic -> Host` narrowing and returns a
 `TensorView<'_, Host>`; each `LinalgBackend` method and each CPU reduction entry narrows its operands once, and everything below takes the
 host-marked view (`TypedTensorView<'_, T, DynRank, Host>`) without re-checking placement. The managed-memory Cholesky route is dispatched
-before the narrowing, and values the CPU engine itself produces (a materialized copy) are narrowed where they are produced.
+before the narrowing, and values the CPU engine itself produces (a materialized copy) are narrowed where they are produced. Write targets
+cross the same boundary: `TensorWrite::try_mut_host(op)` / `TensorViewMut::try_mut_host(op)` returns a `TensorViewMut<'_, Host>` with the
+read side's errors, so a CPU `_read_into` entry narrows its destination once and writes it without a refusal-only check. `TensorWrite` itself
+stays unparameterized, like `TensorRead`: its `Tensor(&mut Tensor)` arm holds an owner whose placement no type proves.
 
 ## 2. Withdrawn — do not re-propose without new evidence
 

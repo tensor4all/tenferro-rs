@@ -14,6 +14,7 @@ use crate::{
     Error, ErrorKind, ShapeMismatch, ShapeVec, SliceConfig, ValidationError, ValidationKind,
 };
 
+mod host_write_narrowing;
 mod strided_dynamic;
 
 #[derive(Debug)]
