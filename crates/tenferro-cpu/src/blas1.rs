@@ -25,18 +25,19 @@ macro_rules! preset_scalar {
 }
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    ContractionScalar, DType, MemoryKind, TensorRead, TensorView, TensorViewMut, TensorWrite,
+    ContractionScalar, DType, TensorRead, TensorView, TensorViewMut, TensorWrite,
 };
 
 use crate::buffer_pool::BufferPool;
 use threadteam::Exec;
 
+/// Reject a read operand that is not host memory.
+///
+/// The same payload predicate every other CPU entry uses
+/// (`structural::validate_cpu_host_read`), so this path cannot refuse a tensor
+/// that the materialization paths accept.
 pub(crate) fn validate_cpu_read(op: &'static str, input: &TensorRead<'_>) -> crate::Result<()> {
-    if input.backend_family().is_some() || input.placement().memory_kind == MemoryKind::Device {
-        Err(crate::cpu_backend_buffer_error(op))
-    } else {
-        Ok(())
-    }
+    crate::structural::validate_cpu_host_read(op, "operand", input)
 }
 
 pub(crate) fn axpby_read_into_accum(

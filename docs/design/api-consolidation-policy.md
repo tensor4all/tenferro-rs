@@ -78,7 +78,9 @@ Three rules, all learned by being wrong:
    everything else. A review is not a verdict.
 3. **A duplicated expression is a bug only when it is shown to disagree.** "Two types look alike" is not a finding: `Shape` and `Strides`
    are two facts. The admissible form is a case where the two expressions give different answers for one input — e.g. `set_placement`
-   (`types.rs:2362`) lets a caller relabel a host tensor as `Device`, after which the CPU path rejects it and the linalg path accepts it.
+   (`types.rs:2362`) let a caller relabel a host tensor as `Device`, after which the CPU path rejected it and the linalg path accepted it.
+   That case is now closed the way this rule prescribes: the payload owns the fact (`is_host_memory`), every entry point asks it, and
+   `set_placement` refuses a device label on host storage so the disagreement has no input left to disagree about (#2484).
 
 ## 4. Order of work
 

@@ -1,7 +1,7 @@
 use super::*;
 use tenferro_tensor::{
-    BackendStorageHandle, MemoryKind, Placement, Rank, StorageBuffer, TensorRead,
-    TensorViewCanonicalization, TypedTensorView, TypedTensorViewMut,
+    BackendStorageHandle, MemoryKind, Rank, StorageBuffer, TensorRead, TensorViewCanonicalization,
+    TypedTensorView, TypedTensorViewMut,
 };
 
 /// The Rust scalar type behind a preset variant name a macro received.
@@ -27,13 +27,6 @@ macro_rules! preset_scalar {
     (C64) => {
         num_complex::Complex64
     };
-}
-fn opaque_backend_placement() -> Placement {
-    Placement {
-        memory_kind: MemoryKind::Device,
-        device: None,
-        cpu_affinity: None,
-    }
 }
 
 #[test]
@@ -81,10 +74,8 @@ fn cpu_runtime_materialization_dispatches_all_dtypes_with_backend_session_parity
 }
 
 #[test]
-fn cpu_runtime_materialization_rejects_owned_host_buffer_with_device_placement() {
-    let mut input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    input.set_placement(opaque_backend_placement());
-    let input = Tensor::from_typed::<f64>(input);
+fn cpu_runtime_materialization_rejects_owned_backend_buffer() {
+    let input = Tensor::from_typed::<f64>(backend_buffer_tensor::<f64>(vec![2], 31));
     let mut backend = crate::CpuEngine::serial();
 
     let err = crate::test_support::on_engine(&mut backend, |__s| {
@@ -98,18 +89,38 @@ fn cpu_runtime_materialization_rejects_owned_host_buffer_with_device_placement()
         Error::RuntimeState {
             op: "CpuEngine::to_contiguous_read",
             ref message,
-        } if message.contains("source host placement") && message.contains("Device")
+        } if message.contains("source host placement") && message.contains("download to host")
     ));
 }
 
+/// A relabelled host tensor stays host memory: the payload decides, so CPU and
+/// linalg accept the same tensor and `set_placement` cannot create the lie.
 #[test]
-fn cpu_runtime_materialization_rejects_host_view_with_device_placement() {
+fn host_payload_keeps_a_host_verdict_when_a_device_label_is_requested() {
     let mut input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    input.set_placement(opaque_backend_placement());
+    let err = input
+        .set_placement(opaque_backend_placement())
+        .expect_err("a device label contradicts a plain host payload");
+    assert!(matches!(
+        err,
+        Error::RuntimeState {
+            op: "TypedTensor::set_placement",
+            ref message,
+        } if message.contains("Device") && message.contains("plain host memory")
+    ));
+    // The refused write left the tensor untouched and host-addressable.
+    assert_eq!(input.placement().memory_kind, MemoryKind::UnpinnedHost);
+    assert!(TensorRead::from_tensor(&Tensor::from_typed::<f64>(input)).is_host_memory());
+}
+
+#[test]
+fn cpu_runtime_materialization_rejects_backend_buffer_view() {
+    let input = backend_buffer_tensor::<f64>(vec![2], 32);
+    let view = input.backend_region_view(vec![2], vec![1], 0).unwrap();
     let mut backend = crate::CpuEngine::serial();
 
     let err = crate::test_support::on_engine(&mut backend, |__s| {
-        __s.to_contiguous_read(TensorRead::from_view(TensorView::F64(input.as_view())))
+        __s.to_contiguous_read(TensorRead::from_view(TensorView::F64(view)))
     })
     .unwrap()
     .unwrap_err();
@@ -119,7 +130,7 @@ fn cpu_runtime_materialization_rejects_host_view_with_device_placement() {
         Error::RuntimeState {
             op: "CpuEngine::to_contiguous_read",
             ref message,
-        } if message.contains("source host placement") && message.contains("Device")
+        } if message.contains("source host placement") && message.contains("download to host")
     ));
 }
 
@@ -256,9 +267,13 @@ fn cpu_session_materializes_plain_borrow_into_recyclable_plain_output() {
 }
 
 #[test]
-fn cpu_session_materialization_rejects_bad_placement_without_pool_checkout() {
-    let mut source = TypedTensor::<f64, Rank<1>>::from_vec_col_major([2], vec![1.0, 2.0]).unwrap();
-    source.set_placement(opaque_backend_placement());
+fn cpu_session_materialization_rejects_a_backend_buffer_without_pool_checkout() {
+    let source = TypedTensor::<f64, Rank<1>>::from_buffer_col_major(
+        [2],
+        StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(33, 2))),
+        opaque_backend_placement(),
+    )
+    .unwrap();
     let mut backend = crate::test_support::cpu_engine(1).unwrap();
     let retained_before = backend.buffer_pool_len();
     let read = source.as_view().into_tensor_read().unwrap();
@@ -332,11 +347,7 @@ fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
         })
     ));
 
-    let mut misplaced = Tensor::from_vec_col_major(vec![2], vec![0_i32; 2]).unwrap();
-    misplaced
-        .as_typed_mut::<i32>()
-        .expect("an i32 tensor")
-        .set_placement(opaque_backend_placement());
+    let mut misplaced = Tensor::from_typed::<i32>(backend_buffer_tensor::<i32>(vec![2], 34));
     assert!(matches!(
         crate::test_support::on_engine(&mut backend, |__s| __s.copy_read_into(
             TensorRead::from_tensor(&src),
@@ -346,6 +357,7 @@ fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
             op: "CpuEngine::copy_read_into",
             ref message,
         }) if message.contains("destination") && message.contains("host placement")
+            && message.contains("download to host")
     ));
 }
 
@@ -433,10 +445,9 @@ fn cpu_copy_into_rejects_backend_destination_without_download() {
 }
 
 #[test]
-fn cpu_copy_into_rejects_host_source_with_device_placement() {
+fn cpu_copy_into_rejects_backend_source_buffer() {
     let mut backend = crate::CpuEngine::serial();
-    let mut src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    src.set_placement(opaque_backend_placement());
+    let src = backend_buffer_tensor::<f64>(vec![2], 35);
     let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
 
     let err = with_cpu_session(&mut backend, |cpu| {
@@ -454,11 +465,10 @@ fn cpu_copy_into_rejects_host_source_with_device_placement() {
 }
 
 #[test]
-fn cpu_copy_into_rejects_host_destination_with_device_placement() {
+fn cpu_copy_into_rejects_backend_destination_buffer() {
     let mut backend = crate::CpuEngine::serial();
     let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
-    dst.set_placement(opaque_backend_placement());
+    let mut dst = backend_buffer_tensor::<f64>(vec![2], 36);
 
     let err = with_cpu_session(&mut backend, |cpu| {
         cpu.copy_into(&src.as_view(), &mut dst.as_view_mut())
@@ -984,11 +994,13 @@ fn cpu_structural_read_broadcast_in_dim_explicit_stride_exact_output() {
 fn cpu_structural_read_direct_helpers_preserve_view_placement() {
     let mut buffers = crate::buffer_pool::BufferPool::new();
     let mut input = TypedTensor::<i64>::from_vec_col_major(vec![2], vec![9, 13]).unwrap();
-    input.set_placement(tenferro_tensor::Placement {
-        memory_kind: tenferro_tensor::MemoryKind::PinnedHost,
-        device: None,
-        cpu_affinity: None,
-    });
+    input
+        .set_placement(tenferro_tensor::Placement {
+            memory_kind: tenferro_tensor::MemoryKind::PinnedHost,
+            device: None,
+            cpu_affinity: None,
+        })
+        .unwrap();
 
     let transpose = crate::structural::transpose_read_with_pool(
         &mut buffers,
@@ -1383,11 +1395,13 @@ fn cpu_view_materialization_preserves_static_rank_and_placement() {
     assert_eq!(ranked.as_slice().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 
     let mut placed = TypedTensor::<i64>::from_vec_col_major(vec![2], vec![9_i64, 13]).unwrap();
-    placed.set_placement(tenferro_tensor::Placement {
-        memory_kind: tenferro_tensor::MemoryKind::PinnedHost,
-        device: None,
-        cpu_affinity: None,
-    });
+    placed
+        .set_placement(tenferro_tensor::Placement {
+            memory_kind: tenferro_tensor::MemoryKind::PinnedHost,
+            device: None,
+            cpu_affinity: None,
+        })
+        .unwrap();
     let placed = crate::structural::typed_materialize_view_with_pool(
         &mut buffers,
         &placed.as_view(),

@@ -2773,6 +2773,7 @@ name = "tenferro-tensor-core"
 version = "0.10.0"
 dependencies = [
  "num-complex",
+ "strided-view",
  "thiserror 2.0.21",
  "tinyvec",
 ]

@@ -44,6 +44,21 @@ pub fn cpu_backend_buffer_error(op: &'static str) -> Error {
     )
 }
 
+/// Error returned when a CPU operand's payload is not host memory.
+///
+/// `role` names the operand (`lhs`, `destination`, ...). The verdict is the
+/// payload predicate, so this error never accuses a host tensor of being a
+/// device buffer because a label said so.
+#[doc(hidden)]
+pub fn cpu_non_host_operand_error(op: &'static str, role: &'static str) -> Error {
+    Error::runtime_state(
+        op,
+        format!(
+            "CPU backend requires {role} host placement for {op}: the payload is a backend buffer; download to host before CPU execution"
+        ),
+    )
+}
+
 #[derive(Debug, thiserror::Error)]
 #[doc(hidden)]
 pub enum CpuNumericalError {

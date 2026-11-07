@@ -3159,7 +3159,7 @@ fn complex32_real_part_tensor(
         values.shape().to_vec(),
         values.host_data()?.iter().map(|value| value.re).collect(),
     )?;
-    out.set_placement(values.placement().clone());
+    out.set_placement(values.placement().clone())?;
     Ok(out)
 }
 
@@ -3170,7 +3170,7 @@ fn complex64_real_part_tensor(
         values.shape().to_vec(),
         values.host_data()?.iter().map(|value| value.re).collect(),
     )?;
-    out.set_placement(values.placement().clone());
+    out.set_placement(values.placement().clone())?;
     Ok(out)
 }
 

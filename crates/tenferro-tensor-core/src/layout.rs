@@ -1,17 +1,9 @@
 use crate::{
     checked_logical_element_count, checked_product, col_major_strides, validate_permutation,
     DynRank, Rank, Result, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, TensorRank,
-    ValidationError, INLINE_RANK,
+    ValidationError,
 };
-use std::collections::HashSet;
-use tinyvec::TinyVec;
-
-/// Maximum logical elements for exact mutable-overlap validation.
-///
-/// Larger layouts must pass the sufficient stride-span proof. This keeps the
-/// fallback bounded because it enumerates logical elements and stores visited
-/// physical offsets.
-const MUTABLE_NO_OVERLAP_EXACT_ELEMENT_LIMIT: usize = 4096;
+use strided_view::is_injective_layout;
 
 pub(crate) fn reachable_offset_range(
     shape: &[usize],
@@ -335,10 +327,12 @@ impl<R: TensorRank> TensorLayout<R> {
 
     /// Validate that the layout can be used for mutable access without aliasing.
     ///
-    /// Empty logical views are accepted. Non-empty layouts are accepted when a
-    /// conservative stride-span proof succeeds, or when exact enumeration of a
-    /// small bounded view proves that all logical elements map to distinct
-    /// physical offsets.
+    /// Empty logical views are accepted. A non-empty layout is accepted exactly
+    /// when distinct logical positions map to distinct physical offsets, as
+    /// decided by [`strided_view::is_injective_layout`]: the one injectivity
+    /// rule this workspace uses. There is no tenferro-local shortcut and no
+    /// element-count ceiling, so a legal layout is never refused for being
+    /// large.
     ///
     /// # Examples
     ///
@@ -354,83 +348,22 @@ impl<R: TensorRank> TensorLayout<R> {
     ///
     /// Returns [`ValidationError::OverlappingMutableLayout`] when multiple
     /// logical elements can alias, or [`ValidationError::IntegerOverflow`]
-    /// when overlap validation arithmetic overflows.
+    /// when the logical element count does not fit `usize`. Metadata whose
+    /// reachable offsets do not fit `isize` is rejected by
+    /// [`TensorLayout::from_parts`] before a layout exists.
     pub fn validate_mutable_no_overlap(&self) -> Result<()> {
         if self.shape().contains(&0) {
             return Ok(());
         }
 
-        for (&extent, &stride) in self.shape().iter().zip(self.strides()) {
-            if extent > 1 && stride == 0 {
-                return Err(ValidationError::OverlappingMutableLayout);
-            }
-        }
+        // Keep the element-count error distinct: an overflowing product is not
+        // an overlapping layout, and injectivity analysis reports it as one.
+        checked_product(self.shape())?;
 
-        let element_count = checked_product(self.shape())?;
-
-        let mut axes = self
-            .shape()
-            .iter()
-            .zip(self.strides())
-            .filter(|&(&extent, _)| extent > 1)
-            .map(|(&extent, &stride)| (extent, stride.unsigned_abs()))
-            .collect::<TinyVec<[(usize, usize); INLINE_RANK]>>();
-        axes.sort_by_key(|&(_, stride)| stride);
-
-        let mut span = 0usize;
-        for (extent, stride) in axes {
-            if stride <= span {
-                return self.validate_mutable_no_overlap_exact_or_reject(element_count);
-            }
-            span = span
-                .checked_add(
-                    (extent - 1)
-                        .checked_mul(stride)
-                        .ok_or(ValidationError::IntegerOverflow)?,
-                )
-                .ok_or(ValidationError::IntegerOverflow)?;
-        }
-
-        Ok(())
-    }
-
-    fn validate_mutable_no_overlap_exact_or_reject(&self, element_count: usize) -> Result<()> {
-        if element_count > MUTABLE_NO_OVERLAP_EXACT_ELEMENT_LIMIT {
-            return Err(ValidationError::OverlappingMutableLayout);
-        }
-
-        let mut seen = HashSet::with_capacity(element_count);
-        let rank = self.shape().len();
-        let mut indices = vec![0usize; rank];
-
-        loop {
-            let mut physical_offset = self.offset;
-            for (&index, &stride) in indices.iter().zip(self.strides()) {
-                let index = isize::try_from(index).map_err(|_| ValidationError::IntegerOverflow)?;
-                let delta = index
-                    .checked_mul(stride)
-                    .ok_or(ValidationError::IntegerOverflow)?;
-                physical_offset = physical_offset
-                    .checked_add(delta)
-                    .ok_or(ValidationError::IntegerOverflow)?;
-            }
-
-            if !seen.insert(physical_offset) {
-                return Err(ValidationError::OverlappingMutableLayout);
-            }
-
-            let mut axis = 0;
-            while axis < rank {
-                indices[axis] += 1;
-                if indices[axis] < self.shape()[axis] {
-                    break;
-                }
-                indices[axis] = 0;
-                axis += 1;
-            }
-            if axis == rank {
-                return Ok(());
-            }
+        if is_injective_layout(self.shape(), self.strides()) {
+            Ok(())
+        } else {
+            Err(ValidationError::OverlappingMutableLayout)
         }
     }
 

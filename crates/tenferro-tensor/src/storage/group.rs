@@ -1371,6 +1371,25 @@ impl AllocationGroup {
             .map(|(_, descriptor)| descriptor.provider)
     }
 
+    /// Whether this slot's root is a backend allocation rather than host memory.
+    ///
+    /// This is the fact `TypedTensor::as_view` uses to choose between a root
+    /// handle and a host slice, so asking it here keeps an owner and its views
+    /// on the same answer. An unresolvable slot counts as not host memory.
+    pub(crate) fn slot_root_is_backend(&self, slot: DescriptorSlot) -> bool {
+        let Some((_, descriptor)) = self.resolve_descriptor(slot).ok() else {
+            return true;
+        };
+        let Some(owner) = self
+            .allocations
+            .get(descriptor.allocation.index())
+            .and_then(|owner| owner.as_ref())
+        else {
+            return true;
+        };
+        owner.backend_allocation().is_some()
+    }
+
     pub(crate) fn backend_root_buffer<T: 'static>(&self) -> Option<&crate::StorageBuffer<T>> {
         self.allocations
             .first()

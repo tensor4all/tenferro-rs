@@ -503,11 +503,13 @@ fn blas1_invalid_axpby_requests_leave_y_byte_identical() {
 
     let mut placed_x = x.duplicate().unwrap();
     if let Some(tensor) = placed_x.as_typed_mut::<f64>() {
-        tensor.set_placement(Placement {
-            memory_kind: MemoryKind::PinnedHost,
-            device: None,
-            cpu_affinity: None,
-        });
+        tensor
+            .set_placement(Placement {
+                memory_kind: MemoryKind::PinnedHost,
+                device: None,
+                cpu_affinity: None,
+            })
+            .unwrap();
     }
     assert_axpby_rejects_without_mutating(
         &mut backend,
@@ -517,28 +519,17 @@ fn blas1_invalid_axpby_requests_leave_y_byte_identical() {
         &mut y,
     );
 
-    let mut device_x = x.duplicate().unwrap();
-    if let Some(tensor) = device_x.as_typed_mut::<f64>() {
-        tensor.set_placement(Placement {
-            memory_kind: MemoryKind::Device,
-            device: None,
-            cpu_affinity: None,
-        });
-    }
-    let mut device_y = y.duplicate().unwrap();
-    if let Some(tensor) = device_y.as_typed_mut::<f64>() {
-        tensor.set_placement(Placement {
-            memory_kind: MemoryKind::Device,
-            device: None,
-            cpu_affinity: None,
-        });
-    }
+    // A device payload, not a device label: `set_placement` refuses the label
+    // on host storage, so the rejected input is built as a backend buffer. The
+    // destination stays a readable host owner so the "left byte-identical"
+    // assertion below can still inspect it.
+    let device_x = Tensor::from_typed::<f64>(backend_buffer_tensor::<f64>(vec![2], 41));
     assert_axpby_rejects_without_mutating(
         &mut backend,
         ContractionScalar::F64(1.0),
         &device_x,
         ContractionScalar::F64(1.0),
-        &mut device_y,
+        &mut y,
     );
 
     let mut noncompact_storage = vec![10.0_f64, 20.0, 30.0, 40.0];
@@ -592,14 +583,8 @@ fn blas1_vdot_and_norm_reject_invalid_metadata_and_placement() {
         );
     }
 
-    let mut device = x.duplicate().unwrap();
-    if let Some(tensor) = device.as_typed_mut::<f64>() {
-        tensor.set_placement(Placement {
-            memory_kind: MemoryKind::Device,
-            device: None,
-            cpu_affinity: None,
-        });
-    }
+    // A device payload, not a device label.
+    let device = Tensor::from_typed::<f64>(backend_buffer_tensor::<f64>(vec![2], 43));
     assert!(
         crate::test_support::on_engine(&mut backend, |session| session.vdot_read(
             TensorRead::from_tensor(&device),

@@ -1,6 +1,6 @@
 //! The write-side host narrowing: `TensorWrite`, `TensorViewMut` and
 //! `TypedTensorViewMut::try_mut_host` refuse with the same variants and text as
-//! the read-side `try_host`, and resolve placement labels the same way.
+//! the read-side `try_host`, and report the payload's own placement.
 
 use super::{backend_tensor_f64, external_f64_tensor};
 use crate::types::{
@@ -141,12 +141,25 @@ fn try_mut_host_refuses_an_external_payload_as_unsupported_dtype_like_the_read_s
 }
 
 #[test]
-fn try_mut_host_resolves_a_device_label_on_host_storage_like_the_read_side() {
+fn try_mut_host_and_try_host_carry_the_same_host_label() {
+    // A host payload keeps a host label: the device label a test used to write
+    // there is refused, so narrowing has nothing to resolve and both sides must
+    // report exactly the placement the tensor carries.
     let mut typed = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    typed.set_placement(Placement {
-        cpu_affinity: None,
-        ..device_placement()
-    });
+    assert!(typed
+        .set_placement(Placement {
+            cpu_affinity: None,
+            ..device_placement()
+        })
+        .is_err());
+    typed
+        .set_placement(Placement {
+            memory_kind: MemoryKind::PinnedHost,
+            device: None,
+            cpu_affinity: None,
+        })
+        .expect("pinned host memory describes the host payload");
+
     let read_placement = typed
         .as_view()
         .try_host("example")
@@ -155,9 +168,8 @@ fn try_mut_host_resolves_a_device_label_on_host_storage_like_the_read_side() {
         .clone();
     let host = typed.as_view_mut().try_mut_host("example").unwrap();
     assert_eq!(host.placement(), &read_placement);
-    assert_eq!(host.placement().memory_kind, MemoryKind::UnpinnedHost);
-    assert!(host.placement().device.is_none());
+    assert_eq!(host.placement().memory_kind, MemoryKind::PinnedHost);
 
     let dynamic = host.into_dynamic();
-    assert_eq!(dynamic.placement().memory_kind, MemoryKind::UnpinnedHost);
+    assert_eq!(dynamic.placement().memory_kind, MemoryKind::PinnedHost);
 }

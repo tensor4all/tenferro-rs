@@ -196,7 +196,7 @@ where
             .map_err(|failure| failure.into_parts().1)?
             .1,
     )?;
-    tensor.set_placement(view.placement().clone());
+    tensor.set_placement(view.placement().clone())?;
     Ok(tensor)
 }
 

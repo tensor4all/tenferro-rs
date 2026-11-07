@@ -676,23 +676,29 @@ struct FaultyTransferProvider {
 }
 
 impl TransferProvider for FaultyTransferProvider {
-    fn transfer_blocking(&self, request: TransferRequest<'_>) -> tenferro_runtime::Result<Tensor> {
+    fn transfer_blocking(&self, _request: TransferRequest<'_>) -> tenferro_runtime::Result<Tensor> {
         match self.fault {
             FaultyTransferOutput::DType => Ok(Tensor::from_vec_col_major(vec![2], vec![1_i32, 2])?),
             FaultyTransferOutput::Shape => Ok(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?),
             FaultyTransferOutput::Placement => {
-                let mut tensor = duplicate_f64_read(request.input().clone())?;
-                let Some(tensor) = tensor.as_typed_mut::<f64>() else {
-                    return Err(Error::Internal(
-                        "test transfer expected an f64 tensor".into(),
-                    ));
-                };
-                tensor.set_placement(Placement {
-                    memory_kind: MemoryKind::Device,
-                    device: None,
-                    cpu_affinity: None,
-                });
-                Ok(tensor.duplicate()?.into())
+                // A transfer that answers device memory where the caller asked
+                // for host memory. The payload must be a backend buffer: a
+                // device label on host storage is refused, because the label has
+                // to describe what it labels.
+                let output = TypedTensor::<f64>::from_buffer_col_major(
+                    vec![2],
+                    StorageBuffer::Backend(Box::new(TestDomainBuffer::<f64> {
+                        values: Arc::new(Mutex::new(vec![0.0; 2])),
+                        domain: AllocationDomainId::fresh(),
+                        allocation: next_test_allocation_id(),
+                    })),
+                    Placement {
+                        memory_kind: MemoryKind::Device,
+                        device: None,
+                        cpu_affinity: None,
+                    },
+                )?;
+                Ok(output.into())
             }
             FaultyTransferOutput::BufferLength => {
                 let len = Arc::new(AtomicUsize::new(2));

@@ -175,7 +175,7 @@ fn pooled_output<T: CpuPackedLu>(
         source.shape(),
         compact_host_data(op, source)?,
     )?;
-    output.set_placement(source.placement().clone());
+    output.set_placement(source.placement().clone())?;
     Ok(output)
 }
 
@@ -288,7 +288,7 @@ pub(super) fn lu_factor_solve_typed<T: CpuPackedLu>(
             output.host_data_mut()?,
         )?;
     }
-    pivot_data.set_placement(a.placement().clone());
+    pivot_data.set_placement(a.placement().clone())?;
     Ok((output, lu_data, pivot_data))
 }
 

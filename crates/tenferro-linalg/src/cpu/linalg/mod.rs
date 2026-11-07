@@ -209,6 +209,6 @@ pub(crate) fn output_from_rhs_view<T: Copy + Clone + PoolScalar + 'static>(
     // SAFETY: every element of the compact destination was initialized from
     // the corresponding logical RHS element above.
     let mut output = unsafe { output.assume_init_recycled()? };
-    output.set_placement(rhs.placement().clone());
+    output.set_placement(rhs.placement().clone())?;
     Ok(output)
 }

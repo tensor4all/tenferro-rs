@@ -440,27 +440,29 @@ fn validate_write_layout(tensor: &TensorWrite<'_>, role: &'static str) -> Result
     }
 }
 
-/// Host-placement check for one read operand of the CPU einsum route.
+/// Host-memory check for one read operand of the CPU einsum route.
 ///
 /// `tenferro-einsum` passes the same `TensorRead` values it hands to cpueinsum,
-/// so the CPU placement contract has to be checked where they are built.
+/// so the CPU admission contract has to be checked where they are built. This
+/// is `structural::validate_cpu_host_read` under the name the einsum boundary
+/// imports: the payload decides, never the placement label.
 #[doc(hidden)]
 pub fn validate_cpu_host_read(
     op: &'static str,
     role: &'static str,
     read: &TensorRead<'_>,
 ) -> tenferro_tensor::Result<()> {
-    crate::structural::validate_cpu_host_placement(op, role, read_placement(read))
+    crate::structural::validate_cpu_host_read(op, role, read)
 }
 
-/// Host-placement check for one write operand of the CPU einsum route.
+/// Host-memory check for one write operand of the CPU einsum route.
 #[doc(hidden)]
 pub fn validate_cpu_host_write(
     op: &'static str,
     role: &'static str,
     out: &TensorWrite<'_>,
 ) -> tenferro_tensor::Result<()> {
-    crate::structural::validate_cpu_host_placement(op, role, write_placement(out))
+    crate::structural::validate_cpu_host_write(op, role, out)
 }
 
 /// Validate host operands and axis groups for an allocating contraction,
@@ -471,8 +473,8 @@ pub(crate) fn validate_dot_operands(
     config: &DotGeneralConfig,
     accumulation: DotGeneralAccumulation,
 ) -> Result<()> {
-    crate::structural::validate_cpu_host_placement(OP, "lhs", read_placement(lhs))?;
-    crate::structural::validate_cpu_host_placement(OP, "rhs", read_placement(rhs))?;
+    crate::structural::validate_cpu_host_read(OP, "lhs", lhs)?;
+    crate::structural::validate_cpu_host_read(OP, "rhs", rhs)?;
     if accumulation.alpha.dtype() != lhs.dtype() || accumulation.beta.dtype() != lhs.dtype() {
         return Err(Error::dtype_mismatch(
             OP,
@@ -514,9 +516,9 @@ pub(crate) fn validate_dot_general<'a>(
         ));
     }
 
-    crate::structural::validate_cpu_host_placement(OP, "lhs", read_placement(lhs))?;
-    crate::structural::validate_cpu_host_placement(OP, "rhs", read_placement(rhs))?;
-    crate::structural::validate_cpu_host_placement(OP, "output", write_placement(output))?;
+    crate::structural::validate_cpu_host_read(OP, "lhs", lhs)?;
+    crate::structural::validate_cpu_host_read(OP, "rhs", rhs)?;
+    crate::structural::validate_cpu_host_write(OP, "output", output)?;
     validate_read_layout(lhs, "lhs")?;
     validate_read_layout(rhs, "rhs")?;
     // The element count only feeds a test accessor; the validation is the point.
@@ -531,36 +533,6 @@ pub(crate) fn validate_dot_general<'a>(
         #[cfg(test)]
         output_element_count: _output_element_count,
     })
-}
-
-pub(crate) fn read_placement<'a>(tensor: &'a TensorRead<'_>) -> &'a tenferro_tensor::Placement {
-    match tensor {
-        TensorRead::Tensor(tensor) => tensor.placement(),
-        TensorRead::View(view) => match view {
-            tenferro_tensor::TensorView::F32(view) => view.placement(),
-            tenferro_tensor::TensorView::F64(view) => view.placement(),
-            tenferro_tensor::TensorView::I32(view) => view.placement(),
-            tenferro_tensor::TensorView::I64(view) => view.placement(),
-            tenferro_tensor::TensorView::Bool(view) => view.placement(),
-            tenferro_tensor::TensorView::C32(view) => view.placement(),
-            tenferro_tensor::TensorView::C64(view) => view.placement(),
-        },
-    }
-}
-
-pub(crate) fn write_placement<'a>(tensor: &'a TensorWrite<'_>) -> &'a tenferro_tensor::Placement {
-    match tensor {
-        TensorWrite::Tensor(tensor) => tensor.placement(),
-        TensorWrite::View(view) => match view {
-            tenferro_tensor::TensorViewMut::F32(view) => view.placement(),
-            tenferro_tensor::TensorViewMut::F64(view) => view.placement(),
-            tenferro_tensor::TensorViewMut::I32(view) => view.placement(),
-            tenferro_tensor::TensorViewMut::I64(view) => view.placement(),
-            tenferro_tensor::TensorViewMut::Bool(view) => view.placement(),
-            tenferro_tensor::TensorViewMut::C32(view) => view.placement(),
-            tenferro_tensor::TensorViewMut::C64(view) => view.placement(),
-        },
-    }
 }
 
 /// Validated contraction-axis roles, borrowed from the caller's config.

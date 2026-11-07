@@ -397,7 +397,7 @@ fn tensor_from_vec_with_template<T: PoolScalar>(
     placement: &tenferro_tensor::Placement,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let mut tensor = TypedTensor::from_vec_col_major(shape, data)?;
-    tensor.set_placement(placement.clone());
+    tensor.set_placement(placement.clone())?;
     Ok(tensor)
 }
 
@@ -511,7 +511,7 @@ fn tensor_from_lease<T: PoolScalar>(
     placement: &tenferro_tensor::Placement,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let mut tensor = finish_lease(lease)?;
-    tensor.set_placement(placement.clone());
+    tensor.set_placement(placement.clone())?;
     Ok(tensor)
 }
 
@@ -732,9 +732,9 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
     )?;
 
     let placement = input.placement();
-    lu_data.set_placement(placement.clone());
-    pivot_data.set_placement(placement.clone());
-    parity_data.set_placement(placement.clone());
+    lu_data.set_placement(placement.clone())?;
+    pivot_data.set_placement(placement.clone())?;
+    parity_data.set_placement(placement.clone())?;
     Ok((lu_data, pivot_data, parity_data))
 }
 
@@ -931,7 +931,7 @@ pub(crate) fn solve<T: FaerLinalg>(
         )
         .map_err(provider(Op::Solve))?;
     }
-    output.set_placement(b.placement().clone());
+    output.set_placement(b.placement().clone())?;
     Ok(output)
 }
 
@@ -1708,8 +1708,8 @@ pub(crate) fn compact_factor_2d<T: FaerLinalg>(
         ));
     }
     let placement = input.placement();
-    packed.set_placement(placement.clone());
-    coeff.set_placement(placement.clone());
+    packed.set_placement(placement.clone())?;
+    coeff.set_placement(placement.clone())?;
     Ok((packed, coeff))
 }
 
@@ -1745,8 +1745,8 @@ pub(crate) fn append_2d<T: FaerLinalg>(
             coeff.shape(),
             compact_host_data(OP, coeff)?,
         )?;
-        packed_copy.set_placement(packed.placement().clone());
-        coeff_copy.set_placement(coeff.placement().clone());
+        packed_copy.set_placement(packed.placement().clone())?;
+        coeff_copy.set_placement(coeff.placement().clone())?;
         return Ok((packed_copy, coeff_copy));
     }
     let new_cols = old_cols
@@ -1833,8 +1833,8 @@ pub(crate) fn append_2d<T: FaerLinalg>(
         }
     }
     let placement = packed.placement();
-    output.set_placement(placement.clone());
-    output_coeff.set_placement(placement.clone());
+    output.set_placement(placement.clone())?;
+    output_coeff.set_placement(placement.clone())?;
     Ok((output, output_coeff))
 }
 
@@ -1926,8 +1926,8 @@ pub(crate) fn from_factors_2d<T: FaerLinalg>(
         output_coeff_data[..q_coeff_data.len()].copy_from_slice(q_coeff_data);
     }
     let placement = q.placement();
-    output.set_placement(placement.clone());
-    output_coeff.set_placement(placement.clone());
+    output.set_placement(placement.clone())?;
+    output_coeff.set_placement(placement.clone())?;
     Ok((output, output_coeff))
 }
 
@@ -1958,7 +1958,7 @@ pub(crate) fn raw_r_2d<T: FaerLinalg>(
             }
         }
     }
-    r.set_placement(packed.placement().clone());
+    r.set_placement(packed.placement().clone())?;
     Ok(r)
 }
 
@@ -2020,7 +2020,7 @@ pub(crate) fn q_columns_2d<T: FaerLinalg>(
             }
         }
     }
-    q.set_placement(packed.placement().clone());
+    q.set_placement(packed.placement().clone())?;
     Ok(q)
 }
 
