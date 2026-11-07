@@ -597,6 +597,14 @@ const BORROWED_ENTRY_CEILINGS: &[(&str, usize)] = &[
     ("borrowed/eig_values/48", 0),
     ("borrowed/svd/complex64", 0),
     ("borrowed/eigh/complex64", 0),
+    // The rank boundary of the storage guarantee (#2505): metadata up to `INLINE_RANK` is inline,
+    // so a rank-8 operand still measures zero, while a rank-9 one spends a small, fixed number of
+    // host allocations on the dims and strides that no longer fit. The measured count and the
+    // crate documentation are two halves of one claim: `docs` scopes the pool guarantee to the
+    // payload and the workspace, and the rank-9 row keeps the spill from quietly becoming "zero"
+    // (below) or unbounded (this ceiling).
+    ("borrowed/qr/rank8", 0),
+    ("borrowed/qr/rank9", 16),
 ];
 
 #[test]
@@ -620,24 +628,26 @@ fn borrowed_entries_keep_their_steady_state_allocation_counts() {
     let herm = herm.as_typed::<Complex64>().unwrap().as_view();
 
     let mut failures = Vec::new();
-    let mut run =
-        |name: &str, call: &mut dyn FnMut(&mut tcontract_exec::Exec<'_>, &mut BufferPool)| {
-            let mut best: Option<AllocationReport> = None;
-            for _ in 0..4 {
-                let report = measure(|| {
-                    engine.with_exec(|exec| call(exec, &mut lane_pool)).unwrap();
-                });
-                if best.is_none_or(|best| report.allocations < best.allocations) {
-                    best = Some(report);
-                }
+    let mut run = |name: &str,
+                   call: &mut dyn FnMut(&mut tcontract_exec::Exec<'_>, &mut BufferPool)|
+     -> AllocationReport {
+        let mut best: Option<AllocationReport> = None;
+        for _ in 0..4 {
+            let report = measure(|| {
+                engine.with_exec(|exec| call(exec, &mut lane_pool)).unwrap();
+            });
+            if best.is_none_or(|best| report.allocations < best.allocations) {
+                best = Some(report);
             }
-            let report = best.unwrap_or_default();
-            let ceiling = ceiling(name);
-            println!("{name}: {report:?} (ceiling {ceiling})");
-            if report.allocations > ceiling {
-                failures.push(format!("{name}: {} > {ceiling}", report.allocations));
-            }
-        };
+        }
+        let report = best.unwrap_or_default();
+        let ceiling = ceiling(name);
+        println!("{name}: {report:?} (ceiling {ceiling})");
+        if report.allocations > ceiling {
+            failures.push(format!("{name}: {} > {ceiling}", report.allocations));
+        }
+        report
+    };
     run("borrowed/svd/48", &mut |e, b| {
         drop(svd_with_exec(e, b, &a, false).unwrap())
     });
@@ -665,6 +675,39 @@ fn borrowed_entries_keep_their_steady_state_allocation_counts() {
     run("borrowed/eigh/complex64", &mut |e, b| {
         drop(eigh_with_exec(e, b, &herm).unwrap())
     });
+
+    // The rank boundary of the storage guarantee (#2505). One 4x4 operand at two ranks, so only
+    // the metadata length differs: at rank 8 the dims and strides still fit `INLINE_RANK`, and at
+    // rank 9 they do not, so the same call pays a few small host allocations that the pool cannot
+    // hold. This pair is the test half of the "Storage" wording in the crate docs, which scopes
+    // the guarantee to the payload and the provider workspace: rank 8 must stay at zero, and rank
+    // 9 must not, so neither the wording nor the spill can drift alone.
+    let block: Vec<f64> = (0..16).map(|index| 1.0 + index as f64).collect();
+    let rank8 = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![4, 4, 1, 1, 1, 1, 1, 1], block.clone()).unwrap(),
+    );
+    let rank9 = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![4, 4, 1, 1, 1, 1, 1, 1, 1], block).unwrap(),
+    );
+    let rank8 = rank8.as_typed::<f64>().unwrap().as_view();
+    let rank9 = rank9.as_typed::<f64>().unwrap().as_view();
+
+    let report = run("borrowed/qr/rank8", &mut |e, b| {
+        drop(qr_with_exec(e, b, &rank8).unwrap())
+    });
+    assert_eq!(
+        report.allocations, 0,
+        "a rank-8 operand fits `INLINE_RANK`, so its metadata stays inline"
+    );
+    let report = run("borrowed/qr/rank9", &mut |e, b| {
+        drop(qr_with_exec(e, b, &rank9).unwrap())
+    });
+    assert!(
+        report.allocations > 0,
+        "a rank-9 operand spilled nothing: the documented metadata spill above `INLINE_RANK` \
+         no longer happens, so the \"Storage\" wording owes a correction"
+    );
+
     assert!(
         failures.is_empty(),
         "borrowed entries allocate more per call than the recorded ceilings:\n{}",

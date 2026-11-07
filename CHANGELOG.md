@@ -185,3 +185,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `tenferro-fft`, `tenferro-linalg`, `tenferro-internal-ops`): no code was gated
   on it and HIP/ROCm has no implementation. A consumer that enabled or forwarded
   `rocm` drops it from its feature list (#2310).
+
+### Fixed
+
+- **A borrowed linalg entry refuses an empty operand with a negative stride**
+  (#2505). The six `*_with_exec` factorizations validated the layout inside
+  `raw_view`, which the zero-dimension shortcut returned before, so a `[3, 0]`
+  or `[0, 0]` view whose remaining axis was reversed came back with empty
+  outputs while the same layout on a non-empty operand was `Unsupported`. The
+  stride rule now runs before the shortcut, so the empty operand fails with the
+  non-empty error, variant and message included. Every other input, the
+  shortcut's own results included, is unchanged.
+- **The borrowed entries' storage guarantee is scoped to the payload and the
+  workspace** (#2505). The rustdoc said tenferro "allocates nothing outside"
+  the caller's `BufferPool`, but a view's and an output's dims and strides are
+  shape metadata: inline up to `INLINE_RANK` (8) axes, heap-allocated above
+  that, so a rank-9 operand allocates a few small metadata blocks per call. The
+  contract now says what it covers, and `tests/cpu_linalg_allocation.rs` carries
+  a rank-8 row (no allocations) beside a rank-9 row (some), so the wording and
+  the measured counts can only move together.
