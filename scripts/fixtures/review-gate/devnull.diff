@@ -1,0 +1,23 @@
+diff --git a/crates/tenferro-tensor/src/dispatch.rs b/crates/tenferro-tensor/src/dispatch.rs
+deleted file mode 100644
+index 118f733..0000000
+--- a/crates/tenferro-tensor/src/dispatch.rs
++++ /dev/null
+@@ -1,8 +0,0 @@
+-pub fn shape_stride(shape: &[usize], stride: &[isize]) -> usize {
+-    let mut total = 0;
+-    for (dim, step) in shape.iter().zip(stride.iter()) {
+-        total += dim * step.unsigned_abs();
+-    }
+-    let value = 1;
+-    value + total
+-}
+diff --git a/crates/tenferro-tensor/src/fresh.rs b/crates/tenferro-tensor/src/fresh.rs
+new file mode 100644
+index 0000000..03f5f02
+--- /dev/null
++++ b/crates/tenferro-tensor/src/fresh.rs
+@@ -0,0 +1,3 @@
++pub fn fresh() -> u8 {
++    9
++}
