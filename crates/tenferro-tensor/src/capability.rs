@@ -228,6 +228,59 @@ impl OperationCapability {
     }
 }
 
+/// Resolve one operation/dtype entry against a backend capability table.
+///
+/// This is the single lookup rule behind [`TensorBackendCapability::capability`]
+/// and [`TensorBackendCapability::require_capability`]. Backends and their
+/// operation kernels call it directly so a support decision is spelled once
+/// instead of re-implemented next to each table.
+///
+/// `axis` selects the capability axis the caller needs: `None` returns the
+/// declared entry without judging it, `Some(_)` returns it only when that axis
+/// reports support.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_core_ops::PrimitiveOpKind;
+/// use tenferro_tensor::{
+///     capability_entry, BackendId, CapabilityAxis, CapabilityQuery, DType,
+///     OperationCapability, SupportLevel,
+/// };
+///
+/// const ENTRIES: &[OperationCapability] = &[OperationCapability {
+///     backend: BackendId::Cpu,
+///     op: PrimitiveOpKind::Exp,
+///     dtype: DType::F64,
+///     output_dtype: DType::F64,
+///     result: SupportLevel::Native,
+///     read_inputs: SupportLevel::Native,
+///     write_output: SupportLevel::Unsupported,
+///     strided_output: SupportLevel::Unsupported,
+///     accumulation: SupportLevel::Unsupported,
+/// }];
+/// let query = CapabilityQuery::new(PrimitiveOpKind::Exp, DType::F64);
+///
+/// assert!(capability_entry(ENTRIES, BackendId::Cpu, query, Some(CapabilityAxis::ReadInputs)).is_some());
+/// assert!(capability_entry(ENTRIES, BackendId::Cpu, query, Some(CapabilityAxis::WriteOutput)).is_none());
+/// assert!(capability_entry(ENTRIES, BackendId::Cuda, query, None).is_none());
+/// ```
+#[must_use]
+pub fn capability_entry(
+    entries: &[OperationCapability],
+    backend: BackendId,
+    query: CapabilityQuery,
+    axis: Option<CapabilityAxis>,
+) -> Option<OperationCapability> {
+    entries
+        .iter()
+        .copied()
+        .find(|entry| {
+            entry.backend == backend && entry.op == query.op && entry.dtype == query.dtype
+        })
+        .filter(|entry| axis.is_none_or(|axis| entry.axis(axis).is_supported()))
+}
+
 /// Backend capability query surface.
 ///
 /// # Examples
@@ -301,9 +354,7 @@ pub trait TensorBackendCapability {
     /// ```
     #[must_use]
     fn capability(&self, query: CapabilityQuery) -> Option<OperationCapability> {
-        self.capabilities().iter().copied().find(|entry| {
-            entry.backend == self.backend_id() && entry.op == query.op && entry.dtype == query.dtype
-        })
+        capability_entry(self.capabilities(), self.backend_id(), query, None)
     }
 
     /// Require support for one operation/dtype/axis, returning a structured
@@ -352,28 +403,18 @@ pub trait TensorBackendCapability {
         query: CapabilityQuery,
         axis: CapabilityAxis,
     ) -> crate::Result<OperationCapability> {
-        let entry = self.capability(query).ok_or_else(|| {
-            crate::Error::unsupported_dtype(
-                descriptor(query.op).name,
-                query.dtype,
-                format!(
-                    "backend {} does not support this operation/dtype",
-                    self.backend_id()
-                ),
-            )
-        })?;
-        if entry.axis(axis).is_supported() {
-            Ok(entry)
-        } else {
-            Err(crate::Error::unsupported_dtype(
-                descriptor(query.op).name,
-                query.dtype,
-                format!(
-                    "backend {} does not support this operation/dtype",
-                    self.backend_id()
-                ),
-            ))
-        }
+        capability_entry(self.capabilities(), self.backend_id(), query, Some(axis)).ok_or_else(
+            || {
+                crate::Error::unsupported_dtype(
+                    descriptor(query.op).name,
+                    query.dtype,
+                    format!(
+                        "backend {} does not support this operation/dtype",
+                        self.backend_id()
+                    ),
+                )
+            },
+        )
     }
 }
 

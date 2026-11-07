@@ -10,8 +10,8 @@ use super::{typed_view_from_view, PooledUninitOutput};
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::simd_math::{self, VectorKernel};
 use tenferro_tensor::{
-    BackendId, CapabilityAxis, DType, Tensor, TensorRank, TensorRead, TensorScalar, TensorView,
-    TypedTensor, TypedTensorView,
+    BackendId, CapabilityAxis, CapabilityQuery, DType, Tensor, TensorRank, TensorRead,
+    TensorScalar, TensorView, TypedTensor, TypedTensorView,
 };
 use threadteam::Exec;
 
@@ -336,20 +336,16 @@ fn require_cpu_capability(
     dtype: DType,
     axis: CapabilityAxis,
 ) -> crate::Result<()> {
-    let supported = crate::cpu_capabilities()
-        .iter()
-        .copied()
-        .find(|entry| entry.op == op_kind && entry.dtype == dtype)
-        .is_some_and(|entry| entry.axis(axis).is_supported());
-    if supported {
-        Ok(())
-    } else {
-        Err(crate::Error::unsupported_dtype(
-            op,
-            dtype,
-            unsupported_analytic_dtype_message(dtype),
-        ))
-    }
+    tenferro_tensor::capability_entry(
+        crate::cpu_capabilities(),
+        BackendId::Cpu,
+        CapabilityQuery::new(op_kind, dtype),
+        Some(axis),
+    )
+    .map(|_| ())
+    .ok_or_else(|| {
+        crate::Error::unsupported_dtype(op, dtype, unsupported_analytic_dtype_message(dtype))
+    })
 }
 
 fn strided_view_contains<T>(

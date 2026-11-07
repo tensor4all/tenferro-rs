@@ -78,17 +78,18 @@ change. Manual rows below it cover families outside the descriptor.
 
 Typed code uses compile-time trait bounds and does not read the descriptor.
 
-`TensorBackendCapability::capability` looks up one entry, and
-`TensorBackendCapability::require_capability` turns a missing entry or an
-unsupported axis into `Error::UnsupportedDType`. `require_capability` has no
-production caller; it is exercised by its doctest and the CPU capability unit
-test.
+`tenferro_tensor::capability_entry` is the one lookup rule: it matches the
+backend id, operation and dtype in a table and, when an axis is given, keeps
+the entry only if that axis reports support. `TensorBackendCapability::capability`
+and `::require_capability` are thin wrappers over it, and so is every kernel
+that reads a table. `require_capability` has no production caller; it is
+exercised by its doctest and the CPU capability unit test.
 
 The only production read of a descriptor today is the CPU analytic unary
-dispatch (`tenferro-cpu/src/analytic.rs`), which checks the `read_inputs` axis
-of `cpu_capabilities()` before dispatching on dtype and returns
-`UnsupportedDType` when the entry is missing or unsupported. No CUDA dispatch
-path and no other CPU path reads the table.
+dispatch (`tenferro-cpu/src/analytic.rs`), which asks `capability_entry` for the
+`read_inputs` axis of `cpu_capabilities()` before dispatching on dtype and
+returns `UnsupportedDType` when the entry is missing or unsupported. No CUDA
+dispatch path and no other CPU path reads the table.
 
 The runtime planner does not read this descriptor. Preparation selects a
 provider per operation family (`tenferro_runtime::CoreCapabilityKind`:

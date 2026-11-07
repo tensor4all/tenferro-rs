@@ -20,6 +20,8 @@ mod determinant_extremes;
 mod eager_surface_parity;
 #[path = "integration/eager_tensor.rs"]
 mod eager_tensor;
+#[path = "integration/error_contract.rs"]
+mod error_contract;
 #[path = "integration/full_piv_lu.rs"]
 mod full_piv_lu;
 #[path = "integration/full_svd_host_checks.rs"]
