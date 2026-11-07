@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.ci.change_policy import ChangeClass, classify_paths
+from scripts.ci.change_policy import ChangeClass, _changed_paths, classify_paths
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -547,6 +547,126 @@ class RustCommentPolicyTests(unittest.TestCase):
         self.assertEqual(payload["run_gpu"], False)
         self.assertEqual(payload["run_rust"], True)
         self.assertIn("docs-only Rust comments", payload["reason"])
+
+
+class StaleBaseTests(unittest.TestCase):
+    """A base branch that moved past the fork point must not add its files.
+
+    `--base` carries the base branch tip (`github.event.pull_request.base.sha`),
+    not the fork point. Comparing the two trees directly therefore also reports
+    every path that landed on the base branch *after* the fork, as if the pull
+    request had removed it. Reading the diff from the merge base is what keeps
+    an untouched file out: a late landing on a GPU control-plane path otherwise
+    reserves a paid pod for a pull request that never touched it.
+    """
+
+    PR_FILE = "README.md"
+    LATE_MAIN_CI_FILE = "scripts/ci/runpod_provision.py"
+    LATE_MAIN_CODE_FILE = "crates/demo/src/lib.rs"
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def git(self, repo: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    def commit(self, repo: Path, message: str) -> str:
+        self.git(repo, "add", "-A")
+        self.git(repo, "commit", "-q", "-m", message)
+        return self.git(repo, "rev-parse", "HEAD").strip()
+
+    def scenario(self, name: str, late_path: str) -> tuple[Path, str, str]:
+        """Build a fork, a prose-only pull request, and a late base landing."""
+        repo = Path(self.temp_dir.name) / name
+        repo.mkdir(parents=True)
+        self.git(repo, "init", "-q", "-b", "main")
+        self.git(repo, "config", "user.email", "test@example.com")
+        self.git(repo, "config", "user.name", "Test User")
+        (repo / "docs").mkdir()
+        (repo / "docs" / "guide.md").write_text("guide\n")
+        self.commit(repo, "fork point")
+
+        self.git(repo, "checkout", "-q", "-b", "pr")
+        (repo / self.PR_FILE).write_text("pull request\n")
+        head = self.commit(repo, "pr: prose only")
+
+        self.git(repo, "checkout", "-q", "main")
+        late = repo / late_path
+        late.parent.mkdir(parents=True, exist_ok=True)
+        late.write_text("landed on the base branch after the fork\n")
+        base = self.commit(repo, "base: late landing")
+
+        self.git(repo, "checkout", "-q", "pr")
+        return repo, base, head
+
+    def classify(self, repo: Path, base: str, head: str) -> dict:
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--base", base, "--head", head],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(result.stdout)
+
+    def test_late_gpu_control_plane_landing_reserves_no_pod(self) -> None:
+        repo, base, head = self.scenario("ci", self.LATE_MAIN_CI_FILE)
+        payload = self.classify(repo, base, head)
+        self.assertEqual(payload["classification"], "docs-only")
+        self.assertFalse(payload["run_gpu"])
+        self.assertFalse(payload["run_ci_config"])
+        self.assertNotIn(self.LATE_MAIN_CI_FILE, payload["reason"])
+
+    def test_late_code_landing_does_not_widen_the_class(self) -> None:
+        repo, base, head = self.scenario("code", self.LATE_MAIN_CODE_FILE)
+        payload = self.classify(repo, base, head)
+        self.assertEqual(payload["classification"], "docs-only")
+        self.assertFalse(payload["run_gpu"])
+        self.assertFalse(payload["run_rust"])
+        self.assertNotIn(self.LATE_MAIN_CODE_FILE, payload["reason"])
+
+    def test_changed_paths_are_read_from_the_fork_point(self) -> None:
+        repo, base, head = self.scenario("paths", self.LATE_MAIN_CODE_FILE)
+        self.assertEqual(
+            _changed_paths(base, head, cwd=str(repo)), [self.PR_FILE]
+        )
+        self.assertIsNone(_changed_paths("0" * 40, head, cwd=str(repo)))
+
+    def test_unresolvable_split_point_fails_closed(self) -> None:
+        """An unknown base keeps full validation; it never guesses a lane."""
+        repo, _, head = self.scenario("missing", self.LATE_MAIN_CI_FILE)
+        payload = self.classify(repo, "0" * 40, head)
+        self.assertEqual(payload["classification"], "code")
+        self.assertTrue(payload["run_gpu"])
+
+    def test_shallow_history_without_the_fork_point_fails_closed(self) -> None:
+        """A shallow clone has both endpoints but no merge base to compare."""
+        repo, base, head = self.scenario("shallow", self.LATE_MAIN_CI_FILE)
+        clone = Path(self.temp_dir.name) / "shallow-clone"
+        subprocess.run(
+            ["git", "clone", "-q", "--depth", "1", f"file://{repo}", str(clone)],
+            check=True,
+            capture_output=True,
+        )
+        for revision in (base, head):
+            subprocess.run(
+                ["git", "fetch", "-q", "--depth", "1", "origin", revision],
+                cwd=clone,
+                check=True,
+                capture_output=True,
+            )
+        payload = self.classify(clone, base, head)
+        self.assertEqual(payload["classification"], "code")
+        self.assertTrue(payload["run_gpu"])
 
 
 class LocalGateTests(unittest.TestCase):
