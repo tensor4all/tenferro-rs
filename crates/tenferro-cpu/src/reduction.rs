@@ -75,12 +75,23 @@ fn host_operand<'a>(op: &'static str, input: &'a Tensor) -> crate::Result<Tensor
     TensorRead::from_tensor(input).try_host(op)
 }
 
-fn validate_reduced_axes_nonempty(
+/// Validate `axes` for a fold of `op`, refusing a zero-length reduced axis only when the fold
+/// has no identity to report.
+///
+/// `sum`, `sum of squares` and `prod` are the empty fold's own unit (`0`, `0`, `1`), so a
+/// zero-length axis is a well-defined result and the strided plan writes the identity for every
+/// output. `max` and `min` have no finite identity, and reporting `-inf`/`+inf` (or a dtype
+/// sentinel) would invent a value the input never held: those stay `InvalidArgument`.
+fn validate_reduced_axes(
     op: &'static str,
     shape: &[usize],
     axes: &[usize],
+    fold: ReduceOp,
 ) -> crate::Result<()> {
     validate_axes(op, axes, shape.len())?;
+    if empty_fold_has_identity(fold) {
+        return Ok(());
+    }
     for &axis in axes {
         if shape[axis] == 0 {
             return Err(crate::Error::invalid_argument(
@@ -91,6 +102,15 @@ fn validate_reduced_axes_nonempty(
         }
     }
     Ok(())
+}
+
+/// Whether `fold` has a unit for an empty domain: `sum` and `sum of squares` return `0`, `prod`
+/// returns `1`. The extrema have none, which is why they refuse a zero-length axis.
+fn empty_fold_has_identity(fold: ReduceOp) -> bool {
+    matches!(
+        fold,
+        ReduceOp::Sum | ReduceOp::SumSquares | ReduceOp::Product
+    )
 }
 
 fn reduction_empty_axes_noop(
@@ -158,10 +178,10 @@ impl WrappingReductionElem for i64 {}
 
 /// # Errors
 ///
-/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
-/// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
-/// reductions, [`crate::Error::Unsupported`] for `Bool`, or a typed backend
-/// error when the input storage cannot be read.
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds` or
+/// `DuplicateAxis` for invalid axes, [`crate::Error::Unsupported`] for `Bool`, or a typed backend
+/// error when the input storage cannot be read. A zero-length reduced axis is the empty sum:
+/// every output element is `0`.
 pub(crate) fn reduce_sum(input: &Tensor, axes: &[usize], exec: Exec<'_>) -> crate::Result<Tensor> {
     if let Some(output) = reduction_empty_axes_noop("reduce_sum", input, axes)? {
         return Ok(output);
@@ -237,9 +257,9 @@ pub(crate) fn reduce_sum_read(
 
 /// # Errors
 ///
-/// Returns a typed validation error for invalid axes or zero-length reduced
-/// dimensions, `Unsupported` for non-real floating dtypes, or a typed backend
-/// error while reading storage or executing the strided kernel.
+/// Returns a typed validation error for invalid axes, `Unsupported` for non-real floating dtypes,
+/// or a typed backend error while reading storage or executing the strided kernel. A zero-length
+/// reduced axis is the empty sum of squares: every output element is `0`.
 pub(crate) fn reduce_sum_squares(
     buffers: &mut BufferPool,
     input: &Tensor,
@@ -432,10 +452,10 @@ pub(crate) fn reduce_sum_squares_read(
 
 /// # Errors
 ///
-/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
-/// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
-/// reductions, [`crate::Error::Unsupported`] for `Bool`, or a typed backend
-/// error when the input storage cannot be read.
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds` or
+/// `DuplicateAxis` for invalid axes, [`crate::Error::Unsupported`] for `Bool`, or a typed backend
+/// error when the input storage cannot be read. A zero-length reduced axis is the empty product:
+/// every output element is `1`.
 pub(crate) fn reduce_prod(input: &Tensor, axes: &[usize], exec: Exec<'_>) -> crate::Result<Tensor> {
     if let Some(output) = reduction_empty_axes_noop("reduce_prod", input, axes)? {
         return Ok(output);
@@ -681,7 +701,7 @@ fn typed_reduce_erased<T>(
 where
     T: Copy + Clone + TensorScalar,
 {
-    validate_reduced_axes_nonempty(label, input.shape(), axes)?;
+    validate_reduced_axes(label, input.shape(), axes, op)?;
     if axes.is_empty() {
         // INVARIANT: empty-axis typed reductions preserve values exactly while
         // satisfying the owned-output contract.
@@ -773,7 +793,7 @@ where
     T: Copy + Clone + TensorScalar + crate::buffer_pool::PoolScalar + 'static,
     TR: TensorRank,
 {
-    validate_reduced_axes_nonempty(label, input.shape(), axes)?;
+    validate_reduced_axes(label, input.shape(), axes, op)?;
     if axes.is_empty() {
         return Err(crate::Error::unsupported(
             label,
@@ -834,9 +854,9 @@ where
 
 /// # Errors
 ///
-/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
-/// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
-/// reductions, or a typed backend error while materializing the result.
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds` or
+/// `DuplicateAxis` for invalid axes, or a typed backend error while materializing the result. A
+/// zero-length reduced axis is the empty sum: every output element is `0`.
 pub(crate) fn typed_reduce_sum<T>(
     input: &HostView<'_, T>,
     axes: &[usize],
@@ -864,9 +884,9 @@ where
 
 /// # Errors
 ///
-/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
-/// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
-/// reductions, or a typed backend error while materializing the result.
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds` or
+/// `DuplicateAxis` for invalid axes, or a typed backend error while materializing the result. A
+/// zero-length reduced axis is the empty product: every output element is `1`.
 pub(crate) fn typed_reduce_prod<T>(
     input: &HostView<'_, T>,
     axes: &[usize],

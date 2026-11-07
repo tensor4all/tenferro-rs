@@ -780,25 +780,151 @@ fn reduce_max_and_min_propagate_nan_instead_of_leaking_sentinel() {
 }
 
 #[test]
-fn reduce_sum_zero_length_axis_is_rejected_like_other_reductions() {
+fn reduce_sum_and_prod_over_zero_length_axis_return_the_empty_fold_identity() {
+    // The empty fold is the operation's own unit: sum is 0, prod is 1. The full axis set keeps
+    // nothing, so the result is the scalar identity.
     let empty = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap(),
     );
 
-    assert!(matches!(
-        reduce_sum(&empty, &[0], strided_kernel::Exec::serial()),
-        Err(crate::Error::Validation {
-            op: "reduce_sum",
-            ..
-        })
-    ));
-    assert!(matches!(
-        reduce_prod(&empty, &[0], strided_kernel::Exec::serial()),
-        Err(crate::Error::Validation {
-            op: "reduce_prod",
-            ..
-        })
-    ));
+    let sum = reduce_sum(&empty, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(sum.shape(), &[] as &[usize]);
+    assert_eq!(sum.as_slice::<f64>().unwrap(), &[0.0]);
+
+    let prod = reduce_prod(&empty, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(prod.shape(), &[] as &[usize]);
+    assert_eq!(prod.as_slice::<f64>().unwrap(), &[1.0]);
+}
+
+#[test]
+fn reduce_zero_length_axis_fills_every_kept_position_with_the_identity() {
+    // The reduced axis is empty but two axes survive, so the identity is per output element, not
+    // one scalar: every one of them is the unit of the fold.
+    let empty = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 0, 3], Vec::<f64>::new()).unwrap(),
+    );
+
+    let sum = reduce_sum(&empty, &[1], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(sum.shape(), &[2, 3]);
+    assert_eq!(sum.as_slice::<f64>().unwrap(), &[0.0; 6]);
+
+    let prod = reduce_prod(&empty, &[1], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(prod.shape(), &[2, 3]);
+    assert_eq!(prod.as_slice::<f64>().unwrap(), &[1.0; 6]);
+
+    // Two reduced axes with one of them empty: the fold still has an empty domain.
+    let sum = reduce_sum(&empty, &[0, 1], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(sum.shape(), &[3]);
+    assert_eq!(sum.as_slice::<f64>().unwrap(), &[0.0; 3]);
+}
+
+#[test]
+fn reduce_zero_length_axis_identity_covers_integer_and_complex_dtypes() {
+    // The identity is the dtype's own unit, so it follows the same rule for the wrapping integer
+    // and complex routes as for floats.
+    let empty_f32 = Tensor::from_typed::<f32>(
+        TypedTensor::from_vec_col_major(vec![0, 2], Vec::<f32>::new()).unwrap(),
+    );
+    let sum = reduce_sum(&empty_f32, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(sum.as_slice::<f32>().unwrap(), &[0.0_f32; 2]);
+    let prod = reduce_prod(&empty_f32, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(prod.as_slice::<f32>().unwrap(), &[1.0_f32; 2]);
+
+    let empty_i32 = Tensor::from_typed::<i32>(
+        TypedTensor::from_vec_col_major(vec![0, 2], Vec::<i32>::new()).unwrap(),
+    );
+    let sum = reduce_sum(&empty_i32, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(sum.as_slice::<i32>().unwrap(), &[0_i32; 2]);
+    let prod = reduce_prod(&empty_i32, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(prod.as_slice::<i32>().unwrap(), &[1_i32; 2]);
+
+    let empty_i64 = Tensor::from_typed::<i64>(
+        TypedTensor::from_vec_col_major(vec![0, 2], Vec::<i64>::new()).unwrap(),
+    );
+    let sum = reduce_sum(&empty_i64, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(sum.as_slice::<i64>().unwrap(), &[0, 0]);
+    let prod = reduce_prod(&empty_i64, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(prod.as_slice::<i64>().unwrap(), &[1, 1]);
+
+    let empty_c64 = Tensor::from_typed::<tenferro_tensor::Complex64>(
+        TypedTensor::from_vec_col_major(vec![0, 2], Vec::<tenferro_tensor::Complex64>::new())
+            .unwrap(),
+    );
+    let sum = reduce_sum(&empty_c64, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(
+        sum.as_slice::<tenferro_tensor::Complex64>().unwrap(),
+        &[tenferro_tensor::Complex64::new(0.0, 0.0); 2]
+    );
+    let prod = reduce_prod(&empty_c64, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(
+        prod.as_slice::<tenferro_tensor::Complex64>().unwrap(),
+        &[tenferro_tensor::Complex64::new(1.0, 0.0); 2]
+    );
+
+    let empty_c32 = Tensor::from_typed::<tenferro_tensor::Complex32>(
+        TypedTensor::from_vec_col_major(vec![0, 2], Vec::<tenferro_tensor::Complex32>::new())
+            .unwrap(),
+    );
+    let sum = reduce_sum(&empty_c32, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(
+        sum.as_slice::<tenferro_tensor::Complex32>().unwrap(),
+        &[tenferro_tensor::Complex32::new(0.0, 0.0); 2]
+    );
+    let prod = reduce_prod(&empty_c32, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(
+        prod.as_slice::<tenferro_tensor::Complex32>().unwrap(),
+        &[tenferro_tensor::Complex32::new(1.0, 0.0); 2]
+    );
+}
+
+#[test]
+fn reduce_sum_squares_over_zero_length_axis_is_zero() {
+    let empty = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![0, 2], Vec::<f64>::new()).unwrap(),
+    );
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+    let squares =
+        reduce_sum_squares(&mut buffers, &empty, &[0], strided_kernel::Exec::serial()).unwrap();
+    assert_eq!(squares.shape(), &[2]);
+    assert_eq!(squares.as_slice::<f64>().unwrap(), &[0.0; 2]);
+}
+
+#[test]
+fn reduce_zero_length_axis_through_a_view_matches_the_owned_route() {
+    // `reduce_*_read` on a borrowed view runs a different typed path than the owned tensor; both
+    // must report the same identity.
+    let backing = TypedTensor::<f64>::from_vec_col_major(vec![2, 0, 3], Vec::<f64>::new()).unwrap();
+    let view = backing.as_view();
+    let mut engine = crate::CpuEngine::serial();
+
+    for (expected, actual) in [
+        (
+            0.0_f64,
+            crate::test_support::on_engine(&mut engine, |session| {
+                session.reduce_sum_read(TensorRead::from_view(TensorView::F64(view.clone())), &[1])
+            }),
+        ),
+        (
+            1.0_f64,
+            crate::test_support::on_engine(&mut engine, |session| {
+                session.reduce_prod_read(TensorRead::from_view(TensorView::F64(view.clone())), &[1])
+            }),
+        ),
+    ] {
+        let actual = actual.unwrap().unwrap();
+        assert_eq!(actual.shape(), &[2, 3]);
+        assert_eq!(actual.as_slice::<f64>().unwrap(), &[expected; 6]);
+    }
+}
+
+#[test]
+fn reduce_max_and_min_still_reject_zero_length_axis() {
+    // The extrema have no identity: reporting -inf/+inf, or a dtype sentinel, would invent a value
+    // the input never held, so they keep the typed validation error.
+    let empty = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap(),
+    );
+
     assert!(matches!(
         reduce_max(&empty, &[0], strided_kernel::Exec::serial()),
         Err(crate::Error::Validation {

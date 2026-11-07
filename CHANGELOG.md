@@ -60,6 +60,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`sum`, `sum of squares` and `prod` accept a zero-length reduced axis and
+  return the fold's own unit** (#2453). `reduce_sum` / `reduce_prod` on a
+  `[0, 2]` input over axis 0 now yields `[2]` filled with `0` / `1` instead of
+  the previous `InvalidArgument`, on both the owned and the borrowed-view CPU
+  entries and on the CUDA entries, and for every dtype the fold supports
+  (`F32`, `F64`, complex, `I32`, `I64`). The result follows the shape rule the
+  operation already had: a reduced axis is empty, so every kept position is the
+  identity, and a result whose kept extent is itself zero stays empty.
+  `max` and `min` keep the typed `InvalidArgument`: they have no finite
+  identity, and reporting a sentinel would invent a value the input never held.
+  An empty *axis list* still returns the input unchanged.
 - **The CPU linalg and reduction entries narrow each operand to `Host` once
   and no longer re-check placement below that point.** The
   `ensure_host_tensor` / `ensure_host_tensor_read` pre-checks (55 call sites in
