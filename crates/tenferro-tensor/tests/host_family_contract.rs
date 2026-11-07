@@ -514,7 +514,11 @@ fn mutable_layout_exact_fallback_accepts_small_ambiguous_non_overlapping_layout(
 }
 
 #[test]
-fn mutable_layout_rejects_large_ambiguous_layout_without_exact_fallback() {
+fn mutable_layout_accepts_large_interleaved_injective_layout() {
+    // 4097 * 2 = 8194 logical elements, above the retired 4096-element
+    // ceiling. The layout is injective: one axis covers the even offsets up to
+    // 8192 and the other adds the odd stride 4097, so no two positions alias.
+    // A legal layout must not be refused for its element count.
     let layout = TensorLayout::<DynRank>::from_parts(
         vec![4097, 2].into_iter().collect(),
         vec![2, 4097].into_iter().collect(),
@@ -522,10 +526,7 @@ fn mutable_layout_rejects_large_ambiguous_layout_without_exact_fallback() {
         12_290,
     )
     .unwrap();
-    assert!(matches!(
-        layout.validate_mutable_no_overlap(),
-        Err(ValidationError::OverlappingMutableLayout)
-    ));
+    layout.validate_mutable_no_overlap().unwrap();
 }
 
 #[test]

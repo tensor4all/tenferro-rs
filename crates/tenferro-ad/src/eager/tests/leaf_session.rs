@@ -890,16 +890,24 @@ fn host_leaf_materialization_matches_the_cpu_backend_acceptance() -> Result<(), 
     );
     assert!(cpu_host_owned_read(&TensorRead::from_view(view)).is_none());
 
-    // Declined: a device placement is refused by the CPU backend, so the eager
-    // path must decline and let the session report that typed error.
-    let mut placed =
-        TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]).map_err(Error::from)?;
-    placed.set_placement(Placement {
-        memory_kind: MemoryKind::Device,
-        device: None,
-        cpu_affinity: None,
-    });
-    let placed = Tensor::from_typed(placed);
+    // Declined: device memory is refused by the CPU backend, so the eager path
+    // must decline and let the session report that typed error. The payload is a
+    // backend buffer rather than a host tensor with a device label, because a
+    // host payload is host memory whatever the label says.
+    let placed = Tensor::from_typed::<f64>(
+        TypedTensor::<f64>::from_buffer_col_major(
+            vec![1],
+            tenferro_tensor::StorageBuffer::Backend(Box::new(
+                tenferro_tensor::BackendStorageHandle::<f64>::new_with_len(51, 1),
+            )),
+            Placement {
+                memory_kind: MemoryKind::Device,
+                device: None,
+                cpu_affinity: None,
+            },
+        )
+        .map_err(Error::from)?,
+    );
     assert!(cpu_host_owned_read(&TensorRead::from_tensor(&placed)).is_none());
     assert!(tenferro_cpu::CpuEngine::serial()
         .to_contiguous_read(TensorRead::from_tensor(&placed))

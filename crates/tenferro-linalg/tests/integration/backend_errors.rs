@@ -1483,3 +1483,99 @@ fn cpu_solve_read_covers_direct_vector_and_matrix_rhs_views() {
         assert_eq!(f64_values(&matrix_output), vec![2.0, 2.0, 4.0, 3.0]);
     });
 }
+
+/// One tensor, two entry points, one verdict (#2484).
+///
+/// The CPU provider used to ask `Placement::memory_kind` while linalg asked
+/// `TensorRead::try_host`, so the same tensor could be host memory to one and
+/// device memory to the other. Both now ask `is_host_memory`, which reads the
+/// payload, so this test pins the agreement: accepted together, refused
+/// together, with the same error kind.
+#[test]
+fn cpu_and_linalg_give_one_verdict_for_the_same_tensor() {
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    support::with_cpu_linalg(&mut backend, |backend| {
+        // Host payload: both entry points accept it, and the answer is the
+        // payload's, not a label's.
+        let host = f64_tensor(vec![2, 2], vec![4.0, 2.0, 2.0, 3.0]);
+        assert!(host.is_host_memory(), "a plain host owner is host memory");
+        assert!(
+            TensorRead::from_tensor(&host).is_host_memory(),
+            "the read target answers what the owner answers"
+        );
+        backend
+            .to_contiguous_read(TensorRead::from_tensor(&host))
+            .expect("the CPU provider accepts a host payload");
+        host.cholesky(backend)
+            .expect("linalg accepts the same host payload");
+
+        // A host payload labelled with a memory class the label check used to
+        // refuse: `Other` is not `PinnedHost` or `UnpinnedHost`, so the retired
+        // CPU rule rejected it while linalg already accepted it. The payload
+        // decides now, so both accept.
+        let mut other_labelled = f64_tensor(vec![2, 2], vec![4.0, 2.0, 2.0, 3.0]);
+        other_labelled
+            .as_typed_mut::<f64>()
+            .expect("an f64 tensor")
+            .set_placement(Placement {
+                memory_kind: MemoryKind::Other("shared-host".to_owned()),
+                device: None,
+                cpu_affinity: None,
+            })
+            .expect("an unmodelled class may label a host payload");
+        backend
+            .to_contiguous_read(TensorRead::from_tensor(&other_labelled))
+            .expect("the CPU provider accepts the payload whatever the unmodelled class");
+        other_labelled
+            .cholesky(backend)
+            .expect("linalg accepts the same payload");
+
+        // Device payload: both entry points refuse it as "download first", and
+        // with the same error kind, so no surface silently copies.
+        let device = backend_f64_tensor(vec![2, 2], 907);
+        assert!(
+            !device.is_host_memory(),
+            "a backend buffer is not host memory"
+        );
+        let cpu_err = backend
+            .to_contiguous_read(TensorRead::from_tensor(&device))
+            .expect_err("the CPU provider must refuse device memory");
+        let linalg_err = device
+            .cholesky(backend)
+            .expect_err("linalg must refuse device memory");
+        assert_eq!(
+            cpu_err.kind(),
+            ErrorKind::RuntimeState,
+            "the CPU refusal is a runtime-state error"
+        );
+        assert_eq!(
+            cpu_err.kind(),
+            linalg_err.kind(),
+            "both surfaces report the same verdict kind for one tensor"
+        );
+        assert!(
+            cpu_err.to_string().contains("download") && linalg_err.to_string().contains("download"),
+            "both refusals name the download: {cpu_err} / {linalg_err}"
+        );
+    });
+}
+
+/// The contradictory label the CPU and linalg used to disagree about is refused
+/// where it is written, so the disagreement cannot be constructed at all.
+#[test]
+fn a_host_payload_cannot_be_relabelled_as_device_memory() {
+    let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    let err = tensor
+        .set_placement(Placement {
+            memory_kind: MemoryKind::Device,
+            device: None,
+            cpu_affinity: None,
+        })
+        .expect_err("a device label contradicts a plain host payload");
+    assert_eq!(err.kind(), ErrorKind::RuntimeState);
+    assert_eq!(
+        tensor.placement().memory_kind,
+        MemoryKind::UnpinnedHost,
+        "the refused relabel stores nothing"
+    );
+}

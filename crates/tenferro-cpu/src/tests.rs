@@ -46,6 +46,34 @@ fn with_cpu_engine_checks_exact_marker_and_scopes_borrow() {
     assert_eq!(value, 17);
 }
 
+/// A device placement: the label a backend buffer carries.
+fn opaque_backend_placement() -> tenferro_tensor::Placement {
+    tenferro_tensor::Placement {
+        memory_kind: tenferro_tensor::MemoryKind::Device,
+        device: None,
+        cpu_affinity: None,
+    }
+}
+
+/// A tensor whose payload is a backend buffer, labelled as one.
+///
+/// `set_placement` refuses a device label on host storage, so a test that needs
+/// "the CPU provider receives device memory" must build device memory.
+fn backend_buffer_tensor<T: tenferro_tensor::TensorScalar + Send + Sync + 'static>(
+    shape: Vec<usize>,
+    handle_id: u64,
+) -> TypedTensor<T> {
+    let len = shape.iter().product();
+    TypedTensor::<T>::from_buffer_col_major(
+        shape,
+        tenferro_tensor::StorageBuffer::Backend(Box::new(
+            tenferro_tensor::BackendStorageHandle::<T>::new_with_len(handle_id, len),
+        )),
+        opaque_backend_placement(),
+    )
+    .expect("a backend buffer carries a device placement")
+}
+
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
     *t.as_typed::<f64>()
         .expect("expected F64 tensor")

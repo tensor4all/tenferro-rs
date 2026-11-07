@@ -359,28 +359,34 @@ fn host_array_index_spelling_reports_an_out_of_bounds_write() {
     host[[2]] = 5;
 }
 #[test]
-fn into_host_resolves_a_device_label_instead_of_carrying_it() {
-    // `set_placement` can label the union however it likes, and one legitimate use is to label host
-    // memory as device-resident so that an entry point's refusal path can be exercised. The narrow to
-    // `Host` is where that contradiction ends: from there the type is the evidence, so the label must
-    // agree with the payload rather than be carried across.
+fn into_host_carries_a_label_that_already_agrees_with_the_payload() {
+    // A host payload cannot be labelled device-resident: `set_placement` refuses
+    // the contradiction, so the narrow to `Host` no longer has anything to
+    // launder. It carries the honest label across unchanged, and the type stays
+    // the evidence an entry point may rely on.
     let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    tensor.set_placement(Placement {
+    let refused = tensor.set_placement(Placement {
         memory_kind: tenferro_tensor::MemoryKind::Device,
         device: None,
         cpu_affinity: None,
     });
-    assert_eq!(
-        tensor.placement().memory_kind,
-        tenferro_tensor::MemoryKind::Device,
-        "the union keeps the label it was given"
+    assert!(
+        refused.is_err(),
+        "a device label on plain host storage is metadata contradicting the value"
     );
+    tensor
+        .set_placement(Placement {
+            memory_kind: tenferro_tensor::MemoryKind::PinnedHost,
+            device: None,
+            cpu_affinity: None,
+        })
+        .expect("pinned host memory describes the payload");
 
     let host = tensor.into_host().unwrap();
     assert_eq!(
         host.placement().memory_kind,
-        tenferro_tensor::MemoryKind::UnpinnedHost,
-        "a host payload cannot come out of the narrow still labelled device-resident"
+        tenferro_tensor::MemoryKind::PinnedHost,
+        "the narrow carries the label a host payload can have"
     );
     assert_eq!(host.as_slice(), &[1.0, 2.0]);
 }

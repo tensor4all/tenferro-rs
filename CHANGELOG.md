@@ -60,6 +60,32 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **One host/device answer: `is_host_memory()` on `TypedTensor`, its views,
+  `Tensor`, `TensorRead`, `TensorWrite` and `TensorViewMut`** (#2484). The
+  payload decides — a plain host owner, a host slice and a CPU-resident
+  allocation group are host memory, a backend buffer is not — and
+  `Placement::memory_kind` never does. `TensorRead::try_host`,
+  `try_mut_host`, the CPU provider's operand admission and linalg's borrowed
+  entries all run this one predicate, so a tensor can no longer be host memory
+  to linalg and device memory to the CPU provider. `TypedTensor::set_placement`
+  now returns `Result` and refuses `MemoryKind::Device` or `Managed` on a plain
+  host payload, which is the contradiction that made those two paths disagree;
+  a host payload keeps a host label instead of being rewritten on the way into
+  `Host`. The opposite direction stays legal: a backend handle is opaque to the
+  tensor crate and the runtime labels one with the caller's storage class, so
+  relabelling a backend payload is still accepted. Callers of `set_placement`
+  handle the `Result`; the pinned-host and CPU-affinity relabels it exists for
+  are unchanged.
+- **One mutable-layout legality rule: `TensorLayout::validate_mutable_no_overlap`
+  now runs `strided_view::is_injective_layout`** (#2484), the analysis that
+  already guards strided-rs' own mutable kernels, and `tenferro-tensor-core`
+  depends on `strided-view` for it. The local stride-span proof and its
+  4096-element exact-enumeration ceiling are gone, so an injective interleaved
+  layout such as `[3, 1500]` with strides `[2000, 3]` is accepted for writing
+  instead of being reported as `OverlappingMutableLayout`. Genuinely overlapping
+  layouts still get that error, and an element count that does not fit `usize`
+  still gets `IntegerOverflow`.
+
 - **`sum`, `sum of squares` and `prod` accept a zero-length reduced axis and
   return the fold's own unit** (#2453). `reduce_sum` / `reduce_prod` on a
   `[0, 2]` input over axis 0 now yields `[2]` filled with `0` / `1` instead of

@@ -106,7 +106,7 @@ fn pooled_identity<T: FaerLinalg>(
             }
         }
     }
-    identity.set_placement(placement.clone());
+    identity.set_placement(placement.clone())?;
     Ok(identity)
 }
 

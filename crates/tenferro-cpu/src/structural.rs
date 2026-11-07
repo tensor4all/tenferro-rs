@@ -7,8 +7,8 @@ use strided_kernel::{
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use tenferro_tensor::{
-    DType, MemoryKind, Placement, Tensor, TensorRank, TensorRead, TensorScalar, TensorView,
-    TypedTensor, TypedTensorView, TypedTensorViewMut,
+    DType, Tensor, TensorRank, TensorRead, TensorScalar, TensorView, TensorWrite, TypedTensor,
+    TypedTensorView, TypedTensorViewMut,
 };
 
 /// The Rust scalar type behind a preset variant name a macro received.
@@ -321,7 +321,7 @@ fn tensor_from_array_with_placement<T: TensorScalar + 'static>(
 ) -> crate::Result<TypedTensor<T>> {
     let shape = out.dims().to_vec();
     let mut output = TypedTensor::from_vec_col_major(shape, out.into_data())?;
-    output.set_placement(placement.clone());
+    output.set_placement(placement.clone())?;
     Ok(output)
 }
 
@@ -335,10 +335,7 @@ where
     T: Copy + Clone + PoolScalar + 'static,
     R: TensorRank,
 {
-    if view.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    validate_cpu_host_placement(op, "source", view.placement())?;
+    validate_cpu_host_view(op, "source", view)?;
     let src: StridedView<'_, T, Identity> = StridedView::new(
         view.host_storage()?,
         view.shape(),
@@ -355,7 +352,7 @@ where
         .map_err(|err| crate::Error::backend_source(op, err))?;
     // SAFETY: the successful copy replay writes every logical destination element.
     let mut out = unsafe { out.assume_init_as_recycled::<R>()? };
-    out.set_placement(view.placement().clone());
+    out.set_placement(view.placement().clone())?;
     Ok(out)
 }
 
@@ -385,11 +382,8 @@ where
             ));
         }
     }
-    if src.backend_buffer().is_some() || dst.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    validate_cpu_host_placement(op, "source", src.placement())?;
-    validate_cpu_host_placement(op, "destination", dst.placement())?;
+    validate_cpu_host_view(op, "source", src)?;
+    validate_cpu_host_view_mut(op, "destination", dst)?;
 
     let src_view: StridedView<'_, T, Identity> = StridedView::new(
         src.host_storage()?,
@@ -411,24 +405,53 @@ where
     copy_into(&mut dst_view, &src_view, exec).map_err(|err| crate::Error::backend_source(op, err))
 }
 
-pub(crate) fn validate_cpu_host_placement(
-    op: &'static str,
-    role: &'static str,
-    placement: &Placement,
-) -> crate::Result<()> {
-    if matches!(
-        placement.memory_kind,
-        MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
-    ) {
+/// The one CPU admission rule for an operand, applied to every operand type.
+///
+/// `is_host` must come from the payload predicate (`is_host_memory` on the read,
+/// write, view or mutable view), never from `Placement::memory_kind`. linalg
+/// reaches the same predicate through `TensorRead::try_host`, so the two
+/// surfaces cannot disagree about one tensor.
+fn require_host_memory(op: &'static str, role: &'static str, is_host: bool) -> crate::Result<()> {
+    if is_host {
         return Ok(());
     }
-    Err(crate::Error::runtime_state(
-        op,
-        format!(
-            "CPU backend requires {role} host placement for {op}, got {:?}",
-            placement.memory_kind
-        ),
-    ))
+    Err(crate::cpu_non_host_operand_error(op, role))
+}
+
+/// Reject a read operand the CPU provider cannot address in place.
+pub(crate) fn validate_cpu_host_read(
+    op: &'static str,
+    role: &'static str,
+    read: &TensorRead<'_>,
+) -> crate::Result<()> {
+    require_host_memory(op, role, read.is_host_memory())
+}
+
+/// Reject a write operand the CPU provider cannot address in place.
+pub(crate) fn validate_cpu_host_write(
+    op: &'static str,
+    role: &'static str,
+    out: &TensorWrite<'_>,
+) -> crate::Result<()> {
+    require_host_memory(op, role, out.is_host_memory())
+}
+
+/// Reject a typed read view the CPU provider cannot address in place.
+pub(crate) fn validate_cpu_host_view<T: 'static, R: TensorRank>(
+    op: &'static str,
+    role: &'static str,
+    view: &TypedTensorView<'_, T, R>,
+) -> crate::Result<()> {
+    require_host_memory(op, role, view.is_host_memory())
+}
+
+/// Reject a typed write view the CPU provider cannot address in place.
+pub(crate) fn validate_cpu_host_view_mut<T: 'static, R: TensorRank>(
+    op: &'static str,
+    role: &'static str,
+    view: &TypedTensorViewMut<'_, T, R>,
+) -> crate::Result<()> {
+    require_host_memory(op, role, view.is_host_memory())
 }
 
 #[cfg(test)]
@@ -1073,7 +1096,7 @@ where
         .map_err(|err| crate::Error::backend_source("transpose", err))?;
     // SAFETY: the successful transpose copy writes every logical destination element.
     let mut out = unsafe { out.assume_init_recycled()? };
-    out.set_placement(view.placement().clone());
+    out.set_placement(view.placement().clone())?;
     Ok(out)
 }
 
@@ -1106,7 +1129,7 @@ pub fn typed_reshape<T: Clone + TensorScalar + 'static>(
     // inputs whose copy the token's width gate (`reshape_uses_pool`) keeps serial
     // and any context that cannot parallelize the copy.
     let mut output = TypedTensor::from_vec_col_major(shape.to_vec(), tensor.host_data()?.to_vec())?;
-    output.set_placement(tensor.placement().clone());
+    output.set_placement(tensor.placement().clone())?;
     Ok(output)
 }
 
@@ -1146,7 +1169,7 @@ where
         .map_err(|err| crate::Error::backend_source("reshape", err))?;
     // SAFETY: the successful reshape copy writes every logical destination element.
     let mut out = unsafe { out.assume_init_recycled()? };
-    out.set_placement(view.placement().clone());
+    out.set_placement(view.placement().clone())?;
     Ok(out)
 }
 
@@ -1236,7 +1259,7 @@ where
     .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     // SAFETY: the successful broadcast copy writes every logical destination element.
     let mut out = unsafe { out.assume_init_recycled()? };
-    out.set_placement(view.placement().clone());
+    out.set_placement(view.placement().clone())?;
     Ok(out)
 }
 
@@ -1494,7 +1517,7 @@ where
     let op = if upper { "triu" } else { "tril" };
     let src = read_host_view(op, view)?;
     let mut out = triangular_mask_from_view(buffers, op, &src, k, upper, fill, exec)?;
-    out.set_placement(view.placement().clone());
+    out.set_placement(view.placement().clone())?;
     Ok(out)
 }
 
@@ -1659,7 +1682,7 @@ where
 
     let src = host_view(op, tensor)?;
     let mut out = triangular_mask_from_view(buffers, op, &src, k, upper, fill, exec)?;
-    out.set_placement(tensor.placement().clone());
+    out.set_placement(tensor.placement().clone())?;
     Ok(out)
 }
 

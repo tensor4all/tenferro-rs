@@ -2157,14 +2157,14 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
         } = self;
         match storage {
             // This is the only way a value becomes `TypedTensor<_, _, Host>`, so it is where the
-            // representation's one invariant is established: a host-backed tensor is never labelled
-            // device-resident. `set_placement` can write any `Placement` onto the union — that is what
-            // makes the union honest — but the narrowing must not carry the lie into the typed side,
-            // because an entry point that takes `Host` is entitled to trust it and skip a runtime
+            // representation's one invariant is established: a host-backed tensor never carries a
+            // device memory label. `TypedTensor::set_placement` refuses that label on host storage,
+            // and the buffers that reach here are built with a matching one, so the narrowing only
+            // has to move the payload across; an entry point that takes `Host` may skip a runtime
             // placement check (the CPU entry points narrow once, through `TensorRead::try_host`).
             DynamicStorage::Host(host) => Ok(TypedTensor {
                 shape,
-                placement: host_placement(placement),
+                placement,
                 layout,
                 storage: host,
             }),
@@ -2237,6 +2237,15 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
 impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
     /// Replace placement metadata without changing the storage buffer.
     ///
+    /// Placement is metadata on top of the payload, and it must describe it:
+    /// a plain host payload accepts [`MemoryKind::PinnedHost`],
+    /// [`MemoryKind::UnpinnedHost`] or [`MemoryKind::Other`], a backend payload
+    /// accepts [`MemoryKind::Device`], [`MemoryKind::Managed`] or
+    /// [`MemoryKind::Other`], and the two contradicting pairs are refused.
+    /// This is the only place a payload and a label meet after construction, so
+    /// refusing here is what lets every consumer answer "is this host memory?"
+    /// from the payload alone instead of re-reading the label.
+    ///
     /// Only the runtime union can be relabelled. A [`Host`] or [`Gpu`] owner
     /// keeps the placement it was built with; move it through `into_dynamic()`
     /// first to relabel it.
@@ -2250,7 +2259,7 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust
     /// use tenferro_tensor::{MemoryKind, Placement, TypedTensor};
     ///
     /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]).unwrap();
@@ -2258,11 +2267,24 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
     ///     memory_kind: MemoryKind::PinnedHost,
     ///     device: None,
     ///     cpu_affinity: None,
-    /// });
+    /// })?;
     /// assert_eq!(t.placement().memory_kind, MemoryKind::PinnedHost);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn set_placement(&mut self, placement: Placement) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when `placement.memory_kind`
+    /// names a memory class the payload cannot be, and stores nothing in that
+    /// case.
+    pub fn set_placement(&mut self, placement: Placement) -> crate::Result<()> {
+        validate_placement_for_payload(
+            "TypedTensor::set_placement",
+            self.is_host_memory(),
+            &placement,
+        )?;
         self.placement = placement;
+        Ok(())
     }
 
     /// Replace only CPU routing/locality metadata without changing storage.
@@ -2282,6 +2304,35 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
     /// ```
     pub fn set_cpu_affinity(&mut self, cpu_affinity: Option<CpuDomainId>) {
         self.placement.cpu_affinity = cpu_affinity;
+    }
+
+    /// Whether this owner's payload is host-addressed memory.
+    ///
+    /// This is the one host/device answer in the workspace: the payload
+    /// decides, never [`Placement::memory_kind`]. A plain host payload and a
+    /// CPU-resident allocation group are host memory; a group backed by another
+    /// provider is not. CPU and linalg entry points both ask this question, so
+    /// a tensor cannot be host memory for one and device memory for the other.
+    /// [`Self::set_placement`] refuses a label this answer contradicts, so the
+    /// two never disagree.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let host = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+    /// assert!(host.is_host_memory());
+    /// assert!(host.as_view().is_host_memory());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_host_memory(&self) -> bool {
+        match &self.storage {
+            DynamicStorage::Host(_) => true,
+            // The same root fact `as_view()` reads to choose a host slice over a
+            // root handle, so an owner and its views cannot answer differently.
+            DynamicStorage::Group(core) => core.group.payload_is_host_memory(),
+        }
     }
 
     /// Layout that reflects the owned storage rather than the compact shape.
@@ -3190,14 +3241,47 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
 }
 
 impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R, Dynamic> {
+    /// The host elements this view borrows, or `None` when it borrows a
+    /// backend buffer.
+    ///
+    /// The one match that decides host memory for borrowed views. Both
+    /// [`Self::is_host_memory`] and [`Self::try_host`] read it, so the
+    /// predicate and the narrowing cannot drift apart.
+    fn host_elements(&self) -> Option<&'a [T]> {
+        match &self.buffer {
+            TensorStorageRef::Host(data) => Some(*data),
+            TensorStorageRef::Backend(_) | TensorStorageRef::Root(_) => None,
+        }
+    }
+
+    /// Whether this view borrows host-addressed memory.
+    ///
+    /// The same answer [`Self::try_host`] acts on and
+    /// [`TypedTensor::is_host_memory`] gives for the owner: the borrowed payload
+    /// decides, never [`Placement::memory_kind`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+    /// assert!(tensor.as_view().is_host_memory());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_host_memory(&self) -> bool {
+        self.host_elements().is_some()
+    }
+
     /// Checked narrowing of a borrowed view to the host representation.
     ///
     /// This is the one place a borrowed dynamic view becomes `Host`-marked: it
     /// succeeds exactly when the view borrows host elements (a plain host
-    /// owner, a host slice, or a CPU-resident allocation group), keeps the
-    /// layout, and resolves a device or managed placement label to host memory
-    /// the same way [`TypedTensor::into_host`] does. A consumer that receives
-    /// the result reads it through [`TypedTensorView::as_host_slice`] without a
+    /// owner, a host slice, or a CPU-resident allocation group) and keeps the
+    /// layout and the placement label. It runs [`Self::is_host_memory`], so a
+    /// CPU entry point that narrows here and a CPU entry point that validates
+    /// without narrowing reach the same verdict. A consumer that receives the
+    /// result reads it through [`TypedTensorView::as_host_slice`] without a
     /// further check.
     ///
     /// # Examples
@@ -3216,23 +3300,21 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R, Dynamic> {
     /// Returns [`crate::Error::RuntimeState`] attributed to `op` when the view
     /// borrows backend (device) storage; download the tensor to host first.
     pub fn try_host(self, op: &'static str) -> crate::Result<TypedTensorView<'a, T, R, Host>> {
-        match self.buffer {
-            TensorStorageRef::Host(data) => Ok(TypedTensorView {
-                buffer: TensorStorageRef::Host(data),
-                // A host-marked view carries no retained region: the borrow of
-                // `data` is what keeps the owner alive for `'a`.
-                root: None,
-                layout: self.layout,
-                placement: host_placement(self.placement),
-                _representation: std::marker::PhantomData,
-            }),
-            TensorStorageRef::Backend(_) | TensorStorageRef::Root(_) => {
-                Err(crate::Error::runtime_state(
-                    op,
-                    "CPU backend received a backend buffer; download the tensor to host before CPU execution",
-                ))
-            }
-        }
+        let Some(data) = self.host_elements() else {
+            return Err(crate::Error::runtime_state(
+                op,
+                "CPU backend received a backend buffer; download the tensor to host before CPU execution",
+            ));
+        };
+        Ok(TypedTensorView {
+            buffer: TensorStorageRef::Host(data),
+            // A host-marked view carries no retained region: the borrow of
+            // `data` is what keeps the owner alive for `'a`.
+            root: None,
+            layout: self.layout,
+            placement: self.placement,
+            _representation: std::marker::PhantomData,
+        })
     }
 }
 
@@ -3869,7 +3951,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
         let shape = R::shape_from_vec(shape_vec(self.shape()))
             .map_err(|err| tensor_layout_error("TypedTensorView::duplicate", err))?;
         let mut tensor = TypedTensor::from_vec_col_major(shape, data)?;
-        tensor.set_placement(self.placement.clone());
+        tensor.set_placement(self.placement.clone())?;
         Ok(tensor)
     }
 
@@ -3917,7 +3999,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
         let shape = R::shape_from_vec(shape_vec(self.shape()))
             .map_err(|err| tensor_layout_error("TypedTensorView::to_col_major", err))?;
         let mut tensor = TypedTensor::from_vec_col_major(shape, copied)?;
-        tensor.set_placement(self.placement.clone());
+        tensor.set_placement(self.placement.clone())?;
         Ok(tensor)
     }
 
@@ -4486,15 +4568,32 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
 }
 
 impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R, Dynamic> {
+    /// Whether this mutable view writes host-addressed memory.
+    ///
+    /// The one host/device answer for a write target, decided by the borrowed
+    /// payload and never by [`Placement::memory_kind`]; it is the same answer
+    /// [`Self::try_mut_host`] acts on.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+    /// assert!(tensor.as_view_mut().is_host_memory());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_host_memory(&self) -> bool {
+        matches!(self.buffer, TensorStorageRefMut::Host(_))
+    }
+
     /// Checked narrowing of a mutable view to the host representation.
     ///
     /// The mutable counterpart of [`TypedTensorView::try_host`]: it succeeds
-    /// exactly when the view borrows host elements (a plain host owner, a host
-    /// slice, or a CPU-resident allocation group), keeps the layout, and
-    /// resolves a device or managed placement label to host memory the same
-    /// way [`TypedTensor::into_host`] does. A consumer that receives the result
-    /// writes it through [`TypedTensorViewMut::as_host_slice_mut`] without a
-    /// further check.
+    /// exactly when the view writes host elements (a plain host owner, a host
+    /// slice, or a CPU-resident allocation group) and keeps the layout and the
+    /// placement label. A consumer that receives the result writes it through
+    /// [`TypedTensorViewMut::as_host_slice_mut`] without a further check.
     ///
     /// # Examples
     ///
@@ -4524,7 +4623,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R, Dynamic> {
                 // the group child has no drop-time obligation.
                 root: None,
                 layout: self.layout,
-                placement: host_placement(self.placement),
+                placement: self.placement,
                 _representation: std::marker::PhantomData,
             }),
             TensorStorageRefMut::Backend(_) => Err(crate::Error::runtime_state(
@@ -6225,6 +6324,11 @@ pub struct Tensor {
 }
 
 impl<R: TensorRank> OwnedTensorGroup<R> {
+    /// Whether this group's slot is host-addressed memory.
+    fn payload_is_host_memory(&self) -> bool {
+        !self.group.slot_root_is_backend(self.slot)
+    }
+
     /// Whether this group's descriptor names a non-CPU provider.
     fn is_backend_buffer(&self) -> bool {
         !matches!(
@@ -8292,7 +8396,7 @@ impl<'a> TensorView<'a> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust
     /// use tenferro_tensor::TensorView;
     ///
     /// let view = TensorView::f64(&[1], &[1.0])?;
@@ -8308,6 +8412,32 @@ impl<'a> TensorView<'a> {
             Self::Bool(t) => t.backend_family(),
             Self::C32(t) => t.backend_family(),
             Self::C64(t) => t.backend_family(),
+        }
+    }
+
+    /// Return whether this view borrows host-addressed memory.
+    ///
+    /// See [`TypedTensorView::is_host_memory`]; the borrowed payload answers,
+    /// not the placement label.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TensorView;
+    ///
+    /// let view = TensorView::f64(&[1], &[1.0])?;
+    /// assert!(view.is_host_memory());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_host_memory(&self) -> bool {
+        match self {
+            Self::F32(t) => t.is_host_memory(),
+            Self::F64(t) => t.is_host_memory(),
+            Self::I32(t) => t.is_host_memory(),
+            Self::I64(t) => t.is_host_memory(),
+            Self::Bool(t) => t.is_host_memory(),
+            Self::C32(t) => t.is_host_memory(),
+            Self::C64(t) => t.is_host_memory(),
         }
     }
 
@@ -8463,7 +8593,7 @@ impl<'a> TensorView<'a> {
                 view.shape().to_vec(),
                 view.as_slice()?.to_vec(),
             )?;
-            tensor.set_placement(view.placement().clone());
+            tensor.set_placement(view.placement().clone())?;
             Ok(tensor)
         }
 
@@ -8564,6 +8694,33 @@ impl<'a> TensorViewMut<'a> {
             Self::Bool(t) => t.offset(),
             Self::C32(t) => t.offset(),
             Self::C64(t) => t.offset(),
+        }
+    }
+
+    /// Return whether this mutable view writes host-addressed memory.
+    ///
+    /// See [`TypedTensorViewMut::is_host_memory`]; it is the same answer
+    /// [`Self::try_mut_host`] acts on.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TensorViewMut;
+    ///
+    /// let mut data = [1.0_f64, 2.0];
+    /// let view = TensorViewMut::f64(&[2], &mut data)?;
+    /// assert!(view.is_host_memory());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_host_memory(&self) -> bool {
+        match self {
+            Self::F32(t) => t.is_host_memory(),
+            Self::F64(t) => t.is_host_memory(),
+            Self::I32(t) => t.is_host_memory(),
+            Self::I64(t) => t.is_host_memory(),
+            Self::Bool(t) => t.is_host_memory(),
+            Self::C32(t) => t.is_host_memory(),
+            Self::C64(t) => t.is_host_memory(),
         }
     }
 
@@ -8931,6 +9088,29 @@ impl<'a> TensorRead<'a> {
         match self {
             Self::Tensor(tensor) => tensor.placement(),
             Self::View(view) => view.placement(),
+        }
+    }
+
+    /// Return whether this read target borrows host-addressed memory.
+    ///
+    /// The one host/device answer a CPU entry point needs, decided by the
+    /// payload and never by [`Placement::memory_kind`]; it is the same answer
+    /// [`Self::try_host`] acts on, and the same one
+    /// [`TypedTensor::is_host_memory`] gives for an owner.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// assert!(TensorRead::from_tensor(&tensor).is_host_memory());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_host_memory(&self) -> bool {
+        match self {
+            Self::Tensor(tensor) => tensor.is_host_memory(),
+            Self::View(view) => view.is_host_memory(),
         }
     }
 
@@ -9349,6 +9529,28 @@ impl<'a> TensorWrite<'a> {
         match self {
             Self::Tensor(tensor) => Ok(col_major_strides(tensor.shape())?.into_vec()),
             Self::View(view) => Ok(view.strides().to_vec()),
+        }
+    }
+
+    /// Return whether this write target writes host-addressed memory.
+    ///
+    /// The one host/device answer for an output, decided by the payload and
+    /// never by [`Placement::memory_kind`]. It is the same answer
+    /// [`Self::try_mut_host`] acts on.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorWrite};
+    ///
+    /// let mut tensor = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2])?;
+    /// assert!(TensorWrite::from_tensor(&mut tensor).is_host_memory());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_host_memory(&self) -> bool {
+        match self {
+            Self::Tensor(tensor) => tensor.is_host_memory(),
+            Self::View(view) => view.is_host_memory(),
         }
     }
 
@@ -10013,22 +10215,42 @@ pub(crate) fn default_placement() -> Placement {
     }
 }
 
-/// Keep only the parts of `placement` a host-backed tensor can honestly carry.
+/// Refuse a label a payload demonstrably contradicts.
 ///
-/// A host tensor's storage is host memory, so `MemoryKind::Device` or `Managed` on one is metadata
-/// that contradicts the value. The union may hold that contradiction on purpose — a test fabricates
-/// it to check that an entry point refuses — but the narrow to `Host` resolves it, because from that
-/// point on the type is the evidence and no caller re-checks. `cpu_affinity` is real routing
-/// information for host memory and is kept.
-fn host_placement(placement: Placement) -> Placement {
-    match placement.memory_kind {
-        MemoryKind::PinnedHost | MemoryKind::UnpinnedHost => placement,
-        _ => Placement {
-            memory_kind: MemoryKind::UnpinnedHost,
-            device: None,
-            cpu_affinity: placement.cpu_affinity,
-        },
+/// One fact has one owner: the payload. A plain host payload is a Rust slice, so
+/// `MemoryKind::Device` or `Managed` on one names memory it definitely does not
+/// have; that is the contradiction this check refuses, and it is what keeps
+/// "host memory labelled device-resident" out of the workspace.
+///
+/// The opposite direction stays legal on purpose. A backend payload is an opaque
+/// [`BackendAllocation`](crate::BackendAllocation), so this crate cannot decide
+/// whether the handle is device memory or host-mapped; the runtime labels such a
+/// payload with the caller's storage class, and `MemoryKind::Other` is likewise
+/// unmodelled. Refusing those would turn a routing key into an unrepresentable
+/// state without removing a single alias risk.
+///
+/// Enforced where an owned tensor is built with an explicit placement and in
+/// [`TypedTensor::set_placement`], the only two ways a payload and a label meet.
+fn validate_placement_for_payload(
+    op: &'static str,
+    payload_is_host: bool,
+    placement: &Placement,
+) -> crate::Result<()> {
+    let contradicts = payload_is_host
+        && matches!(
+            placement.memory_kind,
+            MemoryKind::Device | MemoryKind::Managed
+        );
+    if contradicts {
+        return Err(crate::Error::runtime_state(
+            op,
+            format!(
+                "the placement says {:?} but the payload is plain host memory; a host payload cannot be device memory",
+                placement.memory_kind
+            ),
+        ));
     }
+    Ok(())
 }
 
 fn typed_tensor_from_vec_col_major<T, R: TensorRank>(
@@ -10157,14 +10379,17 @@ fn try_typed_tensor_from_buffer_col_major<
     let group_shape = R::shape_from_vec(shape_vec(layout.shape()))
         .map_err(|err| tensor_layout_error("from_buffer_col_major", err))?;
     match buffer {
-        StorageBuffer::Host(data) => Ok(TypedTensor {
-            shape: group_shape,
-            placement,
-            layout: stride_vec(layout.strides()),
-            storage: DynamicStorage::Host(HostStorage {
-                data: HostData::new(data),
-            }),
-        }),
+        StorageBuffer::Host(data) => {
+            validate_placement_for_payload("from_buffer_col_major", true, &placement)?;
+            Ok(TypedTensor {
+                shape: group_shape,
+                placement,
+                layout: stride_vec(layout.strides()),
+                storage: DynamicStorage::Host(HostStorage {
+                    data: HostData::new(data),
+                }),
+            })
+        }
         StorageBuffer::Backend(buffer) => {
             let group = OwnedTensorGroup::from_backend_buffer(
                 group_shape.clone(),
@@ -10539,7 +10764,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
                 .map_err(|err| tensor_layout_error("TypedTensor::duplicate", err))?,
             self.host_data()?.to_vec(),
         )?;
-        copy.set_placement(self.placement().clone());
+        copy.set_placement(self.placement().clone())?;
         Ok(copy)
     }
 
@@ -12081,6 +12306,32 @@ impl Tensor {
             }),
             // A caller-owned payload is host memory, never a backend buffer.
             TensorPayload::External(..) => false,
+        }
+    }
+
+    /// Return whether this tensor's payload is host-addressed memory.
+    ///
+    /// The one host/device answer, decided by the payload and never by
+    /// [`Placement::memory_kind`]: the same answer
+    /// [`TypedTensor::is_host_memory`] gives for a typed owner and
+    /// [`TensorRead::is_host_memory`] for a read target. A caller-owned payload
+    /// holds host bytes, so it is host memory; erasing its dtype, not its
+    /// placement, is what makes a preset-scalar view unavailable.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// assert!(t.is_host_memory());
+    /// assert!(TensorRead::from_tensor(&t).is_host_memory());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_host_memory(&self) -> bool {
+        match &self.payload {
+            TensorPayload::Native(preset) => with_preset!(preset, |typed| typed.is_host_memory()),
+            TensorPayload::External(..) => true,
         }
     }
 

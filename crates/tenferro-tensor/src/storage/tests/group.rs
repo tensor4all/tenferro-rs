@@ -554,7 +554,9 @@ fn set_placement_survives_the_allocation_group_round_trip() {
         device: None,
         cpu_affinity: Some(crate::CpuDomainId::new(3)),
     };
-    tensor.set_placement(placement.clone());
+    tensor
+        .set_placement(placement.clone())
+        .expect("pinned host memory describes the host payload");
     let tensor = crate::Tensor::from_typed(tensor);
 
     let (mut group, slots) = AllocationGroup::from_tensors(vec![tensor]).unwrap();
@@ -985,7 +987,12 @@ fn compact_slice_extraction_refuses_a_backend_owner() {
         // The label is not authority: relabelling a backend root as host must
         // not make its compact slice extractable.
         if relabel_as_host {
-            tensor.set_placement(host_label.clone());
+            // A backend handle is opaque to the tensor crate, so a host label on
+            // one is a routing key it cannot contradict. The extraction path
+            // must still refuse the owner, because the label is not authority.
+            tensor
+                .set_placement(host_label.clone())
+                .expect("a backend handle may carry a caller-chosen storage class");
         }
         let value = crate::TensorValue::from_tensor(crate::Tensor::from_typed(tensor))
             .slice_view(&crate::SliceConfig {

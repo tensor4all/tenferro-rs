@@ -352,7 +352,8 @@ pub(crate) fn cpu_negative_integer_exponent(op: &'static str, dtype: DType) -> c
 }
 
 pub(crate) use tenferro_cpu_basic::{
-    cpu_backend_buffer_error, typed_host_data, typed_view, typed_view_from_view,
+    cpu_backend_buffer_error, cpu_non_host_operand_error, typed_host_data, typed_view,
+    typed_view_from_view,
 };
 pub(crate) fn materialize_tensor_read_in_domain(
     buffers: &mut BufferPool,
@@ -578,14 +579,14 @@ pub(crate) fn copy_tensor_read_into(
 /// Clone one owned host tensor into a fresh allocation.
 ///
 /// The accepted inputs are: host placement and a preset scalar
-/// (`validate_cpu_host_placement` + `typed_host_data`). `tenferro-ad`'s eager
+/// (`validate_cpu_host_view` + `typed_host_data`). `tenferro-ad`'s eager
 /// leaf path states the same acceptance in `cpu_host_owned_read` so it can skip
 /// the session, and `host_leaf_materialization_matches_the_cpu_backend_acceptance`
 /// pins the two against each other. Change both together.
 fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> crate::Result<Tensor> {
     macro_rules! clone_host {
         ($variant:ident, $tensor:expr) => {{
-            structural::validate_cpu_host_placement(op, "source", $tensor.placement())?;
+            structural::validate_cpu_host_view(op, "source", &$tensor.as_view())?;
             typed_host_data(op, $tensor)?;
             $tensor
                 .duplicate()
