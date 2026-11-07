@@ -10,7 +10,7 @@
  *
  * The rule implemented here:
  *
- *   A waiver is a comment by someone with write access or better containing
+ *   A waiver is a comment by a maintainer containing
  *   `waive-review <40-character sha>`. It is valid only while that SHA is the
  *   pull request's current head. The label is a pointer for humans; it grants
  *   nothing on its own.
@@ -27,7 +27,9 @@
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 /** Repository roles fetched with `getCollaboratorPermissionLevel`. */
-const MAINTAINER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+// Narrower than "write": a waiver removes the LLM review gate for one head, and widening the set of
+// people who may do that is a policy change, not part of binding the waiver to a sha.
+const MAINTAINER_PERMISSIONS = new Set(["admin", "maintain"]);
 
 const FULL_SHA = /^[0-9a-fA-F]{40}$/;
 

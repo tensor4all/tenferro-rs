@@ -330,9 +330,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(
             'new Set(["OWNER", "MEMBER", "COLLABORATOR"])', waiver
         )
+        # The sha binding is the fix; the set of people who may waive stays as it
+        # was (admin/maintain). Widening it to `write` would be a policy change
+        # riding along in a security patch, so the contract pins the narrow set.
         self.assertIn(
-            'new Set(["admin", "maintain", "write"])', waiver
+            'new Set(["admin", "maintain"])', waiver
         )
+        self.assertNotIn('"write"]', waiver)
         self.assertIn("getCollaboratorPermissionLevel", waiver)
         self.assertIn(".role_name", waiver)
         self.assertNotIn("data.permission", waiver)
