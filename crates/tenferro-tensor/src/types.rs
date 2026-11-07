@@ -1119,21 +1119,60 @@ pub trait Representation: representation_sealed::Sealed + 'static {
     /// Owned payload stored for this representation.
     #[doc(hidden)]
     type Storage<T, R: TensorRank>;
+
+    /// Placement given to an owner of this representation built without one.
+    ///
+    /// Placement metadata is fixed when a [`Host`] or [`Gpu`] owner is built:
+    /// only a [`Dynamic`] owner can replace it afterwards, through
+    /// [`TypedTensor::set_placement`]. [`Host`] constructors use this
+    /// placement, unpinned host memory with no device and no CPU affinity.
+    /// [`Gpu`] and [`Dynamic`] use the same default when no placement is
+    /// supplied; a device-resident owner receives its device placement from
+    /// the constructor that adopts the backend buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, MemoryKind, Representation, TypedTensor};
+    ///
+    /// let expected = <Host as Representation>::default_placement();
+    /// assert_eq!(expected.memory_kind, MemoryKind::UnpinnedHost);
+    /// assert!(expected.device.is_none());
+    /// let host = TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0])?;
+    /// assert_eq!(host.placement(), &expected);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn default_placement() -> Placement;
 }
 
 impl Representation for Host {
     #[doc(hidden)]
     type Storage<T, R: TensorRank> = HostStorage<T>;
+
+    fn default_placement() -> Placement {
+        default_placement()
+    }
 }
 
 impl Representation for Gpu {
     #[doc(hidden)]
     type Storage<T, R: TensorRank> = GroupStorage<R>;
+
+    fn default_placement() -> Placement {
+        // The only Gpu constructor without an explicit placement is
+        // `TypedTensor<_, _, Host>::promote`, which keeps the host owner's
+        // placement: unpinned host memory on the CPU provider.
+        default_placement()
+    }
 }
 
 impl Representation for Dynamic {
     #[doc(hidden)]
     type Storage<T, R: TensorRank> = DynamicStorage<T, R>;
+
+    fn default_placement() -> Placement {
+        default_placement()
+    }
 }
 
 /// Directly owned plain or pooled host elements.
@@ -1237,7 +1276,7 @@ fn typed_host_tensor_from_vec_col_major<T, R: TensorRank>(
     try_checked_shape_len(shape.as_ref(), data.len(), op)?;
     Ok(TypedTensor {
         shape,
-        placement: default_placement(),
+        placement: <Host as Representation>::default_placement(),
         layout,
         storage: HostStorage {
             data: HostData::new(data),
@@ -2190,6 +2229,55 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
 }
 
 impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
+    /// Replace placement metadata without changing the storage buffer.
+    ///
+    /// Only the runtime union can be relabelled. A [`Host`] or [`Gpu`] owner
+    /// keeps the placement it was built with; move it through `into_dynamic()`
+    /// first to relabel it.
+    ///
+    /// ```compile_fail
+    /// use tenferro_tensor::{DynRank, Host, Placement, TypedTensor};
+    /// let mut host = TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0])?;
+    /// host.set_placement(Placement::default());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryKind, Placement, TypedTensor};
+    ///
+    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]).unwrap();
+    /// t.set_placement(Placement {
+    ///     memory_kind: MemoryKind::PinnedHost,
+    ///     device: None,
+    ///     cpu_affinity: None,
+    /// });
+    /// assert_eq!(t.placement().memory_kind, MemoryKind::PinnedHost);
+    /// ```
+    pub fn set_placement(&mut self, placement: Placement) {
+        self.placement = placement;
+    }
+
+    /// Replace only CPU routing/locality metadata without changing storage.
+    ///
+    /// Device, memory kind, backend allocation domain, and allocation identity
+    /// remain unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{CpuDomainId, TypedTensor};
+    ///
+    /// let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0])?;
+    /// tensor.set_cpu_affinity(Some(CpuDomainId::new(4)));
+    /// assert_eq!(tensor.placement().cpu_affinity, Some(CpuDomainId::new(4)));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn set_cpu_affinity(&mut self, cpu_affinity: Option<CpuDomainId>) {
+        self.placement.cpu_affinity = cpu_affinity;
+    }
+
     /// Layout that reflects the owned storage rather than the compact shape.
     ///
     /// [`Self::layout`] reports the compact construction layout. A
@@ -2342,44 +2430,6 @@ impl<T, R: TensorRank, D: Representation> TypedTensor<T, R, D> {
     /// ```
     pub fn placement(&self) -> &Placement {
         &self.placement
-    }
-
-    /// Replace placement metadata without changing the storage buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::{MemoryKind, Placement, TypedTensor};
-    ///
-    /// let mut t = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0]).unwrap();
-    /// t.set_placement(Placement {
-    ///     memory_kind: MemoryKind::PinnedHost,
-    ///     device: None,
-    ///     cpu_affinity: None,
-    /// });
-    /// assert_eq!(t.placement().memory_kind, MemoryKind::PinnedHost);
-    /// ```
-    pub fn set_placement(&mut self, placement: Placement) {
-        self.placement = placement;
-    }
-
-    /// Replace only CPU routing/locality metadata without changing storage.
-    ///
-    /// Device, memory kind, backend allocation domain, and allocation identity
-    /// remain unchanged.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::{CpuDomainId, TypedTensor};
-    ///
-    /// let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0])?;
-    /// tensor.set_cpu_affinity(Some(CpuDomainId::new(4)));
-    /// assert_eq!(tensor.placement().cpu_affinity, Some(CpuDomainId::new(4)));
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn set_cpu_affinity(&mut self, cpu_affinity: Option<CpuDomainId>) {
-        self.placement.cpu_affinity = cpu_affinity;
     }
 
     /// Compute the checked compact column-major offset of an element.

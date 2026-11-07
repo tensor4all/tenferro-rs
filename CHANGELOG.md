@@ -37,6 +37,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`TypedTensor::set_placement` and `set_cpu_affinity` exist only on the
+  `Dynamic` representation.** A `Host` or `Gpu` owner keeps the placement it was
+  built with, so a statically host-owned tensor can no longer be relabelled as
+  device memory; only the runtime union can carry a placement that disagrees with
+  its storage. `Representation` gains `default_placement()`, the placement a
+  representation's owner receives when none is supplied (unpinned host memory,
+  no device, no CPU affinity, for all three). Migration: relabel through
+  `into_dynamic()`, as in `let mut t = host.into_dynamic(); t.set_placement(p);`.
+  Every in-repository caller already held a `Dynamic` tensor.
 - **The dependency pins move to the `threadteam` 0.5 line** (#2494):
   `threadteam` 0.5.1, `strided-{basic,perm,kernel,nn,fused}` 0.12.0,
   `strided-view` 0.7.1, `t4a-faer` 0.32.0, `tcontract-exec` 0.11.0,
