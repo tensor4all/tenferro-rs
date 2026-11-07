@@ -44,9 +44,17 @@ type PublicSvd<T> = (
 /// the public face of the same four scalars is [`crate::LinalgScalar`], whose sealed supertrait
 /// routes the borrowed entries here.
 pub(crate) trait FaerLinalg:
-    tlinalg::FaerScalar + PoolScalar + Default + PartialEq + std::ops::Mul<Output = Self>
+    tlinalg::FaerScalar<Real = Self::RealScalar>
+    + PoolScalar
+    + Default
+    + PartialEq
+    + std::ops::Mul<Output = Self>
 {
     /// The real scalar of singular values and Hermitian eigenvalues.
+    ///
+    /// Pinned to the provider's own `ScalarEntity::Real` by the supertrait binding above: tlinalg
+    /// 0.10 writes the spectrum in that type, and without the equality the two associated types are
+    /// merely equal per impl rather than interchangeable, so a buffer of one cannot fill the other.
     type RealScalar: PoolScalar + Default;
     /// The complex scalar of general eigenvalues and eigenvectors.
     type ComplexScalar: PoolScalar + Default;
@@ -80,16 +88,6 @@ pub(crate) trait FaerLinalg:
         workspace: &mut [core::mem::MaybeUninit<u8>],
         exec: &mut Exec<'_>,
     ) -> tlinalg::Result<()>;
-    /// A spectrum the provider wrote in `Self`, as a tensor of the real scalar.
-    ///
-    /// The identity for a real scalar. For a complex scalar it is one pooled pass that copies the
-    /// real parts into a lease of `buffers`; the `Self` tensor returns to the pool when it drops.
-    fn real_spectrum(
-        buffers: &BufferPool,
-        op: &'static str,
-        role: &'static str,
-        spectrum: TypedTensor<Self>,
-    ) -> tenferro_tensor::Result<TypedTensor<Self::RealScalar>>;
     /// The general eigendecomposition, whose outputs are in the complex counterpart.
     fn eig_batch(
         input: RawStridedRef<'_, Self>,
@@ -112,28 +110,6 @@ pub(crate) trait FaerLinalg:
     ) -> tenferro_tensor::Result<()>;
 }
 
-/// Copy the real parts of a complex spectrum into a pooled real lease, keeping its placement.
-// TODO(tlinalg): `svd_into` and `eigh_into` (tlinalg 0.9) write the spectrum in the input scalar.
-// When tlinalg takes a real-spectrum slot, lease the real tensor directly and delete this pass.
-fn gather_real_parts<C: PoolScalar, R: PoolScalar>(
-    buffers: &BufferPool,
-    op: &'static str,
-    role: &'static str,
-    spectrum: TypedTensor<C>,
-    real_part: impl Fn(C) -> R,
-) -> tenferro_tensor::Result<TypedTensor<R>> {
-    let mut real = pooled_output::<R>(buffers, op, role, spectrum.shape())?;
-    // INVARIANT: both tensors are compact with the same shape, so the zip writes every slot.
-    for (slot, &value) in real
-        .as_uninit_slice_mut()
-        .iter_mut()
-        .zip(spectrum.host_data()?)
-    {
-        slot.write(real_part(value));
-    }
-    tensor_from_lease(real, spectrum.placement())
-}
-
 macro_rules! impl_faer_linalg {
     (
         $scalar:ty,
@@ -145,8 +121,7 @@ macro_rules! impl_faer_linalg {
         |$f:ident| $is_finite:expr,
         $to_faer:ident,
         $to_faer_mut:ident,
-        $complex:ty,
-        |$buffers:ident, $op:ident, $role:ident, $spectrum:ident| $real_spectrum:expr
+        $complex:ty
     ) => {
         impl FaerLinalg for $scalar {
             type RealScalar = $real;
@@ -240,15 +215,6 @@ macro_rules! impl_faer_linalg {
                 tlinalg::eigh::eigh_values_into(Op::EighValues, input, values, workspace, exec)
             }
 
-            fn real_spectrum(
-                $buffers: &BufferPool,
-                $op: &'static str,
-                $role: &'static str,
-                $spectrum: TypedTensor<Self>,
-            ) -> tenferro_tensor::Result<TypedTensor<$real>> {
-                $real_spectrum
-            }
-
             fn eig_batch(
                 input: RawStridedRef<'_, Self>,
                 values: &mut [core::mem::MaybeUninit<$complex>],
@@ -337,8 +303,7 @@ impl_faer_linalg!(
     |value| value.is_finite(),
     same_slice,
     same_slice_mut,
-    Complex32,
-    |_buffers, _op, _role, spectrum| Ok(spectrum)
+    Complex32
 );
 impl_faer_linalg!(
     f64,
@@ -350,8 +315,7 @@ impl_faer_linalg!(
     |value| value.is_finite(),
     same_slice,
     same_slice_mut,
-    Complex64,
-    |_buffers, _op, _role, spectrum| Ok(spectrum)
+    Complex64
 );
 impl_faer_linalg!(
     Complex32,
@@ -377,14 +341,7 @@ impl_faer_linalg!(
     |value| value.re.is_finite() && value.im.is_finite(),
     complex32_to_faer_slice,
     complex32_to_faer_slice_mut,
-    Complex32,
-    |buffers, op, role, spectrum| gather_real_parts(
-        buffers,
-        op,
-        role,
-        spectrum,
-        |value: Complex32| value.re
-    )
+    Complex32
 );
 impl_faer_linalg!(
     Complex64,
@@ -410,14 +367,7 @@ impl_faer_linalg!(
     |value| value.re.is_finite() && value.im.is_finite(),
     complex64_to_faer_slice,
     complex64_to_faer_slice_mut,
-    Complex64,
-    |buffers, op, role, spectrum| gather_real_parts(
-        buffers,
-        op,
-        role,
-        spectrum,
-        |value: Complex64| value.re
-    )
+    Complex64
 );
 
 // ---------------------------------------------------------------------------------------------

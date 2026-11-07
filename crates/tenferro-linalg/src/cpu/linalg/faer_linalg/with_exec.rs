@@ -56,7 +56,9 @@ pub(crate) fn svd_typed<T: FaerLinalg>(
     }
     let batch = checked_product(op, "batch shape", batch_shape)?;
     let mut u = pooled_output::<T>(buffers, "svd", "left singular vectors", &u_shape)?;
-    let mut s = pooled_output::<T>(buffers, "svd", "singular values", &s_shape)?;
+    // tlinalg 0.10 writes the spectrum in the real scalar (#101), so the lease is the output:
+    // no gather of real parts after the call.
+    let mut s = pooled_output::<T::RealScalar>(buffers, "svd", "singular values", &s_shape)?;
     let mut vt = pooled_output::<T>(buffers, "svd", "right singular vectors", &vt_shape)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
@@ -73,15 +75,9 @@ pub(crate) fn svd_typed<T: FaerLinalg>(
         exec,
     )
     .map_err(provider(Op::Svd))?;
-    let s = T::real_spectrum(
-        buffers,
-        op,
-        "singular values",
-        tensor_from_lease(s, placement)?,
-    )?;
     Ok((
         tensor_from_lease(u, placement)?,
-        s,
+        tensor_from_lease(s, placement)?,
         tensor_from_lease(vt, placement)?,
     ))
 }
@@ -193,7 +189,7 @@ pub(crate) fn eigh_typed<T: FaerLinalg>(
             tensor_from_vec_with_template(vectors_shape, Vec::new(), placement)?,
         ));
     }
-    let mut values = pooled_output::<T>(buffers, OP, "eigenvalues", &values_shape)?;
+    let mut values = pooled_output::<T::RealScalar>(buffers, OP, "eigenvalues", &values_shape)?;
     let mut vectors = pooled_output::<T>(buffers, OP, "eigenvectors", &vectors_shape)?;
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut workspace = pooled_workspace::<T>(
@@ -209,13 +205,10 @@ pub(crate) fn eigh_typed<T: FaerLinalg>(
         exec,
     )
     .map_err(provider(Op::Eigh))?;
-    let values = T::real_spectrum(
-        buffers,
-        OP,
-        "eigenvalues",
+    Ok((
         tensor_from_lease(values, placement)?,
-    )?;
-    Ok((values, tensor_from_lease(vectors, placement)?))
+        tensor_from_lease(vectors, placement)?,
+    ))
 }
 
 pub(crate) fn eigh_values_typed<T: FaerLinalg>(
