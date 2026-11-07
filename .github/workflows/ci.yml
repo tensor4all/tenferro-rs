@@ -297,6 +297,9 @@ jobs:
       - name: Test the review waiver decision
         if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
         run: node --test scripts/test-review-waiver.js
+      - name: Test the repository rules review gate
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
+        run: python3 scripts/test-repository-rules-review.py
       - name: Validate CI configuration
         if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
         env:
