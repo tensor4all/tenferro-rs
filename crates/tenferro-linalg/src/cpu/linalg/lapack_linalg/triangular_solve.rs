@@ -1,3 +1,4 @@
+use crate::cpu::linalg::HostView;
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::TypedTensor;
 use tlinalg_blas::triangular_solve::TriangularSolveOptions;
@@ -10,8 +11,8 @@ use super::helpers::{
 
 pub(crate) fn triangular_solve<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
+    a: &HostView<'_, T>,
+    b: &HostView<'_, T>,
     left_side: bool,
     lower: bool,
     transpose_a: bool,
@@ -39,7 +40,7 @@ pub(crate) fn triangular_solve<T: LapackLinalg>(
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b);
     }
     let mut output = pooled_output::<T>(buffers, OP, "rhs", b.shape())?;
-    let (a_view, b_view) = (a.as_view(), b.as_view());
+    let (a_view, b_view) = (a.clone().into_dynamic(), b.clone().into_dynamic());
     T::triangular_solve(
         buffers,
         TriangularSolveOptions {

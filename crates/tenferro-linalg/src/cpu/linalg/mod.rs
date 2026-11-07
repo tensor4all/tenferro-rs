@@ -11,7 +11,13 @@ mod rank_revealing_qr;
 
 use strided_view::RawStridedRef;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar, PooledUninitOutput};
-use tenferro_tensor::{TypedTensor, TypedTensorView};
+use tenferro_tensor::{DynRank, Host, TypedTensor, TypedTensorView};
+
+/// A borrowed operand already narrowed to host storage at the CPU backend boundary.
+///
+/// The provider kernels take this rather than `&TypedTensor<T>`: the CPU backend narrows each
+/// caller operand once (`TensorRead::try_host`) and nothing below re-checks placement.
+pub(crate) type HostView<'a, T> = TypedTensorView<'a, T, DynRank, Host>;
 
 /// A pooled destination a provider kernel fills completely.
 ///
@@ -77,6 +83,29 @@ pub(crate) fn pooled_zeroed<T: PoolScalar>(
         slot.write(T::pool_zero());
     }
     finish_lease(lease)
+}
+
+/// The elements of a host operand that covers its buffer in compact column-major order.
+///
+/// The kernels that read an operand as one flat compact slice (the packed-state QR helpers and the
+/// packed-LU solve) received an owned compact tensor before the host narrowing moved to the
+/// backend boundary; the boundary hands them operands borrowed from such tensors. A strided view
+/// would make the flat slice the wrong elements, so the layout is checked rather than assumed.
+pub(crate) fn compact_host_data<'a, T: 'static>(
+    op: &'static str,
+    view: &HostView<'a, T>,
+) -> tenferro_tensor::Result<&'a [T]> {
+    let compact = view.offset() == 0
+        && view.backing_len() == view.n_elements()
+        && matches!(view.is_col_major_contiguous(), Ok(true));
+    if !compact {
+        return Err(tenferro_tensor::Error::invalid_argument(
+            op,
+            "layout",
+            "expected a compact column-major operand",
+        ));
+    }
+    Ok(view.as_host_slice())
 }
 
 /// Describe a host view to a linalg provider without copying it.

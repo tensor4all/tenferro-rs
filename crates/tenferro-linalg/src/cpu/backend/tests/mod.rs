@@ -1,7 +1,7 @@
 //! Module-local tests for the linalg dispatch seams.
 
 use super::{
-    ensure_host_tensor, tensor_write_view, typed_host, write_view_operand, zeros_like_tensor,
+    host_operand, tensor_write_view, write_view_operand, zeros_like_tensor, HostOperandExt,
 };
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{DType, Tensor, TensorWrite, TypedTensor};
@@ -50,33 +50,41 @@ fn cases() -> Vec<Tensor> {
     ]
 }
 
-/// Every preset scalar reaches its own arm of the host check and of the zero-like
+/// Every preset scalar reaches its own arm of the host narrowing and of the zero-like
 /// builder, so no tag arm is left unreached by the crate's own suite.
 #[test]
-fn host_check_and_zero_like_cover_every_preset_scalar() {
+fn host_narrowing_and_zero_like_cover_every_preset_scalar() {
     for input in cases() {
-        assert!(ensure_host_tensor("lu_factor", &input).is_ok());
-        let zero = zeros_like_tensor(&input).unwrap();
+        let host = host_operand("lu_factor", &input).unwrap();
+        assert_eq!(host.dtype(), input.dtype());
+        let zero = zeros_like_tensor(input.dtype(), input.shape()).unwrap();
         assert_eq!(zero.dtype(), input.dtype());
     }
 }
 
-/// The tag tables only reach `typed_host` with the scalar they claim, so its refusal is
-/// unreachable from the public API. Covering it here keeps the invariant honest: a
-/// mismatch is the same typed refusal the wildcard arms produce, never a panic.
+/// The tag tables only ask a host operand for the scalar they claim, so a mismatched
+/// `as_typed` is unreachable from the public API. Covering it here keeps the invariant
+/// honest: a mismatch is `None` (the tables turn it into their typed refusal), never a panic.
 #[test]
-fn typed_host_refuses_a_dtype_the_dispatch_never_produces() {
+fn host_operand_as_typed_refuses_a_dtype_the_dispatch_never_produces() {
     let tensor =
         Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
-    assert!(typed_host::<f32>(&tensor, "lu_factor").is_err());
+    let host = host_operand("lu_factor", &tensor).unwrap();
+    assert!(host.as_typed::<f32>().is_none());
+    assert!(host.as_typed::<i32>().is_some());
 }
 
-/// The accessor reports the module's refusal when the tag and the runtime dtype disagree.
+/// A caller-owned payload has no preset-scalar host view, so the narrowing refuses it
+/// with the operation's name, as the per-entry host check did.
 #[test]
-fn typed_host_refuses_a_dtype_the_table_never_produces() {
-    let tensor =
-        Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
-    assert!(typed_host::<f32>(&tensor, "zeros_like_tensor").is_err());
+fn host_operand_refuses_an_external_payload_by_operation() {
+    use tenferro_tensor::{DynRank, ErasedHostTensor, Host};
+    let payload = ErasedHostTensor::new(
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0]).unwrap(),
+    );
+    let tensor = Tensor::external(payload);
+    let err = host_operand("cholesky", &tensor).unwrap_err();
+    assert!(err.to_string().contains("cholesky"), "{err}");
 }
 
 /// The write-view accessor's unwind site is the module's documented invariant, so a test states it rather

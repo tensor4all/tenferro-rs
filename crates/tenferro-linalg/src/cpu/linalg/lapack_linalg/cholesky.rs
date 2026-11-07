@@ -1,3 +1,4 @@
+use crate::cpu::linalg::HostView;
 use strided_view::RawStridedRef;
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::TypedTensor;
@@ -43,7 +44,7 @@ pub(crate) fn cholesky_compact_data<T: LapackLinalg>(
 
 pub(crate) fn cholesky<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     const OP: &str = "cholesky";
     let (n, batch_shape) = square_core_and_batch_result(input, OP)?;
@@ -54,7 +55,7 @@ pub(crate) fn cholesky<T: LapackLinalg>(
     batch_element_count(OP, batch_shape)?;
     checked_product(OP, "matrix", &shape)?;
     let mut lower = pooled_output::<T>(buffers, OP, "matrix", &shape)?;
-    let view = input.as_view();
+    let view = input.clone().into_dynamic();
     T::cholesky(buffers, super::super::raw_view(OP, &view)?, &mut lower)
         .map_err(provider(Op::Cholesky))?;
     tensor_from_vec_with_template(shape, lower, input)

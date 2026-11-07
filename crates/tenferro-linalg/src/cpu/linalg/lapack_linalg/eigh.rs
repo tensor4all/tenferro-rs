@@ -1,3 +1,4 @@
+use crate::cpu::linalg::HostView;
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::TypedTensor;
 use tlinalg_blas::Op;
@@ -12,7 +13,7 @@ use super::helpers::{
 /// The values are returned in the real scalar, as the faer route returns them.
 pub(crate) fn eigh<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T::RealScalar>, TypedTensor<T>)> {
     const OP: &str = "eigh";
     let (n, batch_shape) = square_core_and_batch_result(input, OP)?;
@@ -29,7 +30,7 @@ pub(crate) fn eigh<T: LapackLinalg>(
     }
     let mut values = pooled_output::<T::RealScalar>(buffers, OP, "values", &values_shape)?;
     let mut vectors = pooled_output::<T>(buffers, OP, "vectors", input.shape())?;
-    let view = input.as_view();
+    let view = input.clone().into_dynamic();
     T::eigh(
         buffers,
         Op::Eigh,
@@ -46,7 +47,7 @@ pub(crate) fn eigh<T: LapackLinalg>(
 
 pub(crate) fn eigh_values<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
     const OP: &str = "eigh_values";
     let (n, batch_shape) = square_core_and_batch_result(input, OP)?;
@@ -55,7 +56,7 @@ pub(crate) fn eigh_values<T: LapackLinalg>(
         return tensor_from_vec_with_template(values_shape, Vec::new(), input);
     }
     let mut values = pooled_output::<T::RealScalar>(buffers, OP, "values", &values_shape)?;
-    let view = input.as_view();
+    let view = input.clone().into_dynamic();
     T::eigh(
         buffers,
         Op::EighValues,

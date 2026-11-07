@@ -8,6 +8,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **One host narrowing for borrowed reads: `TensorRead::try_host(op)`,
+  `TensorView::try_host(op)` and `TypedTensorView::try_host(op)`.** Each
+  returns a host-marked view (`TensorView<'_, Host>` /
+  `TypedTensorView<'_, T, R, Host>`) when the read borrows host elements, and
+  otherwise a `RuntimeState` error naming `op` (backend storage) or an
+  `UnsupportedDType` error naming `op` (a `Tensor::external` payload). The
+  host-marked views widen back without copying (`into_dynamic`), and
+  `TensorView<'_, Host>` reports `dtype`, `shape` and `is_owned_layout`.
+  `TensorView` gains a defaulted representation parameter
+  (`TensorView<'a, D: Representation = Dynamic>`); every existing spelling
+  `TensorView<'a>` still names the same type.
 - **`tenferro_linalg::error::map_error` is public** (#2462). It is the
   translation tenferro's own linalg entries apply to a `tlinalg` failure, so a
   caller that runs `tlinalg` factorizations itself reports the same error
@@ -37,6 +48,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The CPU linalg and reduction entries narrow each operand to `Host` once
+  and no longer re-check placement below that point.** The
+  `ensure_host_tensor` / `ensure_host_tensor_read` pre-checks (55 call sites in
+  `tenferro-linalg`, 5 in `tenferro-cpu`) and the helpers themselves are
+  removed; every `LinalgBackend` method and
+  reduction entry calls `try_host` on its operands at the boundary, and the
+  private entry functions and provider kernels take host-marked views. A
+  backend-buffer operand is still refused with `RuntimeState` at the CPU
+  boundary (the message now reads "CPU backend received a backend buffer;
+  download the tensor to host before CPU execution" for linalg too). Two
+  behaviour differences: a borrowed view that already covers its buffer in
+  compact column-major order is no longer copied before a non-faer linalg
+  route, and a host-resident operand carrying a device or managed placement
+  label produces outputs labelled as host memory, as `into_host` already did.
 - **`TypedTensor::set_placement` and `set_cpu_affinity` exist only on the
   `Dynamic` representation.** A `Host` or `Gpu` owner keeps the placement it was
   built with, so a statically host-owned tensor can no longer be relabelled as

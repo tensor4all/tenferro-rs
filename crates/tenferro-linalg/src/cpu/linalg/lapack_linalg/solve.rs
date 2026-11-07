@@ -1,3 +1,4 @@
+use crate::cpu::linalg::HostView;
 use strided_view::{RawStridedMut, RawStridedRef};
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::{TypedTensor, TypedTensorView, TypedTensorViewMut};
@@ -14,8 +15,8 @@ mod tests;
 
 pub(crate) fn solve<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
+    a: &HostView<'_, T>,
+    b: &HostView<'_, T>,
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     const OP: &str = "solve";
@@ -39,7 +40,7 @@ pub(crate) fn solve<T: LapackLinalg>(
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b);
     }
     let mut output = pooled_output::<T>(buffers, OP, "rhs", b.shape())?;
-    let (a_view, b_view) = (a.as_view(), b.as_view());
+    let (a_view, b_view) = (a.clone().into_dynamic(), b.clone().into_dynamic());
     T::solve(
         buffers,
         transpose_a,

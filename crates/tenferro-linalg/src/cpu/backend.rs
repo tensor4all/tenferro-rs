@@ -13,15 +13,129 @@ use crate::validation::validate_square_matrix;
 use super::linalg;
 use tenferro_cpu::same_variant_pair;
 
+use super::linalg::HostView;
 use num_complex::{Complex32, Complex64};
 use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_cpu::CpuEngine;
 use tenferro_tensor::{
-    validate::validate_nonsingular_u, AllocationDomainId, DType, Error, HostAccessError,
+    validate::validate_nonsingular_u, AllocationDomainId, DType, Error, Host, HostAccessError,
     MemoryKind, SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorStructural,
     TensorView, TensorViewMut, TensorWrite, TypedTensor,
 };
+
+/// A caller operand after the one host narrowing at the `LinalgBackend` boundary.
+///
+/// Every `*_entered` function below takes this instead of `&Tensor`: the type is the evidence
+/// that the operand borrows host storage, so no function under the boundary checks placement
+/// again.
+type HostOperand<'a> = TensorView<'a, Host>;
+
+/// Narrow a caller operand to host storage, attributing a refusal to `op`.
+fn host_operand<'a>(
+    op: &'static str,
+    input: &'a Tensor,
+) -> tenferro_tensor::Result<HostOperand<'a>> {
+    TensorRead::from_tensor(input).try_host(op)
+}
+
+/// Narrow a value the CPU engine itself produced (a materialized or reshaped copy).
+///
+/// The engine writes those into host storage, so this narrowing cannot refuse in practice; it is
+/// a separate function so a caller operand is never re-narrowed under the boundary by accident.
+fn host_engine_output<'a>(
+    op: &'static str,
+    produced: &'a Tensor,
+) -> tenferro_tensor::Result<HostOperand<'a>> {
+    TensorRead::from_tensor(produced).try_host(op)
+}
+
+/// One typed arm of a [`HostOperand`].
+trait HostArm: Sized {
+    fn arm<'v, 'a>(view: &'v HostOperand<'a>) -> Option<&'v HostView<'a, Self>>;
+}
+
+macro_rules! impl_host_arm {
+    ($($scalar:ty => $variant:ident),* $(,)?) => {$(
+        impl HostArm for $scalar {
+            fn arm<'v, 'a>(view: &'v HostOperand<'a>) -> Option<&'v HostView<'a, Self>> {
+                match view {
+                    TensorView::$variant(typed) => Some(typed),
+                    _ => None,
+                }
+            }
+        }
+    )*};
+}
+
+impl_host_arm!(
+    f32 => F32,
+    f64 => F64,
+    i32 => I32,
+    i64 => I64,
+    bool => Bool,
+    Complex32 => C32,
+    Complex64 => C64,
+);
+
+/// `as_typed` on a host operand, so the dtype tables read the same as they did on `&Tensor`.
+trait HostOperandExt<'a> {
+    fn as_typed<T: HostArm>(&self) -> Option<&HostView<'a, T>>;
+}
+
+impl<'a> HostOperandExt<'a> for HostOperand<'a> {
+    fn as_typed<T: HostArm>(&self) -> Option<&HostView<'a, T>> {
+        T::arm(self)
+    }
+}
+
+/// Run `operation` on `input` laid out like an owned tensor, materializing it first if needed.
+///
+/// An operand that already covers its buffer in compact column-major order is passed through;
+/// any other layout is gathered once by the CPU engine, as the borrowed-read routes always did.
+fn with_owned_layout<R>(
+    exec: &mut Exec<'_>,
+    buffers: &mut BufferPool,
+    op: &'static str,
+    input: HostOperand<'_>,
+    operation: impl FnOnce(
+        &HostOperand<'_>,
+        &mut BufferPool,
+        &mut Exec<'_>,
+    ) -> tenferro_tensor::Result<R>,
+) -> tenferro_tensor::Result<R> {
+    if input.is_owned_layout() {
+        return operation(&input, buffers, exec);
+    }
+    tenferro_cpu::with_materialized_tensor_read(
+        exec,
+        buffers,
+        op,
+        TensorRead::from_view(input.into_dynamic()),
+        |materialized, buffers, exec| {
+            operation(&host_engine_output(op, materialized)?, buffers, exec)
+        },
+    )
+}
+
+/// A metadata-only reshape of a compact host operand, keeping it host-marked.
+///
+/// Used for the vector right-hand side a solve treats as an `[n, 1, batch...]` matrix: the
+/// operand already covers its buffer compactly, so no element moves.
+fn reshape_host<'a>(
+    input: &HostOperand<'a>,
+    shape: &[usize],
+) -> tenferro_tensor::Result<HostOperand<'a>> {
+    Ok(match input {
+        TensorView::F32(view) => TensorView::F32(view.reshape_view(shape)?),
+        TensorView::F64(view) => TensorView::F64(view.reshape_view(shape)?),
+        TensorView::I32(view) => TensorView::I32(view.reshape_view(shape)?),
+        TensorView::I64(view) => TensorView::I64(view.reshape_view(shape)?),
+        TensorView::Bool(view) => TensorView::Bool(view.reshape_view(shape)?),
+        TensorView::C32(view) => TensorView::C32(view.reshape_view(shape)?),
+        TensorView::C64(view) => TensorView::C64(view.reshape_view(shape)?),
+    })
+}
 
 /// The Rust scalar type behind a preset variant name a macro received.
 macro_rules! preset_scalar {
@@ -78,7 +192,7 @@ impl LinalgBackend for CpuEngine {
             {
                 return managed_cholesky(exec, buffers, TensorRead::from_tensor(input), domain);
             }
-            ensure_host_tensor("cholesky", input)?;
+            let input = &host_operand("cholesky", input)?;
             cholesky_entered(exec, buffers, input)
         })
     }
@@ -92,8 +206,8 @@ impl LinalgBackend for CpuEngine {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor("triangular_solve", a)?;
-        ensure_host_tensor("triangular_solve", b)?;
+        let a = &host_operand("triangular_solve", a)?;
+        let b = &host_operand("triangular_solve", b)?;
         let options = TriangularSolveOptions {
             left_side,
             lower,
@@ -114,8 +228,8 @@ impl LinalgBackend for CpuEngine {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor_read("triangular_solve", &a)?;
-        ensure_host_tensor_read("triangular_solve", &b)?;
+        let a = a.try_host("triangular_solve")?;
+        let b = b.try_host("triangular_solve")?;
         ensure_supported_linalg_dtypes("triangular_solve", a.dtype(), b.dtype())?;
         let options = TriangularSolveOptions {
             left_side,
@@ -129,40 +243,24 @@ impl LinalgBackend for CpuEngine {
             // into the destructible right-hand side. If either is ineligible,
             // the scoped materializer below packs only what it must.
             #[cfg(feature = "native")]
-            if faer_strided_read_ok(&a) && faer_rhs_read_ok(&b) {
-                return triangular_solve_faer_view_entered(
-                    exec,
-                    buffers,
-                    linalg_view("triangular_solve", a)?,
-                    linalg_view("triangular_solve", b)?,
-                    options,
-                );
+            if faer_strided_host_ok(&a) && faer_rhs_host_ok(&b) {
+                return triangular_solve_faer_view_entered(exec, buffers, a, b, options);
             }
-            tenferro_cpu::with_materialized_tensor_read(
-                exec,
-                buffers,
-                "triangular_solve",
-                a,
-                |a, buffers, exec| {
-                    tenferro_cpu::with_materialized_tensor_read(
-                        exec,
-                        buffers,
-                        "triangular_solve",
-                        b,
-                        |b, buffers, exec| triangular_solve_entered(exec, buffers, a, b, options),
-                    )
-                },
-            )
+            with_owned_layout(exec, buffers, "triangular_solve", a, |a, buffers, exec| {
+                with_owned_layout(exec, buffers, "triangular_solve", b, |b, buffers, exec| {
+                    triangular_solve_entered(exec, buffers, a, b, options)
+                })
+            })
         })
     }
 
     fn lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor("lu", input)?;
+        let input = &host_operand("lu", input)?;
         self.with_linalg_pool_checked(|exec, buffers| lu_entered(exec, buffers, input))
     }
 
     fn lu_factor(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor("lu_factor", input)?;
+        let input = &host_operand("lu_factor", input)?;
         {
             #[cfg(feature = "native")]
             {
@@ -282,7 +380,7 @@ impl LinalgBackend for CpuEngine {
     }
 
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor("full_piv_lu", input)?;
+        let input = &host_operand("full_piv_lu", input)?;
         self.with_linalg_pool_checked(|exec, buffers| full_piv_lu_entered(exec, buffers, input))
     }
 
@@ -292,21 +390,22 @@ impl LinalgBackend for CpuEngine {
         b: &Tensor,
         transpose_a: bool,
     ) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor("full_piv_lu_solve", a)?;
-        ensure_host_tensor("full_piv_lu_solve", b)?;
+        let a = &host_operand("full_piv_lu_solve", a)?;
+        let b = &host_operand("full_piv_lu_solve", b)?;
         ensure_supported_linalg_pair("full_piv_lu_solve", a, b)?;
         validate_square_matrix("full_piv_lu_solve", a.shape())?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return self.with_linalg_pool_checked(|_, _| zeros_like_tensor(b));
+            return self.with_linalg_pool_checked(|_, _| zeros_like_tensor(b.dtype(), b.shape()));
         }
 
-        let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
-            (
-                self.reshape_read(TensorRead::from_tensor(b), &matrix_rhs_shape)?,
+        // A vector right-hand side is solved as a one-column matrix: a metadata reshape of the
+        // compact host operand, restored on the result below.
+        let (rhs, restore_shape) = match batched_vector_rhs_shape(a, b) {
+            Some(matrix_rhs_shape) => (
+                reshape_host(b, &matrix_rhs_shape)?,
                 Some(b.shape().to_vec()),
-            )
-        } else {
-            (b.duplicate()?, None)
+            ),
+            None => (b.clone(), None),
         };
 
         // The same complete-pivoting kernel as `full_piv_lu` in both CPU builds.
@@ -327,69 +426,57 @@ impl LinalgBackend for CpuEngine {
     }
 
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor("svd", input)?;
+        let input = &host_operand("svd", input)?;
         self.with_linalg_pool_checked(|exec, buffers| svd_entered(exec, buffers, input))
     }
 
     fn svd_full(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor("svd_full", input)?;
+        let input = &host_operand("svd_full", input)?;
         self.with_linalg_pool_checked(|exec, buffers| svd_full_entered(exec, buffers, input))
     }
 
     fn svd_full_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor_read("svd_full", &input)?;
+        let input = input.try_host("svd_full")?;
         ensure_supported_linalg_dtype("svd_full", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
-            if faer_strided_read_ok(&input) {
-                return svd_full_faer_view_entered(exec, buffers, linalg_view("svd_full", input)?);
+            if faer_strided_host_ok(&input) {
+                return svd_full_faer_view_entered(exec, buffers, input);
             }
-            tenferro_cpu::with_materialized_tensor_read(
-                exec,
-                buffers,
-                "svd_full",
-                input,
-                |input, buffers, exec| svd_full_entered(exec, buffers, input),
-            )
+            with_owned_layout(exec, buffers, "svd_full", input, |input, buffers, exec| {
+                svd_full_entered(exec, buffers, input)
+            })
         })
     }
 
     fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor("svd_values", input)?;
+        let input = &host_operand("svd_values", input)?;
         self.with_linalg_pool_checked(|exec, buffers| svd_values_entered(exec, buffers, input))
     }
 
     fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor_read("svd", &input)?;
+        let input = input.try_host("svd")?;
         ensure_supported_linalg_dtype("svd", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
-            if faer_strided_read_ok(&input) {
-                return svd_faer_view_entered(exec, buffers, linalg_view("svd", input)?);
+            if faer_strided_host_ok(&input) {
+                return svd_faer_view_entered(exec, buffers, input);
             }
-            tenferro_cpu::with_materialized_tensor_read(
-                exec,
-                buffers,
-                "svd",
-                input,
-                |input, buffers, exec| svd_entered(exec, buffers, input),
-            )
+            with_owned_layout(exec, buffers, "svd", input, |input, buffers, exec| {
+                svd_entered(exec, buffers, input)
+            })
         })
     }
 
     fn svd_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor_read("svd_values", &input)?;
+        let input = input.try_host("svd_values")?;
         ensure_supported_linalg_dtype("svd_values", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
-            if faer_strided_read_ok(&input) {
-                return svd_values_faer_view_entered(
-                    exec,
-                    buffers,
-                    linalg_view("svd_values", input)?,
-                );
+            if faer_strided_host_ok(&input) {
+                return svd_values_faer_view_entered(exec, buffers, input);
             }
-            tenferro_cpu::with_materialized_tensor_read(
+            with_owned_layout(
                 exec,
                 buffers,
                 "svd_values",
@@ -400,25 +487,21 @@ impl LinalgBackend for CpuEngine {
     }
 
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor("qr", input)?;
+        let input = &host_operand("qr", input)?;
         self.with_linalg_pool_checked(|exec, buffers| qr_entered(exec, buffers, input))
     }
 
     fn qr_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor_read("qr", &input)?;
+        let input = input.try_host("qr")?;
         ensure_supported_linalg_dtype("qr", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
-            if faer_strided_read_ok(&input) {
-                return qr_faer_view_entered(exec, buffers, linalg_view("qr", input)?);
+            if faer_strided_host_ok(&input) {
+                return qr_faer_view_entered(exec, buffers, input);
             }
-            tenferro_cpu::with_materialized_tensor_read(
-                exec,
-                buffers,
-                "qr",
-                input,
-                |input, buffers, exec| qr_entered(exec, buffers, input),
-            )
+            with_owned_layout(exec, buffers, "qr", input, |input, buffers, exec| {
+                qr_entered(exec, buffers, input)
+            })
         })
     }
 
@@ -428,7 +511,7 @@ impl LinalgBackend for CpuEngine {
         options: crate::RankRevealingQrOptions,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
-        ensure_host_tensor("rank_revealing_qr", input)?;
+        let input = &host_operand("rank_revealing_qr", input)?;
         ensure_supported_linalg_dtype("rank_revealing_qr", input.dtype())?;
         self.with_linalg_pool_checked(|exec, buffers| {
             rank_revealing_qr_entered(exec, buffers, input, options)
@@ -441,19 +524,14 @@ impl LinalgBackend for CpuEngine {
         options: crate::RankRevealingQrOptions,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
-        ensure_host_tensor_read("rank_revealing_qr", &input)?;
+        let input = input.try_host("rank_revealing_qr")?;
         ensure_supported_linalg_dtype("rank_revealing_qr", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
-            if faer_strided_read_ok(&input) {
-                return rank_revealing_qr_faer_view_entered(
-                    exec,
-                    buffers,
-                    linalg_view("rank_revealing_qr", input)?,
-                    options,
-                );
+            if faer_strided_host_ok(&input) {
+                return rank_revealing_qr_faer_view_entered(exec, buffers, input, options);
             }
-            tenferro_cpu::with_materialized_tensor_read(
+            with_owned_layout(
                 exec,
                 buffers,
                 "rank_revealing_qr",
@@ -464,7 +542,7 @@ impl LinalgBackend for CpuEngine {
     }
 
     fn householder_qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<CompactQrResult> {
-        ensure_host_tensor("householder_qr", input)?;
+        let input = &host_operand("householder_qr", input)?;
         self.with_linalg_pool_checked(|exec, buffers| householder_qr_entered(exec, buffers, input))
     }
 
@@ -473,8 +551,8 @@ impl LinalgBackend for CpuEngine {
         q: &Tensor,
         r: &Tensor,
     ) -> tenferro_tensor::Result<CompactQrResult> {
-        ensure_host_tensor("householder_qr_from_factors", q)?;
-        ensure_host_tensor("householder_qr_from_factors", r)?;
+        let q = &host_operand("householder_qr_from_factors", q)?;
+        let r = &host_operand("householder_qr_from_factors", r)?;
         self.with_linalg_pool_checked(|exec, buffers| {
             householder_qr_from_factors_entered(exec, buffers, q, r)
         })
@@ -486,9 +564,9 @@ impl LinalgBackend for CpuEngine {
         coeff: &Tensor,
         block: &Tensor,
     ) -> tenferro_tensor::Result<CompactQrResult> {
-        ensure_host_tensor("householder_qr_append", packed)?;
-        ensure_host_tensor("householder_qr_append", coeff)?;
-        ensure_host_tensor("householder_qr_append", block)?;
+        let packed = &host_operand("householder_qr_append", packed)?;
+        let coeff = &host_operand("householder_qr_append", coeff)?;
+        let block = &host_operand("householder_qr_append", block)?;
         self.with_linalg_pool_checked(|exec, buffers| {
             householder_qr_append_entered(exec, buffers, packed, coeff, block)
         })
@@ -500,8 +578,8 @@ impl LinalgBackend for CpuEngine {
         coeff: &Tensor,
         options: crate::QrOptions,
     ) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor("householder_qr_r", packed)?;
-        ensure_host_tensor("householder_qr_r", coeff)?;
+        let packed = &host_operand("householder_qr_r", packed)?;
+        let coeff = &host_operand("householder_qr_r", coeff)?;
         self.with_linalg_pool_checked(|exec, buffers| {
             householder_qr_r_entered(exec, buffers, packed, coeff, options)
         })
@@ -514,49 +592,41 @@ impl LinalgBackend for CpuEngine {
         columns: std::ops::Range<usize>,
         options: crate::QrOptions,
     ) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor("householder_qr_q_columns", packed)?;
-        ensure_host_tensor("householder_qr_q_columns", coeff)?;
+        let packed = &host_operand("householder_qr_q_columns", packed)?;
+        let coeff = &host_operand("householder_qr_q_columns", coeff)?;
         self.with_linalg_pool_checked(|exec, buffers| {
             householder_qr_q_columns_entered(exec, buffers, packed, coeff, columns, options)
         })
     }
 
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor("eigh", input)?;
+        let input = &host_operand("eigh", input)?;
         self.with_linalg_pool_checked(|exec, buffers| eigh_entered(exec, buffers, input))
     }
 
     fn eigh_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor_read("eigh", &input)?;
+        let input = input.try_host("eigh")?;
         ensure_supported_linalg_dtype("eigh", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
-            if faer_strided_read_ok(&input) {
-                return eigh_faer_view_entered(exec, buffers, linalg_view("eigh", input)?);
+            if faer_strided_host_ok(&input) {
+                return eigh_faer_view_entered(exec, buffers, input);
             }
-            tenferro_cpu::with_materialized_tensor_read(
-                exec,
-                buffers,
-                "eigh",
-                input,
-                |input, buffers, exec| eigh_entered(exec, buffers, input),
-            )
+            with_owned_layout(exec, buffers, "eigh", input, |input, buffers, exec| {
+                eigh_entered(exec, buffers, input)
+            })
         })
     }
 
     fn eigh_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor_read("eigh_values", &input)?;
+        let input = input.try_host("eigh_values")?;
         ensure_supported_linalg_dtype("eigh_values", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
-            if faer_strided_read_ok(&input) {
-                return eigh_values_faer_view_entered(
-                    exec,
-                    buffers,
-                    linalg_view("eigh_values", input)?,
-                );
+            if faer_strided_host_ok(&input) {
+                return eigh_values_faer_view_entered(exec, buffers, input);
             }
-            tenferro_cpu::with_materialized_tensor_read(
+            with_owned_layout(
                 exec,
                 buffers,
                 "eigh_values",
@@ -574,52 +644,40 @@ impl LinalgBackend for CpuEngine {
             {
                 return managed_cholesky(exec, buffers, input, domain);
             }
-            ensure_host_tensor_read("cholesky", &input)?;
+            let input = input.try_host("cholesky")?;
             ensure_supported_linalg_dtype("cholesky", input.dtype())?;
             #[cfg(feature = "native")]
-            if faer_strided_read_ok(&input) {
-                return cholesky_faer_view_entered(exec, buffers, linalg_view("cholesky", input)?);
+            if faer_strided_host_ok(&input) {
+                return cholesky_faer_view_entered(exec, buffers, input);
             }
-            tenferro_cpu::with_materialized_tensor_read(
-                exec,
-                buffers,
-                "cholesky",
-                input,
-                |input, buffers, exec| cholesky_entered(exec, buffers, input),
-            )
+            with_owned_layout(exec, buffers, "cholesky", input, |input, buffers, exec| {
+                cholesky_entered(exec, buffers, input)
+            })
         })
     }
 
     fn lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor_read("lu", &input)?;
+        let input = input.try_host("lu")?;
         ensure_supported_linalg_dtype("lu", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
-            if faer_strided_read_ok(&input) {
-                return lu_faer_view_entered(exec, buffers, linalg_view("lu", input)?);
+            if faer_strided_host_ok(&input) {
+                return lu_faer_view_entered(exec, buffers, input);
             }
-            tenferro_cpu::with_materialized_tensor_read(
-                exec,
-                buffers,
-                "lu",
-                input,
-                |input, buffers, exec| lu_entered(exec, buffers, input),
-            )
+            with_owned_layout(exec, buffers, "lu", input, |input, buffers, exec| {
+                lu_entered(exec, buffers, input)
+            })
         })
     }
 
     fn full_piv_lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor_read("full_piv_lu", &input)?;
+        let input = input.try_host("full_piv_lu")?;
         ensure_supported_linalg_dtype("full_piv_lu", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
-            if faer_strided_read_ok(&input) {
-                return full_piv_lu_faer_view_entered(
-                    exec,
-                    buffers,
-                    linalg_view("full_piv_lu", input)?,
-                );
+            if faer_strided_host_ok(&input) {
+                return full_piv_lu_faer_view_entered(exec, buffers, input);
             }
-            tenferro_cpu::with_materialized_tensor_read(
+            with_owned_layout(
                 exec,
                 buffers,
                 "full_piv_lu",
@@ -630,36 +688,28 @@ impl LinalgBackend for CpuEngine {
     }
 
     fn eig_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor_read("eig", &input)?;
+        let input = input.try_host("eig")?;
         ensure_supported_linalg_dtype("eig", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
-            if faer_strided_read_ok(&input) {
-                return linalg::faer::eig_view(exec, buffers, linalg_view("eig", input)?);
+            if faer_strided_host_ok(&input) {
+                return linalg::faer::eig_view(exec, buffers, input.into_dynamic());
             }
-            tenferro_cpu::with_materialized_tensor_read(
-                exec,
-                buffers,
-                "eig",
-                input,
-                |input, buffers, exec| eig_entered(exec, buffers, input),
-            )
+            with_owned_layout(exec, buffers, "eig", input, |input, buffers, exec| {
+                eig_entered(exec, buffers, input)
+            })
         })
     }
 
     fn eig_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor_read("eig_values", &input)?;
+        let input = input.try_host("eig_values")?;
         ensure_supported_linalg_dtype("eig_values", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
-            if faer_strided_read_ok(&input) {
-                return linalg::faer::eig_values_view(
-                    exec,
-                    buffers,
-                    linalg_view("eig_values", input)?,
-                );
+            if faer_strided_host_ok(&input) {
+                return linalg::faer::eig_values_view(exec, buffers, input.into_dynamic());
             }
-            tenferro_cpu::with_materialized_tensor_read(
+            with_owned_layout(
                 exec,
                 buffers,
                 "eig_values",
@@ -670,18 +720,18 @@ impl LinalgBackend for CpuEngine {
     }
 
     fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor("eigh_values", input)?;
+        let input = &host_operand("eigh_values", input)?;
         self.with_linalg_pool_checked(|exec, buffers| eigh_values_entered(exec, buffers, input))
     }
 
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        ensure_host_tensor("eig", input)?;
+        let input = &host_operand("eig", input)?;
         ensure_supported_linalg_dtype("eig", input.dtype())?;
         self.with_linalg_pool_checked(|exec, buffers| eig_entered(exec, buffers, input))
     }
 
     fn eig_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor("eig_values", input)?;
+        let input = &host_operand("eig_values", input)?;
         ensure_supported_linalg_dtype("eig_values", input.dtype())?;
         self.with_linalg_pool_checked(|exec, buffers| eig_values_entered(exec, buffers, input))
     }
@@ -697,17 +747,18 @@ impl LinalgBackend for CpuEngine {
     ) -> tenferro_tensor::Result<Tensor> {
         const OP: &str = "lu_solve_prepared";
 
-        ensure_host_tensor(OP, a)?;
-        ensure_host_tensor(OP, packed_lu)?;
-        ensure_host_tensor(OP, pivots)?;
-        ensure_host_tensor(OP, b)?;
+        let a = &host_operand(OP, a)?;
+        let packed_lu_tensor = packed_lu;
+        let packed_lu = &host_operand(OP, packed_lu)?;
+        let pivots = &host_operand(OP, pivots)?;
+        let b = &host_operand(OP, b)?;
         ensure_supported_linalg_pair(OP, a, b)?;
         ensure_supported_linalg_pair(OP, a, packed_lu)?;
         if !matches!(pivots.dtype(), DType::I32) {
             return Err(Error::dtype_mismatch(OP, DType::I32, pivots.dtype()));
         }
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return self.with_linalg_pool_checked(|_, _| zeros_like_tensor(b));
+            return self.with_linalg_pool_checked(|_, _| zeros_like_tensor(b.dtype(), b.shape()));
         }
 
         validate_lu_solve_prepared_shapes(
@@ -715,7 +766,7 @@ impl LinalgBackend for CpuEngine {
             pivots.shape(),
             &packed_lu::rhs_matrix_shape(a.shape(), b.shape()),
         )?;
-        validate_nonsingular_u(packed_lu)?;
+        validate_nonsingular_u(packed_lu_tensor)?;
         // One pooled RHS copy becomes the output; the provider kernel applies
         // the stored pivots and both triangular solves per matrix in place.
         self.with_linalg_pool_checked(|exec, buffers| {
@@ -735,8 +786,8 @@ impl LinalgBackend for CpuEngine {
     fn lu_factor_solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         const OP: &str = "lu_factor_solve";
 
-        ensure_host_tensor(OP, a)?;
-        ensure_host_tensor(OP, b)?;
+        let a = &host_operand(OP, a)?;
+        let b = &host_operand(OP, b)?;
         ensure_supported_linalg_pair(OP, a, b)?;
         self.with_linalg_pool_checked(|exec, buffers| {
             packed_lu::lu_factor_solve_entered(exec, buffers, a, b)
@@ -744,8 +795,8 @@ impl LinalgBackend for CpuEngine {
     }
 
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor("solve", a)?;
-        ensure_host_tensor("solve", b)?;
+        let a = &host_operand("solve", a)?;
+        let b = &host_operand("solve", b)?;
         ensure_supported_linalg_pair("solve", a, b)?;
         self.with_linalg_pool_checked(|exec, buffers| solve_entered(exec, buffers, a, b))
     }
@@ -755,36 +806,21 @@ impl LinalgBackend for CpuEngine {
         a: TensorRead<'_>,
         b: TensorRead<'_>,
     ) -> tenferro_tensor::Result<Tensor> {
-        ensure_host_tensor_read("solve", &a)?;
-        ensure_host_tensor_read("solve", &b)?;
+        let a = a.try_host("solve")?;
+        let b = b.try_host("solve")?;
         ensure_supported_linalg_dtypes("solve", a.dtype(), b.dtype())?;
         let direct = !has_zero_dim(a.shape())
             && !has_zero_dim(b.shape())
             && solve_shape_direct_eligible(a.shape(), b.shape());
         self.with_linalg_pool_checked(move |exec, buffers| {
             if direct {
-                solve_from_views_entered(
-                    exec,
-                    buffers,
-                    linalg_view("solve", a)?,
-                    linalg_view("solve", b)?,
-                )
+                solve_from_views_entered(exec, buffers, a, b)
             } else {
-                tenferro_cpu::with_materialized_tensor_read(
-                    exec,
-                    buffers,
-                    "solve",
-                    a,
-                    |a, buffers, exec| {
-                        tenferro_cpu::with_materialized_tensor_read(
-                            exec,
-                            buffers,
-                            "solve",
-                            b,
-                            |b, buffers, exec| solve_entered(exec, buffers, a, b),
-                        )
-                    },
-                )
+                with_owned_layout(exec, buffers, "solve", a, |a, buffers, exec| {
+                    with_owned_layout(exec, buffers, "solve", b, |b, buffers, exec| {
+                        solve_entered(exec, buffers, a, b)
+                    })
+                })
             }
         })
     }
@@ -796,20 +832,27 @@ impl LinalgBackend for CpuEngine {
         out: TensorWrite<'_>,
     ) -> tenferro_tensor::Result<()> {
         crate::backend::validate_solve_read_into(&a, &b, &out)?;
-        ensure_host_tensor_read("solve_read_into", &a)?;
-        ensure_host_tensor_read("solve_read_into", &b)?;
-        ensure_host_tensor_read("solve_read_into", &out.as_read())?;
+        let a = a.try_host("solve_read_into")?;
+        let b = b.try_host("solve_read_into")?;
+        // The output is a write target rather than an operand, and there is no host-marked mutable
+        // view to narrow it into: its refusal is taken here and the host view is dropped. The
+        // direct route below writes it through its own mutable view.
+        out.as_read().try_host("solve_read_into").map(drop)?;
         ensure_supported_linalg_dtypes("solve_read_into", a.dtype(), b.dtype())?;
 
         if has_zero_dim(a.shape())
             || has_zero_dim(b.shape())
             || !solve_read_into_direct_eligible(&a, &b, &out)
         {
-            return crate::backend::solve_read_into_default(self, a, b, out);
+            // The default composes the public `solve_read`, which is a boundary of its own.
+            return crate::backend::solve_read_into_default(
+                self,
+                TensorRead::from_view(a.into_dynamic()),
+                TensorRead::from_view(b.into_dynamic()),
+                out,
+            );
         }
 
-        let a = linalg_view("solve_read_into", a)?;
-        let b = linalg_view("solve_read_into", b)?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             solve_read_into_entered(exec, buffers, a, b, out)
         })
@@ -817,8 +860,8 @@ impl LinalgBackend for CpuEngine {
 }
 
 fn solve_read_into_direct_eligible(
-    a: &TensorRead<'_>,
-    b: &TensorRead<'_>,
+    a: &HostOperand<'_>,
+    b: &HostOperand<'_>,
     out: &TensorWrite<'_>,
 ) -> bool {
     if !solve_shape_direct_eligible(a.shape(), b.shape()) {
@@ -1070,24 +1113,11 @@ fn write_managed_cholesky_output<T: TensorScalar + Copy + Send + Sync + 'static>
     })?
 }
 
-/// The typed host tensor behind `input`, or this file's standard refusal.
-///
-/// Callers reach this from a match on `input.dtype()`, so `None` here means the tag
-/// table and the runtime dtype disagree rather than a caller mistake.
-fn typed_host<'a, T: TensorScalar>(
-    input: &'a Tensor,
-    op: &'static str,
-) -> tenferro_tensor::Result<&'a TypedTensor<T>> {
-    input
-        .as_typed::<T>()
-        .ok_or_else(|| unsupported_dtype(op, input.dtype()))
-}
-
 /// The typed operands behind a same-dtype pair, or this entry point's refusal.
-fn q_columns_operands<'a, T: TensorScalar>(
-    packed: &'a Tensor,
-    coeff: &'a Tensor,
-) -> Result<TypedOperandPair<'a, T>, tenferro_tensor::Error> {
+fn q_columns_operands<'v, 'a, T: HostArm>(
+    packed: &'v HostOperand<'a>,
+    coeff: &'v HostOperand<'a>,
+) -> Result<TypedOperandPair<'v, 'a, T>, tenferro_tensor::Error> {
     let p = packed.as_typed::<T>().ok_or_else(|| {
         Error::dtype_mismatch("householder_qr_q_columns", packed.dtype(), coeff.dtype())
     })?;
@@ -1098,19 +1128,16 @@ fn q_columns_operands<'a, T: TensorScalar>(
 }
 
 /// A pair of borrowed typed operands that share one scalar.
-type TypedOperandPair<'a, T> = (
-    &'a TypedTensor<T, tenferro_tensor::DynRank>,
-    &'a TypedTensor<T, tenferro_tensor::DynRank>,
-);
+type TypedOperandPair<'v, 'a, T> = (&'v HostView<'a, T>, &'v HostView<'a, T>);
 
 /// The typed operands behind a same-dtype pair, or the refusal this entry point reports.
 ///
 /// The result type is spelled out because this module's imports resolve `TypedTensor` to its
 /// two-parameter form and `Result` to the standard one at file scope.
-fn qr_import_operands<'a, T: TensorScalar>(
-    q: &'a Tensor,
-    r: &'a Tensor,
-) -> Result<TypedOperandPair<'a, T>, tenferro_tensor::Error> {
+fn qr_import_operands<'v, 'a, T: HostArm>(
+    q: &'v HostOperand<'a>,
+    r: &'v HostOperand<'a>,
+) -> Result<TypedOperandPair<'v, 'a, T>, tenferro_tensor::Error> {
     let q_t = q
         .as_typed::<T>()
         .ok_or_else(|| unsupported_dtype("householder_qr_from_factors", q.dtype()))?;
@@ -1121,18 +1148,18 @@ fn qr_import_operands<'a, T: TensorScalar>(
 }
 
 /// A triple of borrowed typed operands that share one scalar.
-type TypedOperandTriple<'a, T> = (
-    &'a TypedTensor<T, tenferro_tensor::DynRank>,
-    &'a TypedTensor<T, tenferro_tensor::DynRank>,
-    &'a TypedTensor<T, tenferro_tensor::DynRank>,
+type TypedOperandTriple<'v, 'a, T> = (
+    &'v HostView<'a, T>,
+    &'v HostView<'a, T>,
+    &'v HostView<'a, T>,
 );
 
 /// The typed operands behind a same-dtype triple, or the refusal this entry point reports.
-fn append_operands<'a, T: TensorScalar>(
-    packed: &'a Tensor,
-    coeff: &'a Tensor,
-    block: &'a Tensor,
-) -> Result<TypedOperandTriple<'a, T>, tenferro_tensor::Error> {
+fn append_operands<'v, 'a, T: HostArm>(
+    packed: &'v HostOperand<'a>,
+    coeff: &'v HostOperand<'a>,
+    block: &'v HostOperand<'a>,
+) -> Result<TypedOperandTriple<'v, 'a, T>, tenferro_tensor::Error> {
     let mismatch = || unsupported_dtype("householder_qr_append", packed.dtype());
     let packed_t = packed.as_typed::<T>().ok_or_else(mismatch)?;
     let coeff_t = coeff.as_typed::<T>().ok_or_else(mismatch)?;
@@ -1140,57 +1167,11 @@ fn append_operands<'a, T: TensorScalar>(
     Ok((packed_t, coeff_t, block_t))
 }
 
-fn ensure_host_tensor(op: &'static str, input: &Tensor) -> tenferro_tensor::Result<()> {
-    match input.dtype() {
-        // A caller-owned payload is not a linalg operand.
-        DType::External(type_id) => Err(unsupported_dtype(op, DType::External(type_id))),
-        DType::F32 => ensure_host_typed_tensor(op, typed_host::<f32>(input, op)?),
-        DType::F64 => ensure_host_typed_tensor(op, typed_host::<f64>(input, op)?),
-        DType::I32 => ensure_host_typed_tensor(op, typed_host::<i32>(input, op)?),
-        DType::I64 => ensure_host_typed_tensor(op, typed_host::<i64>(input, op)?),
-        DType::Bool => ensure_host_typed_tensor(op, typed_host::<bool>(input, op)?),
-        DType::C32 => ensure_host_typed_tensor(op, typed_host::<Complex32>(input, op)?),
-        DType::C64 => ensure_host_typed_tensor(op, typed_host::<Complex64>(input, op)?),
-    }
-}
-
-pub(crate) fn ensure_host_tensor_read(
-    op: &'static str,
-    input: &TensorRead<'_>,
-) -> tenferro_tensor::Result<()> {
-    match input {
-        TensorRead::Tensor(tensor) => ensure_host_tensor(op, tensor),
-        TensorRead::View(view) => ensure_host_tensor_view(op, view),
-    }
-}
-
-fn ensure_host_tensor_view(
-    op: &'static str,
-    input: &TensorView<'_>,
-) -> tenferro_tensor::Result<()> {
-    let is_backend_buffer = match input {
-        TensorView::F32(view) => view.backend_buffer().is_some(),
-        TensorView::F64(view) => view.backend_buffer().is_some(),
-        TensorView::I32(view) => view.backend_buffer().is_some(),
-        TensorView::I64(view) => view.backend_buffer().is_some(),
-        TensorView::Bool(view) => view.backend_buffer().is_some(),
-        TensorView::C32(view) => view.backend_buffer().is_some(),
-        TensorView::C64(view) => view.backend_buffer().is_some(),
-    };
-    if is_backend_buffer {
-        return Err(Error::runtime_state(
-            op,
-            "CPU linalg backend received a backend buffer; download the tensor to host before CPU execution",
-        ));
-    }
-    Ok(())
-}
-
 fn triangular_solve_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    a: &Tensor,
-    b: &Tensor,
+    a: &HostOperand<'_>,
+    b: &HostOperand<'_>,
     options: TriangularSolveOptions,
 ) -> tenferro_tensor::Result<Tensor> {
     {
@@ -1246,21 +1227,22 @@ fn triangular_solve_entered(
 fn solve_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    a: &Tensor,
-    b: &Tensor,
+    a: &HostOperand<'_>,
+    b: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     validate_square_matrix("solve", a.shape())?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-        return zeros_like_tensor(b);
+        return zeros_like_tensor(b.dtype(), b.shape());
     }
 
-    let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
-        (
-            tenferro_cpu::reshape_tensor(exec, buffers, b, &matrix_rhs_shape)?,
+    // A vector right-hand side is solved as a one-column matrix: a metadata reshape of the
+    // compact host operand, restored on the result below.
+    let (rhs, restore_shape) = match batched_vector_rhs_shape(a, b) {
+        Some(matrix_rhs_shape) => (
+            reshape_host(b, &matrix_rhs_shape)?,
             Some(b.shape().to_vec()),
-        )
-    } else {
-        (b.duplicate()?, None)
+        ),
+        None => (b.clone(), None),
     };
 
     let result = {
@@ -1301,9 +1283,12 @@ fn solve_entered(
 fn solve_from_views_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    a: TensorView<'_>,
-    b: TensorView<'_>,
+    a: HostOperand<'_>,
+    b: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let a = a.into_dynamic();
+    let b = b.into_dynamic();
     {
         #[cfg(feature = "native")]
         {
@@ -1370,10 +1355,13 @@ fn solve_from_views_entered(
 fn solve_read_into_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    a: TensorView<'_>,
-    b: TensorView<'_>,
+    a: HostOperand<'_>,
+    b: HostOperand<'_>,
     out: TensorWrite<'_>,
 ) -> tenferro_tensor::Result<()> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let a = a.into_dynamic();
+    let b = b.into_dynamic();
     let out = tensor_write_view(out);
     {
         #[cfg(feature = "native")]
@@ -1461,7 +1449,7 @@ fn write_view_operand<T: TensorScalar>(tensor: &mut Tensor) -> &mut TypedTensor<
 fn cholesky_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     {
         #[cfg(feature = "native")]
@@ -1549,7 +1537,7 @@ fn cholesky_entered(
 fn lu_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     {
         #[cfg(feature = "native")]
@@ -1657,7 +1645,7 @@ fn lu_entered(
 fn full_piv_lu_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     // One complete-pivoting kernel (tlinalg, faer) serves both CPU builds: LAPACK has no
     // rank-revealing complete-pivot LU (`?getc2` errors on singular input, perturbs small
@@ -1702,7 +1690,7 @@ fn full_piv_lu_entered(
 fn svd_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     {
         #[cfg(feature = "native")]
@@ -1788,7 +1776,7 @@ fn svd_entered(
 fn svd_full_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     {
         #[cfg(feature = "native")]
@@ -1874,7 +1862,7 @@ fn svd_full_entered(
 fn svd_values_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     {
         #[cfg(feature = "native")]
@@ -1954,7 +1942,7 @@ fn svd_values_entered(
 fn qr_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     {
         #[cfg(feature = "native")]
@@ -2042,7 +2030,7 @@ fn qr_entered(
 fn rank_revealing_qr_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
     options: crate::RankRevealingQrOptions,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     macro_rules! map_result {
@@ -2159,7 +2147,7 @@ fn rank_revealing_qr_entered(
 fn householder_qr_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<CompactQrResult> {
     {
         #[cfg(feature = "native")]
@@ -2254,8 +2242,8 @@ fn householder_qr_entered(
 fn householder_qr_from_factors_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    q: &Tensor,
-    r: &Tensor,
+    q: &HostOperand<'_>,
+    r: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<CompactQrResult> {
     if q.dtype() != r.dtype() {
         return Err(Error::dtype_mismatch(
@@ -2335,9 +2323,9 @@ fn householder_qr_from_factors_entered(
 fn householder_qr_append_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    packed: &Tensor,
-    coeff: &Tensor,
-    block: &Tensor,
+    packed: &HostOperand<'_>,
+    coeff: &HostOperand<'_>,
+    block: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<CompactQrResult> {
     if packed.dtype() != coeff.dtype() || packed.dtype() != block.dtype() {
         return Err(Error::dtype_mismatch(
@@ -2427,8 +2415,8 @@ fn householder_qr_append_entered(
 fn householder_qr_r_entered(
     _context: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    packed: &Tensor,
-    coeff: &Tensor,
+    packed: &HostOperand<'_>,
+    coeff: &HostOperand<'_>,
     options: crate::QrOptions,
 ) -> tenferro_tensor::Result<Tensor> {
     let positive = options.gauge == crate::QrGauge::PositiveDiagonal;
@@ -2467,8 +2455,8 @@ fn householder_qr_r_entered(
 fn householder_qr_q_columns_entered(
     _context: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    packed: &Tensor,
-    coeff: &Tensor,
+    packed: &HostOperand<'_>,
+    coeff: &HostOperand<'_>,
     columns: std::ops::Range<usize>,
     options: crate::QrOptions,
 ) -> tenferro_tensor::Result<Tensor> {
@@ -2580,7 +2568,7 @@ fn householder_qr_q_columns_entered(
 fn eigh_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     {
         #[cfg(feature = "native")]
@@ -2666,7 +2654,7 @@ fn eigh_entered(
 fn eigh_values_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     {
         #[cfg(feature = "native")]
@@ -2746,7 +2734,7 @@ fn eigh_values_entered(
 fn eig_values_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     {
         #[cfg(feature = "native")]
@@ -2770,7 +2758,7 @@ fn eig_values_entered(
 fn eig_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     {
         #[cfg(feature = "native")]
@@ -2791,61 +2779,40 @@ fn eig_entered(
     }
 }
 
-fn faer_strided_read_ok(input: &TensorRead<'_>) -> bool {
+fn faer_strided_host_ok(input: &HostOperand<'_>) -> bool {
     match input {
-        TensorRead::Tensor(tensor) => match tensor.dtype() {
-            DType::F32 => tensor
-                .as_typed::<f32>()
-                .is_some_and(|t| linalg::faer::faer_strided_ok(&t.as_view())),
-            DType::F64 => tensor
-                .as_typed::<f64>()
-                .is_some_and(|t| linalg::faer::faer_strided_ok(&t.as_view())),
-            DType::C32 => tensor
-                .as_typed::<Complex32>()
-                .is_some_and(|t| linalg::faer::faer_strided_ok(&t.as_view())),
-            DType::C64 => tensor
-                .as_typed::<Complex64>()
-                .is_some_and(|t| linalg::faer::faer_strided_ok(&t.as_view())),
-            // A caller-owned payload is not a faer operand, and neither are the
-            // integer and boolean tags, which faer does not compute on here.
-            _ => false,
-        },
-        TensorRead::View(TensorView::F32(view)) => linalg::faer::faer_strided_ok(view),
-        TensorRead::View(TensorView::F64(view)) => linalg::faer::faer_strided_ok(view),
-        TensorRead::View(TensorView::C32(view)) => linalg::faer::faer_strided_ok(view),
-        TensorRead::View(TensorView::C64(view)) => linalg::faer::faer_strided_ok(view),
-        TensorRead::View(TensorView::I32(_))
-        | TensorRead::View(TensorView::I64(_))
-        | TensorRead::View(TensorView::Bool(_)) => false,
+        TensorView::F32(view) => linalg::faer::faer_strided_ok(view),
+        TensorView::F64(view) => linalg::faer::faer_strided_ok(view),
+        TensorView::C32(view) => linalg::faer::faer_strided_ok(view),
+        TensorView::C64(view) => linalg::faer::faer_strided_ok(view),
+        // faer does not compute on the integer and boolean tags here.
+        TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => false,
     }
 }
 
 /// Can this right-hand side be gathered directly by the faer view path?
 ///
-/// The RHS is copied element by element, so strides may be arbitrary; only host
-/// placement, the matrix rank every provider requires, and a supported dtype
-/// matter.
+/// The RHS is copied element by element, so strides may be arbitrary; only the
+/// matrix rank every provider requires and a supported dtype matter (the host
+/// type already rules out a backend buffer).
 #[cfg(feature = "native")]
-fn faer_rhs_read_ok(input: &TensorRead<'_>) -> bool {
-    if input.backend_family().is_some() {
-        return false;
-    }
-    if input.shape().len() != 2 {
-        return false;
-    }
-    matches!(
-        input.dtype(),
-        DType::F32 | DType::F64 | DType::C32 | DType::C64
-    )
+fn faer_rhs_host_ok(input: &HostOperand<'_>) -> bool {
+    input.shape().len() == 2
+        && matches!(
+            input.dtype(),
+            DType::F32 | DType::F64 | DType::C32 | DType::C64
+        )
 }
 
 #[cfg(feature = "native")]
 fn rank_revealing_qr_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: TensorView<'_>,
+    input: HostOperand<'_>,
     options: crate::RankRevealingQrOptions,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let input = input.into_dynamic();
     macro_rules! factor {
         ($view:expr, $scalar:ty) => {
             linalg::faer::rank_revealing_qr_view(exec, buffers, $view, options).map(|result| {
@@ -2873,10 +2840,13 @@ fn rank_revealing_qr_faer_view_entered(
 fn triangular_solve_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    a: TensorView<'_>,
-    b: TensorView<'_>,
+    a: HostOperand<'_>,
+    b: HostOperand<'_>,
     options: TriangularSolveOptions,
 ) -> tenferro_tensor::Result<Tensor> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let a = a.into_dynamic();
+    let b = b.into_dynamic();
     let TriangularSolveOptions {
         left_side,
         lower,
@@ -2915,8 +2885,10 @@ fn triangular_solve_faer_view_entered(
 fn svd_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: TensorView<'_>,
+    input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let input = input.into_dynamic();
     match input {
         TensorView::F32(view) => linalg::faer::svd_view(exec, buffers, view).map(svd_erased),
         TensorView::F64(view) => linalg::faer::svd_view(exec, buffers, view).map(svd_erased),
@@ -2930,8 +2902,10 @@ fn svd_faer_view_entered(
 fn svd_full_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: TensorView<'_>,
+    input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let input = input.into_dynamic();
     match input {
         TensorView::F32(view) => linalg::faer::svd_full_view(exec, buffers, view).map(svd_erased),
         TensorView::F64(view) => linalg::faer::svd_full_view(exec, buffers, view).map(svd_erased),
@@ -2945,8 +2919,10 @@ fn svd_full_faer_view_entered(
 fn svd_values_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: TensorView<'_>,
+    input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let input = input.into_dynamic();
     match input {
         TensorView::F32(view) => {
             linalg::faer::svd_values_view(exec, buffers, view).map(Tensor::from_typed::<f32>)
@@ -2968,8 +2944,10 @@ fn svd_values_faer_view_entered(
 fn qr_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: TensorView<'_>,
+    input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let input = input.into_dynamic();
     match input {
         TensorView::F32(view) => linalg::faer::qr_view(exec, buffers, view).map(pair_erased),
         TensorView::F64(view) => linalg::faer::qr_view(exec, buffers, view).map(pair_erased),
@@ -2983,8 +2961,10 @@ fn qr_faer_view_entered(
 fn eigh_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: TensorView<'_>,
+    input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let input = input.into_dynamic();
     match input {
         TensorView::F32(view) => linalg::faer::eigh_view(exec, buffers, view).map(pair_erased),
         TensorView::F64(view) => linalg::faer::eigh_view(exec, buffers, view).map(pair_erased),
@@ -2998,8 +2978,10 @@ fn eigh_faer_view_entered(
 fn eigh_values_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: TensorView<'_>,
+    input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let input = input.into_dynamic();
     match input {
         TensorView::F32(view) => {
             linalg::faer::eigh_values_view(exec, buffers, view).map(Tensor::from_typed::<f32>)
@@ -3021,8 +3003,10 @@ fn eigh_values_faer_view_entered(
 fn cholesky_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: TensorView<'_>,
+    input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let input = input.into_dynamic();
     match input {
         TensorView::F32(view) => {
             linalg::faer::cholesky_view(exec, buffers, view).map(Tensor::from_typed::<f32>)
@@ -3044,8 +3028,10 @@ fn cholesky_faer_view_entered(
 fn lu_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: TensorView<'_>,
+    input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let input = input.into_dynamic();
     match input {
         TensorView::F32(view) => linalg::faer::lu_view(exec, buffers, view)
             .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
@@ -3070,8 +3056,10 @@ fn lu_faer_view_entered(
 fn full_piv_lu_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: TensorView<'_>,
+    input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    // The provider's view kernels are shared with the dynamic `with_exec` entries.
+    let input = input.into_dynamic();
     match input {
         TensorView::F32(view) => linalg::faer::full_piv_lu_view(exec, buffers, view)
             .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
@@ -3097,23 +3085,10 @@ fn full_piv_lu_faer_view_entered(
     }
 }
 
-fn ensure_host_typed_tensor<T: TensorScalar>(
-    op: &'static str,
-    input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<()> {
-    if input.as_view().backend_buffer().is_some() {
-        return Err(Error::runtime_state(
-            op,
-            "CPU linalg backend received a backend buffer; download the tensor to host before CPU execution",
-        ));
-    }
-    Ok(())
-}
-
 fn ensure_supported_linalg_pair(
     op: &'static str,
-    lhs: &Tensor,
-    rhs: &Tensor,
+    lhs: &HostOperand<'_>,
+    rhs: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<()> {
     ensure_supported_linalg_dtypes(op, lhs.dtype(), rhs.dtype())
 }
@@ -3157,7 +3132,7 @@ fn has_zero_dim(shape: &[usize]) -> bool {
     shape.contains(&0)
 }
 
-fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
+fn batched_vector_rhs_shape(a: &HostOperand<'_>, b: &HostOperand<'_>) -> Option<Vec<usize>> {
     batched_vector_rhs_shape_of(a.shape(), b.shape())
 }
 
@@ -3180,8 +3155,8 @@ fn batched_vector_rhs_shape_of(a_shape: &[usize], b_shape: &[usize]) -> Option<V
     Some(rhs_shape)
 }
 
-fn zeros_like_tensor(input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-    Ok(match input.dtype() {
+fn zeros_like_tensor(dtype: DType, shape: &[usize]) -> tenferro_tensor::Result<Tensor> {
+    Ok(match dtype {
         // A caller-owned payload has no zero-like runtime tensor.
         DType::External(type_id) => {
             return Err(unsupported_dtype(
@@ -3189,19 +3164,28 @@ fn zeros_like_tensor(input: &Tensor) -> tenferro_tensor::Result<Tensor> {
                 DType::External(type_id),
             ));
         }
-        DType::F32 => Tensor::from_typed::<f32>(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::F64 => Tensor::from_typed::<f64>(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::I32 => Tensor::from_typed::<i32>(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::I64 => Tensor::from_typed::<i64>(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::F32 => Tensor::from_typed::<f32>(TypedTensor::zeros(shape.to_vec())?),
+        DType::F64 => Tensor::from_typed::<f64>(TypedTensor::zeros(shape.to_vec())?),
+        DType::I32 => Tensor::from_typed::<i32>(TypedTensor::zeros(shape.to_vec())?),
+        DType::I64 => Tensor::from_typed::<i64>(TypedTensor::zeros(shape.to_vec())?),
         DType::Bool => {
-            let t = typed_host::<bool>(input, "zeros_like_tensor")?;
+            let len = shape
+                .iter()
+                .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+                .ok_or_else(|| {
+                    Error::invalid_argument(
+                        "zeros_like_tensor",
+                        "shape",
+                        "element count overflows usize",
+                    )
+                })?;
             Tensor::from_typed::<bool>(TypedTensor::from_vec_col_major(
-                t.shape().to_vec(),
-                vec![false; t.n_elements()],
+                shape.to_vec(),
+                vec![false; len],
             )?)
         }
-        DType::C32 => Tensor::from_typed::<Complex32>(TypedTensor::zeros(input.shape().to_vec())?),
-        DType::C64 => Tensor::from_typed::<Complex64>(TypedTensor::zeros(input.shape().to_vec())?),
+        DType::C32 => Tensor::from_typed::<Complex32>(TypedTensor::zeros(shape.to_vec())?),
+        DType::C64 => Tensor::from_typed::<Complex64>(TypedTensor::zeros(shape.to_vec())?),
     })
 }
 
@@ -3349,8 +3333,8 @@ fn square_matrix_dim(op: &'static str, shape: &[usize]) -> tenferro_tensor::Resu
 
 fn unsupported_pair(
     op: &'static str,
-    lhs: &Tensor,
-    rhs: &Tensor,
+    lhs: &HostOperand<'_>,
+    rhs: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     if lhs.dtype() != rhs.dtype() {
         Err(Error::dtype_mismatch(op, lhs.dtype(), rhs.dtype()))

@@ -621,10 +621,10 @@ fn cpu_solve_read_into_reaches_direct_write_for_eligible_outputs() {
     let guarded_fallback = source_section(
         solve_read_into,
         "if has_zero_dim(a.shape())",
-        "}\n\n        let a = linalg_view(\"solve_read_into\", a)?;",
+        "}\n\n        self.with_linalg_pool_checked(",
     );
     assert!(
-        guarded_fallback.contains("solve_read_into_default(self, a, b, out)"),
+        guarded_fallback.contains("solve_read_into_default("),
         "the allocate+copy fallback must be the guarded ineligible branch, not the main path"
     );
 }

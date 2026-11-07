@@ -215,6 +215,7 @@ fn test_svd_unsupported_dtype_returns_error() {
 fn test_faer_svd_decomposition_failure_returns_error() {
     let mut backend = tenferro_cpu::CpuEngine::serial();
     let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 0.0, 0.0, 1.0]).unwrap();
+    let input = input.as_view().try_host("svd").unwrap();
 
     let err = with_cpu_linalg(&mut backend, |backend| {
         backend.with_linalg_pool(|context, buffers| faer_linalg::svd(context, buffers, &input))
@@ -231,6 +232,7 @@ fn test_faer_eig_decomposition_failure_returns_error() {
     let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 0.0, 0.0, 1.0]).unwrap(),
     );
+    let input = TensorRead::from_tensor(&input).try_host("eig").unwrap();
 
     let err = with_cpu_linalg(&mut backend, |backend| {
         backend.with_linalg_pool(|context, buffers| faer_linalg::eig(context, buffers, &input))
@@ -278,8 +280,9 @@ fn test_faer_eig_zero_extent_returns_empty_complex_outputs_per_input_width() {
     ];
 
     for input in &cases {
+        let input = TensorRead::from_tensor(input).try_host("eig").unwrap();
         let outputs = with_cpu_linalg(&mut backend, |backend| {
-            backend.with_linalg_pool(|context, buffers| faer_linalg::eig(context, buffers, input))
+            backend.with_linalg_pool(|context, buffers| faer_linalg::eig(context, buffers, &input))
         })
         .unwrap();
 

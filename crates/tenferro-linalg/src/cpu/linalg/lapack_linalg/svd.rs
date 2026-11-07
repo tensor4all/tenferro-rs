@@ -1,3 +1,4 @@
+use crate::cpu::linalg::HostView;
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::TypedTensor;
 use tlinalg_blas::svd::{SvdMode, SvdOutputs};
@@ -24,7 +25,7 @@ fn svd_buffers<T: LapackLinalg>(
     buffers: &mut BufferPool,
     op: Op,
     mode: SvdMode,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
     shapes: [&[usize]; 3],
 ) -> tenferro_tensor::Result<SvdBuffers<T>> {
     let op_name = op.as_str();
@@ -32,7 +33,7 @@ fn svd_buffers<T: LapackLinalg>(
     let mut s = pooled_output::<T::RealScalar>(buffers, op_name, "singular values", s_shape)?;
     let mut u = pooled_output::<T>(buffers, op_name, "left singular vectors", u_shape)?;
     let mut vt = pooled_output::<T>(buffers, op_name, "right singular vectors", vt_shape)?;
-    let view = input.as_view();
+    let view = input.clone().into_dynamic();
     T::svd(
         buffers,
         op,
@@ -50,7 +51,7 @@ fn svd_buffers<T: LapackLinalg>(
 
 pub(crate) fn svd<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedSvd<T>> {
     let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd")?;
     let (m, n) = (matrix_shape[0], matrix_shape[1]);
@@ -81,7 +82,7 @@ pub(crate) fn svd<T: LapackLinalg>(
 
 pub(crate) fn svd_full<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedSvd<T>> {
     let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_full")?;
     let (m, n) = (matrix_shape[0], matrix_shape[1]);
@@ -111,12 +112,12 @@ pub(crate) fn svd_full<T: LapackLinalg>(
 /// dimension is zero, so the factor for the non-empty dimension is the identity rather than an
 /// empty tensor. This mirrors the faer provider so one public call has one shape and unitarity
 /// contract.
-fn empty_full_svd_outputs<T: LapackLinalg, U>(
+fn empty_full_svd_outputs<T: LapackLinalg>(
     op: &'static str,
     m: usize,
     n: usize,
     batch_shape: &[usize],
-    template: &TypedTensor<U>,
+    template: &impl super::helpers::PlacementTemplate,
 ) -> tenferro_tensor::Result<TypedSvd<T>> {
     let blocks = checked_product(op, "batch shape", batch_shape)?;
     Ok((
@@ -158,7 +159,7 @@ fn identity_blocks<T: LapackLinalg>(
 
 pub(crate) fn svd_values<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
     let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_values")?;
     let (m, n) = (matrix_shape[0], matrix_shape[1]);

@@ -1,3 +1,4 @@
+use crate::cpu::linalg::{compact_host_data, HostView};
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::TypedTensor;
 use tlinalg_blas::Op;
@@ -64,9 +65,9 @@ fn apply_reflectors_2d<T: LapackLinalg>(
         .map_err(provider(Op::HouseholderApply))
 }
 
-fn validate_state<T>(
-    packed: &TypedTensor<T>,
-    tau: &TypedTensor<T>,
+fn validate_state<T: 'static>(
+    packed: &HostView<'_, T>,
+    tau: &HostView<'_, T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize, usize)> {
     let (m, n) = matrix_dims(packed, op)?;
@@ -90,11 +91,11 @@ fn validate_state<T>(
 
 pub(crate) fn compact_factor_2d<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<CompactQrResult<T>> {
     let (m, n) = matrix_dims(input, "compact_factor_2d")?;
     let k = m.min(n);
-    let input_data = input.host_data()?;
+    let input_data = compact_host_data("compact_factor_2d", input)?;
     let mut packed = buffers.acquire_with_capacity::<T>(input_data.len());
     packed.extend_from_slice(input_data);
     let tau = if has_zero_dim(input.shape()) {
@@ -110,9 +111,9 @@ pub(crate) fn compact_factor_2d<T: LapackLinalg>(
 
 pub(crate) fn append_2d<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    packed: &TypedTensor<T>,
-    tau: &TypedTensor<T>,
-    input: &TypedTensor<T>,
+    packed: &HostView<'_, T>,
+    tau: &HostView<'_, T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<CompactQrResult<T>> {
     let (m, old_n, old_k) = validate_state(packed, tau, "append_2d")?;
     let (input_m, p) = matrix_dims(input, "append_2d")?;
@@ -127,24 +128,28 @@ pub(crate) fn append_2d<T: LapackLinalg>(
         return Ok((
             tensor_from_vec_with_template(
                 packed.shape().to_vec(),
-                packed.host_data()?.to_vec(),
+                compact_host_data("append_2d", packed)?.to_vec(),
                 packed,
             )?,
-            tensor_from_vec_with_template(tau.shape().to_vec(), tau.host_data()?.to_vec(), tau)?,
+            tensor_from_vec_with_template(
+                tau.shape().to_vec(),
+                compact_host_data("append_2d", tau)?.to_vec(),
+                tau,
+            )?,
         ));
     }
     let new_n = old_n.checked_add(p).ok_or_else(|| {
         tenferro_tensor::Error::invalid_argument("append_2d", "shape", "column count overflow")
     })?;
     let new_k = m.min(new_n);
-    let input_data = input.host_data()?;
+    let input_data = compact_host_data("append_2d", input)?;
     let mut transformed = buffers.acquire_with_capacity::<T>(input_data.len());
     transformed.extend_from_slice(input_data);
     apply_reflectors_2d::<T>(
         buffers,
-        packed.host_data()?,
+        compact_host_data("append_2d", packed)?,
         old_n,
-        tau.host_data()?,
+        compact_host_data("append_2d", tau)?,
         &mut transformed,
         m,
         p,
@@ -169,12 +174,12 @@ pub(crate) fn append_2d<T: LapackLinalg>(
 
     let packed_len = checked_product("append_2d", "packed state", &[m, new_n])?;
     let mut output = buffers.acquire_with_capacity::<T>(packed_len);
-    output.extend_from_slice(packed.host_data()?);
+    output.extend_from_slice(compact_host_data("append_2d", packed)?);
     for col in 0..p {
         output.extend_from_slice(&transformed[col * m..col * m + old_k]);
         output.extend_from_slice(&trailing[col * trailing_rows..(col + 1) * trailing_rows]);
     }
-    let tau_data = tau.host_data()?;
+    let tau_data = compact_host_data("append_2d", tau)?;
     let mut output_tau = buffers.acquire_with_capacity::<T>(new_k);
     output_tau.extend_from_slice(tau_data);
     output_tau.extend_from_slice(&new_tau);
@@ -187,8 +192,8 @@ pub(crate) fn append_2d<T: LapackLinalg>(
 
 pub(crate) fn from_factors_2d<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    q: &TypedTensor<T>,
-    r: &TypedTensor<T>,
+    q: &HostView<'_, T>,
+    r: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<CompactQrResult<T>> {
     let (m, s) = matrix_dims(q, "from_factors_2d")?;
     let (r_s, n) = matrix_dims(r, "from_factors_2d")?;
@@ -207,7 +212,7 @@ pub(crate) fn from_factors_2d<T: LapackLinalg>(
         ));
     }
     let k = m.min(n);
-    let r_data = r.host_data()?;
+    let r_data = compact_host_data("from_factors_2d", r)?;
     for col in 0..n.min(s) {
         for row in col + 1..s {
             if r_data[row + col * s] != T::default() {
@@ -234,7 +239,7 @@ pub(crate) fn from_factors_2d<T: LapackLinalg>(
         ));
     }
 
-    let q_data = q.host_data()?;
+    let q_data = compact_host_data("from_factors_2d", q)?;
     let mut q_packed = buffers.acquire_with_capacity::<T>(q_data.len());
     q_packed.extend_from_slice(q_data);
     let q_tau = geqrf_2d(buffers, &mut q_packed, m, s)?;
@@ -265,13 +270,13 @@ pub(crate) fn from_factors_2d<T: LapackLinalg>(
 }
 
 pub(crate) fn raw_r_2d<T: LapackLinalg>(
-    packed: &TypedTensor<T>,
-    tau: &TypedTensor<T>,
+    packed: &HostView<'_, T>,
+    tau: &HostView<'_, T>,
     positive_diagonal: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let (m, n, k) = validate_state(packed, tau, "raw_r_2d")?;
     let mut r = vec![T::default(); checked_product("raw_r_2d", "R", &[k, n])?];
-    let packed_data = packed.host_data()?;
+    let packed_data = compact_host_data("raw_r_2d", packed)?;
     for col in 0..n {
         for row in 0..k.min(col + 1) {
             r[row + col * k] = packed_data[row + col * m];
@@ -290,8 +295,8 @@ pub(crate) fn raw_r_2d<T: LapackLinalg>(
 
 pub(crate) fn q_columns_2d<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    packed: &TypedTensor<T>,
-    tau: &TypedTensor<T>,
+    packed: &HostView<'_, T>,
+    tau: &HostView<'_, T>,
     start: usize,
     end: usize,
     positive_diagonal: bool,
@@ -315,9 +320,9 @@ pub(crate) fn q_columns_2d<T: LapackLinalg>(
     if columns != 0 {
         apply_reflectors_2d::<T>(
             buffers,
-            packed.host_data()?,
+            compact_host_data("q_columns_2d", packed)?,
             n,
-            tau.host_data()?,
+            compact_host_data("q_columns_2d", tau)?,
             &mut q,
             m,
             columns,
@@ -325,7 +330,7 @@ pub(crate) fn q_columns_2d<T: LapackLinalg>(
             false,
         )?;
         if positive_diagonal {
-            let packed_data = packed.host_data()?;
+            let packed_data = compact_host_data("q_columns_2d", packed)?;
             // The gauge is defined by R's diagonal, so it fixes only the first
             // `k` columns; a complement column has no diagonal to fix.
             for col in 0..columns {
@@ -345,7 +350,7 @@ pub(crate) fn q_columns_2d<T: LapackLinalg>(
 
 pub(crate) fn qr<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     const OP: &str = "qr";
     let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, OP)?;
@@ -361,7 +366,7 @@ pub(crate) fn qr<T: LapackLinalg>(
     }
     let mut q = pooled_output::<T>(buffers, OP, "Q", &q_shape)?;
     let mut r = pooled_output::<T>(buffers, OP, "R", &r_shape)?;
-    let view = input.as_view();
+    let view = input.clone().into_dynamic();
     T::qr(buffers, super::super::raw_view(OP, &view)?, &mut q, &mut r).map_err(provider(Op::Qr))?;
     Ok(vec![
         tensor_from_vec_with_template(q_shape, q, input)?,
@@ -376,7 +381,7 @@ pub(crate) fn qr<T: LapackLinalg>(
 /// batched call; the host decides each rank from the `R` diagonal.
 pub(crate) fn rank_revealing_qr<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
     options: crate::RankRevealingQrOptions,
 ) -> tenferro_tensor::Result<crate::cpu::linalg::rank_revealing_qr::TypedRrqr<T>> {
     const OP: &str = "rank_revealing_qr";
@@ -388,7 +393,7 @@ pub(crate) fn rank_revealing_qr<T: LapackLinalg>(
     let r_shape = matrix_with_batch_shape(k, n, batch_shape);
     let p_shape = vector_with_batch_shape(n, batch_shape);
     let batch = checked_product(OP, "batch shape", batch_shape)?;
-    let view = input.as_view();
+    let view = input.clone().into_dynamic();
     crate::cpu::linalg::rank_revealing_qr::screen_non_finite(OP, &view, batch, |value: T| {
         value.is_finite_value()
     })?;

@@ -3,6 +3,11 @@ use tenferro_tensor::TypedTensor;
 
 use super::{append_2d, compact_factor_2d, from_factors_2d, q_columns_2d, raw_r_2d};
 
+/// Borrow a test operand the way the CPU backend boundary hands it to the provider.
+fn host<T: 'static>(tensor: &TypedTensor<T>) -> crate::cpu::linalg::HostView<'_, T> {
+    tensor.as_view().try_host("test").unwrap()
+}
+
 fn check_batched_qr<T: super::LapackLinalg>(
     make: impl Fn(f64, f64) -> T,
     value: impl Fn(T) -> num_complex::Complex64,
@@ -14,7 +19,7 @@ fn check_batched_qr<T: super::LapackLinalg>(
             .collect();
         let input = TypedTensor::from_vec_col_major([m, n, 2, 3], data.clone()).unwrap();
         let mut buffers = BufferPool::new();
-        let outputs = super::qr(&mut buffers, &input).unwrap();
+        let outputs = super::qr(&mut buffers, &host(&input)).unwrap();
         assert_eq!(outputs[0].shape(), &[m, k, 2, 3]);
         assert_eq!(outputs[1].shape(), &[k, n, 2, 3]);
         let q = outputs[0].host_data().unwrap();
@@ -65,13 +70,13 @@ fn batched_qr_handles_empty_shapes_and_rejects_wrong_rank() {
     let mut buffers = BufferPool::new();
     for shape in [[2, 2, 0], [0, 3, 2], [3, 0, 2]] {
         let input = TypedTensor::<f64>::from_vec_col_major(shape, vec![]).unwrap();
-        let outputs = super::qr(&mut buffers, &input).unwrap();
+        let outputs = super::qr(&mut buffers, &host(&input)).unwrap();
         assert!(outputs
             .iter()
             .all(|out| out.host_data().unwrap().is_empty()));
     }
     let input = TypedTensor::<f64>::from_vec_col_major([0], vec![]).unwrap();
-    assert!(super::qr(&mut buffers, &input).is_err());
+    assert!(super::qr(&mut buffers, &host(&input)).is_err());
 }
 
 fn product(a: &[f64], a_rows: usize, a_cols: usize, b: &[f64], b_cols: usize) -> Vec<f64> {
@@ -109,10 +114,10 @@ fn compact_factor_and_append_reconstruct_without_refactoring_old_columns() {
             .unwrap();
     let mut buffers = BufferPool::new();
 
-    let (packed, tau) = compact_factor_2d(&mut buffers, &a).unwrap();
-    let (packed, tau) = append_2d(&mut buffers, &packed, &tau, &b).unwrap();
-    let r = raw_r_2d(&packed, &tau, false).unwrap();
-    let q = q_columns_2d(&mut buffers, &packed, &tau, 0, 4, false).unwrap();
+    let (packed, tau) = compact_factor_2d(&mut buffers, &host(&a)).unwrap();
+    let (packed, tau) = append_2d(&mut buffers, &host(&packed), &host(&tau), &host(&b)).unwrap();
+    let r = raw_r_2d(&host(&packed), &host(&tau), false).unwrap();
+    let q = q_columns_2d(&mut buffers, &host(&packed), &host(&tau), 0, 4, false).unwrap();
 
     let expected = [
         1.0, 2.0, 3.0, 4.0, 2.0, 0.0, 1.0, 3.0, 3.0, -1.0, 2.0, 1.0, 0.5, 2.0, -2.0, 4.0,
@@ -132,9 +137,9 @@ fn from_factors_reconstructs_product_without_forming_dense_qr_product() {
         TypedTensor::from_vec_col_major(vec![2, 3], vec![2.0, 0.0, 3.0, 1.0, 4.0, 2.0]).unwrap();
     let mut buffers = BufferPool::new();
 
-    let (packed, tau) = from_factors_2d(&mut buffers, &q, &r).unwrap();
-    let extracted_r = raw_r_2d(&packed, &tau, false).unwrap();
-    let extracted_q = q_columns_2d(&mut buffers, &packed, &tau, 0, 3, false).unwrap();
+    let (packed, tau) = from_factors_2d(&mut buffers, &host(&q), &host(&r)).unwrap();
+    let extracted_r = raw_r_2d(&host(&packed), &host(&tau), false).unwrap();
+    let extracted_q = q_columns_2d(&mut buffers, &host(&packed), &host(&tau), 0, 3, false).unwrap();
 
     let expected = product(q.host_data().unwrap(), 4, 2, r.host_data().unwrap(), 3);
     assert_close(

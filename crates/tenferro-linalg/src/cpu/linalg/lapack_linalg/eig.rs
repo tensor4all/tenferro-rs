@@ -1,6 +1,6 @@
-use num_complex::{Complex32, Complex64};
+use crate::cpu::linalg::HostView;
 use tenferro_cpu::linalg_interop::BufferPool;
-use tenferro_tensor::{DType, Tensor, TypedTensor};
+use tenferro_tensor::{Host, Tensor, TensorView};
 use tlinalg_blas::Op;
 
 use super::helpers::{
@@ -12,7 +12,7 @@ use super::unsupported_dtype;
 /// Eigenvalues (and with `vectors`, right eigenvectors) of a batch, as erased complex tensors.
 fn eig_typed<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
     vectors: bool,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     let (op, provider_op) = if vectors {
@@ -33,7 +33,7 @@ fn eig_typed<T: LapackLinalg>(
     } else {
         Vec::new()
     };
-    let view = input.as_view();
+    let view = input.clone().into_dynamic();
     T::eig(
         buffers,
         provider_op,
@@ -59,49 +59,32 @@ fn eig_typed<T: LapackLinalg>(
 
 fn eig_erased(
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &TensorView<'_, Host>,
     vectors: bool,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     let op = if vectors { "eig" } else { "eig_values" };
     if input.shape().contains(&0) {
         return zero_dim_eig_outputs(input, op, vectors);
     }
-    let unsupported = || unsupported_dtype(op, input.dtype());
-    match input.dtype() {
-        DType::F32 => eig_typed(
-            buffers,
-            input.as_typed::<f32>().ok_or_else(unsupported)?,
-            vectors,
-        ),
-        DType::F64 => eig_typed(
-            buffers,
-            input.as_typed::<f64>().ok_or_else(unsupported)?,
-            vectors,
-        ),
-        DType::C32 => eig_typed(
-            buffers,
-            input.as_typed::<Complex32>().ok_or_else(unsupported)?,
-            vectors,
-        ),
-        DType::C64 => eig_typed(
-            buffers,
-            input.as_typed::<Complex64>().ok_or_else(unsupported)?,
-            vectors,
-        ),
-        _ => Err(unsupported()),
+    match input {
+        TensorView::F32(view) => eig_typed(buffers, view, vectors),
+        TensorView::F64(view) => eig_typed(buffers, view, vectors),
+        TensorView::C32(view) => eig_typed(buffers, view, vectors),
+        TensorView::C64(view) => eig_typed(buffers, view, vectors),
+        unsupported => Err(unsupported_dtype(op, unsupported.dtype())),
     }
 }
 
 pub(crate) fn eig(
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &TensorView<'_, Host>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     eig_erased(buffers, input, true)
 }
 
 pub(crate) fn eig_values(
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &TensorView<'_, Host>,
 ) -> tenferro_tensor::Result<Tensor> {
     eig_erased(buffers, input, false)?.pop().ok_or_else(|| {
         tenferro_tensor::Error::runtime_state("eig_values", "eigenvalue output missing")

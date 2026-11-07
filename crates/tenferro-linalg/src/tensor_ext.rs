@@ -2687,10 +2687,10 @@ fn ensure_linalg_input_residency(
     input: &TensorRead<'_>,
 ) -> tenferro_tensor::Result<()> {
     if with_cpu_engine(session, |_| ()).is_some() {
-        return with_cpu_engine(session, |_| {
-            crate::cpu::backend::ensure_host_tensor_read(op, input)
-        })
-        .expect("marker probe matched a CPU execution session");
+        // The shortcut runs no kernel, so the host view is only the refusal the LU route would
+        // have returned; it is dropped here.
+        return with_cpu_engine(session, |_| input.clone().try_host(op).map(drop))
+            .expect("marker probe matched a CPU execution session");
     }
     #[cfg(feature = "cuda")]
     if with_cuda_engine(session, |_| ()).is_some() {

@@ -2160,8 +2160,8 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
             // representation's one invariant is established: a host-backed tensor is never labelled
             // device-resident. `set_placement` can write any `Placement` onto the union — that is what
             // makes the union honest — but the narrowing must not carry the lie into the typed side,
-            // because an entry point that takes `Host` is entitled to trust it and skip the runtime
-            // check (`ensure_host_tensor`).
+            // because an entry point that takes `Host` is entitled to trust it and skip a runtime
+            // placement check (the CPU entry points narrow once, through `TensorRead::try_host`).
             DynamicStorage::Host(host) => Ok(TypedTensor {
                 shape,
                 placement: host_placement(placement),
@@ -3186,6 +3186,79 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
             placement,
             _representation: std::marker::PhantomData,
         })
+    }
+}
+
+impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R, Dynamic> {
+    /// Checked narrowing of a borrowed view to the host representation.
+    ///
+    /// This is the one place a borrowed dynamic view becomes `Host`-marked: it
+    /// succeeds exactly when the view borrows host elements (a plain host
+    /// owner, a host slice, or a CPU-resident allocation group), keeps the
+    /// layout, and resolves a device or managed placement label to host memory
+    /// the same way [`TypedTensor::into_host`] does. A consumer that receives
+    /// the result reads it through [`TypedTensorView::as_host_slice`] without a
+    /// further check.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+    /// let host = tensor.as_view().try_host("example")?;
+    /// assert_eq!(host.as_host_slice(), &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] attributed to `op` when the view
+    /// borrows backend (device) storage; download the tensor to host first.
+    pub fn try_host(self, op: &'static str) -> crate::Result<TypedTensorView<'a, T, R, Host>> {
+        match self.buffer {
+            TensorStorageRef::Host(data) => Ok(TypedTensorView {
+                buffer: TensorStorageRef::Host(data),
+                // A host-marked view carries no retained region: the borrow of
+                // `data` is what keeps the owner alive for `'a`.
+                root: None,
+                layout: self.layout,
+                placement: host_placement(self.placement),
+                _representation: std::marker::PhantomData,
+            }),
+            TensorStorageRef::Backend(_) | TensorStorageRef::Root(_) => {
+                Err(crate::Error::runtime_state(
+                    op,
+                    "CPU backend received a backend buffer; download the tensor to host before CPU execution",
+                ))
+            }
+        }
+    }
+}
+
+impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R, Host> {
+    /// Widen a host-marked view to the runtime union without copying.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DynRank, Host, TypedTensorView};
+    ///
+    /// let data = [1_i32, 2];
+    /// let host: TypedTensorView<'_, i32, DynRank, Host> =
+    ///     TypedTensorView::from_host_slice(vec![2].as_slice(), vec![1].as_slice(), 0, &data)?;
+    /// let dynamic = host.into_dynamic();
+    /// assert_eq!(dynamic.host_storage()?, &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn into_dynamic(self) -> TypedTensorView<'a, T, R, Dynamic> {
+        TypedTensorView {
+            buffer: self.buffer,
+            root: self.root,
+            layout: self.layout,
+            placement: self.placement,
+            _representation: std::marker::PhantomData,
+        }
     }
 }
 
@@ -6246,15 +6319,173 @@ impl Tensor {
 /// assert_eq!(view.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-#[derive(Clone, Debug)]
-pub enum TensorView<'a> {
-    F32(TypedTensorView<'a, f32>),
-    F64(TypedTensorView<'a, f64>),
-    I32(TypedTensorView<'a, i32>),
-    I64(TypedTensorView<'a, i64>),
-    Bool(TypedTensorView<'a, bool>),
-    C32(TypedTensorView<'a, Complex<f32>>),
-    C64(TypedTensorView<'a, Complex<f64>>),
+///
+/// `D` marks the representation the view was proven to borrow, as on
+/// [`TypedTensorView`]. The default [`Dynamic`] view may borrow host or backend
+/// storage; a `TensorView<'a, Host>` comes only from
+/// [`TensorView::try_host`] or [`TensorRead::try_host`], so every arm borrows
+/// host storage and a consumer reads it without a further placement check.
+#[derive(Debug)]
+pub enum TensorView<'a, D: Representation = Dynamic> {
+    F32(TypedTensorView<'a, f32, DynRank, D>),
+    F64(TypedTensorView<'a, f64, DynRank, D>),
+    I32(TypedTensorView<'a, i32, DynRank, D>),
+    I64(TypedTensorView<'a, i64, DynRank, D>),
+    Bool(TypedTensorView<'a, bool, DynRank, D>),
+    C32(TypedTensorView<'a, Complex<f32>, DynRank, D>),
+    C64(TypedTensorView<'a, Complex<f64>, DynRank, D>),
+}
+
+// Written by hand because the representation markers are not `Clone`: the
+// derive would demand `D: Clone` although no marker value is ever stored.
+impl<D: Representation> Clone for TensorView<'_, D> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::F32(view) => Self::F32(view.clone()),
+            Self::F64(view) => Self::F64(view.clone()),
+            Self::I32(view) => Self::I32(view.clone()),
+            Self::I64(view) => Self::I64(view.clone()),
+            Self::Bool(view) => Self::Bool(view.clone()),
+            Self::C32(view) => Self::C32(view.clone()),
+            Self::C64(view) => Self::C64(view.clone()),
+        }
+    }
+}
+
+/// Apply one expression to every arm of a [`TensorView`], keeping the arm.
+macro_rules! map_tensor_view {
+    ($view:expr, |$typed:ident| $body:expr) => {
+        match $view {
+            TensorView::F32($typed) => TensorView::F32($body),
+            TensorView::F64($typed) => TensorView::F64($body),
+            TensorView::I32($typed) => TensorView::I32($body),
+            TensorView::I64($typed) => TensorView::I64($body),
+            TensorView::Bool($typed) => TensorView::Bool($body),
+            TensorView::C32($typed) => TensorView::C32($body),
+            TensorView::C64($typed) => TensorView::C64($body),
+        }
+    };
+}
+
+impl<'a> TensorView<'a> {
+    /// Checked narrowing of a dtype-erased view to the host representation.
+    ///
+    /// See [`TypedTensorView::try_host`]: the narrowing succeeds exactly when
+    /// the view borrows host elements, and a consumer of the
+    /// `TensorView<'a, Host>` it returns needs no further placement check.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let host = TensorView::f64(&[2], &[1.0, 2.0])?.try_host("example")?;
+    /// assert_eq!(host.dtype(), DType::F64);
+    /// assert_eq!(host.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] attributed to `op` when the view
+    /// borrows backend (device) storage; download the tensor to host first.
+    pub fn try_host(self, op: &'static str) -> crate::Result<TensorView<'a, Host>> {
+        Ok(map_tensor_view!(self, |view| view.try_host(op)?))
+    }
+}
+
+impl<'a> TensorView<'a, Host> {
+    /// Widen a host-marked view to the runtime union without copying.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let host = TensorView::i32(&[2], &[3, 4])?.try_host("example")?;
+    /// let dynamic = host.into_dynamic();
+    /// assert_eq!(dynamic.as_slice::<i32>()?, &[3, 4]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn into_dynamic(self) -> TensorView<'a> {
+        map_tensor_view!(self, |view| view.into_dynamic())
+    }
+
+    /// The element dtype of this host view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let host = TensorView::i64(&[1], &[7])?.try_host("example")?;
+    /// assert_eq!(host.dtype(), DType::I64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn dtype(&self) -> DType {
+        match self {
+            Self::F32(_) => DType::F32,
+            Self::F64(_) => DType::F64,
+            Self::I32(_) => DType::I32,
+            Self::I64(_) => DType::I64,
+            Self::Bool(_) => DType::Bool,
+            Self::C32(_) => DType::C32,
+            Self::C64(_) => DType::C64,
+        }
+    }
+
+    /// The logical shape of this host view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TensorView;
+    ///
+    /// let host = TensorView::f32(&[2], &[1.0, 2.0])?.try_host("example")?;
+    /// assert_eq!(host.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn shape(&self) -> &[usize] {
+        match self {
+            Self::F32(view) => view.shape(),
+            Self::F64(view) => view.shape(),
+            Self::I32(view) => view.shape(),
+            Self::I64(view) => view.shape(),
+            Self::Bool(view) => view.shape(),
+            Self::C32(view) => view.shape(),
+            Self::C64(view) => view.shape(),
+        }
+    }
+
+    /// Whether the view covers its whole host buffer in compact column-major
+    /// order from offset zero, so it reads exactly like an owned tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
+    /// let host = TensorRead::from_tensor(&tensor).try_host("example")?;
+    /// assert!(host.is_owned_layout());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn is_owned_layout(&self) -> bool {
+        fn owned<T: 'static>(view: &TypedTensorView<'_, T, DynRank, Host>) -> bool {
+            view.offset() == 0
+                && view.backing_len() == view.n_elements()
+                && matches!(view.is_col_major_contiguous(), Ok(true))
+        }
+        match self {
+            Self::F32(view) => owned(view),
+            Self::F64(view) => owned(view),
+            Self::I32(view) => owned(view),
+            Self::I64(view) => owned(view),
+            Self::Bool(view) => owned(view),
+            Self::C32(view) => owned(view),
+            Self::C64(view) => owned(view),
+        }
+    }
 }
 
 /// Dynamic mutable borrowed tensor view.
@@ -8230,6 +8461,46 @@ impl<'a> TensorViewMut<'a> {
             Self::C32(t) => TensorView::C32(t.as_read_only()),
             Self::C64(t) => TensorView::C64(t.as_read_only()),
         }
+    }
+}
+
+impl<'a> TensorRead<'a> {
+    /// Checked narrowing of a read target to a host-marked view.
+    ///
+    /// This is the boundary a CPU entry point crosses once: an owned tensor is
+    /// borrowed without copying, an existing view keeps its layout, and the
+    /// result is a [`TensorView<'a, Host>`](TensorView) whose consumers read
+    /// host elements without re-checking placement. `op` names the operation
+    /// in the error, as the per-entry checks it replaces did.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let host = TensorRead::from_tensor(&tensor).try_host("cholesky")?;
+    /// assert_eq!(host.dtype(), DType::F64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::UnsupportedDType`] attributed to `op` for a
+    /// tensor built with [`Tensor::external`], which has no preset-scalar view,
+    /// and [`crate::Error::RuntimeState`] attributed to `op` when the read
+    /// borrows backend (device) storage; download the tensor to host first.
+    pub fn try_host(self, op: &'static str) -> crate::Result<TensorView<'a, Host>> {
+        let dtype = self.dtype();
+        self.tensor_view()
+            .ok_or_else(|| {
+                crate::Error::unsupported_dtype(
+                    op,
+                    dtype,
+                    "an externally defined payload has no host tensor view",
+                )
+            })?
+            .try_host(op)
     }
 }
 
