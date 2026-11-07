@@ -1,5 +1,23 @@
 //! Borrowed-`Exec` factorization entries with typed outputs (#2462); the contract is the
 //! "Borrowed-`Exec` factorization entries" section of the crate documentation.
+//!
+//! # Three input rules behind three spellings of the same factorization
+//!
+//! The crate now offers the same six factorizations through three shapes, and they accept
+//! **different inputs**. That is deliberate, and it is the thing to read before choosing one:
+//!
+//! | entry | input | rule |
+//! |---|---|---|
+//! | `svd(&Tensor)` and siblings | an owned tensor | copied in through its own view: no layout restriction, because the callee already owns the bytes |
+//! | `svd_read(TensorRead)` and siblings | any read | the `*_read` rule: rank 2 in place, everything else materialized, and a **negative stride is gathered** |
+//! | `svd_with_exec(&mut Exec, &mut BufferPool, &TypedTensorView)` and siblings | a borrowed view | the `*_impl` rule: `matrix_core_and_batch` + `raw_view`, read in place, and a **negative stride is `Unsupported`** |
+//!
+//! The rule follows from the promise, not from taste. A borrowed entry promises "no copy", so it
+//! cannot gather a negative stride and has to refuse it. A read entry promises "any read", so it
+//! must pay for the gather. Neither behaviour may be relaxed to match the other: the parity test
+//! `a_negative_stride_is_unsupported_for_every_entry` asserts both halves on the same view, so
+//! making them agree fails a test that says why they do not.
+
 
 use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::BufferPool;
