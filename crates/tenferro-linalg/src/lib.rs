@@ -87,19 +87,26 @@
 //!
 //! - **Execution.** A call runs on the `exec` it is handed: the bundle's token, its width and its
 //!   batch policy. It enters no other pool and does not re-enter an engine.
-//! - **Storage.** Every output, the provider workspace and the transient spectrum of a complex
-//!   input are leased from `buffers`; tenferro allocates nothing outside it. (faer's own GEMM
-//!   still allocates packing scratch per call off x86_64; that is inside the provider, and
-//!   `tests/cpu_linalg_allocation.rs` records it.) An output returns its storage to the pool when
-//!   it drops, so a lane that keeps one pool reaches a steady state. Results may outlive the
-//!   pool; their storage is then freed instead of recycled.
+//! - **Storage.** Every output payload, the provider workspace and the transient spectrum of a
+//!   complex input are leased from `buffers`; tenferro allocates no payload or workspace outside
+//!   it. The guarantee is about those buffers, not about every byte a call touches: the dims and
+//!   strides of a view and of an output are shape metadata, held inline up to `INLINE_RANK` (8)
+//!   axes and heap-allocated past that, so an operand of rank 9 or more makes a few small
+//!   metadata allocations outside the pool per call. `tests/cpu_linalg_allocation.rs` carries a
+//!   rank-9 row beside its rank-2 and rank-8 rows, so this wording and the measured counts move
+//!   together. (faer's own GEMM still allocates packing scratch per call off x86_64; that is
+//!   inside the provider, and the same test records it.) An output returns its storage to the
+//!   pool when it drops, so a lane that keeps one pool reaches a steady state. Results may outlive
+//!   the pool; their storage is then freed instead of recycled.
 //! - **View rule.** The operand is a matrix `[m, n]` or a batch `[m, n, b..]`; the eigensolvers
 //!   require `m == n`. Its dims, strides and offset are read in place as given. A negative stride
 //!   is refused with an `Unsupported` error before anything is computed. This is **not** the
 //!   rule of the `*_read` engine entries, which read rank 2 in place, gather negative strides and
 //!   materialize everything else; that stays on the owned path.
 //! - **Empty input.** An operand with a zero dimension returns correctly shaped outputs without
-//!   reading it; the square factors of a full SVD are then identities.
+//!   reading it; the square factors of a full SVD are then identities. Its strides are still
+//!   validated first, so an empty operand with a negative stride is refused with the error a
+//!   non-empty one gets instead of taking this shortcut.
 //! - **Placement.** Every output carries the operand's placement.
 //! - **Errors.** Rank and shape failures use the shared validation kinds; a provider failure is
 //!   [`map_error`](crate::error::map_error) of the `tlinalg` error.

@@ -11,8 +11,9 @@ use tlinalg::Op;
 
 use super::{
     checked_product, has_zero_dim, matrix_core_and_batch, matrix_with_batch_shape, pooled_output,
-    pooled_workspace, pooled_zeroed, provider, raw_view, square_core_and_batch, tensor_from_lease,
-    tensor_from_vec_with_template, vector_with_batch_shape, FaerLinalg,
+    pooled_workspace, pooled_zeroed, provider, raw_view, reject_negative_strides,
+    square_core_and_batch, tensor_from_lease, tensor_from_vec_with_template,
+    vector_with_batch_shape, FaerLinalg,
 };
 
 /// `(U, S, Vᴴ)`: `U` and `Vᴴ` in `T`, `S` in its real scalar.
@@ -36,6 +37,8 @@ pub(crate) fn svd_typed<T: FaerLinalg>(
     let u_shape = matrix_with_batch_shape(m, u_cols, batch_shape);
     let s_shape = vector_with_batch_shape(k, batch_shape);
     let vt_shape = matrix_with_batch_shape(v_cols, n, batch_shape);
+    // The layout rule precedes the empty shortcut below: see `reject_negative_strides`.
+    reject_negative_strides(op, view)?;
     if has_zero_dim(view.shape()) {
         // The full variant keeps its `m x m` and `n x n` factors even when the other core
         // dimension is zero, so a degenerate factor is not empty: the canonical choice is the
@@ -115,6 +118,8 @@ pub(crate) fn svd_values_typed<T: FaerLinalg>(
     const OP: &str = "svd_values";
     let (m, n, batch_shape) = matrix_core_and_batch(view.shape(), OP)?;
     let shape = vector_with_batch_shape(m.min(n), batch_shape);
+    // The layout rule precedes the empty shortcut below: see `reject_negative_strides`.
+    reject_negative_strides(OP, view)?;
     if has_zero_dim(view.shape()) {
         return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
     }
@@ -145,6 +150,8 @@ pub(crate) fn qr_typed<T: FaerLinalg>(
     let placement = view.placement();
     let q_shape = matrix_with_batch_shape(m, k, batch_shape);
     let r_shape = matrix_with_batch_shape(k, n, batch_shape);
+    // The layout rule precedes the empty shortcut below: see `reject_negative_strides`.
+    reject_negative_strides(OP, view)?;
     if has_zero_dim(view.shape()) {
         return Ok((
             tensor_from_vec_with_template(q_shape, Vec::new(), placement)?,
@@ -183,6 +190,8 @@ pub(crate) fn eigh_typed<T: FaerLinalg>(
     let placement = view.placement();
     let values_shape = vector_with_batch_shape(n, batch_shape);
     let vectors_shape = matrix_with_batch_shape(n, n, batch_shape);
+    // The layout rule precedes the empty shortcut below: see `reject_negative_strides`.
+    reject_negative_strides(OP, view)?;
     if has_zero_dim(view.shape()) {
         return Ok((
             tensor_from_vec_with_template(values_shape, Vec::new(), placement)?,
@@ -219,6 +228,8 @@ pub(crate) fn eigh_values_typed<T: FaerLinalg>(
     const OP: &str = "eigh_values";
     let (n, batch_shape) = square_core_and_batch(view.shape(), OP)?;
     let shape = vector_with_batch_shape(n, batch_shape);
+    // The layout rule precedes the empty shortcut below: see `reject_negative_strides`.
+    reject_negative_strides(OP, view)?;
     if has_zero_dim(view.shape()) {
         return tensor_from_vec_with_template(shape, Vec::new(), view.placement());
     }

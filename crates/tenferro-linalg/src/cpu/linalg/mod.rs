@@ -108,6 +108,26 @@ pub(crate) fn compact_host_data<'a, T: 'static>(
     Ok(view.as_host_slice())
 }
 
+/// Reject a borrowed operand that has a negative stride, before any provider work.
+///
+/// The borrowed entries promise "no copy", so a negative stride (a reversed slice, say) is refused
+/// instead of gathered. Every entry calls this *before* its zero-dimension shortcut: the shortcut
+/// answers a shape, and the layout rule does not depend on whether the operand has elements, so an
+/// empty operand with a negative stride must fail with the error a non-empty one gets rather than
+/// take the shortcut's success. That ordering is the only behaviour the split decides (#2505).
+pub(crate) fn reject_negative_strides<T: 'static>(
+    op: &'static str,
+    view: &TypedTensorView<'_, T>,
+) -> tenferro_tensor::Result<()> {
+    if view.strides().iter().any(|&stride| stride < 0) {
+        return Err(tenferro_tensor::Error::unsupported(
+            op,
+            "a negative stride is not a supported linalg input layout",
+        ));
+    }
+    Ok(())
+}
+
 /// Describe a host view to a linalg provider without copying it.
 ///
 /// Both providers read their operands as borrowed strided descriptors. The view's shape, strides
@@ -118,12 +138,7 @@ pub(crate) fn raw_view<'v, T: 'static>(
     op: &'static str,
     view: &'v TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<RawStridedRef<'v, T>> {
-    if view.strides().iter().any(|&stride| stride < 0) {
-        return Err(tenferro_tensor::Error::unsupported(
-            op,
-            "a negative stride is not a supported linalg input layout",
-        ));
-    }
+    reject_negative_strides(op, view)?;
     RawStridedRef::new(
         view.host_storage()?,
         view.shape(),
