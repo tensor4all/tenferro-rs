@@ -6,6 +6,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`tenferro_linalg::error::map_error` is public** (#2462). It is the
+  translation tenferro's own linalg entries apply to a `tlinalg` failure, so a
+  caller that runs `tlinalg` factorizations itself reports the same error
+  tenferro would instead of copying a variant table. Its rustdoc states the
+  contract: the `op` argument names the result, each `tlinalg::Error` variant
+  maps to one documented tenferro variant and kind, and a variant a later
+  `tlinalg` adds becomes `Error::Internal` with its `Debug` text. It never
+  panics. Available with the `native` or `blas` feature.
+- **The BLAS-provider lane boundary is documented** (#2463) in the CPU execution
+  and backend-choice guides and on the `TensorDot` entries of `CpuEngine`. A
+  vendor call takes the whole engine and the library's own threads, so a
+  context budget is not honoured there. Lanes must not enter the vendor
+  provider concurrently unless the library tolerates it. Only the native
+  provider has a per-context entry, and tenferro offers no wrapper that
+  simulates per-lane widths.
+
 ### Changed
 
 - **Breaking (minor): traced values are owned by a `TraceContext`.** This is a

@@ -20,6 +20,10 @@
 
 use tenferro_tensor::{DType, ErrorKind};
 
+#[cfg(any(feature = "native", feature = "blas"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "native", feature = "blas"))))]
+pub use crate::cpu::tlinalg_error::map_error;
+
 /// Typed diagnostics for provider status and workspace contracts.
 #[cfg(any(feature = "blas", feature = "cuda", feature = "native"))]
 #[derive(Debug, thiserror::Error)]

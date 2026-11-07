@@ -557,6 +557,46 @@ impl CpuEngine {
     }
 }
 
+/// The engine's GEMM entries, and on a `blas` build the only GEMM entries.
+///
+/// On the `native` provider these run on the engine's pool within its budget. A caller that wants
+/// independent GEMMs on lanes of one context forks the bundle that
+/// [`CpuEngine::with_exec`] lends and runs a cpueinsum plan per lane; that per-context entry exists
+/// only on the native provider.
+///
+/// On the `blas` provider a call takes the whole engine and the vendor library's own threads:
+/// **the context budget is not honoured by that provider**, because the vendor step ignores the
+/// placement token and sizes itself from the library's process-wide thread setting
+/// (`OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`). Lanes must not call
+/// into the vendor provider concurrently unless the linked library is known to tolerate it; two
+/// lanes asking for different widths cannot both be honoured by one global setting. tenferro does
+/// not offer a wrapper that sets that global per lane to simulate per-lane widths, because it would
+/// hide who owns the setting instead of answering it. See the "Lanes and the vendor provider"
+/// section of `docs/guides/cpu-execution.md`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuEngine;
+/// use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TensorRead};
+///
+/// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
+/// let identity = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+/// let config = DotGeneralConfig {
+///     lhs_contracting_dims: [1].as_slice().into(),
+///     rhs_contracting_dims: [0].as_slice().into(),
+///     lhs_batch_dims: [].as_slice().into(),
+///     rhs_batch_dims: [].as_slice().into(),
+/// };
+/// let mut engine = CpuEngine::serial();
+/// let product = engine.dot_general_read(
+///     TensorRead::from_tensor(&a),
+///     TensorRead::from_tensor(&identity),
+///     &config,
+/// )?;
+/// assert_eq!(product.as_slice::<f64>()?, &[1.0, 3.0, 2.0, 4.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 impl TensorDot for CpuEngine {
     fn dot_general_read(
         &mut self,

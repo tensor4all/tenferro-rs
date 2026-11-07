@@ -141,6 +141,31 @@ Provider variables such as `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, and
 tenferro's resource contract, and a one-worker `CpuEngine` does not imply a
 one-thread vendor call.
 
+### Lanes and the vendor provider
+
+The two providers differ in what a lane can call. The native provider has a
+per-context entry: inside `engine.with_exec(|exec| ..)`, a caller forks the
+bundle's token into lanes, builds each lane's bundle with
+`tcontract_exec::Exec::from_token`, and runs a cpueinsum or tlinalg plan in
+each lane on that lane's share of the budget. The vendor provider has no such entry, and it will
+not get one:
+
+- **A vendor call takes the whole engine and the vendor's own threads.** The
+  GEMM entries of a `blas` build are the engine's operations
+  (`TensorDot` on `CpuEngine`). cpueinsum-blas runs its vendor step on the
+  library's own threads and does not use the `Exec` it is handed, so **the
+  context budget is not honoured by the vendor provider**. The vendor's width
+  comes from its process-wide setting, not from the lane.
+- **Lanes must not enter the vendor provider concurrently** unless that vendor
+  library is known to tolerate concurrent calls. Each library has one
+  process-global thread setting, so two lanes that want different widths cannot
+  both be honoured. A caller that needs per-lane widths uses the native
+  provider.
+- **There is no wrapper that simulates per-lane widths.** Setting the vendor's
+  global thread count around each lane's call would hide who owns that setting
+  instead of answering it, and two lanes would silently overwrite each other's
+  choice.
+
 ## Batched Operation Strategy
 
 Lane selection, vendor batching, and the per-item route for batched work
