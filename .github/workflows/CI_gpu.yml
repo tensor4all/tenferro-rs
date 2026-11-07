@@ -82,8 +82,15 @@ jobs:
                 per_page: 100,
               });
 
+              // `listForRef` with a commit SHA also returns check runs published for *other* commits of the same
+              // repository: on 2026-11-07 a gate running for main's d510b61b5 read the clippy job of PR #2481
+              // (head b48346be, run 42335725608/job 128292131998) and failed main on another branch's lint. The gate's
+              // contract is "the lint checks of THIS commit", so filter on it instead of trusting the query.
               const candidates = new Map();
               for (const run of runs) {
+                if (run.head_sha !== ref) {
+                  continue;
+                }
                 if (!required.includes(run.name)) {
                   continue;
                 }
