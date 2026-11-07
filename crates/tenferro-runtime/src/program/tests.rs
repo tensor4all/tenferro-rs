@@ -435,6 +435,7 @@ fn bindings_freeze_separately_and_reject_foreign_or_duplicate_inputs() {
             .tensor_read()
             .unwrap()
             .tensor_view()
+            .expect("a preset scalar has a view")
             .as_slice::<f64>()
             .unwrap(),
         &[1.0, 2.0]
@@ -533,6 +534,7 @@ fn inputs_may_be_declared_between_operations_without_confusing_bindings() {
             .tensor_read()
             .unwrap()
             .tensor_view()
+            .expect("a preset scalar has a view")
             .as_slice::<f64>()
             .unwrap(),
         &[3.0, 4.0]
@@ -1371,6 +1373,7 @@ fn semantic_transform_is_object_safe_and_identity_preserves_unused_bindings() {
             .tensor_read()
             .unwrap()
             .tensor_view()
+            .expect("a preset scalar has a view")
             .as_slice::<f64>()
             .unwrap(),
         &[7.0, 8.0]

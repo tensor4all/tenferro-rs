@@ -20,7 +20,12 @@ fn svd_read_with_driver(
     input: TensorRead<'_>,
     driver: SvdDriver,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let input = input.tensor_view();
+    // A caller-owned payload has no preset view (#2486); refuse it like any
+    // other dtype cuSOLVER does not cover.
+    let dtype = input.dtype();
+    let input = input
+        .tensor_view()
+        .ok_or_else(|| unsupported_dtype("svd", dtype))?;
     match input {
         TensorView::F32(view) => {
             let compact = session.to_contiguous_view(&view)?;
@@ -53,7 +58,12 @@ fn svd_values_read_with_driver(
     input: TensorRead<'_>,
     driver: SvdDriver,
 ) -> tenferro_tensor::Result<Tensor> {
-    let input = input.tensor_view();
+    // A caller-owned payload has no preset view (#2486); refuse it like any
+    // other dtype cuSOLVER does not cover.
+    let dtype = input.dtype();
+    let input = input
+        .tensor_view()
+        .ok_or_else(|| unsupported_dtype("svd_values", dtype))?;
     match input {
         TensorView::F32(view) => session.to_contiguous_view(&view).and_then(|input| {
             linalg::svd_values(session, &Tensor::from_typed::<f32>(input), driver)
@@ -88,7 +98,12 @@ fn eigh_read_with_driver(
     input: TensorRead<'_>,
     driver: EighDriver,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let input = input.tensor_view();
+    // A caller-owned payload has no preset view (#2486); refuse it like any
+    // other dtype cuSOLVER does not cover.
+    let dtype = input.dtype();
+    let input = input
+        .tensor_view()
+        .ok_or_else(|| unsupported_dtype("eigh", dtype))?;
     match input {
         TensorView::F32(view) => {
             let compact = session.to_contiguous_view(&view)?;
@@ -121,7 +136,12 @@ fn eigh_values_read_with_driver(
     input: TensorRead<'_>,
     driver: EighDriver,
 ) -> tenferro_tensor::Result<Tensor> {
-    let input = input.tensor_view();
+    // A caller-owned payload has no preset view (#2486); refuse it like any
+    // other dtype cuSOLVER does not cover.
+    let dtype = input.dtype();
+    let input = input
+        .tensor_view()
+        .ok_or_else(|| unsupported_dtype("eigh_values", dtype))?;
     match input {
         TensorView::F32(view) => session.to_contiguous_view(&view).and_then(|input| {
             linalg::eigh_values(session, &Tensor::from_typed::<f32>(input), driver)
@@ -222,7 +242,12 @@ impl LinalgBackend for CudaEngine {
         // Matches the existing CUDA `svd_read` contract: cuSOLVER needs compact
         // column-major device storage, so a view is canonicalized on the device
         // (never transferred across the host boundary) and then decomposed.
-        let input = input.tensor_view();
+        // A caller-owned payload has no preset view (#2486); refuse it like any
+        // other dtype cuSOLVER does not cover.
+        let dtype = input.dtype();
+        let input = input
+            .tensor_view()
+            .ok_or_else(|| unsupported_dtype("svd_full", dtype))?;
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous_view(&view)?;
@@ -290,7 +315,12 @@ impl LinalgBackend for CudaEngine {
     }
 
     fn qr_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let input = input.tensor_view();
+        // A caller-owned payload has no preset view (#2486); refuse it like any
+        // other dtype cuSOLVER does not cover.
+        let dtype = input.dtype();
+        let input = input
+            .tensor_view()
+            .ok_or_else(|| unsupported_dtype("qr", dtype))?;
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous_view(&view)?;
@@ -331,7 +361,12 @@ impl LinalgBackend for CudaEngine {
         input: TensorRead<'_>,
         options: RankRevealingQrOptions,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let input = input.tensor_view();
+        // A caller-owned payload has no preset view (#2486); refuse it like any
+        // other dtype cuSOLVER does not cover.
+        let dtype = input.dtype();
+        let input = input
+            .tensor_view()
+            .ok_or_else(|| unsupported_dtype("rank_revealing_qr", dtype))?;
         match input {
             TensorView::F32(view) => self.to_contiguous_view(&view).and_then(|input| {
                 self.rank_revealing_qr(&Tensor::from_typed::<f32>(input), options)
@@ -405,7 +440,12 @@ impl LinalgBackend for CudaEngine {
         input: TensorRead<'_>,
         options: QrOptions,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let input = input.tensor_view();
+        // A caller-owned payload has no preset view (#2486); refuse it like any
+        // other dtype cuSOLVER does not cover.
+        let dtype = input.dtype();
+        let input = input
+            .tensor_view()
+            .ok_or_else(|| unsupported_dtype("qr_with_options_read", dtype))?;
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous_view(&view)?;
@@ -468,7 +508,12 @@ impl LinalgBackend for CudaEngine {
     }
 
     fn cholesky_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
-        let input = input.tensor_view();
+        // A caller-owned payload has no preset view (#2486); refuse it like any
+        // other dtype cuSOLVER does not cover.
+        let dtype = input.dtype();
+        let input = input
+            .tensor_view()
+            .ok_or_else(|| unsupported_dtype("cholesky", dtype))?;
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous_view(&view)?;
@@ -497,7 +542,12 @@ impl LinalgBackend for CudaEngine {
     }
 
     fn lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let input = input.tensor_view();
+        // A caller-owned payload has no preset view (#2486); refuse it like any
+        // other dtype cuSOLVER does not cover.
+        let dtype = input.dtype();
+        let input = input
+            .tensor_view()
+            .ok_or_else(|| unsupported_dtype("lu", dtype))?;
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous_view(&view)?;
@@ -526,7 +576,12 @@ impl LinalgBackend for CudaEngine {
     }
 
     fn full_piv_lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let input = input.tensor_view();
+        // A caller-owned payload has no preset view (#2486); refuse it like any
+        // other dtype cuSOLVER does not cover.
+        let dtype = input.dtype();
+        let input = input
+            .tensor_view()
+            .ok_or_else(|| unsupported_dtype("full_piv_lu", dtype))?;
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous_view(&view)?;
@@ -555,7 +610,12 @@ impl LinalgBackend for CudaEngine {
     }
 
     fn eig_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let input = input.tensor_view();
+        // A caller-owned payload has no preset view (#2486); refuse it like any
+        // other dtype cuSOLVER does not cover.
+        let dtype = input.dtype();
+        let input = input
+            .tensor_view()
+            .ok_or_else(|| unsupported_dtype("eig", dtype))?;
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous_view(&view)?;

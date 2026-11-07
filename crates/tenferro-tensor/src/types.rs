@@ -6678,36 +6678,59 @@ impl TensorValue {
         self.layout.offset()
     }
 
+    /// Borrow this value as a dtype-erased view, or `None` when it holds an
+    /// externally defined payload.
+    ///
+    /// [`TensorView`] has one variant per preset scalar (`F32` ... `C64`) and none
+    /// for a caller-owned element type, so a value built from
+    /// [`Tensor::external`] has no view; read it through
+    /// [`Tensor::external_payload`] instead.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tensor::{Tensor, TensorValue};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, Tensor, TensorValue, TypedTensor};
+    ///
     /// let value = TensorValue::from_tensor(Tensor::from_vec_col_major([2, 2], vec![1., 2., 3., 4.])?);
-    /// let view = value.tensor_view();
+    /// let view = value.tensor_view().ok_or("a preset f64 value has a view")?;
     /// assert_eq!(view.shape(), &[2, 2]);
     /// assert_eq!(view.dtype(), tenferro_tensor::DType::F64);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    ///
+    /// let payload = ErasedHostTensor::new(
+    ///     TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1., 2.])?,
+    /// );
+    /// let external = TensorValue::from_tensor(Tensor::external(payload));
+    /// assert!(external.tensor_view().is_none());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tensor_view(&self) -> TensorView<'_> {
+    #[must_use]
+    pub fn tensor_view(&self) -> Option<TensorView<'_>> {
         tensor_view_with_layout(&self.owner, self.layout.clone())
     }
 
+    /// Borrow this value as a [`TensorRead`], or `None` when it is a
+    /// metadata-only view of an externally defined payload.
+    ///
+    /// A compact value is borrowed as its owner tensor, whatever its dtype. A
+    /// non-compact value is borrowed through [`TensorValue::tensor_view`], which
+    /// has no variant for a payload built with [`Tensor::external`].
     ///
     /// # Examples
     ///
     /// ```
     /// use tenferro_tensor::{Tensor, TensorValue};
     /// let value = TensorValue::from_tensor(Tensor::from_vec_col_major([2, 2], vec![1., 2., 3., 4.])?);
-    /// let read = value.tensor_read();
+    /// let read = value.tensor_read().ok_or("a preset f64 value has a read")?;
     /// assert_eq!(read.shape(), &[2, 2]);
     /// assert_eq!(read.dtype(), tenferro_tensor::DType::F64);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tensor_read(&self) -> TensorRead<'_> {
-        self.as_tensor()
-            .map(TensorRead::from_tensor)
-            .unwrap_or_else(|| TensorRead::from_view(self.tensor_view()))
+    #[must_use]
+    pub fn tensor_read(&self) -> Option<TensorRead<'_>> {
+        match self.as_tensor() {
+            Some(tensor) => Some(TensorRead::from_tensor(tensor)),
+            None => self.tensor_view().map(TensorRead::from_view),
+        }
     }
 
     /// # Errors
@@ -7090,8 +7113,15 @@ fn broadcast_typed_view<'a, T: 'static, R: TensorRank>(
     })
 }
 
-fn tensor_view_with_layout(tensor: &Tensor, layout: TensorLayout<DynRank>) -> TensorView<'_> {
-    match tensor.dtype() {
+/// Borrow `tensor` as a preset-scalar view with `layout`, or `None` for an
+/// externally defined payload: `TensorView` has one variant per preset scalar and
+/// none for a caller-owned element type, and [`Tensor::external`] is public, so
+/// that case is reachable and is answered rather than asserted away (#2486).
+fn tensor_view_with_layout(
+    tensor: &Tensor,
+    layout: TensorLayout<DynRank>,
+) -> Option<TensorView<'_>> {
+    Some(match tensor.dtype() {
         DType::F32 => TensorView::F32(typed_view_with_layout(
             tensor
                 .as_typed::<f32>()
@@ -7134,10 +7164,8 @@ fn tensor_view_with_layout(tensor: &Tensor, layout: TensorLayout<DynRank>) -> Te
                 .unwrap_or_else(|| unreachable!("the dtype guard selects this arm")),
             layout,
         )),
-        // INVARIANT: `TensorView` has no externally defined variant, and a view is
-        // never requested for a caller-owned payload.
-        DType::External(_) => unreachable!("views cover the preset scalars"),
-    }
+        DType::External(_) => return None,
+    })
 }
 
 fn typed_view_with_layout<T: TensorScalar + 'static>(
@@ -8183,24 +8211,40 @@ impl<'a> TensorRead<'a> {
         Self::View(view)
     }
 
-    /// Convert this read target into a dtype-erased tensor view.
+    /// Convert this read target into a dtype-erased tensor view, or `None` when
+    /// it borrows a tensor with an externally defined payload.
     ///
     /// Owned tensors are borrowed without copying their storage. Existing
-    /// views preserve their layout and placement metadata.
+    /// views are returned as is, preserving their layout and placement metadata.
+    /// [`TensorView`] has one variant per preset scalar (`F32` ... `C64`) and none
+    /// for a caller-owned element type, so a tensor built from
+    /// [`Tensor::external`] has no view; read it through
+    /// [`Tensor::external_payload`] instead.
+    ///
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_tensor::{Tensor, TensorRead};
-    /// # let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    /// let view = TensorRead::from_tensor(&tensor).tensor_view();
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, Tensor, TensorRead, TypedTensor};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let view = TensorRead::from_tensor(&tensor)
+    ///     .tensor_view()
+    ///     .ok_or("a preset f64 tensor has a view")?;
     /// assert_eq!(view.shape(), &[2]);
     /// assert_eq!(view.as_slice::<f64>()?, &[1.0, 2.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    ///
+    /// let payload = ErasedHostTensor::new(
+    ///     TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0, 2.0])?,
+    /// );
+    /// let external = Tensor::external(payload);
+    /// assert!(TensorRead::from_tensor(&external).tensor_view().is_none());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn tensor_view(self) -> TensorView<'a> {
+    #[must_use]
+    pub fn tensor_view(self) -> Option<TensorView<'a>> {
         match self {
             Self::Tensor(tensor) => tensor_view_with_layout(tensor, tensor_layout(tensor)),
-            Self::View(view) => view,
+            Self::View(view) => Some(view),
         }
     }
 
@@ -8232,16 +8276,13 @@ impl<'a> TensorRead<'a> {
     #[doc(hidden)]
     pub fn broadcast_in_dim_view(self, shape: &[usize], dims: &[usize]) -> crate::Result<Self> {
         let dtype = self.dtype();
-        // INVARIANT: `tensor_view()` has no arm for a caller-owned payload, so
-        // the refusal must happen before the read is converted into a view.
-        if let DType::External(_) = dtype {
-            return Err(crate::Error::unsupported_dtype(
+        let view = self.tensor_view().ok_or_else(|| {
+            crate::Error::unsupported_dtype(
                 "TensorRead::broadcast_in_dim_view",
                 dtype,
                 "a caller-owned payload has no borrowed broadcast view",
-            ));
-        }
-        let view = self.tensor_view();
+            )
+        })?;
         Ok(Self::View(match view {
             TensorView::F32(view) => TensorView::F32(broadcast_typed_view(view, shape, dims)?),
             TensorView::F64(view) => TensorView::F64(broadcast_typed_view(view, shape, dims)?),
@@ -8265,10 +8306,10 @@ impl<'a> TensorRead<'a> {
     ///
     /// Returns [`ValidationError::DTypeMismatch`] when `T` does not match the
     /// input dtype, [`ValidationError::NonContiguousViewAsSlice`] for a
-    /// noncompact view, or a typed runtime-state host-access error for
-    /// backend-owned storage.
-    /// Backend-owned
-    /// inputs are never downloaded implicitly.
+    /// noncompact view, a typed runtime-state host-access error for
+    /// backend-owned storage, or [`crate::Error::UnsupportedDType`] for a
+    /// tensor built with [`Tensor::external`], which has no preset-scalar view.
+    /// Backend-owned inputs are never downloaded implicitly.
     ///
     /// # Examples
     ///
@@ -8281,7 +8322,16 @@ impl<'a> TensorRead<'a> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn as_slice<T: TensorScalar>(&self) -> crate::Result<&'a [T]> {
-        self.clone().tensor_view().as_slice()
+        self.clone()
+            .tensor_view()
+            .ok_or_else(|| {
+                crate::Error::unsupported_dtype(
+                    "TensorRead::as_slice",
+                    self.dtype(),
+                    "a caller-owned payload has no preset-scalar host slice; read it through Tensor::external_payload",
+                )
+            })?
+            .as_slice()
     }
 
     /// Return the element dtype of this read target.

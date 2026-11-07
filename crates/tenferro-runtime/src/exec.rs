@@ -103,17 +103,22 @@ impl InputView {
     /// transform, exactly as the removed instruction evaluated them against
     /// its single input.
     pub(crate) fn apply<'a>(&self, read: TensorRead<'a>) -> Result<TensorRead<'a>> {
-        // A caller-owned payload has no borrowed view.
-        if let DType::External(_) = read.dtype() {
-            return Err(Error::unsupported(
+        // A caller-owned payload has no borrowed view. It is refused up front so
+        // every transform, including the broadcast that `TensorRead` builds
+        // itself, reports the same error.
+        let no_view = || {
+            Error::unsupported(
                 "input_view",
                 ErrorPhase::Execution,
                 "an externally defined scalar has no metadata view",
-            ));
+            )
+        };
+        if let DType::External(_) = read.dtype() {
+            return Err(no_view());
         }
         macro_rules! typed_view_map {
             ($view:expr, $method:ident ( $($arg:expr),* )) => {
-                match $view {
+                match $view.ok_or_else(no_view)? {
                     TensorView::F32(view) => TensorView::F32(view.$method($($arg),*)?),
                     TensorView::F64(view) => TensorView::F64(view.$method($($arg),*)?),
                     TensorView::I32(view) => TensorView::I32(view.$method($($arg),*)?),

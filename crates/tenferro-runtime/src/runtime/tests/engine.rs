@@ -114,7 +114,11 @@ impl TensorStructural for HookEngine {
                 "injected copy failure",
             ));
         }
-        input.clone().tensor_view().duplicate()
+        input
+            .clone()
+            .tensor_view()
+            .expect("a preset scalar has a view")
+            .duplicate()
     }
 
     unused_engine_methods! {

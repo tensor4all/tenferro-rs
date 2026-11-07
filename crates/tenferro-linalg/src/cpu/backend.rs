@@ -133,8 +133,8 @@ impl LinalgBackend for CpuEngine {
                 return triangular_solve_faer_view_entered(
                     exec,
                     buffers,
-                    a.tensor_view(),
-                    b.tensor_view(),
+                    linalg_view("triangular_solve", a)?,
+                    linalg_view("triangular_solve", b)?,
                     options,
                 );
             }
@@ -342,7 +342,7 @@ impl LinalgBackend for CpuEngine {
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
-                return svd_full_faer_view_entered(exec, buffers, input.tensor_view());
+                return svd_full_faer_view_entered(exec, buffers, linalg_view("svd_full", input)?);
             }
             tenferro_cpu::with_materialized_tensor_read(
                 exec,
@@ -365,7 +365,7 @@ impl LinalgBackend for CpuEngine {
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
-                return svd_faer_view_entered(exec, buffers, input.tensor_view());
+                return svd_faer_view_entered(exec, buffers, linalg_view("svd", input)?);
             }
             tenferro_cpu::with_materialized_tensor_read(
                 exec,
@@ -383,7 +383,11 @@ impl LinalgBackend for CpuEngine {
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
-                return svd_values_faer_view_entered(exec, buffers, input.tensor_view());
+                return svd_values_faer_view_entered(
+                    exec,
+                    buffers,
+                    linalg_view("svd_values", input)?,
+                );
             }
             tenferro_cpu::with_materialized_tensor_read(
                 exec,
@@ -406,7 +410,7 @@ impl LinalgBackend for CpuEngine {
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
-                return qr_faer_view_entered(exec, buffers, input.tensor_view());
+                return qr_faer_view_entered(exec, buffers, linalg_view("qr", input)?);
             }
             tenferro_cpu::with_materialized_tensor_read(
                 exec,
@@ -445,7 +449,7 @@ impl LinalgBackend for CpuEngine {
                 return rank_revealing_qr_faer_view_entered(
                     exec,
                     buffers,
-                    input.tensor_view(),
+                    linalg_view("rank_revealing_qr", input)?,
                     options,
                 );
             }
@@ -528,7 +532,7 @@ impl LinalgBackend for CpuEngine {
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
-                return eigh_faer_view_entered(exec, buffers, input.tensor_view());
+                return eigh_faer_view_entered(exec, buffers, linalg_view("eigh", input)?);
             }
             tenferro_cpu::with_materialized_tensor_read(
                 exec,
@@ -546,7 +550,11 @@ impl LinalgBackend for CpuEngine {
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
-                return eigh_values_faer_view_entered(exec, buffers, input.tensor_view());
+                return eigh_values_faer_view_entered(
+                    exec,
+                    buffers,
+                    linalg_view("eigh_values", input)?,
+                );
             }
             tenferro_cpu::with_materialized_tensor_read(
                 exec,
@@ -570,7 +578,7 @@ impl LinalgBackend for CpuEngine {
             ensure_supported_linalg_dtype("cholesky", input.dtype())?;
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
-                return cholesky_faer_view_entered(exec, buffers, input.tensor_view());
+                return cholesky_faer_view_entered(exec, buffers, linalg_view("cholesky", input)?);
             }
             tenferro_cpu::with_materialized_tensor_read(
                 exec,
@@ -588,7 +596,7 @@ impl LinalgBackend for CpuEngine {
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
-                return lu_faer_view_entered(exec, buffers, input.tensor_view());
+                return lu_faer_view_entered(exec, buffers, linalg_view("lu", input)?);
             }
             tenferro_cpu::with_materialized_tensor_read(
                 exec,
@@ -605,7 +613,11 @@ impl LinalgBackend for CpuEngine {
         ensure_supported_linalg_dtype("full_piv_lu", input.dtype())?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             if faer_strided_read_ok(&input) {
-                return full_piv_lu_faer_view_entered(exec, buffers, input.tensor_view());
+                return full_piv_lu_faer_view_entered(
+                    exec,
+                    buffers,
+                    linalg_view("full_piv_lu", input)?,
+                );
             }
             tenferro_cpu::with_materialized_tensor_read(
                 exec,
@@ -623,7 +635,7 @@ impl LinalgBackend for CpuEngine {
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
-                return linalg::faer::eig_view(exec, buffers, input.tensor_view());
+                return linalg::faer::eig_view(exec, buffers, linalg_view("eig", input)?);
             }
             tenferro_cpu::with_materialized_tensor_read(
                 exec,
@@ -641,7 +653,11 @@ impl LinalgBackend for CpuEngine {
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_read_ok(&input) {
-                return linalg::faer::eig_values_view(exec, buffers, input.tensor_view());
+                return linalg::faer::eig_values_view(
+                    exec,
+                    buffers,
+                    linalg_view("eig_values", input)?,
+                );
             }
             tenferro_cpu::with_materialized_tensor_read(
                 exec,
@@ -747,7 +763,12 @@ impl LinalgBackend for CpuEngine {
             && solve_shape_direct_eligible(a.shape(), b.shape());
         self.with_linalg_pool_checked(move |exec, buffers| {
             if direct {
-                solve_from_views_entered(exec, buffers, a.tensor_view(), b.tensor_view())
+                solve_from_views_entered(
+                    exec,
+                    buffers,
+                    linalg_view("solve", a)?,
+                    linalg_view("solve", b)?,
+                )
             } else {
                 tenferro_cpu::with_materialized_tensor_read(
                     exec,
@@ -787,8 +808,8 @@ impl LinalgBackend for CpuEngine {
             return crate::backend::solve_read_into_default(self, a, b, out);
         }
 
-        let a = a.tensor_view();
-        let b = b.tensor_view();
+        let a = linalg_view("solve_read_into", a)?;
+        let b = linalg_view("solve_read_into", b)?;
         self.with_linalg_pool_checked(move |exec, buffers| {
             solve_read_into_entered(exec, buffers, a, b, out)
         })
@@ -839,7 +860,7 @@ fn managed_cholesky(
 ) -> tenferro_tensor::Result<Tensor> {
     let dtype = input.dtype();
     ensure_supported_linalg_dtype("cholesky", dtype)?;
-    match input.tensor_view() {
+    match linalg_view("cholesky", input)? {
         TensorView::F32(view) => managed_cholesky_typed(exec, buffers, &view, domain),
         TensorView::F64(view) => managed_cholesky_typed(exec, buffers, &view, domain),
         TensorView::C32(view) => managed_cholesky_typed(exec, buffers, &view, domain),
@@ -3106,6 +3127,21 @@ fn ensure_supported_linalg_dtypes(
         return Err(Error::dtype_mismatch(op, lhs, rhs));
     }
     ensure_supported_linalg_dtype(op, lhs)
+}
+
+/// Borrow `read` as a preset-scalar view for `op`.
+///
+/// [`TensorRead::tensor_view`] answers `None` for a caller-owned payload
+/// (#2486). The entries call [`ensure_supported_linalg_dtype`] first, which
+/// already refuses that payload, so this reports the same typed error should a
+/// view ever be requested without that check.
+fn linalg_view<'a>(
+    op: &'static str,
+    read: TensorRead<'a>,
+) -> tenferro_tensor::Result<TensorView<'a>> {
+    let dtype = read.dtype();
+    read.tensor_view()
+        .ok_or_else(|| unsupported_dtype(op, dtype))
 }
 
 fn ensure_supported_linalg_dtype(op: &'static str, dtype: DType) -> tenferro_tensor::Result<()> {

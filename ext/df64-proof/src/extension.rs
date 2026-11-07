@@ -1418,7 +1418,7 @@ fn owned_f64_read(read: &TensorRead<'_>) -> tenferro_runtime::Result<Tensor> {
             message,
         ))
     };
-    let TensorView::F64(view) = read.clone().tensor_view() else {
+    let Some(TensorView::F64(view)) = read.clone().tensor_view() else {
         return Err(invalid("df64_from_f64 takes a preset f64 tensor"));
     };
     let storage = view.host_storage().map_err(|source| {

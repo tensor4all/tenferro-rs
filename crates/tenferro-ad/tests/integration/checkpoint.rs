@@ -45,6 +45,7 @@ fn checkpoint_preserves_eval_value() {
         .tensor_read()
         .unwrap()
         .tensor_view()
+        .expect("a preset scalar has a view")
         .as_slice::<f64>()
         .unwrap()[0];
     assert!((value - 9.0).abs() < 1.0e-12);

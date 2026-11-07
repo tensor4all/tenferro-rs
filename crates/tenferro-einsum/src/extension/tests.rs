@@ -242,7 +242,7 @@ fn execute_einsum_extension_reads_consumes_strided_view_inputs() {
     );
     let view =
         TensorValue::from_parts((*base).duplicate().unwrap(), vec![3, 2], vec![2, 1], 0).unwrap();
-    let input = view.tensor_read();
+    let input = view.tensor_read().expect("a preset f64 value has a read");
     let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1]], &[0, 1]));
     let mut backend = CpuEngine::serial();
     let mut caches = ExtensionCacheStore::new();

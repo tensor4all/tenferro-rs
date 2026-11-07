@@ -182,7 +182,7 @@ macro_rules! axpby_strided_write {
             beta: $ty,
             exec: Exec<'_>,
         ) -> crate::Result<()> {
-            let source = match x.tensor_view() {
+            let source = match crate::preset_view("axpby", x)? {
                 TensorView::$variant(view) => view,
                 // INVARIANT: shared validation proves x has the dtype selected
                 // by the outer dispatch before this helper is called.

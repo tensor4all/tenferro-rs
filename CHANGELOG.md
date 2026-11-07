@@ -37,6 +37,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`TensorRead::tensor_view`, `TensorValue::tensor_view` and
+  `TensorValue::tensor_read` return `Option`** (#2486). They answer `None` for a
+  tensor built with `Tensor::external`, whose caller-owned element type has no
+  preset-scalar `TensorView` (for `tensor_read`, only a non-compact view of such
+  a value). Before, they aborted with `unreachable!("views cover the preset
+  scalars")`. Callers that already return `Result` now report that case as a
+  typed error: `TensorRead::as_slice` and the CPU engine's
+  `download_to_host`/`upload_host_tensor` return `Error::UnsupportedDType`
+  instead of aborting. Migration: `read.tensor_view()` becomes
+  `read.tensor_view().ok_or(..)?`, or a `match` on `Some(TensorView::..)`.
+
 - **The CPU complex SVD and `eigh` no longer allocate outside the session
   pool** (#2462). The real spectrum is gathered into a pooled lease instead of
   a fresh `Vec`; the recorded steady-state ceiling of a complex SVD or `eigh`

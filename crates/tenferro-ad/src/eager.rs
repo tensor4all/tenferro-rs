@@ -790,10 +790,19 @@ impl AdValueRecord {
 
     fn value(&self, op: &'static str) -> Result<ValueGuard<'_>> {
         if let RetentionContainer::Owned { tensor } = self.container.as_ref() {
-            // A preset-dtype owned tensor always has a typed borrowed view.
-            return Ok(ValueGuard {
-                view: TensorRead::from_tensor(tensor).tensor_view(),
-            });
+            // `from_untracked_tensor` routes a caller-owned payload away from
+            // `Owned`, so this has a preset view; a missing one is reported, not
+            // asserted.
+            let view = TensorRead::from_tensor(tensor)
+                .tensor_view()
+                .ok_or_else(|| {
+                    Error::runtime_state(
+                        op,
+                        ErrorPhase::Execution,
+                        "an owned caller-owned payload has no typed borrowed view",
+                    )
+                })?;
+            return Ok(ValueGuard { view });
         }
         match self.tensor_read(op)? {
             TensorRead::View(view) => Ok(ValueGuard { view }),

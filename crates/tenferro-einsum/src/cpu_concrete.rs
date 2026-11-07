@@ -134,7 +134,7 @@ pub(crate) fn execute_cached(
                 ($($variant:ident),*) => { match inputs[0].dtype() {
                     $(DType::$variant => {
                         let views = inputs.iter().map(|input| match input.clone().tensor_view() {
-                            TensorView::$variant(view) => Ok(view),
+                            Some(TensorView::$variant(view)) => Ok(view),
                             _ => Err(tenferro_tensor::Error::dtype_mismatch("CPU einsum", inputs[0].dtype(), input.dtype())),
                         }).collect::<tenferro_tensor::Result<Vec<_>>>()?;
                         run(&mut Execution { exec, workspaces, max_retained_bytes: buffers.max_retained_capacity_bytes() }, tree, cache, |shape| {
@@ -364,7 +364,7 @@ pub(crate) fn execute_into(
                         let mut lower_out = cpueinsum::strided_view::StridedViewMut::new(output.host_storage_mut()?, &dims, &strides, offset)
                             .map_err(|error| tenferro_tensor::Error::backend_source("CPU einsum view", error))?;
                         let views = inputs.iter().map(|input| match input.clone().tensor_view() {
-                            TensorView::$variant(view) => Ok(view),
+                            Some(TensorView::$variant(view)) => Ok(view),
                             _ => Err(tenferro_tensor::Error::runtime_state("CPU einsum", "incompatible input view")),
                         }).collect::<tenferro_tensor::Result<Vec<_>>>()?;
                         run_into(&mut Execution { exec, workspaces, max_retained_bytes: buffers.max_retained_capacity_bytes() }, tree, cache, &views, &mut lower_out)
