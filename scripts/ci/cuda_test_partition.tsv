@@ -1319,7 +1319,9 @@ host	tenferro-linalg	cpu::tests::managed_cholesky::managed_borrowed_cholesky_res
 host	tenferro-linalg	cpu::tests::managed_cholesky::managed_cholesky_stages_its_factor_in_pooled_storage
 host	tenferro-linalg	cpu::tests::managed_cholesky::managed_snapshot_is_independent_and_rejects_foreign_storage
 host	tenferro-linalg	cpu::tests::managed_cholesky::managed_traced_cholesky_preserves_domain_and_values
-host	tenferro-linalg	cpu::tlinalg_error::tests::every_variant_rebuilds_tenferros_kind_role_and_source
+host	tenferro-linalg	cpu::tlinalg_error::tests::every_known_variant_maps_to_its_documented_tenferro_error
+host	tenferro-linalg	cpu::tlinalg_error::tests::op_argument_wins_over_the_op_stored_in_the_error
+host	tenferro-linalg	cpu::tlinalg_error::tests::public_path_is_the_mapping_tenferro_uses
 host	tenferro-linalg	error::tests::invalid_workspace_keeps_typed_backend_source
 host	tenferro-linalg	error::tests::provider_status_keeps_typed_backend_source
 host	tenferro-linalg	extension::cuda_tests::session_support_admits_cuda_full_svd_and_still_rejects_the_missing_kernels
