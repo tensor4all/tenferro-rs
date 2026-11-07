@@ -363,14 +363,17 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("labelTime", workflow)
 
     def test_fork_prs_get_the_deterministic_review_verdict(self) -> None:
-        """The job that spends no secret must not be gated on the author.
+        """No review job may be gated on the author: none of them needs to be.
 
-        `review-bot` runs the LLM and therefore keeps the association gate;
-        `review-bot-no-llm` checks out the base revision, fetches the PR head for
-        the diff only, and runs the base tree's deterministic `--dry-run` review
-        with no secret. Gating it on the author left every fork PR without a
-        verdict and the required gate red by construction (#2510). The gate's
-        "all three skipped -> fail" branch stays as the loud-failure safety net.
+        `review-bot` is not an LLM job any more. The external LLM pass is
+        permanently disabled (`--llm-skipped-reason`), so it checks out the base
+        revision, fetches the PR head for the diff only, and runs the base tree's
+        deterministic `--dry-run` review with no secret, exactly like
+        `review-bot-no-llm`. Gating either job on `author_association` left every
+        fork PR without a verdict and the required gate red by construction
+        (#2510); the association read is what has to stay gone, not the job. The
+        label conditions, the waiver job, and the gate's "all three skipped ->
+        fail" safety net are what actually guard something.
         """
 
         workflow = read(".github/workflows/review_bot.yml")
@@ -382,19 +385,27 @@ class WorkflowContractTests(unittest.TestCase):
             later = re.search(r"^  [a-z][a-z0-9-]*:$", body, re.MULTILINE)
             return rest[: len(rest) - len(body) + later.start()] if later else rest
 
-        no_llm = job("review-bot-no-llm")
-        self.assertNotIn("author_association", no_llm)
+        # Neither review job may read the author, in its condition or anywhere else.
+        for name in ("review-bot", "review-bot-no-llm"):
+            with self.subTest(job=name):
+                body = job(name)
+                self.assertNotIn("author_association", body)
+                self.assertNotIn("head.repo.full_name", body)
+                self.assertIn(
+                    "!contains(github.event.pull_request.labels.*.name, 'rules-review:waive')",
+                    body,
+                )
         self.assertIn(
             "contains(github.event.pull_request.labels.*.name, 'rules-review:no-llm')",
-            no_llm,
+            job("review-bot"),
         )
         self.assertIn(
-            "!contains(github.event.pull_request.labels.*.name, 'rules-review:waive')",
-            no_llm,
+            "contains(github.event.pull_request.labels.*.name, 'rules-review:no-llm')",
+            job("review-bot-no-llm"),
         )
-        # The secret-spending job keeps the gate; the waiver is untouched.
-        self.assertIn("author_association == 'OWNER'", job("review-bot"))
+        # The waiver stays a same-repository, maintainer-comment escape hatch.
         self.assertIn("'rules-review:waive'", job("review-bot-waived"))
+        self.assertIn("head.repo.full_name", job("review-bot-waived"))
         # A regression that skips all three still fails loudly for a fork PR.
         self.assertIn("Fork PR with no review verdict", job("review-bot-gate"))
 

@@ -25,10 +25,21 @@ env:
 jobs:
   review-bot:
     name: repository rules review
+    # Deterministic review only: the external LLM pass is permanently disabled
+    # (`--llm-skipped-reason` on the review step below), so this job executes the
+    # base tree's `scripts/repository-rules-review.py --dry-run` after checking out
+    # the base revision and fetching the PR head for `git diff` only. Nothing from
+    # the PR branch runs and no secret is read, which is why fork and in-repo PRs
+    # are reviewed by the same trusted code.
+    #
+    # The author's association was nevertheless required here, and that is exactly
+    # what the comments on `review-bot-no-llm` and on the gate below deny: both say
+    # a fork PR is evaluated from the base revision with no secret. Keeping the
+    # condition made the workflow contradict itself: a fork PR had every review
+    # job skipped and the required gate failed by construction, which is #2510.
+    # With the LLM pass gone the condition guarded nothing, so it is dropped and
+    # the labels are the only remaining switch.
     if: |
-      (github.event.pull_request.author_association == 'OWNER' ||
-       github.event.pull_request.author_association == 'MEMBER' ||
-       github.event.pull_request.author_association == 'COLLABORATOR') &&
       !contains(github.event.pull_request.labels.*.name, 'rules-review:waive') &&
       !contains(github.event.pull_request.labels.*.name, 'rules-review:no-llm')
     runs-on: ubuntu-24.04
@@ -145,10 +156,11 @@ jobs:
     name: repository rules review (LLM skipped)
     # Deterministic pass only: base revision checkout, PR head fetched for the diff
     # only, base tree's review script, no secret. The author's association is not a
-    # trust boundary here, and gating on it left every fork PR without a verdict
-    # (#2510). `review-bot` above keeps its own association gate; widening that path
-    # is a separate change. A fork PR reaches this job once a maintainer applies the
-    # no-LLM label and the head-sha waiver comment the step below requires.
+    # trust boundary here either, and gating on it left every fork PR without a
+    # verdict (#2510). This job is now the legacied escape hatch: it runs only when
+    # a maintainer applies the no-LLM label and leaves the head-sha waiver comment
+    # the step below requires. The default path for any PR, fork or in-repo, is
+    # `review-bot` above.
     if: |
       !contains(github.event.pull_request.labels.*.name, 'rules-review:waive') &&
       contains(github.event.pull_request.labels.*.name, 'rules-review:no-llm')
@@ -387,12 +399,13 @@ jobs:
           REVIEW_NO_LLM_LABEL: ${{ env.REVIEW_NO_LLM_LABEL }}
         run: |
           set -euo pipefail
-          # The three review jobs above used to be gated on `head.repo == github.repository`, so
-          # every fork PR reported `skipped` and this gate could only fail it. They do not need that
-          # condition: each checks out the *base* revision, fetches the PR head for the diff only,
-          # and runs the base tree's `scripts/repository-rules-review.py --dry-run` with no secrets,
-          # so nothing from the fork is executed. Refusing forks only produced a required check that
-          # nobody working from a fork could satisfy.
+          # The three review jobs above used to be gated on `head.repo == github.repository`, and
+          # `review-bot` additionally on the author's association, so every fork PR reported
+          # `skipped` and this gate could only fail it. None of them needs those conditions: each
+          # checks out the *base* revision, fetches the PR head for the diff only, and runs the base
+          # tree's `scripts/repository-rules-review.py --dry-run` with no secrets, so nothing from the
+          # fork is executed and the author's identity changes nothing about what runs. Refusing forks
+          # only produced a required check that nobody working from a fork could satisfy.
           #
           # Still fail when a fork PR arrives with no verdict at all.
           if [ "${IS_FORK_PR}" = "true" ] &&
