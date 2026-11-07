@@ -438,9 +438,20 @@ def run_git(args: list[str], cwd: Path = ROOT, *, check: bool = True) -> str:
 
 
 def untracked_files() -> list[str]:
-    """Paths git does not track yet, honouring .gitignore."""
+    """Paths git does not track yet, honouring .gitignore.
+
+    `ls-files` is line-oriented, so it C-quotes a path containing `"` or a tab
+    even with `core.quotePath=false`; the quoted literal matches no real path,
+    and it would also poison the `A` records `name_status` appends in worktree
+    mode. One normalization for every path git hands us.
+    """
+
     output = run_git(["ls-files", "--others", "--exclude-standard"])
-    return [line.strip() for line in output.splitlines() if line.strip()]
+    return [
+        _unquote_diff_path(line.strip())
+        for line in output.splitlines()
+        if line.strip()
+    ]
 
 
 def untracked_file_diff(path: str) -> str:
@@ -460,12 +471,28 @@ def untracked_file_diff(path: str) -> str:
 
 
 def changed_files(base: str, head: str, *, worktree: bool = False) -> list[str]:
+    """Paths changed between `base` and `head`, as git names them.
+
+    `--name-only` is a line-oriented listing, so git quotes a path containing
+    `"` or a tab even with `core.quotePath=false`. Every later read is keyed by
+    the path in this list, so a quoted literal would silently exclude that file
+    from the per-path rules; normalize here, next to where git produced it.
+    """
+
     if worktree:
         output = run_git(["diff", "--name-only", base])
-        tracked = [line.strip() for line in output.splitlines() if line.strip()]
+        tracked = [
+            _unquote_diff_path(line.strip())
+            for line in output.splitlines()
+            if line.strip()
+        ]
         return sorted({*tracked, *untracked_files()})
     output = run_git(["diff", "--name-only", f"{base}...{head}"])
-    return [line.strip() for line in output.splitlines() if line.strip()]
+    return [
+        _unquote_diff_path(line.strip())
+        for line in output.splitlines()
+        if line.strip()
+    ]
 
 
 def unified_diff(base: str, head: str, *, worktree: bool = False) -> str:
@@ -753,15 +780,75 @@ class _OpenHunk:
         )
 
 
-def _unquote_diff_path(path: str) -> str:
-    """Undo git's C-style quoting of a path containing spaces or escapes."""
+# The single-character escapes git's C quoting can emit. Octal escapes are
+# handled separately; no key here is also an octal digit, so the two cases
+# cannot be confused.
+_GIT_C_ESCAPES = {
+    "a": "\a",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+    "\\": "\\",
+    '"': '"',
+}
 
-    if len(path) >= 2 and path.startswith('"') and path.endswith('"'):
-        try:
-            return json.loads(path)
-        except ValueError:
-            return path[1:-1]
-    return path
+
+def _unquote_diff_path(path: str) -> str:
+    """Undo git's C-style quoting of a path containing spaces or escapes.
+
+    git's quoting is NOT JSON: with `core.quotePath` on (the default) every
+    non-ASCII byte is written as a three-digit OCTAL BYTE -- `"src/na\\303\\257ve
+    file.rs"` -- and `\\303` is not a legal JSON escape. `json.loads` therefore
+    raised, the caller fell back to `path[1:-1]`, and the ESCAPED literal became
+    the path. That path matches no entry in `git diff --name-status -z`, so the
+    cross-check in `paths_consistent` reported both an unexpected and a missing
+    path and blocked every diff touching a non-ASCII path.
+
+    `run_git` passes `core.quotePath=false`, which hides the bug for non-ASCII
+    only: a path containing `"` or a tab is quoted (and escaped) regardless of
+    that flag, so the match must not depend on it.
+
+    The escapes describe BYTES, so they are reassembled into a byte string and
+    decoded as UTF-8 once at the end. `surrogateescape` keeps an invalid or
+    truncated trailing sequence distinguishable rather than silently repaired;
+    such a path matches nothing, which is the fail-closed outcome this gate
+    wants.
+    """
+
+    if not (len(path) >= 2 and path.startswith('"') and path.endswith('"')):
+        return path
+
+    body = path[1:-1]
+    raw = bytearray()
+    index = 0
+    while index < len(body):
+        char = body[index]
+        if char != "\\":
+            raw.extend(char.encode("utf-8"))
+            index += 1
+            continue
+        index += 1
+        if index >= len(body):
+            # A trailing lone backslash is not quoting; keep it literally.
+            raw.extend(b"\\")
+            break
+        escape = body[index]
+        octal = body[index : index + 3]
+        if escape in _GIT_C_ESCAPES:
+            raw.extend(_GIT_C_ESCAPES[escape].encode("utf-8"))
+            index += 1
+        elif len(octal) == 3 and all(digit in "01234567" for digit in octal):
+            raw.append(int(octal, 8))
+            index += 3
+        else:
+            # Not an escape git emits; keep the backslash dropped rather than
+            # rejecting the path git just handed us.
+            raw.extend(escape.encode("utf-8"))
+            index += 1
+    return raw.decode("utf-8", "surrogateescape")
 
 
 def _strip_diff_side(path: str, side: str) -> str | None:

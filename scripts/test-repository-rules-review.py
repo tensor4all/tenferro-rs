@@ -3070,6 +3070,212 @@ def test_binary_mode_and_quoted_paths_do_not_look_like_tampering() -> None:
     }
 
 
+# git's quoted forms, byte-for-byte as `git -c core.quotePath=true diff` emits
+# them: non-ASCII becomes three-digit octal BYTES, and `"`, tab and backslash
+# are quoted even with `core.quotePath=false` because the quoting has to stay
+# unambiguous. Spelling these out (rather than building them) is the point:
+# they are the shapes the gate actually receives.
+QUOTED_NAIVE = '"src/na\\303\\257ve file.rs"'
+QUOTED_JAPANESE = '"src/\\346\\227\\245\\346\\234\\254\\350\\252\\236.rs"'
+QUOTED_QUOTE = '"q\\"uote.rs"'
+REAL_NAIVE = "src/na\u00efve file.rs"
+REAL_JAPANESE = "src/\u65e5\u672c\u8a9e.rs"
+REAL_QUOTE = 'q"uote.rs'
+
+
+def test_unquote_diff_path_decodes_git_octal_bytes() -> None:
+    """git quotes non-ASCII as octal BYTES, which `json.loads` cannot read.
+
+    `"\\303"` is not a JSON escape, so the old implementation raised, fell back
+    to `path[1:-1]`, and returned the escape sequence as if it were the name.
+    """
+
+    mod = load_module()
+
+    assert mod._unquote_diff_path(QUOTED_NAIVE) == REAL_NAIVE
+    assert mod._unquote_diff_path(QUOTED_JAPANESE) == REAL_JAPANESE
+    # The regression itself: the escaped literal must never come back.
+    assert mod._unquote_diff_path(QUOTED_NAIVE) != QUOTED_NAIVE[1:-1]
+    assert "\\303" not in mod._unquote_diff_path(QUOTED_NAIVE)
+
+
+def test_unquote_diff_path_decodes_single_character_escapes() -> None:
+    mod = load_module()
+
+    assert mod._unquote_diff_path(QUOTED_QUOTE) == REAL_QUOTE
+    assert mod._unquote_diff_path('"tab\\tx.rs"') == "tab\tx.rs"
+    assert mod._unquote_diff_path('"back\\\\slash.rs"') == "back\\slash.rs"
+    assert mod._unquote_diff_path('"new\\nline.rs"') == "new\nline.rs"
+    assert mod._unquote_diff_path('"bell\\a.rs"') == "bell\a.rs"
+
+
+def test_unquote_diff_path_leaves_unquoted_paths_alone() -> None:
+    mod = load_module()
+
+    assert mod._unquote_diff_path("src/plain file.rs") == "src/plain file.rs"
+    assert mod._unquote_diff_path("") == ""
+    assert mod._unquote_diff_path('"') == '"'
+
+
+def test_unquote_diff_path_keeps_a_truncated_sequence_unmatchable() -> None:
+    """A trailing byte fraction is not repaired into a plausible path."""
+
+    mod = load_module()
+
+    # `\303` alone is the first byte of a two-byte sequence: no character.
+    assert mod._unquote_diff_path('"a\\303"') == "a\udcc3"
+    # A lone trailing backslash is literal, not a dropped escape.
+    assert mod._unquote_diff_path('"odd\\"') == "odd\\"
+
+
+def test_quoted_diff_paths_match_unquoted_name_status() -> None:
+    """The diff header quotes, `--name-status -z` does not: both must match.
+
+    This is the production shape under `core.quotePath=true`: one side of the
+    gate reads quoted headers, the other reads raw NUL-separated paths.
+    """
+
+    mod = load_module()
+    diff = "\n".join(
+        [
+            f"diff --git {QUOTED_NAIVE} {QUOTED_NAIVE}",
+            "index 1111111..2222222 100644",
+            f"--- {QUOTED_NAIVE}\t",
+            f"+++ {QUOTED_NAIVE}\t",
+            "@@ -1 +1,2 @@",
+            " a",
+            "+b",
+            f"diff --git {QUOTED_QUOTE} {QUOTED_QUOTE}",
+            "index 3333333..4444444 100644",
+            f"--- {QUOTED_QUOTE}",
+            f"+++ {QUOTED_QUOTE}",
+            "@@ -1 +1,2 @@",
+            " a",
+            "+b",
+        ]
+    )
+    name_status = f"M\0{REAL_NAIVE}\0M\0{REAL_QUOTE}\0"
+
+    consistency = mod.paths_consistent(diff, name_status)
+
+    assert consistency.ok, consistency
+    assert mod.changed_paths(diff) == {REAL_NAIVE, REAL_QUOTE}
+    assert mod.added_lines_by_file(diff) == {REAL_NAIVE: {2}, REAL_QUOTE: {2}}
+
+
+def test_changed_files_unquotes_every_listing_shape() -> None:
+    """The file list is the third path source, and it quotes too.
+
+    With `core.quotePath=false` a non-ASCII path is printed raw, but a path
+    containing `"` or a tab is still quoted; with the flag on both are. Every
+    per-path rule keys on this list, so neither shape may survive as a literal.
+    """
+
+    mod = load_module()
+    listing = "\n".join([REAL_NAIVE, QUOTED_QUOTE, '"tab\\tx.rs"'])
+    untracked = "\n".join(['"untracked \\"quote\\".md"', "untracked naïve.md"])
+
+    def fake_run_git(args, cwd=mod.ROOT, *, check=True):
+        if args[:1] == ["ls-files"]:
+            return untracked
+        if args[:2] == ["diff", "--name-only"]:
+            return listing
+        return ""
+
+    original = mod.run_git
+    mod.run_git = fake_run_git
+    try:
+        files = mod.changed_files("origin/main", "HEAD")
+        worktree_files = mod.changed_files("origin/main", "HEAD", worktree=True)
+        newly_untracked = mod.untracked_files()
+    finally:
+        mod.run_git = original
+
+    assert files == [REAL_NAIVE, REAL_QUOTE, "tab\tx.rs"]
+    assert newly_untracked == ['untracked "quote".md', "untracked naïve.md"]
+    assert worktree_files == sorted({*files, *newly_untracked})
+
+
+def test_main_path_matching_accepts_git_quoted_headers() -> None:
+    """main()'s path matching must not depend on `core.quotePath`.
+
+    End to end over the real reporting path: the file list and the diff headers
+    carry git's quoted form while `--name-status -z` lists the raw path, and no
+    `diff-path-mismatch` block may appear. Before the fix the quoted literal
+    became the claimed path, so the gate blocked an honest diff.
+    """
+
+    import json as json_module
+    import tempfile
+
+    mod = load_module()
+    naive_path = "docs/na\u00efve \u65e5\u672c\u8a9e note.md"
+    quote_path = 'docs/q"uote note.md'
+    quoted = [
+        '"docs/na\\303\\257ve \\346\\227\\245\\346\\234\\254\\350\\252\\236 note.md"',
+        '"docs/q\\"uote note.md"',
+    ]
+    diff = "\n".join(
+        [
+            f"diff --git {quoted[0]} {quoted[0]}",
+            "index 1111111..2222222 100644",
+            f"--- {quoted[0]}\t",
+            f"+++ {quoted[0]}\t",
+            "@@ -1 +1,2 @@",
+            " a",
+            "+b",
+            f"diff --git {quoted[1]} {quoted[1]}",
+            "index 3333333..4444444 100644",
+            f"--- {quoted[1]}",
+            f"+++ {quoted[1]}",
+            "@@ -1 +1,2 @@",
+            " a",
+            "+b",
+        ]
+    )
+    name_status = f"M\0{naive_path}\0M\0{quote_path}\0"
+
+    def fake_run_git(args, cwd=mod.ROOT, *, check=True):
+        if args[:2] == ["diff", "--name-only"]:
+            # What the gate sees if `core.quotePath` were on: the listing quotes
+            # non-ASCII too, and `--name-status -z` stays raw.
+            return f"{quoted[0]}\n{quoted[1]}\n"
+        if args[:2] == ["diff", "--name-status"]:
+            return name_status
+        if args[:2] == ["diff", "--unified=3"]:
+            return diff
+        return ""
+
+    original = mod.run_git
+    mod.run_git = fake_run_git
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            report = pathlib.Path(directory) / "report.json"
+            code = mod.main(
+                [
+                    "--base",
+                    "origin/main",
+                    "--head",
+                    "HEAD",
+                    "--dry-run",
+                    "--no-dotenv",
+                    "--llm-skipped-reason",
+                    "local deterministic review",
+                    "--output-json",
+                    str(report),
+                ]
+            )
+            payload = json_module.loads(report.read_text(encoding="utf-8"))
+    finally:
+        mod.run_git = original
+
+    ids = [finding["id"] for finding in payload["findings"]]
+    assert "diff-path-mismatch" not in ids, payload["findings"]
+    assert payload["changed_files"] == [naive_path, quote_path]
+    assert payload["verdict"] == "pass", payload["block_findings"]
+    assert code == 0
+
+
 def main() -> int:
     for test in [
         test_added_lines_by_file,
@@ -3225,6 +3431,13 @@ def main() -> int:
         test_name_status_cross_check_understands_renames_and_deletes,
         test_path_consistency_finding_blocks_only_on_a_mismatch,
         test_binary_mode_and_quoted_paths_do_not_look_like_tampering,
+        test_unquote_diff_path_decodes_git_octal_bytes,
+        test_unquote_diff_path_decodes_single_character_escapes,
+        test_unquote_diff_path_leaves_unquoted_paths_alone,
+        test_unquote_diff_path_keeps_a_truncated_sequence_unmatchable,
+        test_quoted_diff_paths_match_unquoted_name_status,
+        test_changed_files_unquotes_every_listing_shape,
+        test_main_path_matching_accepts_git_quoted_headers,
     ]:
         test()
     return 0
