@@ -37,6 +37,26 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`TypedTensor::set_placement` and `set_cpu_affinity` exist only on the
+  `Dynamic` representation.** A `Host` or `Gpu` owner keeps the placement it was
+  built with, so a statically host-owned tensor can no longer be relabelled as
+  device memory; only the runtime union can carry a placement that disagrees with
+  its storage. `Representation` gains `default_placement()`, the placement a
+  representation's owner receives when none is supplied (unpinned host memory,
+  no device, no CPU affinity, for all three). Migration: relabel through
+  `into_dynamic()`, as in `let mut t = host.into_dynamic(); t.set_placement(p);`.
+  Every in-repository caller already held a `Dynamic` tensor.
+- **`TypedTensor::into_host` resolves a device label instead of carrying it.**
+  `Host` is now evidence rather than a hint: the narrow keeps `PinnedHost` /
+  `UnpinnedHost` (and any `cpu_affinity`) and replaces `Device` / `Managed` /
+  `Other` with unpinned host memory. A value labelled device-resident that is
+  narrowed to host used to come out still claiming a device, which is why every
+  entry point had to re-check the label at run time (`ensure_host_tensor`, 72
+  call sites). Those checks are removed in the following change; this one only
+  establishes the invariant they were compensating for. Fabricating the
+  contradiction on the union still works, and `tests/ui/storage/fail/
+  host_placement_is_not_settable.rs` pins the other half: the compiler refuses
+  `set_placement` on a `Host`-typed value (`E0599`).
 - **The dependency pins move to the `threadteam` 0.5 line** (#2494):
   `threadteam` 0.5.1, `strided-{basic,perm,kernel,nn,fused}` 0.12.0,
   `strided-view` 0.7.1, `t4a-faer` 0.32.0, `tcontract-exec` 0.11.0,
