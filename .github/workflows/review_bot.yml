@@ -143,10 +143,13 @@ jobs:
 
   review-bot-no-llm:
     name: repository rules review (LLM skipped)
+    # Deterministic pass only: base revision checkout, PR head fetched for the diff
+    # only, base tree's review script, no secret. The author's association is not a
+    # trust boundary here, and gating on it left every fork PR without a verdict
+    # (#2510). `review-bot` above keeps its own association gate; widening that path
+    # is a separate change. A fork PR reaches this job once a maintainer applies the
+    # no-LLM label and the head-sha waiver comment the step below requires.
     if: |
-      (github.event.pull_request.author_association == 'OWNER' ||
-       github.event.pull_request.author_association == 'MEMBER' ||
-       github.event.pull_request.author_association == 'COLLABORATOR') &&
       !contains(github.event.pull_request.labels.*.name, 'rules-review:waive') &&
       contains(github.event.pull_request.labels.*.name, 'rules-review:no-llm')
     runs-on: ubuntu-24.04

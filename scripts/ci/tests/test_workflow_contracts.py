@@ -362,6 +362,42 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("latestHeadUpdate", workflow)
         self.assertNotIn("labelTime", workflow)
 
+    def test_fork_prs_get_the_deterministic_review_verdict(self) -> None:
+        """The job that spends no secret must not be gated on the author.
+
+        `review-bot` runs the LLM and therefore keeps the association gate;
+        `review-bot-no-llm` checks out the base revision, fetches the PR head for
+        the diff only, and runs the base tree's deterministic `--dry-run` review
+        with no secret. Gating it on the author left every fork PR without a
+        verdict and the required gate red by construction (#2510). The gate's
+        "all three skipped -> fail" branch stays as the loud-failure safety net.
+        """
+
+        workflow = read(".github/workflows/review_bot.yml")
+
+        def job(name: str) -> str:
+            start = workflow.index(f"\n  {name}:\n") + 1
+            rest = workflow[start:]
+            body = rest[rest.index("\n") :]
+            later = re.search(r"^  [a-z][a-z0-9-]*:$", body, re.MULTILINE)
+            return rest[: len(rest) - len(body) + later.start()] if later else rest
+
+        no_llm = job("review-bot-no-llm")
+        self.assertNotIn("author_association", no_llm)
+        self.assertIn(
+            "contains(github.event.pull_request.labels.*.name, 'rules-review:no-llm')",
+            no_llm,
+        )
+        self.assertIn(
+            "!contains(github.event.pull_request.labels.*.name, 'rules-review:waive')",
+            no_llm,
+        )
+        # The secret-spending job keeps the gate; the waiver is untouched.
+        self.assertIn("author_association == 'OWNER'", job("review-bot"))
+        self.assertIn("'rules-review:waive'", job("review-bot-waived"))
+        # A regression that skips all three still fails loudly for a fork PR.
+        self.assertIn("Fork PR with no review verdict", job("review-bot-gate"))
+
     def test_runpod_secret_stays_on_trusted_hosted_jobs(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         run_gpu = text[
