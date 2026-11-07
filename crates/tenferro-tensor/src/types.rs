@@ -6689,8 +6689,45 @@ impl TensorValue {
     /// assert_eq!(view.dtype(), tenferro_tensor::DType::F64);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics when the value holds an externally defined payload (built with
+    /// [`Tensor::external`]), which has no preset-scalar [`TensorView`]. Use
+    /// [`TensorValue::try_tensor_view`] when the value may hold one.
     pub fn tensor_view(&self) -> TensorView<'_> {
-        tensor_view_with_layout(&self.owner, self.layout.clone())
+        self.try_tensor_view().unwrap_or_else(|| {
+            panic!("an externally defined payload has no preset-scalar view; use try_tensor_view")
+        })
+    }
+
+    /// Borrow this value as a dtype-erased view, or `None` when it holds an
+    /// externally defined payload.
+    ///
+    /// [`TensorView`] has one variant per preset scalar (`F32` ... `C64`) and none
+    /// for a caller-owned element type, so a value built from
+    /// [`Tensor::external`] has no view; read it through
+    /// [`Tensor::external_payload`] instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, Tensor, TensorValue, TypedTensor};
+    ///
+    /// let preset = TensorValue::from_tensor(Tensor::from_vec_col_major([2], vec![1., 2.])?);
+    /// let view = preset.try_tensor_view().expect("a preset scalar has a view");
+    /// assert_eq!(view.as_slice::<f64>()?, &[1., 2.]);
+    ///
+    /// let payload = ErasedHostTensor::new(
+    ///     TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1., 2.])?,
+    /// );
+    /// let external = TensorValue::from_tensor(Tensor::external(payload));
+    /// assert!(external.try_tensor_view().is_none());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[must_use]
+    pub fn try_tensor_view(&self) -> Option<TensorView<'_>> {
+        try_tensor_view_with_layout(&self.owner, self.layout.clone())
     }
 
     ///
@@ -7090,8 +7127,15 @@ fn broadcast_typed_view<'a, T: 'static, R: TensorRank>(
     })
 }
 
-fn tensor_view_with_layout(tensor: &Tensor, layout: TensorLayout<DynRank>) -> TensorView<'_> {
-    match tensor.dtype() {
+/// Borrow `tensor` as a preset-scalar view with `layout`, or `None` for an
+/// externally defined payload: `TensorView` has one variant per preset scalar and
+/// none for a caller-owned element type, and [`Tensor::external`] is public, so
+/// that case is reachable and is answered rather than asserted away (#2486).
+fn try_tensor_view_with_layout(
+    tensor: &Tensor,
+    layout: TensorLayout<DynRank>,
+) -> Option<TensorView<'_>> {
+    Some(match tensor.dtype() {
         DType::F32 => TensorView::F32(typed_view_with_layout(
             tensor
                 .as_typed::<f32>()
@@ -7134,10 +7178,8 @@ fn tensor_view_with_layout(tensor: &Tensor, layout: TensorLayout<DynRank>) -> Te
                 .unwrap_or_else(|| unreachable!("the dtype guard selects this arm")),
             layout,
         )),
-        // INVARIANT: `TensorView` has no externally defined variant, and a view is
-        // never requested for a caller-owned payload.
-        DType::External(_) => unreachable!("views cover the preset scalars"),
-    }
+        DType::External(_) => return None,
+    })
 }
 
 fn typed_view_with_layout<T: TensorScalar + 'static>(
@@ -8197,10 +8239,50 @@ impl<'a> TensorRead<'a> {
     /// assert_eq!(view.as_slice::<f64>()?, &[1.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics when this read borrows a tensor with an externally defined payload
+    /// (built with [`Tensor::external`]), which has no preset-scalar
+    /// [`TensorView`]. Use [`TensorRead::try_tensor_view`] when the read may
+    /// borrow one.
     pub fn tensor_view(self) -> TensorView<'a> {
+        self.try_tensor_view().unwrap_or_else(|| {
+            panic!("an externally defined payload has no preset-scalar view; use try_tensor_view")
+        })
+    }
+
+    /// Convert this read target into a dtype-erased tensor view, or `None` when
+    /// it borrows a tensor with an externally defined payload.
+    ///
+    /// [`TensorView`] has one variant per preset scalar (`F32` ... `C64`) and none
+    /// for a caller-owned element type, so a tensor built from
+    /// [`Tensor::external`] has no view; read it through
+    /// [`Tensor::external_payload`] instead. An existing view is returned as is.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, Tensor, TensorRead, TypedTensor};
+    ///
+    /// let preset = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let view = TensorRead::from_tensor(&preset)
+    ///     .try_tensor_view()
+    ///     .expect("a preset scalar has a view");
+    /// assert_eq!(view.as_slice::<f64>()?, &[1.0, 2.0]);
+    ///
+    /// let payload = ErasedHostTensor::new(
+    ///     TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0, 2.0])?,
+    /// );
+    /// let external = Tensor::external(payload);
+    /// assert!(TensorRead::from_tensor(&external).try_tensor_view().is_none());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[must_use]
+    pub fn try_tensor_view(self) -> Option<TensorView<'a>> {
         match self {
-            Self::Tensor(tensor) => tensor_view_with_layout(tensor, tensor_layout(tensor)),
-            Self::View(view) => view,
+            Self::Tensor(tensor) => try_tensor_view_with_layout(tensor, tensor_layout(tensor)),
+            Self::View(view) => Some(view),
         }
     }
 
