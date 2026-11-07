@@ -45,12 +45,17 @@ The two forms use different coordinates, and the conversion between them is
 one-way at the program boundary. A program's `DimExpr::InputDim { input_idx, .. }`
 names a program input by position; a `SymDim` tensor axis names a traced handle
 or a call-local input by an id that the caller pairs with a position through an
-explicit tensor map. A program position is never turned into a `SymDim` tensor
-id ([#2443](https://github.com/tensor4all/tenferro-rs/issues/2443)): when a
+explicit tensor map. The runtime and `tenferro-ad` paths never turn a program
+position into a `SymDim` tensor id
+([#2443](https://github.com/tensor4all/tenferro-rs/issues/2443)): when a
 traced handle or an AD seed derives its extents from program metadata, an extent
 that evaluates without inputs becomes a constant and every other axis names the
 handle's own axis. Program input #1 and the handle whose id is 1 would otherwise
 be the same `u64`, and a conversion given the other one would read the wrong axis.
+This holds for those paths, not for the type: the `#[doc(hidden)] pub`
+constructor `SymDim::tensor_axis` accepts any id, and `tenferro-linalg`'s
+semantic AD still builds axes from program input positions offset by one (see
+the Known limits in the `tenferro_runtime::sym_dim` module docs).
 
 This is enough for expressions such as:
 
