@@ -299,23 +299,26 @@ const REMAINING_FAMILY_CEILINGS: &[(&str, usize)] = &[
 /// Steady-state ceiling overrides, for a host whose counts differ from the baselines above.
 ///
 /// **Empty on every arch, and that is the measured result, not an omission.** Re-measured
-/// 2026-11-08 on `aarch64` (Apple M5 Max, macOS 26, rustc 1.96.0) against the versions the
-/// lockfile actually resolves, `t4a-faer` 0.32.0 / `t4a-gemm-common` 0.20.4: the counts this
-/// test prints on stderr stay between 0 and 3 per row, and **no row reaches its baseline**
-/// (`faer/svd/48` measures 1 against a baseline of 3; `borrowed/svd/48`, `borrowed/svd_full/48`
-/// and `borrowed/qr/48` measure 0 against their baseline of 0).
+/// 2026-11-08 on `aarch64` (Apple M5 Max, macOS 26.7.2, rustc 1.96.0) against the versions the
+/// lockfile resolves, `t4a-faer` 0.32.0 / `t4a-gemm-common` 0.20.4: **every row measures at or
+/// below its baseline**, so no override is needed. The largest aarch64 count is 10
+/// (`borrowed/qr/rank9`, baseline 16, the rank-9 metadata spill); every other row is 0-3.
+/// Three rows that used to carry an override: `faer/svd/48` is 1 against a baseline of 3,
+/// `borrowed/svd/48` and `borrowed/qr/48` are 0 against a baseline of 0.
 ///
-/// The surplus these overrides used to record was two allocations per GEMM call inside
+/// The surplus these overrides recorded was two allocations per GEMM call inside
 /// `t4a-gemm-common` 0.20.3 `gemm_basic_generic`, attributed by backtrace in #2448: a fresh
 /// `dyn_stack::MemBuffer` (`src/gemm.rs:437`) and the `did_pack_lhs` flag vector
-/// (`src/gemm.rs:498`). On 0.30.0 / 0.20.3 `faer/svd/48` measured 33 over 16 GEMM calls; it
-/// now measures 1, so the per-call allocation is gone rather than merely cheaper.
+/// (`src/gemm.rs:498`). The table budgeted `faer/svd/48` at 33 on 0.30.0 / 0.20.3; that count
+/// is gone on this host, not merely cheaper.
 ///
-/// The empty table stays as the place to record a host-specific count. That is also what keeps
-/// the gate able to fail: with no override, a reintroduced per-GEMM allocation blows the
-/// baseline on the first extra one (16 GEMM calls against a ceiling of 3). A Linux `aarch64`
-/// host takes the same faer path but has not been measured; if its counts differ, its rows get
-/// an entry here with the host and the versions named, never a blanket increase.
+/// The empty table stays as the place to record a host-specific count, and it is what keeps the
+/// gate able to fail: with no override, a reintroduced per-GEMM allocation exceeds the
+/// baseline instead of hiding under a 33-allocation budget.
+///
+/// Scope: one aarch64 host (macOS) measured. Linux aarch64 is unmeasured and stays stated as
+/// such; a row that differs there gets an entry with the host and versions named, never a
+/// blanket increase.
 const ARCH_CEILING_OVERRIDES: &[(&str, usize)] = &[];
 
 fn ceiling(name: &str) -> usize {
@@ -557,7 +560,8 @@ fn remaining_linalg_families_keep_their_steady_state_allocation_counts() {
 /// transient spectrum come from that pool, so they make no host-side allocation at all: zero, as
 /// the complex rows (which take the pooled real-spectrum gather) and the values-only rows show on
 /// every arch. Off x86_64 the real 48x48 factor rows used to add faer per-GEMM allocations;
-/// since `t4a-gemm-common` 0.20.4 they measure zero there as well (see `ARCH_CEILING_OVERRIDES`).
+/// with `t4a-gemm-common` 0.20.4 they measure zero on the one aarch64 host measured so far
+/// (see `ARCH_CEILING_OVERRIDES`).
 const BORROWED_ENTRY_CEILINGS: &[(&str, usize)] = &[
     ("borrowed/svd/48", 0),
     ("borrowed/svd_full/48", 0),
