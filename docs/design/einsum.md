@@ -209,7 +209,7 @@ supports arbitrary ranks and axis positions when unique labels form a supported
 exact-output dot; ellipsis, Unicode string labels, repeated labels, broadcasting,
 and other unsupported forms keep the existing parser/planner fallback. It uses
 borrowed ASCII byte labels for string calls and inline integer-label scratch for
-explicit notation. `DotGeneralConfig` owns four `SmallVec<[usize; 4]>` axis
+explicit notation. `DotGeneralConfig` owns four `TinyVec<[usize; 4]>` axis
 lists: each stores up to four axes inline and spills for larger lists. This is
 not a tensor-rank restriction. Ordinary low-rank direct calls therefore need no
 axis-list heap allocation. Larger expressions and general fallbacks may still

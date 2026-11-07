@@ -12,7 +12,6 @@ use std::fmt;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
-use smallvec::SmallVec;
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::{DType, Engine, Tensor, TensorRead};
 use tinyvec::TinyVec;
@@ -34,9 +33,10 @@ use crate::runtime::{
 use crate::{Error, Result};
 
 // `TensorRead` has no `Default`, so `tinyvec::Array` cannot hold it inline.
-// Keep the short input-read list in a `SmallVec`, which does not require
-// `Default` and stays inline for the common case.
-type RuntimeInputReads<'a> = SmallVec<[TensorRead<'a>; 8]>;
+// The run's input list is a `Vec` that is moved, not copied, into the
+// execution slots (`RunSlots::initialize` maps it to `ExecSlot::Read` without
+// collecting), so it is the only per-run input-list allocation.
+type RuntimeInputReads<'a> = Vec<TensorRead<'a>>;
 type RuntimeInputShapes<'a> = TinyVec<[&'a [usize]; 8]>;
 type RuntimeShapeScratch = TinyVec<[usize; 8]>;
 
@@ -653,7 +653,6 @@ fn execute_scheduled<'input>(
     // the run's own input list is checked here.
     validate_exec_input_count(program, inputs.len())?;
     let mut event_domains = Some(ScheduledEventDomains::new(schedule, engines)?);
-    let inputs = inputs.into_iter().map(ExecSlot::Read).collect();
     let flat = schedule.flat_location();
     let executed = execute_scheduled_slots_into(
         program,
@@ -809,10 +808,14 @@ impl<'input> RunSlots<'input> {
     fn initialize(
         &mut self,
         program: &ExecProgram,
-        inputs: Vec<ExecSlot<'input>>,
+        inputs: RuntimeInputReads<'input>,
         schedule: &ScheduledGraph,
     ) -> Result<()> {
-        crate::exec::initialize_exec_slots_in(program, inputs, &mut self.staged)?;
+        crate::exec::initialize_exec_slots_in(
+            program,
+            inputs.into_iter().map(ExecSlot::Read),
+            &mut self.staged,
+        )?;
         if schedule.input_locations().len() != program.input_slots.len() {
             return Err(Error::runtime_state(
                 "Runtime::run",
@@ -970,7 +973,7 @@ fn execute_scheduled_slots_into<'input>(
     node_regions: &[super::region::NodeRegion],
     region_counters: &super::region::RegionExecutionCounters,
     operations: &[PreparedOperationPlan],
-    inputs: Vec<ExecSlot<'input>>,
+    inputs: RuntimeInputReads<'input>,
     engines: &mut EngineSet<'_, '_>,
     event_domains: &mut Option<ScheduledEventDomains>,
 ) -> Result<RunSlots<'input>> {
@@ -1435,9 +1438,14 @@ impl ScheduledEventDomains {
         node_index: usize,
         node: &ScheduledNode,
         destination: super::EventDomainId,
-    ) -> Result<SmallVec<[Arc<dyn EventToken>; 4]>> {
-        // `Arc<dyn EventToken>` has no `Default`; `tinyvec::Array` cannot hold it.
-        let mut admitted = SmallVec::with_capacity(node.dependencies().len());
+    ) -> Result<Vec<Arc<dyn EventToken>>> {
+        // `Arc<dyn EventToken>` has neither `Default` nor `Copy`, so it fits no
+        // inline array. This path is cold: a single-domain run coalesces and
+        // returns from `enqueue` before reaching here (#2186), so only
+        // multi-domain runs classify dependencies, and each such node already
+        // allocates its completion token and records a device event. An empty
+        // dependency list does not allocate.
+        let mut admitted = Vec::with_capacity(node.dependencies().len());
         for dependency in node.dependencies() {
             let dependency_completion =
                 self.completions.get(dependency).cloned().ok_or_else(|| {
@@ -2201,7 +2209,7 @@ fn resolve_input_reads<'a>(
         return Ok(resolved);
     }
     let resolved = if inputs.len() == expected {
-        inputs.iter().cloned().collect()
+        inputs.to_vec()
     } else {
         let mut explicit = inputs.iter();
         let mut resolved = RuntimeInputReads::new();

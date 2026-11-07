@@ -134,7 +134,7 @@ both per call.
 Decision: make both inline and stop converting each axis twice.
 
 - `TensorValue::slice_view` converts each axis straight into a
-  `SmallVec<[CoreSliceSpec; 8]>`; `core_slice_specs` returns the same inline
+  `TinyVec<[CoreSliceSpec; 8]>`; `core_slice_specs` returns the same inline
   vector for its other callers.
 
 The `reshape_view` duplicate `ShapeVec` derivation and the `is_compact_col_major`

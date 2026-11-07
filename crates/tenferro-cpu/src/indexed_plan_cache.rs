@@ -352,7 +352,7 @@ fn indexed_plan_retained_bytes(key: &IndexedPlanKey, plan: &IndexedPlan) -> usiz
     };
     // INVARIANT: erased indexed plans clone the key's layout/config vectors
     // and may derive additional axis vectors. Charge twice the logical key
-    // payload in addition to any spilled key capacity so inline SmallVec keys
+    // payload in addition to any spilled key capacity so inline TinyVec keys
     // still account for the upstream plan's heap-owned Vec payload.
     size_of::<IndexedPlanCacheEntry>()
         .saturating_add(size_of::<IndexedPlanKey>())

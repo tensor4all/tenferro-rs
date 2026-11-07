@@ -1,10 +1,9 @@
 use std::mem::size_of_val;
 
-use smallvec::SmallVec;
 use strided_kernel::{
     col_major_strides, ErasedConcatenatePlan, ErasedDynamicSlicePlan, ErasedDynamicUpdateSlicePlan,
-    ErasedGatherPlan, ErasedPadPlan, ErasedRawStridedPtr, ErasedRawStridedRef, ErasedReversePlan,
-    ErasedScatterPlan, ErasedSlicePlan, Exec, GatherSpec, KernelDType, ScatterSpec,
+    ErasedGatherPlan, ErasedPadPlan, ErasedRawStridedPtr, ErasedReversePlan, ErasedScatterPlan,
+    ErasedSlicePlan, Exec, GatherSpec, KernelDType, ScatterSpec,
 };
 use tinyvec::TinyVec;
 
@@ -745,7 +744,7 @@ pub(crate) fn concatenate_read_with_pool(
     let dtype = first.dtype();
     macro_rules! concatenate_operands {
         ($ty:ty, $variant:ident) => {{
-            let operands: SmallVec<[Operand<'_, $ty>; 4]> = inputs
+            let operands: TinyVec<[Operand<'_, $ty>; 4]> = inputs
                 .iter()
                 .map(|input| match input {
                     TensorRead::Tensor(tensor) => {
@@ -994,36 +993,16 @@ where
             )
         })?
         .dtype();
-    let typed_inputs = collect_typed_inputs(first_dtype, inputs)?;
-    typed_concatenate(buffers, &typed_inputs, axis, exec)
-}
-
-fn collect_typed_inputs<'a, T>(
-    first_dtype: crate::DType,
-    inputs: &[&'a Tensor],
-) -> crate::Result<SmallVec<[&'a TypedTensor<T>; 4]>>
-where
-    Tensor: TensorAsTyped<T>,
-{
-    inputs
+    // Each input is resolved to its typed operand descriptor in one pass, so
+    // the only list is the inline operand list.
+    let operands: TinyVec<[Operand<'_, T>; 4]> = inputs
         .iter()
         .map(|tensor| {
-            TensorAsTyped::<T>::as_typed(*tensor).ok_or_else(|| {
+            let typed = TensorAsTyped::<T>::as_typed(*tensor).ok_or_else(|| {
                 crate::Error::dtype_mismatch("concatenate", first_dtype, tensor.dtype())
-            })
+            })?;
+            Operand::from_typed("concatenate", typed)
         })
-        .collect()
-}
-
-fn typed_concatenate<T: Copy + Clone + PoolScalar + TensorScalar>(
-    buffers: &mut BufferPool,
-    inputs: &[&TypedTensor<T>],
-    axis: usize,
-    exec: Exec<'_>,
-) -> crate::Result<TypedTensor<T>> {
-    let operands: SmallVec<[Operand<'_, T>; 4]> = inputs
-        .iter()
-        .map(|input| Operand::from_typed("concatenate", input))
         .collect::<crate::Result<_>>()?;
     typed_concatenate_operands(buffers, &operands, axis, exec)
 }
@@ -1094,33 +1073,52 @@ fn typed_concatenate_operands<T: Copy + Clone + PoolScalar + TensorScalar>(
     .map_err(|err| crate::Error::backend_source("concatenate", err))?;
 
     let mut out = PooledUninitOutput::new(buffers, &out_shape)?;
-    // `ErasedRawStridedRef` has no `Default`, so `tinyvec::Array` cannot hold
-    // it; `SmallVec` keeps the four-operand descriptor list inline.
-    let input_refs: SmallVec<[ErasedRawStridedRef<'_>; 4]> = inputs
-        .iter()
-        .map(|input| {
-            unsafe {
-                // SAFETY: this operation supplies initialized typed bytes with
-                // alignment and dtype matching the descriptor; validated dimensions,
-                // strides, and offset keep every reachable source element in bounds
-                // for the retained borrow.
-                crate::erased_raw_strided_ref(
-                    dtype,
-                    typed_bytes(input.data),
-                    input.shape,
-                    input.strides,
-                    input.offset,
-                )
-            }
-            .map_err(|err| crate::Error::backend_source("concatenate", err))
-        })
-        .collect::<crate::Result<_>>()?;
-    // `ErasedRawStridedPtr` has no `Default`; `SmallVec` keeps the short list
-    // inline as above.
-    let input_ptrs: SmallVec<[ErasedRawStridedPtr<'_>; 4]> = input_refs
-        .iter()
-        .map(ErasedRawStridedPtr::from_ref)
-        .collect();
+    let mut input_ptrs = inputs.iter().map(|input| {
+        unsafe {
+            // SAFETY: this operation supplies initialized typed bytes with
+            // alignment and dtype matching the descriptor; validated dimensions,
+            // strides, and offset keep every reachable source element in bounds
+            // for the retained borrow.
+            crate::erased_raw_strided_ref(
+                dtype,
+                typed_bytes(input.data),
+                input.shape,
+                input.strides,
+                input.offset,
+            )
+        }
+        .map(|input_ref| ErasedRawStridedPtr::from_ref(&input_ref))
+        .map_err(|err| crate::Error::backend_source("concatenate", err))
+    });
+    // `typed_concatenate_operands` returned above for an empty input list.
+    let Some(first_ptr) = input_ptrs.next().transpose()? else {
+        return Err(crate::Error::invalid_argument(
+            "concatenate",
+            "configuration",
+            "concatenate requires at least one input",
+        ));
+    };
+    // `ErasedRawStridedPtr` (strided-view) has no `Default`, so
+    // `tinyvec::Array` cannot hold it. It is `Copy`, so up to
+    // `INLINE_INPUTS` descriptors go into a stack array seeded with the first
+    // one; every slot below `inputs.len()` is overwritten before the plan reads
+    // it. More inputs spill to a `Vec`, as an inline-capacity vector would.
+    const INLINE_INPUTS: usize = 4;
+    let mut inline_ptrs = [first_ptr; INLINE_INPUTS];
+    let mut spilled_ptrs = Vec::new();
+    let input_ptrs: &[ErasedRawStridedPtr<'_>] = if inputs.len() <= INLINE_INPUTS {
+        for (slot, input_ptr) in inline_ptrs[1..].iter_mut().zip(input_ptrs) {
+            *slot = input_ptr?;
+        }
+        &inline_ptrs[..inputs.len()]
+    } else {
+        spilled_ptrs.reserve_exact(inputs.len());
+        spilled_ptrs.push(first_ptr);
+        for input_ptr in input_ptrs {
+            spilled_ptrs.push(input_ptr?);
+        }
+        &spilled_ptrs
+    };
     let mut out_ref = unsafe {
         // SAFETY: the output guard exclusively owns aligned storage whose
         // byte layout agrees with dtype; validated dimensions, strides, and
@@ -1135,7 +1133,7 @@ fn typed_concatenate_operands<T: Copy + Clone + PoolScalar + TensorScalar>(
         )
     }
     .map_err(|err| crate::Error::backend_source("concatenate", err))?;
-    plan.execute_uninit(&mut out_ref, &input_ptrs, exec)
+    plan.execute_uninit(&mut out_ref, input_ptrs, exec)
         .map_err(|err| crate::Error::backend_source("concatenate", err))?;
 
     // INVARIANT: the compact output has no unreachable storage, so successful

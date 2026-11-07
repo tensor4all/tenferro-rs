@@ -683,7 +683,7 @@ fn descriptor_plan_allocation_count_separates_contiguous_and_strided() {
     let root = identity.root_resource();
 
     // Both metadata sets are built outside the counted region, and both fit the
-    // inline `SmallVec` capacity, so only the descriptor plan itself is counted.
+    // inline `TinyVec` capacity, so only the descriptor plan itself is counted.
     let compact_shape = vec![2, 3].into_iter().collect::<ShapeVec>();
     let compact_strides = vec![1, 2].into_iter().collect::<StrideVec>();
     let compact = count_descriptor_allocations(|| {
