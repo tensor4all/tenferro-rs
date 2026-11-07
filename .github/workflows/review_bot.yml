@@ -155,76 +155,21 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - name: Verify label actor can skip LLM
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const issue_number = context.payload.pull_request.number;
-            const labelName = process.env.REVIEW_NO_LLM_LABEL;
-            const allowed = new Set(["admin", "maintain"]);
-            const events = await github.paginate(github.rest.issues.listEventsForTimeline, {
-              owner,
-              repo,
-              issue_number,
-              per_page: 100,
-            });
-            const labeledEvents = events.filter(
-              (event) =>
-                event.event === "labeled" &&
-                event.label?.name === labelName &&
-                event.actor?.login
-            );
-            const labelEvent = labeledEvents.length
-              ? labeledEvents[labeledEvents.length - 1]
-              : null;
-            if (!labelEvent) {
-              core.setFailed(`Could not find a timeline event for ${labelName}; remove and reapply the label.`);
-              return;
-            }
-            if (context.payload.action === "synchronize") {
-              core.setFailed(`The ${labelName} label must be reapplied after the latest PR push.`);
-              return;
-            }
-            const labelTime = Date.parse(labelEvent.created_at);
-            if (!Number.isFinite(labelTime)) {
-              core.setFailed(`Could not determine when ${labelName} was applied; remove and reapply the label.`);
-              return;
-            }
-            const headUpdateTimes = events
-              .filter(
-                (event) =>
-                  ["committed", "head_ref_force_pushed"].includes(event.event) &&
-                  event.created_at
-              )
-              .map((event) => Date.parse(event.created_at))
-              .filter((time) => Number.isFinite(time));
-            const latestHeadUpdate = headUpdateTimes.length
-              ? Math.max(...headUpdateTimes)
-              : null;
-            if (latestHeadUpdate !== null && labelTime <= latestHeadUpdate) {
-              core.setFailed(`The ${labelName} label is older than the latest PR head update; reapply it.`);
-              return;
-            }
-            const labelActor = labelEvent.actor.login;
-            const {data} = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner,
-              repo,
-              username: labelActor,
-            });
-            if (!allowed.has(data.role_name)) {
-              core.setFailed(
-                `Actor ${labelActor} has ${data.role_name} repository role; ` +
-                `the ${labelName} label requires the maintain or admin role.`
-              );
-            }
       - name: Checkout trusted base revision
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Verify a maintainer skipped the LLM pass for this head sha
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // The waiver is a maintainer comment naming the current head sha, so
+            // it stops applying the moment the head moves. The label only makes
+            // a human's intent visible; see scripts/review-waiver.js.
+            const { run } = require(`${process.env.GITHUB_WORKSPACE}/scripts/review-waiver.js`);
+            await run({ github, core, context, labelName: process.env.REVIEW_NO_LLM_LABEL });
       - name: Fetch PR head for diff only
         id: refs
         run: |
@@ -322,76 +267,21 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - name: Verify label actor can waive review
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const issue_number = context.payload.pull_request.number;
-            const labelName = process.env.REVIEW_WAIVE_LABEL;
-            const allowed = new Set(["admin", "maintain"]);
-            const events = await github.paginate(github.rest.issues.listEventsForTimeline, {
-              owner,
-              repo,
-              issue_number,
-              per_page: 100,
-            });
-            const labeledEvents = events.filter(
-              (event) =>
-                event.event === "labeled" &&
-                event.label?.name === labelName &&
-                event.actor?.login
-            );
-            const labelEvent = labeledEvents.length
-              ? labeledEvents[labeledEvents.length - 1]
-              : null;
-            if (!labelEvent) {
-              core.setFailed(`Could not find a timeline event for ${labelName}; remove and reapply the label.`);
-              return;
-            }
-            if (context.payload.action === "synchronize") {
-              core.setFailed(`The ${labelName} label must be reapplied after the latest PR push.`);
-              return;
-            }
-            const labelTime = Date.parse(labelEvent.created_at);
-            if (!Number.isFinite(labelTime)) {
-              core.setFailed(`Could not determine when ${labelName} was applied; remove and reapply the label.`);
-              return;
-            }
-            const headUpdateTimes = events
-              .filter(
-                (event) =>
-                  ["committed", "head_ref_force_pushed"].includes(event.event) &&
-                  event.created_at
-              )
-              .map((event) => Date.parse(event.created_at))
-              .filter((time) => Number.isFinite(time));
-            const latestHeadUpdate = headUpdateTimes.length
-              ? Math.max(...headUpdateTimes)
-              : null;
-            if (latestHeadUpdate !== null && labelTime <= latestHeadUpdate) {
-              core.setFailed(`The ${labelName} label is older than the latest PR head update; reapply it.`);
-              return;
-            }
-            const labelActor = labelEvent.actor.login;
-            const {data} = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner,
-              repo,
-              username: labelActor,
-            });
-            if (!allowed.has(data.role_name)) {
-              core.setFailed(
-                `Actor ${labelActor} has ${data.role_name} repository role; ` +
-                `the ${labelName} label requires the maintain or admin role.`
-              );
-            }
       - name: Checkout trusted base revision
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Verify a maintainer waived review for this head sha
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // The waiver is a maintainer comment naming the current head sha, so
+            // it stops applying the moment the head moves. The label only makes
+            // a human's intent visible; see scripts/review-waiver.js.
+            const { run } = require(`${process.env.GITHUB_WORKSPACE}/scripts/review-waiver.js`);
+            await run({ github, core, context, labelName: process.env.REVIEW_WAIVE_LABEL });
       - name: Fetch PR head for diff only
         id: refs
         run: |

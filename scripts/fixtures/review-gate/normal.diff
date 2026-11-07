@@ -1,0 +1,13 @@
+diff --git a/crates/tenferro-tensor/src/dispatch.rs b/crates/tenferro-tensor/src/dispatch.rs
+index 118f733..0cb7059 100644
+--- a/crates/tenferro-tensor/src/dispatch.rs
++++ b/crates/tenferro-tensor/src/dispatch.rs
+@@ -3,6 +3,6 @@ pub fn shape_stride(shape: &[usize], stride: &[isize]) -> usize {
+     for (dim, step) in shape.iter().zip(stride.iter()) {
+         total += dim * step.unsigned_abs();
+     }
+-    let value = 1;
+-    value + total
++    let added_marker = total * 2;
++    added_marker
+ }

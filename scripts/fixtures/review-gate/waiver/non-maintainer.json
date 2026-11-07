@@ -1,0 +1,33 @@
+{
+  "name": "waiver comment from below write access",
+  "action": "labeled",
+  "labelPresent": true,
+  "headSha": "2222222222222222222222222222222222222222",
+  "comments": [
+    {
+      "id": 1,
+      "user": {
+        "login": "author"
+      },
+      "author_association": "CONTRIBUTOR",
+      "created_at": "2026-01-01T10:00:00Z",
+      "body": "waive-review 2222222222222222222222222222222222222222"
+    }
+  ],
+  "timeline": [
+    {
+      "event": "labeled",
+      "label": {
+        "name": "rules-review:waive"
+      },
+      "actor": {
+        "login": "author"
+      },
+      "created_at": "2026-01-01T10:00:00Z"
+    }
+  ],
+  "expect": {
+    "allowed": false,
+    "code": "non-maintainer-waiver"
+  }
+}

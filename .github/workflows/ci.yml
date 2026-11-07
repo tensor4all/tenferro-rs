@@ -294,6 +294,9 @@ jobs:
       - name: Install pinned actionlint
         if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
         run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+      - name: Test the review waiver decision
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
+        run: node --test scripts/test-review-waiver.js
       - name: Validate CI configuration
         if: needs.policy.result == 'success' && needs.policy.outputs.run_ci_config == 'true'
         env:

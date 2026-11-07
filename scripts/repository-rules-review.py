@@ -610,33 +610,412 @@ def build_rules_payload(section_names: list[str]) -> str:
     return "\n\n".join(chunks)
 
 
-def added_lines_by_file(diff_text: str) -> dict[str, set[int]]:
-    result: dict[str, set[int]] = {}
-    current_file: str | None = None
-    new_line = 0
+# ---------------------------------------------------------------------------
+# Hunk-aware diff parsing (#88).
+#
+# `git diff` is a state machine. `@@ -a,b +c,d @@` opens a hunk whose body is
+# exactly `b` old-side and `d` new-side lines, and `+++ ` is a file header ONLY
+# while no body is outstanding. Deciding "this line is a header" from its prefix
+# alone let an ADDED line whose content begins with `++ ` -- rendered as
+# `+++ b/whatever` -- become the current file, so the pull-request author chose
+# the path every later addition was attributed to and every path-keyed rule read
+# or skipped the wrong file.
+#
+# Every helper below shares this one parse so the four entry points cannot drift
+# apart again.
+# ---------------------------------------------------------------------------
 
-    for line in diff_text.splitlines():
-        if line.startswith("+++ "):
-            raw = line.removeprefix("+++ b/").removeprefix("+++ ")
-            if raw != "/dev/null":
-                current_file = raw
-                result.setdefault(current_file, set())
-            continue
-        if line.startswith("@@"):
-            match = re.search(r"\+(\d+)", line)
-            new_line = int(match.group(1)) if match else 0
-            continue
-        if current_file is None:
-            continue
-        if line.startswith("+") and not line.startswith("+++"):
-            result[current_file].add(new_line)
-            new_line += 1
-        elif line.startswith("-") and not line.startswith("---"):
-            continue
-        elif line.startswith(" "):
-            new_line += 1
+DEV_NULL = "/dev/null"
 
+# Lines git emits that are never file content and never file headers.
+DIFF_META_PREFIXES = (
+    "index ",
+    "old mode ",
+    "new mode ",
+    "deleted file mode ",
+    "new file mode ",
+    "similarity index ",
+    "dissimilarity index ",
+    "copy from ",
+    "copy to ",
+    "rename from ",
+    "rename to ",
+    "Binary files ",
+)
+
+
+@dataclass(frozen=True)
+class HunkLine:
+    """One body line of a hunk. `kind` is `"+"`, `"-"` or `" "`."""
+
+    kind: str
+    text: str
+    old_lineno: int | None
+    new_lineno: int | None
+
+
+@dataclass(frozen=True)
+class Hunk:
+    old_start: int
+    old_count: int
+    new_start: int
+    new_count: int
+    lines: tuple[HunkLine, ...]
+
+    def added(self) -> list[HunkLine]:
+        return [line for line in self.lines if line.kind == "+"]
+
+
+@dataclass(frozen=True)
+class FileDiff:
+    old_path: str | None
+    new_path: str | None
+    hunks: tuple[Hunk, ...]
+
+    @property
+    def path(self) -> str | None:
+        """Path rules key on: the new side, or the old one for a delete."""
+
+        return self.new_path or self.old_path
+
+
+@dataclass
+class _OpenHunk:
+    """A hunk whose `@@` budget is still deciding what its body is."""
+
+    old_start: int
+    old_count: int
+    new_start: int
+    new_count: int
+    old_left: int
+    new_left: int
+    old_no: int
+    new_no: int
+    lines: list[HunkLine]
+
+    @classmethod
+    def from_header(cls, match: re.Match[str]) -> "_OpenHunk":
+        # HUNK_HEADER groups: 1 old_start, 2 old_count, 3 new_start,
+        # 4 new_count, 5 trailing section heading.
+        old_count = int(match.group(2) or 1)
+        new_count = int(match.group(4) or 1)
+        old_start = int(match.group(1))
+        new_start = int(match.group(3))
+        return cls(
+            old_start=old_start,
+            old_count=old_count,
+            new_start=new_start,
+            new_count=new_count,
+            old_left=old_count,
+            new_left=new_count,
+            old_no=old_start,
+            new_no=new_start,
+            lines=[],
+        )
+
+    @property
+    def spent(self) -> bool:
+        """True once the header's line budget has been fully accounted for."""
+
+        return self.old_left <= 0 and self.new_left <= 0
+
+    def consume(self, raw: str) -> bool:
+        """Take one body line; return False when `raw` cannot be body content."""
+
+        marker = raw[:1]
+        if marker == "+":
+            self.lines.append(HunkLine("+", raw[1:], None, self.new_no))
+            self.new_no += 1
+            self.new_left -= 1
+        elif marker == "-":
+            self.lines.append(HunkLine("-", raw[1:], self.old_no, None))
+            self.old_no += 1
+            self.old_left -= 1
+        elif marker == " " or raw == "":
+            self.lines.append(
+                HunkLine(" ", raw[1:] if raw else "", self.old_no, self.new_no)
+            )
+            self.old_no += 1
+            self.new_no += 1
+            self.old_left -= 1
+            self.new_left -= 1
+        else:
+            return False
+        return True
+
+    def close(self) -> Hunk:
+        return Hunk(
+            old_start=self.old_start,
+            old_count=self.old_count,
+            new_start=self.new_start,
+            new_count=self.new_count,
+            lines=tuple(self.lines),
+        )
+
+
+def _unquote_diff_path(path: str) -> str:
+    """Undo git's C-style quoting of a path containing spaces or escapes."""
+
+    if len(path) >= 2 and path.startswith('"') and path.endswith('"'):
+        try:
+            return json.loads(path)
+        except ValueError:
+            return path[1:-1]
+    return path
+
+
+def _strip_diff_side(path: str, side: str) -> str | None:
+    """`b/foo` -> `foo`; `/dev/null` -> None."""
+
+    path = _unquote_diff_path(path.strip())
+    if path == DEV_NULL:
+        return None
+    prefix = side + "/"
+    if path.startswith(prefix):
+        return path[len(prefix) :]
+    return path
+
+
+def _split_diff_git_header(header: str) -> tuple[str | None, str | None]:
+    """Split the `a/x b/y` tail of a `diff --git` line.
+
+    Plain paths are separated by " b/"; a path git had to quote (spaces,
+    non-ASCII) arrives as two quoted strings.
+    """
+
+    header = header.strip()
+    if header.startswith('"'):
+        parts = re.findall(r'"(?:[^"\\]|\\.)*"', header)
+        if len(parts) == 2:
+            return _strip_diff_side(parts[0], "a"), _strip_diff_side(parts[1], "b")
+    marker = header.rfind(" b/")
+    if marker == -1:
+        return None, None
+    return (
+        _strip_diff_side(header[:marker], "a"),
+        _strip_diff_side(header[marker + 1 :], "b"),
+    )
+
+
+def parse_diff(diff_text: str) -> list[FileDiff]:
+    """Parse `git diff` output into :class:`FileDiff` records.
+
+    A `+++ ` line is a header only while no hunk body is outstanding; inside a
+    hunk the `@@` budget decides, so a `+++`-looking line is content.
+    """
+
+    files: list[FileDiff] = []
+    old_path: str | None = None
+    new_path: str | None = None
+    hunks: list[Hunk] = []
+    open_hunk: _OpenHunk | None = None
+
+    def close_hunk() -> None:
+        nonlocal open_hunk
+        if open_hunk is not None:
+            hunks.append(open_hunk.close())
+            open_hunk = None
+
+    def flush_file() -> None:
+        nonlocal old_path, new_path, hunks
+        close_hunk()
+        if old_path is None and new_path is None and not hunks:
+            return
+        files.append(FileDiff(old_path=old_path, new_path=new_path, hunks=tuple(hunks)))
+        old_path = None
+        new_path = None
+        hunks = []
+
+    for raw in diff_text.splitlines():
+        if open_hunk is not None:
+            if raw.startswith("\\"):
+                # "\ No newline at end of file" is metadata, not a body line.
+                continue
+            if open_hunk.consume(raw):
+                if open_hunk.spent:
+                    close_hunk()
+                continue
+            # Truncated or malformed hunk: stop reading content and re-read this
+            # line as a header candidate instead of swallowing it.
+            close_hunk()
+            if not raw.startswith(("diff --git ", "@@", "--- ")):
+                continue
+
+        if raw.startswith("diff --git "):
+            flush_file()
+            # The header names both sides; `--- `/`+++ ` refine it below and a
+            # rename/copy pair overrides both. Keeping this default makes a
+            # mode-only or binary file block report its paths at all.
+            old_path, new_path = _split_diff_git_header(raw[len("diff --git ") :])
+            continue
+        if raw.startswith(("rename from ", "copy from ")):
+            old_path = _unquote_diff_path(raw.split(" ", 2)[2].strip())
+            continue
+        if raw.startswith(("rename to ", "copy to ")):
+            new_path = _unquote_diff_path(raw.split(" ", 2)[2].strip())
+            continue
+        if raw.startswith("--- "):
+            old_path = _strip_diff_side(raw[4:], "a")
+            continue
+        if raw.startswith("+++ "):
+            new_path = _strip_diff_side(raw[4:], "b")
+            continue
+        match = HUNK_HEADER.match(raw)
+        if match:
+            open_hunk = _OpenHunk.from_header(match)
+            if open_hunk.spent:
+                close_hunk()
+            continue
+        if raw.startswith(DIFF_META_PREFIXES):
+            continue
+        # Anything else outside a hunk is noise; it never names a file.
+
+    flush_file()
+    return files
+
+
+def added_lines_with_text(diff_text: str) -> dict[str, list[tuple[int, str]]]:
+    """Map each file to its added ``(new_line_number, text)`` pairs.
+
+    Only the new side names a file: a deletion's ``+++ /dev/null`` yields no
+    bucket, which is what the pre-#88 helper reported and what every call site
+    already tolerates.
+    """
+
+    result: dict[str, list[tuple[int, str]]] = {}
+    for file_diff in parse_diff(diff_text):
+        if file_diff.new_path is None:
+            continue
+        bucket = result.setdefault(file_diff.new_path, [])
+        for hunk in file_diff.hunks:
+            for line in hunk.lines:
+                if line.kind == "+" and line.new_lineno is not None:
+                    bucket.append((line.new_lineno, line.text))
     return result
+
+
+def added_lines_by_file(diff_text: str) -> dict[str, set[int]]:
+    """Map each file to the set of new-side line numbers it adds."""
+
+    return {
+        path: {lineno for lineno, _ in lines}
+        for path, lines in added_lines_with_text(diff_text).items()
+    }
+
+
+def changed_paths(diff_text: str) -> set[str]:
+    """Every non-``/dev/null`` path the diff names, old side or new."""
+
+    paths: set[str] = set()
+    for file_diff in parse_diff(diff_text):
+        if file_diff.old_path:
+            paths.add(file_diff.old_path)
+        if file_diff.new_path:
+            paths.add(file_diff.new_path)
+    return paths
+
+
+def parse_name_status(text: str) -> dict[str, tuple[str, str | None]]:
+    """Parse ``git diff --name-status -z`` output.
+
+    Returns ``{path: (status, other_path)}`` where ``other_path`` is the old path
+    of a rename or copy and ``None`` otherwise.
+    """
+
+    fields = [chunk for chunk in text.split("\0") if chunk != ""]
+    result: dict[str, tuple[str, str | None]] = {}
+    index = 0
+    while index < len(fields):
+        status = fields[index]
+        index += 1
+        if status[:1] in ("R", "C"):
+            if index + 1 >= len(fields):
+                break
+            result[fields[index + 1]] = (status, fields[index])
+            index += 2
+            continue
+        if index >= len(fields):
+            break
+        result[fields[index]] = (status, None)
+        index += 1
+    return result
+
+
+@dataclass(frozen=True)
+class PathConsistency:
+    """Difference between the paths a diff claims and the paths git lists."""
+
+    unexpected: tuple[str, ...]
+    missing: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.unexpected and not self.missing
+
+
+def paths_consistent(diff_text: str, name_status_text: str) -> PathConsistency:
+    """Cross-check the diff's claimed paths against `git diff --name-status -z`.
+
+    Git reports the paths it used to build the diff, NUL-separated and therefore
+    unambiguous. A diff naming a path git does not list has been tampered with;
+    a gate must fail closed on a non-empty result rather than trust either side.
+    This is the second layer behind `parse_diff`: the parser no longer invents
+    paths, and if a later edit reintroduces one this still refuses.
+    """
+
+    parsed = parse_name_status(name_status_text)
+    listed = set(parsed)
+    for _status, other in parsed.values():
+        if other:
+            listed.add(other)
+    claimed = changed_paths(diff_text)
+    return PathConsistency(
+        unexpected=tuple(sorted(claimed - listed)),
+        missing=tuple(sorted(listed - claimed)),
+    )
+
+
+def path_consistency_finding(
+    diff_text: str, name_status_text: str
+) -> Finding | None:
+    """Block when the diff and `git --name-status` disagree about the paths."""
+
+    consistency = paths_consistent(diff_text, name_status_text)
+    if consistency.ok:
+        return None
+    unexpected = ", ".join(consistency.unexpected) or "(none)"
+    missing = ", ".join(consistency.missing) or "(none)"
+    return Finding(
+        id="diff-path-mismatch",
+        severity="block",
+        rule_section="Rule Source Of Truth",
+        file=consistency.unexpected[0]
+        if consistency.unexpected
+        else (consistency.missing[0] if consistency.missing else "<unknown>"),
+        line=None,
+        summary="Diff names paths that git --name-status does not report",
+        detail=(
+            "The diff under review and `git diff --name-status -z` for the same "
+            "base/head pair disagree, so at least one path was taken from the "
+            f"diff text rather than from git: not listed by git: {unexpected}; "
+            f"listed by git but absent from the diff: {missing}. The gate reads "
+            "paths from diff headers, so it cannot be trusted until they match."
+        ),
+    )
+
+
+def name_status(base: str, head: str, *, worktree: bool = False) -> str:
+    """`git diff --name-status -z` for the same pair the reviewed diff came from.
+
+    `unified_diff` synthesises all-added diffs for untracked files in worktree
+    mode (they have no committed counterpart), so those paths are appended here
+    as `A` records or the cross-check would report them as unexpected.
+    """
+
+    if worktree:
+        listed = run_git(["diff", "--name-status", "-z", base])
+        return listed + "".join(f"A\0{path}\0" for path in untracked_files())
+    return run_git(["diff", "--name-status", "-z", f"{base}...{head}"])
 
 
 def files_with_unanchorable_deletions(diff_text: str) -> set[str]:
@@ -665,78 +1044,20 @@ def files_with_unanchorable_deletions(diff_text: str) -> set[str]:
     File headers are only read OUTSIDE a hunk. Inside one, ``--- validation``
     is the deletion of a source line reading ``-- validation``, not an
     old-file header; treating it as a header reset the hunk flags and lost the
-    file. ``diff --git`` returns the parser to the header state.
+    file. The hunk state now comes from the one shared `parse_diff`, so this
+    cannot drift away from the other readers.
     """
     result: set[str] = set()
-    current_file: str | None = None
-    old_file: str | None = None
-    in_hunk = False
-    hunk_deleted = False
-    hunk_added = False
-
-    def close_hunk() -> None:
-        if current_file and hunk_deleted and not hunk_added:
-            result.add(current_file)
-
-    for line in diff_text.splitlines():
-        if line.startswith("diff --git"):
-            close_hunk()
-            in_hunk = False
-            hunk_deleted = hunk_added = False
-            current_file = old_file = None
+    for file_diff in parse_diff(diff_text):
+        path = file_diff.path
+        if path is None:
             continue
-        if line.startswith("@@"):
-            close_hunk()
-            in_hunk = True
-            hunk_deleted = hunk_added = False
-            continue
-        if not in_hunk:
-            if line.startswith("--- "):
-                raw = line.removeprefix("--- a/").removeprefix("--- ")
-                old_file = None if raw == "/dev/null" else raw
-                continue
-            if line.startswith("+++ "):
-                raw = line.removeprefix("+++ b/").removeprefix("+++ ")
-                current_file = old_file if raw == "/dev/null" else raw
-                continue
-            continue
-        if current_file is None:
-            continue
-        if line.startswith("-"):
-            hunk_deleted = True
-        elif line.startswith("+"):
-            hunk_added = True
-    close_hunk()
-    return result
-
-
-def added_lines_with_text(diff_text: str) -> dict[str, list[tuple[int, str]]]:
-    """Map each file to its added ``(new_line_number, text)`` pairs."""
-    result: dict[str, list[tuple[int, str]]] = {}
-    current_file: str | None = None
-    new_line = 0
-
-    for line in diff_text.splitlines():
-        if line.startswith("+++ "):
-            raw = line.removeprefix("+++ b/").removeprefix("+++ ")
-            current_file = None if raw == "/dev/null" else raw
-            if current_file is not None:
-                result.setdefault(current_file, [])
-            continue
-        if line.startswith("@@"):
-            match = re.search(r"\+(\d+)", line)
-            new_line = int(match.group(1)) if match else 0
-            continue
-        if current_file is None:
-            continue
-        if line.startswith("+") and not line.startswith("+++"):
-            result[current_file].append((new_line, line[1:]))
-            new_line += 1
-        elif line.startswith("-") and not line.startswith("---"):
-            continue
-        elif line.startswith(" "):
-            new_line += 1
-
+        for hunk in file_diff.hunks:
+            removed = any(line.kind == "-" for line in hunk.lines)
+            added = any(line.kind == "+" for line in hunk.lines)
+            if removed and not added:
+                result.add(path)
+                break
     return result
 
 
@@ -910,17 +1231,35 @@ def split_oversized_hunk_verbatim(header: list[str], hunk: list[str]) -> list[st
 
 
 def split_large_file_diff(diff_text: str) -> list[str]:
-    """Split one file diff while preserving file headers in every chunk."""
+    """Split one file diff while preserving file headers in every chunk.
+
+    The header/hunk split uses the same `@@` budget as `parse_diff`: a body line
+    never opens a hunk, so a chunk boundary can never be chosen by diff content.
+    """
+
     lines = diff_text.splitlines()
     header: list[str] = []
     hunks: list[list[str]] = []
     current_hunk: list[str] | None = None
+    open_hunk: _OpenHunk | None = None
 
     for line in lines:
+        if open_hunk is not None and current_hunk is not None:
+            if line.startswith("\\") or open_hunk.consume(line):
+                current_hunk.append(line)
+                if open_hunk.spent:
+                    open_hunk = None
+                continue
+            # Truncated or malformed budget: re-read this line as a header.
+            open_hunk = None
+        match = HUNK_HEADER.match(line)
         if line.startswith("@@"):
             if current_hunk is not None:
                 hunks.append(current_hunk)
             current_hunk = [line]
+            open_hunk = _OpenHunk.from_header(match) if match else None
+            if open_hunk is not None and open_hunk.spent:
+                open_hunk = None
         elif current_hunk is None:
             header.append(line)
         else:
@@ -1008,47 +1347,33 @@ def sensitive_diff_location(diff_text: str) -> tuple[str, int] | None:
     can be split across two: the assignment stays unchanged on a context line
     and only the value line is replaced. Checking added lines in isolation sees
     a bare string literal with no credential-shaped name anywhere on it.
+
+    The scan walks hunks from `parse_diff`, so a line whose content renders as
+    `+++ ...` is an ordinary added line here instead of being skipped as a file
+    header -- which is exactly how such a line used to avoid `contains_sensitive_text`.
     """
-    current_file: str | None = None
-    new_line = 0
-    # Set when the previous surviving line opened an assignment whose value has
-    # not appeared yet, so the next line's literal is that value.
-    awaiting_value = False
-
-    for line in diff_text.splitlines():
-        if line.startswith("+++ "):
-            raw = line.removeprefix("+++ b/").removeprefix("+++ ")
-            current_file = None if raw == "/dev/null" else raw
+    for file_diff in parse_diff(diff_text):
+        if file_diff.new_path is None:
+            continue
+        for hunk in file_diff.hunks:
+            # Set when the previous surviving line opened an assignment whose
+            # value has not appeared yet, so the next line's literal is that value.
             awaiting_value = False
-            continue
-        if line.startswith("@@"):
-            match = re.search(r"\+(\d+)", line)
-            new_line = int(match.group(1)) if match else 0
-            awaiting_value = False
-            continue
-        if current_file is None:
-            continue
-
-        if line.startswith("-") and not line.startswith("---"):
-            # A deleted line neither survives nor breaks the continuation.
-            continue
-        if not (line.startswith("+") or line.startswith(" ")):
-            continue
-
-        body = line[1:]
-        is_added = line.startswith("+") and not line.startswith("+++")
-
-        if is_added and contains_sensitive_text(body):
-            return current_file, new_line
-        if is_added and awaiting_value and is_standalone_secret_value(body):
-            return current_file, new_line
-
-        opener = OPEN_SECRET_ASSIGNMENT.search(body)
-        awaiting_value = bool(opener) and is_credential_name(opener.group("name"))
-        if is_added:
-            new_line += 1
-        else:
-            new_line += 1
+            for line in hunk.lines:
+                if line.kind == "-":
+                    # A deleted line neither survives nor breaks the continuation.
+                    continue
+                body = line.text
+                is_added = line.kind == "+"
+                if is_added and line.new_lineno is not None:
+                    if contains_sensitive_text(body):
+                        return file_diff.new_path, line.new_lineno
+                    if awaiting_value and is_standalone_secret_value(body):
+                        return file_diff.new_path, line.new_lineno
+                opener = OPEN_SECRET_ASSIGNMENT.search(body)
+                awaiting_value = bool(opener) and is_credential_name(
+                    opener.group("name")
+                )
     return None
 
 
@@ -2728,6 +3053,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     diff_text = unified_diff(args.base, args.head, worktree=args.worktree)
+    # Second layer behind the hunk-aware parser: git's own NUL-separated path
+    # list for the same range. The diff text is PR-controlled; this is not.
+    name_status_text = name_status(args.base, args.head, worktree=args.worktree)
     added_lines = added_lines_by_file(diff_text)
     added_text = added_lines_with_text(diff_text)
     deleted_from = files_with_unanchorable_deletions(diff_text)
@@ -2745,6 +3073,9 @@ def main(argv: list[str] | None = None) -> int:
     sensitive_finding = sensitive_diff_finding(diff_text)
     if sensitive_finding:
         findings.append(sensitive_finding)
+    path_finding = path_consistency_finding(diff_text, name_status_text)
+    if path_finding:
+        findings.append(path_finding)
     if args.llm_skipped_reason:
         findings.append(llm_skipped_finding(args.llm_skipped_reason))
 

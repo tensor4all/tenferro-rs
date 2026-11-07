@@ -1,0 +1,34 @@
+{
+  "name": "association NONE but the repository role is maintain",
+  "action": "labeled",
+  "labelPresent": true,
+  "headSha": "2222222222222222222222222222222222222222",
+  "comments": [
+    {
+      "id": 1,
+      "user": {
+        "login": "maint"
+      },
+      "author_association": "NONE",
+      "created_at": "2026-01-01T10:00:00Z",
+      "body": "waive-review 2222222222222222222222222222222222222222",
+      "author_permission": "maintain"
+    }
+  ],
+  "timeline": [
+    {
+      "event": "labeled",
+      "label": {
+        "name": "rules-review:waive"
+      },
+      "actor": {
+        "login": "maint"
+      },
+      "created_at": "2026-01-01T10:00:00Z"
+    }
+  ],
+  "expect": {
+    "allowed": true,
+    "code": "waiver-matches-head"
+  }
+}
