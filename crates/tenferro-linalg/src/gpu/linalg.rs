@@ -169,14 +169,38 @@ enum CusolverSvdRoutine {
 /// `Auto` follows the JAX-compatible accurate size policy and is the default;
 /// an explicit driver always wins.
 ///
-/// `Auto` never selects the polar `Xgesvdp`: its small singular values are only
-/// accurate to about `1e-6` of the largest (#2182), which an `eps`-scale
-/// truncation cannot tolerate, so it stays opt-in.
+/// This module owns the whole `SvdDriver` translation, so the public enum stays
+/// backend-neutral and carries only the one-line routine correspondence:
+///
+/// - `Auto` is `gesvdj` when both matrix dimensions are at most 1024, otherwise
+///   `gesvd`, for every dtype (#971, #2182). It never selects the polar
+///   `Xgesvdp`: that driver's small singular values are only accurate to about
+///   `1e-6` of the largest, which an `eps`-scale truncation cannot tolerate, so
+///   it stays opt-in.
+/// - `Jacobi` forces `gesvdj`, `QrBased` forces `gesvd`, `Polar` forces
+///   `Xgesvdp`, all regardless of size.
+/// - `Polar` reads cuSOLVER's `h_err_sigma`, the absolute perturbation bound on
+///   the computed singular values, and returns a typed `BackendFailure`
+///   (`XGESVDP_MAX_RELATIVE_ERROR`) instead of silently wrong factors. On
+///   rank-deficient `F32`/`C32` input cuSOLVER reports a perturbation
+///   comparable to the spectrum (measured `808.69` for a `256x256` `f32`
+///   matrix of rank 64 whose `smax` is `1.42e2`, #2182), so an explicit
+///   single-precision call there fails rather than returning the perturbed
+///   values.
+/// - `Polar` accuracy is input-dependent, not uniformly worse. On ten-decade
+///   spectra built as `U diag(s) Vᴴ` it was the most accurate of the three on an
+///   A100 and `0.39x`-`0.46x` the time of `gesvd`; on a circulant-like matrix
+///   with the same spectrum it lost about two digits against `gesvd` (#1849).
+///   `gesvdj` was `2.7x`-`3.1x` slower than `gesvd` on that family, and about
+///   `3x` slower on an `800x800` ten-decade matrix in #1839. Timings are in
+///   [issue #1839](https://github.com/tensor4all/tenferro-rs/issues/1839) and
+///   [issue #1849](https://github.com/tensor4all/tenferro-rs/issues/1849), and
+///   `benches/cuda_svd_driver.rs` re-measures time and accuracy together.
 fn select_svd_driver(driver: SvdDriver, m: usize, n: usize) -> CusolverSvdRoutine {
     match driver {
-        SvdDriver::Gesvdj => CusolverSvdRoutine::Gesvdj,
-        SvdDriver::Gesvd => CusolverSvdRoutine::Gesvd,
-        SvdDriver::Xgesvdp => CusolverSvdRoutine::Xgesvdp,
+        SvdDriver::Jacobi => CusolverSvdRoutine::Gesvdj,
+        SvdDriver::QrBased => CusolverSvdRoutine::Gesvd,
+        SvdDriver::Polar => CusolverSvdRoutine::Xgesvdp,
         SvdDriver::Auto => {
             if m <= JAX_COMPATIBLE_GESVDJ_MAX_DIM && n <= JAX_COMPATIBLE_GESVDJ_MAX_DIM {
                 CusolverSvdRoutine::Gesvdj
@@ -210,18 +234,30 @@ enum CusolverEighRoutine {
 
 /// A real batch always takes a batched cuSOLVER routine, which replaces one
 /// launch per matrix with a single launch. Which batched routine depends only
-/// on the driver: `Auto`/`Syevd` take divide-and-conquer `Xsyev`, `Syevj`
-/// takes Jacobi. Single matrices have no launch overhead to amortize and keep
-/// the per-matrix entry points.
+/// on the driver: `Auto`/`DivideAndConquer` take divide-and-conquer `Xsyev`,
+/// `Jacobi` takes Jacobi. Single matrices have no launch overhead to amortize
+/// and keep the per-matrix entry points: `syevd`/`heevd` for the
+/// divide-and-conquer families.
+///
+/// This module owns the whole `EighDriver` translation, so the public enum stays
+/// backend-neutral:
+///
+/// - `Auto` selects the fastest divide-and-conquer kernel reachable, including
+///   `cusolverDnXsyevBatched`, which solves a whole batch in one launch at the
+///   same accuracy. On an A100 that was about 100x to 280x faster than the
+///   per-matrix loop the default used before (#1852). The batched routine is a
+///   different cuSOLVER entry point, so a batched result can differ from the
+///   per-matrix loop in the last ULPs.
+/// - The one remaining fallback is a library that does not export `XsyevBatched`
+///   (cuSOLVER older than 11.7.1): the batch takes the per-matrix `syevd` loop,
+///   while every other cuSOLVER routine keeps working (#2413).
+/// - `DivideAndConquer` is an explicit spelling of that same choice; `Jacobi`
+///   takes `syevj`/`heevj` and their batched forms.
 ///
 /// There is no size threshold. Measured on an A100 (issue #1852), batched
 /// Jacobi beats a per-matrix Jacobi loop at every order tested from 8 to 512,
 /// and `XsyevBatched` beats a per-matrix `syevd` loop at every one of them, so
 /// no order exists at which falling back to a loop is the faster choice.
-///
-/// The one remaining fallback is a library that does not export `XsyevBatched`
-/// (cuSOLVER older than 11.7.1): the batch takes the per-matrix `syevd` loop,
-/// while every other cuSOLVER routine keeps working (#2413).
 fn select_eigh_driver(
     driver: EighDriver,
     batch_total: usize,
@@ -229,14 +265,14 @@ fn select_eigh_driver(
 ) -> CusolverEighRoutine {
     let batched = batch_total > 1;
     match driver {
-        EighDriver::Auto | EighDriver::Syevd => {
+        EighDriver::Auto | EighDriver::DivideAndConquer => {
             if batched && xsyev_batched_available {
                 CusolverEighRoutine::XsyevBatched
             } else {
                 CusolverEighRoutine::Syevd
             }
         }
-        EighDriver::Syevj => {
+        EighDriver::Jacobi => {
             if batched {
                 CusolverEighRoutine::SyevjBatched
             } else {

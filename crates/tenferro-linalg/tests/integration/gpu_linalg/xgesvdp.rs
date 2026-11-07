@@ -60,13 +60,13 @@ fn check_factors(input: &Tensor, factors: &[Tensor]) {
 #[ignore = "requires CUDA and cuSOLVER Xgesvdp"]
 fn test_cuda_svd_xgesvdp_rectangular_batched_and_values() {
     for (m, n) in [(7, 3), (3, 7), (5, 5)] {
-        check_forced_svd_driver(m, n, SvdDriver::Xgesvdp);
+        check_forced_svd_driver(m, n, SvdDriver::Polar);
         // Different matrices across eight outstanding calls stress host scratch
         // isolation as well as device offsets in the shared batch loop.
         let input = complex_input(m, n, 8);
         let mut gpu = gpu_backend();
         let device = upload(&gpu, &input);
-        let options = SvdOptions::default().driver(SvdDriver::Xgesvdp);
+        let options = SvdOptions::default().driver(SvdDriver::Polar);
         let outputs = with_cuda_linalg_session(&mut gpu, |s| {
             s.svd_with_options_read(TensorRead::from_tensor(&device), options)
         })
@@ -74,12 +74,12 @@ fn test_cuda_svd_xgesvdp_rectangular_batched_and_values() {
         let factors: Vec<_> = outputs.iter().map(|x| download(&gpu, x)).collect();
         check_factors(&input, &factors);
         let baseline = with_cuda_linalg_session(&mut gpu, |s| {
-            s.svd_with_options(&device, SvdOptions::default().driver(SvdDriver::Gesvd))
+            s.svd_with_options(&device, SvdOptions::default().driver(SvdDriver::QrBased))
         })
         .unwrap();
         assert_tensor_close(&factors[1], &download(&gpu, &baseline[1]), 1e-12);
         let values = with_cuda_linalg_session(&mut gpu, |s| {
-            s.svd_values_with_driver_read(TensorRead::from_tensor(&device), SvdDriver::Xgesvdp)
+            s.svd_values_with_driver_read(TensorRead::from_tensor(&device), SvdDriver::Polar)
         })
         .unwrap();
         assert_tensor_close(&download(&gpu, &values), &factors[1], 1e-12);
@@ -95,7 +95,7 @@ fn test_cuda_svd_xgesvdp_traced_and_pruned() {
     let input = complex_input(3, 7, 1);
     let mut gpu = gpu_backend();
     let device = upload(&gpu, &input);
-    let options = SvdOptions::default().driver(SvdDriver::Xgesvdp);
+    let options = SvdOptions::default().driver(SvdDriver::Polar);
     let expected =
         with_cuda_linalg_session(&mut gpu, |s| s.svd_with_options(&device, options)).unwrap();
     let traced = trace
@@ -107,7 +107,7 @@ fn test_cuda_svd_xgesvdp_traced_and_pruned() {
         .svd_with_options(options.derivative_eps(2e-12))
         .unwrap();
     let (_, qr_s, _) = traced
-        .svd_with_options(SvdOptions::default().driver(SvdDriver::Gesvd))
+        .svd_with_options(SvdOptions::default().driver(SvdDriver::QrBased))
         .unwrap();
     let program = GraphCompiler::new()
         .compile_many(&[&u, &s, &vt, &only_s, &qr_s])
@@ -149,7 +149,7 @@ fn test_cuda_svd_xgesvdp_eager() {
     let input = complex_input(7, 3, 1);
     let mut gpu = gpu_backend();
     let device = upload(&gpu, &input);
-    let options = SvdOptions::default().driver(SvdDriver::Xgesvdp);
+    let options = SvdOptions::default().driver(SvdDriver::Polar);
     let expected =
         with_cuda_linalg_session(&mut gpu, |s| s.svd_with_options(&device, options)).unwrap();
     let runtime = EagerRuntime::new().unwrap();
@@ -218,7 +218,7 @@ fn test_cuda_svd_xgesvdp_large_spectrum_agrees_with_gesvd() {
         let input = tensor_c64(vec![m, m], data);
         let device = upload(&gpu, &input);
         let mut spectra = Vec::new();
-        for driver in [SvdDriver::Gesvd, SvdDriver::Xgesvdp] {
+        for driver in [SvdDriver::QrBased, SvdDriver::Polar] {
             let result = with_cuda_linalg_session(&mut gpu, |s| {
                 s.svd_with_options_read(
                     TensorRead::from_tensor(&device),

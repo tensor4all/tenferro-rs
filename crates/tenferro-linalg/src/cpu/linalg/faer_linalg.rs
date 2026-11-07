@@ -2024,8 +2024,20 @@ pub(crate) fn q_columns_2d<T: FaerLinalg>(
     Ok(q)
 }
 
-/// Predicate: can this view be fed to the provider as a strided descriptor?
-/// Can faer read this host operand in place? (The host type already rules out a backend buffer.)
+/// Can the provider read this host operand in place, as a strided descriptor?
+///
+/// This is the provider's eligibility predicate, not part of the public
+/// `_read` contract: a view qualifies when it is rank 2 and every stride is
+/// non-negative, so faer receives a `MatRef` over the caller's buffer with no
+/// front-end copy. The host type already rules out a backend buffer.
+///
+/// A view that fails the predicate is not an error. `cpu::backend`'s
+/// `with_owned_layout` gathers it once through
+/// `tenferro_cpu::with_materialized_tensor_read`, which is the only
+/// materialization on that route: the gathered operand is reclaimed from the
+/// operation's pool as soon as the provider returns. Callers therefore see the
+/// same factors either way; the predicate only decides whether the caller's
+/// buffer is read directly.
 pub(crate) fn faer_strided_ok<T: 'static>(view: &HostView<'_, T>) -> bool {
     view.shape().len() == 2 && view.strides().iter().all(|&s| s >= 0)
 }

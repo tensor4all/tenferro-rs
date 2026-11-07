@@ -85,9 +85,12 @@ extension traits. Eager decompositions take `&mut EagerSession` from
 `EagerRuntime::with_eager_session`; do not call the tensor-owned `solve` entry
 inside an active borrowed session. Concrete methods take `&mut dyn Engine` obtained through
 the caller-held engine. `TensorReadLinalgExt::svdvals_read`
-and `eigvalsh_read` accept borrowed inputs; eligible faer host views avoid a
-full input copy, while providers that need owned compact storage materialize at
-the provider boundary. A values-only backend capability returns only the
+and `eigvalsh_read` accept borrowed inputs. A provider may consume the borrowed
+view without copying it when its own layout rules allow, and otherwise
+materializes it once inside its own boundary; no zero-copy guarantee is made,
+the borrowed source is never modified, and a provider that cannot read the view
+returns a typed error instead of a narrowed result. A values-only backend
+capability returns only the
 values tensor and does not allocate singular/eigenvectors; unsupported
 providers return a typed error rather than computing a full decomposition and
 discarding its factors. `LinalgBackend` is the SPI provider contract used by
@@ -263,20 +266,24 @@ assert_eq!(vt_rank2.concrete_shape()?, vec![2, 3]);
 ```
 <!-- end-snippet-source -->
 
-`SvdOptions::driver` selects the cuSOLVER routine on the CUDA backend.
-`SvdDriver::Auto` (the default) is accuracy-preserving and matches JAX: Jacobi
-`gesvdj` when both matrix dimensions are at most 1024 and QR-based `gesvd`
-beyond that. `SvdDriver::Gesvd` or `SvdDriver::Gesvdj` forces one routine
-regardless of size; which one is faster depends on the singular-value spectrum,
-so measure on your workload. `SvdDriver::Xgesvdp` is opt-in: it is the fastest
-driver for `min(m, n) >= 256` (see the `cuda_svd_driver` benchmark), but its
-small singular values are only accurate to about `1e-6` of the largest, so do
-not combine it with an `eps`-scale truncation (a pseudoinverse or
-tensor-network truncation at `1e-12`..`1e-14`) - the retained rank can change.
-Tenferro reads cuSOLVER's `h_err_sigma` perturbation bound and returns a typed
-backend failure rather than silently wrong factors when the perturbation is not
-small relative to the largest singular value; that is what rejects a
-rank-deficient `F32`/`C32` explicit request. CPU providers ignore the driver.
+`SvdOptions::driver` selects an algorithm family. A provider may ignore it and
+run its single SVD kernel, which is what the CPU providers do. `SvdDriver::Auto`
+(the default) is the accuracy-preserving family choice: on the CUDA backend it
+matches JAX, taking Jacobi `gesvdj` when both matrix dimensions are at most 1024
+and QR-based `gesvd` beyond that. `SvdDriver::QrBased` or `SvdDriver::Jacobi`
+forces one family regardless of size; which one is faster depends on the
+singular-value spectrum, so measure on your workload. `SvdDriver::Polar` is
+opt-in: it is the fastest family for `min(m, n) >= 256` (see the
+`cuda_svd_driver` benchmark), but its small singular values are only accurate to
+about `1e-6` of the largest, so do not combine it with an `eps`-scale truncation
+(a pseudoinverse or tensor-network truncation at `1e-12`..`1e-14`) - the
+retained rank can change. Its accuracy is also input-dependent: it was the most
+accurate of the three families on ten-decade spectra and lost about two digits
+against `QrBased` on a circulant-like matrix with the same spectrum. On the CUDA
+backend, tenferro reads cuSOLVER's `h_err_sigma` perturbation bound and returns a
+typed backend failure rather than silently wrong factors when the perturbation
+is not small relative to the largest singular value; that is what rejects a
+rank-deficient `F32`/`C32` explicit request.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_svd_driver -->
 ```rust
@@ -292,7 +299,7 @@ let a = trace.from_vec_col_major(
     ],
 )?;
 // Forces cuSOLVER `gesvd` on CUDA; CPU providers ignore the driver.
-let (u, s, vt) = a.svd_with_options(SvdOptions::default().driver(SvdDriver::Gesvd))?;
+let (u, s, vt) = a.svd_with_options(SvdOptions::default().driver(SvdDriver::QrBased))?;
 
 assert_eq!(u.concrete_shape()?, vec![3, 2]);
 assert_eq!(s.concrete_shape()?, vec![2]);
@@ -302,13 +309,14 @@ assert_eq!(vt.concrete_shape()?, vec![2, 2]);
 
 `EighOptions::driver` is the same knob for the Hermitian eigensolver, but you
 will rarely need it. `EighDriver::Auto` (the default) picks the fastest
-divide-and-conquer routine available: a single matrix goes to `syevd`/`heevd`,
-and a batch goes to `cusolverDnXsyevBatched`, which diagonalises the whole
-batch in one launch at the same accuracy. On an A100 that is 1024 batched 8x8
+divide-and-conquer family available; on the CUDA backend a single matrix goes to
+`syevd`/`heevd` and a batch goes to `cusolverDnXsyevBatched`, which diagonalises
+the whole batch in one launch at the same accuracy.
+`EighDriver::DivideAndConquer` is the explicit spelling of that same choice. On an A100 that is 1024 batched 8x8
 `f64` matrices in 0.37 ms against 105 ms for the per-matrix loop this default
 used before, and 0.69 ms against 70 ms for 256 batched 32x32.
 
-`EighDriver::Syevj` selects the Jacobi eigensolver instead, batched the same
+`EighDriver::Jacobi` selects the Jacobi eigensolver instead, batched the same
 way. It is worth asking for only on batches of small matrices: on that A100 it
 is slightly ahead at order 8 and 32 (0.27 ms and 0.38 ms) and behind from
 there, by about 4x at order 128, and much further on wide spectra where it is
@@ -332,7 +340,7 @@ let a = trace.from_vec_col_major(
 // On CUDA this reaches `syevjBatched`: one launch for the whole batch.
 // CPU providers ignore the driver.
 let (values, vectors) =
-    a.eigh_with_options(EighOptions::default().driver(EighDriver::Syevj))?;
+    a.eigh_with_options(EighOptions::default().driver(EighDriver::Jacobi))?;
 
 assert_eq!(values.concrete_shape()?, vec![2, 2]);
 assert_eq!(vectors.concrete_shape()?, vec![2, 2, 2]);

@@ -30,7 +30,7 @@ fn explicit_driver_overrides_dimension_policy() {
     let max = JAX_COMPATIBLE_GESVDJ_MAX_DIM;
     for (m, n) in [(64, 64), (max, max), (max + 1, 4), (4, max + 1)] {
         assert_eq!(
-            select_svd_driver(SvdDriver::Xgesvdp, m, n),
+            select_svd_driver(SvdDriver::Polar, m, n),
             CusolverSvdRoutine::Xgesvdp
         );
         assert_ne!(
@@ -40,16 +40,16 @@ fn explicit_driver_overrides_dimension_policy() {
     }
     // Below the threshold Auto would pick gesvdj; Gesvd must still win.
     assert_eq!(
-        select_svd_driver(SvdDriver::Gesvd, 64, 64),
+        select_svd_driver(SvdDriver::QrBased, 64, 64),
         CusolverSvdRoutine::Gesvd
     );
     // Above the threshold Auto would pick gesvd; Gesvdj must still win.
     assert_eq!(
-        select_svd_driver(SvdDriver::Gesvdj, max + 1, 4),
+        select_svd_driver(SvdDriver::Jacobi, max + 1, 4),
         CusolverSvdRoutine::Gesvdj
     );
     assert_eq!(
-        select_svd_driver(SvdDriver::Gesvdj, 4, max + 1),
+        select_svd_driver(SvdDriver::Jacobi, 4, max + 1),
         CusolverSvdRoutine::Gesvdj
     );
 }
@@ -69,12 +69,12 @@ fn eigh_batches_take_a_batched_routine_at_every_order() {
                 "Auto batch={batch}"
             );
             assert_eq!(
-                select_eigh_driver(EighDriver::Syevd, batch, true),
+                select_eigh_driver(EighDriver::DivideAndConquer, batch, true),
                 CusolverEighRoutine::XsyevBatched,
                 "Syevd batch={batch}"
             );
             assert_eq!(
-                select_eigh_driver(EighDriver::Syevj, batch, true),
+                select_eigh_driver(EighDriver::Jacobi, batch, true),
                 CusolverEighRoutine::SyevjBatched,
                 "Syevj batch={batch}"
             );
@@ -93,14 +93,14 @@ fn eigh_batches_fall_back_to_the_syevd_loop_without_the_batched_entry_point() {
             "Auto batch={batch}"
         );
         assert_eq!(
-            select_eigh_driver(EighDriver::Syevd, batch, false),
+            select_eigh_driver(EighDriver::DivideAndConquer, batch, false),
             CusolverEighRoutine::Syevd,
             "Syevd batch={batch}"
         );
         // The Jacobi batched entry point predates the version boundary, so its
         // capability does not depend on `XsyevBatched`.
         assert_eq!(
-            select_eigh_driver(EighDriver::Syevj, batch, false),
+            select_eigh_driver(EighDriver::Jacobi, batch, false),
             CusolverEighRoutine::SyevjBatched,
             "Syevj batch={batch}"
         );
@@ -129,11 +129,11 @@ fn eigh_single_matrices_keep_the_per_matrix_entry_points() {
         CusolverEighRoutine::Syevd
     );
     assert_eq!(
-        select_eigh_driver(EighDriver::Syevd, 1, true),
+        select_eigh_driver(EighDriver::DivideAndConquer, 1, true),
         CusolverEighRoutine::Syevd
     );
     assert_eq!(
-        select_eigh_driver(EighDriver::Syevj, 1, true),
+        select_eigh_driver(EighDriver::Jacobi, 1, true),
         CusolverEighRoutine::Syevj
     );
 }

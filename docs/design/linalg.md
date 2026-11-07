@@ -111,6 +111,22 @@ tensors erase only the borrowed input through `TensorScalar::tensor_read`, then
 validate each dynamic backend output while downcasting it to the fixed typed
 tuple.
 
+### The borrowed-read contract is backend-neutral
+
+A `_read` entry promises that a provider *may* consume the borrowed view
+without copying it when its own layout rules allow, and otherwise materialises
+it once inside its own boundary. It never promises zero copy, never modifies
+the borrowed source, and returns a typed error rather than a narrowed result
+when the provider cannot read the view at all. Which ranks, strides, or
+placements are eligible is the **provider's internal decision**: the CPU lane's
+predicate lives beside its faer path (`faer_strided_ok`, gathered once through
+`with_materialized_tensor_read` when false) and the CUDA lane's rule is
+`to_contiguous_view` in `gpu/mod.rs`. Neither appears in the public contract,
+so turning a provider feature off cannot falsify a documented promise.
+`SvdDriver` and `EighDriver` follow the same rule: the enum names a family a
+provider may honour or ignore, and the vendor routine a provider maps it to is
+recorded on that provider's side.
+
 `LinalgScalar` is sealed to `f32`, `f64`, `Complex32`, and `Complex64`. It uses
 `TensorScalar::Real` for singular values, Hermitian eigenvalues, determinant
 log-magnitudes, and norms, and supplies a `Complex` associated type for general

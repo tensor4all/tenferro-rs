@@ -250,6 +250,11 @@ where
 /// `threadteam::Team` (`token.carries_team()`), and `token.team(|team| ..)` hands
 /// faer `Par::Team(team)`. Keep `Par::Seq` otherwise; `Par::rayon` is never used.
 ///
+/// No tenferro function takes a faer type in its signature; this is a
+/// re-export for direct calls, not the shape of the tenferro API. Passing a
+/// faer type through a tenferro signature would make faer's version part of
+/// this crate's public surface.
+///
 /// # Examples
 ///
 /// ```rust
