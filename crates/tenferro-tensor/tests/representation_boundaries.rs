@@ -358,3 +358,29 @@ fn host_array_index_spelling_reports_an_out_of_bounds_write() {
         TypedTensor::<i32, Rank<1>, Host>::from_host_vec_col_major([2], vec![1, 2]).unwrap();
     host[[2]] = 5;
 }
+#[test]
+fn into_host_resolves_a_device_label_instead_of_carrying_it() {
+    // `set_placement` can label the union however it likes, and one legitimate use is to label host
+    // memory as device-resident so that an entry point's refusal path can be exercised. The narrow to
+    // `Host` is where that contradiction ends: from there the type is the evidence, so the label must
+    // agree with the payload rather than be carried across.
+    let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    tensor.set_placement(Placement {
+        memory_kind: tenferro_tensor::MemoryKind::Device,
+        device: None,
+        cpu_affinity: None,
+    });
+    assert_eq!(
+        tensor.placement().memory_kind,
+        tenferro_tensor::MemoryKind::Device,
+        "the union keeps the label it was given"
+    );
+
+    let host = tensor.into_host().unwrap();
+    assert_eq!(
+        host.placement().memory_kind,
+        tenferro_tensor::MemoryKind::UnpinnedHost,
+        "a host payload cannot come out of the narrow still labelled device-resident"
+    );
+    assert_eq!(host.as_slice(), &[1.0, 2.0]);
+}

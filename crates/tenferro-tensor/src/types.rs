@@ -2156,9 +2156,15 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
             storage,
         } = self;
         match storage {
+            // This is the only way a value becomes `TypedTensor<_, _, Host>`, so it is where the
+            // representation's one invariant is established: a host-backed tensor is never labelled
+            // device-resident. `set_placement` can write any `Placement` onto the union — that is what
+            // makes the union honest — but the narrowing must not carry the lie into the typed side,
+            // because an entry point that takes `Host` is entitled to trust it and skip the runtime
+            // check (`ensure_host_tensor`).
             DynamicStorage::Host(host) => Ok(TypedTensor {
                 shape,
-                placement,
+                placement: host_placement(placement),
                 layout,
                 storage: host,
             }),
@@ -9455,6 +9461,24 @@ pub(crate) fn default_placement() -> Placement {
         memory_kind: MemoryKind::UnpinnedHost,
         device: None,
         cpu_affinity: None,
+    }
+}
+
+/// Keep only the parts of `placement` a host-backed tensor can honestly carry.
+///
+/// A host tensor's storage is host memory, so `MemoryKind::Device` or `Managed` on one is metadata
+/// that contradicts the value. The union may hold that contradiction on purpose — a test fabricates
+/// it to check that an entry point refuses — but the narrow to `Host` resolves it, because from that
+/// point on the type is the evidence and no caller re-checks. `cpu_affinity` is real routing
+/// information for host memory and is kept.
+fn host_placement(placement: Placement) -> Placement {
+    match placement.memory_kind {
+        MemoryKind::PinnedHost | MemoryKind::UnpinnedHost => placement,
+        _ => Placement {
+            memory_kind: MemoryKind::UnpinnedHost,
+            device: None,
+            cpu_affinity: placement.cpu_affinity,
+        },
     }
 }
 
