@@ -278,7 +278,7 @@ pub fn capability_entry(
         .find(|entry| {
             entry.backend == backend && entry.op == query.op && entry.dtype == query.dtype
         })
-        .filter(|entry| axis.map_or(true, |axis| entry.axis(axis).is_supported()))
+        .filter(|entry| axis.is_none_or(|axis| entry.axis(axis).is_supported()))
 }
 
 /// Backend capability query surface.
