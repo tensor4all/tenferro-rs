@@ -798,15 +798,15 @@ fn check_forced_svd_driver(m: usize, n: usize, driver: SvdDriver) {
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU and forces legacy gesvd below the 1024 Auto threshold"]
 fn test_cuda_svd_forced_gesvd_below_threshold_reconstructs() {
-    check_forced_svd_driver(64, 64, SvdDriver::Gesvd);
-    check_forced_svd_driver(8, 64, SvdDriver::Gesvd);
+    check_forced_svd_driver(64, 64, SvdDriver::QrBased);
+    check_forced_svd_driver(8, 64, SvdDriver::QrBased);
 }
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU and forces gesvdj above the 1024 Auto threshold"]
 fn test_cuda_svd_forced_gesvdj_above_threshold_reconstructs() {
-    check_forced_svd_driver(1025, 8, SvdDriver::Gesvdj);
-    check_forced_svd_driver(8, 1025, SvdDriver::Gesvdj);
+    check_forced_svd_driver(1025, 8, SvdDriver::Jacobi);
+    check_forced_svd_driver(8, 1025, SvdDriver::Jacobi);
 }
 
 #[test]
@@ -1437,24 +1437,24 @@ fn check_forced_eigh_driver(n: usize, batch: usize, driver: EighDriver) {
 #[test]
 #[ignore = "requires a CUDA GPU and forces the Jacobi eigensolver that Auto never picks"]
 fn test_cuda_eigh_forced_syevj_matches_reference() {
-    check_forced_eigh_driver(8, 1, EighDriver::Syevj);
-    check_forced_eigh_driver(64, 1, EighDriver::Syevj);
-    check_forced_eigh_driver(6, 4, EighDriver::Syevj);
+    check_forced_eigh_driver(8, 1, EighDriver::Jacobi);
+    check_forced_eigh_driver(64, 1, EighDriver::Jacobi);
+    check_forced_eigh_driver(6, 4, EighDriver::Jacobi);
     // Above the order that used to gate the batched Jacobi entry point
     // (#1852): the routine is valid there, so the batch still takes it.
-    check_forced_eigh_driver(33, 4, EighDriver::Syevj);
-    check_forced_eigh_driver(64, 4, EighDriver::Syevj);
+    check_forced_eigh_driver(33, 4, EighDriver::Jacobi);
+    check_forced_eigh_driver(64, 4, EighDriver::Jacobi);
 }
 
 #[test]
 #[ignore = "requires a CUDA GPU"]
 fn test_cuda_eigh_forced_syevd_matches_reference() {
-    check_forced_eigh_driver(8, 1, EighDriver::Syevd);
+    check_forced_eigh_driver(8, 1, EighDriver::DivideAndConquer);
     // Batched input now reaches `cusolverDnXsyevBatched` (#1852), including
     // above the order that used to gate any batched routine.
-    check_forced_eigh_driver(6, 4, EighDriver::Syevd);
-    check_forced_eigh_driver(33, 4, EighDriver::Syevd);
-    check_forced_eigh_driver(64, 4, EighDriver::Syevd);
+    check_forced_eigh_driver(6, 4, EighDriver::DivideAndConquer);
+    check_forced_eigh_driver(33, 4, EighDriver::DivideAndConquer);
+    check_forced_eigh_driver(64, 4, EighDriver::DivideAndConquer);
 }
 
 #[test]

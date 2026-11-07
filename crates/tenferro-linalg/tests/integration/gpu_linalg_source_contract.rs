@@ -734,9 +734,9 @@ fn gpu_svd_uses_jax_compatible_default_driver_selection() {
         "const XGESVDP_MAX_RELATIVE_ERROR: f64 = 1.0e-6",
         "enum CusolverSvdRoutine",
         "fn select_svd_driver(driver: SvdDriver, m: usize, n: usize) -> CusolverSvdRoutine",
-        "SvdDriver::Gesvdj => CusolverSvdRoutine::Gesvdj",
-        "SvdDriver::Gesvd => CusolverSvdRoutine::Gesvd",
-        "SvdDriver::Xgesvdp => CusolverSvdRoutine::Xgesvdp",
+        "SvdDriver::Jacobi => CusolverSvdRoutine::Gesvdj",
+        "SvdDriver::QrBased => CusolverSvdRoutine::Gesvd",
+        "SvdDriver::Polar => CusolverSvdRoutine::Xgesvdp",
         "SvdDriver::Auto => {",
         "m <= JAX_COMPATIBLE_GESVDJ_MAX_DIM && n <= JAX_COMPATIBLE_GESVDJ_MAX_DIM",
     ] {

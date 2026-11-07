@@ -76,9 +76,10 @@ mod private {
     /// The sealing supertrait of [`LinalgScalar`](super::LinalgScalar).
     ///
     /// `pub` inside a private module: nameable as a supertrait, unreachable outside the crate.
-    /// Its methods route the public borrowed-`Exec` entries to the faer route's typed bodies per
-    /// concrete type, which is what lets the public bound stay free of the provider's own scalar
-    /// traits (whose `Real`/`Complex` names would otherwise collide with `LinalgScalar::Complex`).
+    /// Its methods route the public borrowed-`Exec` entries to the compiled provider route's typed
+    /// bodies per concrete type, which is what lets the public bound stay free of the provider's
+    /// own scalar traits (whose `Real`/`Complex` names would otherwise collide with
+    /// `LinalgScalar::Complex`).
     pub trait Sealed {
         /// The body of the public `svd_with_exec`.
         ///
@@ -912,9 +913,11 @@ pub trait TensorReadLinalgExt {
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
     /// Compute singular values from a borrowed tensor read target.
     ///
-    /// Eligible faer host views are consumed without a full input copy. A
-    /// provider that requires owned compact storage may materialize explicitly;
-    /// unsupported providers return a typed error.
+    /// A provider may consume the borrowed view without copying it when its own
+    /// layout rules allow, and otherwise materialises it once inside its own
+    /// boundary. No zero-copy guarantee is made, the borrowed source is never
+    /// modified, and a provider that cannot read the view at all returns a typed
+    /// error instead of silently narrowing the result.
     ///
     /// # Errors
     /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected
@@ -958,11 +961,11 @@ pub trait TensorReadLinalgExt {
     /// Compute the full-matrices SVD `(U, S, Vt)` from a borrowed tensor read
     /// target, with `U` shaped `m x m` and `Vt` shaped `n x n`.
     ///
-    /// Eligible faer host views (rank 2, host placement, non-negative strides)
-    /// are consumed without an input copy. A provider that requires owned
-    /// compact storage materializes explicitly inside the provider boundary;
-    /// unsupported providers return a typed error instead of a thin result. The
-    /// borrowed source is never modified.
+    /// A provider may consume the borrowed view without copying it when its own
+    /// layout rules allow, and otherwise materialises it once inside its own
+    /// boundary. No zero-copy guarantee is made, the borrowed source is never
+    /// modified, and a provider that cannot read the view at all returns a typed
+    /// error instead of silently narrowing the result.
     ///
     /// # Errors
     /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected

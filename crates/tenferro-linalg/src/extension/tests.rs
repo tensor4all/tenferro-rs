@@ -304,9 +304,9 @@ fn svd_driver_is_part_of_op_identity_and_survives_pruning() {
         })
     };
     let auto = make(SvdDriver::Auto);
-    let gesvd = make(SvdDriver::Gesvd);
-    let gesvdj = make(SvdDriver::Gesvdj);
-    let xgesvdp = make(SvdDriver::Xgesvdp);
+    let gesvd = make(SvdDriver::QrBased);
+    let gesvdj = make(SvdDriver::Jacobi);
+    let xgesvdp = make(SvdDriver::Polar);
     for other in [&auto, &gesvd, &gesvdj] {
         assert!(!xgesvdp.payload_eq(other));
         assert_ne!(payload_hash(&xgesvdp), payload_hash(other));
@@ -320,10 +320,10 @@ fn svd_driver_is_part_of_op_identity_and_survives_pruning() {
         polar_values.op(),
         LinalgOp::SvdVals {
             derivative_eps: 1.0e-12,
-            driver: SvdDriver::Xgesvdp,
+            driver: SvdDriver::Polar,
         }
     );
-    for driver in [SvdDriver::Auto, SvdDriver::Gesvd, SvdDriver::Gesvdj] {
+    for driver in [SvdDriver::Auto, SvdDriver::QrBased, SvdDriver::Jacobi] {
         let other = LinalgExtensionOp::new(LinalgOp::SvdVals {
             derivative_eps: 1.0e-12,
             driver,
@@ -336,10 +336,13 @@ fn svd_driver_is_part_of_op_identity_and_survives_pruning() {
     // be deduplicated against the default policy op.
     assert!(!auto.payload_eq(&gesvd));
     assert!(!gesvd.payload_eq(&gesvdj));
-    assert!(gesvd.payload_eq(&make(SvdDriver::Gesvd)));
+    assert!(gesvd.payload_eq(&make(SvdDriver::QrBased)));
     assert_ne!(payload_hash(&auto), payload_hash(&gesvd));
     assert_ne!(payload_hash(&gesvd), payload_hash(&gesvdj));
-    assert_eq!(payload_hash(&gesvd), payload_hash(&make(SvdDriver::Gesvd)));
+    assert_eq!(
+        payload_hash(&gesvd),
+        payload_hash(&make(SvdDriver::QrBased))
+    );
 
     // Pruning `U`/`Vt` keeps the caller's kernel choice on the values-only op.
     let pruned = gesvd
@@ -353,7 +356,7 @@ fn svd_driver_is_part_of_op_identity_and_survives_pruning() {
         pruned.op(),
         LinalgOp::SvdVals {
             derivative_eps: 1.0e-12,
-            driver: SvdDriver::Gesvd,
+            driver: SvdDriver::QrBased,
         }
     );
     let pruned_auto = LinalgExtensionOp::new(LinalgOp::SvdVals {
@@ -389,7 +392,7 @@ fn decomposition_value_outputs_prune_to_values_only_ops() {
     let eigh = LinalgExtensionOp::new(LinalgOp::Eigh {
         derivative_eps: 1.0e-12,
         gauge: EighGauge::Raw,
-        driver: EighDriver::Syevj,
+        driver: EighDriver::Jacobi,
     });
     let pruned_eigh = eigh
         .prune_outputs(&[true, false])
@@ -402,7 +405,7 @@ fn decomposition_value_outputs_prune_to_values_only_ops() {
         pruned_eigh.op(),
         LinalgOp::EighVals {
             derivative_eps: 1.0e-12,
-            driver: EighDriver::Syevj,
+            driver: EighDriver::Jacobi,
         }
     );
 

@@ -390,7 +390,7 @@ pub trait LinalgBackend: Engine {
     ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.svd_with_options_read(
     ///             TensorRead::from_view(TensorView::F64(input.as_view())),
-    ///             SvdOptions::default().driver(SvdDriver::Gesvd),
+    ///             SvdOptions::default().driver(SvdDriver::QrBased),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
@@ -774,7 +774,7 @@ pub trait LinalgBackend: Engine {
     ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.eigh_with_options_read(
     ///             TensorRead::from_view(TensorView::F64(input.as_view())),
-    ///             EighOptions::default().driver(EighDriver::Syevj),
+    ///             EighOptions::default().driver(EighDriver::Jacobi),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")

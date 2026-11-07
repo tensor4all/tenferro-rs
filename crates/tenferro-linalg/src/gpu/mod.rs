@@ -1,3 +1,25 @@
+//! CUDA provider for the borrowed linalg entries.
+//!
+//! # Borrowed operands
+//!
+//! The public `_read` contract in `TensorReadLinalgExt` makes no zero-copy
+//! promise: a provider consumes the borrowed view without copying when its own
+//! layout rules allow, and otherwise materialises it once inside its own
+//! boundary. This provider is the strict case, because cuSOLVER needs compact
+//! column-major device storage:
+//!
+//! - every borrowed operand goes through `CudaEngine::to_contiguous_view`, so a
+//!   rank-2 view with arbitrary strides is gathered **once on the device** and
+//!   never crosses the host boundary;
+//! - a view that is already compact and device-resident is passed through
+//!   without a gather;
+//! - an operand that cannot be represented at all (a caller-owned payload with
+//!   no preset view, or a dtype cuSOLVER does not cover) is a typed
+//!   `UnsupportedDType` error, never a narrowed result.
+//!
+//! Which ranks and strides are eligible is therefore this provider's internal
+//! decision and not part of the public contract; the CPU lane's predicate lives
+//! in `cpu::linalg::faer::faer_strided_ok`.
 mod ffi;
 mod linalg;
 

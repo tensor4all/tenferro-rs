@@ -33,7 +33,7 @@
 //! [`ErrorKind::Unsupported`] is skipped with a printed line rather than a
 //! panic; any other failure is fatal.
 //!
-//! Arms: drivers `Auto`, `Gesvdj`, `Gesvd`, `Xgesvdp`; orders 64, 256, 1024;
+//! Arms: drivers `Auto`, `Jacobi`, `QrBased`, `Polar`; orders 64, 256, 1024;
 //! dtypes `f32`, `f64`, `c32`, `c64`. The Criterion group id is
 //! `cuda_svd_driver/<dtype>/n<n>/<driver>`.
 
@@ -57,9 +57,9 @@ const DTYPES: &[DType] = &[DType::F32, DType::F64, DType::C32, DType::C64];
 /// Drivers compared. `Auto` is the default policy; the rest are explicit.
 const DRIVERS: &[SvdDriver] = &[
     SvdDriver::Auto,
-    SvdDriver::Gesvdj,
-    SvdDriver::Gesvd,
-    SvdDriver::Xgesvdp,
+    SvdDriver::Jacobi,
+    SvdDriver::QrBased,
+    SvdDriver::Polar,
 ];
 
 /// One deterministic square input, host copy kept for the accuracy residuals.
@@ -114,9 +114,9 @@ fn dtype_label(dtype: DType) -> &'static str {
 fn driver_label(driver: SvdDriver) -> &'static str {
     match driver {
         SvdDriver::Auto => "Auto",
-        SvdDriver::Gesvdj => "Gesvdj",
-        SvdDriver::Gesvd => "Gesvd",
-        SvdDriver::Xgesvdp => "Xgesvdp",
+        SvdDriver::Jacobi => "Jacobi",
+        SvdDriver::QrBased => "QrBased",
+        SvdDriver::Polar => "Polar",
     }
 }
 

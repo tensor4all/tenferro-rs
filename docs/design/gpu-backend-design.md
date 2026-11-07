@@ -219,7 +219,7 @@ CUDA SVD follows the accuracy-preserving, JAX-compatible default driver
 selection when the caller leaves `SvdOptions::driver` at `SvdDriver::Auto`: use
 cuSOLVER Jacobi `gesvdj` when both matrix dimensions are at most 1024,
 otherwise QR-based `gesvd`. `Auto` never selects the polar `Xgesvdp` (#2182).
-`SvdDriver::Gesvdj` and `SvdDriver::Gesvd` force the routine regardless of
+`SvdDriver::Jacobi` and `SvdDriver::QrBased` force the family regardless of
 size, because the faster driver depends on the spectrum and the shape, not the
 dimensions alone. The driver is part of the traced op identity and survives
 pruning to the values-only op; CPU providers ignore it. `gesvdj` returns V, so
@@ -247,7 +247,7 @@ exactly singular factor is left to the caller's verification, as in
 status read and `Singular` error, and the forward solve also skips the
 permutation-parity kernel that only the public LU outputs consume.
 
-`SvdDriver::Xgesvdp` is the opt-in polar-decomposition routine; `Auto` never
+`SvdDriver::Polar` is the opt-in polar-decomposition routine; `Auto` never
 selects it, and the explicit variant forces it at any size and dtype. It is the
 fastest of the three drivers for `min(m, n) >= 256` on an A100 (see the
 `cuda_svd_driver` benchmark), but its small singular values are only accurate to
@@ -273,8 +273,9 @@ CUDA eigh routes by batch count, not by order. A real batch
 library provides one, because that replaces one launch per matrix with a single
 launch; a single matrix keeps the per-matrix entry point, and so does a batch
 whose batched routine is unavailable. Which batched routine depends only on the
-driver: `EighDriver::Auto` and `Syevd` take divide-and-conquer
-`cusolverDnXsyevBatched`, and `Syevj` takes Jacobi `syevjBatched`.
+driver: `EighDriver::Auto` and `EighDriver::DivideAndConquer` take
+divide-and-conquer `cusolverDnXsyevBatched`, and `EighDriver::Jacobi` takes
+Jacobi `syevjBatched`.
 
 There is deliberately no size threshold. An earlier revision capped batched
 Jacobi at order 32 and described that as a cuSOLVER restriction; issue #1852
@@ -288,7 +289,8 @@ batched input: it is defined as the fastest divide-and-conquer routine
 available, and the batched entry point is a different cuSOLVER call. It is the
 same algorithm at the same accuracy, and it made the default about 100x to
 280x faster on batches (105 ms to 0.37 ms for 1024 8x8 `f64`; 70 ms to 0.69 ms
-for 256 32x32). `Syevj` retains a narrow advantage only up to about order 32.
+for 256 32x32). `EighDriver::Jacobi` retains a narrow advantage only up to
+about order 32.
 
 `cusolverDnXsyevBatched` and its `_bufferSize` companion are loaded
 *optionally*, and batched divide-and-conquer eigh is a capability gated on both:

@@ -96,12 +96,13 @@ pub enum QrGauge {
     PositiveDiagonal,
 }
 
-/// cuSOLVER SVD routine selection used by [`SvdOptions`] on the CUDA backend.
+/// Algorithm family used by [`SvdOptions`].
 ///
-/// The driver changes speed and numerical behavior; [`Self::Xgesvdp`] may
-/// perturb near-singular inputs. Gauge handling and AD rule selection are
-/// unchanged. CPU providers have a single SVD kernel and ignore the driver.
-/// Equivalent to `jax.lax.linalg.svd(..., algorithm=...)` and
+/// A provider may ignore the selection and run its single SVD kernel; where a
+/// selection is honoured it changes speed and numerical behavior, not the
+/// decomposition contract, so gauge handling and AD rule selection are
+/// unaffected. [`Self::Polar`] may perturb near-singular inputs. Equivalent to
+/// `jax.lax.linalg.svd(..., algorithm=...)` and
 /// `torch.linalg.svd(..., driver=...)`.
 ///
 /// # Examples
@@ -109,49 +110,54 @@ pub enum QrGauge {
 /// ```rust
 /// use tenferro_linalg::{SvdDriver, SvdOptions};
 ///
-/// let options = SvdOptions::default().driver(SvdDriver::Gesvd);
-/// assert_eq!(options.driver, SvdDriver::Gesvd);
+/// let options = SvdOptions::default().driver(SvdDriver::QrBased);
+/// assert_eq!(options.driver, SvdDriver::QrBased);
 /// assert_eq!(SvdOptions::default().driver, SvdDriver::Auto);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SvdDriver {
-    /// The backend's default policy. On CUDA this is the accuracy-preserving,
-    /// JAX-compatible rule: `gesvdj` when both matrix dimensions are at most
-    /// 1024, otherwise `gesvd`. It never selects the polar
-    /// [`Self::Xgesvdp`], whose small singular values are only accurate to
-    /// about `1e-6` of the largest (#2182). CPU providers have a single SVD
-    /// kernel and ignore the driver.
+    /// The provider's default policy for this input.
+    ///
+    /// Never selects [`Self::Polar`]: its small singular values are only
+    /// accurate to about `1e-6` of the largest, which an `eps`-scale
+    /// truncation cannot tolerate, so the accurate families stay the default
+    /// unless the caller opts in. A provider with one SVD kernel returns the
+    /// same factors for every selection.
+    ///
+    /// On the CUDA provider this is the accuracy-preserving, JAX-compatible
+    /// rule: [`Self::Jacobi`] when both matrix dimensions are at most 1024,
+    /// otherwise [`Self::QrBased`].
     #[default]
     Auto,
-    /// cuSOLVER's Jacobi driver (`cusolverDn<t>gesvdj`) regardless of size.
-    Gesvdj,
-    /// cuSOLVER's QR-based driver (`cusolverDn<t>gesvd`) regardless of size.
-    Gesvd,
-    /// cuSOLVER's polar-decomposition driver (`cusolverDnXgesvdp`).
-    ///
-    /// Explicit only: [`Self::Auto`] never selects this routine. It is the
-    /// fastest of the three drivers for `min(m, n) >= 256` on an A100 (see the
-    /// `cuda_svd_driver` benchmark), but its small singular values are only
-    /// accurate to about `1e-6` of the largest singular value. Do not use it
-    /// for an `eps`-scale truncation (a pseudoinverse or tensor-network
-    /// truncation at `1e-12`..`1e-14`): the perturbation can change the
-    /// retained rank.
-    ///
-    /// Tenferro reads cuSOLVER's `h_err_sigma` perturbation bound and returns a
-    /// typed backend failure instead of silently wrong factors when it is not
-    /// small relative to the largest singular value. On rank-deficient
-    /// `F32`/`C32` input cuSOLVER reports a perturbation comparable to the
-    /// spectrum, so an explicit single-precision call there fails rather than
-    /// returning the perturbed values. CPU providers accept and ignore this
-    /// selection.
-    ///
-    /// Accuracy is input-dependent, not uniformly better or worse than
-    /// [`Self::Gesvd`]. On ten-decade spectra built as `U diag(s) Vᴴ` it was
-    /// the most accurate of the three drivers on an A100, but on a
-    /// circulant-like matrix with the same spectrum it lost about two digits
-    /// against `gesvd`. Measure on your own inputs before relying on it for
+    /// One-sided Jacobi rotations: the accurate family for small and medium
+    /// orders, and more work than [`Self::QrBased`] on large or wide spectra.
+    /// On the CUDA provider this selects `cusolverDn<t>gesvdj`.
+    Jacobi,
+    /// Bidiagonalization followed by an implicit-QR iteration: the general
+    /// purpose family, and the faster of the two accurate families on large
+    /// and wide spectra.
+    /// On the CUDA provider this selects `cusolverDn<t>gesvd`.
+    QrBased,
+    /// Polar decomposition: the fastest family for `min(m, n) >= 256` on an
+    /// A100 (see the `cuda_svd_driver` benchmark), and the least accurate on
     /// small singular values.
-    Xgesvdp,
+    ///
+    /// Explicit only: [`Self::Auto`] never selects it. Its small singular
+    /// values are only accurate to about `1e-6` of the largest, so do not use
+    /// it for an `eps`-scale truncation (a pseudoinverse or a tensor-network
+    /// truncation at `1e-12`..`1e-14`): the perturbation can change the
+    /// retained rank. Accuracy is input-dependent rather than uniformly worse
+    /// than [`Self::QrBased`]: on ten-decade spectra built as `U diag(s) Vᴴ` it
+    /// was the most accurate of the three families on an A100, but on a
+    /// circulant-like matrix with the same spectrum it lost about two digits
+    /// against [`Self::QrBased`]. Measure on your own inputs before relying on
+    /// it for small singular values.
+    ///
+    /// A provider that can bound its own perturbation returns a typed backend
+    /// failure instead of silently wrong factors when the bound is not small
+    /// relative to the largest singular value.
+    /// On the CUDA provider this selects `cusolverDnXgesvdp`.
+    Polar,
 }
 
 /// Options for singular value decomposition.
@@ -164,10 +170,10 @@ pub enum SvdDriver {
 /// let options = SvdOptions::default()
 ///     .gauge(SvdGauge::CanonicalPivot)
 ///     .derivative_eps(1.0e-10)
-///     .driver(SvdDriver::Gesvd);
+///     .driver(SvdDriver::QrBased);
 /// assert_eq!(options.gauge, SvdGauge::CanonicalPivot);
 /// assert_eq!(options.derivative_eps, 1.0e-10);
-/// assert_eq!(options.driver, SvdDriver::Gesvd);
+/// assert_eq!(options.driver, SvdDriver::QrBased);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SvdOptions {
@@ -175,7 +181,7 @@ pub struct SvdOptions {
     pub gauge: SvdGauge,
     /// AD derivative regularization for repeated or nearly repeated singular values.
     pub derivative_eps: f64,
-    /// CUDA SVD driver; ignored by CPU providers.
+    /// Algorithm family for the SVD; a provider may ignore it.
     pub driver: SvdDriver,
 }
 
@@ -220,15 +226,15 @@ impl SvdOptions {
         self
     }
 
-    /// Return options with an explicit CUDA SVD driver.
+    /// Return options with an explicit SVD driver.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use tenferro_linalg::{SvdDriver, SvdOptions};
     ///
-    /// let options = SvdOptions::default().driver(SvdDriver::Gesvdj);
-    /// assert_eq!(options.driver, SvdDriver::Gesvdj);
+    /// let options = SvdOptions::default().driver(SvdDriver::Jacobi);
+    /// assert_eq!(options.driver, SvdDriver::Jacobi);
     /// ```
     pub fn driver(mut self, driver: SvdDriver) -> Self {
         self.driver = driver;
@@ -236,12 +242,11 @@ impl SvdOptions {
     }
 }
 
-/// cuSOLVER Hermitian eigensolver selection used by [`EighOptions`] on the
-/// CUDA backend.
+/// Algorithm family used by [`EighOptions`].
 ///
-/// The driver changes speed and rounding, not the decomposition contract, so
-/// gauges and AD rules are unaffected. CPU providers have a single eigh kernel
-/// and ignore it. Analogous to [`SvdDriver`] and to
+/// The family changes speed and rounding, not the decomposition contract, so
+/// gauges and AD rules are unaffected by the choice. A provider may ignore the
+/// selection and run its single eigh kernel. Analogous to [`SvdDriver`] and to
 /// `scipy.linalg.eigh(..., driver=...)`.
 ///
 /// # Examples
@@ -249,35 +254,34 @@ impl SvdOptions {
 /// ```rust
 /// use tenferro_linalg::{EighDriver, EighOptions};
 ///
-/// let options = EighOptions::default().driver(EighDriver::Syevj);
-/// assert_eq!(options.driver, EighDriver::Syevj);
+/// let options = EighOptions::default().driver(EighDriver::Jacobi);
+/// assert_eq!(options.driver, EighDriver::Jacobi);
 /// assert_eq!(EighOptions::default().driver, EighDriver::Auto);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EighDriver {
-    /// The backend's default policy: the fastest divide-and-conquer routine
-    /// available. On CUDA a single matrix uses `syevd`/`heevd` and a batch
-    /// uses `cusolverDnXsyevBatched`, which solves the whole batch in one
-    /// launch at the same accuracy. On an A100 that is about 100x to 280x
-    /// faster than the per-matrix loop this default used before.
-    /// An older cuSOLVER that does not export `cusolverDnXsyevBatched` still
-    /// opens and takes the per-matrix loop for a batch (issue #2413).
+    /// The provider's default policy: the fastest divide-and-conquer kernel it
+    /// can reach, including a single-launch batched entry point where one
+    /// exists.
     ///
-    /// The batched routine is a different cuSOLVER entry point, so batched
-    /// results can differ from the per-matrix loop in the last ULPs.
+    /// Measured on an A100, the batched entry point is about 100x to 280x
+    /// faster than the per-matrix loop this default used before. It is a
+    /// different vendor routine, so a batched result can differ from the
+    /// per-matrix loop in the last ULPs.
     #[default]
     Auto,
-    /// cuSOLVER's divide-and-conquer driver, which is what [`Self::Auto`]
-    /// already selects. Kept as an explicit spelling of the same choice.
-    Syevd,
-    /// cuSOLVER's Jacobi driver (`cusolverDn<t>syevj`, `heevj` for complex
-    /// input, and their batched forms).
+    /// Divide-and-conquer, which is what [`Self::Auto`] already selects. Kept
+    /// as an explicit spelling of the same choice.
+    /// On the CUDA provider this selects `cusolverDn<t>syevd`.
+    DivideAndConquer,
+    /// Jacobi rotations: worth asking for only on batches of small matrices.
     ///
-    /// Worth asking for only on batches of small matrices: measured on an
-    /// A100 it is slightly ahead of the default up to about order 32 and
-    /// loses from there, by about 4x at order 128 and far more on wide
-    /// spectra, where it is also the less accurate of the two.
-    Syevj,
+    /// Measured on an A100 it is slightly ahead of the default up to about
+    /// order 32 and loses from there, by about 4x at order 128 and far more on
+    /// wide spectra, where it is also the less accurate of the two.
+    /// On the CUDA provider this selects `cusolverDn<t>syevj`, `heevj` for
+    /// complex input, and their batched forms.
+    Jacobi,
 }
 
 /// Options for Hermitian eigenvalue decomposition.
@@ -289,9 +293,9 @@ pub enum EighDriver {
 ///
 /// let options = EighOptions::default()
 ///     .derivative_eps(1.0e-10)
-///     .driver(EighDriver::Syevj);
+///     .driver(EighDriver::Jacobi);
 /// assert_eq!(options.derivative_eps, 1.0e-10);
-/// assert_eq!(options.driver, EighDriver::Syevj);
+/// assert_eq!(options.driver, EighDriver::Jacobi);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EighOptions {
@@ -299,7 +303,7 @@ pub struct EighOptions {
     pub gauge: EighGauge,
     /// AD derivative regularization for repeated or nearly repeated eigenvalues.
     pub derivative_eps: f64,
-    /// CUDA eigensolver driver; ignored by CPU providers.
+    /// Algorithm family for the eigensolver; a provider may ignore it.
     pub driver: EighDriver,
 }
 
@@ -344,15 +348,15 @@ impl EighOptions {
         self
     }
 
-    /// Return options with an explicit CUDA eigensolver driver.
+    /// Return options with an explicit eigensolver driver.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use tenferro_linalg::{EighDriver, EighOptions};
     ///
-    /// let options = EighOptions::default().driver(EighDriver::Syevd);
-    /// assert_eq!(options.driver, EighDriver::Syevd);
+    /// let options = EighOptions::default().driver(EighDriver::DivideAndConquer);
+    /// assert_eq!(options.driver, EighDriver::DivideAndConquer);
     /// ```
     pub fn driver(mut self, driver: EighDriver) -> Self {
         self.driver = driver;
@@ -2131,9 +2135,9 @@ fn hash_svd_gauge(hasher: &mut dyn Hasher, gauge: SvdGauge) {
 fn hash_svd_driver(hasher: &mut dyn Hasher, driver: SvdDriver) {
     let tag = match driver {
         SvdDriver::Auto => 0,
-        SvdDriver::Gesvdj => 1,
-        SvdDriver::Gesvd => 2,
-        SvdDriver::Xgesvdp => 3,
+        SvdDriver::Jacobi => 1,
+        SvdDriver::QrBased => 2,
+        SvdDriver::Polar => 3,
     };
     hasher.write_u8(tag);
 }
@@ -2141,8 +2145,8 @@ fn hash_svd_driver(hasher: &mut dyn Hasher, driver: SvdDriver) {
 fn hash_eigh_driver(hasher: &mut dyn Hasher, driver: EighDriver) {
     let tag = match driver {
         EighDriver::Auto => 0,
-        EighDriver::Syevd => 1,
-        EighDriver::Syevj => 2,
+        EighDriver::DivideAndConquer => 1,
+        EighDriver::Jacobi => 2,
     };
     hasher.write_u8(tag);
 }

@@ -66,6 +66,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`SvdDriver` and `EighDriver` name an algorithm family, not a cuSOLVER
+  routine** (#2516). `SvdDriver::{Gesvdj, Gesvd, Xgesvdp}` became
+  `{Jacobi, QrBased, Polar}` and `EighDriver::{Syevd, Syevj}` became
+  `{DivideAndConquer, Jacobi}`; `Auto` and every derivation are unchanged, and
+  the variant docs now state the efficacy and keep one line naming the routine
+  the CUDA provider maps the family to. The long cuSOLVER notes (the
+  `h_err_sigma` guard, the batched entry points, the older-library fallback)
+  moved to `gpu/linalg.rs` beside the dispatch that owns them. The docs of
+  `TensorReadLinalgExt`'s borrowed entries no longer promise a faer-shaped
+  eligibility rule: the public contract says a provider may read the view in
+  place and otherwise materializes once inside its own boundary, and the
+  predicates (`faer_strided_ok` for the CPU lane, `to_contiguous_view` for the
+  CUDA lane) are documented on the provider side. `tenferro_cpu::faer`'s
+  re-export doc now states that no tenferro function takes a faer type in its
+  signature. This is a source-breaking rename of public enum variants.
 - **One host/device answer: `is_host_memory()` on `TypedTensor`, its views,
   `Tensor`, `TensorRead`, `TensorWrite` and `TensorViewMut`** (#2484). The
   payload decides — a plain host owner, a host slice and a CPU-resident

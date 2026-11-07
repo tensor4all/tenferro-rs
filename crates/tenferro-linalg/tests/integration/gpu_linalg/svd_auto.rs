@@ -263,7 +263,7 @@ fn cuda_svd_auto_keeps_the_accurate_driver_across_the_1024_boundary() {
         return;
     }
     let mut gpu = gpu_backend();
-    for (order, expected) in [(256_usize, SvdDriver::Gesvdj), (1025, SvdDriver::Gesvd)] {
+    for (order, expected) in [(256_usize, SvdDriver::Jacobi), (1025, SvdDriver::QrBased)] {
         let input = dense_input(DType::F64, &[order, order], 0x2182_1000 + order as u64);
         let device = upload(&gpu, &input);
         let auto = with_cuda_linalg_session(&mut gpu, |session| {
@@ -383,7 +383,7 @@ fn cuda_svd_auto_pinv_mask_matches_gesvd_near_cutoff() {
     })
     .unwrap();
     let reference = with_cuda_linalg_session(&mut gpu, |session| {
-        session.svd_values_with_driver(&device, SvdDriver::Gesvd)
+        session.svd_values_with_driver(&device, SvdDriver::QrBased)
     })
     .unwrap();
     let auto = real_values(&download(&gpu, &auto));
@@ -430,7 +430,7 @@ fn cuda_svd_auto_values_only_matches_full_factors_for_all_dtypes() {
         .unwrap();
         assert_tensor_close(&download(&gpu, &values), &s, dtype_tolerance(dtype));
         let reference = with_cuda_linalg_session(&mut gpu, |session| {
-            session.svd_values_with_driver(&device, SvdDriver::Gesvd)
+            session.svd_values_with_driver(&device, SvdDriver::QrBased)
         })
         .unwrap();
         // Compare against the distinct driver with a relative tolerance: the
@@ -459,7 +459,7 @@ fn cuda_svd_xgesvdp_rejects_unreliable_single_precision_factorization() {
     let mut gpu = gpu_backend();
     let device = upload(&gpu, &input);
     let error = with_cuda_linalg_session(&mut gpu, |session| {
-        session.svd_with_options(&device, SvdOptions::default().driver(SvdDriver::Xgesvdp))
+        session.svd_with_options(&device, SvdOptions::default().driver(SvdDriver::Polar))
     })
     .unwrap_err();
     assert!(
@@ -467,7 +467,7 @@ fn cuda_svd_xgesvdp_rejects_unreliable_single_precision_factorization() {
         "explicit Xgesvdp on rank-deficient f32 should fail with a typed backend error, got {error:?}"
     );
     let error = with_cuda_linalg_session(&mut gpu, |session| {
-        session.svd_values_with_driver(&device, SvdDriver::Xgesvdp)
+        session.svd_values_with_driver(&device, SvdDriver::Polar)
     })
     .unwrap_err();
     assert!(
@@ -498,7 +498,7 @@ fn cuda_svd_xgesvdp_rejects_a_bad_batch_member_beside_a_large_one() {
     let mut gpu = gpu_backend();
     let device = upload(&gpu, &input);
     let error = with_cuda_linalg_session(&mut gpu, |session| {
-        session.svd_with_options(&device, SvdOptions::default().driver(SvdDriver::Xgesvdp))
+        session.svd_with_options(&device, SvdOptions::default().driver(SvdDriver::Polar))
     })
     .unwrap_err();
     assert!(

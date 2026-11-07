@@ -20,7 +20,7 @@ fn test_cuda_svd_xgesvdp_full_and_economy() {
                 &mut backend,
                 device.as_typed::<Complex64>().unwrap(),
                 full,
-                SvdDriver::Xgesvdp,
+                SvdDriver::Polar,
             )
             .unwrap();
             let (uc, vr, k) = (

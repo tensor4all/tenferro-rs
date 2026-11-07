@@ -178,7 +178,7 @@ fn traced_decomposition_options_execute_through_registered_runtime() {
 #[test]
 fn cpu_ignores_explicit_svd_driver_on_concrete_and_traced_paths() {
     let trace = TraceContext::new();
-    for driver in [SvdDriver::Gesvd, SvdDriver::Gesvdj, SvdDriver::Xgesvdp] {
+    for driver in [SvdDriver::QrBased, SvdDriver::Jacobi, SvdDriver::Polar] {
         check_cpu_ignores_svd_driver(&trace, driver);
     }
 }
@@ -278,11 +278,11 @@ fn cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths() {
                 .eigh_with_options(&a, EighOptions::default())
                 .unwrap();
             let forced_outputs = backend
-                .eigh_with_options(&a, EighOptions::default().driver(EighDriver::Syevj))
+                .eigh_with_options(&a, EighOptions::default().driver(EighDriver::Jacobi))
                 .unwrap();
             let default_values = backend.eigh_values(&a).unwrap();
             let forced_values = backend
-                .eigh_values_with_driver(&a, EighDriver::Syevd)
+                .eigh_values_with_driver(&a, EighDriver::DivideAndConquer)
                 .unwrap();
             (
                 default_outputs,
@@ -310,12 +310,12 @@ fn cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths() {
         .from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3, 3], data).unwrap())
         .unwrap();
     let (w, v) = traced
-        .eigh_with_options(EighOptions::default().driver(EighDriver::Syevj))
+        .eigh_with_options(EighOptions::default().driver(EighDriver::Jacobi))
         .unwrap();
     // Only the eigenvalues are live here, so the op prunes to a values-only
     // op that keeps the forced driver; the CPU runtime must still execute it.
     let (w_only, _) = traced
-        .eigh_with_options(EighOptions::default().driver(EighDriver::Syevd))
+        .eigh_with_options(EighOptions::default().driver(EighDriver::DivideAndConquer))
         .unwrap();
 
     let mut compiler = GraphCompiler::new();
