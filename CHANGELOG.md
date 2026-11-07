@@ -71,6 +71,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `max` and `min` keep the typed `InvalidArgument`: they have no finite
   identity, and reporting a sentinel would invent a value the input never held.
   An empty *axis list* still returns the input unchanged.
+- **`rem` differentiates away from its discontinuities in the semantic AD
+  transforms** (#2454). `rem(x, y) = x - trunc(x / y) * y` is linear in `x` with
+  slope `1` and in `y` with slope `-trunc(x / y)`, so `linearize` emits
+  `dx - trunc(x / y) * dy` and the reverse rule emits `1` and
+  `-trunc(x / y)` times the cotangent. `trunc(x / y)` is built in the core
+  vocabulary as `q - rem(q, 1)`, so the emitted graph agrees with the primal's
+  own remainder instead of depending on a second rounding mode. The rule is
+  inactive for integer and complex inputs, which have no such derivative, and
+  `compare` remains explicitly inactive. This changes
+  `tenferro_ops::ad::support`: `Rem` is `direct_support!`, not
+  `nondiff_support!`. The derivative is undefined at `y == 0` and at an exact
+  integer quotient; those single points are left out rather than given a
+  one-sided value.
 - **The CPU linalg and reduction entries narrow each operand to `Host` once
   and no longer re-check placement below that point.** The
   `ensure_host_tensor` / `ensure_host_tensor_read` pre-checks (55 call sites in

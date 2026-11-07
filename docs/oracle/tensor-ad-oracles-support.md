@@ -39,6 +39,7 @@ finite-difference tests because the public oracle family is not yet replayable.
 | --- | --- | --- | --- |
 | Einsum extension | finite-difference | `einsum_with(..., "ij,jk->ik", ...)` | `cargo test -p tenferro-einsum --features autodiff --test integration grad_einsum_matmul_real_matches_finite_diff_for_both_inputs` |
 | FFT C2C extension | finite-difference | `fft(...).jvp(...)` | `cargo test -p tenferro-fft --features autodiff --test fft_ops fft_c64_jvp_matches_finite_diff` |
+| Rem | finite-difference | `rem(x, y)` JVP/VJP away from `y == 0` and exact integer quotients (#2454) | `cargo test -p tenferro-ad --test integration semantic_core_rem_jvp_and_vjp_match_a_finite_difference` |
 | Lu | finite-difference | `grad(sum(l) + sum(u))` | `cargo test -p tenferro-linalg --features autodiff --test integration lu_qr_sum_grads_match_finite_diff` |
 | Qr | finite-difference | `grad(sum(q) + sum(r))` | `cargo test -p tenferro-linalg --features autodiff --test integration lu_qr_sum_grads_match_finite_diff` |
 | Incremental Householder QR | Torch JVP/VJP + finite-difference replay | factor, append, factor import, selected Q, and R | `RUN_ORACLE_REPLAY=1 ORACLE_REPLAY_OP=incremental_householder_qr cargo test -p tenferro-linalg --features autodiff,native --test integration oracle_replays_supported_db_cases_when_requested -- --nocapture` |

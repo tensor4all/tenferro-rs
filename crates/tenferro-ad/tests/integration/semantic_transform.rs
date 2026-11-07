@@ -1244,28 +1244,189 @@ fn semantic_core_reduce_max_balances_ties_numerically() {
 }
 
 #[test]
-fn semantic_core_discrete_ops_are_explicitly_inactive() {
+fn semantic_core_rem_jvp_and_vjp_match_a_finite_difference() {
+    // `rem(x, y) = x - trunc(x / y) * y`, so away from the jumps (`y == 0`, an exact integer
+    // quotient) the derivative is 1 in `x` and `-trunc(x / y)` in `y`. The expected values here
+    // come from a central difference of the primal, not from the same closed form the rule
+    // emits, so a wrong rule cannot agree with its own test (#2454).
     let ad = ad_context();
-    let rem = binary_core_program(
+    let source = binary_core_program(
         DType::F64,
-        [DimExpr::Const(2)],
+        [DimExpr::Const(3)],
         DType::F64,
-        [DimExpr::Const(2)],
+        [DimExpr::Const(3)],
+        CoreSemanticOp::Rem,
+    );
+
+    // Far from a jump: `y != 0` and no `x / y` is an integer.
+    let x = [-5.5_f64, 7.25, -0.75];
+    let y = [2.0_f64, -3.0, 0.4];
+    let dx = [1.5_f64, -0.5, 2.25];
+    let dy = [0.25_f64, 1.0, -1.5];
+    let lhs = Tensor::from_vec_col_major(vec![3], x.to_vec()).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3], y.to_vec()).unwrap();
+    let lhs_tangent = Tensor::from_vec_col_major(vec![3], dx.to_vec()).unwrap();
+    let rhs_tangent = Tensor::from_vec_col_major(vec![3], dy.to_vec()).unwrap();
+
+    let jvp = ad.jvp_program(&source, &[true, true]).unwrap();
+    assert_eq!(jvp.derivative_output_indices(), &[Some(0)]);
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(jvp.frozen())
+        .unwrap();
+    let tangent = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&lhs, &rhs, &lhs_tangent, &rhs_tangent])
+        .unwrap();
+    assert_close(
+        tangent.as_slice::<f64>().unwrap(),
+        &rem_directional_finite_difference(&x, &y, &dx, &dy),
+        1e-7,
+        "rem jvp",
+    );
+    // The closed form of the same rule, spelled out here: `1 * dx - trunc(x / y) * dy`.
+    let trunc: Vec<f64> = x
+        .iter()
+        .zip(y)
+        .map(|(&x, y)| trunc_quotient(x, y))
+        .collect();
+    let analytic: Vec<f64> = (0..3).map(|i| dx[i] - trunc[i] * dy[i]).collect();
+    assert_close(
+        tangent.as_slice::<f64>().unwrap(),
+        &analytic,
+        1e-7,
+        "rem jvp closed form",
+    );
+
+    let cotangent = [2.0_f64, -0.5, 3.0];
+    let output_cotangent = Tensor::from_vec_col_major(vec![3], cotangent.to_vec()).unwrap();
+    let vjp = ad.vjp_program(&source, &[true, true], &[true]).unwrap();
+    assert_eq!(vjp.derivative_output_indices(), &[Some(0), Some(1)]);
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(vjp.frozen())
+        .unwrap();
+    let cotangents =
+        crate::support::run_on_cpu(&cpu_runtime(), &compiled, &[&lhs, &rhs, &output_cotangent])
+            .unwrap();
+
+    // `d/dx = 1`, checked against the finite difference of the weighted primal.
+    let step = 1e-6;
+    let grad_x_fd: Vec<f64> = (0..3)
+        .map(|index| {
+            let mut plus = x;
+            let mut minus = x;
+            plus[index] += step;
+            minus[index] -= step;
+            (weighted_rem(&plus, &y, &cotangent) - weighted_rem(&minus, &y, &cotangent))
+                / (2.0 * step)
+        })
+        .collect();
+    assert_close(
+        cotangents[0].as_slice::<f64>().unwrap(),
+        &grad_x_fd,
+        1e-6,
+        "rem vjp grad_x",
+    );
+    let analytic_x: Vec<f64> = cotangent.to_vec();
+    assert_close(
+        cotangents[0].as_slice::<f64>().unwrap(),
+        &analytic_x,
+        1e-9,
+        "rem vjp grad_x closed form",
+    );
+
+    // `d/dy = -trunc(x / y)`, again against the finite difference.
+    let grad_y_fd: Vec<f64> = (0..3)
+        .map(|index| {
+            let mut plus = y;
+            let mut minus = y;
+            plus[index] += step;
+            minus[index] -= step;
+            (weighted_rem(&x, &plus, &cotangent) - weighted_rem(&x, &minus, &cotangent))
+                / (2.0 * step)
+        })
+        .collect();
+    assert_close(
+        cotangents[1].as_slice::<f64>().unwrap(),
+        &grad_y_fd,
+        1e-6,
+        "rem vjp grad_y",
+    );
+    let analytic_y: Vec<f64> = (0..3).map(|i| -cotangent[i] * trunc[i]).collect();
+    assert_close(
+        cotangents[1].as_slice::<f64>().unwrap(),
+        &analytic_y,
+        1e-9,
+        "rem vjp grad_y closed form",
+    );
+}
+
+#[test]
+fn semantic_core_rem_stays_inactive_for_integer_dtypes() {
+    // `rem` is defined for integers too, but an integer has no derivative to report: the rule
+    // must not emit a float-shaped coefficient for it.
+    let ad = ad_context();
+    let source = binary_core_program(
+        DType::I64,
+        [DimExpr::Const(3)],
+        DType::I64,
+        [DimExpr::Const(3)],
         CoreSemanticOp::Rem,
     );
     assert_eq!(
-        ad.jvp_program(&rem, &[true, true])
+        ad.jvp_program(&source, &[true, true])
             .unwrap()
             .derivative_output_indices(),
         &[None]
     );
     assert_eq!(
-        ad.vjp_program(&rem, &[true, true], &[true])
+        ad.vjp_program(&source, &[true, true], &[true])
             .unwrap()
             .derivative_output_indices(),
         &[None, None]
     );
+}
 
+/// `trunc(x / y)` computed on the host, with Rust's truncated remainder as the definition.
+fn trunc_quotient(x: f64, y: f64) -> f64 {
+    (x / y).trunc()
+}
+
+/// `sum_i rem(x_i, y_i) * c_i`, the scalar a reverse pass differentiates.
+fn weighted_rem(x: &[f64], y: &[f64], c: &[f64]) -> f64 {
+    x.iter()
+        .zip(y)
+        .zip(c)
+        .map(|((&x, &y), &c)| (x % y) * c)
+        .sum()
+}
+
+/// Central difference of `rem` along the direction `(dx, dy)`.
+fn rem_directional_finite_difference(x: &[f64], y: &[f64], dx: &[f64], dy: &[f64]) -> Vec<f64> {
+    let step = 1e-6;
+    let plus: Vec<f64> = (0..x.len())
+        .map(|i| (x[i] + step * dx[i]) % (y[i] + step * dy[i]))
+        .collect();
+    let minus: Vec<f64> = (0..x.len())
+        .map(|i| (x[i] - step * dx[i]) % (y[i] - step * dy[i]))
+        .collect();
+    plus.iter()
+        .zip(&minus)
+        .map(|(&plus, &minus)| (plus - minus) / (2.0 * step))
+        .collect()
+}
+
+fn assert_close(actual: &[f64], expected: &[f64], tolerance: f64, what: &str) {
+    assert_eq!(actual.len(), expected.len(), "{what}: length");
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "{what}[{index}]: actual={actual} expected={expected}"
+        );
+    }
+}
+
+#[test]
+fn semantic_core_discrete_ops_are_explicitly_inactive() {
+    let ad = ad_context();
     let compare = binary_core_program(
         DType::F64,
         [DimExpr::Const(2)],
@@ -1865,7 +2026,7 @@ fn semantic_program_transform_cache_reuses_bound_programs_without_stale_bindings
             .tensor_read()
             .unwrap()
             .tensor_view()
-            .expect("a preset scalar has a view")
+            .expect("a preset dtype always has the requested representation")
             .as_slice::<f64>()
             .unwrap()
             .to_vec()
