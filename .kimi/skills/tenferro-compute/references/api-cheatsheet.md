@@ -161,6 +161,17 @@ allocation-returning calls still allocate outputs (the `_into` forms do not).
 See the
 [engine and prepared-execution contract](../../../../docs/guides/ordinary-and-prepared-execution.md#one-engine-across-ordinary-eager-and-prepared-work).
 
+## Lane-local factorizations
+
+On the `native` provider, a caller that runs its own lanes calls
+`tenferro_linalg::{svd, svd_values, qr, eigh, eigh_values, eig_values}_with_exec(exec,
+&mut lane_pool, &view)` on the bundle from `engine.with_exec(|exec| ..)` and a
+lane-owned `tenferro_cpu::linalg_interop::BufferPool`. They read a `[m, n]` or
+`[m, n, b..]` view in place (a negative stride is `Unsupported`), take every
+output from that pool, and return typed tensors (spectra in
+`LinalgScalar::RealScalar`, general eigenvalues in `LinalgScalar::Complex`)
+bit-identical to the engine entries. The BLAS provider has no such entry.
+
 ## Borrowing external memory
 
 Wrap an existing column-major buffer (a `faer::Mat`, an ndarray view, or any

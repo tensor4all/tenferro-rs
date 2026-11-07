@@ -1,4 +1,4 @@
-use super::{checked_product, FaerEig};
+use super::{checked_product, FaerLinalg};
 use crate::cpu::tests::with_cpu_linalg;
 use crate::{QrOptions, TensorLinalgExt};
 use num_complex::{Complex32, Complex64};
@@ -118,7 +118,7 @@ fn normalize_eig_vectors_puts_columns_in_the_unit_gauge() {
         Complex64::new(1.0, 0.0),
         Complex64::new(0.0, 2.0),
     ];
-    <f64 as FaerEig>::normalize_eig_vectors(&mut columns, 2, 1).unwrap();
+    <f64 as FaerLinalg>::normalize_eig_vectors(&mut columns, 2, 1).unwrap();
     assert!((columns[0].re - 0.6).abs() < 1.0e-12, "{:?}", columns[0]);
     assert!((columns[1].im - 0.8).abs() < 1.0e-12, "{:?}", columns[1]);
     let root_five = 5.0_f64.sqrt();
@@ -139,7 +139,9 @@ fn normalize_eig_vectors_rejects_non_normalizable_columns_typed() {
     // All-zero column: there is no direction to normalize, so the seam must
     // refuse rather than divide by zero.
     let mut zero = vec![Complex64::new(0.0, 0.0); 4];
-    assert_typed_non_finite(<f64 as FaerEig>::normalize_eig_vectors(&mut zero, 2, 1).unwrap_err());
+    assert_typed_non_finite(
+        <f64 as FaerLinalg>::normalize_eig_vectors(&mut zero, 2, 1).unwrap_err(),
+    );
 
     // Non-finite column: a provider that overflowed inside its
     // back-substitution must surface the typed NonFinite source, not NaN.
@@ -150,7 +152,7 @@ fn normalize_eig_vectors_rejects_non_normalizable_columns_typed() {
         Complex64::new(1.0, 0.0),
     ];
     assert_typed_non_finite(
-        <f64 as FaerEig>::normalize_eig_vectors(&mut non_finite, 2, 1).unwrap_err(),
+        <f64 as FaerLinalg>::normalize_eig_vectors(&mut non_finite, 2, 1).unwrap_err(),
     );
 }
 
@@ -167,7 +169,7 @@ fn normalize_eig_vectors_normalizes_extreme_magnitude_finite_columns() {
         Complex32::new(1.0, 0.0),
         Complex32::new(0.0, 1.0),
     ];
-    <f32 as FaerEig>::normalize_eig_vectors(&mut large32, 2, 1).unwrap();
+    <f32 as FaerLinalg>::normalize_eig_vectors(&mut large32, 2, 1).unwrap();
     assert!((large32[0].re - 0.6).abs() < 1.0e-6, "{:?}", large32[0]);
     assert!((large32[1].im - 0.8).abs() < 1.0e-6, "{:?}", large32[1]);
 
@@ -178,7 +180,7 @@ fn normalize_eig_vectors_normalizes_extreme_magnitude_finite_columns() {
         Complex32::new(1.0, 0.0),
         Complex32::new(0.0, 1.0),
     ];
-    <f32 as FaerEig>::normalize_eig_vectors(&mut tiny32, 2, 1).unwrap();
+    <f32 as FaerLinalg>::normalize_eig_vectors(&mut tiny32, 2, 1).unwrap();
     let root_five = 5.0_f32.sqrt();
     assert!(
         (tiny32[0].re - 1.0 / root_five).abs() < 1.0e-6,
@@ -198,7 +200,7 @@ fn normalize_eig_vectors_normalizes_extreme_magnitude_finite_columns() {
         Complex64::new(1.0, 0.0),
         Complex64::new(0.0, 1.0),
     ];
-    <f64 as FaerEig>::normalize_eig_vectors(&mut large64, 2, 1).unwrap();
+    <f64 as FaerLinalg>::normalize_eig_vectors(&mut large64, 2, 1).unwrap();
     assert!((large64[0].re - 0.6).abs() < 1.0e-12, "{:?}", large64[0]);
     assert!((large64[1].im - 0.8).abs() < 1.0e-12, "{:?}", large64[1]);
 
@@ -210,7 +212,7 @@ fn normalize_eig_vectors_normalizes_extreme_magnitude_finite_columns() {
         Complex64::new(1.0, 0.0),
         Complex64::new(0.0, 1.0),
     ];
-    <f64 as FaerEig>::normalize_eig_vectors(&mut tiny64, 2, 1).unwrap();
+    <f64 as FaerLinalg>::normalize_eig_vectors(&mut tiny64, 2, 1).unwrap();
     let root_five64 = 5.0_f64.sqrt();
     assert!(
         (tiny64[0].re - 1.0 / root_five64).abs() < 1.0e-12,

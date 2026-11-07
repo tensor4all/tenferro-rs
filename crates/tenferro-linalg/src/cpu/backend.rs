@@ -1696,7 +1696,7 @@ fn svd_entered(
                             .as_typed::<f32>()
                             .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
+                    .map(svd_erased),
                     DType::F64 => linalg::faer::svd(
                         exec,
                         buffers,
@@ -1704,7 +1704,7 @@ fn svd_entered(
                             .as_typed::<f64>()
                             .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
+                    .map(svd_erased),
                     DType::C32 => linalg::faer::svd(
                         exec,
                         buffers,
@@ -1712,7 +1712,7 @@ fn svd_entered(
                             .as_typed::<Complex32>()
                             .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?,
                     )
-                    .and_then(svd_c32_outputs_to_public_tensors),
+                    .map(svd_erased),
                     DType::C64 => linalg::faer::svd(
                         exec,
                         buffers,
@@ -1720,7 +1720,7 @@ fn svd_entered(
                             .as_typed::<Complex64>()
                             .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?,
                     )
-                    .and_then(svd_c64_outputs_to_public_tensors),
+                    .map(svd_erased),
                     _ => Err(unsupported_dtype("svd", input.dtype())),
                 }
             }
@@ -1737,25 +1737,25 @@ fn svd_entered(
                             .as_typed::<f32>()
                             .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
+                    .map(svd_erased),
                     DType::F64 => linalg::blas::svd(
                         buffers,
                         input
                             .as_typed::<f64>()
                             .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
+                    .map(svd_erased),
                     DType::C32 => {
                         let t = input
                             .as_typed::<Complex32>()
                             .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?;
-                        linalg::blas::svd(buffers, t).and_then(svd_c32_outputs_to_public_tensors)
+                        linalg::blas::svd(buffers, t).map(svd_erased)
                     }
                     DType::C64 => {
                         let t = input
                             .as_typed::<Complex64>()
                             .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?;
-                        linalg::blas::svd(buffers, t).and_then(svd_c64_outputs_to_public_tensors)
+                        linalg::blas::svd(buffers, t).map(svd_erased)
                     }
                     _ => Err(unsupported_dtype("svd", input.dtype())),
                 }
@@ -1782,7 +1782,7 @@ fn svd_full_entered(
                             .as_typed::<f32>()
                             .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
+                    .map(svd_erased),
                     DType::F64 => linalg::faer::svd_full(
                         exec,
                         buffers,
@@ -1790,7 +1790,7 @@ fn svd_full_entered(
                             .as_typed::<f64>()
                             .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
+                    .map(svd_erased),
                     DType::C32 => linalg::faer::svd_full(
                         exec,
                         buffers,
@@ -1798,7 +1798,7 @@ fn svd_full_entered(
                             .as_typed::<Complex32>()
                             .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
                     )
-                    .and_then(svd_c32_outputs_to_public_tensors),
+                    .map(svd_erased),
                     DType::C64 => linalg::faer::svd_full(
                         exec,
                         buffers,
@@ -1806,7 +1806,7 @@ fn svd_full_entered(
                             .as_typed::<Complex64>()
                             .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
                     )
-                    .and_then(svd_c64_outputs_to_public_tensors),
+                    .map(svd_erased),
                     _ => Err(unsupported_dtype("svd_full", input.dtype())),
                 }
             }
@@ -1823,27 +1823,25 @@ fn svd_full_entered(
                             .as_typed::<f32>()
                             .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
+                    .map(svd_erased),
                     DType::F64 => linalg::blas::svd_full(
                         buffers,
                         input
                             .as_typed::<f64>()
                             .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
+                    .map(svd_erased),
                     DType::C32 => {
                         let t = input
                             .as_typed::<Complex32>()
                             .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?;
-                        linalg::blas::svd_full(buffers, t)
-                            .and_then(svd_c32_outputs_to_public_tensors)
+                        linalg::blas::svd_full(buffers, t).map(svd_erased)
                     }
                     DType::C64 => {
                         let t = input
                             .as_typed::<Complex64>()
                             .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?;
-                        linalg::blas::svd_full(buffers, t)
-                            .and_then(svd_c64_outputs_to_public_tensors)
+                        linalg::blas::svd_full(buffers, t).map(svd_erased)
                     }
                     _ => Err(unsupported_dtype("svd_full", input.dtype())),
                 }
@@ -1950,7 +1948,7 @@ fn qr_entered(
                             .as_typed::<f32>()
                             .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
+                    .map(pair_erased),
                     DType::F64 => linalg::faer::qr(
                         exec,
                         buffers,
@@ -1958,7 +1956,7 @@ fn qr_entered(
                             .as_typed::<f64>()
                             .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
+                    .map(pair_erased),
                     DType::C32 => linalg::faer::qr(
                         exec,
                         buffers,
@@ -1966,12 +1964,7 @@ fn qr_entered(
                             .as_typed::<Complex32>()
                             .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
                     )
-                    .map(|outputs| {
-                        outputs
-                            .into_iter()
-                            .map(Tensor::from_typed::<Complex32>)
-                            .collect()
-                    }),
+                    .map(pair_erased),
                     DType::C64 => linalg::faer::qr(
                         exec,
                         buffers,
@@ -1979,12 +1972,7 @@ fn qr_entered(
                             .as_typed::<Complex64>()
                             .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
                     )
-                    .map(|outputs| {
-                        outputs
-                            .into_iter()
-                            .map(Tensor::from_typed::<Complex64>)
-                            .collect()
-                    }),
+                    .map(pair_erased),
                     _ => Err(unsupported_dtype("qr", input.dtype())),
                 }
             }
@@ -2001,38 +1989,28 @@ fn qr_entered(
                             .as_typed::<f32>()
                             .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
+                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed).collect()),
                     DType::F64 => linalg::blas::qr(
                         buffers,
                         input
                             .as_typed::<f64>()
                             .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
+                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed).collect()),
                     DType::C32 => linalg::blas::qr(
                         buffers,
                         input
                             .as_typed::<Complex32>()
                             .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
                     )
-                    .map(|outputs| {
-                        outputs
-                            .into_iter()
-                            .map(Tensor::from_typed::<Complex32>)
-                            .collect()
-                    }),
+                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed).collect()),
                     DType::C64 => linalg::blas::qr(
                         buffers,
                         input
                             .as_typed::<Complex64>()
                             .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
                     )
-                    .map(|outputs| {
-                        outputs
-                            .into_iter()
-                            .map(Tensor::from_typed::<Complex64>)
-                            .collect()
-                    }),
+                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed).collect()),
                     _ => Err(unsupported_dtype("qr", input.dtype())),
                 }
             }
@@ -2596,7 +2574,7 @@ fn eigh_entered(
                             .as_typed::<f32>()
                             .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
+                    .map(pair_erased),
                     DType::F64 => linalg::faer::eigh(
                         exec,
                         buffers,
@@ -2604,7 +2582,7 @@ fn eigh_entered(
                             .as_typed::<f64>()
                             .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
+                    .map(pair_erased),
                     DType::C32 => linalg::faer::eigh(
                         exec,
                         buffers,
@@ -2612,7 +2590,7 @@ fn eigh_entered(
                             .as_typed::<Complex32>()
                             .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?,
                     )
-                    .and_then(eigh_c32_outputs_to_public_tensors),
+                    .map(pair_erased),
                     DType::C64 => linalg::faer::eigh(
                         exec,
                         buffers,
@@ -2620,7 +2598,7 @@ fn eigh_entered(
                             .as_typed::<Complex64>()
                             .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?,
                     )
-                    .and_then(eigh_c64_outputs_to_public_tensors),
+                    .map(pair_erased),
                     _ => Err(unsupported_dtype("eigh", input.dtype())),
                 }
             }
@@ -2637,25 +2615,25 @@ fn eigh_entered(
                             .as_typed::<f32>()
                             .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
+                    .map(pair_erased),
                     DType::F64 => linalg::blas::eigh(
                         buffers,
                         input
                             .as_typed::<f64>()
                             .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?,
                     )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
+                    .map(pair_erased),
                     DType::C32 => {
                         let t = input
                             .as_typed::<Complex32>()
                             .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?;
-                        linalg::blas::eigh(buffers, t).and_then(eigh_c32_outputs_to_public_tensors)
+                        linalg::blas::eigh(buffers, t).map(pair_erased)
                     }
                     DType::C64 => {
                         let t = input
                             .as_typed::<Complex64>()
                             .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?;
-                        linalg::blas::eigh(buffers, t).and_then(eigh_c64_outputs_to_public_tensors)
+                        linalg::blas::eigh(buffers, t).map(pair_erased)
                     }
                     _ => Err(unsupported_dtype("eigh", input.dtype())),
                 }
@@ -2919,16 +2897,10 @@ fn svd_faer_view_entered(
     input: TensorView<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     match input {
-        TensorView::F32(view) => linalg::faer::svd_view(exec, buffers, view)
-            .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-        TensorView::F64(view) => linalg::faer::svd_view(exec, buffers, view)
-            .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-        TensorView::C32(view) => {
-            linalg::faer::svd_view(exec, buffers, view).and_then(svd_c32_outputs_to_public_tensors)
-        }
-        TensorView::C64(view) => {
-            linalg::faer::svd_view(exec, buffers, view).and_then(svd_c64_outputs_to_public_tensors)
-        }
+        TensorView::F32(view) => linalg::faer::svd_view(exec, buffers, view).map(svd_erased),
+        TensorView::F64(view) => linalg::faer::svd_view(exec, buffers, view).map(svd_erased),
+        TensorView::C32(view) => linalg::faer::svd_view(exec, buffers, view).map(svd_erased),
+        TensorView::C64(view) => linalg::faer::svd_view(exec, buffers, view).map(svd_erased),
         unsupported => Err(unsupported_dtype("svd", unsupported.dtype())),
     }
 }
@@ -2940,14 +2912,10 @@ fn svd_full_faer_view_entered(
     input: TensorView<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     match input {
-        TensorView::F32(view) => linalg::faer::svd_full_view(exec, buffers, view)
-            .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-        TensorView::F64(view) => linalg::faer::svd_full_view(exec, buffers, view)
-            .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-        TensorView::C32(view) => linalg::faer::svd_full_view(exec, buffers, view)
-            .and_then(svd_c32_outputs_to_public_tensors),
-        TensorView::C64(view) => linalg::faer::svd_full_view(exec, buffers, view)
-            .and_then(svd_c64_outputs_to_public_tensors),
+        TensorView::F32(view) => linalg::faer::svd_full_view(exec, buffers, view).map(svd_erased),
+        TensorView::F64(view) => linalg::faer::svd_full_view(exec, buffers, view).map(svd_erased),
+        TensorView::C32(view) => linalg::faer::svd_full_view(exec, buffers, view).map(svd_erased),
+        TensorView::C64(view) => linalg::faer::svd_full_view(exec, buffers, view).map(svd_erased),
         unsupported => Err(unsupported_dtype("svd_full", unsupported.dtype())),
     }
 }
@@ -2982,22 +2950,10 @@ fn qr_faer_view_entered(
     input: TensorView<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     match input {
-        TensorView::F32(view) => linalg::faer::qr_view(exec, buffers, view)
-            .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-        TensorView::F64(view) => linalg::faer::qr_view(exec, buffers, view)
-            .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-        TensorView::C32(view) => linalg::faer::qr_view(exec, buffers, view).map(|outputs| {
-            outputs
-                .into_iter()
-                .map(Tensor::from_typed::<Complex32>)
-                .collect()
-        }),
-        TensorView::C64(view) => linalg::faer::qr_view(exec, buffers, view).map(|outputs| {
-            outputs
-                .into_iter()
-                .map(Tensor::from_typed::<Complex64>)
-                .collect()
-        }),
+        TensorView::F32(view) => linalg::faer::qr_view(exec, buffers, view).map(pair_erased),
+        TensorView::F64(view) => linalg::faer::qr_view(exec, buffers, view).map(pair_erased),
+        TensorView::C32(view) => linalg::faer::qr_view(exec, buffers, view).map(pair_erased),
+        TensorView::C64(view) => linalg::faer::qr_view(exec, buffers, view).map(pair_erased),
         unsupported => Err(unsupported_dtype("qr", unsupported.dtype())),
     }
 }
@@ -3009,14 +2965,10 @@ fn eigh_faer_view_entered(
     input: TensorView<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     match input {
-        TensorView::F32(view) => linalg::faer::eigh_view(exec, buffers, view)
-            .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-        TensorView::F64(view) => linalg::faer::eigh_view(exec, buffers, view)
-            .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-        TensorView::C32(view) => linalg::faer::eigh_view(exec, buffers, view)
-            .and_then(eigh_c32_outputs_to_public_tensors),
-        TensorView::C64(view) => linalg::faer::eigh_view(exec, buffers, view)
-            .and_then(eigh_c64_outputs_to_public_tensors),
+        TensorView::F32(view) => linalg::faer::eigh_view(exec, buffers, view).map(pair_erased),
+        TensorView::F64(view) => linalg::faer::eigh_view(exec, buffers, view).map(pair_erased),
+        TensorView::C32(view) => linalg::faer::eigh_view(exec, buffers, view).map(pair_erased),
+        TensorView::C64(view) => linalg::faer::eigh_view(exec, buffers, view).map(pair_erased),
         unsupported => Err(unsupported_dtype("eigh", unsupported.dtype())),
     }
 }
@@ -3239,21 +3191,27 @@ fn complex64_real_part_tensor(
     Ok(out)
 }
 
-fn svd_output_count_error(count: usize) -> Error {
-    Error::Internal(format!(
-        "svd produced an invalid output count: expected 3, got {count}"
-    ))
+/// Erase a typed `(U, S, Vᴴ)`; the spectrum is already in the real scalar.
+fn svd_erased<T: TensorScalar, R: TensorScalar>(
+    (u, s, vt): (TypedTensor<T>, TypedTensor<R>, TypedTensor<T>),
+) -> Vec<Tensor> {
+    vec![
+        Tensor::from_typed(u),
+        Tensor::from_typed(s),
+        Tensor::from_typed(vt),
+    ]
+}
+
+/// Erase a typed pair of factorization outputs (`(Q, R)` or `(values, vectors)`).
+fn pair_erased<A: TensorScalar, B: TensorScalar>(
+    (first, second): (TypedTensor<A>, TypedTensor<B>),
+) -> Vec<Tensor> {
+    vec![Tensor::from_typed(first), Tensor::from_typed(second)]
 }
 
 fn full_piv_lu_output_count_error(count: usize) -> Error {
     Error::Internal(format!(
         "full_piv_lu produced an invalid output count: expected 5, got {count}"
-    ))
-}
-
-fn eigh_output_count_error(count: usize) -> Error {
-    Error::Internal(format!(
-        "eigh produced an invalid output count: expected 2, got {count}"
     ))
 }
 
@@ -3302,74 +3260,6 @@ fn full_piv_lu_c64_outputs_to_public_tensors(
             Tensor::from_typed::<f64>(complex64_real_part_tensor(parity)?),
         ]),
         _ => Err(full_piv_lu_output_count_error(count)),
-    }
-}
-
-fn svd_c32_outputs_to_public_tensors(
-    outputs: Vec<TypedTensor<Complex32>>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let count = outputs.len();
-    let mut outputs = outputs.into_iter();
-    match (
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-    ) {
-        (Some(u), Some(values), Some(vt), None) => Ok(vec![
-            Tensor::from_typed::<Complex32>(u),
-            Tensor::from_typed::<f32>(complex32_real_part_tensor(values)?),
-            Tensor::from_typed::<Complex32>(vt),
-        ]),
-        _ => Err(svd_output_count_error(count)),
-    }
-}
-
-fn svd_c64_outputs_to_public_tensors(
-    outputs: Vec<TypedTensor<Complex64>>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let count = outputs.len();
-    let mut outputs = outputs.into_iter();
-    match (
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-        outputs.next(),
-    ) {
-        (Some(u), Some(values), Some(vt), None) => Ok(vec![
-            Tensor::from_typed::<Complex64>(u),
-            Tensor::from_typed::<f64>(complex64_real_part_tensor(values)?),
-            Tensor::from_typed::<Complex64>(vt),
-        ]),
-        _ => Err(svd_output_count_error(count)),
-    }
-}
-
-fn eigh_c32_outputs_to_public_tensors(
-    outputs: Vec<TypedTensor<Complex32>>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let count = outputs.len();
-    let mut outputs = outputs.into_iter();
-    match (outputs.next(), outputs.next(), outputs.next()) {
-        (Some(values), Some(vectors), None) => Ok(vec![
-            Tensor::from_typed::<f32>(complex32_real_part_tensor(values)?),
-            Tensor::from_typed::<Complex32>(vectors),
-        ]),
-        _ => Err(eigh_output_count_error(count)),
-    }
-}
-
-fn eigh_c64_outputs_to_public_tensors(
-    outputs: Vec<TypedTensor<Complex64>>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let count = outputs.len();
-    let mut outputs = outputs.into_iter();
-    match (outputs.next(), outputs.next(), outputs.next()) {
-        (Some(values), Some(vectors), None) => Ok(vec![
-            Tensor::from_typed::<f64>(complex64_real_part_tensor(values)?),
-            Tensor::from_typed::<Complex64>(vectors),
-        ]),
-        _ => Err(eigh_output_count_error(count)),
     }
 }
 

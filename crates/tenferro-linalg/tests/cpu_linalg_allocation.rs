@@ -248,7 +248,7 @@ const F64_LU_CEILINGS: &[(&str, usize)] = &[
     ("faer/svdvals/48", 1),
     ("faer/svd/tall", 3),
     ("faer/svdvals/tall", 1),
-    ("faer/svd/complex32", 5),
+    ("faer/svd/complex32", 1),
     ("faer/svdvals/complex32", 2),
 ];
 
@@ -274,7 +274,7 @@ const REMAINING_FAMILY_CEILINGS: &[(&str, usize)] = &[
     ("faer/eigvals/48", 3),
     ("faer/solve/complex32", 2),
     ("faer/qr/complex32", 3),
-    ("faer/eigh/complex32", 5),
+    ("faer/eigh/complex32", 1),
     ("faer/eig/complex32", 3),
     ("blas/cholesky/48", 3),
     ("blas/triangular_solve/48", 2),
@@ -333,6 +333,12 @@ const ARCH_CEILING_OVERRIDES: &[(&str, usize)] = &[
     ("faer/rank_revealing_qr/tall", 15),
     ("faer/eigh/48", 18),
     ("faer/eig/48", 32),
+    // The borrowed entries carry no host-side allocation; these are the same per-GEMM faer
+    // allocations as the engine rows above, without the engine's erased output vector.
+    ("borrowed/svd/48", 31),
+    ("borrowed/svd_full/48", 31),
+    ("borrowed/qr/48", 27),
+    ("borrowed/eigh/48", 16),
     ("faer/solve/complex32", 5),
     ("faer/eig/complex32", 8),
 ];
@@ -346,6 +352,7 @@ fn ceiling(name: &str) -> usize {
         .iter()
         .chain(F64_LU_CEILINGS)
         .chain(REMAINING_FAMILY_CEILINGS)
+        .chain(BORROWED_ENTRY_CEILINGS)
         .find(|(case, _)| *case == name)
         .map(|(_, ceiling)| *ceiling)
         .unwrap_or_else(|| panic!("no recorded allocation ceiling for {name}"))
@@ -570,6 +577,97 @@ fn remaining_linalg_families_keep_their_steady_state_allocation_counts() {
     assert!(
         failures.is_empty(),
         "CPU linalg routes allocate more per call than the recorded ceilings:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// Steady-state ceilings of the borrowed-`Exec` entries (#2462), measured on the caller's lane
+/// pool. Their contract is that every output, the provider workspace and a complex input's
+/// transient spectrum come from that pool, so they make no host-side allocation at all: zero, as
+/// the complex rows (which take the pooled real-spectrum gather) and the values-only rows show on
+/// every arch. Off x86_64 the real 48x48 factor rows add faer's per-GEMM allocations; see
+/// `ARCH_CEILING_OVERRIDES`.
+const BORROWED_ENTRY_CEILINGS: &[(&str, usize)] = &[
+    ("borrowed/svd/48", 0),
+    ("borrowed/svd_full/48", 0),
+    ("borrowed/svd_values/48", 0),
+    ("borrowed/qr/48", 0),
+    ("borrowed/eigh/48", 0),
+    ("borrowed/eigh_values/48", 0),
+    ("borrowed/eig_values/48", 0),
+    ("borrowed/svd/complex64", 0),
+    ("borrowed/eigh/complex64", 0),
+];
+
+#[test]
+fn borrowed_entries_keep_their_steady_state_allocation_counts() {
+    use tenferro_cpu::linalg_interop::BufferPool;
+    use tenferro_linalg::{
+        eig_values_with_exec, eigh_values_with_exec, eigh_with_exec, qr_with_exec,
+        svd_values_with_exec, svd_with_exec,
+    };
+
+    let _serial = serial_test();
+    let mut engine = faer_backend();
+    let mut lane_pool = BufferPool::new();
+    let a = f64_matrix(48);
+    let spd = f64_spd(48);
+    let c = c64_matrix(32);
+    let herm = c64_hermitian(32);
+    let a = a.as_typed::<f64>().unwrap().as_view();
+    let spd = spd.as_typed::<f64>().unwrap().as_view();
+    let c = c.as_typed::<Complex64>().unwrap().as_view();
+    let herm = herm.as_typed::<Complex64>().unwrap().as_view();
+
+    let mut failures = Vec::new();
+    let mut run =
+        |name: &str, call: &mut dyn FnMut(&mut tcontract_exec::Exec<'_>, &mut BufferPool)| {
+            let mut best: Option<AllocationReport> = None;
+            for _ in 0..4 {
+                let report = measure(|| {
+                    engine.with_exec(|exec| call(exec, &mut lane_pool)).unwrap();
+                });
+                if best.is_none_or(|best| report.allocations < best.allocations) {
+                    best = Some(report);
+                }
+            }
+            let report = best.unwrap_or_default();
+            let ceiling = ceiling(name);
+            println!("{name}: {report:?} (ceiling {ceiling})");
+            if report.allocations > ceiling {
+                failures.push(format!("{name}: {} > {ceiling}", report.allocations));
+            }
+        };
+    run("borrowed/svd/48", &mut |e, b| {
+        drop(svd_with_exec(e, b, &a, false).unwrap())
+    });
+    run("borrowed/svd_full/48", &mut |e, b| {
+        drop(svd_with_exec(e, b, &a, true).unwrap())
+    });
+    run("borrowed/svd_values/48", &mut |e, b| {
+        drop(svd_values_with_exec(e, b, &a).unwrap())
+    });
+    run("borrowed/qr/48", &mut |e, b| {
+        drop(qr_with_exec(e, b, &a).unwrap())
+    });
+    run("borrowed/eigh/48", &mut |e, b| {
+        drop(eigh_with_exec(e, b, &spd).unwrap())
+    });
+    run("borrowed/eigh_values/48", &mut |e, b| {
+        drop(eigh_values_with_exec(e, b, &spd).unwrap())
+    });
+    run("borrowed/eig_values/48", &mut |e, b| {
+        drop(eig_values_with_exec(e, b, &a).unwrap())
+    });
+    run("borrowed/svd/complex64", &mut |e, b| {
+        drop(svd_with_exec(e, b, &c, false).unwrap())
+    });
+    run("borrowed/eigh/complex64", &mut |e, b| {
+        drop(eigh_with_exec(e, b, &herm).unwrap())
+    });
+    assert!(
+        failures.is_empty(),
+        "borrowed entries allocate more per call than the recorded ceilings:\n{}",
         failures.join("\n")
     );
 }

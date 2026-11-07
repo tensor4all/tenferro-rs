@@ -147,8 +147,11 @@ The two providers differ in what a lane can call. The native provider has a
 per-context entry: inside `engine.with_exec(|exec| ..)`, a caller forks the
 bundle's token into lanes, builds each lane's bundle with
 `tcontract_exec::Exec::from_token`, and runs a cpueinsum or tlinalg plan in
-each lane on that lane's share of the budget. The vendor provider has no such entry, and it will
-not get one:
+each lane on that lane's share of the budget. For factorizations, the
+`tenferro_linalg::*_with_exec` entries (`svd`, `svd_values`, `qr`, `eigh`,
+`eigh_values`, `eig_values`) take that lane bundle and a lane-owned
+`BufferPool` and return typed tensors, with the same results as the engine
+entries. The vendor provider has no such entry, and it will not get one:
 
 - **A vendor call takes the whole engine and the vendor's own threads.** The
   GEMM entries of a `blas` build are the engine's operations
