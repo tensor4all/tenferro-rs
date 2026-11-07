@@ -55,7 +55,61 @@ macro_rules! map_provider_error {
 }
 
 /// Rebuild tenferro's error from a `tlinalg` (faer route) failure.
-pub(crate) fn map_error(op: tlinalg::Op, error: tlinalg::Error) -> tenferro_tensor::Error {
+///
+/// This is the translation tenferro's own linalg entries apply to every `tlinalg` failure. A
+/// caller that runs `tlinalg` factorizations itself, for example on the bundle
+/// `tenferro_cpu::CpuEngine::with_exec` lends, calls it to report
+/// exactly the error tenferro would have reported for the same failure. The types are the
+/// `tlinalg` build this crate links (0.9); a caller names them through a `tlinalg` dependency of
+/// the same semver-compatible version.
+///
+/// # Contract
+///
+/// The mapping is total and never panics. It is decided in two steps:
+///
+/// 1. **Operation name.** Every error it builds names `op.as_str()` from the `op` argument. The
+///    `op` field stored inside `error` is not consulted, so when the two disagree the argument
+///    wins. The only place the inner `op` survives is the typed source of
+///    `InsufficientWorkspace`, which is the provider error itself.
+/// 2. **Variant.** One `match` on the `tlinalg::Error` variant. The arms are disjoint, so their
+///    order does not change the result; the catch-all arm is last and fires only for a variant no
+///    arm names.
+///
+/// | `tlinalg::Error` | tenferro error | [`ErrorKind`](tenferro_tensor::ErrorKind) | Downcastable source |
+/// | --- | --- | --- | --- |
+/// | `NonConvergence` | `Extension` (linalg family) | `NumericalFailure` | [`Error::NonConvergence`](crate::Error::NonConvergence) `{ op }` |
+/// | `NonFinite { role }` | `Extension` (linalg family) | `NumericalFailure` | [`Error::NonFinite`](crate::Error::NonFinite) `{ op, role: role.as_str() }` |
+/// | `Singular` | `Extension` (linalg family) | `NumericalFailure` | [`Error::Singular`](crate::Error::Singular) `{ op }` |
+/// | `InvalidArgument { role, detail }` | `Validation` | `Validation(InvalidArgument)` | `ValidationError::InvalidArgument { argument: role, message: detail }` |
+/// | `InvalidWorkspace { library, routine, detail }` | `BackendSource` | `BackendFailure` | crate-private; `library`, `routine` and `detail` are in the message |
+/// | `Inconsistent { detail }` | `Internal("{op}: {detail}")` | `Internal` | none |
+/// | `InsufficientWorkspace` | `RuntimeStateSource` | `RuntimeState` | the `tlinalg::Error` itself, `op`, `needed` and `have` included |
+/// | any other variant | `Internal("{op}: unmapped linalg provider error {error:?}")` | `Internal` | none |
+///
+/// The last row is the case that cannot be represented. `tlinalg::Error` is
+/// `#[non_exhaustive]`, so a later `tlinalg` may add a variant this crate does not know. The
+/// mapping does not guess a kind for it: it returns the generic `Internal` variant with the
+/// provider error's `Debug` text, so the failure stays visible and is never misclassified as a
+/// numerical or caller error. Against `tlinalg` 0.9 every variant has its own row and the last row
+/// is unreachable.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::error::Error as _;
+/// use tenferro_tensor::ErrorKind;
+///
+/// let error = tenferro_linalg::error::map_error(
+///     tlinalg::Op::Svd,
+///     tlinalg::Error::NonConvergence { op: tlinalg::Op::Svd },
+/// );
+/// assert_eq!(error.kind(), ErrorKind::NumericalFailure);
+/// assert!(matches!(
+///     error.source().and_then(|source| source.downcast_ref()),
+///     Some(tenferro_linalg::Error::NonConvergence { op: "svd" })
+/// ));
+/// ```
+pub fn map_error(op: tlinalg::Op, error: tlinalg::Error) -> tenferro_tensor::Error {
     map_provider_error!(op, error, tlinalg,
     // The host sizes every call with the matching `*_workspace` query at the
     // same `Exec`, so a short region is a broken host contract rather than a

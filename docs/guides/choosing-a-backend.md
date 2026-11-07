@@ -57,11 +57,18 @@ performance is worth giving up tenferro's per-operation thread-count control.
 
 | Provider family | Required library | Cargo feature | Thread ownership and scope | Guidance |
 | --- | --- | --- | --- | --- |
-| faer / cpueinsum / tcontract / tlinalg | None beyond the Rust dependencies | `native` | The caller's `Pool`; the engine never creates workers | Default choice when reproducibility and predictable nesting matter |
+| faer / cpueinsum / tcontract / tlinalg | None beyond the Rust dependencies | `native` | The caller's `Pool`; the engine never creates workers. Per-context entry: a lane forked from the engine's token runs a plan on its own share of the budget | Default choice when reproducibility and predictable nesting matter, and the only choice for per-lane GEMM widths |
 | OpenBLAS | OpenBLAS and its CBLAS/LAPACK entry points | `blas`, `blas-openblas` | OpenBLAS-owned pool; settings such as `OPENBLAS_NUM_THREADS` are provider/process-wide | Use for peak BLAS/LAPACK throughput; keep the outer fan-out small to avoid oversubscription |
 | Intel MKL | MKL and its BLAS/LAPACK entry points | `blas`, `blas-mkl` | MKL-owned pool; `MKL_NUM_THREADS` and related OpenMP settings are provider/process-wide | Use when the deployment already standardizes on MKL; tenferro cannot bound the provider's fan-out |
 | Apple Accelerate | Apple Accelerate BLAS/LAPACK | `blas`, `blas-accelerate` | Accelerate-owned pool; `VECLIB_MAXIMUM_THREADS` is provider/process-wide | Use for Apple-native deployments |
 | BLIS | BLIS | Planned in [#1334](https://github.com/tensor4all/tenferro-rs/issues/1334) | Provider-owned; the final scope and controls are not part of the current API | Do not rely on a BLIS feature until the planned provider contract lands |
+
+The vendor rows share one boundary. A vendor call takes the whole engine and
+the library's own threads, so a context's thread budget is not honoured there,
+and lanes must not enter the vendor provider concurrently unless the library is
+known to tolerate it. Only the native provider has a per-context entry, and
+tenferro offers no wrapper that simulates per-lane widths on a vendor library.
+See [Lanes and the vendor provider](cpu-execution.md#lanes-and-the-vendor-provider).
 
 A build chooses the numerical provider; the application chooses the pool it
 hands to `CpuEngine`:

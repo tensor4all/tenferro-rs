@@ -12,7 +12,7 @@ mod tlinalg_blas;
 mod tlinalg_workspace;
 
 #[cfg(any(feature = "native", feature = "blas"))]
-mod tlinalg_error;
+pub(crate) mod tlinalg_error;
 
 #[cfg(test)]
 mod tests;
