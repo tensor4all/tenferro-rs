@@ -39,7 +39,7 @@ fn prepared_solve_preserves_mixed_owned_and_strided_inputs() {
                     TensorRead::from_view(
                         read.clone()
                             .tensor_view()
-                            .expect("a preset scalar has a view"),
+                            .expect("a preset dtype always has the requested representation"),
                     )
                 }
             })

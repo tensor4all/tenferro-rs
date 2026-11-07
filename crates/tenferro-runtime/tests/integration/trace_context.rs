@@ -55,7 +55,7 @@ fn trace_finish_preserves_ordered_inputs_defaults_and_duplicate_outputs() {
             .tensor_read()
             .unwrap()
             .tensor_view()
-            .expect("a preset scalar has a view")
+            .expect("a preset dtype always has the requested representation")
             .as_slice::<f64>()
             .unwrap(),
         lhs_tensor.as_slice::<f64>().unwrap()

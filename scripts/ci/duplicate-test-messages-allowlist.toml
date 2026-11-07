@@ -1,0 +1,102 @@
+# Reviewed duplicate assertion messages (#2492).
+#
+# `scripts/ci/check-duplicate-test-messages.py` fails when one sentence-shaped
+# `expect("...")` message appears in more than two test files. An entry here
+# records why one shared definition is unreachable and which files are
+# reviewed; a file that starts using the message fails the run, so the recorded
+# list may only shrink. An entry without a reason fails.
+
+[[message]]
+literal = "a preset dtype always has the requested representation"
+files = [
+  "crates/tenferro-ad/src/eager_exec/tests.rs",
+  "crates/tenferro-ad/tests/integration/checkpoint.rs",
+  "crates/tenferro-ad/tests/integration/read_entry_parity.rs",
+  "crates/tenferro-ad/tests/integration/semantic_transform.rs",
+  "crates/tenferro-cpu/src/tests/cpu_tests/dot_structural_analytic.rs",
+  "crates/tenferro-einsum/src/extension/tests.rs",
+  "crates/tenferro-fft/tests/backend_capability.rs",
+  "crates/tenferro-internal-cpu-kernels/src/elementwise/tests.rs",
+  "crates/tenferro-linalg/src/extension/tests/saved_solve.rs",
+  "crates/tenferro-runtime/src/program/tests.rs",
+  "crates/tenferro-runtime/src/runtime/tests/engine.rs",
+  "crates/tenferro-runtime/tests/integration/runtime_execution.rs",
+  "crates/tenferro-runtime/tests/integration/runtime_public_api.rs",
+  "crates/tenferro-runtime/tests/integration/trace_context.rs",
+  "crates/tenferro-tensor/src/storage/tests/group.rs",
+  "crates/tenferro-tensor/src/tests/types_tests.rs",
+]
+reason = """
+One sentence for every `tensor_view()` / `tensor_read()` unwrap in test code: the accessor returns
+`None` only for an external payload, so a preset-dtype value always has the representation. The
+80 sites span seven crates and both unit tests (`src/**/tests`) and integration binaries
+(`tests/**`); each integration binary is its own compilation unit and there is no shared
+test-support crate, while a `#[doc(hidden)] pub` constant in `tenferro-tensor` would add public
+surface for tests (REPOSITORY_RULES.md, Public Surface Discipline). The wording is therefore one
+reviewed sentence rather than one definition, and this entry is the ratchet that keeps a
+seventeenth file from copying it.
+"""
+
+[[message]]
+literal = "the dtype guard selects this arm"
+files = [
+  "crates/tenferro-ad/tests/integration/checkpoint.rs",
+  "crates/tenferro-ad/tests/integration/checkpoint_truncate_integration.rs",
+  "crates/tenferro-ad/tests/integration/dynamic_truncate.rs",
+  "crates/tenferro-ad/tests/integration/gpu_ad_tests.rs",
+  "crates/tenferro-ad/tests/integration/sym_dim.rs",
+  "crates/tenferro-linalg/src/cpu/tests/dtype.rs",
+  "crates/tenferro-linalg/tests/integration/backend_errors.rs",
+  "crates/tenferro-runtime/src/compiler/tests.rs",
+]
+reason = """
+The marker for an `as_typed::<T>()` unwrap whose dtype the surrounding test just constructed. It
+names the arm under test rather than an invariant a helper could own, and the tests live in
+different crates' unit-test modules and integration binaries, so the sentence is repeated by
+construction: the fixture's dtype is local to each test, not to a shared helper.
+"""
+
+[[message]]
+literal = "cargo sets CARGO for tests"
+files = [
+  "crates/tenferro-tensor/tests/storage_allocation_group.rs",
+  "crates/tenferro-tensor/tests/storage_as_view_allocation.rs",
+  "crates/tenferro-tensor/tests/storage_borrow_contract.rs",
+  "crates/tenferro-tensor/tests/storage_prepared_access.rs",
+  "crates/tenferro-tensor/tests/storage_prepared_validation.rs",
+  "crates/tenferro-tensor/tests/storage_provider_event_retirement.rs",
+  "crates/tenferro-tensor/tests/storage_root_claims.rs",
+  "crates/tenferro-tensor/tests/storage_traversal_resolution.rs",
+]
+reason = """
+Each storage artifact test shells out to `cargo` and reads `CARGO`, which cargo sets for every test
+binary it runs. A shared read would have to live in `tenferro-tensor`'s public surface or in a new
+test-support crate; both are larger changes than the two-line read these binaries repeat.
+"""
+
+[[message]]
+literal = "source file must be readable"
+files = [
+  "crates/tenferro-gpu/tests/integration/public_surface_contract.rs",
+  "crates/tenferro-runtime/src/runtime/tests/preparation.rs",
+  "crates/tenferro-runtime/tests/integration/public_surface_contract.rs",
+  "crates/tenferro-runtime/tests/integration/runtime_preparation_api.rs",
+]
+reason = """
+Source-contract tests read a repository file and assert on its text. The path differs per crate
+and per contract, so only the read is shared; each helper resolves its own crate root.
+"""
+
+[[message]]
+literal = "the CPU session accepts the policy"
+files = [
+  "crates/tenferro-cpu/src/backend/tests/batch_policy.rs",
+  "crates/tenferro-einsum/src/cpu_concrete/forced_lane_tests.rs",
+  "crates/tenferro-linalg/src/cpu/tests/batch_policy.rs",
+]
+reason = """
+Three crates' lane-policy tests build a `CpuEngine` over a caller-supplied pool policy. The
+assertion is the same because the entry point is the same, but the tests belong to three
+different crates (an engine test, an einsum lane test and a linalg batch-policy test), and none
+of them may reach into another's test module.
+"""

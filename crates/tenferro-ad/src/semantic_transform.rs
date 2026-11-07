@@ -633,8 +633,8 @@ fn linearize_core(
         | CoreSemanticOp::ReduceMin { .. } => {
             linearize_nonlinear_reduction(builder, op, primal_inputs, tangent_inputs[0])?
         }
-        CoreSemanticOp::Rem
-        | CoreSemanticOp::Compare(_)
+        CoreSemanticOp::Rem => linearize_rem(builder, primal_inputs, tangent_inputs)?,
+        CoreSemanticOp::Compare(_)
         | CoreSemanticOp::ShapeOf { .. }
         | CoreSemanticOp::Constant { .. } => AdValue::Absent,
         _ => return Err(unsupported_core(SemanticTransformRole::Jvp, op)),
@@ -961,9 +961,8 @@ fn vjp_core(
         | CoreSemanticOp::ReduceMin { .. } => {
             nonlinear_reduction_vjp(builder, op, primal_inputs, cotangent, active_inputs[0])?
         }
-        CoreSemanticOp::Rem | CoreSemanticOp::Compare(_) => {
-            vec![AdValue::Absent, AdValue::Absent]
-        }
+        CoreSemanticOp::Rem => rem_vjp(builder, primal_inputs, cotangent, active_inputs)?,
+        CoreSemanticOp::Compare(_) => vec![AdValue::Absent, AdValue::Absent],
         CoreSemanticOp::ShapeOf { .. } => vec![AdValue::Absent],
         CoreSemanticOp::Constant { .. } => Vec::new(),
         _ => return Err(unsupported_core(SemanticTransformRole::Vjp, op)),
@@ -1647,6 +1646,80 @@ fn balanced_extrema_contribution(
     Ok(AdValue::Value(
         builder.add_op(CoreSemanticOp::Select, &[other_eq_output, half, selected])?[0],
     ))
+}
+
+/// `rem(x, y) = x - trunc(x / y) * y`, so away from its discontinuities (`y == 0`, and an exact
+/// integer quotient, where the derivative jumps) it is linear in `x` with slope `1` and in `y`
+/// with slope `-trunc(x / y)`. The discontinuities are a measure-zero set and are left
+/// undefined rather than given a one-sided value.
+fn linearize_rem(
+    builder: &mut SemanticProgramBuilder,
+    primal_inputs: &[ProgramValue],
+    tangent_inputs: &[AdValue],
+) -> Result<AdValue, SemanticAdTransformError> {
+    if !rem_has_real_derivative(builder, primal_inputs)? {
+        return Ok(AdValue::Absent);
+    }
+    let lhs = tangent_inputs[0];
+    let rhs = if matches!(tangent_inputs[1], AdValue::Value(_)) {
+        let coefficient = trunc_quotient(builder, primal_inputs)?;
+        let scaled = multiply_ad_value(builder, tangent_inputs[1], coefficient)?;
+        unary_ad_value(builder, CoreSemanticOp::Neg, scaled)?
+    } else {
+        AdValue::Absent
+    };
+    Ok(add_ad_values(builder, lhs, rhs)?)
+}
+
+/// The reverse rule of `rem`: `d/dx = 1`, `d/dy = -trunc(x / y)`.
+fn rem_vjp(
+    builder: &mut SemanticProgramBuilder,
+    primal_inputs: &[ProgramValue],
+    cotangent: AdValue,
+    active_inputs: &[bool],
+) -> Result<Vec<AdValue>, SemanticAdTransformError> {
+    if !rem_has_real_derivative(builder, primal_inputs)? {
+        return Ok(vec![AdValue::Absent, AdValue::Absent]);
+    }
+    let lhs = active_cotangent(builder, cotangent, active_inputs[0], primal_inputs[0])?;
+    let rhs = if active_inputs[1] {
+        let coefficient = trunc_quotient(builder, primal_inputs)?;
+        let scaled = multiply_ad_value(builder, cotangent, coefficient)?;
+        unary_ad_value(builder, CoreSemanticOp::Neg, scaled)?
+    } else {
+        AdValue::Absent
+    };
+    Ok(vec![
+        normalize_ad_value(builder, lhs, active_inputs[0], primal_inputs[0])?,
+        normalize_ad_value(builder, rhs, active_inputs[1], primal_inputs[1])?,
+    ])
+}
+
+/// Whether `rem`'s inputs carry a differentiable dtype.
+///
+/// `rem` is defined for the real and integer dtypes only (`SameNumeric` minus complex), so a
+/// float input differentiates and an integer input takes the non-differentiable branch instead
+/// of a derivative that has no dtype to live in.
+fn rem_has_real_derivative(
+    builder: &mut SemanticProgramBuilder,
+    primal_inputs: &[ProgramValue],
+) -> Result<bool, SemanticAdTransformError> {
+    Ok(matches!(
+        builder.value_metadata(primal_inputs[0])?.dtype(),
+        DType::F32 | DType::F64
+    ))
+}
+
+/// `trunc(x / y)` in the core vocabulary: `rem(q, 1.0)` is `q`'s fractional part (the remainder
+/// takes the dividend's sign), so `q - rem(q, 1.0)` truncates toward zero.
+fn trunc_quotient(
+    builder: &mut SemanticProgramBuilder,
+    primal_inputs: &[ProgramValue],
+) -> Result<ProgramValue, SemanticAdTransformError> {
+    let quotient = builder.add_op(CoreSemanticOp::Div, &[primal_inputs[0], primal_inputs[1]])?[0];
+    let one = one_like(builder, quotient, SemanticTransformRole::Jvp)?;
+    let fraction = builder.add_op(CoreSemanticOp::Rem, &[quotient, one])?[0];
+    Ok(builder.add_op(CoreSemanticOp::Sub, &[quotient, fraction])?[0])
 }
 
 fn linearize_clamp(

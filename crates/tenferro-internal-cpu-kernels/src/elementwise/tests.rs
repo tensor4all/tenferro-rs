@@ -399,7 +399,7 @@ fn broadcast_multiply_handles_scalar_full_output_pairs() {
         "test",
         complex_value
             .tensor_read()
-            .expect("a preset scalar value has a read"),
+            .expect("a preset dtype always has the requested representation"),
     )
     .unwrap();
     let complex_data = complex_tensor.as_slice::<Complex<f64>>().unwrap();
@@ -444,7 +444,7 @@ fn lazy_outer_product_lhs_prefix_preserves_logical_output_order() {
         "test",
         value
             .tensor_read()
-            .expect("a preset scalar value has a read"),
+            .expect("a preset dtype always has the requested representation"),
     )
     .unwrap();
     let expected: Vec<f64> = (0..4)
@@ -493,7 +493,7 @@ fn lazy_outer_product_rhs_prefix_preserves_logical_output_order() {
         "test",
         value
             .tensor_read()
-            .expect("a preset scalar value has a read"),
+            .expect("a preset dtype always has the requested representation"),
     )
     .unwrap();
     let expected: Vec<f64> = (0..3)
@@ -1379,7 +1379,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
             "test",
             value_f32
                 .tensor_read()
-                .expect("a preset scalar value has a read")
+                .expect("a preset dtype always has the requested representation")
         )
         .unwrap()
         .shape(),
@@ -1495,7 +1495,7 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
             "test",
             materialized
                 .tensor_read()
-                .expect("a preset scalar value has a read")
+                .expect("a preset dtype always has the requested representation")
         )
         .unwrap()
         .as_slice::<i64>()

@@ -3202,6 +3202,44 @@ enum ReduceOp {
     SumSquares,
 }
 
+/// The unit an empty fold writes: `sum` and `sum of squares` have `0`, `prod` has `1`.
+#[derive(Clone, Copy)]
+enum EmptyFoldUnit {
+    Zero,
+    One,
+}
+
+impl CudaEngine {
+    /// A device tensor of `shape` holding the unit of a fold whose domain is empty.
+    ///
+    /// The allocation comes back zeroed, which is already `sum`'s unit; `prod` writes ones over
+    /// it. A result with an empty extent has no element to write, so the allocation is the whole
+    /// result there.
+    ///
+    /// # Errors
+    ///
+    /// The allocation's failure, or the one-fill's planner and runtime failure.
+    fn empty_fold(
+        &mut self,
+        shape: &[usize],
+        dtype: DType,
+        unit: EmptyFoldUnit,
+        op: &'static str,
+    ) -> crate::Result<Tensor> {
+        let output = alloc_tensor(self.runtime(), dtype, shape)?;
+        if matches!(unit, EmptyFoldUnit::One) && !shape.contains(&0) {
+            // The crate's one one-fill launch: a compact device layout and a reduction's identity
+            // are the same kernel, so the linalg auxiliary is reused rather than a second copy of
+            // its plan-and-launch sequence.
+            self.linalg_fill_one(&output, op)?;
+        }
+        // The caller observes this tensor as the result of a standalone call, so the enqueued
+        // fill has to be complete when it returns; inside a scheduled run this is a no-op.
+        self.prove_launch(op)?;
+        Ok(output)
+    }
+}
+
 impl CudaEngine {
     /// Reduce `axes` one axis at a time, largest axis first so the indices stay valid.
     fn reduce_axes(
@@ -3225,14 +3263,36 @@ impl CudaEngine {
                 format!("axis {axis} is outside the tensor's rank {}", shape.len()),
             ));
         }
-        // An empty fold has no identity to report: the CPU surface refuses it, and the kernel
-        // planners only report it as a negative count.
+        // The output's extents: every source axis the reduction keeps.
+        let squeezed: Vec<usize> = shape
+            .iter()
+            .enumerate()
+            .filter(|(kept_axis, _)| !ordered.contains(kept_axis))
+            .map(|(_, &extent)| extent)
+            .collect();
+        // An empty result has nothing to write, so allocating it is the whole operation. A launch
+        // over zero output elements is refused by the runtime ("grid dimensions must be
+        // non-zero"), which is why this precedes every routed path below.
+        if squeezed.contains(&0) {
+            return alloc_tensor(self.runtime(), dtype, &squeezed);
+        }
+        // An empty fold is the fold's own unit where it has one: `sum` and `sum of squares` give
+        // 0, `prod` gives 1. `max`/`min` have no finite identity, so they keep the error the CPU
+        // surface reports. The kernel seeds its accumulator from the reduced axis' first element
+        // and has none to read, so the unit is written here instead of launched.
         if let Some(&axis) = ordered.iter().find(|&&axis| shape[axis] == 0) {
-            return Err(crate::Error::invalid_argument(
-                name,
-                "axes",
-                format!("cannot reduce over zero-length axis {axis}"),
-            ));
+            let unit = match op {
+                ReduceOp::Sum | ReduceOp::SumSquares => EmptyFoldUnit::Zero,
+                ReduceOp::Prod => EmptyFoldUnit::One,
+                ReduceOp::Max | ReduceOp::Min => {
+                    return Err(crate::Error::invalid_argument(
+                        name,
+                        "axes",
+                        format!("cannot reduce over zero-length axis {axis}"),
+                    ))
+                }
+            };
+            return self.empty_fold(squeezed.as_slice(), dtype, unit, name);
         }
         if ordered.is_empty() {
             let shape = source.shape().to_vec();
@@ -3258,12 +3318,6 @@ impl CudaEngine {
         // with or without those unit axes, so the last pass allocates the squeezed result and
         // the kernel writes it through the keepdims layout: no squeeze copy, no second
         // allocation and no second wait (#2406).
-        let squeezed: Vec<usize> = shape
-            .iter()
-            .enumerate()
-            .filter(|(axis, _)| !ordered.contains(axis))
-            .map(|(_, &extent)| extent)
-            .collect();
         let passes = ordered.len();
         for (pass, &axis) in ordered.iter().rev().enumerate() {
             // Only a sum of squares changes between passes: it folds the squares once and adds

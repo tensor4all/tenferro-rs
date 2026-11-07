@@ -1712,12 +1712,12 @@ fn dot_read_hooks_do_not_stage_view_operands() {
             TensorRead::from_view(
                 lhs_value
                     .tensor_view()
-                    .expect("a preset scalar value has a view"),
+                    .expect("a preset dtype always has the requested representation"),
             ),
             TensorRead::from_view(
                 rhs_value
                     .tensor_view()
-                    .expect("a preset scalar value has a view"),
+                    .expect("a preset dtype always has the requested representation"),
             ),
             &config,
         )
@@ -1735,12 +1735,12 @@ fn dot_read_hooks_do_not_stage_view_operands() {
             TensorRead::from_view(
                 lhs_value
                     .tensor_view()
-                    .expect("a preset scalar value has a view"),
+                    .expect("a preset dtype always has the requested representation"),
             ),
             TensorRead::from_view(
                 rhs_value
                     .tensor_view()
-                    .expect("a preset scalar value has a view"),
+                    .expect("a preset dtype always has the requested representation"),
             ),
             &config,
             false,
@@ -1759,12 +1759,12 @@ fn dot_read_hooks_do_not_stage_view_operands() {
             TensorRead::from_view(
                 lhs_value
                     .tensor_view()
-                    .expect("a preset scalar value has a view"),
+                    .expect("a preset dtype always has the requested representation"),
             ),
             TensorRead::from_view(
                 rhs_value
                     .tensor_view()
-                    .expect("a preset scalar value has a view"),
+                    .expect("a preset dtype always has the requested representation"),
             ),
             &config,
             true,
@@ -1784,7 +1784,7 @@ fn dot_read_hooks_do_not_stage_view_operands() {
         .to_contiguous_read(TensorRead::from_view(
             lhs_value
                 .tensor_view()
-                .expect("a preset scalar value has a view"),
+                .expect("a preset dtype always has the requested representation"),
         ))
         .unwrap();
     assert_eq!(engine.resources.read_stagings(), 1);
@@ -1833,41 +1833,60 @@ fn read_entries_consume_views_without_staging() {
     check!(
         "add_read",
         engine.add_read(
-            TensorRead::from_view(a.tensor_view().expect("a preset scalar value has a view")),
-            TensorRead::from_view(a.tensor_view().expect("a preset scalar value has a view"))
+            TensorRead::from_view(
+                a.tensor_view()
+                    .expect("a preset dtype always has the requested representation")
+            ),
+            TensorRead::from_view(
+                a.tensor_view()
+                    .expect("a preset dtype always has the requested representation")
+            )
         )
     );
     check!(
         "exp_read",
         engine.exp_read(TensorRead::from_view(
-            a.tensor_view().expect("a preset scalar value has a view")
+            a.tensor_view()
+                .expect("a preset dtype always has the requested representation")
         ))
     );
     check!(
         "reduce_sum_read",
         engine.reduce_sum_read(
-            TensorRead::from_view(a.tensor_view().expect("a preset scalar value has a view")),
+            TensorRead::from_view(
+                a.tensor_view()
+                    .expect("a preset dtype always has the requested representation")
+            ),
             &[0]
         )
     );
     check!(
         "transpose_read",
         engine.transpose_read(
-            TensorRead::from_view(a.tensor_view().expect("a preset scalar value has a view")),
+            TensorRead::from_view(
+                a.tensor_view()
+                    .expect("a preset dtype always has the requested representation")
+            ),
             &[1, 0]
         )
     );
     check!(
         "reshape_read",
         engine.reshape_read(
-            TensorRead::from_view(a.tensor_view().expect("a preset scalar value has a view")),
+            TensorRead::from_view(
+                a.tensor_view()
+                    .expect("a preset dtype always has the requested representation")
+            ),
             &[3, 2]
         )
     );
     check!(
         "broadcast_in_dim_read",
         engine.broadcast_in_dim_read(
-            TensorRead::from_view(a.tensor_view().expect("a preset scalar value has a view")),
+            TensorRead::from_view(
+                a.tensor_view()
+                    .expect("a preset dtype always has the requested representation")
+            ),
             &[2, 3, 2],
             &[0, 1]
         )
@@ -1875,21 +1894,34 @@ fn read_entries_consume_views_without_staging() {
     check!(
         "vdot_read",
         engine.vdot_read(
-            TensorRead::from_view(a.tensor_view().expect("a preset scalar value has a view")),
-            TensorRead::from_view(a.tensor_view().expect("a preset scalar value has a view"))
+            TensorRead::from_view(
+                a.tensor_view()
+                    .expect("a preset dtype always has the requested representation")
+            ),
+            TensorRead::from_view(
+                a.tensor_view()
+                    .expect("a preset dtype always has the requested representation")
+            )
         )
     );
     check!(
         "norm_squared_read",
         engine.norm_squared_read(TensorRead::from_view(
-            a.tensor_view().expect("a preset scalar value has a view")
+            a.tensor_view()
+                .expect("a preset dtype always has the requested representation")
         ))
     );
     check!(
         "dot_general_read",
         engine.dot_general_read(
-            TensorRead::from_view(a.tensor_view().expect("a preset scalar value has a view")),
-            TensorRead::from_view(b.tensor_view().expect("a preset scalar value has a view")),
+            TensorRead::from_view(
+                a.tensor_view()
+                    .expect("a preset dtype always has the requested representation")
+            ),
+            TensorRead::from_view(
+                b.tensor_view()
+                    .expect("a preset dtype always has the requested representation")
+            ),
             &dot_config
         )
     );
@@ -1897,8 +1929,14 @@ fn read_entries_consume_views_without_staging() {
         "dot_general_read_cached",
         engine.dot_general_read_cached(
             Some(0),
-            TensorRead::from_view(a.tensor_view().expect("a preset scalar value has a view")),
-            TensorRead::from_view(b.tensor_view().expect("a preset scalar value has a view")),
+            TensorRead::from_view(
+                a.tensor_view()
+                    .expect("a preset dtype always has the requested representation")
+            ),
+            TensorRead::from_view(
+                b.tensor_view()
+                    .expect("a preset dtype always has the requested representation")
+            ),
             &dot_config
         )
     );
@@ -2076,7 +2114,8 @@ fn read_entries_consume_views_without_staging() {
     let before = engine.resources.read_stagings();
     let _ = engine
         .to_contiguous_read(TensorRead::from_view(
-            a.tensor_view().expect("a preset scalar value has a view"),
+            a.tensor_view()
+                .expect("a preset dtype always has the requested representation"),
         ))
         .unwrap();
     assert_eq!(engine.resources.read_stagings(), before + 1);
