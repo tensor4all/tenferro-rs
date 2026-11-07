@@ -101,10 +101,20 @@ test("a comment by someone below write access is rejected", () => {
   assert.match(decision.reason, /CONTRIBUTOR/);
 });
 
-test("a write-permission comment is accepted even when the association is odd", () => {
-  const decision = evaluateFixture("permission-write");
+test("a repository maintain role is accepted even when the association is odd", () => {
+  const decision = evaluateFixture("permission-maintain");
 
   assert.equal(decision.allowed, true, decision.reason);
+});
+
+test("a repository write role is below the waiver threshold", () => {
+  const fixture = load("permission-write");
+  const decision = waiver.evaluate(fixture);
+
+  // The pre-fix rule let the label stand regardless, so it accepted this too.
+  assert.equal(legacyEvaluate(fixture).allowed, true);
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.code, "non-maintainer-waiver");
 });
 
 test("the label alone grants nothing", () => {
