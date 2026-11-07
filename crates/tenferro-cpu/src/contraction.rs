@@ -209,7 +209,7 @@ enum Placement {
     /// members stay reserved for the engine's lifetime, so every parallel
     /// region (the strided kernels, tcontract batches, faer's `Par::Team`) is a
     /// team section and no work goes through Rayon.
-    Team(threadteam::Team),
+    Team(Box<threadteam::Team>),
 }
 
 // Exactly one retained workspace per engine, kept together with the pool (or
@@ -294,7 +294,7 @@ impl ExecutionResources {
         let deadline = std::time::Instant::now() + BUDGET;
         loop {
             match pool.into_team(width) {
-                Ok(team) => return Placement::Team(team),
+                Ok(team) => return Placement::Team(Box::new(team)),
                 Err(refused) => pool = refused.into_pool(),
             }
             if std::time::Instant::now() >= deadline {
