@@ -297,13 +297,66 @@ class WorkflowContractTests(unittest.TestCase):
         )
 
     def test_review_labels_are_authorized_by_repository_role(self) -> None:
-        text = read(".github/workflows/review_bot.yml")
+        """Both review exemptions authorize a maintainer, never a bare label.
+
+        The decision moved out of the two inline blocks and into
+        `scripts/review-waiver.js` when the waiver was bound to the head sha
+        (#89). The contract is unchanged in substance: the actor's repository
+        role or association decides, both verifiers use the same decision, and
+        nothing authorizes on a weaker field.
+        """
+
+        workflow = read(".github/workflows/review_bot.yml")
+        waiver = read("scripts/review-waiver.js")
+
         self.assertEqual(
-            text.count('const allowed = new Set(["admin", "maintain"]);'), 2
+            workflow.count("require(`${process.env.GITHUB_WORKSPACE}/scripts/review-waiver.js`)"),
+            2,
+            "both review-label verifiers must use the shared waiver decision",
         )
-        self.assertEqual(text.count("allowed.has(data.role_name)"), 2)
-        self.assertNotIn("allowed.has(data.permission)", text)
-        self.assertEqual(text.count("has ${data.role_name} repository role"), 2)
+        self.assertIn(
+            'await run({ github, core, context, labelName: process.env.REVIEW_WAIVE_LABEL });',
+            workflow,
+        )
+        self.assertIn(
+            'await run({ github, core, context, labelName: process.env.REVIEW_NO_LLM_LABEL });',
+            workflow,
+        )
+        # The old inline allow-list is gone from the workflow; a label no longer
+        # grants anything on its own.
+        self.assertNotIn('const allowed = new Set(["admin", "maintain"]);', workflow)
+        self.assertNotIn("allowed.has(data.permission)", waiver)
+        # Authorization is by repository role, resolved through `role_name`.
+        self.assertIn(
+            'new Set(["OWNER", "MEMBER", "COLLABORATOR"])', waiver
+        )
+        self.assertIn(
+            'new Set(["admin", "maintain", "write"])', waiver
+        )
+        self.assertIn("getCollaboratorPermissionLevel", waiver)
+        self.assertIn(".role_name", waiver)
+        self.assertNotIn("data.permission", waiver)
+
+    def test_review_waiver_is_bound_to_the_head_sha(self) -> None:
+        """A waiver names a commit; no timestamp may stand in for that."""
+
+        waiver = read("scripts/review-waiver.js")
+
+        self.assertIn("waive-review", waiver)
+        self.assertIn("waiver-matches-head", waiver)
+        self.assertIn("stale-waiver", waiver)
+        self.assertIn("shorthand-waiver", waiver)
+        self.assertIn("invalid-head", waiver)
+        # `committed.created_at` never existed and `committer.date` is
+        # author-controlled; neither may come back as a staleness signal. The
+        # module names both only in the comment that records why.
+        self.assertNotIn("listEventsForTimeline", waiver)
+        self.assertNotIn("headUpdateTimes", waiver)
+        self.assertNotIn("latestHeadUpdate", waiver)
+        workflow = read(".github/workflows/review_bot.yml")
+        self.assertNotIn("listEventsForTimeline", workflow)
+        self.assertNotIn("latestHeadUpdate", workflow)
+        self.assertNotIn("labelTime", workflow)
 
     def test_runpod_secret_stays_on_trusted_hosted_jobs(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")

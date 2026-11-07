@@ -31,6 +31,11 @@ in `tensor4all-meta` under `scripts/review-gate/`.
   can no longer disagree. Consequence to expect: applying the label without a
   `waive-review <sha>` comment now fails the job, and the failure message names
   the sha to post.
+- **`scripts/ci/tests/test_workflow_contracts.py` moved with the decision.** Its
+  "review labels are authorized by repository role" contract used to count two
+  inline allow-lists in the workflow; it now asserts that both verifiers call the
+  shared module and that the module authorizes on `author_association` and
+  `role_name` only. The contract is the same, its address changed.
 
 ## Verification conclusions and constraints
 
