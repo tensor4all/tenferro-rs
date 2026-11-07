@@ -97,6 +97,28 @@ class ChangePolicyTests(unittest.TestCase):
         self.assertFalse(policy.run_docs)
         self.assertFalse(policy.run_rust)
 
+    def test_review_gate_python_scripts_use_ci_config_lane(self) -> None:
+        """`review_bot.yml` runs the reviewer; no pod ever imports either file.
+
+        Both files are Python, and the device suite the paid lane runs cannot
+        observe them: `.github/workflows/review_bot.yml` executes
+        `repository-rules-review.py` from the trusted base revision, and
+        `test-repository-rules-review.py` is the fixture suite that exercises
+        it. A Python-only change to either therefore belongs to the CI
+        configuration lane and must not reserve a pod (#2512).
+        """
+        for path in (
+            "scripts/repository-rules-review.py",
+            "scripts/test-repository-rules-review.py",
+        ):
+            with self.subTest(path=path):
+                policy = classify_paths([path])
+                self.assertIs(policy.change_class, ChangeClass.CI_ONLY)
+                self.assertTrue(policy.run_ci_config)
+                self.assertFalse(policy.run_rust)
+                self.assertFalse(policy.run_gpu)
+                self.assertFalse(policy.run_macos)
+
     def test_unrelated_ci_change_does_not_require_macos(self) -> None:
         policy = classify_paths([".github/workflows/docs.yml"])
         self.assertFalse(policy.run_macos)

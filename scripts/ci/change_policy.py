@@ -83,6 +83,16 @@ _CI_FILES = frozenset(
         # paid GPU lane for a JavaScript-only edit.
         "scripts/review-waiver.js",
         "scripts/test-review-waiver.js",
+        # The review gate's Python half, by the same argument:
+        # `.github/workflows/review_bot.yml` executes
+        # `scripts/repository-rules-review.py`, and
+        # `scripts/test-repository-rules-review.py` is the fixture suite that
+        # exercises it. Neither file is Rust and the pod's device suite never
+        # imports them, so a Python-only change to either belongs to the CI
+        # lane: it re-runs the CI-configuration job and must not reserve the
+        # paid GPU lane (#2512).
+        "scripts/repository-rules-review.py",
+        "scripts/test-repository-rules-review.py",
     }
 )
 _CI_PREFIXES = (".github/workflows/", "scripts/ci/")
