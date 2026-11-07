@@ -1,8 +1,8 @@
 //! Module-local tests for the reduction dispatch seams.
 
 use super::{
-    norm_squared_read, reduce_max, reduce_min, reduce_prod, reduce_prod_read, reduce_sum,
-    reduce_sum_read, reduce_sum_squares, typed_input,
+    host_operand, norm_squared_read, reduce_max, reduce_min, reduce_prod, reduce_prod_read,
+    reduce_sum, reduce_sum_read, reduce_sum_squares,
 };
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensor};
@@ -39,14 +39,20 @@ fn reduce_max_and_min_cover_every_preset_scalar() {
     }
 }
 
-/// The tag tables only reach `typed_input` with the scalar they claim, so its refusal
-/// is unreachable from the public API. Covering it here keeps the invariant honest:
-/// a mismatch is a typed error, never a panic.
+/// The owned-tensor route narrows to host storage once, and a caller-owned payload has
+/// no preset-scalar host view: the refusal is a typed error naming the reduction, never a
+/// panic. (This replaces the per-scalar `typed_input` lookup the host arms no longer need.)
 #[test]
-fn typed_input_refuses_a_dtype_the_dispatch_never_produces() {
-    let tensor =
-        Tensor::from_typed::<i32>(TypedTensor::from_vec_col_major(vec![2], vec![1, 2]).unwrap());
-    assert!(typed_input::<f32>("reduce_sum", &tensor).is_err());
+fn host_operand_refuses_an_external_payload_by_operation() {
+    use tenferro_tensor::{DynRank, ErasedHostTensor, Host};
+    let payload = ErasedHostTensor::new(
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0, 2.0])
+            .unwrap(),
+    );
+    let tensor = Tensor::external(payload);
+    let err = host_operand("reduce_sum", &tensor).unwrap_err();
+    assert!(err.to_string().contains("reduce_sum"), "{err}");
+    assert!(reduce_sum(&tensor, &[0], Exec::serial()).is_err());
 }
 
 /// The sum and product tables carry complex and integer arms that the float-only paths

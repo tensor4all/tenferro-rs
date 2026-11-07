@@ -1,3 +1,4 @@
+use crate::cpu::linalg::{compact_host_data, HostView};
 use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::TypedTensor;
@@ -12,7 +13,7 @@ use crate::cpu::linalg::{pooled_copy, pooled_zeroed};
 /// Explicit partial-pivot LU, `P A = L U`, of every matrix of a batch.
 pub(crate) fn lu<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     const OP: &str = "lu";
     let (m, n, batch_shape) = matrix_core_and_batch_result(input, OP)?;
@@ -37,7 +38,7 @@ pub(crate) fn lu<T: LapackLinalg>(
     let mut l = pooled_output::<T>(buffers, OP, "lower factor", &l_shape)?;
     let mut u = pooled_output::<T>(buffers, OP, "upper factor", &u_shape)?;
     let mut parity = buffers.acquire_with_capacity::<T>(batch);
-    let view = input.as_view();
+    let view = input.clone().into_dynamic();
     T::lu(
         buffers,
         super::super::raw_view(OP, &view)?,
@@ -60,7 +61,7 @@ pub(crate) fn lu<T: LapackLinalg>(
 pub(crate) fn lu_factor<T: LapackLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)> {
     let (m, n, batch_shape) = matrix_core_and_batch_result(input, "lu_factor")?;
     let k = m.min(n);
@@ -93,7 +94,7 @@ pub(crate) fn lu_factor<T: LapackLinalg>(
         "lu_factor",
         "matrix",
         input.shape(),
-        input.host_data()?,
+        compact_host_data("lu_factor", input)?,
     )?;
     let mut pivot_data = pooled_zeroed::<i32>(buffers, "lu_factor", "pivots", &pivot_shape)?;
     let mut parity_data = pooled_zeroed::<T>(buffers, "lu_factor", "parity", batch_shape)?;

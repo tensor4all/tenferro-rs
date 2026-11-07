@@ -16,7 +16,7 @@ fn tensor_view_public_surface_uses_canonical_names() {
     let types_rs = read_repo_file(repo_root, "tenferro-tensor/src/types.rs");
 
     assert!(
-        types_rs.contains("pub enum TensorView<'a>"),
+        types_rs.contains("pub enum TensorView<'a, D: Representation = Dynamic>"),
         "dtype-erased read-only views should use TensorView"
     );
     assert!(

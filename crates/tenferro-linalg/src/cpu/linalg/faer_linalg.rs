@@ -6,18 +6,17 @@
 //! views, tensor construction, and the host compositions built on the extracted primitives (the
 //! rank decision of rank-revealing QR and the compact Householder QR state operations).
 
+use crate::cpu::linalg::HostView;
 use faer::{MatMut, MatRef};
 use num_complex::{Complex32, Complex64};
 use strided_view::{RawStridedMut, RawStridedRef};
 
 use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar, PooledUninitOutput};
-use tenferro_tensor::{
-    DType, Tensor, TensorView, TypedTensor, TypedTensorView, TypedTensorViewMut,
-};
+use tenferro_tensor::{Host, Tensor, TensorView, TypedTensor, TypedTensorView, TypedTensorViewMut};
 use tlinalg::Op;
 
-use super::{finish_lease, pooled_copy, pooled_output, pooled_zeroed, raw_view};
+use super::{compact_host_data, finish_lease, pooled_copy, pooled_output, pooled_zeroed, raw_view};
 
 mod with_exec;
 use crate::cpu::tlinalg::PooledWorkspace;
@@ -552,9 +551,9 @@ fn cholesky_impl<T: FaerLinalg>(
 pub(crate) fn cholesky<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    cholesky_impl(exec, buffers, &input.as_view())
+    cholesky_impl(exec, buffers, &input.clone().into_dynamic())
 }
 
 pub(crate) fn cholesky_view<T: FaerLinalg>(
@@ -667,9 +666,9 @@ fn lu_impl<T: FaerLinalg>(
 pub(crate) fn lu<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    lu_impl(exec, buffers, &input.as_view())
+    lu_impl(exec, buffers, &input.clone().into_dynamic())
 }
 
 pub(crate) fn lu_view<T: FaerLinalg>(
@@ -684,7 +683,7 @@ pub(crate) fn lu_view<T: FaerLinalg>(
 pub(crate) fn lu_factor<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)> {
     let (m, n, batch_shape) = matrix_core_and_batch(input.shape(), "lu_factor")?;
     let k = m.min(n);
@@ -712,7 +711,7 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
         "lu_factor",
         "matrix",
         input.shape(),
-        input.host_data()?,
+        compact_host_data("lu_factor", input)?,
     )?;
     let mut pivot_data = pooled_zeroed::<i32>(buffers, "lu_factor", "pivots", &pivot_shape)?;
     // Every item's parity is written by the factorization, so the prefill only has to leave the
@@ -798,9 +797,9 @@ fn full_piv_lu_impl<T: FaerLinalg>(
 pub(crate) fn full_piv_lu<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    full_piv_lu_impl(exec, buffers, &input.as_view())
+    full_piv_lu_impl(exec, buffers, &input.clone().into_dynamic())
 }
 
 pub(crate) fn full_piv_lu_view<T: FaerLinalg>(
@@ -849,8 +848,8 @@ fn solve_shapes<'s>(
 pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
+    a: &HostView<'_, T>,
+    b: &HostView<'_, T>,
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     const OP: &str = "full_piv_lu_solve";
@@ -860,7 +859,7 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
     }
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut x = pooled_output::<T>(buffers, OP, "solution", b.shape())?;
-    let (a_view, b_view) = (a.as_view(), b.as_view());
+    let (a_view, b_view) = (a.clone().into_dynamic(), b.clone().into_dynamic());
     let mut workspace = pooled_workspace::<T>(
         buffers,
         tlinalg::full_piv_lu::full_piv_lu_solve_workspace::<T>(n, nrhs, batch, exec)
@@ -886,8 +885,8 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
 pub(crate) fn solve<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
+    a: &HostView<'_, T>,
+    b: &HostView<'_, T>,
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     const OP: &str = "solve";
@@ -898,9 +897,15 @@ pub(crate) fn solve<T: FaerLinalg>(
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     // The right-hand side is copied once into the output, which the solve then overwrites in
     // place: the same single copy the per-item route made.
-    let mut output = pooled_copy::<T>(buffers, OP, "solution", b.shape(), b.host_data()?)?;
-    let a_view = a.as_view();
-    let b_view = b.as_view();
+    let mut output = pooled_copy::<T>(
+        buffers,
+        OP,
+        "solution",
+        b.shape(),
+        compact_host_data(OP, b)?,
+    )?;
+    let a_view = a.clone().into_dynamic();
+    let b_view = b.clone().into_dynamic();
     let mut workspace = pooled_workspace::<T>(
         buffers,
         tlinalg::lu::lu_solve_workspace::<T>(n, nrhs, transpose_a, batch, exec)
@@ -1117,8 +1122,8 @@ fn triangular_solve_impl<T: FaerLinalg>(
 pub(crate) fn triangular_solve<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
+    a: &HostView<'_, T>,
+    b: &HostView<'_, T>,
     left_side: bool,
     lower: bool,
     transpose_a: bool,
@@ -1127,8 +1132,8 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
     triangular_solve_impl(
         exec,
         buffers,
-        &a.as_view(),
-        &b.as_view(),
+        &a.clone().into_dynamic(),
+        &b.clone().into_dynamic(),
         tlinalg::triangular_solve::TriangularSolveFlags {
             left_side,
             lower,
@@ -1180,18 +1185,18 @@ pub(crate) fn triangular_solve_view<T: FaerLinalg>(
 pub(crate) fn svd<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<PublicSvd<T>> {
-    crate::svd_with_exec(exec, buffers, &input.as_view(), false)
+    crate::svd_with_exec(exec, buffers, &input.clone().into_dynamic(), false)
 }
 
 #[cfg(feature = "native")]
 pub(crate) fn svd_full<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<PublicSvd<T>> {
-    crate::svd_with_exec(exec, buffers, &input.as_view(), true)
+    crate::svd_with_exec(exec, buffers, &input.clone().into_dynamic(), true)
 }
 
 #[cfg(feature = "native")]
@@ -1218,9 +1223,9 @@ pub(crate) fn svd_full_view<T: crate::LinalgScalar>(
 pub(crate) fn svd_values<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
-    crate::svd_values_with_exec(exec, buffers, &input.as_view())
+    crate::svd_values_with_exec(exec, buffers, &input.clone().into_dynamic())
 }
 
 #[cfg(feature = "native")]
@@ -1241,9 +1246,9 @@ pub(crate) fn svd_values_view<T: crate::LinalgScalar>(
 pub(crate) fn qr<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
-    crate::qr_with_exec(exec, buffers, &input.as_view())
+    crate::qr_with_exec(exec, buffers, &input.clone().into_dynamic())
 }
 
 #[cfg(feature = "native")]
@@ -1320,10 +1325,10 @@ fn rank_revealing_qr_impl<T: FaerLinalg>(
 pub(crate) fn rank_revealing_qr<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
     options: crate::RankRevealingQrOptions,
 ) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<T>> {
-    rank_revealing_qr_impl(exec, buffers, &input.as_view(), options)
+    rank_revealing_qr_impl(exec, buffers, &input.clone().into_dynamic(), options)
 }
 
 /// Column-pivoted QR of a borrowed 2-D host view, read in place by the provider.
@@ -1346,9 +1351,9 @@ pub(crate) fn rank_revealing_qr_view<T: FaerLinalg>(
 pub(crate) fn eigh<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T::RealScalar>, TypedTensor<T>)> {
-    crate::eigh_with_exec(exec, buffers, &input.as_view())
+    crate::eigh_with_exec(exec, buffers, &input.clone().into_dynamic())
 }
 
 #[cfg(feature = "native")]
@@ -1365,9 +1370,9 @@ pub(crate) fn eigh_view<T: crate::LinalgScalar>(
 pub(crate) fn eigh_values<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
-    crate::eigh_values_with_exec(exec, buffers, &input.as_view())
+    crate::eigh_values_with_exec(exec, buffers, &input.clone().into_dynamic())
 }
 
 #[cfg(feature = "native")]
@@ -1517,36 +1522,27 @@ pub(crate) fn eig_values_view(
     })
 }
 
-fn typed_or_unsupported<'t, T: PoolScalar>(
-    input: &'t Tensor,
-    op: &'static str,
-) -> tenferro_tensor::Result<&'t TypedTensor<T>> {
-    input
-        .as_typed::<T>()
-        .ok_or_else(|| crate::error::unsupported_dtype(op, input.dtype()))
-}
-
-/// Dispatch an erased owned tensor over the four supported dtypes as a typed view.
+/// Dispatch a host operand over the four supported dtypes as a typed view.
 macro_rules! owned_dispatch {
     ($input:expr, $op:expr, |$typed:ident| $body:expr) => {
-        match $input.dtype() {
-            DType::F32 => {
-                let $typed = typed_or_unsupported::<f32>($input, $op)?.as_view();
+        match $input {
+            TensorView::F32(view) => {
+                let $typed = view.clone().into_dynamic();
                 $body
             }
-            DType::F64 => {
-                let $typed = typed_or_unsupported::<f64>($input, $op)?.as_view();
+            TensorView::F64(view) => {
+                let $typed = view.clone().into_dynamic();
                 $body
             }
-            DType::C32 => {
-                let $typed = typed_or_unsupported::<Complex32>($input, $op)?.as_view();
+            TensorView::C32(view) => {
+                let $typed = view.clone().into_dynamic();
                 $body
             }
-            DType::C64 => {
-                let $typed = typed_or_unsupported::<Complex64>($input, $op)?.as_view();
+            TensorView::C64(view) => {
+                let $typed = view.clone().into_dynamic();
                 $body
             }
-            _ => Err(crate::error::unsupported_dtype($op, $input.dtype())),
+            unsupported => Err(crate::error::unsupported_dtype($op, unsupported.dtype())),
         }
     };
 }
@@ -1554,7 +1550,7 @@ macro_rules! owned_dispatch {
 pub(crate) fn eig(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &TensorView<'_, Host>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     owned_dispatch!(input, "eig", |typed| eig_erased(exec, buffers, &typed))
 }
@@ -1563,7 +1559,7 @@ pub(crate) fn eig(
 pub(crate) fn eig_values(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &Tensor,
+    input: &TensorView<'_, Host>,
 ) -> tenferro_tensor::Result<Tensor> {
     owned_dispatch!(input, "eig_values", |typed| {
         crate::eig_values_with_exec(exec, buffers, &typed).map(Tensor::from_typed)
@@ -1646,8 +1642,8 @@ fn apply_reflectors_data<T: FaerLinalg>(
     .map_err(provider(Op::HouseholderQr))
 }
 
-fn matrix_dims<T>(
-    input: &TypedTensor<T>,
+fn matrix_dims<T: 'static>(
+    input: &HostView<'_, T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize)> {
     if input.shape().len() != 2 {
@@ -1660,9 +1656,9 @@ fn matrix_dims<T>(
     Ok((input.shape()[0], input.shape()[1]))
 }
 
-fn validate_compact_state<T>(
-    packed: &TypedTensor<T>,
-    coeff: &TypedTensor<T>,
+fn validate_compact_state<T: 'static>(
+    packed: &HostView<'_, T>,
+    coeff: &HostView<'_, T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize, usize)> {
     let (rows, cols) = matrix_dims(packed, op)?;
@@ -1687,7 +1683,7 @@ fn validate_compact_state<T>(
 pub(crate) fn compact_factor_2d<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
     const OP: &str = "compact_factor_2d";
     let (rows, cols) = matrix_dims(input, OP)?;
@@ -1696,7 +1692,7 @@ pub(crate) fn compact_factor_2d<T: FaerLinalg>(
         OP,
         "packed state",
         &[rows, cols],
-        input.host_data()?,
+        compact_host_data(OP, input)?,
     )?;
     let mut coeff = compact_factor_data(exec, buffers, packed.host_data_mut()?, rows, cols)?;
     let k = rows.min(cols);
@@ -1715,9 +1711,9 @@ pub(crate) fn compact_factor_2d<T: FaerLinalg>(
 pub(crate) fn append_2d<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    packed: &TypedTensor<T>,
-    coeff: &TypedTensor<T>,
-    input: &TypedTensor<T>,
+    packed: &HostView<'_, T>,
+    coeff: &HostView<'_, T>,
+    input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
     let (rows, old_cols, old_k) = validate_compact_state(packed, coeff, "append_2d")?;
     let (input_rows, block_cols) = matrix_dims(input, "append_2d")?;
@@ -1735,14 +1731,14 @@ pub(crate) fn append_2d<T: FaerLinalg>(
             OP,
             "packed state",
             packed.shape(),
-            packed.host_data()?,
+            compact_host_data(OP, packed)?,
         )?;
         let mut coeff_copy = pooled_copy::<T>(
             buffers,
             OP,
             "coefficients",
             coeff.shape(),
-            coeff.host_data()?,
+            compact_host_data(OP, coeff)?,
         )?;
         packed_copy.set_placement(packed.placement().clone());
         coeff_copy.set_placement(coeff.placement().clone());
@@ -1757,14 +1753,14 @@ pub(crate) fn append_2d<T: FaerLinalg>(
         OP,
         "transformed block",
         &[rows, block_cols],
-        input.host_data()?,
+        compact_host_data(OP, input)?,
     )?;
     apply_reflectors_data(
         exec,
         buffers,
-        packed.host_data()?,
+        compact_host_data(OP, packed)?,
         old_cols,
-        coeff.host_data()?,
+        compact_host_data(OP, coeff)?,
         transformed.host_data_mut()?,
         rows,
         block_cols,
@@ -1795,7 +1791,7 @@ pub(crate) fn append_2d<T: FaerLinalg>(
     };
     let mut output = pooled_zeroed::<T>(buffers, OP, "packed state", &[rows, new_cols])?;
     {
-        let packed_data = packed.host_data()?;
+        let packed_data = compact_host_data(OP, packed)?;
         let transformed_data = transformed.host_data()?;
         let trailing_data = trailing.host_data()?;
         let output_data = output.host_data_mut()?;
@@ -1813,7 +1809,7 @@ pub(crate) fn append_2d<T: FaerLinalg>(
     }
     let mut output_coeff = pooled_zeroed::<T>(buffers, OP, "coefficients", &[new_k])?;
     {
-        let coeff_data = coeff.host_data()?;
+        let coeff_data = compact_host_data(OP, coeff)?;
         let new_coeff_len = match &new_coeff {
             Some(new_coeff) => new_coeff.host_data()?.len(),
             None => 0,
@@ -1840,8 +1836,8 @@ pub(crate) fn append_2d<T: FaerLinalg>(
 pub(crate) fn from_factors_2d<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    q: &TypedTensor<T>,
-    r: &TypedTensor<T>,
+    q: &HostView<'_, T>,
+    r: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
     let (rows, q_cols) = matrix_dims(q, "from_factors_2d")?;
     let (r_rows, cols) = matrix_dims(r, "from_factors_2d")?;
@@ -1859,7 +1855,7 @@ pub(crate) fn from_factors_2d<T: FaerLinalg>(
         ));
     }
     let k = rows.min(cols);
-    let r_data = r.host_data()?;
+    let r_data = compact_host_data("from_factors_2d", r)?;
     for col in 0..cols.min(q_cols) {
         for row in col + 1..q_cols {
             if r_data[row + col * q_cols] != T::default() {
@@ -1871,7 +1867,13 @@ pub(crate) fn from_factors_2d<T: FaerLinalg>(
         }
     }
     const OP: &str = "from_factors_2d";
-    let mut q_packed = pooled_copy::<T>(buffers, OP, "packed Q", &[rows, q_cols], q.host_data()?)?;
+    let mut q_packed = pooled_copy::<T>(
+        buffers,
+        OP,
+        "packed Q",
+        &[rows, q_cols],
+        compact_host_data(OP, q)?,
+    )?;
     let q_coeff = compact_factor_data(exec, buffers, q_packed.host_data_mut()?, rows, q_cols)?;
     let mut folded = pooled_zeroed::<T>(buffers, OP, "folded R", &[q_cols, cols])?;
     let mut t = pooled_zeroed::<T>(buffers, OP, "triangular factor", &[q_cols, q_cols])?;
@@ -1926,15 +1928,15 @@ pub(crate) fn from_factors_2d<T: FaerLinalg>(
 
 pub(crate) fn raw_r_2d<T: FaerLinalg>(
     buffers: &BufferPool,
-    packed: &TypedTensor<T>,
-    coeff: &TypedTensor<T>,
+    packed: &HostView<'_, T>,
+    coeff: &HostView<'_, T>,
     positive_diagonal: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     const OP: &str = "raw_r_2d";
     let (rows, cols, k) = validate_compact_state(packed, coeff, OP)?;
     let mut r = pooled_zeroed::<T>(buffers, OP, "R", &[k, cols])?;
     {
-        let packed_data = packed.host_data()?;
+        let packed_data = compact_host_data(OP, packed)?;
         let r_data = r.host_data_mut()?;
         for col in 0..cols {
             for row in 0..k.min(col + 1) {
@@ -1958,8 +1960,8 @@ pub(crate) fn raw_r_2d<T: FaerLinalg>(
 pub(crate) fn q_columns_2d<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    packed: &TypedTensor<T>,
-    coeff: &TypedTensor<T>,
+    packed: &HostView<'_, T>,
+    coeff: &HostView<'_, T>,
     start: usize,
     end: usize,
     positive_diagonal: bool,
@@ -1986,9 +1988,9 @@ pub(crate) fn q_columns_2d<T: FaerLinalg>(
         apply_reflectors_data(
             exec,
             buffers,
-            packed.host_data()?,
+            compact_host_data(OP, packed)?,
             packed.shape()[1],
-            coeff.host_data()?,
+            compact_host_data(OP, coeff)?,
             q.host_data_mut()?,
             rows,
             columns,
@@ -1996,7 +1998,7 @@ pub(crate) fn q_columns_2d<T: FaerLinalg>(
             false,
         )?;
         if positive_diagonal {
-            let packed_data = packed.host_data()?;
+            let packed_data = compact_host_data(OP, packed)?;
             let q_data = q.host_data_mut()?;
             // The gauge is defined by R's diagonal, so it fixes only the first `k` columns; a
             // complement column has no diagonal to fix and is left as the reflector product
@@ -2018,10 +2020,9 @@ pub(crate) fn q_columns_2d<T: FaerLinalg>(
 }
 
 /// Predicate: can this view be fed to the provider as a strided descriptor?
-pub(crate) fn faer_strided_ok<T: 'static>(view: &TypedTensorView<'_, T>) -> bool {
-    view.backend_buffer().is_none()
-        && view.shape().len() == 2
-        && view.strides().iter().all(|&s| s >= 0)
+/// Can faer read this host operand in place? (The host type already rules out a backend buffer.)
+pub(crate) fn faer_strided_ok<T: 'static>(view: &HostView<'_, T>) -> bool {
+    view.shape().len() == 2 && view.strides().iter().all(|&s| s >= 0)
 }
 
 // The tests drive the public backend, which takes this route only in the `native` build.

@@ -3,13 +3,13 @@ use std::mem::size_of_val;
 use num_complex::{Complex32, Complex64};
 use strided_kernel::{col_major_strides, reduce, ErasedReducePlan, Exec, KernelDType, ReduceOp};
 
-use super::{typed_host_data, typed_view, typed_view_from_view, PooledUninitOutput};
+use super::{typed_view, typed_view_from_view, PooledUninitOutput};
 use crate::buffer_pool::BufferPool;
 use crate::elementwise;
 use crate::materialize_tensor_read;
 use tenferro_tensor::{
-    DType, ShapeVec, Tensor, TensorRank, TensorRead, TensorScalar, TensorView, TypedTensor,
-    TypedTensorView,
+    DType, DynRank, Host, ShapeVec, Tensor, TensorRank, TensorRead, TensorScalar, TensorView,
+    TypedTensor, TypedTensorView,
 };
 
 fn unsupported_dtype_with_supported(
@@ -64,46 +64,15 @@ fn validate_axes(op: &'static str, axes: &[usize], rank: usize) -> crate::Result
     }
     Ok(())
 }
-/// The typed host tensor behind `input`, or a typed refusal.
+/// A dynamic-rank operand narrowed to host storage once, at a reduction entry.
+type HostView<'a, T> = TypedTensorView<'a, T, DynRank, Host>;
+
+/// Narrow a reduction operand to host storage, attributing a refusal to `op`.
 ///
-/// Callers reach this from a match on `input.dtype()`, so `None` means the tag table
-/// and the runtime dtype disagree rather than a caller mistake.
-fn typed_input<'a, T: TensorScalar>(
-    op: &'static str,
-    input: &'a Tensor,
-) -> crate::Result<&'a TypedTensor<T>> {
-    input.as_typed::<T>().ok_or_else(|| {
-        crate::Error::unsupported_dtype(
-            op,
-            input.dtype(),
-            "the CPU reduction requires a preset scalar",
-        )
-    })
-}
-
-fn ensure_host_tensor(op: &'static str, input: &Tensor) -> crate::Result<()> {
-    macro_rules! ensure {
-        ($tensor:expr) => {{
-            typed_host_data(op, $tensor)?;
-            Ok(())
-        }};
-    }
-
-    match input.dtype() {
-        DType::F32 => ensure!(typed_input::<f32>("ensure_host_tensor", input)?),
-        DType::F64 => ensure!(typed_input::<f64>("ensure_host_tensor", input)?),
-        DType::I32 => ensure!(typed_input::<i32>("ensure_host_tensor", input)?),
-        DType::I64 => ensure!(typed_input::<i64>("ensure_host_tensor", input)?),
-        DType::Bool => ensure!(typed_input::<bool>("ensure_host_tensor", input)?),
-        DType::C32 => ensure!(typed_input::<Complex32>("ensure_host_tensor", input)?),
-        DType::C64 => ensure!(typed_input::<Complex64>("ensure_host_tensor", input)?),
-        // A caller-owned payload has no CPU implementation for this operation.
-        DType::External(type_id) => Err(crate::Error::unsupported_dtype(
-            "ensure_host_tensor",
-            tenferro_tensor::DType::External(type_id),
-            "an externally defined payload is not supported by this CPU operation",
-        )),
-    }
+/// This is the only placement check on the owned-tensor route: the typed reduction below takes
+/// the host view it returns and reads its elements without checking again.
+fn host_operand<'a>(op: &'static str, input: &'a Tensor) -> crate::Result<TensorView<'a, Host>> {
+    TensorRead::from_tensor(input).try_host(op)
 }
 
 fn validate_reduced_axes_nonempty(
@@ -198,48 +167,31 @@ pub(crate) fn reduce_sum(input: &Tensor, axes: &[usize], exec: Exec<'_>) -> crat
         return Ok(output);
     }
 
-    match input.dtype() {
-        DType::F32 => Ok(Tensor::from_typed::<f32>(typed_reduce_sum(
-            typed_input::<f32>("reduce_sum", input)?,
-            axes,
-            exec,
+    let input = host_operand("reduce_sum", input)?;
+    match &input {
+        TensorView::F32(view) => Ok(Tensor::from_typed::<f32>(typed_reduce_sum(
+            view, axes, exec,
         )?)),
-        DType::F64 => Ok(Tensor::from_typed::<f64>(typed_reduce_sum(
-            typed_input::<f64>("reduce_sum", input)?,
-            axes,
-            exec,
+        TensorView::F64(view) => Ok(Tensor::from_typed::<f64>(typed_reduce_sum(
+            view, axes, exec,
         )?)),
-        DType::I32 => Ok(Tensor::from_typed::<i32>(typed_reduce_sum_wrapping(
-            typed_input::<i32>("reduce_sum", input)?,
-            axes,
-            exec,
+        TensorView::I32(view) => Ok(Tensor::from_typed::<i32>(typed_reduce_sum_wrapping(
+            view, axes, exec,
         )?)),
-        DType::I64 => Ok(Tensor::from_typed::<i64>(typed_reduce_sum_wrapping(
-            typed_input::<i64>("reduce_sum", input)?,
-            axes,
-            exec,
+        TensorView::I64(view) => Ok(Tensor::from_typed::<i64>(typed_reduce_sum_wrapping(
+            view, axes, exec,
         )?)),
-        DType::Bool => Err(unsupported_dtype_with_supported(
+        TensorView::Bool(_) => Err(unsupported_dtype_with_supported(
             "reduce_sum",
             DType::Bool,
             "F32/F64/I32/I64/C32/C64",
         )),
-        DType::C32 => Ok(Tensor::from_typed::<Complex32>(typed_reduce_sum(
-            typed_input::<Complex32>("reduce_sum", input)?,
-            axes,
-            exec,
+        TensorView::C32(view) => Ok(Tensor::from_typed::<Complex32>(typed_reduce_sum(
+            view, axes, exec,
         )?)),
-        DType::C64 => Ok(Tensor::from_typed::<Complex64>(typed_reduce_sum(
-            typed_input::<Complex64>("reduce_sum", input)?,
-            axes,
-            exec,
+        TensorView::C64(view) => Ok(Tensor::from_typed::<Complex64>(typed_reduce_sum(
+            view, axes, exec,
         )?)),
-        // A caller-owned payload has no CPU implementation for this operation.
-        DType::External(type_id) => Err(crate::Error::unsupported_dtype(
-            "reduce_sum",
-            tenferro_tensor::DType::External(type_id),
-            "an externally defined payload is not supported by this CPU operation",
-        )),
     }
 }
 
@@ -256,10 +208,7 @@ pub(crate) fn reduce_sum_read(
     }
 
     match input {
-        TensorRead::Tensor(input) => {
-            ensure_host_tensor("reduce_sum", input)?;
-            reduce_sum(input, axes, exec)
-        }
+        TensorRead::Tensor(input) => reduce_sum(input, axes, exec),
         TensorRead::View(TensorView::F32(t)) => Ok(Tensor::from_typed::<f32>(
             typed_reduce_view_erased(buffers, &t, axes, ReduceOp::Sum, "reduce_sum", exec)?,
         )),
@@ -308,28 +257,25 @@ pub(crate) fn reduce_sum_squares(
         return elementwise::mul_with_pool(buffers, input, input, exec);
     }
 
-    match input.dtype() {
-        DType::F32 => Ok(Tensor::from_typed::<f32>(typed_reduce_erased(
-            input.as_typed::<f32>().ok_or_else(|| {
-                unsupported_sum_squares_dtype("reduce_sum_squares", input.dtype())
-            })?,
+    let input = host_operand("reduce_sum_squares", input)?;
+    match &input {
+        TensorView::F32(view) => Ok(Tensor::from_typed::<f32>(typed_reduce_erased(
+            view,
             axes,
             ReduceOp::SumSquares,
             "reduce_sum_squares",
             exec,
         )?)),
-        DType::F64 => Ok(Tensor::from_typed::<f64>(typed_reduce_erased(
-            input.as_typed::<f64>().ok_or_else(|| {
-                unsupported_sum_squares_dtype("reduce_sum_squares", input.dtype())
-            })?,
+        TensorView::F64(view) => Ok(Tensor::from_typed::<f64>(typed_reduce_erased(
+            view,
             axes,
             ReduceOp::SumSquares,
             "reduce_sum_squares",
             exec,
         )?)),
-        _ => Err(unsupported_sum_squares_dtype(
+        other => Err(unsupported_sum_squares_dtype(
             "reduce_sum_squares",
-            input.dtype(),
+            other.dtype(),
         )),
     }
 }
@@ -456,10 +402,7 @@ pub(crate) fn reduce_sum_squares_read(
     }
 
     match input {
-        TensorRead::Tensor(input) => {
-            ensure_host_tensor("reduce_sum_squares", input)?;
-            reduce_sum_squares(buffers, input, axes, exec)
-        }
+        TensorRead::Tensor(input) => reduce_sum_squares(buffers, input, axes, exec),
         TensorRead::View(TensorView::F32(t)) => {
             Ok(Tensor::from_typed::<f32>(typed_reduce_view_erased(
                 buffers,
@@ -498,48 +441,31 @@ pub(crate) fn reduce_prod(input: &Tensor, axes: &[usize], exec: Exec<'_>) -> cra
         return Ok(output);
     }
 
-    match input.dtype() {
-        DType::F32 => Ok(Tensor::from_typed::<f32>(typed_reduce_prod(
-            typed_input::<f32>("reduce_prod", input)?,
-            axes,
-            exec,
+    let input = host_operand("reduce_prod", input)?;
+    match &input {
+        TensorView::F32(view) => Ok(Tensor::from_typed::<f32>(typed_reduce_prod(
+            view, axes, exec,
         )?)),
-        DType::F64 => Ok(Tensor::from_typed::<f64>(typed_reduce_prod(
-            typed_input::<f64>("reduce_prod", input)?,
-            axes,
-            exec,
+        TensorView::F64(view) => Ok(Tensor::from_typed::<f64>(typed_reduce_prod(
+            view, axes, exec,
         )?)),
-        DType::I32 => Ok(Tensor::from_typed::<i32>(typed_reduce_prod_wrapping(
-            typed_input::<i32>("reduce_prod", input)?,
-            axes,
-            exec,
+        TensorView::I32(view) => Ok(Tensor::from_typed::<i32>(typed_reduce_prod_wrapping(
+            view, axes, exec,
         )?)),
-        DType::I64 => Ok(Tensor::from_typed::<i64>(typed_reduce_prod_wrapping(
-            typed_input::<i64>("reduce_prod", input)?,
-            axes,
-            exec,
+        TensorView::I64(view) => Ok(Tensor::from_typed::<i64>(typed_reduce_prod_wrapping(
+            view, axes, exec,
         )?)),
-        DType::Bool => Err(unsupported_dtype_with_supported(
+        TensorView::Bool(_) => Err(unsupported_dtype_with_supported(
             "reduce_prod",
             DType::Bool,
             "F32/F64/I32/I64/C32/C64",
         )),
-        DType::C32 => Ok(Tensor::from_typed::<Complex32>(typed_reduce_prod(
-            typed_input::<Complex32>("reduce_prod", input)?,
-            axes,
-            exec,
+        TensorView::C32(view) => Ok(Tensor::from_typed::<Complex32>(typed_reduce_prod(
+            view, axes, exec,
         )?)),
-        DType::C64 => Ok(Tensor::from_typed::<Complex64>(typed_reduce_prod(
-            typed_input::<Complex64>("reduce_prod", input)?,
-            axes,
-            exec,
+        TensorView::C64(view) => Ok(Tensor::from_typed::<Complex64>(typed_reduce_prod(
+            view, axes, exec,
         )?)),
-        // A caller-owned payload has no CPU implementation for this operation.
-        DType::External(type_id) => Err(crate::Error::unsupported_dtype(
-            "reduce_prod",
-            tenferro_tensor::DType::External(type_id),
-            "an externally defined payload is not supported by this CPU operation",
-        )),
     }
 }
 
@@ -556,10 +482,7 @@ pub(crate) fn reduce_prod_read(
     }
 
     match input {
-        TensorRead::Tensor(input) => {
-            ensure_host_tensor("reduce_prod", input)?;
-            reduce_prod(input, axes, exec)
-        }
+        TensorRead::Tensor(input) => reduce_prod(input, axes, exec),
         TensorRead::View(TensorView::F32(t)) => Ok(Tensor::from_typed::<f32>(
             typed_reduce_view_erased(buffers, &t, axes, ReduceOp::Product, "reduce_prod", exec)?,
         )),
@@ -597,46 +520,39 @@ pub(crate) fn reduce_max(input: &Tensor, axes: &[usize], exec: Exec<'_>) -> crat
         return Ok(output);
     }
 
-    match input.dtype() {
-        DType::F32 => Ok(Tensor::from_typed::<f32>(typed_reduce_erased(
-            typed_input::<f32>("reduce_max", input)?,
+    let input = host_operand("reduce_max", input)?;
+    match &input {
+        TensorView::F32(view) => Ok(Tensor::from_typed::<f32>(typed_reduce_erased(
+            view,
             axes,
             ReduceOp::Max,
             "reduce_max",
             exec,
         )?)),
-        DType::F64 => Ok(Tensor::from_typed::<f64>(typed_reduce_erased(
-            typed_input::<f64>("reduce_max", input)?,
+        TensorView::F64(view) => Ok(Tensor::from_typed::<f64>(typed_reduce_erased(
+            view,
             axes,
             ReduceOp::Max,
             "reduce_max",
             exec,
         )?)),
-        DType::I32 => Ok(Tensor::from_typed::<i32>(typed_reduce_erased(
-            typed_input::<i32>("reduce_max", input)?,
+        TensorView::I32(view) => Ok(Tensor::from_typed::<i32>(typed_reduce_erased(
+            view,
             axes,
             ReduceOp::Max,
             "reduce_max",
             exec,
         )?)),
-        DType::I64 => Ok(Tensor::from_typed::<i64>(typed_reduce_erased(
-            typed_input::<i64>("reduce_max", input)?,
+        TensorView::I64(view) => Ok(Tensor::from_typed::<i64>(typed_reduce_erased(
+            view,
             axes,
             ReduceOp::Max,
             "reduce_max",
             exec,
         )?)),
-        DType::Bool | DType::C32 | DType::C64 => Err(unsupported_dtype_with_supported(
-            "reduce_max",
-            input.dtype(),
-            "F32/F64/I32/I64",
-        )),
-        // A caller-owned payload has no CPU implementation for this operation.
-        DType::External(type_id) => Err(crate::Error::unsupported_dtype(
-            "reduce_max",
-            tenferro_tensor::DType::External(type_id),
-            "an externally defined payload is not supported by this CPU operation",
-        )),
+        TensorView::Bool(_) | TensorView::C32(_) | TensorView::C64(_) => Err(
+            unsupported_dtype_with_supported("reduce_max", input.dtype(), "F32/F64/I32/I64"),
+        ),
     }
 }
 
@@ -653,10 +569,7 @@ pub(crate) fn reduce_max_read(
     }
 
     match input {
-        TensorRead::Tensor(input) => {
-            ensure_host_tensor("reduce_max", input)?;
-            reduce_max(input, axes, exec)
-        }
+        TensorRead::Tensor(input) => reduce_max(input, axes, exec),
         TensorRead::View(TensorView::F32(t)) => Ok(Tensor::from_typed::<f32>(
             typed_reduce_view_erased(buffers, &t, axes, ReduceOp::Max, "reduce_max", exec)?,
         )),
@@ -688,46 +601,39 @@ pub(crate) fn reduce_min(input: &Tensor, axes: &[usize], exec: Exec<'_>) -> crat
         return Ok(output);
     }
 
-    match input.dtype() {
-        DType::F32 => Ok(Tensor::from_typed::<f32>(typed_reduce_erased(
-            typed_input::<f32>("reduce_min", input)?,
+    let input = host_operand("reduce_min", input)?;
+    match &input {
+        TensorView::F32(view) => Ok(Tensor::from_typed::<f32>(typed_reduce_erased(
+            view,
             axes,
             ReduceOp::Min,
             "reduce_min",
             exec,
         )?)),
-        DType::F64 => Ok(Tensor::from_typed::<f64>(typed_reduce_erased(
-            typed_input::<f64>("reduce_min", input)?,
+        TensorView::F64(view) => Ok(Tensor::from_typed::<f64>(typed_reduce_erased(
+            view,
             axes,
             ReduceOp::Min,
             "reduce_min",
             exec,
         )?)),
-        DType::I32 => Ok(Tensor::from_typed::<i32>(typed_reduce_erased(
-            typed_input::<i32>("reduce_min", input)?,
+        TensorView::I32(view) => Ok(Tensor::from_typed::<i32>(typed_reduce_erased(
+            view,
             axes,
             ReduceOp::Min,
             "reduce_min",
             exec,
         )?)),
-        DType::I64 => Ok(Tensor::from_typed::<i64>(typed_reduce_erased(
-            typed_input::<i64>("reduce_min", input)?,
+        TensorView::I64(view) => Ok(Tensor::from_typed::<i64>(typed_reduce_erased(
+            view,
             axes,
             ReduceOp::Min,
             "reduce_min",
             exec,
         )?)),
-        DType::Bool | DType::C32 | DType::C64 => Err(unsupported_dtype_with_supported(
-            "reduce_min",
-            input.dtype(),
-            "F32/F64/I32/I64",
-        )),
-        // A caller-owned payload has no CPU implementation for this operation.
-        DType::External(type_id) => Err(crate::Error::unsupported_dtype(
-            "reduce_min",
-            tenferro_tensor::DType::External(type_id),
-            "an externally defined payload is not supported by this CPU operation",
-        )),
+        TensorView::Bool(_) | TensorView::C32(_) | TensorView::C64(_) => Err(
+            unsupported_dtype_with_supported("reduce_min", input.dtype(), "F32/F64/I32/I64"),
+        ),
     }
 }
 
@@ -744,10 +650,7 @@ pub(crate) fn reduce_min_read(
     }
 
     match input {
-        TensorRead::Tensor(input) => {
-            ensure_host_tensor("reduce_min", input)?;
-            reduce_min(input, axes, exec)
-        }
+        TensorRead::Tensor(input) => reduce_min(input, axes, exec),
         TensorRead::View(TensorView::F32(t)) => Ok(Tensor::from_typed::<f32>(
             typed_reduce_view_erased(buffers, &t, axes, ReduceOp::Min, "reduce_min", exec)?,
         )),
@@ -769,7 +672,7 @@ pub(crate) fn reduce_min_read(
 }
 
 fn typed_reduce_erased<T>(
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
     axes: &[usize],
     op: ReduceOp,
     label: &'static str,
@@ -790,7 +693,14 @@ where
         tenferro_tensor::validate::checked_shape_product(label, "output shape", &output_shape)?;
     let output_strides = col_major_strides(&output_shape);
     let dtype = kernel_dtype(T::dtype());
-    let input_view = typed_view(label, input)?;
+    // The host type is the placement evidence; only the layout is described here.
+    let input_view = strided_kernel::StridedView::<T>::new(
+        input.as_host_slice(),
+        input.shape(),
+        input.strides(),
+        input.offset(),
+    )
+    .map_err(|err| crate::Error::backend_source(label, err))?;
     let plan = ErasedReducePlan::compile_axes(
         dtype,
         op,
@@ -928,7 +838,7 @@ where
 /// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
 /// reductions, or a typed backend error while materializing the result.
 pub(crate) fn typed_reduce_sum<T>(
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
     axes: &[usize],
     exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
@@ -939,7 +849,7 @@ where
 }
 
 fn typed_reduce_sum_wrapping<T>(
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
     axes: &[usize],
     exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
@@ -958,7 +868,7 @@ where
 /// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
 /// reductions, or a typed backend error while materializing the result.
 pub(crate) fn typed_reduce_prod<T>(
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
     axes: &[usize],
     exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>
@@ -969,7 +879,7 @@ where
 }
 
 fn typed_reduce_prod_wrapping<T>(
-    input: &TypedTensor<T>,
+    input: &HostView<'_, T>,
     axes: &[usize],
     exec: Exec<'_>,
 ) -> crate::Result<TypedTensor<T>>

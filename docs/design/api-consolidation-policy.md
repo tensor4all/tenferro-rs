@@ -42,9 +42,12 @@ comment asserts something the type does not carry. Public entry points return `R
 has actually excluded.
 
 **R7. Push what the type can carry into the type, and consolidate the rest in one place.** `HostTensor`/`DeviceTensor` is worth doing, but
-it *moves* the check rather than deleting it: `ensure_host_tensor` also rejects `DType::External` and tests for a backend buffer
-(`cpu/backend.rs:1122-1160`), and no type can express managed memory. So: the axis where it helps (the linalg layer, which today has *zero*
-`Host` uses), one `TryFrom` at the erased boundary for the rest.
+it *moves* the check rather than deleting it: the host check also rejects `DType::External` and tests for a backend buffer, and no type can
+express managed memory. So: the axis where it helps (the linalg layer), one narrowing at the erased boundary for the rest. This is now how
+the CPU entries work: `TensorRead::try_host(op)` / `TensorView::try_host(op)` is the one fallible `Dynamic -> Host` narrowing and returns a
+`TensorView<'_, Host>`; each `LinalgBackend` method and each CPU reduction entry narrows its operands once, and everything below takes the
+host-marked view (`TypedTensorView<'_, T, DynRank, Host>`) without re-checking placement. The managed-memory Cholesky route is dispatched
+before the narrowing, and values the CPU engine itself produces (a materialized copy) are narrowed where they are produced.
 
 ## 2. Withdrawn — do not re-propose without new evidence
 

@@ -10,8 +10,11 @@
 #[allow(unused_imports)]
 use super::linalg;
 #[cfg(any(not(feature = "native"), not(feature = "blas")))]
-use super::{batched_vector_rhs_shape_of, has_zero_dim, square_matrix_dim};
-use crate::cpu::linalg::{pooled_copy, pooled_zeroed};
+use super::{
+    batched_vector_rhs_shape_of, has_zero_dim, square_matrix_dim, HostOperand, HostOperandExt,
+};
+use crate::cpu::linalg::HostView;
+use crate::cpu::linalg::{compact_host_data, pooled_copy, pooled_zeroed};
 use num_complex::{Complex32, Complex64};
 use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
@@ -163,9 +166,15 @@ impl_cpu_packed_lu!(f32, f64, Complex32, Complex64);
 fn pooled_output<T: CpuPackedLu>(
     buffers: &BufferPool,
     op: &'static str,
-    source: &TypedTensor<T>,
+    source: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
-    let mut output = pooled_copy::<T>(buffers, op, "matrix", source.shape(), source.host_data()?)?;
+    let mut output = pooled_copy::<T>(
+        buffers,
+        op,
+        "matrix",
+        source.shape(),
+        compact_host_data(op, source)?,
+    )?;
     output.set_placement(source.placement().clone());
     Ok(output)
 }
@@ -194,9 +203,9 @@ pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a_shape: &[usize],
-    packed_lu: &TypedTensor<T>,
-    pivots: &TypedTensor<i32>,
-    b: &TypedTensor<T>,
+    packed_lu: &HostView<'_, T>,
+    pivots: &HostView<'_, i32>,
+    b: &HostView<'_, T>,
     transpose_a: bool,
     conjugate_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
@@ -214,8 +223,8 @@ pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
         OP,
         n,
         nrhs,
-        packed_lu.host_data()?,
-        pivots.host_data()?,
+        compact_host_data(OP, packed_lu)?,
+        compact_host_data(OP, pivots)?,
         output.host_data_mut()?,
         transpose_a,
         conjugate_a,
@@ -236,8 +245,8 @@ pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
 pub(super) fn lu_factor_solve_typed<T: CpuPackedLu>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    a: &TypedTensor<T>,
-    b: &TypedTensor<T>,
+    a: &HostView<'_, T>,
+    b: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>, TypedTensor<i32>)> {
     const OP: &str = "lu_factor_solve";
     let n = square_matrix_dim(OP, a.shape())?;
@@ -294,10 +303,10 @@ pub(super) fn lu_factor_solve_typed<T: CpuPackedLu>(
 pub(super) fn lu_solve_prepared_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    a: &Tensor,
-    packed_lu: &Tensor,
-    pivots: &Tensor,
-    b: &Tensor,
+    a: &HostOperand<'_>,
+    packed_lu: &HostOperand<'_>,
+    pivots: &HostOperand<'_>,
+    b: &HostOperand<'_>,
     transpose_a: bool,
     conjugate_a: bool,
 ) -> tenferro_tensor::Result<Tensor> {
@@ -343,8 +352,8 @@ pub(super) fn lu_solve_prepared_entered(
 pub(super) fn lu_factor_solve_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
-    a: &Tensor,
-    b: &Tensor,
+    a: &HostOperand<'_>,
+    b: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     const OP: &str = "lu_factor_solve";
     let inconsistent = || Error::dtype_mismatch(OP, a.dtype(), b.dtype());

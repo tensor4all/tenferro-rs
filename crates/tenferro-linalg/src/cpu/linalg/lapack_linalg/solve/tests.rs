@@ -1,6 +1,11 @@
 use super::*;
 use num_complex::{Complex32, Complex64};
 
+/// Borrow a test operand the way the CPU backend boundary hands it to the provider.
+fn host<T: 'static>(tensor: &TypedTensor<T>) -> crate::cpu::linalg::HostView<'_, T> {
+    tensor.as_view().try_host("test").unwrap()
+}
+
 fn check_batches<T>(make: impl Fn(f64) -> T, error: impl Fn(T, T) -> f64)
 where
     T: LapackLinalg + std::ops::Add<Output = T> + std::ops::Mul<Output = T>,
@@ -37,7 +42,7 @@ where
             shape.extend_from_slice(&batch_shape);
             let a = TypedTensor::from_vec_col_major(shape.clone(), matrices.clone()).unwrap();
             let b = TypedTensor::from_vec_col_major(shape.clone(), rhs.clone()).unwrap();
-            let out = solve(&mut buffers, &a, &b, transpose).unwrap();
+            let out = solve(&mut buffers, &host(&a), &host(&b), transpose).unwrap();
             assert_eq!(out.shape(), shape);
             for (&actual, &expected) in out.host_data().unwrap().iter().zip(&expected) {
                 assert!(
@@ -72,17 +77,19 @@ fn batched_solve_validates_empty_batches_and_late_singularity() {
     let a = TypedTensor::<f64>::from_vec_col_major([2, 2, 0], vec![]).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major([2, 1, 0], vec![]).unwrap();
     assert_eq!(
-        solve(&mut buffers, &a, &b, false).unwrap().shape(),
+        solve(&mut buffers, &host(&a), &host(&b), false)
+            .unwrap()
+            .shape(),
         &[2, 1, 0]
     );
     let bad = TypedTensor::<f64>::from_vec_col_major([3, 1, 0], vec![]).unwrap();
-    assert!(solve(&mut buffers, &a, &bad, false).is_err());
+    assert!(solve(&mut buffers, &host(&a), &host(&bad), false).is_err());
     let bad = TypedTensor::<f64>::from_vec_col_major([2, 1, 1], vec![1.0; 2]).unwrap();
-    assert!(solve(&mut buffers, &a, &bad, false).is_err());
+    assert!(solve(&mut buffers, &host(&a), &host(&bad), false).is_err());
     let a =
         TypedTensor::from_vec_col_major([2, 2, 2], vec![2.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0])
             .unwrap();
     let b = TypedTensor::from_vec_col_major([2, 1, 2], vec![1.0; 4]).unwrap();
-    assert!(solve(&mut buffers, &a, &b, false).is_err());
+    assert!(solve(&mut buffers, &host(&a), &host(&b), false).is_err());
     assert_eq!(b.host_data().unwrap(), &[1.0; 4]);
 }

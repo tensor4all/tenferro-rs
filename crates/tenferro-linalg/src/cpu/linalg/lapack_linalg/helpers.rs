@@ -5,6 +5,7 @@
 //! helpers, and [`LapackLinalg`]: one trait per scalar that forwards each family to the provider
 //! with the session pool as its workspace.
 
+use crate::cpu::linalg::HostView;
 use num_complex::{Complex32, Complex64};
 use strided_view::{RawStridedMut, RawStridedRef};
 
@@ -500,8 +501,8 @@ pub(crate) fn validate_buffer_len(
     Ok(())
 }
 
-pub(crate) fn matrix_dims<T>(
-    input: &TypedTensor<T>,
+pub(crate) fn matrix_dims<T: 'static>(
+    input: &HostView<'_, T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize)> {
     if input.shape().len() != 2 {
@@ -514,18 +515,35 @@ pub(crate) fn matrix_dims<T>(
     Ok((input.shape()[0], input.shape()[1]))
 }
 
-pub(crate) fn tensor_from_vec_with_template<T: Clone + tenferro_tensor::TensorScalar, U>(
+/// Something whose placement a freshly built output inherits.
+pub(crate) trait PlacementTemplate {
+    fn template_placement(&self) -> &tenferro_tensor::Placement;
+}
+
+impl<U> PlacementTemplate for TypedTensor<U> {
+    fn template_placement(&self) -> &tenferro_tensor::Placement {
+        self.placement()
+    }
+}
+
+impl<U: 'static> PlacementTemplate for HostView<'_, U> {
+    fn template_placement(&self) -> &tenferro_tensor::Placement {
+        self.placement()
+    }
+}
+
+pub(crate) fn tensor_from_vec_with_template<T: Clone + tenferro_tensor::TensorScalar>(
     shape: Vec<usize>,
     data: Vec<T>,
-    template: &TypedTensor<U>,
+    template: &impl PlacementTemplate,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let mut tensor = TypedTensor::from_vec_col_major(shape, data)?;
-    tensor.set_placement(template.placement().clone());
+    tensor.set_placement(template.template_placement().clone());
     Ok(tensor)
 }
 
-pub(crate) fn split_core_and_batch_result<'a, T>(
-    input: &'a TypedTensor<T>,
+pub(crate) fn split_core_and_batch_result<'a, T: 'static>(
+    input: &'a HostView<'_, T>,
     core_rank: usize,
     op: &'static str,
 ) -> tenferro_tensor::Result<(&'a [usize], &'a [usize])> {
@@ -539,16 +557,16 @@ pub(crate) fn split_core_and_batch_result<'a, T>(
     Ok(input.shape().split_at(core_rank))
 }
 
-pub(crate) fn matrix_core_and_batch_result<'a, T>(
-    input: &'a TypedTensor<T>,
+pub(crate) fn matrix_core_and_batch_result<'a, T: 'static>(
+    input: &'a HostView<'_, T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize, &'a [usize])> {
     let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, op)?;
     Ok((matrix_shape[0], matrix_shape[1], batch_shape))
 }
 
-pub(crate) fn square_core_and_batch_result<'a, T>(
-    input: &'a TypedTensor<T>,
+pub(crate) fn square_core_and_batch_result<'a, T: 'static>(
+    input: &'a HostView<'_, T>,
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, &'a [usize])> {
     let (rows, cols, batch_shape) = matrix_core_and_batch_result(input, op)?;
@@ -640,7 +658,7 @@ pub(crate) fn release_scratch<T: PoolScalar>(buffers: &mut BufferPool, data: Vec
 /// Empty `(values, vectors)` of a general eigendecomposition with a zero core dimension, tagged
 /// with the complex dtype the nonempty route returns.
 pub(crate) fn zero_dim_eig_outputs(
-    input: &Tensor,
+    input: &tenferro_tensor::TensorView<'_, tenferro_tensor::Host>,
     op: &'static str,
     vectors: bool,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {

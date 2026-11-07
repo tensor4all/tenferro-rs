@@ -383,7 +383,8 @@ fn faer_eligible_reads_reach_the_view_path_before_any_materialization() {
     // Evidence for the borrowed-input contract: a read hook that faer can
     // consume as a strided `MatRef` must test eligibility and return through
     // the `*_faer_view_entered` adapter *before* it reaches
-    // `with_materialized_tensor_read`, so an eligible view never pays for a
+    // `with_owned_layout` (the scoped materializer behind
+    // `with_materialized_tensor_read`), so an eligible view never pays for a
     // front-end copy.
     let source = cpu_backend_source();
     for (read, view_entry) in [
@@ -401,13 +402,13 @@ fn faer_eligible_reads_reach_the_view_path_before_any_materialization() {
     ] {
         let section = rust_function_section(&source, read);
         let eligibility = section
-            .find("faer_strided_read_ok(&input)")
-            .unwrap_or_else(|| panic!("{read} must consult faer_strided_read_ok"));
+            .find("faer_strided_host_ok(&input)")
+            .unwrap_or_else(|| panic!("{read} must consult faer_strided_host_ok"));
         let view_return = section
             .find(view_entry)
             .unwrap_or_else(|| panic!("{read} must return through {view_entry}"));
         let materialization = section
-            .find("tenferro_cpu::with_materialized_tensor_read(")
+            .find("with_owned_layout(")
             .unwrap_or_else(|| panic!("{read} must keep a materializing fallback"));
         assert!(
             eligibility < view_return && view_return < materialization,
@@ -420,16 +421,16 @@ fn faer_eligible_reads_reach_the_view_path_before_any_materialization() {
     // element by element, so only host placement, rank and dtype matter there.
     let section = rust_function_section(&source, "triangular_solve_read");
     let eligibility = section
-        .find("faer_strided_read_ok(&a)")
+        .find("faer_strided_host_ok(&a)")
         .expect("triangular_solve_read must test the coefficient view");
     let rhs_eligibility = section
-        .find("faer_rhs_read_ok(&b)")
+        .find("faer_rhs_host_ok(&b)")
         .expect("triangular_solve_read must test the right-hand side view");
     let view_return = section
         .find("triangular_solve_faer_view_entered")
         .expect("triangular_solve_read must return through its view adapter");
     let materialization = section
-        .find("tenferro_cpu::with_materialized_tensor_read(")
+        .find("with_owned_layout(")
         .expect("triangular_solve_read must keep a materializing fallback");
     assert!(
         eligibility < view_return && rhs_eligibility < view_return && view_return < materialization,
@@ -465,7 +466,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
             "{read} must delegate to already-entered helper {entered}"
         );
         assert!(
-            section.contains("tenferro_cpu::with_materialized_tensor_read("),
+            section.contains("with_owned_layout("),
             "{read} must canonicalize through its entered execution-context proof"
         );
         assert!(
@@ -490,7 +491,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
     for read in ["triangular_solve_read", "solve_read"] {
         assert_eq!(
             rust_function_section(&source, read)
-                .matches("tenferro_cpu::with_materialized_tensor_read(")
+                .matches("with_owned_layout(")
                 .count(),
             2,
             "{read} must nest scoped materialization so failure of the second input reclaims the first"
