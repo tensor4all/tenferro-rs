@@ -39,6 +39,19 @@ Pushes to `main` force the
 comprehensive Linux and macOS matrix; they do not add a second paid RunPod GPU
 run after the pull-request gate.
 
+The changed paths come from the fork point, never from the two trees. `--base`
+carries the base branch tip (`github.event.pull_request.base.sha`), so
+`git diff base head` also reports every path that landed on the base branch
+after the pull request forked, as if the pull request had removed it; a late
+landing on a `_GPU_DEVICE_CONTROL_FILES` path then reserved a pod for a pull
+request that never touched it (#2514). Classification therefore reads
+`base...head` (the merge-base diff), which is also what the hunk reader in
+`_docs_only_rust_paths` already used. The path list from the GitHub API has the
+same meaning and is unchanged. When the fork point cannot be resolved - a
+shallow clone without the common ancestor, an unknown or unrelated revision -
+the policy keeps the full policy. It does not fall back to the two-tree diff:
+that comparison can hide a real change as well as invent one.
+
 Required job names do not disappear when work is unnecessary. Each required
 job either runs its selected profile or publishes an explicit successful
 no-op. A classification failure is a validation failure, never a cheap

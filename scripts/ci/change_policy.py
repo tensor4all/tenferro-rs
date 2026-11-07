@@ -417,14 +417,50 @@ def classify_paths(
     )
 
 
-def _changed_paths(base: str, head: str) -> list[str]:
-    result = subprocess.run(
-        ["git", "diff", "--name-only", base, head, "--"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+def _changed_paths(
+    base: str, head: str, *, cwd: str | None = None
+) -> list[str] | None:
+    """Return the paths that `head` changed relative to its fork point.
+
+    `git diff base head` (two-dot) compares the two trees, so every path that
+    landed on `base` after the branch point reads as a change of `head`. That
+    is the normal shape of an endpoint pair: `--base` carries
+    `github.event.pull_request.base.sha`, the base branch tip, not the commit
+    the pull request forked from. A late landing on a GPU control-plane file
+    would then reserve a paid pod for a pull request that never touched it
+    (#2514). `base...head` asks the same question about the branch instead,
+    and matches how `_docs_only_rust_paths` reads the hunks.
+
+    Returns None when the fork point cannot be resolved - a shallow clone
+    without the common ancestor, an unrelated or unknown revision, or a git
+    that cannot run at all. The caller keeps the full policy: a diff this
+    function cannot scope must not pick a cheaper lane.
+    """
+
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", f"{base}...{head}", "--"],
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
     return result.stdout.splitlines()
+
+
+def _classify_endpoints(event: str, base: str, head: str) -> ChangePolicy:
+    """Classify the diff between two revision endpoints."""
+
+    if event == "push":
+        return _full_policy("push-to-main override", run_gpu=False)
+    paths = _changed_paths(base, head)
+    if paths is None:
+        # Fail closed, like every other classification failure: a validation
+        # failure is never a cheap fallback (docs/design/change-aware-ci.md).
+        return _full_policy(f"no merge base for {base}...{head}: full validation")
+    return classify_paths(paths, event=event, base=base, head=head)
 
 
 def _write_github_output(policy: ChangePolicy, output_path: str) -> None:
@@ -459,14 +495,13 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     if args.path:
-        paths = list(args.path)
+        policy = classify_paths(
+            list(args.path), event=args.event, base=args.base, head=args.head
+        )
     elif args.base:
-        paths = _changed_paths(args.base, args.head)
+        policy = _classify_endpoints(args.event, args.base, args.head)
     else:
-        paths = []
-    policy = classify_paths(
-        paths, event=args.event, base=args.base, head=args.head
-    )
+        policy = classify_paths([], event=args.event)
     print(json.dumps(policy.as_output(), sort_keys=True))
     if output_path := os.environ.get("GITHUB_OUTPUT"):
         _write_github_output(policy, output_path)
