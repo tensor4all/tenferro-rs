@@ -4485,6 +4485,82 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     }
 }
 
+impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R, Dynamic> {
+    /// Checked narrowing of a mutable view to the host representation.
+    ///
+    /// The mutable counterpart of [`TypedTensorView::try_host`]: it succeeds
+    /// exactly when the view borrows host elements (a plain host owner, a host
+    /// slice, or a CPU-resident allocation group), keeps the layout, and
+    /// resolves a device or managed placement label to host memory the same
+    /// way [`TypedTensor::into_host`] does. A consumer that receives the result
+    /// writes it through [`TypedTensorViewMut::as_host_slice_mut`] without a
+    /// further check.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+    /// let mut host = tensor.as_view_mut().try_mut_host("example")?;
+    /// host.as_host_slice_mut()[0] = 5.0;
+    /// assert_eq!(tensor.as_slice()?, &[5.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] attributed to `op` when the view
+    /// borrows backend (device) storage; download the tensor to host first.
+    pub fn try_mut_host(
+        self,
+        op: &'static str,
+    ) -> crate::Result<TypedTensorViewMut<'a, T, R, Host>> {
+        match self.buffer {
+            TensorStorageRefMut::Host(data) => Ok(TypedTensorViewMut {
+                buffer: TensorStorageRefMut::Host(data),
+                // A host-marked view carries no retained region: the exclusive
+                // borrow of `data` is what keeps the owner alive for `'a`, and
+                // the group child has no drop-time obligation.
+                root: None,
+                layout: self.layout,
+                placement: host_placement(self.placement),
+                _representation: std::marker::PhantomData,
+            }),
+            TensorStorageRefMut::Backend(_) => Err(crate::Error::runtime_state(
+                op,
+                "CPU backend received a backend buffer; download the tensor to host before CPU execution",
+            )),
+        }
+    }
+}
+
+impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R, Host> {
+    /// Widen a host-marked mutable view to the runtime union without copying.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DynRank, Host, TypedTensorViewMut};
+    ///
+    /// let mut data = [1_i32, 2];
+    /// let host: TypedTensorViewMut<'_, i32, DynRank, Host> =
+    ///     TypedTensorViewMut::from_host_slice(vec![2].as_slice(), vec![1].as_slice(), 0, &mut data)?;
+    /// let dynamic = host.into_dynamic();
+    /// assert_eq!(dynamic.as_read_only().host_storage()?, &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn into_dynamic(self) -> TypedTensorViewMut<'a, T, R, Dynamic> {
+        TypedTensorViewMut {
+            buffer: self.buffer,
+            root: self.root,
+            layout: self.layout,
+            placement: self.placement,
+            _representation: std::marker::PhantomData,
+        }
+    }
+}
+
 impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R, Host> {
     /// Create a representation-marked mutable view over an explicit host layout.
     ///
@@ -6504,16 +6580,158 @@ impl<'a> TensorView<'a, Host> {
 /// assert_eq!(view.dtype(), DType::F64);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
+///
+/// `D` marks the representation the view was proven to borrow, as on
+/// [`TypedTensorViewMut`]. The default [`Dynamic`] view may borrow host or
+/// backend storage; a `TensorViewMut<'a, Host>` comes only from
+/// [`TensorViewMut::try_mut_host`] or [`TensorWrite::try_mut_host`], so every
+/// arm borrows host storage and a consumer writes it without a further
+/// placement check.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
-pub enum TensorViewMut<'a> {
-    F32(TypedTensorViewMut<'a, f32>),
-    F64(TypedTensorViewMut<'a, f64>),
-    I32(TypedTensorViewMut<'a, i32>),
-    I64(TypedTensorViewMut<'a, i64>),
-    Bool(TypedTensorViewMut<'a, bool>),
-    C32(TypedTensorViewMut<'a, Complex<f32>>),
-    C64(TypedTensorViewMut<'a, Complex<f64>>),
+pub enum TensorViewMut<'a, D: Representation = Dynamic> {
+    F32(TypedTensorViewMut<'a, f32, DynRank, D>),
+    F64(TypedTensorViewMut<'a, f64, DynRank, D>),
+    I32(TypedTensorViewMut<'a, i32, DynRank, D>),
+    I64(TypedTensorViewMut<'a, i64, DynRank, D>),
+    Bool(TypedTensorViewMut<'a, bool, DynRank, D>),
+    C32(TypedTensorViewMut<'a, Complex<f32>, DynRank, D>),
+    C64(TypedTensorViewMut<'a, Complex<f64>, DynRank, D>),
+}
+
+/// Apply one expression to every arm of a [`TensorViewMut`], keeping the arm.
+macro_rules! map_tensor_view_mut {
+    ($view:expr, |$typed:ident| $body:expr) => {
+        match $view {
+            TensorViewMut::F32($typed) => TensorViewMut::F32($body),
+            TensorViewMut::F64($typed) => TensorViewMut::F64($body),
+            TensorViewMut::I32($typed) => TensorViewMut::I32($body),
+            TensorViewMut::I64($typed) => TensorViewMut::I64($body),
+            TensorViewMut::Bool($typed) => TensorViewMut::Bool($body),
+            TensorViewMut::C32($typed) => TensorViewMut::C32($body),
+            TensorViewMut::C64($typed) => TensorViewMut::C64($body),
+        }
+    };
+}
+
+impl<'a> TensorViewMut<'a> {
+    /// Checked narrowing of a dtype-erased mutable view to the host
+    /// representation.
+    ///
+    /// See [`TypedTensorViewMut::try_mut_host`]: the narrowing succeeds exactly
+    /// when the view borrows host elements, and a consumer of the
+    /// `TensorViewMut<'a, Host>` it returns needs no further placement check.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, TensorViewMut};
+    ///
+    /// let mut data = [1.0_f64, 2.0];
+    /// let host = TensorViewMut::f64(&[2], &mut data)?.try_mut_host("example")?;
+    /// assert_eq!(host.dtype(), DType::F64);
+    /// assert_eq!(host.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] attributed to `op` when the view
+    /// borrows backend (device) storage; download the tensor to host first.
+    pub fn try_mut_host(self, op: &'static str) -> crate::Result<TensorViewMut<'a, Host>> {
+        Ok(map_tensor_view_mut!(self, |view| view.try_mut_host(op)?))
+    }
+}
+
+impl<'a> TensorViewMut<'a, Host> {
+    /// Widen a host-marked mutable view to the runtime union without copying.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TensorViewMut;
+    ///
+    /// let mut data = [3_i32, 4];
+    /// let host = TensorViewMut::i32(&[2], &mut data)?.try_mut_host("example")?;
+    /// let dynamic = host.into_dynamic();
+    /// assert_eq!(dynamic.as_read_only().as_slice::<i32>()?, &[3, 4]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn into_dynamic(self) -> TensorViewMut<'a> {
+        map_tensor_view_mut!(self, |view| view.into_dynamic())
+    }
+
+    /// The element dtype of this host view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, TensorViewMut};
+    ///
+    /// let mut data = [7_i64];
+    /// let host = TensorViewMut::i64(&[1], &mut data)?.try_mut_host("example")?;
+    /// assert_eq!(host.dtype(), DType::I64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn dtype(&self) -> DType {
+        match self {
+            Self::F32(_) => DType::F32,
+            Self::F64(_) => DType::F64,
+            Self::I32(_) => DType::I32,
+            Self::I64(_) => DType::I64,
+            Self::Bool(_) => DType::Bool,
+            Self::C32(_) => DType::C32,
+            Self::C64(_) => DType::C64,
+        }
+    }
+
+    /// The logical shape of this host view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TensorViewMut;
+    ///
+    /// let mut data = [1.0_f32, 2.0];
+    /// let host = TensorViewMut::f32(&[2], &mut data)?.try_mut_host("example")?;
+    /// assert_eq!(host.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn shape(&self) -> &[usize] {
+        match self {
+            Self::F32(view) => view.shape(),
+            Self::F64(view) => view.shape(),
+            Self::I32(view) => view.shape(),
+            Self::I64(view) => view.shape(),
+            Self::Bool(view) => view.shape(),
+            Self::C32(view) => view.shape(),
+            Self::C64(view) => view.shape(),
+        }
+    }
+
+    /// The strides of this host view in element units.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TensorViewMut;
+    ///
+    /// let mut data = [0.0_f64; 6];
+    /// let host = TensorViewMut::f64(&[2, 3], &mut data)?.try_mut_host("example")?;
+    /// assert_eq!(host.strides(), &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn strides(&self) -> &[isize] {
+        match self {
+            Self::F32(view) => view.strides(),
+            Self::F64(view) => view.strides(),
+            Self::I32(view) => view.strides(),
+            Self::I64(view) => view.strides(),
+            Self::Bool(view) => view.strides(),
+            Self::C32(view) => view.strides(),
+            Self::C64(view) => view.strides(),
+        }
+    }
 }
 
 /// Read-only tensor input accepted by synchronous eager kernels.
@@ -8954,6 +9172,66 @@ impl<'a> TensorRead<'a> {
             Self::View(_) => None,
         }
     }
+}
+
+impl<'a> TensorWrite<'a> {
+    /// Checked narrowing of a write target to a host-marked mutable view.
+    ///
+    /// The write counterpart of [`TensorRead::try_host`]: an owned tensor is
+    /// borrowed mutably without copying, an existing view keeps its layout, and
+    /// the result is a [`TensorViewMut<'a, Host>`](TensorViewMut) whose
+    /// consumers write host elements without re-checking placement. `op` names
+    /// the operation in the error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Tensor, TensorWrite};
+    ///
+    /// let mut tensor = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2])?;
+    /// let host = TensorWrite::from_tensor(&mut tensor).try_mut_host("solve_read_into")?;
+    /// assert_eq!(host.dtype(), DType::F64);
+    /// assert_eq!(host.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::UnsupportedDType`] attributed to `op` for a
+    /// tensor built with [`Tensor::external`], which has no preset-scalar view,
+    /// and [`crate::Error::RuntimeState`] attributed to `op` when the target
+    /// borrows backend (device) storage; download the tensor to host first.
+    pub fn try_mut_host(self, op: &'static str) -> crate::Result<TensorViewMut<'a, Host>> {
+        match self {
+            Self::Tensor(tensor) => {
+                let dtype = tensor.dtype();
+                tensor_view_mut_of(tensor).ok_or_else(|| {
+                    crate::Error::unsupported_dtype(
+                        op,
+                        dtype,
+                        "an externally defined payload has no host tensor view",
+                    )
+                })?
+            }
+            Self::View(view) => view,
+        }
+        .try_mut_host(op)
+    }
+}
+
+/// Mutably borrow an owned tensor as a dtype-erased view, or `None` when it
+/// holds an externally defined payload ([`TensorViewMut`] has no arm for it).
+fn tensor_view_mut_of(tensor: &mut Tensor) -> Option<TensorViewMut<'_>> {
+    Some(match tensor.dtype() {
+        DType::F32 => TensorViewMut::F32(tensor.as_typed_mut::<f32>()?.as_view_mut()),
+        DType::F64 => TensorViewMut::F64(tensor.as_typed_mut::<f64>()?.as_view_mut()),
+        DType::I32 => TensorViewMut::I32(tensor.as_typed_mut::<i32>()?.as_view_mut()),
+        DType::I64 => TensorViewMut::I64(tensor.as_typed_mut::<i64>()?.as_view_mut()),
+        DType::Bool => TensorViewMut::Bool(tensor.as_typed_mut::<bool>()?.as_view_mut()),
+        DType::C32 => TensorViewMut::C32(tensor.as_typed_mut::<Complex32>()?.as_view_mut()),
+        DType::C64 => TensorViewMut::C64(tensor.as_typed_mut::<Complex64>()?.as_view_mut()),
+        DType::External(_) => return None,
+    })
 }
 
 impl<'a> TensorWrite<'a> {

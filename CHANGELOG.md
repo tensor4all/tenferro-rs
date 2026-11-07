@@ -19,6 +19,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `TensorView` gains a defaulted representation parameter
   (`TensorView<'a, D: Representation = Dynamic>`); every existing spelling
   `TensorView<'a>` still names the same type.
+- **The same host narrowing for write targets: `TensorWrite::try_mut_host(op)`,
+  `TensorViewMut::try_mut_host(op)` and `TypedTensorViewMut::try_mut_host(op)`**
+  (#2499). Each returns a host-marked mutable view (`TensorViewMut<'_, Host>` /
+  `TypedTensorViewMut<'_, T, R, Host>`) with the read side's errors: a
+  `RuntimeState` error naming `op` for backend storage and an `UnsupportedDType`
+  error naming `op` for a `Tensor::external` payload. A device or managed
+  placement label on host storage resolves to host memory as `try_host` does.
+  The host-marked mutable views widen back without copying (`into_dynamic`),
+  and `TensorViewMut<'_, Host>` reports `dtype`, `shape` and `strides`.
+  `TensorViewMut` gains a defaulted representation parameter
+  (`TensorViewMut<'a, D: Representation = Dynamic>`); every existing spelling
+  `TensorViewMut<'a>` still names the same type.
 - **`tenferro_linalg::error::map_error` is public** (#2462). It is the
   translation tenferro's own linalg entries apply to a `tlinalg` failure, so a
   caller that runs `tlinalg` factorizations itself reports the same error

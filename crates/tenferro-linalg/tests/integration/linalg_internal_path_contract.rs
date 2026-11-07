@@ -637,7 +637,7 @@ fn cpu_solve_read_into_entered_writes_into_the_caller_buffer() {
     let entered = source_section(
         &source,
         "fn solve_read_into_entered(",
-        "fn tensor_write_view(out: TensorWrite<'_>) -> TensorViewMut<'_> {",
+        "fn cholesky_entered(",
     );
 
     assert!(

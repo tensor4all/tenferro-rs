@@ -2090,10 +2090,7 @@ impl TensorLinalgExt for Tensor {
     fn slogdet(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
         validate_square_matrix("slogdet", self.shape())?;
         if self.shape()[0] == 0 && self.shape()[1] == 0 {
-            ensure_linalg_input_residency(session, "slogdet", &TensorRead::from_tensor(self))?;
-            return with_linalg_backend(session, "slogdet", |backend| {
-                empty_square_slogdet(self.shape(), self.dtype(), backend)
-            });
+            return empty_square_slogdet_on(session, "slogdet", TensorRead::from_tensor(self));
         }
         with_linalg_backend(session, "slogdet", |backend| {
             slogdet_from_lu(four(backend.lu(self)?, "slogdet")?, backend)
@@ -2306,10 +2303,7 @@ impl TensorReadLinalgExt for TensorRead<'_> {
     fn slogdet_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
         validate_square_matrix("slogdet_read", self.shape())?;
         if self.shape()[0] == 0 && self.shape()[1] == 0 {
-            ensure_linalg_input_residency(session, "slogdet_read", &self)?;
-            return with_linalg_backend(session, "slogdet_read", |backend| {
-                empty_square_slogdet(self.shape(), self.dtype(), backend)
-            });
+            return empty_square_slogdet_on(session, "slogdet_read", self);
         }
         with_linalg_backend(session, "slogdet_read", |backend| {
             slogdet_from_lu(four(backend.lu_read(self)?, "slogdet_read")?, backend)
@@ -2675,27 +2669,33 @@ pub(crate) fn with_linalg_backend<X>(
     ))
 }
 
-/// Run the backend's own input-residency check without an operation.
+/// The empty-determinant shortcut, taken after the backend's own input-residency boundary.
 ///
-/// An empty determinant shortcut returns before the LU call that would
-/// otherwise reject a host tensor on a device session or a device tensor on a
-/// host session. This keeps that refusal by calling the same check the LU
-/// route performs, without factorizing or copying the input.
-fn ensure_linalg_input_residency(
+/// An empty square input needs no factorization, but it still crosses the same boundary the LU
+/// route would: a host session narrows it to host once and reads the output shape and dtype from
+/// that host view, and a device session applies the device-residency check. Neither copies or
+/// factorizes the input.
+fn empty_square_slogdet_on(
     session: &mut dyn Engine,
     op: &'static str,
-    input: &TensorRead<'_>,
-) -> tenferro_tensor::Result<()> {
+    input: TensorRead<'_>,
+) -> tenferro_tensor::Result<(Tensor, Tensor)> {
     if with_cpu_engine(session, |_| ()).is_some() {
-        // The shortcut runs no kernel, so the host view is only the refusal the LU route would
-        // have returned; it is dropped here.
-        return with_cpu_engine(session, |_| input.clone().try_host(op).map(drop))
-            .expect("marker probe matched a CPU execution session");
+        return with_cpu_engine(session, |exec| {
+            let input = input.try_host(op)?;
+            empty_square_slogdet(input.shape(), input.dtype(), exec as &mut dyn LinalgBackend)
+        })
+        .expect("marker probe matched a CPU execution session");
     }
     #[cfg(feature = "cuda")]
     if with_cuda_engine(session, |_| ()).is_some() {
         return with_cuda_engine(session, |backend| {
-            crate::gpu::ensure_device_resident_read(backend, op, input)
+            crate::gpu::ensure_device_resident_read(backend, op, &input)?;
+            empty_square_slogdet(
+                input.shape(),
+                input.dtype(),
+                backend as &mut dyn LinalgBackend,
+            )
         })
         .expect("marker probe matched a CUDA execution session");
     }

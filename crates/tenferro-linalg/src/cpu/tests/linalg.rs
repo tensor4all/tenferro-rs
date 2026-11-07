@@ -2626,3 +2626,89 @@ fn full_piv_lu_read_to_contiguous_fallback_rank3_all_dtypes() {
         }
     });
 }
+
+fn backend_resident_f64(id: u64, shape: Vec<usize>, memory_kind: MemoryKind) -> Tensor {
+    let len = shape.iter().product();
+    Tensor::from_typed(
+        TypedTensor::<f64>::from_buffer_col_major(
+            shape,
+            StorageBuffer::Backend(Box::new(BackendStorageHandle::<f64>::new_with_len(id, len))),
+            Placement {
+                memory_kind,
+                device: None,
+                cpu_affinity: None,
+            },
+        )
+        .unwrap(),
+    )
+}
+
+/// The CPU `solve_read_into` narrows its destination to a host mutable view once, so a
+/// backend-resident destination is refused at that boundary with the operation name. The
+/// destination carries a host placement label so that the placement-agreement validation, which
+/// runs first, passes and the storage itself is what the narrowing refuses.
+#[test]
+fn solve_read_into_refuses_a_backend_resident_destination_at_the_host_boundary() {
+    let a = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
+    let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
+    let mut out = backend_resident_f64(130, vec![2, 1], MemoryKind::UnpinnedHost);
+
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    with_cpu_linalg(&mut backend, |backend| {
+        let error = backend
+            .solve_read_into(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                tenferro_tensor::TensorWrite::from_tensor(&mut out),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                tenferro_tensor::Error::RuntimeState {
+                    op: "solve_read_into",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+    });
+}
+
+/// The empty-determinant shortcut runs no factorization but still crosses the host boundary
+/// the LU route would: a backend-resident empty input is refused on a CPU session, and a host
+/// one yields the unit sign and zero log-magnitude.
+#[test]
+fn empty_slogdet_on_a_cpu_session_narrows_its_input_to_host() {
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+
+    let device_empty = backend_resident_f64(131, vec![0, 0], MemoryKind::Device);
+    let error = crate::TensorLinalgExt::slogdet(&device_empty, &mut backend).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            tenferro_tensor::Error::RuntimeState { op: "slogdet", .. }
+        ),
+        "{error}"
+    );
+    let error = TensorRead::from_tensor(&device_empty)
+        .slogdet_read(&mut backend)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            tenferro_tensor::Error::RuntimeState {
+                op: "slogdet_read",
+                ..
+            }
+        ),
+        "{error}"
+    );
+
+    let host_empty = Tensor::from_vec_col_major(vec![0, 0], Vec::<f64>::new()).unwrap();
+    let (sign, logabsdet) = TensorRead::from_tensor(&host_empty)
+        .slogdet_read(&mut backend)
+        .unwrap();
+    assert_eq!(sign.as_slice::<f64>().unwrap(), &[1.0]);
+    assert_eq!(logabsdet.as_slice::<f64>().unwrap(), &[0.0]);
+}
