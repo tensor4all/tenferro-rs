@@ -1,0 +1,40 @@
+{
+  "name": "waiver names the current head",
+  "action": "labeled",
+  "labelPresent": true,
+  "headSha": "1111111111111111111111111111111111111111",
+  "comments": [
+    {
+      "id": 1,
+      "user": {
+        "login": "maint"
+      },
+      "author_association": "MEMBER",
+      "created_at": "2026-01-01T10:00:00Z",
+      "body": "diff read by hand.\n\nwaive-review 1111111111111111111111111111111111111111"
+    }
+  ],
+  "timeline": [
+    {
+      "event": "labeled",
+      "label": {
+        "name": "rules-review:waive"
+      },
+      "actor": {
+        "login": "maint"
+      },
+      "created_at": "2026-01-01T10:00:00Z"
+    },
+    {
+      "event": "committed",
+      "sha": "1111111111111111111111111111111111111111",
+      "author": {
+        "date": "2026-01-01T09:00:00Z"
+      }
+    }
+  ],
+  "expect": {
+    "allowed": true,
+    "code": "waiver-matches-head"
+  }
+}

@@ -77,6 +77,12 @@ _CI_FILES = frozenset(
         "scripts/check-contraction-kernels.py",
         "scripts/check-public-boundary-inventory.py",
         "scripts/test-public-boundary-inventory.py",
+        # The review waiver is executed by `.github/workflows/review_bot.yml`, so
+        # its decision and its fixture test belong to the CI lane: a change to
+        # either must re-run the CI-configuration job and must not reserve the
+        # paid GPU lane for a JavaScript-only edit.
+        "scripts/review-waiver.js",
+        "scripts/test-review-waiver.js",
     }
 )
 _CI_PREFIXES = (".github/workflows/", "scripts/ci/")
