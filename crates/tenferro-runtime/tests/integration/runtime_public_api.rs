@@ -1693,7 +1693,7 @@ fn prepared_transpose_and_slice_outputs_alias_their_input_without_a_copy() {
     let tenferro_tensor::TensorView::F64(view) = read
         .clone()
         .tensor_view()
-        .expect("a preset scalar has a view")
+        .expect("a preset dtype always has the requested representation")
     else {
         panic!("test input is F64");
     };

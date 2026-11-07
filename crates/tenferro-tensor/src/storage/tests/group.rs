@@ -831,7 +831,7 @@ fn compact_slice_extraction_preserves_offset_extent_and_root() {
     assert_eq!(
         value
             .tensor_read()
-            .expect("a preset f64 value has a read")
+            .expect("a preset dtype always has the requested representation")
             .as_slice::<f64>()
             .unwrap(),
         &[2.0, 3.0]
@@ -955,7 +955,7 @@ fn offset_owner_owning_reinterpretation_round_trips() {
     assert_eq!(
         duplicated
             .tensor_read()
-            .expect("a preset f64 value has a read")
+            .expect("a preset dtype always has the requested representation")
             .as_slice::<f64>()
             .unwrap(),
         &reals
@@ -1037,7 +1037,7 @@ fn root_relative_value_duplicates_its_backing_root() {
     assert_eq!(
         duplicated
             .tensor_read()
-            .expect("a preset f64 value has a read")
+            .expect("a preset dtype always has the requested representation")
             .as_slice::<f64>()
             .unwrap(),
         &[2.0, 3.0]
@@ -1138,7 +1138,7 @@ fn owning_reinterpretation_of_a_complex_root_reads_back() {
     assert_eq!(
         value
             .tensor_read()
-            .expect("a preset f64 value has a read")
+            .expect("a preset dtype always has the requested representation")
             .as_slice::<f64>()
             .unwrap(),
         &reals

@@ -574,6 +574,18 @@ The normative rule is the shared `tensor4all-agent-rules`
 `scripts/repository-rules-review.py` routes it to the reviewer and enforces the
 inline `#[cfg(test)]` restriction from it.
 
+- One assertion message belongs to one site. When the same sentence-shaped
+  `expect("...")` message appears in more than two test files it has stopped
+  being a local proof and become a repository-wide claim no site checks, so
+  [`scripts/ci/check-duplicate-test-messages.py`](scripts/ci/check-duplicate-test-messages.py)
+  fails the `ci-config` lane. A reviewed exception goes to
+  [`scripts/ci/duplicate-test-messages-allowlist.toml`](scripts/ci/duplicate-test-messages-allowlist.toml)
+  with a reason and the reviewed file list; the list is a ratchet, so a new file
+  using the message fails rather than joining an entry silently. Keep the
+  message's wording specific to what that site proves (the same accessor
+  invariant spelled differently per site is fine); do not paste one sentence
+  across sibling tests to make the check pass.
+
 ## Device Transfer And Backend Buffer Errors
 
 - tenferro follows the PyTorch convention: no implicit CPU-GPU transfer.

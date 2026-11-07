@@ -117,7 +117,7 @@ impl TensorStructural for HookEngine {
         input
             .clone()
             .tensor_view()
-            .expect("a preset scalar has a view")
+            .expect("a preset dtype always has the requested representation")
             .duplicate()
     }
 

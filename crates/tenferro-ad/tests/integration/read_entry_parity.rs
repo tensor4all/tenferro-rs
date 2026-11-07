@@ -105,7 +105,7 @@ fn eager_and_traced_agree_on_a_borrowed_view_operand() {
     let compact = TensorRead::from_view(
         TensorRead::from_tensor(&logical)
             .tensor_view()
-            .expect("a preset scalar has a view"),
+            .expect("a preset dtype always has the requested representation"),
     );
     let strided = view.tensor_read();
     let placeholder = trace

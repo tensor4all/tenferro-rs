@@ -293,7 +293,7 @@ fn tensor_value_keeps_owned_transpose_as_view() {
     assert_eq!(transposed.shape(), &[3, 2]);
     match transposed
         .tensor_read()
-        .expect("a preset f64 value has a read")
+        .expect("a preset dtype always has the requested representation")
     {
         TensorRead::View(view) => assert_eq!(view.shape(), &[3, 2]),
         TensorRead::Tensor(_) => panic!("owned transpose should be exposed as a view"),
@@ -312,12 +312,17 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     assert_eq!(owned.shape(), &[2, 3]);
     assert_eq!(owned.strides(), &[1, 2]);
     assert_eq!(owned.offset(), 0);
-    match owned.tensor_view().expect("a preset f64 value has a view") {
+    match owned
+        .tensor_view()
+        .expect("a preset dtype always has the requested representation")
+    {
         TensorView::F64(view) => assert_eq!(view.get(&[1, 2]), Some(&6.0)),
         other => panic!("expected f64 view, got {other:?}"),
     }
     assert!(matches!(
-        owned.tensor_read().expect("a preset f64 value has a read"),
+        owned
+            .tensor_read()
+            .expect("a preset dtype always has the requested representation"),
         TensorRead::Tensor(_)
     ));
 
@@ -343,7 +348,10 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         })
         .unwrap();
     assert_eq!(sliced.shape(), &[2, 2]);
-    match sliced.tensor_view().expect("a preset f64 value has a view") {
+    match sliced
+        .tensor_view()
+        .expect("a preset dtype always has the requested representation")
+    {
         TensorView::F64(view) => {
             assert_eq!(view.get(&[0, 0]), Some(&3.0));
             assert_eq!(view.get(&[1, 1]), Some(&6.0));
@@ -388,7 +396,9 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     assert_eq!(value.dtype(), DType::F64);
     assert_eq!(value.shape(), &[2, 3]);
     assert!(matches!(
-        value.tensor_read().expect("a preset f64 value has a read"),
+        value
+            .tensor_read()
+            .expect("a preset dtype always has the requested representation"),
         TensorRead::Tensor(_)
     ));
 
@@ -2407,7 +2417,7 @@ fn an_external_payload_has_no_preset_view_and_says_so() {
     let preset = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     let view = TensorRead::from_tensor(&preset)
         .tensor_view()
-        .expect("a preset scalar has a view");
+        .expect("a preset dtype always has the requested representation");
     assert_eq!(view.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
     let borrowed = TensorView::i32(&[2], &[5, 6]).unwrap();
     let same = TensorRead::from_view(borrowed)
@@ -2417,7 +2427,7 @@ fn an_external_payload_has_no_preset_view_and_says_so() {
     assert_eq!(
         TensorValue::from_tensor(preset)
             .tensor_view()
-            .expect("a preset scalar has a view")
+            .expect("a preset dtype always has the requested representation")
             .as_slice::<f64>()
             .unwrap(),
         &[3.0, 4.0]
