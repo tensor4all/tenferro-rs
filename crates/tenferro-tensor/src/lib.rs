@@ -99,8 +99,8 @@ pub use backend::{
 };
 pub use cache::{CacheStats, RuntimeCacheControl};
 pub use capability::{
-    capability_output_dtype, BackendId, CapabilityAxis, CapabilityQuery, OperationCapability,
-    SupportLevel, TensorBackendCapability,
+    capability_entry, capability_output_dtype, BackendId, CapabilityAxis, CapabilityQuery,
+    OperationCapability, SupportLevel, TensorBackendCapability,
 };
 pub use config::{
     degenerate_dot_kind, CompareDir, DegenerateDotKind, DotGeneralConfig, GatherConfig, PadConfig,

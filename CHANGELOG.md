@@ -8,6 +8,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`tenferro_tensor::capability_entry`** (#2483). It is the one lookup rule
+  behind `TensorBackendCapability::capability` and `::require_capability`: the
+  backend id, operation, dtype and optional capability axis are matched in one
+  place, so a kernel that needs to know whether its table admits a dtype calls
+  the same code the trait does instead of repeating the scan next to a second
+  error message. `CpuEngine`'s analytic dtype gate now goes through it.
 - **One host narrowing for borrowed reads: `TensorRead::try_host(op)`,
   `TensorView::try_host(op)` and `TypedTensorView::try_host(op)`.** Each
   returns a host-marked view (`TensorView<'_, Host>` /
