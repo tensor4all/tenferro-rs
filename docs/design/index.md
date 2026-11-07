@@ -17,7 +17,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [session-oriented-concrete-apis.md](./session-oriented-concrete-apis.md) | Session-borrowing concrete operation surface and its migration record |
 | [storage-ownership-contracts.md](./storage-ownership-contracts.md) | Normative Phase 1 contracts for the storage ownership redesign (#1555): span access and retirement, allocation groups, submission, method distribution, raw handles and reclamation, documentation ownership, and AD value retention |
 | [tensor-prims.md](./tensor-prims.md) | Tensor backend protocol and execution surface |
-| [backend-capability.md](./backend-capability.md) | Runtime backend capability descriptor for typed/erased tensor support and generated CUDA coverage |
+| [backend-capability.md](./backend-capability.md) | Backend capability descriptor: a declared op/dtype support table, not enforced at submission (#2477) |
 | [integer-semantics.md](./integer-semantics.md) | CPU/CUDA integer arithmetic semantics, wrapping behavior, and structured domain errors |
 | [output-modes.md](./output-modes.md) | Output-update vocabulary for `_read`, `_into`, `_add_to`, and dot `_into_accum` surfaces |
 | [algebra.md](./algebra.md) | Algebra boundary, external numeric extensions, tropical paths |

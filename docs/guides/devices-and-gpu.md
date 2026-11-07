@@ -301,21 +301,26 @@ CUDA coverage is about backend dispatch. It is not the same as AD coverage.
 ## Coverage
 
 The CUDA backend uses the same concrete, eager, and traced tensor APIs as
-the CPU backend. The generated table below describes the current first-scope
-core primitive descriptor for CUDA-resident `Tensor` values. It is not an
-autodiff coverage table.
+the CPU backend. The table below copies the CUDA backend capability
+descriptor (`tenferro_gpu::cuda::cuda_capabilities()`) for core primitives on
+CUDA-resident `Tensor` values. It is maintained by hand alongside that table and
+is not generated or checked against it. The descriptor is a declaration:
+submitting an operation does not check it, so the table states what the backend
+declares, not a gate. See [the backend capability design note](../design/backend-capability.md).
+It is not an autodiff coverage table.
 
 Legend:
 
 - `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, and `C64` are the current public `Tensor` dtypes.
 - Native CUDA dtypes have CUDA implementations for that operation.
 - Unsupported descriptor dtypes are semantically valid for the core op catalog
-  but currently return an error on CUDA.
+  but declared unsupported on CUDA; the backend is expected to return an error
+  for them.
 - Dtypes absent from the row are outside the current semantic dtype policy for
   that operation.
 
 <!-- cuda-core-capability:start -->
-| Primitive op | Native CUDA dtypes | Unsupported descriptor dtypes | Output dtype | Native axes |
+| Primitive op | Native CUDA dtypes | Unsupported descriptor dtypes | Output dtype | Axis levels for native dtypes |
 | --- | --- | --- | --- | --- |
 | `add` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 | `sub` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
@@ -342,7 +347,7 @@ Legend:
 | `expm1` | `F32`, `F64` | `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 | `log1p` | `F32`, `F64` | `C32`, `C64` | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 | `erf` | `F32`, `F64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
-| `dot_general` | `F32`, `F64`, `C32`, `C64` | none | same as input | result Native; read Native; write Native; strided Native; accumulation Native |
+| `dot_general` | `F32`, `F64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Native; strided Unsupported; accumulation Native |
 | `reduce_sum` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 | `reduce_sum_squares` | `F32`, `F64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 | `reduce_prod` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
@@ -359,9 +364,8 @@ view returns `Unsupported` with its rank and the supported limit before any
 output is modified. Use an owned `Tensor` destination (or the allocating dot
 entry) instead; owned outputs are not subject to this copy-ABI ceiling.
 
-Additional CUDA coverage outside the first-scope core descriptor is tracked
-below until those operation families are modeled by the backend capability
-descriptor.
+Additional CUDA coverage outside the core descriptor is tracked below; these
+operation families are not modeled by the backend capability descriptor.
 
 | Operation or family | CUDA dtype support | Notes |
 | --- | --- | --- |
