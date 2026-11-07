@@ -34,7 +34,9 @@ pub(crate) fn cpu_host_owned_read(input: &TensorRead<'_>) -> Option<TensorResult
     {
         return None;
     }
-    Some(input.clone().tensor_view().duplicate())
+    // The guard above already refused a caller-owned payload, the only read with
+    // no preset view; mapping keeps that refusal a `None` should the guard move.
+    input.clone().tensor_view().map(|view| view.duplicate())
 }
 
 /// The runtime registration for the kind of `engine`, or `None` for an engine

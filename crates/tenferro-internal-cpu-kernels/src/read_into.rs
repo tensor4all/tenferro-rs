@@ -252,9 +252,19 @@ fn execute_one_shot_elementwise(
     exec: Exec<'_>,
 ) -> crate::Result<()> {
     let out = tensor_write_view(out)?;
+    // Eligibility makes every input dtype equal the output dtype, and
+    // `tensor_write_view` has already refused a caller-owned output, so the
+    // inputs are preset scalars here; the refusal below keeps that a typed error
+    // rather than an assertion should eligibility ever admit more.
+    let no_view = || {
+        Error::unsupported(
+            "elementwise_read_into",
+            "an externally defined payload has no preset-scalar view",
+        )
+    };
     macro_rules! dispatch_map {
         ($map_op:expr) => {{
-            let input = inputs[0].clone().tensor_view();
+            let input = inputs[0].clone().tensor_view().ok_or_else(no_view)?;
             match (input, out) {
                 (TensorView::F32(input), TensorViewMut::F32(out)) => {
                     execute_one_shot_map(KernelDType::F32, $map_op, input, out, exec)
@@ -283,8 +293,8 @@ fn execute_one_shot_elementwise(
     }
     macro_rules! dispatch_zip {
         ($zip_op:expr) => {{
-            let lhs = inputs[0].clone().tensor_view();
-            let rhs = inputs[1].clone().tensor_view();
+            let lhs = inputs[0].clone().tensor_view().ok_or_else(no_view)?;
+            let rhs = inputs[1].clone().tensor_view().ok_or_else(no_view)?;
             match (lhs, rhs, out) {
                 (TensorView::F32(lhs), TensorView::F32(rhs), TensorViewMut::F32(out)) => {
                     execute_one_shot_zip(KernelDType::F32, $zip_op, lhs, rhs, out, exec)

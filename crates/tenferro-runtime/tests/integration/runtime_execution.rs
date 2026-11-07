@@ -522,7 +522,7 @@ struct RecordedTransferRequest {
 }
 
 fn read_f64_values(input: TensorRead<'_>) -> tenferro_runtime::Result<Vec<f64>> {
-    match input.tensor_view() {
+    match input.tensor_view().expect("a preset scalar has a view") {
         TensorView::F64(view) => match view.backend_buffer() {
             Some(buffer) => buffer
                 .map_read()
@@ -1025,7 +1025,11 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
         };
         if same_domain {
             let shape = inputs[0].shape().to_vec();
-            let source_values = match inputs[0].clone().tensor_view() {
+            let source_values = match inputs[0]
+                .clone()
+                .tensor_view()
+                .expect("a preset scalar has a view")
+            {
                 TensorView::F64(view) => match view.backend_buffer() {
                     Some(buffer) => buffer
                         .map_read()

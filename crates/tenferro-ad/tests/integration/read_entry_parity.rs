@@ -102,7 +102,11 @@ fn eager_and_traced_agree_on_a_borrowed_view_operand() {
     let logical = view
         .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
         .expect("materialize the eager input");
-    let compact = TensorRead::from_view(TensorRead::from_tensor(&logical).tensor_view());
+    let compact = TensorRead::from_view(
+        TensorRead::from_tensor(&logical)
+            .tensor_view()
+            .expect("a preset scalar has a view"),
+    );
     let strided = view.tensor_read();
     let placeholder = trace
         .input_symbolic_shape(DType::F64, 3)

@@ -701,8 +701,13 @@ pub trait TracedTensorAdExt {
     /// y.checkpoint(&mut compiler, &runtime, &mut engine).unwrap();
     ///
     /// let value = y.attached_value().unwrap();
-    /// let materialized = value.tensor_read().unwrap().tensor_view().duplicate().unwrap();
-    /// assert_eq!(materialized.as_slice::<f64>().unwrap(), &[9.0]);
+    /// let view = value
+    ///     .tensor_read()?
+    ///     .tensor_view()
+    ///     .ok_or("a checkpointed f64 value has a preset-scalar view")?;
+    /// let materialized = view.duplicate()?;
+    /// assert_eq!(materialized.as_slice::<f64>()?, &[9.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors

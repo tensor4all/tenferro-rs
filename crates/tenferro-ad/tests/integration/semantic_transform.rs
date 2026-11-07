@@ -1865,6 +1865,7 @@ fn semantic_program_transform_cache_reuses_bound_programs_without_stale_bindings
             .tensor_read()
             .unwrap()
             .tensor_view()
+            .expect("a preset scalar has a view")
             .as_slice::<f64>()
             .unwrap()
             .to_vec()

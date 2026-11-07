@@ -60,7 +60,8 @@ impl<'s, 'a> SessionComposite<'s, 'a> {
                 if value.as_tensor().is_some() {
                     Ok(value.into_tensor()?)
                 } else {
-                    self.session.to_contiguous_read(value.tensor_read())
+                    self.session
+                        .to_contiguous_read(ReadInput::Value(value).tensor_read())
                 }
             }
             ReadInput::Borrowed(read) => self.session.to_contiguous_read(read),
@@ -210,6 +211,15 @@ impl<'a> CompositeOps for SessionComposite<'_, 'a> {
         Ok(match value {
             ReadInput::Borrowed(read) => {
                 ReadInput::Borrowed(read.broadcast_in_dim_view(shape, dims)?)
+            }
+            // A view of a caller-owned payload has no `TensorRead` form (#2486),
+            // and `ReadInput::tensor_read` relies on `Value` never holding one.
+            ReadInput::Owned(tensor) if matches!(tensor.dtype(), DType::External(_)) => {
+                return Err(Error::unsupported_dtype(
+                    "broadcast_in_dim",
+                    tensor.dtype(),
+                    "a caller-owned payload has no metadata-only broadcast view",
+                ));
             }
             ReadInput::Owned(tensor) => ReadInput::Value(
                 TensorValue::from_tensor(tensor).broadcast_in_dim_view(shape, dims)?,

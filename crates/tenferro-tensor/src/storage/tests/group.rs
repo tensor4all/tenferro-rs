@@ -763,7 +763,10 @@ fn non_compact_view_descriptors_are_refused_by_extraction_and_keep_their_values(
         // The unchanged group still reads the logical view values.
         let read = group.read_view(slot).unwrap();
         let mut values = Vec::new();
-        let crate::TensorView::F64(view) = read.tensor_view() else {
+        let crate::TensorView::F64(view) = read
+            .tensor_view()
+            .expect("a group descriptor holds a preset scalar")
+        else {
             panic!("{name}: an f64 descriptor");
         };
         let shape = view.shape().to_vec();
@@ -825,7 +828,14 @@ fn compact_slice_extraction_preserves_offset_extent_and_root() {
     // The logical layout keeps the slice offset and extent before extraction.
     assert_eq!(value.shape(), &[2]);
     assert_eq!(value.offset(), 1);
-    assert_eq!(value.tensor_read().as_slice::<f64>().unwrap(), &[2.0, 3.0]);
+    assert_eq!(
+        value
+            .tensor_read()
+            .expect("a preset f64 value has a read")
+            .as_slice::<f64>()
+            .unwrap(),
+        &[2.0, 3.0]
+    );
     let (group, slot, _, _) = value
         .try_into_group_parts()
         .expect("a pooled value enters a group");
@@ -942,7 +952,14 @@ fn offset_owner_owning_reinterpretation_round_trips() {
     let duplicated = value
         .duplicate()
         .expect("a reinterpreted root-relative value duplicates");
-    assert_eq!(duplicated.tensor_read().as_slice::<f64>().unwrap(), &reals);
+    assert_eq!(
+        duplicated
+            .tensor_read()
+            .expect("a preset f64 value has a read")
+            .as_slice::<f64>()
+            .unwrap(),
+        &reals
+    );
 }
 
 /// #2023: a backend owner stays whole-root. The provider binding path reads the
@@ -1018,7 +1035,11 @@ fn root_relative_value_duplicates_its_backing_root() {
     assert_eq!(duplicated.shape(), &[2]);
     assert_eq!(duplicated.offset(), 1);
     assert_eq!(
-        duplicated.tensor_read().as_slice::<f64>().unwrap(),
+        duplicated
+            .tensor_read()
+            .expect("a preset f64 value has a read")
+            .as_slice::<f64>()
+            .unwrap(),
         &[2.0, 3.0]
     );
     // The duplicate is the same kind of value as the original: both keep the
@@ -1114,7 +1135,14 @@ fn owning_reinterpretation_of_a_complex_root_reads_back() {
     // The extracted owner, then the same owner back in a group: the group read
     // resolves the descriptor's `f64` over a `Complex64` root.
     let value = crate::TensorValue::from_tensor(crate::Tensor::from_typed(real));
-    assert_eq!(value.tensor_read().as_slice::<f64>().unwrap(), &reals);
+    assert_eq!(
+        value
+            .tensor_read()
+            .expect("a preset f64 value has a read")
+            .as_slice::<f64>()
+            .unwrap(),
+        &reals
+    );
 
     let (group, slot, _, _) = value
         .try_into_group_parts()
@@ -1122,7 +1150,10 @@ fn owning_reinterpretation_of_a_complex_root_reads_back() {
     let read = group
         .read_view(slot)
         .expect("the reinterpreted descriptor has backing storage");
-    let crate::TensorView::F64(view) = read.tensor_view() else {
+    let crate::TensorView::F64(view) = read
+        .tensor_view()
+        .expect("a group descriptor holds a preset scalar")
+    else {
         panic!("the reinterpreted descriptor is f64");
     };
     assert_eq!(view.shape(), &[2, 2]);

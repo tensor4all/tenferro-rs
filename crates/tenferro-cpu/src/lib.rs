@@ -445,7 +445,7 @@ fn materialize_managed_read(
     }
     // Compact managed descriptors cover retained eager/traced values. Strided
     // managed canonicalization remains an explicit unsupported boundary.
-    match input.tensor_view() {
+    match preset_view(op, input)? {
         TensorView::F32(view) => copy(op, view, domain),
         TensorView::F64(view) => copy(op, view, domain),
         TensorView::I32(view) => copy(op, view, domain),
@@ -454,6 +454,22 @@ fn materialize_managed_read(
         TensorView::C32(view) => copy(op, view, domain),
         TensorView::C64(view) => copy(op, view, domain),
     }
+}
+
+/// Borrow `read` as a preset-scalar view, or refuse a caller-owned payload.
+///
+/// [`TensorRead::tensor_view`] answers `None` for a tensor built with
+/// [`Tensor::external`] (#2486); CPU kernels have no implementation for such a
+/// payload, so `op` reports it as an unsupported dtype.
+pub(crate) fn preset_view<'a>(op: &'static str, read: TensorRead<'a>) -> Result<TensorView<'a>> {
+    let dtype = read.dtype();
+    read.tensor_view().ok_or_else(|| {
+        Error::unsupported_dtype(
+            op,
+            dtype,
+            "an externally defined payload has no preset-scalar view on the CPU backend",
+        )
+    })
 }
 
 pub(crate) fn copy_tensor_read_into(

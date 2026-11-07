@@ -49,7 +49,10 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     let copies = Arc::new(AtomicUsize::new(0));
     let mut backend = RecordingEngine::new(Arc::clone(&copies));
     let input = f64t(vec![2, 3], vec![1., 2., 3., 4., 5., 6.]);
-    let TensorView::F64(view) = TensorRead::from_tensor(&input).tensor_view() else {
+    let TensorView::F64(view) = TensorRead::from_tensor(&input)
+        .tensor_view()
+        .expect("a preset scalar has a view")
+    else {
         panic!("f64 view")
     };
     let read = TensorRead::from_view(TensorView::F64(view.transpose_view([1, 0]).unwrap()));
@@ -67,7 +70,11 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     assert_eq!(data(&input), vec![1., 2., 3., 4., 5., 6.]);
 
     let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![2.0_f32; 6]).unwrap();
-    let rhs = TensorRead::from_view(TensorRead::from_tensor(&rhs).tensor_view());
+    let rhs = TensorRead::from_view(
+        TensorRead::from_tensor(&rhs)
+            .tensor_view()
+            .expect("a preset scalar has a view"),
+    );
     let result = {
         let session: &mut dyn tenferro_tensor::Engine = &mut backend;
         execute(&StdTensorOp::Mul, &[read.clone(), rhs], session)
@@ -131,7 +138,11 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     assert_eq!(copies.load(Ordering::Relaxed), 0);
 
     let empty = f64t(vec![0, 3], vec![]);
-    let read = TensorRead::from_view(TensorRead::from_tensor(&empty).tensor_view());
+    let read = TensorRead::from_view(
+        TensorRead::from_tensor(&empty)
+            .tensor_view()
+            .expect("a preset scalar has a view"),
+    );
     let result = {
         let session: &mut dyn tenferro_tensor::Engine = &mut backend;
         execute(&StdTensorOp::Mul, &[read.clone(), read], session)
@@ -558,9 +569,11 @@ fn eager_read_entries_consume_borrowed_views_without_staging() {
             .zip(&owned)
             .map(|(original, compact)| match original {
                 TensorRead::Tensor(_) => TensorRead::from_tensor(compact),
-                TensorRead::View(_) => {
-                    TensorRead::from_view(TensorRead::from_tensor(compact).tensor_view())
-                }
+                TensorRead::View(_) => TensorRead::from_view(
+                    TensorRead::from_tensor(compact)
+                        .tensor_view()
+                        .expect("a preset scalar has a view"),
+                ),
             })
             .collect();
         let from_compact =
@@ -609,25 +622,39 @@ fn eager_read_entries_consume_borrowed_views_without_staging() {
             strides: vec![1, 1],
         })
         .expect("update view");
-    assert_eq!(compact.tensor_read().shape(), &[5, 4]);
+    assert_eq!(
+        compact
+            .tensor_read()
+            .expect("a preset f64 value has a read")
+            .shape(),
+        &[5, 4]
+    );
     assert_eq!(offset.shape(), &[3, 4]);
     assert_eq!(offset.strides(), &[1, 5]);
 
-    assert_views_match_materialized(&StdTensorOp::Tril { k: -1 }, &[offset.tensor_read()]);
-    assert_views_match_materialized(&StdTensorOp::Triu { k: 1 }, &[columns.tensor_read()]);
+    assert_views_match_materialized(
+        &StdTensorOp::Tril { k: -1 },
+        &[offset.tensor_read().expect("a preset f64 value has a read")],
+    );
+    assert_views_match_materialized(
+        &StdTensorOp::Triu { k: 1 },
+        &[columns
+            .tensor_read()
+            .expect("a preset f64 value has a read")],
+    );
     assert_views_match_materialized(
         &StdTensorOp::ExtractDiag {
             axis_a: 0,
             axis_b: 1,
         },
-        &[offset.tensor_read()],
+        &[offset.tensor_read().expect("a preset f64 value has a read")],
     );
     assert_views_match_materialized(
         &StdTensorOp::EmbedDiag {
             axis_a: 0,
             axis_b: 1,
         },
-        &[offset.tensor_read()],
+        &[offset.tensor_read().expect("a preset f64 value has a read")],
     );
     assert_views_match_materialized(
         &StdTensorOp::Slice(SliceConfig {
@@ -635,7 +662,7 @@ fn eager_read_entries_consume_borrowed_views_without_staging() {
             limits: vec![3, 4],
             strides: vec![1, 2],
         }),
-        &[offset.tensor_read()],
+        &[offset.tensor_read().expect("a preset f64 value has a read")],
     );
     assert_views_match_materialized(
         &StdTensorOp::Pad(PadConfig {
@@ -643,18 +670,25 @@ fn eager_read_entries_consume_borrowed_views_without_staging() {
             edge_padding_high: vec![0, 1],
             interior_padding: vec![0, 1],
         }),
-        &[transposed.tensor_read()],
+        &[transposed
+            .tensor_read()
+            .expect("a preset f64 value has a read")],
     );
     assert_views_match_materialized(
         &StdTensorOp::Reverse { axes: vec![0] },
-        &[offset.tensor_read()],
+        &[offset.tensor_read().expect("a preset f64 value has a read")],
     );
     assert_views_match_materialized(
         &StdTensorOp::Concatenate {
             axis: 0,
             input_count: 2,
         },
-        &[offset.tensor_read(), columns.tensor_read()],
+        &[
+            offset.tensor_read().expect("a preset f64 value has a read"),
+            columns
+                .tensor_read()
+                .expect("a preset f64 value has a read"),
+        ],
     );
 
     // The dynamic-truncate size is a value the dispatch reads, not an operand.
@@ -662,7 +696,7 @@ fn eager_read_entries_consume_borrowed_views_without_staging() {
     assert_views_match_materialized(
         &StdTensorOp::DynamicTruncate { axis: 0 },
         &[
-            offset.tensor_read(),
+            offset.tensor_read().expect("a preset f64 value has a read"),
             TensorRead::from_tensor(&truncated_size),
         ],
     );
@@ -670,7 +704,10 @@ fn eager_read_entries_consume_borrowed_views_without_staging() {
     let wider = f64t(vec![5, 4], vec![0.0; 20]);
     assert_views_match_materialized(
         &StdTensorOp::PadToMatch { axis: 0 },
-        &[offset.tensor_read(), TensorRead::from_tensor(&wider)],
+        &[
+            offset.tensor_read().expect("a preset f64 value has a read"),
+            TensorRead::from_tensor(&wider),
+        ],
     );
 
     let starts = Tensor::from_typed::<i64>(
@@ -680,13 +717,16 @@ fn eager_read_entries_consume_borrowed_views_without_staging() {
         &StdTensorOp::DynamicSlice {
             slice_sizes: vec![2, 2],
         },
-        &[offset.tensor_read(), TensorRead::from_tensor(&starts)],
+        &[
+            offset.tensor_read().expect("a preset f64 value has a read"),
+            TensorRead::from_tensor(&starts),
+        ],
     );
     assert_views_match_materialized(
         &StdTensorOp::DynamicUpdateSlice,
         &[
-            offset.tensor_read(),
-            update.tensor_read(),
+            offset.tensor_read().expect("a preset f64 value has a read"),
+            update.tensor_read().expect("a preset f64 value has a read"),
             TensorRead::from_tensor(&starts),
         ],
     );
@@ -703,7 +743,7 @@ fn eager_read_entries_consume_borrowed_views_without_staging() {
             index_vector_dim: 1,
         }),
         &[
-            offset.tensor_read(),
+            offset.tensor_read().expect("a preset f64 value has a read"),
             TensorRead::from_tensor(&scatter_indices),
             TensorRead::from_tensor(&scatter_updates),
         ],
@@ -712,7 +752,9 @@ fn eager_read_entries_consume_borrowed_views_without_staging() {
     // A compact borrowed read is a view too; it must reach the hook unchanged.
     assert_views_match_materialized(
         &StdTensorOp::Tril { k: 0 },
-        &[TensorRead::from_view(compact.tensor_view())],
+        &[TensorRead::from_view(
+            compact.tensor_view().expect("a preset scalar has a view"),
+        )],
     );
 }
 
@@ -729,7 +771,11 @@ fn eager_promoting_read_entries_convert_only_the_mismatched_operand() {
     use tenferro_tensor::{Error as TensorError, TensorRead, ValidationError};
 
     fn view(tensor: &Tensor) -> TensorRead<'_> {
-        TensorRead::from_view(TensorRead::from_tensor(tensor).tensor_view())
+        TensorRead::from_view(
+            TensorRead::from_tensor(tensor)
+                .tensor_view()
+                .expect("a preset scalar has a view"),
+        )
     }
 
     fn expected(op: &StdTensorOp, inputs: &[&Tensor]) -> Vec<Tensor> {
@@ -937,7 +983,7 @@ fn traced_host_ops_do_not_stage_a_borrowed_operand_or_shape_reference() {
         .expect("compile the traced dynamic_truncate");
     let runtime = cpu_runtime();
     let target = engine.target();
-    let reads = [view.tensor_read()];
+    let reads = [view.tensor_read().expect("a preset f64 value has a read")];
     let prepared = runtime
         .prepare(&program, &reads, std::slice::from_ref(&target))
         .expect("prepare the traced dynamic_truncate");
@@ -970,7 +1016,10 @@ fn traced_host_ops_do_not_stage_a_borrowed_operand_or_shape_reference() {
             ],
         )
         .expect("compile the traced pad_to_match");
-    let padded_reads = [view.tensor_read(), wider.tensor_read()];
+    let padded_reads = [
+        view.tensor_read().expect("a preset f64 value has a read"),
+        wider.tensor_read().expect("a preset f64 value has a read"),
+    ];
     let prepared = runtime
         .prepare(&program, &padded_reads, std::slice::from_ref(&target))
         .expect("prepare the traced pad_to_match");
@@ -1001,7 +1050,10 @@ fn traced_host_ops_do_not_stage_a_borrowed_operand_or_shape_reference() {
             ],
         )
         .expect("compile the traced unpadded pad_to_match");
-    let same_reads = [view.tensor_read(), same.tensor_read()];
+    let same_reads = [
+        view.tensor_read().expect("a preset f64 value has a read"),
+        same.tensor_read().expect("a preset f64 value has a read"),
+    ];
     let prepared = runtime
         .prepare(&program, &same_reads, std::slice::from_ref(&target))
         .expect("prepare the traced unpadded pad_to_match");

@@ -842,6 +842,44 @@ fn reshape_read_external_payload_reports_unsupported_in_parallel_session() {
 }
 
 #[test]
+fn host_transfers_of_an_external_payload_report_unsupported_dtype() {
+    use tenferro_tensor::{
+        DType, DynRank, ErasedHostTensor, Host, TensorDeviceTransfer, TypedTensor,
+    };
+
+    // #2486: both transfers copied through the preset-scalar view and aborted
+    // for a caller-owned payload; they now refuse it with a typed error.
+    let input = Tensor::external(ErasedHostTensor::new(
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap(),
+    ));
+    let mut backend = crate::CpuEngine::serial();
+    for (op, result) in [
+        (
+            "CpuEngine::download_to_host",
+            backend.download_to_host(TensorRead::from_tensor(&input)),
+        ),
+        (
+            "CpuEngine::upload_host_tensor",
+            backend.upload_host_tensor(TensorRead::from_tensor(&input)),
+        ),
+    ] {
+        let error = result.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                tenferro_tensor::Error::UnsupportedDType {
+                    op: actual,
+                    dtype: DType::External(_),
+                    ..
+                } if actual == op
+            ),
+            "{op}: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn cpu_view_materialization_preserves_transposed_and_scattered_values() {
     let mut backend = crate::CpuEngine::serial();
 

@@ -290,7 +290,10 @@ fn tensor_value_keeps_owned_transpose_as_view() {
     let transposed = value.transpose_view([1, 0]).unwrap();
 
     assert_eq!(transposed.shape(), &[3, 2]);
-    match transposed.tensor_read() {
+    match transposed
+        .tensor_read()
+        .expect("a preset f64 value has a read")
+    {
         TensorRead::View(view) => assert_eq!(view.shape(), &[3, 2]),
         TensorRead::Tensor(_) => panic!("owned transpose should be exposed as a view"),
     }
@@ -308,11 +311,14 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     assert_eq!(owned.shape(), &[2, 3]);
     assert_eq!(owned.strides(), &[1, 2]);
     assert_eq!(owned.offset(), 0);
-    match owned.tensor_view() {
+    match owned.tensor_view().expect("a preset f64 value has a view") {
         TensorView::F64(view) => assert_eq!(view.get(&[1, 2]), Some(&6.0)),
         other => panic!("expected f64 view, got {other:?}"),
     }
-    assert!(matches!(owned.tensor_read(), TensorRead::Tensor(_)));
+    assert!(matches!(
+        owned.tensor_read().expect("a preset f64 value has a read"),
+        TensorRead::Tensor(_)
+    ));
 
     let explicit =
         TensorValue::from_parts((*base).duplicate().unwrap(), vec![3, 2], vec![2, 1], 0).unwrap();
@@ -336,7 +342,7 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
         })
         .unwrap();
     assert_eq!(sliced.shape(), &[2, 2]);
-    match sliced.tensor_view() {
+    match sliced.tensor_view().expect("a preset f64 value has a view") {
         TensorView::F64(view) => {
             assert_eq!(view.get(&[0, 0]), Some(&3.0));
             assert_eq!(view.get(&[1, 1]), Some(&6.0));
@@ -380,7 +386,10 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     assert!(value.as_tensor().is_some());
     assert_eq!(value.dtype(), DType::F64);
     assert_eq!(value.shape(), &[2, 3]);
-    assert!(matches!(value.tensor_read(), TensorRead::Tensor(_)));
+    assert!(matches!(
+        value.tensor_read().expect("a preset f64 value has a read"),
+        TensorRead::Tensor(_)
+    ));
 
     let view_value = value.duplicate().unwrap().transpose_view([1, 0]).unwrap();
     assert!(view_value.as_tensor().is_none());
@@ -2388,25 +2397,25 @@ fn an_external_payload_has_no_preset_view_and_says_so() {
     // #2486: `Tensor::external` is public, so a read of it reaches the view
     // conversion; the answer is `None`, not an `unreachable!` abort.
     let tensor = external_f64_tensor();
-    assert!(TensorRead::from_tensor(&tensor).try_tensor_view().is_none());
+    assert!(TensorRead::from_tensor(&tensor).tensor_view().is_none());
 
     let value = TensorValue::from_tensor(external_f64_tensor());
-    assert!(value.try_tensor_view().is_none());
+    assert!(value.tensor_view().is_none());
 
     // Preset scalars and existing views still convert.
     let preset = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     let view = TensorRead::from_tensor(&preset)
-        .try_tensor_view()
+        .tensor_view()
         .expect("a preset scalar has a view");
     assert_eq!(view.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
     let borrowed = TensorView::i32(&[2], &[5, 6]).unwrap();
     let same = TensorRead::from_view(borrowed)
-        .try_tensor_view()
+        .tensor_view()
         .expect("an existing view is returned as is");
     assert_eq!(same.as_slice::<i32>().unwrap(), &[5, 6]);
     assert_eq!(
         TensorValue::from_tensor(preset)
-            .try_tensor_view()
+            .tensor_view()
             .expect("a preset scalar has a view")
             .as_slice::<f64>()
             .unwrap(),
@@ -2415,15 +2424,40 @@ fn an_external_payload_has_no_preset_view_and_says_so() {
 }
 
 #[test]
-#[should_panic(expected = "an externally defined payload has no preset-scalar view")]
-fn tensor_read_tensor_view_panics_with_the_documented_message_for_an_external_payload() {
-    let tensor = external_f64_tensor();
-    let _ = TensorRead::from_tensor(&tensor).tensor_view();
-}
+fn reads_built_on_an_external_payload_answer_instead_of_aborting() {
+    use crate::{DynRank, ErasedHostTensor, Host};
 
-#[test]
-#[should_panic(expected = "an externally defined payload has no preset-scalar view")]
-fn tensor_value_tensor_view_panics_with_the_documented_message_for_an_external_payload() {
-    let value = TensorValue::from_tensor(external_f64_tensor());
-    let _ = value.tensor_view();
+    // `TensorRead::as_slice` went through the view conversion and aborted for a
+    // caller-owned payload; it now reports the dtype it cannot slice.
+    let tensor = external_f64_tensor();
+    let error = TensorRead::from_tensor(&tensor)
+        .as_slice::<f64>()
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::Error::UnsupportedDType {
+            op: "TensorRead::as_slice",
+            dtype: DType::External(_),
+            ..
+        }
+    ));
+
+    // A compact external value is still borrowed as its owner tensor.
+    let compact = TensorValue::from_tensor(external_f64_tensor());
+    assert!(matches!(compact.tensor_read(), Some(TensorRead::Tensor(_))));
+
+    // A metadata-only view of an external value has neither an owner tensor nor
+    // a preset-scalar view, so `tensor_read` answers `None`.
+    let matrix = Tensor::external(ErasedHostTensor::new(
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(
+            vec![2, 3],
+            vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+        )
+        .unwrap(),
+    ));
+    let transposed = TensorValue::from_tensor(matrix)
+        .transpose_view([1, 0])
+        .unwrap();
+    assert!(transposed.is_view());
+    assert!(transposed.tensor_read().is_none());
 }

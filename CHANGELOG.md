@@ -8,12 +8,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **`TensorRead::try_tensor_view` and `TensorValue::try_tensor_view`** (#2486)
-  return `None` for a tensor built with `Tensor::external`, which has no
-  preset-scalar `TensorView`. Before, `tensor_view()` on such a read or value
-  aborted with `unreachable!("views cover the preset scalars")`. `tensor_view()`
-  keeps its signature; it still panics for an external payload, now with a
-  documented `# Panics` contract and a message that names `try_tensor_view`.
 - **`tenferro_linalg::error::map_error` is public** (#2462). It is the
   translation tenferro's own linalg entries apply to a `tlinalg` failure, so a
   caller that runs `tlinalg` factorizations itself reports the same error
@@ -42,6 +36,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Complex` now also implements `PoolScalar + Default`.
 
 ### Changed
+
+- **`TensorRead::tensor_view`, `TensorValue::tensor_view` and
+  `TensorValue::tensor_read` return `Option`** (#2486). They answer `None` for a
+  tensor built with `Tensor::external`, whose caller-owned element type has no
+  preset-scalar `TensorView` (for `tensor_read`, only a non-compact view of such
+  a value). Before, they aborted with `unreachable!("views cover the preset
+  scalars")`. Callers that already return `Result` now report that case as a
+  typed error: `TensorRead::as_slice` and the CPU engine's
+  `download_to_host`/`upload_host_tensor` return `Error::UnsupportedDType`
+  instead of aborting. Migration: `read.tensor_view()` becomes
+  `read.tensor_view().ok_or(..)?`, or a `match` on `Some(TensorView::..)`.
 
 - **The CPU complex SVD and `eigh` no longer allocate outside the session
   pool** (#2462). The real spectrum is gathered into a pooled lease instead of

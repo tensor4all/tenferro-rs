@@ -848,7 +848,7 @@ pub(crate) fn dot_fresh(
 ) -> crate::Result<Tensor> {
     crate::dot_runtime::validate_dot_operands(&lhs, &rhs, config, accumulation)?;
     macro_rules! dispatch {
-        ($($variant:ident),*) => { match (lhs.tensor_view(), rhs.tensor_view(), accumulation.alpha, accumulation.beta) {
+        ($($variant:ident),*) => { match (crate::preset_view("dot_general", lhs)?, crate::preset_view("dot_general", rhs)?, accumulation.alpha, accumulation.beta) {
             $((TensorView::$variant(a), TensorView::$variant(b), ContractionScalar::$variant(alpha), ContractionScalar::$variant(beta)) =>
                 fresh(exec, buffers, plans, slot, a, b, shape, config, accumulation, alpha, beta),)*
             _ => Err(crate::Error::runtime_state("dot_general", "operands and accumulation scalars must have matching supported dtypes")),
@@ -923,7 +923,7 @@ pub(crate) fn dot_into(
     }
     let out = writable_view(out, "dot_general")?;
     macro_rules! dispatch {
-        ($($variant:ident),*) => { match (lhs.tensor_view(), rhs.tensor_view(), out, accumulation.alpha, accumulation.beta) {
+        ($($variant:ident),*) => { match (crate::preset_view("dot_general", lhs)?, crate::preset_view("dot_general", rhs)?, out, accumulation.alpha, accumulation.beta) {
             $((TensorView::$variant(a), TensorView::$variant(b), TensorViewMut::$variant(d), ContractionScalar::$variant(alpha), ContractionScalar::$variant(beta)) =>
                 initialized(exec, buffers, plans, slot, a, b, d, config, accumulation, alpha, beta),)*
             _ => Err(crate::Error::runtime_state("dot_general", "operands and accumulation scalars must have matching supported dtypes")),

@@ -951,9 +951,9 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
         return Ok(vec![session.concatenate(&[&left, &right], 1)?]);
     }
     if let LinalgOp::HouseholderQrSplitTangent { right } = op.op() {
-        let cotangent_shape = inputs[0].clone().tensor_view().shape().to_vec();
-        let left_shape = inputs[1].clone().tensor_view().shape().to_vec();
-        let right_shape = inputs[2].clone().tensor_view().shape().to_vec();
+        let cotangent_shape = inputs[0].shape().to_vec();
+        let left_shape = inputs[1].shape().to_vec();
+        let right_shape = inputs[2].shape().to_vec();
         let config =
             householder_qr_split_config(&cotangent_shape, &left_shape, &right_shape, right)?;
         let cotangent = session.to_contiguous_read(inputs[0].clone())?;

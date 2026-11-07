@@ -239,7 +239,7 @@ impl TensorDeviceTransfer for CpuEngine {
                 "CPU backend received a backend buffer; download the tensor to host with its owning backend before CPU execution",
             ));
         }
-        tensor.tensor_view().duplicate()
+        crate::preset_view("CpuEngine::download_to_host", tensor)?.duplicate()
     }
 
     fn upload_host_tensor(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -250,7 +250,7 @@ impl TensorDeviceTransfer for CpuEngine {
                 "CPU backend upload_host_tensor expects a host tensor; download backend buffers to host before CPU execution",
             ));
         }
-        tensor.tensor_view().duplicate()
+        crate::preset_view("CpuEngine::upload_host_tensor", tensor)?.duplicate()
     }
 }
 

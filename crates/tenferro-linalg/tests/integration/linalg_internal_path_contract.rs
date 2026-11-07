@@ -621,7 +621,7 @@ fn cpu_solve_read_into_reaches_direct_write_for_eligible_outputs() {
     let guarded_fallback = source_section(
         solve_read_into,
         "if has_zero_dim(a.shape())",
-        "}\n\n        let a = a.tensor_view();",
+        "}\n\n        let a = linalg_view(\"solve_read_into\", a)?;",
     );
     assert!(
         guarded_fallback.contains("solve_read_into_default(self, a, b, out)"),

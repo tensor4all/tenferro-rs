@@ -353,7 +353,7 @@ macro_rules! impl_minimal_tensor_backend {
                 tensor: TensorRead<'_>,
             ) -> tenferro_tensor::Result<Tensor> {
                 self.record_transfer();
-                tensor.tensor_view().duplicate()
+                tensor.tensor_view().expect("a preset scalar has a view").duplicate()
             }
 
             fn upload_host_tensor(
@@ -361,7 +361,7 @@ macro_rules! impl_minimal_tensor_backend {
                 tensor: TensorRead<'_>,
             ) -> tenferro_tensor::Result<Tensor> {
                 self.record_transfer();
-                tensor.tensor_view().duplicate()
+                tensor.tensor_view().expect("a preset scalar has a view").duplicate()
             }
         }
         impl SessionCachedDot for $ty {}

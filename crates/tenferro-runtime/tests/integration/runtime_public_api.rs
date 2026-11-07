@@ -1687,7 +1687,11 @@ fn prepared_transpose_and_slice_outputs_alias_their_input_without_a_copy() {
         panic!("a transpose of an input must stay borrowed");
     };
     assert_eq!(read.shape(), &[4, 1]);
-    let tenferro_tensor::TensorView::F64(view) = read.clone().tensor_view() else {
+    let tenferro_tensor::TensorView::F64(view) = read
+        .clone()
+        .tensor_view()
+        .expect("a preset scalar has a view")
+    else {
         panic!("test input is F64");
     };
     let input_values = input.as_slice::<f64>().unwrap();

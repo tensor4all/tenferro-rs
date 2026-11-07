@@ -599,7 +599,9 @@ impl TypedTensorMaskSessionOpsExt for TypedTensor<bool> {
 
 // INVARIANT: this private adapter keeps borrowed reads borrowed, owns the
 // explicit fallback tensor, and owns an intermediate whose layout is a
-// metadata-only view of that tensor; it is never exposed or cloned.
+// metadata-only view of that tensor; it is never exposed or cloned. `Value`
+// always holds a preset scalar: its only constructor,
+// `SessionComposite::broadcast_in_dim_owned`, refuses a caller-owned payload.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ReadInput<'a> {
     Borrowed(TensorRead<'a>),
@@ -612,7 +614,11 @@ impl ReadInput<'_> {
         match self {
             Self::Borrowed(read) => read.clone(),
             Self::Owned(tensor) => TensorRead::from_tensor(tensor),
-            Self::Value(value) => value.tensor_read(),
+            Self::Value(value) => value.tensor_read().expect(
+                "ReadInput::Value is built only by SessionComposite::broadcast_in_dim_owned, \
+                 which refuses a caller-owned payload before building the view, and only a \
+                 view of a caller-owned payload has no read",
+            ),
         }
     }
 }

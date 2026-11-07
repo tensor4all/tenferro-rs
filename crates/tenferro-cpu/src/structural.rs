@@ -538,7 +538,7 @@ pub(crate) fn reshape_read_with_pool(
     // destination element order is the logical source order, so routing the
     // owned case through the strided entry keeps the same result while letting
     // a multi-thread context run the copy on its pool.
-    dispatch_tensor_view_unary_result!(input.tensor_view(), |view| {
+    dispatch_tensor_view_unary_result!(crate::preset_view("reshape", input)?, |view| {
         typed_reshape_view_with_pool(buffers, &view, shape, exec)
     })
 }

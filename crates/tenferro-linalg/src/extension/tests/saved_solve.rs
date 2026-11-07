@@ -36,7 +36,11 @@ fn prepared_solve_preserves_mixed_owned_and_strided_inputs() {
                 } else if i == 3 {
                     TensorRead::from_view(strided_rhs.clone())
                 } else {
-                    TensorRead::from_view(read.clone().tensor_view())
+                    TensorRead::from_view(
+                        read.clone()
+                            .tensor_view()
+                            .expect("a preset scalar has a view"),
+                    )
                 }
             })
             .collect::<Vec<_>>();
