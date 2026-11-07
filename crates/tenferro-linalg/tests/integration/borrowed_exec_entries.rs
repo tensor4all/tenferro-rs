@@ -327,6 +327,25 @@ fn a_negative_stride_is_unsupported_for_every_entry() {
         .unwrap();
     assert!(reversed.strides()[0] < 0);
 
+    // The same rule has to hold when there is nothing to read: a zero-length axis taken from the
+    // reversed view keeps the negative stride, and the zero-dimension shortcut must not return
+    // success before the layout is validated (#2505). `[3, 0]` is the matrix shape the factor
+    // entries read, `[0, 0]` the square one the eigensolvers require.
+    let empty_wide = reversed
+        .slice_view(&[
+            StridedSliceSpec::all(),
+            StridedSliceSpec::new(0, Some(0), 1),
+        ])
+        .unwrap();
+    let empty_square = reversed
+        .slice_view(&[
+            StridedSliceSpec::new(0, Some(0), 1),
+            StridedSliceSpec::new(0, Some(0), 1),
+        ])
+        .unwrap();
+    assert_eq!(empty_wide.shape(), &[3, 0]);
+    assert_eq!(empty_square.shape(), &[0, 0]);
+
     let errors = [
         (
             "svd",
@@ -357,6 +376,7 @@ fn a_negative_stride_is_unsupported_for_every_entry() {
             borrowed(|e, b| eig_values_with_exec(e, b, &reversed)).map(|_| ()),
         ),
     ];
+    let mut non_empty = Vec::new();
     for (op, result) in errors {
         let error = result.expect_err(op);
         assert_eq!(error.kind(), ErrorKind::Unsupported, "{op}: {error}");
@@ -367,6 +387,49 @@ fn a_negative_stride_is_unsupported_for_every_entry() {
             ),
             "{op}"
         );
+        non_empty.push(error.to_string());
+    }
+
+    let empty_errors = [
+        (
+            "svd",
+            borrowed(|e, b| svd_with_exec(e, b, &empty_wide, false)).map(|_| ()),
+        ),
+        (
+            "svd_full",
+            borrowed(|e, b| svd_with_exec(e, b, &empty_wide, true)).map(|_| ()),
+        ),
+        (
+            "svd_values",
+            borrowed(|e, b| svd_values_with_exec(e, b, &empty_wide)).map(|_| ()),
+        ),
+        (
+            "qr",
+            borrowed(|e, b| qr_with_exec(e, b, &empty_wide)).map(|_| ()),
+        ),
+        (
+            "eigh",
+            borrowed(|e, b| eigh_with_exec(e, b, &empty_square)).map(|_| ()),
+        ),
+        (
+            "eigh_values",
+            borrowed(|e, b| eigh_values_with_exec(e, b, &empty_square)).map(|_| ()),
+        ),
+        (
+            "eig_values",
+            borrowed(|e, b| eig_values_with_exec(e, b, &empty_square)).map(|_| ()),
+        ),
+    ];
+    // Same variant, same message as the non-empty operand: the empty operand's shape is a result
+    // the shortcut may answer, but its layout is not, so it cannot be answered with outputs.
+    for ((op, result), message) in empty_errors.into_iter().zip(&non_empty) {
+        let error = result.expect_err(op);
+        assert_eq!(
+            error.kind(),
+            ErrorKind::Unsupported,
+            "{op} on an empty operand: {error}"
+        );
+        assert_eq!(&error.to_string(), message, "{op} on an empty operand");
     }
 
     // No engine entry refuses this view: the `*_read` entries gather a negative stride by design

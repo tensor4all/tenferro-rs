@@ -16,7 +16,10 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar, PooledUninitOutput};
 use tenferro_tensor::{Host, Tensor, TensorView, TypedTensor, TypedTensorView, TypedTensorViewMut};
 use tlinalg::Op;
 
-use super::{compact_host_data, finish_lease, pooled_copy, pooled_output, pooled_zeroed, raw_view};
+use super::{
+    compact_host_data, finish_lease, pooled_copy, pooled_output, pooled_zeroed, raw_view,
+    reject_negative_strides,
+};
 
 mod with_exec;
 use crate::cpu::tlinalg::PooledWorkspace;
@@ -1413,6 +1416,8 @@ fn eig_parts<T: FaerLinalg>(
     let placement = view.placement();
     let values_shape = vector_with_batch_shape(n, batch_shape);
     let vectors_shape = matrix_with_batch_shape(n, n, batch_shape);
+    // The layout rule precedes the empty shortcut below: see `reject_negative_strides`.
+    reject_negative_strides(op, view)?;
     if has_zero_dim(view.shape()) {
         let values = tensor_from_vec_with_template(values_shape, Vec::new(), placement)?;
         let vectors = vectors
