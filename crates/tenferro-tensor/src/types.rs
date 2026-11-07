@@ -7091,7 +7091,21 @@ fn broadcast_typed_view<'a, T: 'static, R: TensorRank>(
 }
 
 fn tensor_view_with_layout(tensor: &Tensor, layout: TensorLayout<DynRank>) -> TensorView<'_> {
-    match tensor.dtype() {
+    try_tensor_view_with_layout(tensor, layout).unwrap_or_else(|| {
+        // INVARIANT: callers reach this only for a preset-scalar owner; the
+        // public entry that can see a caller-owned payload goes through
+        // `try_tensor_view_with_layout` and documents its panic contract.
+        panic!("views cover the preset scalars")
+    })
+}
+
+/// Borrow `tensor` as a dtype-erased view, or `None` for a caller-owned
+/// payload, because `TensorView` has no externally defined variant.
+fn try_tensor_view_with_layout(
+    tensor: &Tensor,
+    layout: TensorLayout<DynRank>,
+) -> Option<TensorView<'_>> {
+    Some(match tensor.dtype() {
         DType::F32 => TensorView::F32(typed_view_with_layout(
             tensor
                 .as_typed::<f32>()
@@ -7134,10 +7148,10 @@ fn tensor_view_with_layout(tensor: &Tensor, layout: TensorLayout<DynRank>) -> Te
                 .unwrap_or_else(|| unreachable!("the dtype guard selects this arm")),
             layout,
         )),
-        // INVARIANT: `TensorView` has no externally defined variant, and a view is
-        // never requested for a caller-owned payload.
-        DType::External(_) => unreachable!("views cover the preset scalars"),
-    }
+        // `TensorView` has no externally defined variant, so a caller-owned
+        // payload has no preset-scalar view.
+        DType::External(_) => return None,
+    })
 }
 
 fn typed_view_with_layout<T: TensorScalar + 'static>(
@@ -8183,10 +8197,51 @@ impl<'a> TensorRead<'a> {
         Self::View(view)
     }
 
+    /// Convert this read target into a dtype-erased tensor view, or `None` when
+    /// it holds a caller-defined payload.
+    ///
+    /// Owned tensors are borrowed without copying their storage. Existing
+    /// views preserve their layout and placement metadata. A tensor built with
+    /// [`Tensor::external`] carries a [`DType::External`] payload, which
+    /// [`TensorView`] has no variant for, so it yields `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_tensor::{Tensor, TensorRead};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
+    ///
+    /// let preset = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let view = TensorRead::from_tensor(&preset)
+    ///     .try_tensor_view()
+    ///     .expect("a preset scalar has a view");
+    /// assert_eq!(view.as_slice::<f64>()?, &[1.0, 2.0]);
+    ///
+    /// let external = Tensor::external(ErasedHostTensor::new(
+    ///     TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0_f64])?,
+    /// ));
+    /// assert!(TensorRead::from_tensor(&external).try_tensor_view().is_none());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn try_tensor_view(self) -> Option<TensorView<'a>> {
+        match self {
+            Self::Tensor(tensor) => try_tensor_view_with_layout(tensor, tensor_layout(tensor)),
+            Self::View(view) => Some(view),
+        }
+    }
+
     /// Convert this read target into a dtype-erased tensor view.
     ///
     /// Owned tensors are borrowed without copying their storage. Existing
     /// views preserve their layout and placement metadata.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the read holds a caller-defined payload (a tensor built with
+    /// [`Tensor::external`], whose dtype is [`DType::External`]), because
+    /// [`TensorView`] covers only the preset scalars. Use
+    /// [`try_tensor_view`](Self::try_tensor_view) when the read may hold one.
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -8198,10 +8253,11 @@ impl<'a> TensorRead<'a> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn tensor_view(self) -> TensorView<'a> {
-        match self {
-            Self::Tensor(tensor) => tensor_view_with_layout(tensor, tensor_layout(tensor)),
-            Self::View(view) => view,
-        }
+        self.try_tensor_view().unwrap_or_else(|| {
+            // Documented panic contract above: a caller-owned payload has no
+            // preset-scalar view.
+            panic!("views cover the preset scalars; use `try_tensor_view` for a caller-defined payload")
+        })
     }
 
     /// Build a metadata-only stride-0 broadcast of this read.

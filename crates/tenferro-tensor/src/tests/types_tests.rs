@@ -2373,3 +2373,36 @@ fn an_external_payload_is_carried_by_the_value_type() {
     assert!(original.clone().shares_payload_with(original));
     assert!(!original.duplicate().shares_payload_with(original));
 }
+
+fn external_tensor() -> Tensor {
+    use crate::{DynRank, ErasedHostTensor, Host};
+
+    Tensor::external(ErasedHostTensor::new(
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap(),
+    ))
+}
+
+#[test]
+fn try_tensor_view_reports_an_external_payload_as_none() {
+    let tensor = external_tensor();
+    assert!(matches!(tensor.dtype(), DType::External(_)));
+    assert!(TensorRead::Tensor(&tensor).try_tensor_view().is_none());
+
+    let preset = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let view = TensorRead::Tensor(&preset)
+        .try_tensor_view()
+        .expect("a preset scalar has a view");
+    assert_eq!(view.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    let view = TensorRead::View(view)
+        .try_tensor_view()
+        .expect("an existing view is returned as is");
+    assert_eq!(view.shape(), &[2]);
+}
+
+#[test]
+#[should_panic(expected = "views cover the preset scalars")]
+fn tensor_view_panics_for_an_external_payload() {
+    let tensor = external_tensor();
+    let _ = TensorRead::Tensor(&tensor).tensor_view();
+}
