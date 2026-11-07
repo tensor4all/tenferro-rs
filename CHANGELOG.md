@@ -37,6 +37,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The dependency pins move to the `threadteam` 0.5 line** (#2494):
+  `threadteam` 0.5.1, `strided-{basic,perm,kernel,nn,fused}` 0.12.0,
+  `strided-view` 0.7.1, `t4a-faer` 0.32.0, `tcontract-exec` 0.11.0,
+  `tlinalg` 0.10.0 and `cpueinsum`/`cpueinsum-blas` 0.11.0. This is breaking for
+  a host even though no tenferro signature moved: an `Exec` carries a
+  `threadteam` 0.5 `TeamExec`, so the pool, the token and the `Exec` must come
+  from the same generation, and two `threadteam::Exec` types cannot meet in one
+  graph. Before this the workspace compiled with 128 `E0308`s. `tlinalg` 0.10
+  also writes the SVD and Hermitian spectra as `<T as ScalarEntity>::Real`,
+  which is the type tenferro already returned, so the pooled pass that converted
+  one to the other is deleted rather than adapted.
 - **`TensorRead::tensor_view`, `TensorValue::tensor_view` and
   `TensorValue::tensor_read` return `Option`** (#2486). They answer `None` for a
   tensor built with `Tensor::external`, whose caller-owned element type has no
