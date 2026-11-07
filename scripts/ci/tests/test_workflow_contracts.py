@@ -219,6 +219,33 @@ class WorkflowContractTests(unittest.TestCase):
             "github.com/rhysd/actionlint/cmd/actionlint@v1.7.7", text
         )
 
+    def test_ci_config_runs_the_repository_rules_review_tests(self) -> None:
+        """The review gate's own unit tests must run in CI, not only locally.
+
+        `scripts/repository-rules-review.py` decides every PR, and
+        `scripts/test-repository-rules-review.py` is its only unit-level
+        guard. Running it beside the waiver test puts both halves of the gate
+        in the cheap `ci-config` lane: standard library only, no pod, no
+        network.
+        """
+
+        text = read(".github/workflows/ci.yml")
+        job = text[text.index("  ci-config:") :]
+        command = "run: python3 scripts/test-repository-rules-review.py"
+        self.assertIn(command, job)
+        # The step must stay behind the same classifier gate as its
+        # neighbours; unconditional would run on every push and every PR the
+        # policy already excused.
+        step = job[job.rindex("      - name: ", 0, job.index(command)) : job.index(command)]
+        self.assertIn(
+            "if: needs.policy.result == 'success' && "
+            "needs.policy.outputs.run_ci_config == 'true'",
+            step,
+        )
+        # The two Python/Node test suites are the gate's only guards; neither
+        # may be dropped for the other.
+        self.assertIn("run: node --test scripts/test-review-waiver.js", job)
+
     def test_changed_error_audit_jobs_fetch_base_history(self) -> None:
         job_header = re.compile(r"^  (?P<name>[A-Za-z0-9_-]+):\s*$", re.MULTILINE)
         audited_jobs: list[str] = []
