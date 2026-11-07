@@ -80,6 +80,14 @@ mod private {
     /// concrete type, which is what lets the public bound stay free of the provider's own scalar
     /// traits (whose `Real`/`Complex` names would otherwise collide with `LinalgScalar::Complex`).
     pub trait Sealed {
+        /// The body of the public `svd_with_exec`.
+        ///
+        /// # Errors
+        ///
+        /// As the public `svd_with_exec`: `ValidationError::RankMismatch` below rank 2,
+        /// `Error::Unsupported` for a negative stride, `Error::RuntimeState` for non-host storage,
+        /// `ValidationError::InvalidArgument` for an overflowing count or out-of-range layout, and
+        /// a provider failure mapped by `map_error`.
         #[cfg(feature = "native")]
         fn svd_with_exec(
             exec: &mut Exec<'_>,
@@ -89,6 +97,14 @@ mod private {
         ) -> tenferro_tensor::Result<Svd<Self>>
         where
             Self: super::LinalgScalar + Sized;
+        /// The body of the public `svd_values_with_exec`.
+        ///
+        /// # Errors
+        ///
+        /// As the public `svd_values_with_exec`: `ValidationError::RankMismatch` below rank 2,
+        /// `Error::Unsupported` for a negative stride, `Error::RuntimeState` for non-host storage,
+        /// `ValidationError::InvalidArgument` for an overflowing count or out-of-range layout, and
+        /// a provider failure mapped by `map_error`.
         #[cfg(feature = "native")]
         fn svd_values_with_exec(
             exec: &mut Exec<'_>,
@@ -97,6 +113,14 @@ mod private {
         ) -> tenferro_tensor::Result<TypedTensor<<Self as super::LinalgScalar>::RealScalar>>
         where
             Self: super::LinalgScalar + Sized;
+        /// The body of the public `qr_with_exec`.
+        ///
+        /// # Errors
+        ///
+        /// As the public `qr_with_exec`: `ValidationError::RankMismatch` below rank 2,
+        /// `Error::Unsupported` for a negative stride, `Error::RuntimeState` for non-host storage,
+        /// `ValidationError::InvalidArgument` for an overflowing count or out-of-range layout, and
+        /// a provider failure mapped by `map_error`.
         #[cfg(feature = "native")]
         fn qr_with_exec(
             exec: &mut Exec<'_>,
@@ -105,6 +129,14 @@ mod private {
         ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<Self>)>
         where
             Self: super::LinalgScalar + Sized;
+        /// The body of the public `eigh_with_exec`.
+        ///
+        /// # Errors
+        ///
+        /// As the public `eigh_with_exec`: `ValidationError::RankMismatch` below rank 2, `ValidationError::ShapeMismatch` for a non-square matrix,
+        /// `Error::Unsupported` for a negative stride, `Error::RuntimeState` for non-host storage,
+        /// `ValidationError::InvalidArgument` for an overflowing count or out-of-range layout, and
+        /// a provider failure mapped by `map_error`.
         #[cfg(feature = "native")]
         #[allow(clippy::type_complexity)]
         fn eigh_with_exec(
@@ -117,6 +149,14 @@ mod private {
         )>
         where
             Self: super::LinalgScalar + Sized;
+        /// The body of the public `eigh_values_with_exec`.
+        ///
+        /// # Errors
+        ///
+        /// As the public `eigh_values_with_exec`: `ValidationError::RankMismatch` below rank 2, `ValidationError::ShapeMismatch` for a non-square matrix,
+        /// `Error::Unsupported` for a negative stride, `Error::RuntimeState` for non-host storage,
+        /// `ValidationError::InvalidArgument` for an overflowing count or out-of-range layout, and
+        /// a provider failure mapped by `map_error`.
         #[cfg(feature = "native")]
         fn eigh_values_with_exec(
             exec: &mut Exec<'_>,
@@ -125,6 +165,14 @@ mod private {
         ) -> tenferro_tensor::Result<TypedTensor<<Self as super::LinalgScalar>::RealScalar>>
         where
             Self: super::LinalgScalar + Sized;
+        /// The body of the public `eig_values_with_exec`.
+        ///
+        /// # Errors
+        ///
+        /// As the public `eig_values_with_exec`: `ValidationError::RankMismatch` below rank 2, `ValidationError::ShapeMismatch` for a non-square matrix,
+        /// `Error::Unsupported` for a negative stride, `Error::RuntimeState` for non-host storage,
+        /// `ValidationError::InvalidArgument` for an overflowing count or out-of-range layout, and
+        /// a provider failure mapped by `map_error`.
         #[cfg(feature = "native")]
         fn eig_values_with_exec(
             exec: &mut Exec<'_>,

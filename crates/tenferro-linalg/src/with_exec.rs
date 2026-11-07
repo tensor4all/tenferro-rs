@@ -15,8 +15,16 @@ use crate::LinalgScalar;
 ///
 /// # Errors
 ///
-/// A rank below 2 is a rank mismatch, a negative stride is `Unsupported`, and a provider failure
-/// is mapped by [`map_error`](crate::error::map_error).
+/// - `Error::Validation` with `ValidationError::RankMismatch` when the view has fewer than two
+///   dimensions.
+/// - [`Error::Unsupported`](tenferro_tensor::Error::Unsupported) when a stride is negative.
+/// - [`Error::RuntimeState`](tenferro_tensor::Error::RuntimeState) when the view's storage is not
+///   host memory.
+/// - `Error::Validation` with `ValidationError::InvalidArgument` when an output element count
+///   overflows `usize`, or when the view's offsets reach outside its storage (role `layout`).
+/// - A failure the provider reports, translated by [`map_error`](crate::error::map_error), whose
+///   table gives the variant per `tlinalg` error kind; a numerical failure is `Error::Extension`
+///   with kind `NumericalFailure` and a downcastable [`Error`](crate::Error) payload.
 ///
 /// # Examples
 ///
@@ -49,7 +57,16 @@ pub fn svd_with_exec<T: LinalgScalar>(
 ///
 /// # Errors
 ///
-/// As [`svd_with_exec`].
+/// - `Error::Validation` with `ValidationError::RankMismatch` when the view has fewer than two
+///   dimensions.
+/// - [`Error::Unsupported`](tenferro_tensor::Error::Unsupported) when a stride is negative.
+/// - [`Error::RuntimeState`](tenferro_tensor::Error::RuntimeState) when the view's storage is not
+///   host memory.
+/// - `Error::Validation` with `ValidationError::InvalidArgument` when an output element count
+///   overflows `usize`, or when the view's offsets reach outside its storage (role `layout`).
+/// - A failure the provider reports, translated by [`map_error`](crate::error::map_error), whose
+///   table gives the variant per `tlinalg` error kind; a numerical failure is `Error::Extension`
+///   with kind `NumericalFailure` and a downcastable [`Error`](crate::Error) payload.
 ///
 /// # Examples
 ///
@@ -88,7 +105,16 @@ pub fn svd_values_with_exec<T: LinalgScalar>(
 ///
 /// # Errors
 ///
-/// As [`svd_with_exec`].
+/// - `Error::Validation` with `ValidationError::RankMismatch` when the view has fewer than two
+///   dimensions.
+/// - [`Error::Unsupported`](tenferro_tensor::Error::Unsupported) when a stride is negative.
+/// - [`Error::RuntimeState`](tenferro_tensor::Error::RuntimeState) when the view's storage is not
+///   host memory.
+/// - `Error::Validation` with `ValidationError::InvalidArgument` when an output element count
+///   overflows `usize`, or when the view's offsets reach outside its storage (role `layout`).
+/// - A failure the provider reports, translated by [`map_error`](crate::error::map_error), whose
+///   table gives the variant per `tlinalg` error kind; a numerical failure is `Error::Extension`
+///   with kind `NumericalFailure` and a downcastable [`Error`](crate::Error) payload.
 ///
 /// # Examples
 ///
@@ -118,7 +144,18 @@ pub fn qr_with_exec<T: LinalgScalar>(
 ///
 /// # Errors
 ///
-/// As [`svd_with_exec`], plus a shape mismatch for a non-square operand.
+/// - `Error::Validation` with `ValidationError::RankMismatch` when the view has fewer than two
+///   dimensions.
+/// - `Error::Validation` with `ValidationError::ShapeMismatch` when the matrix is not square
+///   (`m != n`).
+/// - [`Error::Unsupported`](tenferro_tensor::Error::Unsupported) when a stride is negative.
+/// - [`Error::RuntimeState`](tenferro_tensor::Error::RuntimeState) when the view's storage is not
+///   host memory.
+/// - `Error::Validation` with `ValidationError::InvalidArgument` when an output element count
+///   overflows `usize`, or when the view's offsets reach outside its storage (role `layout`).
+/// - A failure the provider reports, translated by [`map_error`](crate::error::map_error), whose
+///   table gives the variant per `tlinalg` error kind; a numerical failure is `Error::Extension`
+///   with kind `NumericalFailure` and a downcastable [`Error`](crate::Error) payload.
 ///
 /// # Examples
 ///
@@ -149,7 +186,18 @@ pub fn eigh_with_exec<T: LinalgScalar>(
 ///
 /// # Errors
 ///
-/// As [`eigh_with_exec`].
+/// - `Error::Validation` with `ValidationError::RankMismatch` when the view has fewer than two
+///   dimensions.
+/// - `Error::Validation` with `ValidationError::ShapeMismatch` when the matrix is not square
+///   (`m != n`).
+/// - [`Error::Unsupported`](tenferro_tensor::Error::Unsupported) when a stride is negative.
+/// - [`Error::RuntimeState`](tenferro_tensor::Error::RuntimeState) when the view's storage is not
+///   host memory.
+/// - `Error::Validation` with `ValidationError::InvalidArgument` when an output element count
+///   overflows `usize`, or when the view's offsets reach outside its storage (role `layout`).
+/// - A failure the provider reports, translated by [`map_error`](crate::error::map_error), whose
+///   table gives the variant per `tlinalg` error kind; a numerical failure is `Error::Extension`
+///   with kind `NumericalFailure` and a downcastable [`Error`](crate::Error) payload.
 ///
 /// # Examples
 ///
@@ -182,7 +230,18 @@ pub fn eigh_values_with_exec<T: LinalgScalar>(
 ///
 /// # Errors
 ///
-/// As [`eigh_with_exec`].
+/// - `Error::Validation` with `ValidationError::RankMismatch` when the view has fewer than two
+///   dimensions.
+/// - `Error::Validation` with `ValidationError::ShapeMismatch` when the matrix is not square
+///   (`m != n`).
+/// - [`Error::Unsupported`](tenferro_tensor::Error::Unsupported) when a stride is negative.
+/// - [`Error::RuntimeState`](tenferro_tensor::Error::RuntimeState) when the view's storage is not
+///   host memory.
+/// - `Error::Validation` with `ValidationError::InvalidArgument` when an output element count
+///   overflows `usize`, or when the view's offsets reach outside its storage (role `layout`).
+/// - A failure the provider reports, translated by [`map_error`](crate::error::map_error), whose
+///   table gives the variant per `tlinalg` error kind; a numerical failure is `Error::Extension`
+///   with kind `NumericalFailure` and a downcastable [`Error`](crate::Error) payload.
 ///
 /// # Examples
 ///
