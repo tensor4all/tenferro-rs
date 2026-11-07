@@ -45,7 +45,6 @@ cudarc = { workspace = true, optional = true, features = ["cublas", "cutensor"] 
 libloading.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
-smallvec.workspace = true
 tinyvec.workspace = true
 strided-perm.workspace = true
 thiserror.workspace = true

@@ -19,6 +19,19 @@ pub(crate) struct Operand<'a, T> {
     pub(crate) offset: isize,
 }
 
+/// An empty descriptor, so short operand lists can live in a `tinyvec::TinyVec`
+/// (whose inline array requires `Default`); it is never read as an operand.
+impl<T> Default for Operand<'_, T> {
+    fn default() -> Self {
+        Self {
+            data: &[],
+            shape: &[],
+            strides: &[],
+            offset: 0,
+        }
+    }
+}
+
 impl<'a, T: tenferro_tensor::TensorScalar + Copy + 'static> Operand<'a, T> {
     /// Descriptor of a compact owned tensor, borrowing its cached column-major strides.
     pub(crate) fn from_typed(

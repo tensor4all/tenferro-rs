@@ -517,11 +517,16 @@ where
     Ok(read)
 }
 
-pub(crate) fn initialize_exec_slots_in<'input>(
+pub(crate) fn initialize_exec_slots_in<'input, I>(
     program: &ExecProgram,
-    inputs: Vec<ExecSlot<'input>>,
+    inputs: I,
     slots: &mut Vec<Option<ExecSlot<'input>>>,
-) -> Result<()> {
+) -> Result<()>
+where
+    I: IntoIterator<Item = ExecSlot<'input>>,
+    I::IntoIter: ExactSizeIterator,
+{
+    let inputs = inputs.into_iter();
     validate_exec_input_count(program, inputs.len(), "initialize_exec_slots_in")?;
     slots.clear();
     slots.resize_with(program.n_slots, || None);
@@ -1025,11 +1030,7 @@ pub(crate) fn run_exec_program_for_test(
 ) -> Result<Vec<Tensor>> {
     validate_exec_program(program, "test exec program replay")?;
     let mut slots = Vec::new();
-    initialize_exec_slots_in(
-        program,
-        inputs.into_iter().map(ExecSlot::Owned).collect(),
-        &mut slots,
-    )?;
+    initialize_exec_slots_in(program, inputs.into_iter().map(ExecSlot::Owned), &mut slots)?;
     for instruction in &program.instructions {
         if is_host_instruction(instruction) {
             execute_host_instruction_exec(engine, &mut slots, instruction)?;

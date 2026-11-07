@@ -221,20 +221,23 @@ fn prepared_execution_checks_retained_defaults_preparation_did_not_validate() {
 fn runtime_prepared_execution_hot_path_keeps_input_metadata_inline() {
     let source = include_str!("../../src/runtime/execution.rs");
 
-    assert!(
-        source.contains("type RuntimeInputReads<'a> = SmallVec"),
-        "Runtime::run_prepared should keep short input reference lists inline"
-    );
     // `TensorRead` has no `Default`, so `tinyvec::Array` cannot hold the input
-    // read list; the shape list has no such constraint and moved to `TinyVec`.
+    // read list. It is one `Vec` that moves into the execution slots; a second
+    // collected copy of it would add a per-run allocation.
+    assert!(
+        source.contains("type RuntimeInputReads<'a> = Vec<TensorRead<'a>>"),
+        "Runtime::run_prepared should resolve its input reads into one list"
+    );
+    assert!(
+        !source.contains("map(ExecSlot::Read).collect()"),
+        "Runtime::run_prepared should move the input reads into slots without re-collecting"
+    );
     assert!(
         source.contains("type RuntimeInputShapes<'a> = TinyVec"),
         "Runtime::run_prepared should keep short input shape lists inline"
     );
-    assert!(
-        !source.contains("inputs.to_vec()"),
-        "Runtime::run_prepared should not allocate a heap Vec just to copy input refs"
-    );
+    // The resolved read list itself may be `inputs.to_vec()`: it is the single
+    // list that moves into the slots, which the assertion above protects.
 }
 
 #[test]

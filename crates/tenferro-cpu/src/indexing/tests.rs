@@ -1,18 +1,18 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use super::{
-    dynamic_slice, f32_index_to_i64, f64_index_to_i64, inline_col_major_strides, typed_concatenate,
-    BufferPool,
+    dynamic_slice, f32_index_to_i64, f64_index_to_i64, inline_col_major_strides,
+    typed_concatenate_operands, BufferPool, Operand,
 };
 use tenferro_tensor::{Error, ErrorKind, Tensor, TypedTensor, ValidationError, ValidationKind};
 use threadteam::Exec;
 
 #[test]
-fn typed_concatenate_rejects_empty_typed_inputs_without_panicking() {
+fn typed_concatenate_rejects_empty_operands_without_panicking() {
     let mut buffers = BufferPool::new();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        typed_concatenate::<f64>(&mut buffers, &[], 0, Exec::serial())
+        typed_concatenate_operands::<f64>(&mut buffers, &[], 0, Exec::serial())
     }));
 
     assert!(result.is_ok(), "empty typed concatenate should return Err");
@@ -26,16 +26,41 @@ fn typed_concatenate_rejects_empty_typed_inputs_without_panicking() {
 }
 
 #[test]
-fn typed_concatenate_accepts_nonempty_typed_inputs() {
+fn typed_concatenate_accepts_nonempty_operands() {
     let mut buffers = BufferPool::new();
     let a = TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     let b = TypedTensor::from_vec_col_major(vec![1], vec![3.0]).unwrap();
-    let inputs = vec![&a, &b];
+    let inputs = [
+        Operand::from_typed("concatenate", &a).unwrap(),
+        Operand::from_typed("concatenate", &b).unwrap(),
+    ];
 
-    let out = typed_concatenate(&mut buffers, &inputs, 0, Exec::serial()).unwrap();
+    let out = typed_concatenate_operands(&mut buffers, &inputs, 0, Exec::serial()).unwrap();
 
     assert_eq!(out.shape(), &[3]);
     assert_eq!(out.host_data().unwrap(), &[1.0, 2.0, 3.0]);
+}
+
+/// Four inputs fill the inline descriptor array exactly; five spill to the heap.
+/// Both must hand the plan every input in order.
+#[test]
+fn typed_concatenate_fills_inline_descriptors_and_spills_past_them() {
+    let mut buffers = BufferPool::new();
+    let tensors: Vec<TypedTensor<f64>> = (0..5)
+        .map(|i| TypedTensor::from_vec_col_major(vec![1], vec![f64::from(i)]).unwrap())
+        .collect();
+    let operands: Vec<Operand<'_, f64>> = tensors
+        .iter()
+        .map(|tensor| Operand::from_typed("concatenate", tensor).unwrap())
+        .collect();
+
+    for count in [4, 5] {
+        let out = typed_concatenate_operands(&mut buffers, &operands[..count], 0, Exec::serial())
+            .unwrap();
+        let expected: Vec<f64> = (0..count).map(|i| i as f64).collect();
+        assert_eq!(out.shape(), &[count]);
+        assert_eq!(out.host_data().unwrap(), expected.as_slice());
+    }
 }
 
 #[test]

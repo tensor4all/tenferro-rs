@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use smallvec::SmallVec;
 use tenferro_runtime::runtime::{
     EventDomainError, EventDomainId, EventDomainOperation, EventToken,
 };
@@ -40,14 +39,30 @@ pub(crate) fn admit_event_tokens<'a, T: 'static, R>(
     token_type: &'static str,
     launch: impl FnOnce(&[&'a T]) -> Result<R>,
 ) -> Result<R> {
-    // `&T` has no `Default` impl, so `tinyvec::Array` cannot hold it inline.
-    let mut admitted = SmallVec::<[&'a T; 4]>::new();
-    for dependency in dependencies {
-        admitted.push(admit_event_token::<T>(
-            dependency.as_ref(),
-            expected,
-            token_type,
-        )?);
+    let mut admitted = dependencies
+        .iter()
+        .map(|dependency| admit_event_token::<T>(dependency.as_ref(), expected, token_type));
+    let Some(first) = admitted.next().transpose()? else {
+        return launch(&[]);
+    };
+    // `&T` has no `Default`, so `tinyvec::Array` cannot hold it. It is `Copy`,
+    // so up to `INLINE` tokens go into a stack array seeded with the first
+    // token; every slot below `dependencies.len()` is overwritten before
+    // `launch` reads it. Longer lists spill to a `Vec`, as an inline-capacity
+    // vector would.
+    const INLINE: usize = 4;
+    if dependencies.len() <= INLINE {
+        let mut inline = [first; INLINE];
+        for (slot, token) in inline[1..].iter_mut().zip(admitted) {
+            *slot = token?;
+        }
+        launch(&inline[..dependencies.len()])
+    } else {
+        let mut spilled = Vec::with_capacity(dependencies.len());
+        spilled.push(first);
+        for token in admitted {
+            spilled.push(token?);
+        }
+        launch(&spilled)
     }
-    launch(&admitted)
 }

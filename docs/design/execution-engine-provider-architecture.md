@@ -910,12 +910,15 @@ include hits, misses, waits, negative hits, preparation, and eviction.
 Requests are borrowed, validated views over existing metadata. Their creation
 must not allocate in steady state. Variable-rank fields should use one
 repository-wide representation at the boundary rather than repeatedly convert
-between `Vec`, `SmallVec`, and slices.
+between `Vec`, inline-capacity vectors, and slices.
 
 Public execution boundaries accept slices such as `&[T]`, `&[&Tensor]`, or
 borrowed request views. Hot-path internals may stage short input, shape, slot,
-and output lists in `SmallVec` when the inline bound covers the common case and
-benchmarks do not show a regression. Repeated execution workspaces, scratch
+and output lists in `tinyvec::TinyVec` when the inline bound covers the common
+case and benchmarks do not show a regression. `TinyVec` needs `Default` items;
+for a `Copy` item without `Default`, use a stack array seeded with the first
+element and pass `&[T]`, spilling to a `Vec` past the bound. `smallvec` is not
+a workspace dependency. Repeated execution workspaces, scratch
 buffers, and backend resource pools belong to the runtime or engine owner and
 should be reused through that owner rather than allocated per call. A per-call
 heap `Vec` in `Runtime::run_prepared`, segment execution, shape validation, or
@@ -937,7 +940,7 @@ The prototype also found a borrowed request near 7 ns, while constructing a
 per-call `SmallVec` request was worse. These results are evidence for direct
 trait-object fields and resolved slots, not a permanent performance guarantee.
 Future implementation must benchmark representative ranks and request shapes,
-including `Vec` versus `SmallVec`, validation cost, and cache-key hashing.
+including `Vec` versus inline-capacity vectors, validation cost, and cache-key hashing.
 
 ### Eager single-operation cost contract
 

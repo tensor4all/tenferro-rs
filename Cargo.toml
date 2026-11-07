@@ -55,7 +55,6 @@ libm = "0.2.16"
 # 0.1.1 adds the fused activation kernels the CPU engine routes to.
 elem-simd-math = "0.1.1"
 thiserror = "2"
-smallvec = { version = "1", features = ["union"] }
 tinyvec = { version = "1", features = ["alloc"] }
 criterion = "0.5"
 trybuild = "1"
