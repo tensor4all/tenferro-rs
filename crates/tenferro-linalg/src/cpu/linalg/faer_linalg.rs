@@ -44,7 +44,11 @@ type PublicSvd<T> = (
 /// the public face of the same four scalars is [`crate::LinalgScalar`], whose sealed supertrait
 /// routes the borrowed entries here.
 pub(crate) trait FaerLinalg:
-    tlinalg::FaerScalar<Real = Self::RealScalar> + PoolScalar + Default + PartialEq + std::ops::Mul<Output = Self>
+    tlinalg::FaerScalar<Real = Self::RealScalar>
+    + PoolScalar
+    + Default
+    + PartialEq
+    + std::ops::Mul<Output = Self>
 {
     /// The real scalar of singular values and Hermitian eigenvalues.
     ///
@@ -210,7 +214,6 @@ macro_rules! impl_faer_linalg {
             ) -> tlinalg::Result<()> {
                 tlinalg::eigh::eigh_values_into(Op::EighValues, input, values, workspace, exec)
             }
-
 
             fn eig_batch(
                 input: RawStridedRef<'_, Self>,

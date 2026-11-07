@@ -205,7 +205,10 @@ pub(crate) fn eigh_typed<T: FaerLinalg>(
         exec,
     )
     .map_err(provider(Op::Eigh))?;
-    Ok((tensor_from_lease(values, placement)?, tensor_from_lease(vectors, placement)?))
+    Ok((
+        tensor_from_lease(values, placement)?,
+        tensor_from_lease(vectors, placement)?,
+    ))
 }
 
 pub(crate) fn eigh_values_typed<T: FaerLinalg>(
