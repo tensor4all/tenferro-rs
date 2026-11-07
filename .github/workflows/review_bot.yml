@@ -26,6 +26,9 @@ jobs:
   review-bot:
     name: repository rules review
     if: |
+      (github.event.pull_request.author_association == 'OWNER' ||
+       github.event.pull_request.author_association == 'MEMBER' ||
+       github.event.pull_request.author_association == 'COLLABORATOR') &&
       !contains(github.event.pull_request.labels.*.name, 'rules-review:waive') &&
       !contains(github.event.pull_request.labels.*.name, 'rules-review:no-llm')
     runs-on: ubuntu-24.04
@@ -141,6 +144,9 @@ jobs:
   review-bot-no-llm:
     name: repository rules review (LLM skipped)
     if: |
+      (github.event.pull_request.author_association == 'OWNER' ||
+       github.event.pull_request.author_association == 'MEMBER' ||
+       github.event.pull_request.author_association == 'COLLABORATOR') &&
       !contains(github.event.pull_request.labels.*.name, 'rules-review:waive') &&
       contains(github.event.pull_request.labels.*.name, 'rules-review:no-llm')
     runs-on: ubuntu-24.04
@@ -308,6 +314,7 @@ jobs:
   review-bot-waived:
     name: repository rules review (waived)
     if: |
+      github.event.pull_request.head.repo.full_name == github.repository &&
       contains(github.event.pull_request.labels.*.name, 'rules-review:waive')
     runs-on: ubuntu-24.04
     permissions:
