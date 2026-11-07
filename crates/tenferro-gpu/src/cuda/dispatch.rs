@@ -6,9 +6,9 @@
 use t4a_cuda_kernels::{
     plan_binary, plan_clamp, plan_compare, plan_contiguous_to_view, plan_convert, plan_copy_exact,
     plan_dynamic_slice, plan_dynamic_update_slice, plan_elementwise, plan_pad, plan_reduce,
-    plan_reduction, plan_scatter_add, plan_select, plan_slice, plan_tril_view, plan_triu_view,
-    plan_unary, plan_validate_float_indices, plan_validate_real_cast, BinaryOp, DType, Entry,
-    GatherPlan, Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan, UnaryOp,
+    plan_scatter_add, plan_select, plan_slice, plan_tril_view, plan_triu_view, plan_unary,
+    plan_validate_float_indices, plan_validate_real_cast, BinaryOp, DType, Entry, GatherPlan,
+    Layout, ReduceOp, ReductionPlan, ScalarSide, ScatterPlan, UnaryOp,
 };
 use t4a_cuda_runtime::{Arg, BoundFunction, LaunchConfig};
 
@@ -1164,7 +1164,8 @@ impl Dispatcher {
     /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
     /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
     #[allow(clippy::too_many_arguments)]
-    // Only the dispatch tests exercise the explicit-strategy form; the engine uses `reduce_auto`.
+    // Only the dispatch tests exercise the explicit-strategy form; the engine plans with
+    // `plan_reduction` and runs `reduce_planned`.
     #[allow(dead_code)]
     pub(crate) fn reduce(
         &mut self,
@@ -1212,34 +1213,53 @@ impl Dispatcher {
         )
     }
 
-    /// Plan a whole reduction with the crate's split policy and run both passes.
+    /// Run a reduction `plan` from [`plan_reduction`] for the same invocation: one direct launch,
+    /// or the partials pass and the combine pass of a split.
     ///
-    /// `partials` must hold `splits * out_len` elements, and is only used when the
-    /// policy splits; the returned [`ReductionPlan`] says which happened.
+    /// Both destinations are uninitialised, because the reduction overwrites them completely:
+    /// the direct or combine launch writes each of the `out_len` outputs once, and pass 1
+    /// writes each `(output, split)` partial once. `out_buffer` therefore holds the result once
+    /// this returns `Ok`, in stream order. `partials_buffer` must be `Some` exactly when `plan` splits,
+    /// holding the partials layout's elements and nothing more. It is freed in stream order
+    /// after the combine pass that reads it.
     ///
     /// # Errors
     ///
-    /// [`crate::Error::RuntimeState`] when the planner refuses the invocation, and
-    /// [`crate::Error::RuntimeStateSource`] when binding or admitting a launch fails.
+    /// [`crate::Error::RuntimeState`] when the planner refuses the invocation or
+    /// `partials_buffer` does not match the plan, and [`crate::Error::RuntimeStateSource`] when binding or
+    /// admitting a launch fails.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn reduce_auto(
+    pub(crate) fn reduce_planned(
         &mut self,
+        plan: &ReductionPlan,
         dtype: DType,
         op: ReduceOp,
         out: &Layout,
-        out_len: i64,
         input: &Layout,
-        in_len: i64,
         axis: u32,
-        plane_width: u32,
-        out_buffer: &t4a_cuda_runtime::Buffer,
+        out_buffer: &t4a_cuda_runtime::UninitBuffer,
         in_buffer: &t4a_cuda_runtime::Buffer,
-        partials_buffer: &t4a_cuda_runtime::Buffer,
-    ) -> crate::Result<ReductionPlan> {
-        let plan = plan_reduction(dtype, op, out, out_len, input, in_len, axis, plane_width)
-            .map_err(plan_error)?;
-        match &plan {
+        partials_buffer: Option<t4a_cuda_runtime::UninitBuffer>,
+    ) -> crate::Result<()> {
+        // The caller reads `out_buffer` as initialised afterwards, which holds only if the
+        // launches below cover all of it: exactly `out`'s elements.
+        let out_bytes = usize::try_from(out.element_count().map_err(plan_error)?)
+            .ok()
+            .and_then(|len| len.checked_mul(dtype.size()));
+        if Some(out_buffer.len()) != out_bytes {
+            return Err(crate::Error::runtime_state(
+                "reduce",
+                "the reduction output buffer must hold exactly the output layout",
+            ));
+        }
+        match plan {
             ReductionPlan::Direct { strategy, launch } => {
+                if partials_buffer.is_some() {
+                    return Err(crate::Error::runtime_state(
+                        "reduce",
+                        "a direct reduction takes no partials buffer",
+                    ));
+                }
                 let out_layout = t4a_cuda_kernels::CLayout::new(out);
                 let in_layout = t4a_cuda_kernels::CLayout::new(input);
                 let output_len = out.element_count().map_err(plan_error)?;
@@ -1247,7 +1267,7 @@ impl Dispatcher {
                     Entry::Reduce,
                     *launch,
                     &[
-                        Arg::DevicePtr(out_buffer),
+                        Arg::DevicePtrUninit(out_buffer),
                         Arg::DevicePtr(in_buffer),
                         Arg::U32(dtype.tag() as u32),
                         Arg::I32(op.tag()),
@@ -1275,11 +1295,23 @@ impl Dispatcher {
                 let partials_layout =
                     t4a_cuda_kernels::CLayout::from_wide(&partials).map_err(plan_error)?;
                 let output_len = out.element_count().map_err(plan_error)?;
+                let partials_bytes = usize::try_from(partials_len)
+                    .ok()
+                    .and_then(|len| len.checked_mul(dtype.size()));
+                let partials_buffer = match partials_buffer {
+                    Some(buffer) if Some(buffer.len()) == partials_bytes => buffer,
+                    _ => {
+                        return Err(crate::Error::runtime_state(
+                            "reduce",
+                            "a split reduction needs a partials buffer of exactly its layout",
+                        ))
+                    }
+                };
                 self.run(
                     Entry::ReducePartials,
                     *pass1,
                     &[
-                        Arg::DevicePtr(partials_buffer),
+                        Arg::DevicePtrUninit(&partials_buffer),
                         Arg::DevicePtr(in_buffer),
                         Arg::U32(dtype.tag() as u32),
                         Arg::I32(op.tag()),
@@ -1292,12 +1324,17 @@ impl Dispatcher {
                         Arg::U64(split.chunk_len as u64),
                     ],
                 )?;
+                // SAFETY: pass 1 was just admitted on this buffer's stream. It runs one block
+                // per `(output, split)` cube of the partials layout, and each block writes its
+                // own partial, so the buffer, sized to exactly that layout above, is fully
+                // written before the combine pass reads it in stream order.
+                let partials_buffer = unsafe { partials_buffer.assume_init() };
                 self.run(
                     Entry::Reduce,
                     *pass2,
                     &[
-                        Arg::DevicePtr(out_buffer),
-                        Arg::DevicePtr(partials_buffer),
+                        Arg::DevicePtrUninit(out_buffer),
+                        Arg::DevicePtr(&partials_buffer),
                         Arg::U32(dtype.tag() as u32),
                         Arg::I32(combine_op.tag()),
                         Arg::I32(combine_strategy.tag()),
@@ -1307,10 +1344,9 @@ impl Dispatcher {
                         Arg::U64(output_len as u64),
                     ],
                 )?;
-                let _ = partials_len;
             }
         }
-        Ok(plan)
+        Ok(())
     }
 }
 

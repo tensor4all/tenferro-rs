@@ -99,6 +99,18 @@ runtime's submission lock and stream.
 CubeCL launch queue or physical-stream pool to flush or select. Vendor calls
 bind to the stream lent by the engine's raw scope.
 
+A standalone native operation waits once before it returns, which is what makes
+its result observable; a scheduled run defers that wait to its own checkpoint.
+An operation built from several launches still waits once, after the last one,
+because stream order already orders the launches and the stream-ordered frees of
+their scratch. Destinations default to `alloc_zeroed`. A destination that its
+launches overwrite completely may come from `alloc_uninit` instead, converted
+with `UninitBuffer::assume_init` only after the writing launch is admitted, and
+with an `// INVARIANT:` marker that names the check proving the full overwrite.
+The reductions do this for their output and their split partials (#2406). They
+also write the squeezed result shape directly, since a compact column-major
+buffer holds the same bytes with or without unit axes.
+
 cuTENSOR and cuBLAS integration lives in `tenferro-gpu`; cuSOLVER integration
 lives in `tenferro-linalg`. cuFFT loading and opaque plan entries remain owned
 by `tenferro-fft`. Its `cufft-plans` entries live in the executing engine's

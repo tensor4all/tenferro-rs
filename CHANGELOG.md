@@ -23,6 +23,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     program is built with `SemanticProgramBuilder::finish(&[])`.
   - AD seeds of an externally defined scalar must carry that scalar's canonical
     identity, which the context constructors now supply.
+- **CUDA reductions cost about 20 µs less per standalone call.** `tenferro-gpu`
+  reductions now wait once per call instead of once per pass plus once more for
+  the result squeeze. They write the squeezed result directly and no longer
+  zero-fill destinations their kernels overwrite completely. For example, a full
+  `reduce_max` of 1M `f32` values on an A100 drops from 50.8 to 30.2 µs. Result
+  values are bit-identical (#2406).
 
 ### Removed
 

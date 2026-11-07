@@ -213,3 +213,8 @@ required-features = ["cuda"]
 name = "seam_structural"
 path = "tests/seam_structural.rs"
 required-features = ["cuda"]
+
+[[test]]
+name = "seam_full_reduction"
+path = "tests/seam_full_reduction.rs"
+required-features = ["cuda"]
