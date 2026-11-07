@@ -18,7 +18,6 @@
 //! `a_negative_stride_is_unsupported_for_every_entry` asserts both halves on the same view, so
 //! making them agree fails a test that says why they do not.
 
-
 use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::{TypedTensor, TypedTensorView};
