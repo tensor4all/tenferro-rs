@@ -20,7 +20,7 @@ tenferro has two public ways to build a semantic graph:
 | entry point | representation | op surface |
 |---|---|---|
 | `TracedTensor` | one `Arc<Graph<StdTensorOp>>` per tensor plus five merge/scope carriers | 75 inherent `pub fn` in `crates/tenferro-runtime/src/traced.rs`, 13 composites in `traced/composite_ops.rs`, the extension traits of §2.4, and `TracedTensorAdExt` |
-| `TraceContext` | one `SemanticProgramBuilder` plus `ExtensionCacheStore` (`crates/tenferro-runtime/src/trace.rs:19-24`) | `input`, `input_with_default`, `bind_input`, `add_op`, `add_extension`, `value_metadata`, `extension_caches_mut`, `finish` (`trace.rs:39,52,70,87,106,121,129,141`) plus `TraceContextEinsumExt`, `TraceContextLinalgExt` and `TraceContextFftExt` |
+| `TraceContext` | one `SemanticProgramBuilder` plus `ExtensionCacheStore` (`crates/tenferro-runtime/src/trace.rs:25-30`) | `input`, `input_with_default`, `bind_input`, `add_op`, `add_extension`, `value_metadata`, `with_extension_caches`, `finish` (`trace.rs:136,152,170,188,209,226,245,536`) plus `TraceContextEinsumExt`, `TraceContextLinalgExt` and `TraceContextFftExt` |
 
 The two describe the same object. `TracedTensor` builds many small graphs and
 asks `GraphCompiler` to merge them; `TraceContext` appends to one program.
@@ -180,7 +180,7 @@ break it immediately.
 
 | family | traced surface | implementation |
 |---|---|---|
-| linalg | `TraceContextLinalgExt`, 25 methods (`linalg/src/traced.rs:437-1254`, impl at 1256) and `TracedTensorLinalgExt`, the same 25 methods (`:18-415`, impl at 1407, each delegating to the context trait) | 19 `apply(` sites in the same file build `LinalgExtensionOp` and call `tenferro_runtime::extension::apply`; `pinv`, `norm`, `slogdet` and friends are composites over `TracedTensor` standard ops (composite helpers at `traced.rs:1852-1937`) |
+| linalg | `TraceContextLinalgExt`, 25 methods (`linalg/src/traced.rs:437-1254`, impl at 1256) and `TracedTensorLinalgExt`, the same 25 methods (`:18-415`, impl at 1407, each delegating to the context trait) | 19 `apply(` sites in the same file build `LinalgExtensionOp` and call `tenferro_runtime::extension::apply`; `pinv`, `norm` and friends are composites over `TracedTensor` standard ops (entry bodies at `traced.rs:1852-1937`, with further helpers at `:2164`, `:2289`, `:2300`, `:2427`); `slogdet` is extension-backed, composing `LuFactor`, `SignDetFromLuFactor` and `LogAbsDetFromLuFactor` (`:1773-1810`) |
 | fft | `TraceContextFftExt`, 8 methods (`fft/src/lib.rs:663-959`, impl at 960) and `TracedTensorFftExt`, the same 8 (`:1155-1404`, impl at 1406), each delegating to the context trait | one `apply` per method |
 | einsum | `TraceContextEinsumExt`, 6 methods (`einsum/src/traced.rs:50-149`); `TracedTensorEinsumExt`, `tensordot` only (`:313-340`) | the context trait is the real implementation; the traced trait delegates |
 | ext/sparse | `SparseCooTracedTensor` holds a `TracedTensor` (`ext/sparse/src/sparse.rs:135,227`) | `extension::apply` |
