@@ -14,7 +14,12 @@ count** — across fresh threads, processes and repeated runs. That is the whole
 
 The count is pinned explicitly, by building the `CpuEngine` pool with the width you want
 ([Parallelism and Caching](../guides/parallelism-and-caching.md#cpu-thread-count)); it is never
-inherited from an environment variable.
+inherited from an environment variable. A `blas` build is only half pinned by that: the pool
+bounds tenferro-owned work, while the linked provider keeps its own thread controls
+(`OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `OMP_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`). Pin
+those too before comparing bits; otherwise the pool width is unchanged and the vendor still
+changes its own threading
+([BLAS And LAPACK Threads](../guides/parallelism-and-caching.md#blas-and-lapack-threads)).
 
 ## What is not promised
 
@@ -41,12 +46,17 @@ least `PAYS` times the dispatch cost of the sections it opens — the same thres
 The token budget bounds that search; it does not scale the width. The pinned `t4a-faer`
 0.33.0 considers every width in `2..=budget` and takes the **widest one that pays**
 (`t4a-faer 0.33.0/src/utils/cost.rs:613-619`); when none pays it returns 1 and the region runs
-on the calling thread (`:711-713`). Two consequences:
+on the calling thread (`:711-713`). Three consequences:
 
 - a larger budget can make a region parallel that a smaller budget ran serially, because a
   wider width becomes available to the search — the result is not `min(width, budget)`;
 - two budgets that both admit the width the model picks produce the same partition, and so the
-  same bits — which is why 2 and 8 threads agree in the observations below.
+  same bits;
+- equal bits across two budgets do not by themselves show that this happened. The budget
+  changes which widths are available, not the rule: a 1 ms region pays at width 2 (1423 ns of
+  dispatch) and also at width 8 (2738 ns), so the search picks 2 under one budget and 8 under
+  the other, and the two runs can still agree in their last bits. Agreement is an
+  observation, not a consequence of the budget rule.
 
 "Differs across thread counts" therefore means "differs between the serial path and the
 parallel path" for the cases recorded here, not "the summation order follows the count". It is
