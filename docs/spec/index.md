@@ -14,3 +14,4 @@ link here rather than re-stating.
 | [extension-op.md](./extension-op.md) | ExtensionOp trait contract: identity, shape-equality declarations, graph-scope and compiled-guard enforcement, AD, dispatch, and registry |
 | [api-conventions.md](./api-conventions.md) | Public API naming, module shape, feature naming, documentation-surface checks, and checker mapping |
 | [operation-categories.md](./operation-categories.md) | User-facing operation categories and the Eager/Traced surface-parity contract |
+| [reproducibility.md](./reproducibility.md) | Bitwise-reproducibility contract: what a fixed thread count promises, what is not promised across thread counts, and how to compare results |

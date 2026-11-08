@@ -326,7 +326,9 @@ Audit hints:
   error or relative norm error.
 - Use release-mode benchmarks for performance claims. Prefer Criterion-style
   microbenchmarks, wrap inputs and outputs with `std::hint::black_box` where
-  needed, and pin thread counts when comparing CPU behavior.
+  needed, and pin thread counts when comparing CPU behavior. Bitwise equality is
+  promised at a fixed thread count only, never across thread counts
+  (`docs/spec/reproducibility.md`).
 - Benchmark scaling across representative sizes, shapes, layouts, and thread
   counts. A single fixed-size speedup is not enough evidence.
 - Audit AD residual reuse end to end, not just the rule's residual declaration:
@@ -500,6 +502,9 @@ Audit hints:
   bound/clear/stats controls and documentation; bind the engine once.
 
 ## CPU Threading Contract
+
+The bitwise-reproducibility promise this contract supports — identical bits at a fixed
+thread count, nothing across thread counts — is owned by `docs/spec/reproducibility.md`.
 
 - CPU placement is `Serial`, `Single`, or `Team`. `CpuEngine::serial()` owns no
   pool; a caller-built one-worker `threadteam::Pool` stays `Single`, with no
