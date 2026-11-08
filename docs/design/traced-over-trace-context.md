@@ -7,6 +7,9 @@ No implementation before this design was approved; P1 may start after merge.
 
 Every count, line number and size below was taken from the checkout at
 `bdde3f2b6e82f0c9991f4170a642ad80dca7b707` with the command quoted next to it.
+The `TraceContext` op surface in §1 and the linalg/fft rows of §2.4 were
+refreshed on 2026-11-08 for the P3 traits as built (§3.3); the line numbers in
+those rows are from that post-P3 tree, not from `bdde3f2`.
 "Production" means `*.rs` under `crates/**/src` or `ext/**/src`; other counts
 include tests and rustdoc and say so.
 
@@ -17,7 +20,7 @@ tenferro has two public ways to build a semantic graph:
 | entry point | representation | op surface |
 |---|---|---|
 | `TracedTensor` | one `Arc<Graph<StdTensorOp>>` per tensor plus five merge/scope carriers | 75 inherent `pub fn` in `crates/tenferro-runtime/src/traced.rs`, 13 composites in `traced/composite_ops.rs`, the extension traits of §2.4, and `TracedTensorAdExt` |
-| `TraceContext` | one `SemanticProgramBuilder` plus `ExtensionCacheStore` (`crates/tenferro-runtime/src/trace.rs:19-24`) | `input`, `input_with_default`, `bind_input`, `add_op`, `add_extension`, `value_metadata`, `extension_caches_mut`, `finish` (`trace.rs:39,52,70,87,106,121,129,141`) plus `TraceContextEinsumExt` |
+| `TraceContext` | one `SemanticProgramBuilder` plus `ExtensionCacheStore` (`crates/tenferro-runtime/src/trace.rs:19-24`) | `input`, `input_with_default`, `bind_input`, `add_op`, `add_extension`, `value_metadata`, `extension_caches_mut`, `finish` (`trace.rs:39,52,70,87,106,121,129,141`) plus `TraceContextEinsumExt`, `TraceContextLinalgExt` and `TraceContextFftExt` |
 
 The two describe the same object. `TracedTensor` builds many small graphs and
 asks `GraphCompiler` to merge them; `TraceContext` appends to one program.
@@ -177,8 +180,8 @@ break it immediately.
 
 | family | traced surface | implementation |
 |---|---|---|
-| linalg | `TracedTensorLinalgExt`, 25 methods (`linalg/src/traced.rs:17-411`, impl at 412) | 19 `apply(` sites in the same file build `LinalgExtensionOp` and call `tenferro_runtime::extension::apply`; `pinv`, `norm`, `slogdet` and friends are composites over `TracedTensor` standard ops (helpers at `traced.rs:1700-2147`) |
-| fft | `TracedTensorFftExt`, 8 methods (`fft/src/lib.rs:638-930`) | one `apply` per method |
+| linalg | `TraceContextLinalgExt`, 25 methods (`linalg/src/traced.rs:437-1254`, impl at 1256) and `TracedTensorLinalgExt`, the same 25 methods (`:18-415`, impl at 1407, each delegating to the context trait) | 19 `apply(` sites in the same file build `LinalgExtensionOp` and call `tenferro_runtime::extension::apply`; `pinv`, `norm`, `slogdet` and friends are composites over `TracedTensor` standard ops (composite helpers at `traced.rs:1852-1937`) |
+| fft | `TraceContextFftExt`, 8 methods (`fft/src/lib.rs:663-959`, impl at 960) and `TracedTensorFftExt`, the same 8 (`:1155-1404`, impl at 1406), each delegating to the context trait | one `apply` per method |
 | einsum | `TraceContextEinsumExt`, 6 methods (`einsum/src/traced.rs:50-149`); `TracedTensorEinsumExt`, `tensordot` only (`:313-340`) | the context trait is the real implementation; the traced trait delegates |
 | ext/sparse | `SparseCooTracedTensor` holds a `TracedTensor` (`ext/sparse/src/sparse.rs:135,227`) | `extension::apply` |
 | ext/tropical | 7 free functions taking `&TracedTensor` (`ext/tropical/src/traced.rs:150,206,266,329,397,453,642`) | extension ops plus traced standard ops |
@@ -189,11 +192,13 @@ Op semantics (`ExtensionOp` payloads), AD rules (`SemanticLinearizeRule`,
 `SemanticPrimalVjpRule`, written against `SemanticProgramBuilder`) and kernels do
 not depend on it.
 
-The missing piece on the context side is a typed standard-op surface:
-`tenferro-einsum` is the only extension with a `TraceContext` entry point
-(`TraceContextEinsumExt` is the only such trait in the workspace), and
-composites (`pinv`, `norm`, `softmax`, ...) cannot be written on `TraceContext`
-today because it has no `matmul`, `reduce_max`, `transpose`, `compare`, ...
+When this section was written, the missing piece on the context side was a
+typed standard-op surface, with `tenferro-einsum` the only family that had a
+`TraceContext` entry point. P3 closed that gap for linalg and fft (§3.3, as
+built): both now expose a context trait, and the traced traits delegate to
+them. What remains is the standard-op vocabulary itself: `TraceContext` still
+has no `matmul`, `reduce_max`, `transpose`, `compare`, ..., so composites
+(`pinv`, `norm`, `softmax`, ...) are still written against `TracedTensor`.
 
 Note that the typed methods are not just "payload plus `add_op`": binary ops
 insert broadcasts (`broadcast_binary`, `traced.rs:272-289`) and `Convert` ops on
