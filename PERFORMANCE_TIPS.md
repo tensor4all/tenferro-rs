@@ -280,7 +280,7 @@ Audit hints:
   from the faer accumulation order, so their last bits differ from those of
   the packed driver. The test beside this rule compares against a direct faer
   matmul under a **normwise** bound, `max|g - w| <= 4 * k * eps * max|w|`;
-  components can differ by many ULP (2102 steps are on record at `1x141x282`),
+  components can differ by thousands of ULP where a complex dot product cancels,
   so read that test as a normwise guarantee, not a bit-level one. f32, f64 and
   c32 have no bound in the default on any host, so their plan configuration,
   and with it their bits, do not move. `cargo run --release -p tenferro-cpu
