@@ -255,18 +255,28 @@ Audit hints:
   141x282` c64 it takes 170 us against faer's 82 us (tensor4all-rs#1040), so a
   plan prepared under a budget-one token on a `native` build uses
   `FaerLimit::NONE`. **The host class does not enter**: `HostClass::detect` —
-  AVX-512, AVX2, aarch64 or whatever comes next — is not a condition, because
-  the narrowing of #2415 to `x86_64-avx2` left the other classes on the packed
-  driver with no measurement behind it (tensor4all-rs#2524,
-  `crates/tenferro-cpu/src/contraction.rs:471-502`). A per-class exception needs
-  its own measurement naming the class, shape and budget; the test in
-  `crates/tenferro-cpu/src/contraction/tests.rs` enumerates every `HostClass`
-  variant, so a silent one fails there. Wider budgets keep the default on every
+  AVX-512, AVX2, aarch64 or whatever comes next — is not a condition. This is a
+  policy restoration, not a conclusion drawn from the measurements above: #2415
+  narrowed the lift to `x86_64-avx2` and left the other classes on the packed
+  driver (tensor4all-rs#2524, `crates/tenferro-cpu/src/contraction.rs:471-502`).
+  The measured cells named above are AVX2/AVX-512 (EPYC 7763) ones and do not
+  establish that the packed driver loses at a budget of one on aarch64: a
+  budget-one M5 Max run recorded packed faster at `8x141x282` (56.7 vs 68.0 us)
+  and `16x141x282` (97.3 vs 125.3 us) c64 (tensor4all-rs#1040). The rule is
+  stated as a budget condition so that it does not depend on enumerating a
+  growing host list; the test in `crates/tenferro-cpu/src/contraction/tests.rs`
+  reaches its host list through an exhaustive `match` on `HostClass`, so a
+  variant added in `threadteam` fails to compile there instead of silently
+  going untested. A per-class exception needs its own measurement naming the
+  class, shape and budget, and arrives with that measurement. Wider budgets keep the default on every
   host, where the packed driver's partitioning is what is wanted. The budget is
   part of the plan-cache key because a `CpuPlanCache` may be shared by engines
   of different widths. Consequence: serial c64 results above the old volume come
-  from faer's accumulation order, so their last bits differ from the packed
-  driver's (a direct faer matmul agrees to a few ULP). f32, f64 and c32 have no
+  from the faer accumulation order, so their last bits differ from those of the
+  packed driver. The test beside this rule compares against a direct faer matmul
+  under a **normwise** bound, `max|g - w| <= 4 * k * eps * max|w|`; components can
+  differ by many ULP (2102 steps are on record at `1x141x282`), so read that test
+  as a normwise guarantee, not a bit-level one. f32, f64 and c32 have no
   bound in the default on any host, so their plan configuration, and with it
   their bits, do not move. `cargo run --release -p tenferro-cpu --example
   route_faerlimit --features route-report` prints the driver and tcontract's

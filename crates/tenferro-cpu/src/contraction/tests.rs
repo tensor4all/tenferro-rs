@@ -257,22 +257,38 @@ mod plan_slot_reuse {
 /// c64 to the packed driver.
 const DEFAULT_C64_BOUND: u64 = 1 << 17;
 
+/// Every `HostClass` variant, reached through an exhaustive `match`: adding a
+/// variant in `threadteam` makes this function fail to compile until the list is
+/// updated, so the enumeration in the test below cannot silently miss one.
+fn every_host_class() -> [threadteam::HostClass; 6] {
+    use threadteam::HostClass;
+    match HostClass::Generic {
+        HostClass::X86_64Avx512
+        | HostClass::X86_64Avx2
+        | HostClass::X86_64Scalar
+        | HostClass::Aarch64Apple
+        | HostClass::Aarch64
+        | HostClass::Generic => [
+            HostClass::X86_64Avx512,
+            HostClass::X86_64Avx2,
+            HostClass::X86_64Scalar,
+            HostClass::Aarch64Apple,
+            HostClass::Aarch64,
+            HostClass::Generic,
+        ],
+    }
+}
+
 /// Every `HostClass` variant lifts the c64 bound at a thread budget of one on a
 /// `native` build, and no other budget or dtype moves.
 ///
-/// Enumerating the variants is the fence (#2524): the defect was not that a
-/// class was forgotten, it was that the rule was a match arm over a growing
-/// enum. A narrowing added without a measurement fails here.
+/// The list comes from an exhaustive `match`, so the fence is the compiler
+/// (#2524): the defect was not that a class was forgotten, it was that the rule
+/// was a match arm over a growing enum. A narrowing added without a measurement
+/// fails here.
 #[test]
 fn serial_native_lifts_the_c64_bound_on_every_host_class() {
-    let hosts = [
-        threadteam::HostClass::X86_64Avx512,
-        threadteam::HostClass::X86_64Avx2,
-        threadteam::HostClass::X86_64Scalar,
-        threadteam::HostClass::Aarch64Apple,
-        threadteam::HostClass::Aarch64,
-        threadteam::HostClass::Generic,
-    ];
+    let hosts = every_host_class();
     for host in hosts {
         let serial = default_faer_limit(host, 1);
         if cfg!(feature = "native") {
