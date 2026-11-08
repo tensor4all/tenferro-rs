@@ -1,0 +1,16 @@
+name: PR verification section
+
+# The caller is here, and not replaced by an organization-required workflow,
+# because a ruleset-run workflow only fires on opened/synchronize/reopened:
+# `edited` is what catches a description being fixed (stale red) or its evidence
+# being deleted (stale green). See tensor4all/.github/.github/README.md.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+  merge_group:
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  body:
+    uses: tensor4all/.github/.github/workflows/pr-verification.yml@main
