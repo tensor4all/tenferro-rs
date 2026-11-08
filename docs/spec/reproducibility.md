@@ -32,20 +32,27 @@ different computations.
 ## Why a thread count can move the last bits
 
 The width of the parallel work is chosen by a cost model from the problem, not by the
-requested degree. The faer-backed CPU kernels receive the engine's placement token (through
-`tcontract_exec::with_faer_par`), and a parallel region opens only when its serial estimate
-(priced in flops, and therefore dtype-dependent) is at least `PAYS` times the dispatch cost
-of the sections it opens — the same threshold `threadteam::PAYS` applies to tenferro's own
-kernels. The token's budget is an upper bound, not a width: the model picks a width for the
-problem and clamps it to the budget.
+requested degree. The faer-backed CPU kernels receive the engine placement token (through
+`tcontract_exec::with_faer_par`), and a parallel region opens only where the estimate pays:
+the serial time of the region, priced in flops (and therefore dtype-dependent), must be at
+least `PAYS` times the dispatch cost of the sections it opens — the same threshold
+`threadteam::PAYS` applies to tenferro kernels.
 
-The practical shape of that rule:
+The token budget bounds that search; it does not scale the width. The pinned `t4a-faer`
+0.33.0 considers every width in `2..=budget` and takes the **widest one that pays**
+(`t4a-faer 0.33.0/src/utils/cost.rs:613-619`); when none pays it returns 1 and the region runs
+on the calling thread (`:711-713`). Two consequences:
 
-- one worker takes the serial path;
-- two or more take the cost-model-capped parallel path, so two different budgets give the
-  same bits while the model's width stays at or below the smaller budget;
-- "differs across thread counts" therefore means "differs between the serial path and the
-  parallel path", not "the summation order follows the thread count".
+- a larger budget can make a region parallel that a smaller budget ran serially, because a
+  wider width becomes available to the search — the result is not `min(width, budget)`;
+- two budgets that both admit the width the model picks produce the same partition, and so the
+  same bits — which is why 2 and 8 threads agree in the observations below.
+
+"Differs across thread counts" therefore means "differs between the serial path and the
+parallel path" for the cases recorded here, not "the summation order follows the count". It is
+not a general rule: the tridiagonalization inside `t4a-faer` splits columns as `idx / nthreads`
+(`t4a-faer 0.33.0/src/linalg/evd/tridiag.rs:386-409`) and adds the partial vectors, so there two
+parallel widths group the same sum differently.
 
 ## Observations, not contract
 
@@ -56,9 +63,11 @@ Recorded in [#2522](https://github.com/tensor4all/tenferro-rs/issues/2522), on a
 - Complex64 `mat_mul` / `contract_pair` agreed at `16³`, `32³` and `48³`, and differed at
   `64³` and larger **between 1 and 2 threads only** — 2 and 8 agreed at every size.
 
-The complex threshold sits at a different size than the real one because the budget is
-priced in flops, so complex, which carries twice the work per element, keeps its gain
-further up.
+The complex threshold sits at a different size than the real one because the estimate is in
+nanoseconds per multiply-add and the rate is dtype-specific: `gemm_mac` is `0.0641` real against
+`0.2565` complex on the AVX-512 row, and `0.037` against `0.165` on the Apple row
+(`t4a-faer 0.33.0/src/utils/cost.rs:382,407`). That ratio is near four, not the two that
+"twice the work per element" would suggest, so the crossover moves with the measured rate.
 
 ## What this asks of a contributor
 
