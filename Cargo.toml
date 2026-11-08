@@ -80,8 +80,9 @@ strided-view = "0.7.1"
 strided-traits = "0.7.0"
 threadteam = "0.5.1"
 strided-perm = { version = "0.12.0", features = ["parallel"] }
-# The CPU provider stack is on the strided 0.11 / tcontract 0.12 release train; one
-# `tcontract-exec` (check `cargo tree -i tcontract-exec`) keeps `Exec` one type.
+# The CPU provider stack resolves to one release train of the strided and tcontract
+# families; one `tcontract-exec` (check `cargo tree -i tcontract-exec`) keeps `Exec`
+# one type.
 cpueinsum = "0.12.0"
 cpueinsum-blas = "0.12.0"
 tcontract-exec = "0.12.0"
@@ -94,7 +95,7 @@ strided-nn = "0.12.0"
 strided-fused = { version = "0.12.0", default-features = false, features = ["parallel"] }
 strided-kernel = { version = "0.12.0", features = ["parallel"] }
 libloading = "0.8"
-# One faer identity for the native CPU stack (#1939): tlinalg 0.9 and this
+# One faer identity for the native CPU stack (#1939): tlinalg and this
 # dependency use compatible t4a-faer ranges. 0.30 has threadteam 0.4 in its
 # public API; 0.24.8 fixed divide-and-conquer SVD secular-root stagnation
 # (tensor4all/faer#28). Later patch fixes need only a targeted lock update, not
