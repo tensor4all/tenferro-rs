@@ -73,11 +73,15 @@ Recorded in [#2522](https://github.com/tensor4all/tenferro-rs/issues/2522), on a
 - Complex64 `mat_mul` / `contract_pair` agreed at `16³`, `32³` and `48³`, and differed at
   `64³` and larger **between 1 and 2 threads only** — 2 and 8 agreed at every size.
 
-The complex threshold sits at a different size than the real one because the estimate is in
-nanoseconds per multiply-add and the rate is dtype-specific: `gemm_mac` is `0.0641` real against
-`0.2565` complex on the AVX-512 row, and `0.037` against `0.165` on the Apple row
-(`t4a-faer 0.33.0/src/utils/cost.rs:382,407`). That ratio is near four, not the two that
-"twice the work per element" would suggest, so the crossover moves with the measured rate.
+Where the product runs is decided before the width, and for `Complex64` that decision is a
+driver switch rather than the cost-model threshold: above `1 << 17` elements a contraction
+goes to tcontract's packed driver instead of faer, except on `x86_64-avx2` at a thread
+budget of one, where that bound is lifted (`crates/tenferro-cpu/src/contraction.rs:471-505`).
+`48³ = 110 592` is below the bound and `64³ = 262 144` above it, which is exactly where the
+recorded `Complex64` cells diverge, and why 2 and 8 agree with each other but not with 1 on
+that host. The dtype rates (`0.0641`/`0.2565` on the AVX-512 row, `0.037`/`0.165` on the
+Apple row, `t4a-faer 0.33.0/src/utils/cost.rs:382,407`) only decide the width inside
+whichever driver runs; they do not set this boundary.
 
 ## What this asks of a contributor
 
