@@ -43,11 +43,13 @@ What is gone, and what moved:
   still names the same type, but the `Host` specialization adds its own inherent
   `dtype`, so an associated-function reference such as `TensorView::dtype` is now
   `E0034` ambiguous; name the representation (`TensorView::<Dynamic>::dtype`).
-- **The `threadteam`-carrying types changed generation** (see [Dependency
+- **Two generations cross the crate boundary** (see [Dependency
   moves](#dependency-moves)): `threadteam` 0.4.0 became 0.5.1 and `t4a-faer`
   0.30.0 became 0.33.0, so the `Exec`, `Par` and `TeamExec` a host builds no
-  longer meet the ones this crate expects. Two copies in one graph are
-  `E0308`.
+  longer meet the ones this crate expects, and `tcontract-exec`/`cpueinsum`
+  moved 0.10 → 0.12, so `CpuBatchPolicy`, `CpuBatchStrategy` and
+  `CpuBatchThresholds` (re-exports of `tcontract_exec` types) do too. Two
+  copies in one graph are `E0308`.
 
 Nothing was removed from the linalg factorization surface itself (#2483, merged
 as #2481, #2506 and #2508): that change is additive. It adds
