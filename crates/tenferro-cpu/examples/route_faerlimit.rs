@@ -1,10 +1,10 @@
 //! Which driver a large c64 product takes on this host, per thread budget.
 //!
 //! tcontract's `FaerLimit` sends c64 above `m*n*k = 1 << 17` to its packed
-//! driver, and `tenferro-cpu` lifts that bound only for `x86_64-avx2` at a
-//! thread budget of one (tcontract-rs#156, tensor4all-rs#2415). This example
-//! prints the plan the engine actually prepared, so a host can be checked
-//! without reading the code:
+//! driver, and `tenferro-cpu` lifts that bound for every serial `native`
+//! budget, whatever the host class (tenferro-rs#2524). This example prints
+//! the plan the engine actually prepared, so a host can be checked without
+//! reading the code:
 //!
 //! ```text
 //! cargo run --release -p tenferro-cpu --example route_faerlimit \
@@ -12,12 +12,8 @@
 //! ```
 //!
 //! One line per budget for `64x64 * 64x64` c64 (volume 262144, above the
-//! bound):
-//!
-//! * `x86_64-avx2`: `budget=1 route=faer reason=Fused`, then
-//!   `budget=4 route=packed reason=AboveFaerLimit { .. }`.
-//! * `aarch64`, `x86_64-avx512`, `x86_64-scalar` and `generic`: packed at both
-//!   budgets, `reason=AboveFaerLimit { volume: 262144, limit: 131072 }`.
+//! bound): `budget=1 route=faer reason=Fused` on every host class, then
+//! `budget=4 route=packed reason=AboveFaerLimit { .. }`.
 
 use tenferro_cpu::{take_last_plan_route, CpuEngine, Pool};
 use tenferro_tensor::{Complex64, DotGeneralConfig, Tensor, TensorDot, TensorRead};

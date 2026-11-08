@@ -235,6 +235,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A serial `native` c64 contraction takes faer on every host class again**
+  (#2524). `default_faer_limit` had narrowed 0.9.0's rule to `x86_64-avx2` at a
+  thread budget of one, which put `x86_64-avx512` and `aarch64` back on
+  tcontract's packed driver for c64 above `m*n*k = 1 << 17` without a
+  measurement behind the exception (1.28x to 1.45x slower per call in the
+  reported downstream workload). A budget of one now lifts the c64 bound on
+  every `HostClass`, and the test enumerates every variant so a narrowing
+  without a measurement fails there. Wider budgets keep the default.
 - **A borrowed linalg entry refuses an empty operand with a negative stride**
   (#2505). The six `*_with_exec` factorizations validated the layout inside
   `raw_view`, which the zero-dimension shortcut returned before, so a `[3, 0]`

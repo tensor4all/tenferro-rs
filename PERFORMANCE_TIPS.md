@@ -249,21 +249,43 @@ Audit hints:
 - Scratch and batching follow the batched linalg rule in Dense Layout And
   Linear Algebra, which applies to faer and LAPACK providers alike.
 - CPU `dot_general` (native provider) plans with tcontract's `FaerLimit`. Its
-  default sends c64 products above `m*n*k = 1 << 17` to the packed driver. That
-  driver is host-dependent (tcontract-rs#156): on AVX2 at a thread budget of one
-  it lost in all 46 measured c64 cells (packed/faer 1.08 to 2.13, EPYC 7763),
-  so a plan prepared under a budget-one token on an AVX2 host uses `c64: None`.
-  aarch64 keeps the bound (packed wins at `m = 16` on an M5 Max, 0.88) and so
-  does AVX-512, whose class spans 256-bit and 512-bit datapaths. Wider budgets
-  keep the default on every host. The budget is part of the plan-cache key
-  because a `CpuPlanCache` may be shared by engines of different widths.
-  Consequence on AVX2: serial c64 results above the old volume come from faer's
-  accumulation order, so their last bits differ from the packed driver's (a
-  direct faer matmul agrees to a few ULP). f32, f64 and c32 have no bound in the
-  default on any host, so their plan configuration, and with it their bits, do
-  not move. `cargo run --release -p tenferro-cpu --example route_faerlimit
-  --features route-report` prints the driver and tcontract's reason that a host
-  and budget select.
+  default sends c64 products above `m*n*k = 1 << 17` to the packed driver.
+  That driver is slower than faer at a thread budget of one on the x86 hosts
+  measured: on AVX2 it lost in all 46 measured c64 cells (packed/faer 1.08 to
+  2.13, EPYC 7763) and at `8x141 * 141x282` c64 it takes 170 us against faer's
+  82 us (AVX-512, Ryzen AI 9 HX 470, tensor4all-rs#1040), so a plan prepared
+  under a budget-one token on a `native` build uses `FaerLimit::NONE`. **The
+  host class does not enter**: `HostClass::detect` — AVX-512, AVX2, aarch64 or
+  whatever comes next — is not a condition. This is a policy restoration, not
+  a conclusion drawn from the measurements above: #2415 narrowed the lift to
+  `x86_64-avx2` and left the other classes on the packed driver
+  (tenferro-rs#2524, `crates/tenferro-cpu/src/contraction.rs:471-502`). The
+  measurements above are per host, not per rule: the 46 cells are EPYC 7763
+  (Zen 3, AVX2 only, tcontract-rs#156), the `8x141x282` c64 cell is Ryzen AI 9
+  HX 470 (AVX-512 on 256-bit datapaths, tensor4all-rs#1040), and on a
+  budget-one M5 Max the same issue records the packed driver *faster*: 56.7 vs
+  68.0 us at `8x141x282`, 97.3 vs 125.3 us at `16x141x282`, 777 vs 938 us at
+  `141x282 * 282x141` (packed against `FaerLimit::NONE`). So the numbers do
+  not establish that the packed driver loses on aarch64, or on classes nobody
+  measured. The rule is stated as a budget condition so that it does not
+  depend on enumerating a growing host list; the test in
+  `crates/tenferro-cpu/src/contraction/tests.rs` reaches its host list through
+  an exhaustive `match` on `HostClass`, so a variant added in `threadteam`
+  fails to compile there instead of silently going untested. A per-class
+  exception needs its own measurement naming the class, shape and budget, and
+  arrives with that measurement. Wider budgets keep the default on every host,
+  where the packed driver's partitioning is what is wanted. The budget is part
+  of the plan-cache key because a `CpuPlanCache` may be shared by engines of
+  different widths. Consequence: serial c64 results above the old volume come
+  from the faer accumulation order, so their last bits differ from those of
+  the packed driver. The test beside this rule compares against a direct faer
+  matmul under a **normwise** bound, `max|g - w| <= 4 * k * eps * max|w|`;
+  components can differ by thousands of ULP where a complex dot product cancels,
+  so read that test as a normwise guarantee, not a bit-level one. f32, f64 and
+  c32 have no bound in the default on any host, so their plan configuration,
+  and with it their bits, do not move. `cargo run --release -p tenferro-cpu
+  --example route_faerlimit --features route-report` prints the driver and
+  tcontract's reason that a host and budget select.
 
 Audit hints:
 

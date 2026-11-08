@@ -75,8 +75,9 @@ Recorded in [#2522](https://github.com/tensor4all/tenferro-rs/issues/2522), on a
 
 Where the product runs is decided before the width, and for `Complex64` that decision is a
 driver switch rather than the cost-model threshold: above `1 << 17` elements a contraction
-goes to tcontract's packed driver instead of faer, except on `x86_64-avx2` at a thread
-budget of one, where that bound is lifted (`crates/tenferro-cpu/src/contraction.rs:471-505`).
+goes to tcontract's packed driver instead of faer, except at a thread budget of one on a
+`native` build, where that bound is lifted for every host whatever `HostClass::detect`
+returns (`crates/tenferro-cpu/src/contraction.rs:471-502`).
 `48³ = 110 592` is below the bound and `64³ = 262 144` above it, which is exactly where the
 recorded `Complex64` cells diverge, and why 2 and 8 agree with each other but not with 1 on
 that host. The dtype rates (`0.0641`/`0.2565` on the AVX-512 row, `0.037`/`0.165` on the

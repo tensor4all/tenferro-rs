@@ -468,30 +468,42 @@ struct Key {
     budget: usize,
 }
 
-/// The `FaerLimit` for a host class and a thread budget.
+/// The `FaerLimit` for a thread budget.
 ///
 /// tcontract's default (`c64: Some(1 << 17)`) sends c64 to its packed driver
-/// above that volume. The driver is host-dependent, so the bound is too:
+/// above that volume. At a thread budget of one a `native` build lifts the c64
+/// bound on **every** host: that is the maintainer's ruling (tenferro-rs#2524),
+/// restoring the rule 0.9.0 had, and it is a policy stated as a budget condition
+/// rather than a claim that the packed driver loses everywhere.
 ///
-/// * `x86_64-avx2` at a thread budget of one: packed loses to faer in every
-///   measured c64 cell (46 cells, packed/faer 1.08 to 2.13, none below 0.98,
-///   EPYC 7763, tcontract-rs#156), so the c64 bound is lifted.
-/// * `aarch64` keeps the default: on an M5 Max packed wins at `m = 16` (0.88)
-///   and ties at `m = 8` (1.01). AVX-512 is left at the default too, not because
-///   it was measured for this rule but because the class spans 256-bit and
-///   512-bit datapaths and reports packed-winning regions at one thread
-///   (tcontract-rs#156), so it is not known to benefit everywhere.
-/// * Every wider budget keeps the default even where the bound is lifted:
-///   tcontract reports packed winning 18 of 79 groups at four threads.
+/// The measurements do not cover every class. On AVX2 the packed driver lost in
+/// all 46 cells (packed/faer 1.08 to 2.13, EPYC 7763, Zen 3, tcontract-rs#156);
+/// the `8x141 * 141x282` c64 cell that reads 170 us against 82 us was measured
+/// on AVX-512 (Ryzen AI 9 HX 470, tensor4all-rs#1040), and on a budget-one M5 Max
+/// the same issue records the packed driver *faster*: `8x141x282` 56.7 vs 68.0 us,
+/// `16x141x282` 97.3 vs 125.3 us and `141x282 * 282x141` 777 vs 938 us for packed
+/// against `FaerLimit::NONE`. #2415 narrowed the lift to `x86_64-avx2`
+/// from the AVX2 cells; a narrowing that returns has to arrive as a documented,
+/// measured exception per host class, and the test in `contraction/tests.rs`
+/// reaches its host list through an exhaustive `match`, so a variant added to
+/// `threadteam` fails to compile there instead of going untested.
 ///
-/// Only c64 is bounded by default, so f32, f64 and c32 are unchanged on every
-/// host, and a lifted bound changes c64 last bits above `1 << 17` only (faer's
-/// accumulation order instead of the packed driver's).
-fn default_faer_limit(host: HostClass, budget: usize) -> FaerLimit {
+/// * Every wider budget keeps the default, where the packed driver's
+///   partitioning is what is wanted: tcontract reports packed winning 18 of 79
+///   groups at four threads.
+/// * Only c64 is bounded by default, so f32, f64 and c32 are unchanged on every
+///   host, and a lifted bound changes c64 last bits above `1 << 17` only (faer's
+///   accumulation order instead of the packed driver's).
+///
+/// `host` is deliberately unused in the body and kept in the signature: the
+/// enumerated test calls this once per variant.
+fn default_faer_limit(_host: HostClass, budget: usize) -> FaerLimit {
     let limit = PlanConfig::default().faer_limit;
-    match (host, budget) {
-        (HostClass::X86_64Avx2, 1) if cfg!(feature = "native") => FaerLimit { c64: None, ..limit },
-        _ => limit,
+    // A budget of one is the serial engine.
+    if budget == 1 && cfg!(feature = "native") {
+        FaerLimit { c64: None, ..limit }
+    } else {
+        limit
     }
 }
 
