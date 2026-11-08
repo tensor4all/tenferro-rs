@@ -480,8 +480,9 @@ struct Key {
 /// all 46 cells (packed/faer 1.08 to 2.13, EPYC 7763, Zen 3, tcontract-rs#156);
 /// the `8x141 * 141x282` c64 cell that reads 170 us against 82 us was measured
 /// on AVX-512 (Ryzen AI 9 HX 470, tensor4all-rs#1040), and on a budget-one M5 Max
-/// the same issue records the packed driver faster at m=1 (777 vs 938 us) and
-/// still ahead at m=16 (0.88x). #2415 narrowed the lift to `x86_64-avx2`
+/// the same issue records the packed driver *faster*: `8x141x282` 56.7 vs 68.0 us,
+/// `16x141x282` 97.3 vs 125.3 us and `141x282 * 282x141` 777 vs 938 us for packed
+/// against `FaerLimit::NONE`. #2415 narrowed the lift to `x86_64-avx2`
 /// from the AVX2 cells; a narrowing that returns has to arrive as a documented,
 /// measured exception per host class, and the test in `contraction/tests.rs`
 /// reaches its host list through an exhaustive `match`, so a variant added to

@@ -263,11 +263,12 @@ Audit hints:
   measurements above are per host, not per rule: the 46 cells are EPYC 7763
   (Zen 3, AVX2 only, tcontract-rs#156), the `8x141x282` c64 cell is Ryzen AI 9
   HX 470 (AVX-512 on 256-bit datapaths, tensor4all-rs#1040), and on a
-  budget-one M5 Max that issue records the packed driver faster at m=1 (777 vs
-  938 us) and still ahead at m=16 (0.88x). So the numbers do not establish
-  that the packed driver loses on aarch64, or on classes nobody measured. The
-  rule is stated as a budget condition so that it does not depend on
-  enumerating a growing host list; the test in
+  budget-one M5 Max the same issue records the packed driver *faster*: 56.7 vs
+  68.0 us at `8x141x282`, 97.3 vs 125.3 us at `16x141x282`, 777 vs 938 us at
+  `141x282 * 282x141` (packed against `FaerLimit::NONE`). So the numbers do
+  not establish that the packed driver loses on aarch64, or on classes nobody
+  measured. The rule is stated as a budget condition so that it does not
+  depend on enumerating a growing host list; the test in
   `crates/tenferro-cpu/src/contraction/tests.rs` reaches its host list through
   an exhaustive `match` on `HostClass`, so a variant added in `threadteam`
   fails to compile there instead of silently going untested. A per-class
