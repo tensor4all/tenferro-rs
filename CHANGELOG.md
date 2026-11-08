@@ -27,8 +27,9 @@ What is gone, and what moved:
 - **`TensorRead::tensor_view`, `TensorValue::tensor_view` and
   `TensorValue::tensor_read` return `Option`** (#2486, merged as #2490). They
   answer `None` instead of aborting: `tensor_view` for any `Tensor::external`
-  payload, `tensor_read` only for a non-compact view of one (a compact external
-  value still has a read).
+  payload, and `tensor_read` only when the view layout differs from the stored
+  tensor's (`as_tensor` compares layouts, not compactness: a reshaped external
+  value that still covers the whole buffer in a different layout has no read).
 - **`tenferro_runtime::dim_expr_to_sym_dim_public` is removed** (#2443, merged
   as #2473). A program input position has no meaning as a `SymDim`.
 - **`SvdDriver::{Gesvdj, Gesvd, Xgesvdp}` became
@@ -37,6 +38,11 @@ What is gone, and what moved:
   algorithm family rather than a cuSOLVER routine.
 - **The `rocm` placeholder feature is gone** from `tenferro-gpu` and the five
   crates that forwarded it (#2310, merged as #2470).
+- **`TensorView<'a>` and `TensorViewMut<'a>` gained a defaulted
+  representation parameter** (`D: Representation = Dynamic`). A type annotation
+  still names the same type, but the `Host` specialization adds its own inherent
+  `dtype`, so an associated-function reference such as `TensorView::dtype` is now
+  `E0034` ambiguous; name the representation (`TensorView::<Dynamic>::dtype`).
 - **The `threadteam`-carrying types changed generation** (see [Dependency
   moves](#dependency-moves)): `threadteam` 0.4.0 became 0.5.1 and `t4a-faer`
   0.30.0 became 0.33.0, so the `Exec`, `Par` and `TeamExec` a host builds no
