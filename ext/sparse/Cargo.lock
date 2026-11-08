@@ -83,9 +83,9 @@ checksum = "450efd17194c59515cc81b1eb553d98c59e407c095a918c84aefbd71bec1eecc"
 
 [[package]]
 name = "cpueinsum"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b2f710f9be02afd6193bb1f910a6c7a401394c5d01133df5c91fb9e1504fd79"
+checksum = "36136c6e92297d7d63bcb0ca3186aebc5393d14a83afce14fc40fa23a3392614"
 dependencies = [
  "num-complex",
  "strided-view",
@@ -832,9 +832,9 @@ dependencies = [
 
 [[package]]
 name = "t4a-faer"
-version = "0.32.0"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56cb66d2a11287259ed62ab6cbef98e907ef0b67d78b45c32d8d33709693fde7"
+checksum = "fbb418322be3bde5413613ec9dfcaa8c7e764ac8e17fd513ceba6942e9bfcbc7"
 dependencies = [
  "bytemuck",
  "dyn-stack",
@@ -1007,9 +1007,9 @@ dependencies = [
 
 [[package]]
 name = "tcontract"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7684c35bfc6004ad2e6b97a0da15e7930bd431c5403aed2aa412cc200cadeb60"
+checksum = "bd98479083b7f58b4df9cb13d829e4f50fb93e67364de2cc5169a191332a63d1"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1025,9 +1025,9 @@ dependencies = [
 
 [[package]]
 name = "tcontract-exec"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a779eaef6aaada6eda42bb72f6e96bfcebb8a5fa063beacbd6615af4c020bd3f"
+checksum = "13dfb5292bdf73d40f1fe5c65d3d921cedcb922347bfaa09f34217b8598403c9"
 dependencies = [
  "t4a-faer",
  "thiserror 1.0.69",
@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-ad"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "computegraph",
  "lru",
@@ -1060,11 +1060,11 @@ dependencies = [
 
 [[package]]
 name = "tenferro-core-ops"
-version = "0.10.0"
+version = "0.11.0"
 
 [[package]]
 name = "tenferro-cpu"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "cpueinsum",
  "elem-simd-math",
@@ -1089,7 +1089,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-cpu-basic"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1100,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-cpu-fused"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1125,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-internal-cpu-kernels"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1139,7 +1139,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-internal-extension-macros"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1148,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-internal-ops"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "computegraph",
  "num-complex",
@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-runtime"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "computegraph",
  "lru",
@@ -1176,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-tensor"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "tenferro-tensor-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "num-complex",
  "strided-view",
