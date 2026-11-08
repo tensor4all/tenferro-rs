@@ -424,7 +424,9 @@ mod faer_limit {
         key(a).abs_diff(key(b))
     }
 
-    /// Agreement to a few ULP, not bitwise.
+    /// Agreement within a normwise bound, not bitwise: `max|g - w| <=
+    /// 4 * k * eps * max|w|`. Components can differ by thousands of ULP where a
+    /// length-k complex dot product cancels; the bound below is what is checked.
     ///
     /// The two calls reach the same kernel family but not the same entry point:
     /// tcontract multiplies through the t4a-faer conj-aware entry, on a

@@ -250,7 +250,7 @@ Audit hints:
   Linear Algebra, which applies to faer and LAPACK providers alike.
 - CPU `dot_general` (native provider) plans with tcontract's `FaerLimit`. Its
   default sends c64 products above `m*n*k = 1 << 17` to the packed driver.
-  That driver is slower than faer at a thread budget of one on the hosts
+  That driver is slower than faer at a thread budget of one on the x86 hosts
   measured: on AVX2 it lost in all 46 measured c64 cells (packed/faer 1.08 to
   2.13, EPYC 7763) and at `8x141 * 141x282` c64 it takes 170 us against faer's
   82 us (AVX-512, Ryzen AI 9 HX 470, tensor4all-rs#1040), so a plan prepared
