@@ -169,6 +169,8 @@ assert_eq!(engine.num_threads(), 1);
 
 For BLAS/LAPACK providers, apply the same rule to provider thread variables.
 For benchmarks, pin all relevant thread counts and report them with the result.
+Bitwise-identical results are promised at a fixed thread count only, never across
+thread counts: see [Reproducibility](../spec/reproducibility.md).
 
 When the host already partitions coarse work across caller-owned pools,
 give each partition its own `CpuEngine` over its own pool. One computation uses

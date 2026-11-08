@@ -51,6 +51,7 @@
 - [API Conventions](https://tensor4all.org/tenferro-rs/spec/api-conventions.html): Normative public API naming, module shape, feature naming, and documentation-surface conventions.
 - [Tensor Semantics](https://tensor4all.org/tenferro-rs/spec/tensor-semantics.html): Defines dense tensor metadata, storage, placement, typed views, backend boundaries, and the composite (activation, softmax, normalization, `take_along_axis`) edge-case policy.
 - [Backend Contract](https://tensor4all.org/tenferro-rs/spec/backend-contract.html): Defines the execution pipeline from traced values and extension registration through compiled backend execution.
+- [Reproducibility](https://tensor4all.org/tenferro-rs/spec/reproducibility.html): Bitwise-identical results are promised at a fixed thread count only; pin the count before comparing caches, benchmark tables or regression digests.
 
 ## Agent skills
 
