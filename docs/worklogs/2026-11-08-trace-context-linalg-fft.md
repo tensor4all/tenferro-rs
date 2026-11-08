@@ -40,7 +40,11 @@
   integration across its suites, 2 prelude and 37 doctests pass.
 - The new parity tests pin that the context path and the traced path record the
   same program (`semantic_fingerprint`) for a direct decomposition, a composite
-  (`pinv`), a two-value solve, and one- and n-dimensional FFTs.
+  (`pinv`), a two-value solve, a symbolic input, and one- and n-dimensional
+  FFTs. They build programs only and open no device, so all ten are classified
+  `host` in `scripts/ci/cuda_test_partition.tsv`; the CUDA archive job fails
+  closed on an unclassified test, which is the only CI configuration change this
+  PR needs.
 - Two behaviours differ on the new path and are accepted, and both are pinned by
   tests in `crates/tenferro-linalg/tests/integration/trace_context_linalg.rs`:
   (a) a foreign value is reported as the value layer's
