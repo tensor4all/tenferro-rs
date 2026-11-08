@@ -334,6 +334,17 @@ The alternatives are (a) context-only traits and dropping the traced
 method-chaining entry point, or (b) the two delegating traits above. This design
 takes (b) and asks for approval; see §5.
 
+**As built (P3).** The context traits take the context's own `TraceValue`
+inputs and return `TracedTensor`s, with `&self` receivers. The single body of
+each op stays the crate-private `(&TracedTensor)` function: the context method
+derives the tensor from the value (`TraceContext::derive_tensor`) and calls it,
+and the traced trait delegates to the context trait in one line. Composites
+(`det`, `inv`, `lstsq`, `pinv`, `norm`, `eigvalsh`, `eigvals`) are in that same
+one body set. `tenferro_runtime::extension::apply` is kept: it is documented
+public API for out-of-tree extension authors (`docs/spec/extension-op.md`) and is
+used by the runtime's own tests, so removing it is a separate change rather than
+part of P3. `TraceContextEinsumExt` keeps its pre-existing `&mut self` receiver.
+
 `ext/sparse`'s `SparseCooTracedTensor` keeps its `TracedTensor` field (it already
 is the context+value wrapper); only its construction moves to the context
 constructors.
@@ -645,6 +656,10 @@ as a reviewable commit series so each commit builds:
 6. docs.
 
 The PR body maps each commit to the section of this document it implements.
+
+P3 landed for linalg and fft only (issue #2525); the einsum receiver alignment,
+`SparseCooTracedTensor` construction, and the sparse/tropical wrapper families stay
+open, and `extension::apply` stays as public API (see §3.3, as built).
 
 P2 is the large one: it rewrites `traced.rs` (3498 lines) and touches the 110
 `docs/` files and 62 integration test files that name `TracedTensor`. Splitting

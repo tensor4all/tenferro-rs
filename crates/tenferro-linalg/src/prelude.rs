@@ -4,8 +4,9 @@ pub use crate::{
     EighOptions, QrOptions, RankRevealingQrOptions, RankRevealingQrResult, SvdOptions,
 };
 pub use crate::{
-    LinalgBackend, LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TracedTensorLinalgExt,
-    TypedEig, TypedFullPivLu, TypedLu, TypedRankRevealingQrResult, TypedSvd, TypedTensorLinalgExt,
+    LinalgBackend, LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TraceContextLinalgExt,
+    TracedTensorLinalgExt, TypedEig, TypedFullPivLu, TypedLu, TypedRankRevealingQrResult, TypedSvd,
+    TypedTensorLinalgExt,
 };
 
 pub use tenferro_runtime::{Tensor, TensorRead, TracedTensor, TypedTensor};

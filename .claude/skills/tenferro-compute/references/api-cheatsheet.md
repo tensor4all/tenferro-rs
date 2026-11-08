@@ -143,7 +143,9 @@ Import recipes:
 - `tenferro_einsum::TraceContextEinsumExt` for `TraceContext::einsum` graph
   construction; use `tenferro_einsum::TracedTensorEinsumExt` when the receiver
   is an already traced tensor.
-- `tenferro_linalg::TracedTensorLinalgExt` for traced linear algebra.
+- `tenferro_linalg::TraceContextLinalgExt` for linear algebra on a
+  `TraceContext` value, or `tenferro_linalg::TracedTensorLinalgExt` when the
+  receiver is an already traced tensor.
 - `tenferro_ad::TracedTensorAdExt` for `grad`, `vjp`, and `jvp` transforms.
 
 If a method is present in the guide but Rust reports E0599, check the owning
