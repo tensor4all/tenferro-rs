@@ -1,6 +1,8 @@
 //! FFT extension traits and common transform types.
 
-pub use crate::{FftBackend, FftNorm, TensorFftExt, TensorReadFftExt, TracedTensorFftExt};
+pub use crate::{
+    FftBackend, FftNorm, TensorFftExt, TensorReadFftExt, TraceContextFftExt, TracedTensorFftExt,
+};
 pub use tenferro_runtime::{Tensor, TensorRead, TracedTensor};
 pub use tenferro_tensor::Engine;
 

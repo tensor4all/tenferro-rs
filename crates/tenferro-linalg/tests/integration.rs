@@ -55,6 +55,8 @@ mod small_cpu_operations;
 mod solve_residuals;
 #[path = "integration/support.rs"]
 mod support;
+#[path = "integration/trace_context_linalg.rs"]
+mod trace_context_linalg;
 #[path = "integration/traced_ad_explicit.rs"]
 mod traced_ad_explicit;
 #[path = "integration/traced_command_census.rs"]

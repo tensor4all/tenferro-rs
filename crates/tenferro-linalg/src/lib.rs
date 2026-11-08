@@ -4,6 +4,12 @@
 //! registration. Tensor-facing operations are exposed through extension traits.
 //! CPU backend kernels live in this crate behind the linalg backend trait.
 //!
+//! Traced graph construction uses [`TraceContextLinalgExt`] on a
+//! [`TraceContext`](tenferro_runtime::TraceContext), or
+//! [`TracedTensorLinalgExt`] for method chaining on a
+//! [`TracedTensor`](tenferro_runtime::TracedTensor); both record the same
+//! operations.
+//!
 //! # Examples
 //!
 //! ```
@@ -195,7 +201,7 @@ pub use tensor_ext::{
     LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TypedEig, TypedFullPivLu, TypedLu,
     TypedRankRevealingQrResult, TypedSvd, TypedTensorLinalgExt,
 };
-pub use traced::TracedTensorLinalgExt;
+pub use traced::{TraceContextLinalgExt, TracedTensorLinalgExt};
 #[cfg(feature = "native")]
 #[cfg_attr(docsrs, doc(cfg(feature = "native")))]
 pub use with_exec::{

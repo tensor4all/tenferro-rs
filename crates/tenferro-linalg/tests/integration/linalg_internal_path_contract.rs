@@ -20,11 +20,7 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 #[test]
 fn traced_solve_builds_one_fused_factor_solve() {
     let source = crate_source("src/traced.rs");
-    let solve_source = source_section(
-        &source,
-        "pub fn solve",
-        "/// Build a traced least-squares solve",
-    );
+    let solve_source = source_section(&source, "pub(crate) fn solve", "pub(crate) fn lstsq(");
 
     assert!(
         solve_source.contains("LinalgOp::LuFactorSolve"),
@@ -39,11 +35,7 @@ fn traced_solve_builds_one_fused_factor_solve() {
 #[test]
 fn traced_slogdet_consumes_packed_lu_instead_of_public_lu_outputs() {
     let source = crate_source("src/traced.rs");
-    let slogdet_source = source_section(
-        &source,
-        "pub fn slogdet",
-        "/// Build a traced determinant op",
-    );
+    let slogdet_source = source_section(&source, "pub(crate) fn slogdet", "pub(crate) fn det(");
 
     assert!(
         slogdet_source.contains("LinalgOp::LuFactor"),
@@ -151,7 +143,11 @@ fn real_sum_of_squares_norm_skips_abs_materialization_before_square() {
     );
 
     let traced_source = crate_source("src/traced.rs");
-    let traced_norm = source_section(&traced_source, "pub fn norm", "fn unexpected_output_count");
+    let traced_norm = source_section(
+        &traced_source,
+        "pub(crate) fn norm",
+        "fn unexpected_output_count",
+    );
     assert!(
         traced_norm.contains("can_square_without_abs(a.dtype(), axes.len(), ord)")
             && traced_norm.contains("frobenius_norm(a, &axes)"),
@@ -176,11 +172,8 @@ fn real_sum_of_squares_norm_skips_abs_materialization_before_square() {
 #[test]
 fn traced_eigvalsh_uses_hermitian_values_only_path() {
     let source = crate_source("src/traced.rs");
-    let eigvalsh_source = source_section(
-        &source,
-        "pub fn eigvalsh",
-        "/// Build a traced general eigenvalue-only op",
-    );
+    let eigvalsh_source =
+        source_section(&source, "pub(crate) fn eigvalsh", "pub(crate) fn eigvals(");
 
     assert!(
         eigvalsh_source.contains("eigh_values("),
@@ -205,11 +198,7 @@ fn traced_eigvalsh_uses_hermitian_values_only_path() {
 #[test]
 fn traced_eigvals_uses_general_values_only_path() {
     let source = crate_source("src/traced.rs");
-    let eigvals_source = source_section(
-        &source,
-        "pub fn eigvals",
-        "/// Build a traced Moore-Penrose pseudoinverse op",
-    );
+    let eigvals_source = source_section(&source, "pub(crate) fn eigvals", "pub(crate) fn pinv(");
 
     assert!(
         eigvals_source.contains("eig_values("),
@@ -353,8 +342,8 @@ fn traced_pinv_scales_svd_vectors_without_dense_diagonal_materialization() {
     let source = crate_source("src/traced.rs");
     let pinv_source = source_section(
         &source,
-        "pub fn pinv_with_rtol",
-        "/// Build a traced vector, matrix, or tensor norm op",
+        "pub(crate) fn pinv_with_rtol",
+        "pub(crate) fn norm(",
     );
 
     assert!(
@@ -566,8 +555,8 @@ fn traced_lstsq_validates_once_without_symbolic_shape_probe_allocation() {
     let source = crate_source("src/traced.rs");
     let lstsq_source = source_section(
         &source,
-        "pub fn lstsq",
-        "/// Build a traced full-pivot LU solve op",
+        "pub(crate) fn lstsq",
+        "pub(crate) fn full_piv_lu_solve(",
     );
 
     assert!(
