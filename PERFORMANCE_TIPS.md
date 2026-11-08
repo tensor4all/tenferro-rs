@@ -250,20 +250,27 @@ Audit hints:
   Linear Algebra, which applies to faer and LAPACK providers alike.
 - CPU `dot_general` (native provider) plans with tcontract's `FaerLimit`. Its
   default sends c64 products above `m*n*k = 1 << 17` to the packed driver. That
-  driver is host-dependent (tcontract-rs#156): on AVX2 at a thread budget of one
-  it lost in all 46 measured c64 cells (packed/faer 1.08 to 2.13, EPYC 7763),
-  so a plan prepared under a budget-one token on an AVX2 host uses `c64: None`.
-  aarch64 keeps the bound (packed wins at `m = 16` on an M5 Max, 0.88) and so
-  does AVX-512, whose class spans 256-bit and 512-bit datapaths. Wider budgets
-  keep the default on every host. The budget is part of the plan-cache key
-  because a `CpuPlanCache` may be shared by engines of different widths.
-  Consequence on AVX2: serial c64 results above the old volume come from faer's
-  accumulation order, so their last bits differ from the packed driver's (a
-  direct faer matmul agrees to a few ULP). f32, f64 and c32 have no bound in the
-  default on any host, so their plan configuration, and with it their bits, do
-  not move. `cargo run --release -p tenferro-cpu --example route_faerlimit
-  --features route-report` prints the driver and tcontract's reason that a host
-  and budget select.
+  driver loses to faer at a thread budget of one: on AVX2 it lost in all 46
+  measured c64 cells (packed/faer 1.08 to 2.13, EPYC 7763) and at `8x141 *
+  141x282` c64 it takes 170 us against faer's 82 us (tensor4all-rs#1040), so a
+  plan prepared under a budget-one token on a `native` build uses
+  `FaerLimit::NONE`. **The host class does not enter**: `HostClass::detect` —
+  AVX-512, AVX2, aarch64 or whatever comes next — is not a condition, because
+  the narrowing of #2415 to `x86_64-avx2` left the other classes on the packed
+  driver with no measurement behind it (tensor4all-rs#2524,
+  `crates/tenferro-cpu/src/contraction.rs:471-502`). A per-class exception needs
+  its own measurement naming the class, shape and budget; the test in
+  `crates/tenferro-cpu/src/contraction/tests.rs` enumerates every `HostClass`
+  variant, so a silent one fails there. Wider budgets keep the default on every
+  host, where the packed driver's partitioning is what is wanted. The budget is
+  part of the plan-cache key because a `CpuPlanCache` may be shared by engines
+  of different widths. Consequence: serial c64 results above the old volume come
+  from faer's accumulation order, so their last bits differ from the packed
+  driver's (a direct faer matmul agrees to a few ULP). f32, f64 and c32 have no
+  bound in the default on any host, so their plan configuration, and with it
+  their bits, do not move. `cargo run --release -p tenferro-cpu --example
+  route_faerlimit --features route-report` prints the driver and tcontract's
+  reason that a host and budget select.
 
 Audit hints:
 

@@ -5,7 +5,7 @@
 
 use std::error::Error as _;
 
-use super::LowerContractionError;
+use super::{default_faer_limit, LowerContractionError};
 use tenferro_tensor::{Error as TensorError, ErrorKind};
 
 fn has_source<T: std::error::Error + 'static>(error: &TensorError) -> bool {
@@ -253,51 +253,70 @@ mod plan_slot_reuse {
     }
 }
 
-/// How the c64 `FaerLimit` follows the host class and the thread budget.
+/// tcontract's own c64 bound: above this volume its default `FaerLimit` sends
+/// c64 to the packed driver.
+const DEFAULT_C64_BOUND: u64 = 1 << 17;
+
+/// Every `HostClass` variant lifts the c64 bound at a thread budget of one on a
+/// `native` build, and no other budget or dtype moves.
 ///
-/// tcontract's default sends c64 above `m*n*k = 1 << 17` to its packed driver.
-/// That driver is host-dependent (tcontract-rs#156): on AVX2 at a thread budget
-/// of one it never beats faer, while aarch64 (packed wins at `m = 16`) and
-/// AVX-512 keep the bound. A plan is not re-selected per call and one
-/// `CpuPlanCache` may be shared by engines of different widths, so the budget is
-/// part of the key.
+/// Enumerating the variants is the fence (#2524): the defect was not that a
+/// class was forgotten, it was that the rule was a match arm over a growing
+/// enum. A narrowing added without a measurement fails here.
+#[test]
+fn serial_native_lifts_the_c64_bound_on_every_host_class() {
+    let hosts = [
+        threadteam::HostClass::X86_64Avx512,
+        threadteam::HostClass::X86_64Avx2,
+        threadteam::HostClass::X86_64Scalar,
+        threadteam::HostClass::Aarch64Apple,
+        threadteam::HostClass::Aarch64,
+        threadteam::HostClass::Generic,
+    ];
+    for host in hosts {
+        let serial = default_faer_limit(host, 1);
+        if cfg!(feature = "native") {
+            assert_eq!(
+                serial,
+                cpueinsum::tcontract::FaerLimit::NONE,
+                "{} at a budget of one must lift the c64 bound",
+                host.name()
+            );
+        } else {
+            assert_eq!(
+                serial.c64,
+                Some(DEFAULT_C64_BOUND),
+                "{}: a build without `native` keeps tcontract's default",
+                host.name()
+            );
+        }
+        for budget in [2, 4] {
+            let limit = default_faer_limit(host, budget);
+            assert_eq!(
+                limit.c64,
+                Some(DEFAULT_C64_BOUND),
+                "{} at a budget of {budget}: only the serial budget lifts the bound",
+                host.name()
+            );
+            assert_eq!(limit.f32, None, "{}: f32 is unbounded", host.name());
+            assert_eq!(limit.f64, None, "{}: f64 is unbounded", host.name());
+            assert_eq!(limit.c32, None, "{}: c32 is unbounded", host.name());
+        }
+    }
+}
+
+/// How the c64 `FaerLimit` follows the thread budget.
+///
+/// tcontract's default sends c64 above `m*n*k = 1 << 17` to its packed driver;
+/// a serial `native` budget lifts that bound on every host class. A plan is not
+/// re-selected per call and one `CpuPlanCache` may be shared by engines of
+/// different widths, so the budget is part of the key.
 #[cfg(feature = "native")]
 mod faer_limit {
-    use crate::contraction::{default_faer_limit, take_last_plan_route, take_last_route_was_faer};
+    use crate::contraction::{take_last_plan_route, take_last_route_was_faer};
     use crate::test_support::{cpu_engine, with_cpu_session};
     use tenferro_tensor::{Complex64, DotGeneralConfig, Tensor, TensorDot, TensorRead};
     use threadteam::HostClass;
-
-    /// tcontract's own bound for c64.
-    const DEFAULT_BOUND: u64 = 1 << 17;
-    const HOSTS: [HostClass; 6] = [
-        HostClass::X86_64Avx512,
-        HostClass::X86_64Avx2,
-        HostClass::X86_64Scalar,
-        HostClass::Aarch64Apple,
-        HostClass::Aarch64,
-        HostClass::Generic,
-    ];
-
-    /// Only AVX2 at a budget of one lifts the c64 bound, and no other dtype is
-    /// bounded on any host.
-    #[test]
-    fn only_serial_avx2_lifts_the_c64_bound() {
-        for host in HOSTS {
-            for budget in [1, 2, 4] {
-                let limit = default_faer_limit(host, budget);
-                let c64 = if host == HostClass::X86_64Avx2 && budget == 1 {
-                    None
-                } else {
-                    Some(DEFAULT_BOUND)
-                };
-                assert_eq!(limit.c64, c64, "{} at a budget of {budget}", host.name());
-                assert_eq!(limit.f32, None, "{}: f32 is unbounded", host.name());
-                assert_eq!(limit.f64, None, "{}: f64 is unbounded", host.name());
-                assert_eq!(limit.c32, None, "{}: c32 is unbounded", host.name());
-            }
-        }
-    }
 
     fn config() -> DotGeneralConfig {
         DotGeneralConfig {
@@ -428,13 +447,12 @@ mod faer_limit {
         })
     }
 
-    /// The #1040 shapes: budget one routes to faer exactly where the host class
-    /// lifts the c64 bound, and either route stays within the forward error
-    /// bound of a direct faer product.
+    /// The #1040 shapes: budget one routes to faer above the c64 bound on every
+    /// host class, and the result stays within the forward error bound of a
+    /// direct faer product.
     #[test]
-    fn serial_c64_route_follows_the_host_class() {
+    fn serial_c64_route_takes_faer_above_the_bound() {
         let host = HostClass::detect();
-        let lifted = default_faer_limit(host, 1).c64.is_none();
         for (m, k, n) in [(1, 141, 282), (8, 141, 282), (141, 282, 141)] {
             let (av, bv) = (data(m * k, 1), data(k * n, 2));
             let a = Tensor::from_vec_col_major(vec![m, k], av.clone()).unwrap();
@@ -442,25 +460,15 @@ mod faer_limit {
             let mut engine = cpu_engine(1).unwrap();
             let _ = take_last_route_was_faer();
             let got = run(&mut engine, &a, &b);
-            let below_bound = (m * k * n) as u64 <= DEFAULT_BOUND;
             assert_eq!(
                 take_last_route_was_faer(),
-                Some(below_bound || lifted),
-                "{m}x{k}x{n}: {} at a budget of one must {}",
-                host.name(),
-                if below_bound || lifted {
-                    "route to faer"
-                } else {
-                    "keep tcontract's packed driver"
-                }
+                Some(true),
+                "{m}x{k}x{n}: {} at a budget of one must route to faer",
+                host.name()
             );
             assert_eq!(
                 take_last_plan_route().map(|(algorithm, _)| algorithm.name()),
-                Some(if below_bound || lifted {
-                    "faer"
-                } else {
-                    "packed"
-                }),
+                Some("faer"),
                 "{m}x{k}x{n}: the plan report must name the driver that ran"
             );
             let want = faer_product(&av, &bv, m, k, n);
@@ -498,14 +506,13 @@ mod faer_limit {
     #[test]
     fn shared_plan_cache_separates_budget_classes() {
         let (m, k, n) = (8, 141, 282);
-        let lifted = default_faer_limit(HostClass::detect(), 1).c64.is_none();
         let a = Tensor::from_vec_col_major(vec![m, k], data(m * k, 1)).unwrap();
         let b = Tensor::from_vec_col_major(vec![k, n], data(k * n, 2)).unwrap();
         let plans = crate::CpuPlanCache::new();
         let mut serial = cpu_engine(1).unwrap().with_plan_cache(plans.clone());
         let mut wide = cpu_engine(4).unwrap().with_plan_cache(plans.clone());
         let _ = run(&mut serial, &a, &b);
-        assert_eq!(take_last_route_was_faer(), Some(lifted));
+        assert_eq!(take_last_route_was_faer(), Some(true));
         let misses = plans.stats().misses;
         let _ = run(&mut wide, &a, &b);
         assert_eq!(
@@ -519,7 +526,7 @@ mod faer_limit {
             "a wider budget keeps tcontract's default FaerLimit"
         );
         let _ = run(&mut serial, &a, &b);
-        assert_eq!(take_last_route_was_faer(), Some(lifted));
+        assert_eq!(take_last_route_was_faer(), Some(true));
     }
 
     /// f64 is unbounded on every host, so the c64 change cannot move it.
