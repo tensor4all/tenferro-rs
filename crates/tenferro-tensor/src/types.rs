@@ -7320,9 +7320,10 @@ impl TensorValue {
     /// Borrow this value as a [`TensorRead`], or `None` when it is a
     /// metadata-only view of an externally defined payload.
     ///
-    /// A compact value is borrowed as its owner tensor, whatever its dtype. A
-    /// non-compact value is borrowed through [`TensorValue::tensor_view`], which
-    /// has no variant for a payload built with [`Tensor::external`].
+    /// A value whose layout equals its owner's is borrowed as the owner tensor,
+    /// whatever its dtype. Any other value is borrowed through
+    /// [`TensorValue::tensor_view`], which has no variant for a payload built with
+    /// [`Tensor::external`].
     ///
     /// # Examples
     ///
