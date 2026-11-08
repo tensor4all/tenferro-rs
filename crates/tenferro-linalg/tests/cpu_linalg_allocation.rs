@@ -299,9 +299,10 @@ const REMAINING_FAMILY_CEILINGS: &[(&str, usize)] = &[
 /// Steady-state ceiling overrides, for a host whose counts differ from the baselines above.
 ///
 /// **Empty on every arch, and that is the measured result, not an omission.** Re-measured
-/// 2026-11-08 on `aarch64` (Apple M5 Max, macOS 26.7.2, rustc 1.96.0) against the versions the
-/// lockfile resolves, `t4a-faer` 0.32.0 / `t4a-gemm-common` 0.20.4: **every row measures at or
-/// below its baseline**, so no override is needed. The largest aarch64 count is 10
+/// 2026-11-08 on `aarch64` (Apple M5 Max, macOS 26.7.2, rustc 1.96.0) against `t4a-faer`
+/// 0.32.0 / `t4a-gemm-common` 0.20.4, which is the graph *before* the `t4a-faer` 0.33 bump:
+/// **every row measures at or below its baseline**, so no override is needed. The largest
+/// aarch64 count is 10
 /// (`borrowed/qr/rank9`, baseline 16, the rank-9 metadata spill); every other row is 0-3.
 /// Three rows that used to carry an override: `faer/svd/48` is 1 against a baseline of 3,
 /// `borrowed/svd/48` and `borrowed/qr/48` are 0 against a baseline of 0.
