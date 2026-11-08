@@ -471,16 +471,21 @@ struct Key {
 /// The `FaerLimit` for a thread budget.
 ///
 /// tcontract's default (`c64: Some(1 << 17)`) sends c64 to its packed driver
-/// above that volume. At a thread budget of one that driver is about 2x slower
-/// than faer (8x141 * 141x282 c64: 170 us against 82 us, tensor4all-rs#1040),
-/// so a serial `native` budget lifts the c64 bound on **every** host.
+/// above that volume. At a thread budget of one a `native` build lifts the c64
+/// bound on **every** host: that is the maintainer's ruling (tenferro-rs#2524),
+/// restoring the rule 0.9.0 had, and it is a policy stated as a budget condition
+/// rather than a claim that the packed driver loses everywhere.
 ///
-/// `HostClass` does not enter. #2415 narrowed the lift to `x86_64-avx2` from
-/// measured cells (46 cells, packed/faer 1.08 to 2.13, none below 0.98,
-/// EPYC 7763, tcontract-rs#156) and left AVX-512 and aarch64 on the packed
-/// driver without a measurement for the rule, so a future narrowing arrives as
-/// a documented, measured exception; the test in `contraction/tests.rs`
-/// enumerates every `HostClass` variant, so a silent one fails there instead.
+/// The measurements do not cover every class. On AVX2 the packed driver lost in
+/// all 46 cells (packed/faer 1.08 to 2.13, EPYC 7763, Zen 3, tcontract-rs#156);
+/// the `8x141 * 141x282` c64 cell that reads 170 us against 82 us was measured
+/// on AVX-512 (Ryzen AI 9 HX 470, tensor4all-rs#1040), and on a budget-one M5 Max
+/// the same issue records the packed driver faster at m=1 (777 vs 938 us) and
+/// still ahead at m=16 (0.88x). #2415 narrowed the lift to `x86_64-avx2`
+/// from the AVX2 cells; a narrowing that returns has to arrive as a documented,
+/// measured exception per host class, and the test in `contraction/tests.rs`
+/// reaches its host list through an exhaustive `match`, so a variant added to
+/// `threadteam` fails to compile there instead of going untested.
 ///
 /// * Every wider budget keeps the default, where the packed driver's
 ///   partitioning is what is wanted: tcontract reports packed winning 18 of 79

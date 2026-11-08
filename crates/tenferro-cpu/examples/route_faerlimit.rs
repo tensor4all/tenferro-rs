@@ -2,7 +2,7 @@
 //!
 //! tcontract's `FaerLimit` sends c64 above `m*n*k = 1 << 17` to its packed
 //! driver, and `tenferro-cpu` lifts that bound for every serial `native`
-//! budget, whatever the host class (tensor4all-rs#2524). This example prints
+//! budget, whatever the host class (tenferro-rs#2524). This example prints
 //! the plan the engine actually prepared, so a host can be checked without
 //! reading the code:
 //!
