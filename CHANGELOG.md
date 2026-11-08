@@ -26,7 +26,10 @@ What is gone, and what moved:
   host/device predicate the rest of the crate now asks.
 - **`TensorRead::tensor_view`, `TensorValue::tensor_view` and
   `TensorValue::tensor_read` return `Option`** (#2486, merged as #2490). They
-  answer `None` for a `Tensor::external` payload instead of aborting.
+  answer `None` instead of aborting: `tensor_view` for any `Tensor::external`
+  payload, and `tensor_read` only when the view layout differs from the stored
+  tensor's (`as_tensor` compares layouts, not compactness: a reshaped external
+  value that still covers the whole buffer in a different layout has no read).
 - **`tenferro_runtime::dim_expr_to_sym_dim_public` is removed** (#2443, merged
   as #2473). A program input position has no meaning as a `SymDim`.
 - **`SvdDriver::{Gesvdj, Gesvd, Xgesvdp}` became
@@ -35,13 +38,18 @@ What is gone, and what moved:
   algorithm family rather than a cuSOLVER routine.
 - **The `rocm` placeholder feature is gone** from `tenferro-gpu` and the five
   crates that forwarded it (#2310, merged as #2470).
-- **`TensorView<'a>` and `TensorViewMut<'a>` gained a defaulted representation
-  parameter** (`D: Representation = Dynamic`), so the old spelling still names
-  the same type: this one is source-compatible.
-- **Every CPU-stack dependency type changed generation** (see [Dependency
-  moves](#dependency-moves)). An `Exec`, a `Par` or a `TeamExec` from one
-  generation does not compile against another's, and two copies in one graph are
-  `E0308`.
+- **`TensorView<'a>` and `TensorViewMut<'a>` gained a defaulted
+  representation parameter** (`D: Representation = Dynamic`). A type annotation
+  still names the same type, but the `Host` specialization adds its own inherent
+  `dtype`, so an associated-function reference such as `TensorView::dtype` is now
+  `E0034` ambiguous; name the representation (`TensorView::<Dynamic>::dtype`).
+- **Two generations cross the crate boundary** (see [Dependency
+  moves](#dependency-moves)): `threadteam` 0.4.0 became 0.5.1 and `t4a-faer`
+  0.30.0 became 0.33.0, so the `Exec`, `Par` and `TeamExec` a host builds no
+  longer meet the ones this crate expects, and `tcontract-exec`/`cpueinsum`
+  moved 0.10 → 0.12, so `CpuBatchPolicy`, `CpuBatchStrategy` and
+  `CpuBatchThresholds` (re-exports of `tcontract_exec` types) do too. Two
+  copies in one graph are `E0308`.
 
 Nothing was removed from the linalg factorization surface itself (#2483, merged
 as #2481, #2506 and #2508): that change is additive. It adds
@@ -86,13 +94,13 @@ test.
   selected and the performance note beside it cites a normwise bound, not bit
   equality.
 - **`t4a-cuda-kernels` 0.1.2 changes reduction numerics** (#2534). Split pass 1
-  now assigns lanes by group (`V = 16 / element size`, four groups at a time)
-  instead of per lane, so `sum` and `sum_squares` over a contiguous axis
-  accumulate `f32`/`f64` partials in a different order and the result can
-  differ in the final bit from 0.1.1. The NaN-propagating extrema are rewritten
-  as selects, a near-overflow fold (`x0=x1=A`, `x32=x33=-A`, `A = 2^127`) that
-  returned 0 now returns NaN, and the kernel ABI revision moves from 12 to 13
-  (no symbol, signature, struct or launch-geometry change).
+  now assigns lanes by group instead of per lane, so `sum` and `sum_squares`
+  over a contiguous axis accumulate `f32`/`f64` partials in a different order
+  and the result can differ in the final bit from 0.1.1. The NaN-propagating
+  extrema are rewritten as selects, a near-overflow fold (`x0=x1=A`,
+  `x32=x33=-A`, `A = 2^127`) that returned 0 now returns NaN, and the kernel
+  ABI revision moves from 12 to 13 (no symbol, signature, struct or
+  launch-geometry change).
 
 ### Added
 
@@ -275,12 +283,12 @@ test.
 - **`TensorRead::tensor_view`, `TensorValue::tensor_view` and
   `TensorValue::tensor_read` return `Option`** (#2486). They answer `None` for a
   tensor built with `Tensor::external`, whose caller-owned element type has no
-  preset-scalar `TensorView` (for `tensor_read`, only a non-compact view of such
-  a value). Before, they aborted with `unreachable!("views cover the preset
-  scalars")`. Callers that already return `Result` now report that case as a
-  typed error: `TensorRead::as_slice` and the CPU engine's
-  `download_to_host`/`upload_host_tensor` return `Error::UnsupportedDType`
-  instead of aborting. Migration: `read.tensor_view()` becomes
+  preset-scalar `TensorView` (for `tensor_read`, only when the view layout
+  differs from the stored tensor's). Before, they aborted with
+  `unreachable!("views cover the preset scalars")`. Callers that already return
+  `Result` now report that case as a typed error: `TensorRead::as_slice` and the
+  CPU engine's `download_to_host`/`upload_host_tensor` return
+  `Error::UnsupportedDType` instead of aborting. Migration: `read.tensor_view()` becomes
   `read.tensor_view().ok_or(..)?`, or a `match` on `Some(TensorView::..)`.
 
 - **The CPU complex SVD and `eigh` no longer allocate outside the session
